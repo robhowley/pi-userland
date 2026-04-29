@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "files": [
-    "src"
+    "extensions"
   ],
   "publishConfig": {
     "access": "public"
@@ -12,7 +12,7 @@
     "pi-package"
   ],
   "pi": {
-    "extensions": ["./src"]
+    "extensions": ["./extensions/session-hygiene"]
   },
   "repository": {
     "type": "git",
@@ -21,9 +21,9 @@
   },
   "homepage": "https://github.com/roberthowley/pi-userland/tree/main/packages/pi-session-hygiene",
   "scripts": {
-    "lint": "eslint src/",
-    "format:check": "prettier --check src/",
-    "format:write": "prettier --write src/",
+    "lint": "eslint extensions/session-hygiene/ __tests__/",
+    "format:check": "prettier --check extensions/session-hygiene/ __tests__/",
+    "format:write": "prettier --write extensions/session-hygiene/ __tests__/",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
