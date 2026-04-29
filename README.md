@@ -1,53 +1,45 @@
 # Pi Userland
 
-Personal monorepo for independently publishable [Pi](https://github.com/pixl8/pi) packages.
+Monorepo of independently publishable packages for [Pi coding agent](https://pi.dev/).
 
-## Goal
-
-Build `pi-userland` as a personal monorepo for independently publishable Pi packages.
-Key constraint: keep packages modular so you can install only the prompt/tool overhead you want in a given Pi config.
+Small, focused packages to augment your Pi environment without adding unnecessary overhead.
 
 ## Packages
 
-| Package | Description | Status |
-|---------|-------------|--------|
-| _TBD_ | _TBD_ | _TBD_ |
+| Package | Description |
+|--------|------------|
+| `pi-session-hygiene` | Status bar indicator for session cost, context, and cache rate to track session health |
 
-## Quickstart
-
-### Prerequisites
-
-- Node.js 18+
-- pnpm (`npm install -g pnpm`)
-
-### Install dependencies
+## Setup
 
 ```bash
 pnpm install
 ```
 
-### Run checks
+## Checks
 
 ```bash
 pnpm lint
-pnpm format:check
 pnpm typecheck
+pnpm format:check
 ```
 
 ## Development
 
-### Add a new package
-
-1. Create directory: `packages/<name>/`
-2. Copy structure from existing packages (template coming soon)
-3. Add to workspace in `pnpm-workspace.yaml` if not auto-detected
-
-### Publish a package
+### Add a package
 
 ```bash
-cd packages/<name>
-pnpm publish
+packages/<name>/
 ```
+
+Requirements:
+- independently publishable  
+- narrow scope  
+- minimal cross-package dependencies  
+
+## Releasing
+
+Packages are versioned and released independently using conventional commits.
 
 ## License
 
