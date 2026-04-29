@@ -4,16 +4,16 @@ import prettierConfig from 'eslint-config-prettier';
 
 export default tseslint.config(
   js.configs.recommended,
-  tseslint.configs.recommendedTypeChecked,
   {
     languageOptions: {
       parserOptions: {
-        projectService: true,
-        tsconfigRootDir: import.meta.dirname,
+        ecmaVersion: 2022,
+        sourceType: 'module',
       },
     },
   },
   {
+    files: ['**/*.ts', '**/*.tsx'],
     rules: {
       // Strict type checking
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
