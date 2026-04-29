@@ -13,7 +13,7 @@
     "pi-package"
   ],
   "pi": {
-    "extensions": ["./extensions/session-hygiene"]
+    "extensions": ["./extensions"]
   },
   "repository": {
     "type": "git",
