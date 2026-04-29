@@ -10,12 +10,11 @@ All PR titles must follow conventional commits with a **package scope**:
 
 ### Scopes
 
-| Scope | Meaning |
-|-------|---------|
-| `pi-structured-return` | Changes to `packages/pi-structured-return` |
-| `spinner-verbs` | Changes to `packages/spinner-verbs` |
-| `root` | Root-level changes (CI, workflows, configs, shared tooling) |
-| _omit scope_ | Changes affecting all packages equally |
+| Scope               | Meaning |
+|---------------------|---------|
+| `[pi-package-name]` | Changes to `packages/[pi-package-name]` |
+| `root`              | Root-level changes (CI, workflows, configs, shared tooling) |
+| _omit scope_        | Changes affecting all packages equally |
 
 ### Types
 
@@ -34,7 +33,7 @@ All PR titles must follow conventional commits with a **package scope**:
 
 ```
 feat(pi-structured-return): add JSON parser for tool outputs
-fix(spinner-verbs): handle null response gracefully
+fix(pi-spinner-verbs): handle null response gracefully
 chore(root): update pnpm to v9.15.0
 docs: update package installation guide
 refactor: standardize package.json structure
