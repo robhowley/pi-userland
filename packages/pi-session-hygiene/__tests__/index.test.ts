@@ -23,7 +23,7 @@ import * as fs from 'node:fs';
 
 vi.mock('node:fs');
 
-const DEFAULT_THRESHOLDS = PRESETS["Default"];
+const DEFAULT_THRESHOLDS = PRESETS['Default'];
 
 function makeBranch(...costs: number[]) {
   return costs.map((cost) => ({
@@ -146,7 +146,7 @@ describe('session-hygiene', () => {
   });
 
   describe('helper functions', () => {
-    // 
+    //
     it.each([
       ['green when under all thresholds', 3, 50_000, 'green'],
       ['yellow when cost exceeds yellow threshold', 6, 50_000, 'yellow'],
@@ -156,7 +156,7 @@ describe('session-hygiene', () => {
       ['green when context is null and cost is under threshold', 3, null, 'green'],
       ['red when cost is red even if context is null', 16, null, 'red'],
     ] as [string, number, number | null, string][])((_, cost, ctx, expected) => {
-      // 
+      //
       expect(computeHealth(cost, ctx, DEFAULT_THRESHOLDS)).toBe(expected);
     });
 
