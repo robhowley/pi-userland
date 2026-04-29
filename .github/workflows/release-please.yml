@@ -30,6 +30,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          for pkg in ${{ steps.release.outputs.paths_released }}; do
+          echo "Released packages: ${{ steps.release.outputs.paths_released }}"
+          echo "${{ steps.release.outputs.paths_released }}" | jq -r '.[]' | while read pkg; do
             cd "$pkg" && npm publish && cd -
           done
