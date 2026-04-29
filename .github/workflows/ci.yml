@@ -2,9 +2,9 @@ name: CI - Checks
 
 on:
   push:
-    branches: [main, userland-init]
+    branches:
+      - main
   pull_request:
-    types: [opened, edited, synchronize, reopened]
 
 jobs:
   check:
