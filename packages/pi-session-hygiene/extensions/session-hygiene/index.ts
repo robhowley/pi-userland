@@ -170,11 +170,11 @@ export default function (pi: ExtensionAPI) {
           return;
         }
       } else {
-        newThresholds = PRESETS[presetName];
+        newThresholds = PRESETS[presetName] as Thresholds | null;
       }
 
-      const saved = saveConfig(newThresholds);
-      thresholds = newThresholds;
+      const saved = saveConfig(newThresholds!);
+      thresholds = newThresholds!;
 
       if (saved) {
         ctx.ui.notify(

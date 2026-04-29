@@ -13,7 +13,7 @@ import type { HealthLevel, SessionState, Thresholds } from './types.js';
 export const CONFIG_DIR = path.join(os.homedir(), '.pi', 'agent', 'extensions', 'session-hygiene');
 export const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 
-export const PRESETS: Record<string, Thresholds> = {
+export const PRESETS: Readonly<Record<'Conservative' | 'Default' | 'Relaxed', Thresholds>> = {
   Conservative: {
     yellow: { cost: 2, context: 60_000 },
     red: { cost: 8, context: 120_000 },
@@ -32,10 +32,10 @@ export const PRESETS: Record<string, Thresholds> = {
 
 export function isValidThresholds(parsed: unknown): parsed is Thresholds {
   const p = parsed as Record<string, Record<string, unknown>>;
-  const yc = p?.yellow?.cost;
-  const yctx = p?.yellow?.context;
-  const rc = p?.red?.cost;
-  const rctx = p?.red?.context;
+  const yc = p['yellow']?.['cost'];
+  const yctx = p['yellow']?.['context'];
+  const rc = p['red']?.['cost'];
+  const rctx = p['red']?.['context'];
 
   if (
     typeof yc !== 'number' ||
@@ -64,14 +64,14 @@ export function isValidThresholds(parsed: unknown): parsed is Thresholds {
 export function loadConfig(): Thresholds {
   try {
     if (!fs.existsSync(CONFIG_FILE)) {
-      return PRESETS.Default;
+      return PRESETS['Default'];
     }
 
     const data = fs.readFileSync(CONFIG_FILE, 'utf-8');
     const parsed = JSON.parse(data) as unknown;
-    return isValidThresholds(parsed) ? parsed : PRESETS.Default;
+    return isValidThresholds(parsed) ? (parsed as Thresholds) : PRESETS['Default'];
   } catch {
-    return PRESETS.Default;
+    return PRESETS['Default'];
   }
 }
 
