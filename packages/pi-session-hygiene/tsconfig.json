@@ -1,13 +1,15 @@
 {
   "extends": "../../tsconfig.base.json",
-  "include": ["extensions/session-hygiene/"],
   "compilerOptions": {
+    "outDir": "dist",
+    "declaration": true,
+    "declarationMap": true,
     "noPropertyAccessFromIndexSignature": false,
     "exactOptionalPropertyTypes": false,
     "noImplicitReturns": false,
     "noUnusedLocals": false,
     "noUnusedParameters": false,
-    "strict": false,
-    "noEmit": true
-  }
+    "strict": false
+  },
+  "include": ["src/", "__tests__/"]
 }
