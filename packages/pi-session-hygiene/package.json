@@ -2,10 +2,7 @@
   "name": "@robhowley/pi-session-hygiene",
   "version": "0.1.0",
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
   "files": [
-    "dist",
     "src"
   ],
   "publishConfig": {

@@ -31,6 +31,7 @@ export const PRESETS: Readonly<Record<'Conservative' | 'Default' | 'Relaxed', Th
 // ─── Config Helpers ───
 
 export function isValidThresholds(parsed: unknown): parsed is Thresholds {
+  if (parsed === null || typeof parsed !== 'object') return false;
   const p = parsed as Record<string, Record<string, unknown>>;
   const yc = p['yellow']?.['cost'];
   const yctx = p['yellow']?.['context'];
