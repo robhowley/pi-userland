@@ -3,7 +3,10 @@
   "version": "3.2.2",
   "type": "module",
   "files": [
-    "extensions"
+    "extensions",
+    "spinner-verbs",
+    "README.md",
+    "../LICENSE"
   ],
   "publishConfig": {
     "access": "public"
