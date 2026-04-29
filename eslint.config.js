@@ -33,6 +33,7 @@ export default tseslint.config(
       // Looser rules for tests
       '@typescript-eslint/no-explicit-any': 'off',
       '@typescript-eslint/no-unsafe-function-type': 'off',
+      '@typescript-eslint/ban-ts-comment': 'off',
     },
   },
   prettierConfig, // Disable rules that conflict with prettier
