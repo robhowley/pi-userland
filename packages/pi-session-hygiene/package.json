@@ -13,6 +13,15 @@
   "keywords": [
     "pi-package"
   ],
+  "pi": {
+    "extensions": ["./dist/index.js"]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/roberthowley/pi-userland.git",
+    "directory": "packages/pi-session-hygiene"
+  },
+  "homepage": "https://github.com/roberthowley/pi-userland/tree/main/packages/pi-session-hygiene",
   "scripts": {
     "build": "tsc --build",
     "lint": "eslint src/",
@@ -22,16 +31,10 @@
     "test": "vitest run"
   },
   "peerDependencies": {
-    "@mariozechner/pi-ai": "^1.0.0",
-    "@mariozechner/pi-coding-agent": "^1.0.0"
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*"
   },
   "devDependencies": {
-    "@types/node": "^22.15.17",
-    "@typescript-eslint/eslint-plugin": "^8.33.1",
-    "@typescript-eslint/parser": "^8.33.1",
-    "eslint": "^9.31.0",
-    "prettier": "^3.5.3",
-    "typescript": "^5.8.3",
-    "vitest": "^3.1.3"
+    "@types/node": "^22.15.17"
   }
 }
