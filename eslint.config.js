@@ -4,6 +4,7 @@ import prettierConfig from 'eslint-config-prettier';
 
 export default tseslint.config(
   js.configs.recommended,
+  tseslint.configs.recommended,
   {
     languageOptions: {
       parserOptions: {
@@ -24,6 +25,14 @@ export default tseslint.config(
       'no-console': 'off', // Extensions often need console
       'eqeqeq': ['error', 'always'],
       'prefer-const': 'error',
+    },
+  },
+  {
+    files: ['**/*.test.ts', '**/*.spec.ts'],
+    rules: {
+      // Looser rules for tests
+      '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/no-unsafe-function-type': 'off',
     },
   },
   prettierConfig, // Disable rules that conflict with prettier
