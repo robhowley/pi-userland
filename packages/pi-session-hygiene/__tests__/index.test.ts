@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import sessionHygieneExtension from './index.js';
+import sessionHygieneExtension from '../src/index.js';
 import {
   CONFIG_DIR,
   CONFIG_FILE,
@@ -12,7 +12,7 @@ import {
   reconstructCost,
   saveConfig,
   updateStatusIndicator,
-} from './helpers.js';
+} from '../src/helpers.js';
 import type { AssistantMessage } from '@mariozechner/pi-ai';
 import type {
   ExtensionAPI,
@@ -23,7 +23,7 @@ import * as fs from 'node:fs';
 
 vi.mock('node:fs');
 
-const DEFAULT_THRESHOLDS = PRESETS.Default;
+const DEFAULT_THRESHOLDS = PRESETS["Default"];
 
 function makeBranch(...costs: number[]) {
   return costs.map((cost) => ({
