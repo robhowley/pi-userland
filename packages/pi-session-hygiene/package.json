@@ -3,7 +3,6 @@
   "version": "0.1.0",
   "type": "module",
   "main": "extensions/session-hygiene/index.js",
-  "types": "extensions/session-hygiene/index.d.ts",
   "files": [
     "extensions/session-hygiene"
   ],
