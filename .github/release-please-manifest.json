@@ -1,3 +1,4 @@
 {
-  "packages/pi-session-hygiene": "0.1.0"
+  "packages/pi-session-hygiene": "0.1.0",
+  "packages/pi-spinner-verbs": "3.2.2"
 }

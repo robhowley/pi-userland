@@ -1,0 +1,36 @@
+{
+  "name": "@robhowley/pi-spinner-verbs",
+  "version": "3.2.2",
+  "type": "module",
+  "files": [
+    "extensions"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": ["./extensions/spinner-verbs"]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/robhowley/pi-userland.git",
+    "directory": "packages/pi-spinner-verbs"
+  },
+  "homepage": "https://github.com/robhowley/pi-userland/tree/main/packages/pi-spinner-verbs",
+  "scripts": {
+    "lint": "eslint extensions/",
+    "format:check": "prettier --check extensions/",
+    "format:write": "prettier --write extensions/",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.17"
+  }
+}
