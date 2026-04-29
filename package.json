@@ -1,0 +1,15 @@
+{
+  "name": "pi-userland",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Personal monorepo for independently publishable Pi packages",
+  "type": "module",
+  "scripts": {
+    "lint": "pnpm -r lint",
+    "format:check": "pnpm -r format:check",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "keywords": ["pi-package", "monorepo"],
+  "author": "Rob Howley",
+  "license": "MIT"
+}
