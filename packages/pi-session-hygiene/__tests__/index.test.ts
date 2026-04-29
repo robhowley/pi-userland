@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import sessionHygieneExtension from '../src/index.js';
+import sessionHygieneExtension from '../extensions/session-hygiene/index.ts';
 import {
   CONFIG_DIR,
   CONFIG_FILE,
@@ -12,7 +12,7 @@ import {
   reconstructCost,
   saveConfig,
   updateStatusIndicator,
-} from '../src/helpers.js';
+} from '../extensions/session-hygiene/helpers.ts';
 import type { AssistantMessage } from '@mariozechner/pi-ai';
 import type {
   ExtensionAPI,
