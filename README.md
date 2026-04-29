@@ -9,22 +9,37 @@ Small, focused packages to augment your Pi environment without adding unnecessar
 | Package | Description |
 |--------|------------|
 | `pi-session-hygiene` | Status bar indicator for session cost, context, and cache rate to track session health |
+| `pi-spinner-verbs` | Customizes spinner text with themed verbs (e.g., "Paying the iron price...", "With fire and blood...") for sessions with more personality.
 
-## Setup
+## Install
+
+### An individual package
+
+```shell
+pi install npm:@robhowley/[name-of-package]
+```
+
+### The full bundle
+
+```shell
+pi install git:github.com/robhowley/pi-userland
+```
+
+## Development
+
+### Setup
 
 ```bash
 pnpm install
 ```
 
-## Checks
+### Checks
 
 ```bash
 pnpm lint
 pnpm typecheck
 pnpm format:check
 ```
-
-## Development
 
 ### Add a package
 
