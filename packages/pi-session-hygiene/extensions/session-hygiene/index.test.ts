@@ -1,3 +1,4 @@
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-nocheck
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import sessionHygieneExtension from './index.js';
