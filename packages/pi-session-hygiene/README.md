@@ -5,7 +5,7 @@ category: extension
 keywords: [session, cost, context, status-bar, cache, thresholds]
 ---
 
-# @robhowley/session-hygiene
+# @robhowley/pi-session-hygiene
 
 A tiny Pi extension that adds a session-health light to the status bar.
 
@@ -29,9 +29,9 @@ It only updates the status bar. It does **not** prompt, auto-compact, or inject 
 ## Installation
 
 ```bash
-pi install /path/to/session-hygiene
+pi install /path/to/pi-session-hygiene
 # or
-pi install npm:@robhowley/session-hygiene
+pi install npm:@robhowley/pi-session-hygiene
 ```
 
 ## Status Example
