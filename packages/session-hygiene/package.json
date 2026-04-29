@@ -1,0 +1,37 @@
+{
+  "name": "@robhowley/session-hygiene",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "pi-package"
+  ],
+  "scripts": {
+    "build": "tsc --build",
+    "lint": "eslint src/",
+    "format:check": "prettier --check src/",
+    "format:write": "prettier --write src/",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "^1.0.0",
+    "@mariozechner/pi-coding-agent": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.17",
+    "@typescript-eslint/eslint-plugin": "^8.33.1",
+    "@typescript-eslint/parser": "^8.33.1",
+    "eslint": "^9.31.0",
+    "prettier": "^3.5.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.3"
+  }
+}
