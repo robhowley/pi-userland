@@ -1,8 +1,14 @@
 {
   "name": "pi-userland",
   "version": "0.0.0",
+  "description": "Monorepo of independently publishable Pi packages",
   "private": true,
-  "description": "Personal monorepo for independently publishable Pi packages",
+  "pi": {
+    "extensions": ["./packages/*/extensions"],
+    "skills": ["./packages/*/skills"],
+    "prompts": ["./packages/*/prompts"],
+    "themes": ["./packages/*/themes"]
+  },
   "type": "module",
   "scripts": {
     "lint": "pnpm -r lint",

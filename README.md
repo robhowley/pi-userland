@@ -9,7 +9,7 @@ Small, focused packages to augment your Pi environment without adding unnecessar
 | Package | Description |
 |--------|------------|
 | `pi-session-hygiene` | Status bar indicator for session cost, context, and cache rate to track session health |
-| `pi-spinner-verbs` | Customizes spinner text with themed verbs (e.g., "Paying the iron price...", "With fire and blood...") for sessions with more personality.
+| `pi-spinner-verbs` | Customizes thinking text with themed verbs (e.g., "Paying the iron price...", "With fire and blood...") for sessions with more personality.
 
 ## Install
 
