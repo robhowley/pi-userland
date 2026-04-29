@@ -1,10 +1,3 @@
----
-summary: Shows a session health light in Pi's status bar based on cost, context usage, and cache rate.
-commands: [/session-hygiene]
-category: extension
-keywords: [session, cost, context, status-bar, cache, thresholds]
----
-
 # @robhowley/pi-session-hygiene
 
 A tiny Pi extension that adds a session-health light to the status bar.
@@ -57,7 +50,7 @@ Opens interactive threshold configuration. You can pick a preset or enter custom
 
 ## Configuration
 
-Config lives at `~/.pi/agent/extensions/session-hygiene/config.json`:
+Config lives at `~/.pi/agent/extensions/pi-session-hygiene/config.json`:
 
 ```json
 {
