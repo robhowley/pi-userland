@@ -2,16 +2,16 @@
  * Session Hygiene Helpers
  */
 
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-import type { HealthLevel, SessionState, Thresholds } from "./types.js";
+import type { ExtensionContext } from '@mariozechner/pi-coding-agent';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import type { HealthLevel, SessionState, Thresholds } from './types.js';
 
 // ─── Constants ───
 
-export const CONFIG_DIR = path.join(os.homedir(), ".pi", "agent", "extensions", "session-hygiene");
-export const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
+export const CONFIG_DIR = path.join(os.homedir(), '.pi', 'agent', 'extensions', 'session-hygiene');
+export const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 
 export const PRESETS: Record<string, Thresholds> = {
   Conservative: {
@@ -37,7 +37,12 @@ export function isValidThresholds(parsed: unknown): parsed is Thresholds {
   const rc = p?.red?.cost;
   const rctx = p?.red?.context;
 
-  if (typeof yc !== "number" || typeof yctx !== "number" || typeof rc !== "number" || typeof rctx !== "number") {
+  if (
+    typeof yc !== 'number' ||
+    typeof yctx !== 'number' ||
+    typeof rc !== 'number' ||
+    typeof rctx !== 'number'
+  ) {
     return false;
   }
 
@@ -62,7 +67,7 @@ export function loadConfig(): Thresholds {
       return PRESETS.Default;
     }
 
-    const data = fs.readFileSync(CONFIG_FILE, "utf-8");
+    const data = fs.readFileSync(CONFIG_FILE, 'utf-8');
     const parsed = JSON.parse(data) as unknown;
     return isValidThresholds(parsed) ? parsed : PRESETS.Default;
   } catch {
@@ -86,12 +91,12 @@ export function reconstructCost(ctx: ExtensionContext): number {
   let total = 0;
 
   for (const entry of ctx.sessionManager.getBranch()) {
-    if (entry.type !== "message") continue;
-    if (!entry.message || entry.message.role !== "assistant") continue;
+    if (entry.type !== 'message') continue;
+    if (!entry.message || entry.message.role !== 'assistant') continue;
 
     const msg = entry.message;
     const cost = msg?.usage?.cost?.total;
-    if (typeof cost !== "number") continue;
+    if (typeof cost !== 'number') continue;
 
     total += cost;
   }
@@ -106,15 +111,21 @@ export function computeHealth(
   contextTokens: number | null,
   thresholds: Thresholds,
 ): HealthLevel {
-  if (cost >= thresholds.red.cost || (contextTokens !== null && contextTokens >= thresholds.red.context)) {
-    return "red";
+  if (
+    cost >= thresholds.red.cost ||
+    (contextTokens !== null && contextTokens >= thresholds.red.context)
+  ) {
+    return 'red';
   }
 
-  if (cost >= thresholds.yellow.cost || (contextTokens !== null && contextTokens >= thresholds.yellow.context)) {
-    return "yellow";
+  if (
+    cost >= thresholds.yellow.cost ||
+    (contextTokens !== null && contextTokens >= thresholds.yellow.context)
+  ) {
+    return 'yellow';
   }
 
-  return "green";
+  return 'green';
 }
 
 // ─── Status Indicator ───
@@ -129,13 +140,18 @@ export function formatCacheRate(inputTokens: number, cacheReadTokens: number): s
 
 export function updateStatusIndicator(
   health: HealthLevel,
-  ctx: Pick<ExtensionContext, "ui">,
-  cacheStats: Pick<SessionState, "inputTokens" | "cacheReadTokens">,
+  ctx: Pick<ExtensionContext, 'ui'>,
+  cacheStats: Pick<SessionState, 'inputTokens' | 'cacheReadTokens'>,
 ) {
-  const emoji = health === "green" ? "🟢" : health === "yellow" ? "🟡" : "🔴";
-  const label = health === "green" ? "session healthy" : health === "yellow" ? "session growing" : "session critical";
+  const emoji = health === 'green' ? '🟢' : health === 'yellow' ? '🟡' : '🔴';
+  const label =
+    health === 'green'
+      ? 'session healthy'
+      : health === 'yellow'
+        ? 'session growing'
+        : 'session critical';
   const cacheSuffix = formatCacheRate(cacheStats.inputTokens, cacheStats.cacheReadTokens);
   const status = cacheSuffix ? `${emoji} ${label} · ${cacheSuffix}` : `${emoji} ${label}`;
 
-  ctx.ui.setStatus("session-hygiene", status);
+  ctx.ui.setStatus('session-hygiene', status);
 }
