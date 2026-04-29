@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const verbsDir = __dirname;
+const verbsDir = join(__dirname, "..", "..", "spinner-verbs");
 
 export default function (pi: ExtensionAPI) {
   const available = readdirSync(verbsDir)
