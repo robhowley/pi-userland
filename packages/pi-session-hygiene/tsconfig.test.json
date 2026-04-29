@@ -1,16 +1,7 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "noEmit": true,
-    "skipLibCheck": true,
-    "strict": false,
-    "noImplicitReturns": false,
-    "noUnusedLocals": false,
-    "noUnusedParameters": false,
-    "noPropertyAccessFromIndexSignature": false,
-    "exactOptionalPropertyTypes": false,
-    "noFallthroughCasesInSwitch": false
+    "skipLibCheck": true
   },
-  "include": ["extensions/session-hygiene/*.test.ts"],
-  "exclude": ["extensions/session-hygiene/*.ts", "node_modules"]
+  "include": ["__tests__/*.test.ts"]
 }

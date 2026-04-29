@@ -2,9 +2,11 @@
   "name": "@robhowley/pi-session-hygiene",
   "version": "0.1.0",
   "type": "module",
-  "main": "extensions/session-hygiene/index.js",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "files": [
-    "extensions/session-hygiene"
+    "dist",
+    "src"
   ],
   "publishConfig": {
     "access": "public"
@@ -13,7 +15,7 @@
     "pi-package"
   ],
   "pi": {
-    "extensions": ["./extensions"]
+    "extensions": ["./src"]
   },
   "repository": {
     "type": "git",
@@ -22,9 +24,10 @@
   },
   "homepage": "https://github.com/roberthowley/pi-userland/tree/main/packages/pi-session-hygiene",
   "scripts": {
-    "lint": "eslint extensions/session-hygiene/",
-    "format:check": "prettier --check extensions/session-hygiene/",
-    "format:write": "prettier --write extensions/session-hygiene/",
+    "build": "tsc --build",
+    "lint": "eslint src/",
+    "format:check": "prettier --check src/",
+    "format:write": "prettier --write src/",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
