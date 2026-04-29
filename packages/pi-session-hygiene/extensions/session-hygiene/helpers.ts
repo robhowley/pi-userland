@@ -64,7 +64,7 @@ export function loadConfig(): Thresholds {
     }
 
     const data = fs.readFileSync(CONFIG_FILE, "utf-8");
-    const parsed = JSON.parse(data);
+    const parsed = JSON.parse(data) as unknown;
     return isValidThresholds(parsed) ? parsed : PRESETS.Default;
   } catch {
     return PRESETS.Default;
@@ -90,7 +90,7 @@ export function reconstructCost(ctx: ExtensionContext): number {
     if (entry.type !== "message") continue;
     if (!entry.message || entry.message.role !== "assistant") continue;
 
-    const msg = entry.message as AssistantMessage;
+    const msg = entry.message;
     const cost = msg?.usage?.cost?.total;
     if (typeof cost !== "number") continue;
 
