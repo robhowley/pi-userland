@@ -16,4 +16,4 @@ export interface SessionState {
   cacheReadTokens: number;
 }
 
-export type HealthLevel = "green" | "yellow" | "red";
+export type HealthLevel = 'green' | 'yellow' | 'red';
