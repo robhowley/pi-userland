@@ -6,10 +6,13 @@ on:
 
 jobs:
   auto-merge:
-    # Only auto-merge PRs from github-actions[bot] with release-please title
-    # release-please creates PRs with 'chore: release' title from github-actions[bot]
+    # Only auto-merge PRs from release-please with release-please title
+    # release-please can run as github-actions[bot], app/github-actions, release-please[bot], or app/release-please
     if: |
-      github.event.pull_request.user.login == 'github-actions[bot]' &&
+      github.event.pull_request.user.login == 'github-actions[bot]' ||
+      github.event.pull_request.user.login == 'app/github-actions' ||
+      github.event.pull_request.user.login == 'release-please[bot]' ||
+      github.event.pull_request.user.login == 'app/release-please' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       startsWith(github.event.pull_request.title, 'chore: release')
     runs-on: ubuntu-latest
