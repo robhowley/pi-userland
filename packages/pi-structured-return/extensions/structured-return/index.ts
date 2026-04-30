@@ -76,7 +76,7 @@ export default function structuredReturn(pi: ExtensionAPI) {
           ).message;
           if (msg?.role !== 'toolResult' || msg?.toolName !== 'structured_return') continue;
           const details = msg.details;
-          if (details?.rawBytes != null && details?.parsedBytes != null) {
+          if (details?.rawBytes !== undefined && details?.parsedBytes !== undefined) {
             sessionStats.runs++;
             sessionStats.rawBytes += details.rawBytes;
             sessionStats.parsedBytes += details.parsedBytes;
