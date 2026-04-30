@@ -98,5 +98,6 @@ Your custom file can be a plain JSON array:
 | `corporate-jargon` | Double clicking..., Pressure testing..., Closing the loop... |
 | `doc-emrick` | Shunting..., Sliding..., Fiddling...                          |
 | `momentum` | Making moves..., Spinning up..., Getting traction...          |
+| `weird-legalese` | Mutatis mutandis..., Res ipsa loquitur..., Ultra vires...     |
 
 Use `"spinnerVerbs": "random"` to have a theme randomly selected from the list above at each session start.
