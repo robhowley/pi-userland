@@ -1,0 +1,6 @@
+{
+  "name": "benchmark/phpunit",
+  "require-dev": {
+    "phpunit/phpunit": "^12.0"
+  }
+}

@@ -1,0 +1,1 @@
+{"version":2,"defects":{"MathTest::testMultipliesTwoNumbersCorrectly":7,"MathTest::testDoesNotDivideByZero":8},"times":{"MathTest::testAddsTwoNumbersCorrectly":0,"MathTest::testMultipliesTwoNumbersCorrectly":0.001,"MathTest::testDoesNotDivideByZero":0.001}}

@@ -1,0 +1,32 @@
+{"Time":"2026-03-19T13:28:27.838386-04:00","Action":"start","Package":"math-test"}
+{"Time":"2026-03-19T13:28:28.020046-04:00","Action":"run","Package":"math-test","Test":"TestAddsTwoNumbersCorrectly"}
+{"Time":"2026-03-19T13:28:28.020083-04:00","Action":"output","Package":"math-test","Test":"TestAddsTwoNumbersCorrectly","Output":"=== RUN   TestAddsTwoNumbersCorrectly\n"}
+{"Time":"2026-03-19T13:28:28.020124-04:00","Action":"output","Package":"math-test","Test":"TestAddsTwoNumbersCorrectly","Output":"--- PASS: TestAddsTwoNumbersCorrectly (0.00s)\n"}
+{"Time":"2026-03-19T13:28:28.020132-04:00","Action":"pass","Package":"math-test","Test":"TestAddsTwoNumbersCorrectly","Elapsed":0}
+{"Time":"2026-03-19T13:28:28.020135-04:00","Action":"run","Package":"math-test","Test":"TestMultipliesTwoNumbersCorrectly"}
+{"Time":"2026-03-19T13:28:28.020137-04:00","Action":"output","Package":"math-test","Test":"TestMultipliesTwoNumbersCorrectly","Output":"=== RUN   TestMultipliesTwoNumbersCorrectly\n"}
+{"Time":"2026-03-19T13:28:28.020139-04:00","Action":"output","Package":"math-test","Test":"TestMultipliesTwoNumbersCorrectly","Output":"    math_test.go:14: expected 99, got 12\n"}
+{"Time":"2026-03-19T13:28:28.020141-04:00","Action":"output","Package":"math-test","Test":"TestMultipliesTwoNumbersCorrectly","Output":"--- FAIL: TestMultipliesTwoNumbersCorrectly (0.00s)\n"}
+{"Time":"2026-03-19T13:28:28.020144-04:00","Action":"fail","Package":"math-test","Test":"TestMultipliesTwoNumbersCorrectly","Elapsed":0}
+{"Time":"2026-03-19T13:28:28.020147-04:00","Action":"run","Package":"math-test","Test":"TestDoesNotPanic"}
+{"Time":"2026-03-19T13:28:28.020149-04:00","Action":"output","Package":"math-test","Test":"TestDoesNotPanic","Output":"=== RUN   TestDoesNotPanic\n"}
+{"Time":"2026-03-19T13:28:28.02016-04:00","Action":"output","Package":"math-test","Test":"TestDoesNotPanic","Output":"--- FAIL: TestDoesNotPanic (0.00s)\n"}
+{"Time":"2026-03-19T13:28:28.022666-04:00","Action":"output","Package":"math-test","Test":"TestDoesNotPanic","Output":"panic: runtime error: invalid memory address or nil pointer dereference [recovered, repanicked]\n"}
+{"Time":"2026-03-19T13:28:28.02269-04:00","Action":"output","Package":"math-test","Test":"TestDoesNotPanic","Output":"[signal SIGSEGV: segmentation violation code=0x2 addr=0x0 pc=0x10225be94]\n"}
+{"Time":"2026-03-19T13:28:28.022704-04:00","Action":"output","Package":"math-test","Test":"TestDoesNotPanic","Output":"\n"}
+{"Time":"2026-03-19T13:28:28.022708-04:00","Action":"output","Package":"math-test","Test":"TestDoesNotPanic","Output":"goroutine 23 [running]:\n"}
+{"Time":"2026-03-19T13:28:28.022736-04:00","Action":"output","Package":"math-test","Test":"TestDoesNotPanic","Output":"testing.tRunner.func1.2({0x102392be0, 0x1023dcec0})\n"}
+{"Time":"2026-03-19T13:28:28.02274-04:00","Action":"output","Package":"math-test","Test":"TestDoesNotPanic","Output":"\t/opt/homebrew/Cellar/go/1.26.1/libexec/src/testing/testing.go:1974 +0x1a0\n"}
+{"Time":"2026-03-19T13:28:28.022742-04:00","Action":"output","Package":"math-test","Test":"TestDoesNotPanic","Output":"testing.tRunner.func1()\n"}
+{"Time":"2026-03-19T13:28:28.022744-04:00","Action":"output","Package":"math-test","Test":"TestDoesNotPanic","Output":"\t/opt/homebrew/Cellar/go/1.26.1/libexec/src/testing/testing.go:1977 +0x318\n"}
+{"Time":"2026-03-19T13:28:28.022753-04:00","Action":"output","Package":"math-test","Test":"TestDoesNotPanic","Output":"panic({0x102392be0?, 0x1023dcec0?})\n"}
+{"Time":"2026-03-19T13:28:28.022755-04:00","Action":"output","Package":"math-test","Test":"TestDoesNotPanic","Output":"\t/opt/homebrew/Cellar/go/1.26.1/libexec/src/runtime/panic.go:860 +0x12c\n"}
+{"Time":"2026-03-19T13:28:28.022788-04:00","Action":"output","Package":"math-test","Test":"TestDoesNotPanic","Output":"math-test.TestDoesNotPanic(0x38476516a6c8?)\n"}
+{"Time":"2026-03-19T13:28:28.022792-04:00","Action":"output","Package":"math-test","Test":"TestDoesNotPanic","Output":"\t/Users/roberthowley/src/github.com/pi-structured-return/benchmarks/test-runners/go-json/math_test.go:20 +0x4\n"}
+{"Time":"2026-03-19T13:28:28.022798-04:00","Action":"output","Package":"math-test","Test":"TestDoesNotPanic","Output":"testing.tRunner(0x38476516a6c8, 0x1023bbf00)\n"}
+{"Time":"2026-03-19T13:28:28.022802-04:00","Action":"output","Package":"math-test","Test":"TestDoesNotPanic","Output":"\t/opt/homebrew/Cellar/go/1.26.1/libexec/src/testing/testing.go:2036 +0xc4\n"}
+{"Time":"2026-03-19T13:28:28.022804-04:00","Action":"output","Package":"math-test","Test":"TestDoesNotPanic","Output":"created by testing.(*T).Run in goroutine 1\n"}
+{"Time":"2026-03-19T13:28:28.022808-04:00","Action":"output","Package":"math-test","Test":"TestDoesNotPanic","Output":"\t/opt/homebrew/Cellar/go/1.26.1/libexec/src/testing/testing.go:2101 +0x3a8\n"}
+{"Time":"2026-03-19T13:28:28.023398-04:00","Action":"fail","Package":"math-test","Test":"TestDoesNotPanic","Elapsed":0}
+{"Time":"2026-03-19T13:28:28.023405-04:00","Action":"output","Package":"math-test","Output":"FAIL\tmath-test\t0.185s\n"}
+{"Time":"2026-03-19T13:28:28.023412-04:00","Action":"fail","Package":"math-test","Elapsed":0.185}

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="3" time="0.012" timestamp="2026-04-24T18:08:44.164937-04:00" hostname="Roberts-MBP"><testcase classname="test_math" name="test_adds_two_numbers_correctly" time="0.000" /><testcase classname="test_math" name="test_multiplies_two_numbers_correctly" time="0.000"><failure message="assert (3 * 4) == 99">def test_multiplies_two_numbers_correctly():
+&gt;       assert 3 * 4 == 99
+E       assert (3 * 4) == 99
+
+test_math.py:5: AssertionError</failure></testcase><testcase classname="test_math" name="test_does_not_divide_by_zero" time="0.000"><failure message="ZeroDivisionError: division by zero">def test_does_not_divide_by_zero():
+&gt;       result = 1 / 0
+                 ^^^^^
+E       ZeroDivisionError: division by zero
+
+test_math.py:8: ZeroDivisionError</failure></testcase></testsuite></testsuites>

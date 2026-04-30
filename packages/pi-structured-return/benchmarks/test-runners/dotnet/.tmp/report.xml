@@ -1,0 +1,39 @@
+<testsuites>
+  <testsuite name="dotnet.dll" tests="3" skipped="0" failures="2" errors="0" time="0.0047243" timestamp="2026-03-20T18:53:10" hostname="Roberts-MBP" id="0" package="dotnet.dll">
+    <properties />
+    <testcase classname="Benchmark.MathTest" name="DoesNotThrowOnNullAccess" time="0.0019637">
+      <failure type="failure" message="System.NullReferenceException : Object reference not set to an instance of an object.">at Benchmark.MathTest.DoesNotThrowOnNullAccess() in /Users/roberthowley/src/github.com/pi-structured-return/benchmarks/test-runners/dotnet/MathTest.cs:line 21
+   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)</failure>
+    </testcase>
+    <testcase classname="Benchmark.MathTest" name="MultipliesTwoNumbersCorrectly" time="0.0023712">
+      <failure type="failure" message="Assert.Equal() Failure: Values differ&#xA;Expected: 99&#xA;Actual:   12">at Benchmark.MathTest.MultipliesTwoNumbersCorrectly() in /Users/roberthowley/src/github.com/pi-structured-return/benchmarks/test-runners/dotnet/MathTest.cs:line 14
+   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)</failure>
+    </testcase>
+    <testcase classname="Benchmark.MathTest" name="AddsTwoNumbersCorrectly" time="0.0003894" />
+    <system-out>
+Test Framework Informational Messages:
+[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter v3.1.4+50e68bbb8b (64-bit .NET 10.0.5)
+[xUnit.net 00:00:00.03]   Discovering: dotnet
+[xUnit.net 00:00:00.05]   Discovered:  dotnet
+[xUnit.net 00:00:00.06]   Starting:    dotnet
+[xUnit.net 00:00:00.07]       System.NullReferenceException : Object reference not set to an instance of an object.
+[xUnit.net 00:00:00.07]       Stack Trace:
+[xUnit.net 00:00:00.07]         /Users/roberthowley/src/github.com/pi-structured-return/benchmarks/test-runners/dotnet/MathTest.cs(21,0): at Benchmark.MathTest.DoesNotThrowOnNullAccess()
+[xUnit.net 00:00:00.07]            at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)
+[xUnit.net 00:00:00.07]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.08]       Assert.Equal() Failure: Values differ
+[xUnit.net 00:00:00.08]       Expected: 99
+[xUnit.net 00:00:00.08]       Actual:   12
+[xUnit.net 00:00:00.08]       Stack Trace:
+[xUnit.net 00:00:00.08]         /Users/roberthowley/src/github.com/pi-structured-return/benchmarks/test-runners/dotnet/MathTest.cs(14,0): at Benchmark.MathTest.MultipliesTwoNumbersCorrectly()
+[xUnit.net 00:00:00.08]            at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)
+[xUnit.net 00:00:00.08]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:00.08]   Finished:    dotnet
+</system-out>
+    <system-err>Error - [xUnit.net 00:00:00.07]     Benchmark.MathTest.DoesNotThrowOnNullAccess [FAIL]
+Error - [xUnit.net 00:00:00.08]     Benchmark.MathTest.MultipliesTwoNumbersCorrectly [FAIL]
+</system-err>
+  </testsuite>
+</testsuites>

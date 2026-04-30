@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="/Users/roberthowley/src/github.com/pi-structured-return/benchmarks/test-runners/phpunit/phpunit.xml" tests="3" assertions="2" errors="1" failures="1" skipped="0" time="0.002685">
+    <testsuite name="default" tests="3" assertions="2" errors="1" failures="1" skipped="0" time="0.002685">
+      <testsuite name="MathTest" file="/Users/roberthowley/src/github.com/pi-structured-return/benchmarks/test-runners/phpunit/MathTest.php" tests="3" assertions="2" errors="1" failures="1" skipped="0" time="0.002685">
+        <testcase name="testAddsTwoNumbersCorrectly" file="/Users/roberthowley/src/github.com/pi-structured-return/benchmarks/test-runners/phpunit/MathTest.php" line="9" class="MathTest" classname="MathTest" assertions="1" time="0.000496"/>
+        <testcase name="testMultipliesTwoNumbersCorrectly" file="/Users/roberthowley/src/github.com/pi-structured-return/benchmarks/test-runners/phpunit/MathTest.php" line="14" class="MathTest" classname="MathTest" assertions="1" time="0.001418">
+          <failure type="PHPUnit\Framework\ExpectationFailedException">MathTest::testMultipliesTwoNumbersCorrectly
+Failed asserting that 12 is identical to 99.
+
+/Users/roberthowley/src/github.com/pi-structured-return/benchmarks/test-runners/phpunit/MathTest.php:16</failure>
+        </testcase>
+        <testcase name="testDoesNotDivideByZero" file="/Users/roberthowley/src/github.com/pi-structured-return/benchmarks/test-runners/phpunit/MathTest.php" line="19" class="MathTest" classname="MathTest" assertions="0" time="0.000771">
+          <error type="DivisionByZeroError">MathTest::testDoesNotDivideByZero
+DivisionByZeroError: Division by zero
+
+/Users/roberthowley/src/github.com/pi-structured-return/benchmarks/test-runners/phpunit/MathTest.php:21</error>
+        </testcase>
+      </testsuite>
+    </testsuite>
+  </testsuite>
+</testsuites>

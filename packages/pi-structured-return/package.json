@@ -31,6 +31,10 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
+  "dependencies": {
+    "fast-xml-parser": "^5.4.1",
+    "glob": "^11.0.0"
+  },
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*"
   },
