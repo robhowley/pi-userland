@@ -1,15 +1,15 @@
 # Pi Userland
 
-Monorepo of independently publishable packages for [Pi coding agent](https://pi.dev/).
+Monorepo of independently publishable Pi packages.
 
 Small, focused packages to augment your Pi environment without adding unnecessary overhead.
 
 ## Packages
 
-| Package                                                       | Description |
-|---------------------------------------------------------------|------------|
+| Package | Description |
+|--------|------------|
 | [`pi-session-hygiene`](packages/pi-session-hygiene/README.md) | Status bar indicator for session cost, context, and cache rate to track session health |
-| [`pi-spinner-verbs`](packages/pi-spinner-verbs/README.md)   | Customizes thinking text with themed verbs (e.g., "Paying the iron price...", "With fire and blood...") for sessions with more personality.
+| [`pi-spinner-verbs`](packages/pi-spinner-verbs/README.md) | Customizes thinking text with themed verbs (e.g., "Paying the iron price...", "With fire and blood...") for sessions with more personality. |
 
 ## Install
 
