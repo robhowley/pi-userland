@@ -1,6 +1,6 @@
 {
   "name": "@robhowley/pi-session-hygiene",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "files": [
     "extensions",
@@ -14,7 +14,9 @@
     "pi-package"
   ],
   "pi": {
-    "extensions": ["./extensions/session-hygiene"]
+    "extensions": [
+      "./extensions/session-hygiene"
+    ]
   },
   "repository": {
     "type": "git",
