@@ -13,7 +13,7 @@ A [pi](https://pi.dev) extension that customizes the spinner text while the LLM 
 Install directly from npm:
 
 ```shell
-pi install npm:@robhowley/spinner-verbs
+pi install npm:@robhowley/pi-spinner-verbs
 ```
 
 That's it. The extension registers automatically and on the next session start will randomly pick a theme for you.
