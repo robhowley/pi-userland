@@ -1,12 +1,7 @@
 {
   "extends": "../../tsconfig.base.json",
-  "include": ["extensions/", "__tests__/"],
   "compilerOptions": {
-    "noPropertyAccessFromIndexSignature": false,
-    "exactOptionalPropertyTypes": false,
-    "noImplicitReturns": false,
-    "noUnusedLocals": false,
-    "noUnusedParameters": false,
-    "strict": false
-  }
+    "exactOptionalPropertyTypes": false
+  },
+  "include": ["extensions/spinner-verbs/", "__tests__/"]
 }

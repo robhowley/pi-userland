@@ -15,7 +15,9 @@
     "pi-package"
   ],
   "pi": {
-    "extensions": ["./extensions/spinner-verbs"]
+    "extensions": [
+      "./extensions/spinner-verbs"
+    ]
   },
   "repository": {
     "type": "git",
@@ -34,6 +36,8 @@
     "@mariozechner/pi-coding-agent": "*"
   },
   "devDependencies": {
-    "@types/node": "^22.15.17"
+    "@types/node": "^22.15.17",
+    "eslint": "^9.39.4",
+    "prettier": "^3.8.3"
   }
 }
