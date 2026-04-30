@@ -1,4 +1,5 @@
 {
   "packages/pi-session-hygiene": "0.2.0",
-  "packages/pi-spinner-verbs": "3.3.0"
+  "packages/pi-spinner-verbs": "3.3.0",
+  "packages/pi-structured-return": "0.1.0"
 }
