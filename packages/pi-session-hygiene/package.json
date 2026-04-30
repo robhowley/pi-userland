@@ -29,7 +29,7 @@
     "format:check": "prettier --check extensions/session-hygiene/ __tests__/",
     "format:write": "prettier --write extensions/session-hygiene/ __tests__/",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run __tests__"
   },
   "peerDependencies": {
     "@mariozechner/pi-ai": "*",

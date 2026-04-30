@@ -2,8 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it, expect } from "vitest";
-import parser from "./prettier-text";
-import type { RunContext } from "../types";
+import parser from "../../extensions/structured-return/parsers/prettier-text";
+import type { RunContext } from "../../extensions/structured-return/types";
 
 function makeCtx(stdout: string, stderr = "", cwd = "/project"): RunContext {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "prettier-test-"));

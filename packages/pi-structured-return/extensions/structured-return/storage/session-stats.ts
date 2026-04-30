@@ -1,13 +1,13 @@
-import fs from "node:fs";
-import path from "node:path";
-import os from "node:os";
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 
-const FILE_PREFIX = "structured-return-stats.";
-const FILE_SUFFIX = ".jsonl";
+const FILE_PREFIX = 'structured-return-stats.';
+const FILE_SUFFIX = '.jsonl';
 const MAX_FILE_BYTES = 3 * 1024 * 1024; // 3MB
 
 function statsDir(): string {
-  return path.join(os.homedir(), ".pi");
+  return path.join(os.homedir(), '.pi');
 }
 
 export type StatsEntry = {
@@ -27,7 +27,7 @@ export type AggregatedStats = {
 };
 
 function statsFileName(index: number): string {
-  return `${FILE_PREFIX}${String(index).padStart(3, "0")}${FILE_SUFFIX}`;
+  return `${FILE_PREFIX}${String(index).padStart(3, '0')}${FILE_SUFFIX}`;
 }
 
 function statsFilePath(index: number): string {
@@ -69,7 +69,7 @@ export function appendRun(entry: StatsEntry): void {
     }
   }
 
-  const line = JSON.stringify(entry) + "\n";
+  const line = JSON.stringify(entry) + '\n';
   fs.appendFileSync(filePath, line);
 }
 
@@ -79,8 +79,8 @@ export function readLifetimeStats(opts: { cwd?: string } = {}): AggregatedStats 
   const totals: AggregatedStats = { runs: 0, rawBytes: 0, parsedBytes: 0 };
 
   for (const file of files) {
-    const content = fs.readFileSync(file, "utf-8");
-    for (const line of content.split("\n")) {
+    const content = fs.readFileSync(file, 'utf-8');
+    for (const line of content.split('\n')) {
       if (!line.trim()) continue;
       try {
         const entry: StatsEntry = JSON.parse(line);
@@ -113,7 +113,7 @@ export function estimateTokens(bytes: number): string {
 
 export function formatStatsBlock(label: string, stats: AggregatedStats): string[] {
   const saved = stats.rawBytes - stats.parsedBytes;
-  const pct = stats.rawBytes > 0 ? ((saved / stats.rawBytes) * 100).toFixed(1) : "0.0";
+  const pct = stats.rawBytes > 0 ? ((saved / stats.rawBytes) * 100).toFixed(1) : '0.0';
   return [
     `${label}:`,
     `  runs: ${stats.runs}`,

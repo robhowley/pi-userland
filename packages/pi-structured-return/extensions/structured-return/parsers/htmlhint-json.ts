@@ -1,6 +1,6 @@
-import path from "node:path";
-import type { ParserModule, ParsedFailure } from "../types";
-import { safeReadFile } from "./utils";
+import path from 'node:path';
+import type { ParserModule, ParsedFailure } from '../types';
+import { safeReadFile } from './utils';
 
 interface HtmlHintMessage {
   type: string;
@@ -16,15 +16,15 @@ interface HtmlHintFile {
 }
 
 const parser: ParserModule = {
-  id: "htmlhint-json",
+  id: 'htmlhint-json',
   async parse(ctx) {
     // htmlhint --format json writes JSON to stderr (not stdout), so read stderr first.
     const output = (safeReadFile(ctx.stderrPath) + safeReadFile(ctx.stdoutPath)).trim();
     if (!output) {
       return {
-        tool: "htmlhint",
-        status: "pass",
-        summary: "no lint errors",
+        tool: 'htmlhint',
+        status: 'pass',
+        summary: 'no lint errors',
         failures: [],
         logPath: ctx.logPath,
       };
@@ -35,9 +35,9 @@ const parser: ParserModule = {
       files = JSON.parse(output);
     } catch {
       return {
-        tool: "htmlhint",
-        status: "error",
-        summary: "failed to parse htmlhint JSON output",
+        tool: 'htmlhint',
+        status: 'error',
+        summary: 'failed to parse htmlhint JSON output',
         logPath: ctx.logPath,
       };
     }
@@ -57,11 +57,13 @@ const parser: ParserModule = {
     }
 
     const summary =
-      failures.length > 0 ? `${failures.length} lint error${failures.length !== 1 ? "s" : ""}` : "no lint errors";
+      failures.length > 0
+        ? `${failures.length} lint error${failures.length !== 1 ? 's' : ''}`
+        : 'no lint errors';
 
     return {
-      tool: "htmlhint",
-      status: failures.length > 0 ? "fail" : "pass",
+      tool: 'htmlhint',
+      status: failures.length > 0 ? 'fail' : 'pass',
       summary,
       failures,
       logPath: ctx.logPath,

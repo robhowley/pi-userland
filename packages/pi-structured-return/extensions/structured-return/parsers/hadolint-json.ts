@@ -1,6 +1,6 @@
-import path from "node:path";
-import type { ParserModule, ParsedFailure } from "../types";
-import { safeReadFile } from "./utils";
+import path from 'node:path';
+import type { ParserModule, ParsedFailure } from '../types';
+import { safeReadFile } from './utils';
 
 interface HadolintItem {
   code: string;
@@ -12,11 +12,17 @@ interface HadolintItem {
 }
 
 const parser: ParserModule = {
-  id: "hadolint-json",
+  id: 'hadolint-json',
   async parse(ctx) {
     const stdout = safeReadFile(ctx.stdoutPath).trim();
-    if (!stdout || stdout === "[]") {
-      return { tool: "hadolint", status: "pass", summary: "no lint errors", failures: [], logPath: ctx.logPath };
+    if (!stdout || stdout === '[]') {
+      return {
+        tool: 'hadolint',
+        status: 'pass',
+        summary: 'no lint errors',
+        failures: [],
+        logPath: ctx.logPath,
+      };
     }
 
     let items: HadolintItem[];
@@ -24,9 +30,9 @@ const parser: ParserModule = {
       items = JSON.parse(stdout) as HadolintItem[];
     } catch {
       return {
-        tool: "hadolint",
-        status: "error",
-        summary: "failed to parse hadolint JSON output",
+        tool: 'hadolint',
+        status: 'error',
+        summary: 'failed to parse hadolint JSON output',
         logPath: ctx.logPath,
       };
     }
@@ -43,9 +49,9 @@ const parser: ParserModule = {
     });
 
     return {
-      tool: "hadolint",
-      status: failures.length > 0 ? "fail" : "pass",
-      summary: failures.length > 0 ? `${failures.length} lint errors` : "no lint errors",
+      tool: 'hadolint',
+      status: failures.length > 0 ? 'fail' : 'pass',
+      summary: failures.length > 0 ? `${failures.length} lint errors` : 'no lint errors',
       failures,
       logPath: ctx.logPath,
     };

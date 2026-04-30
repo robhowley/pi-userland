@@ -1,6 +1,6 @@
-import path from "node:path";
-import type { ParserModule, ParsedFailure } from "../types";
-import { safeReadFile } from "./utils";
+import path from 'node:path';
+import type { ParserModule, ParsedFailure } from '../types';
+import { safeReadFile } from './utils';
 
 // Rust 1.73+: thread 'name' (optional-id) panicked at file:line:col:
 //             message on following line(s)
@@ -17,20 +17,21 @@ const TEST_RESULT_RE = /^test result: \w+\. (\d+) passed; (\d+) failed/;
 const BLOCK_HEADER_RE = /^---- (.+) stdout ----$/;
 
 const parser: ParserModule = {
-  id: "cargo-test",
+  id: 'cargo-test',
   async parse(ctx) {
     // Use combined log — test binary output goes to stdout, cargo progress to stderr;
     // reading both ensures we catch everything regardless of buffering order.
     const log = safeReadFile(ctx.logPath);
-    const lines = log.split("\n").map((l) => l.trim());
+    const lines = log.split('\n').map((l) => l.trim());
 
     // If compilation failed there will be no "test result:" line
     const hasTestResult = lines.some((l) => TEST_RESULT_RE.test(l));
     if (!hasTestResult) {
       return {
-        tool: "cargo",
-        status: "error",
-        summary: "compilation failed — run `cargo build --message-format=json` for structured errors",
+        tool: 'cargo',
+        status: 'error',
+        summary:
+          'compilation failed — run `cargo build --message-format=json` for structured errors',
         failures: [],
         logPath: ctx.logPath,
       };
@@ -62,12 +63,12 @@ const parser: ParserModule = {
     if (current) blocks.push(current);
 
     const failures: ParsedFailure[] = blocks.map(({ name, lines: blockLines }) =>
-      parseFailureBlock(name, blockLines, ctx.cwd)
+      parseFailureBlock(name, blockLines, ctx.cwd),
     );
 
     return {
-      tool: "cargo",
-      status: failed > 0 ? "fail" : "pass",
+      tool: 'cargo',
+      status: failed > 0 ? 'fail' : 'pass',
       summary: failed > 0 ? `${failed} failed, ${passed} passed` : `${passed} passed`,
       failures,
       logPath: ctx.logPath,
@@ -91,7 +92,7 @@ function parseFailureBlock(testName: string, lines: string[], cwd: string): Pars
       const msgLines: string[] = [];
       for (let j = i + 1; j < lines.length; j++) {
         const next = lines[j];
-        if (next === "" || next.startsWith("note:") || next.startsWith("error:")) break;
+        if (next === '' || next.startsWith('note:') || next.startsWith('error:')) break;
         msgLines.push(next);
       }
       message = formatMessage(msgLines);
@@ -101,17 +102,17 @@ function parseFailureBlock(testName: string, lines: string[], cwd: string): Pars
 
   // Fall back to pre-1.73 format; join block so dotall regex handles multi-line messages
   if (!file) {
-    const blockText = lines.join("\n");
+    const blockText = lines.join('\n');
     const oldMatch = PANIC_OLD.exec(blockText);
     if (oldMatch) {
       // Collapse internal newlines in message to a single space
-      message = oldMatch[1].replace(/\s+/g, " ").trim();
+      message = oldMatch[1].replace(/\s+/g, ' ').trim();
       file = path.relative(cwd, path.resolve(cwd, oldMatch[2]));
       lineNum = Number(oldMatch[3]);
     }
   }
 
-  const id = [file, lineNum, testName].filter(Boolean).join(":");
+  const id = [file, lineNum, testName].filter(Boolean).join(':');
   return {
     id: id || testName,
     file,
@@ -122,14 +123,14 @@ function parseFailureBlock(testName: string, lines: string[], cwd: string): Pars
 
 /** Compact assertion left/right onto one line; otherwise join with "; " */
 function formatMessage(msgLines: string[]): string {
-  if (msgLines.length === 0) return "";
+  if (msgLines.length === 0) return '';
   const main = msgLines[0];
-  const leftLine = msgLines.find((l) => l.trimStart().startsWith("left:"));
-  const rightLine = msgLines.find((l) => l.trimStart().startsWith("right:"));
+  const leftLine = msgLines.find((l) => l.trimStart().startsWith('left:'));
+  const rightLine = msgLines.find((l) => l.trimStart().startsWith('right:'));
   if (leftLine && rightLine) {
     return `${main}\n${leftLine.trim()}, ${rightLine.trim()}`;
   }
-  return msgLines.filter(Boolean).join("; ");
+  return msgLines.filter(Boolean).join('; ');
 }
 
 export default parser;

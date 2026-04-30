@@ -5,7 +5,7 @@ import { describe, it, expect } from "vitest";
 import parser from "../../extensions/structured-return/parsers/dbt-json";
 import type { RunContext } from "../../extensions/structured-return/types";
 
-const SAMPLES_DIR = path.resolve(__dirname, "../../../../benchmarks/pipeline-tools/dbt");
+const SAMPLES_DIR = path.resolve(__dirname, "../../benchmarks/pipeline-tools/dbt");
 
 function makeCtx(stdout: string, cwd = "/project"): RunContext {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dbt-test-"));

@@ -1,5 +1,5 @@
-import type { ParserModule, ParsedFailure } from "../types";
-import { safeReadFile } from "./utils";
+import type { ParserModule, ParsedFailure } from '../types';
+import { safeReadFile } from './utils';
 
 // Error: Parse error on line N:
 const ERROR_HEADER = /^Error: Parse error on line (\d+):$/;
@@ -7,14 +7,14 @@ const ERROR_HEADER = /^Error: Parse error on line (\d+):$/;
 const EXPECTING_LINE = /^(Expecting .+)$/;
 
 const parser: ParserModule = {
-  id: "jsonlint-text",
+  id: 'jsonlint-text',
   async parse(ctx) {
-    const combined = (safeReadFile(ctx.stdoutPath) + "\n" + safeReadFile(ctx.stderrPath)).trim();
+    const combined = (safeReadFile(ctx.stdoutPath) + '\n' + safeReadFile(ctx.stderrPath)).trim();
     if (!combined) {
       return {
-        tool: "jsonlint",
-        status: "pass",
-        summary: "valid JSON",
+        tool: 'jsonlint',
+        status: 'pass',
+        summary: 'valid JSON',
         failures: [],
         logPath: ctx.logPath,
       };
@@ -22,12 +22,14 @@ const parser: ParserModule = {
 
     // Derive filename from argv — use last non-flag arg since earlier positional
     // args may be flag values (e.g. npx --yes jsonlint file.json).
-    const file = ctx.argv.filter((a) => !a.startsWith("-") && a !== "jsonlint" && a !== "npx").pop() ?? "input";
+    const file =
+      ctx.argv.filter((a) => !a.startsWith('-') && a !== 'jsonlint' && a !== 'npx').pop() ??
+      'input';
 
-    const lines = combined.split("\n");
+    const lines = combined.split('\n');
     const failures: ParsedFailure[] = [];
     let line: number | undefined;
-    let message = "";
+    let message = '';
 
     for (const l of lines) {
       const headerMatch = l.match(ERROR_HEADER);
@@ -47,14 +49,14 @@ const parser: ParserModule = {
         id: `${file}:${line}`,
         file,
         line,
-        message: message || "parse error",
+        message: message || 'parse error',
       });
     }
 
     return {
-      tool: "jsonlint",
-      status: failures.length > 0 ? "fail" : "pass",
-      summary: failures.length > 0 ? "parse error" : "valid JSON",
+      tool: 'jsonlint',
+      status: failures.length > 0 ? 'fail' : 'pass',
+      summary: failures.length > 0 ? 'parse error' : 'valid JSON',
       failures,
       logPath: ctx.logPath,
     };

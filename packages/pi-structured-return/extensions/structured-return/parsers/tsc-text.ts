@@ -1,26 +1,26 @@
-import path from "node:path";
-import type { ParserModule, ParsedFailure } from "../types";
-import { safeReadFile } from "./utils";
+import path from 'node:path';
+import type { ParserModule, ParsedFailure } from '../types';
+import { safeReadFile } from './utils';
 
 // tsc --pretty false format: file(line,col): error TSXXXX: message
 const TSC_LINE = /^(.+?)\((\d+),(\d+)\):\s+error\s+(TS\d+):\s+(.+)$/;
 
 const parser: ParserModule = {
-  id: "tsc-text",
+  id: 'tsc-text',
   async parse(ctx) {
     const raw = safeReadFile(ctx.stdoutPath).trim();
     if (!raw) {
       return {
-        tool: "tsc",
-        status: "pass",
-        summary: "no type errors",
+        tool: 'tsc',
+        status: 'pass',
+        summary: 'no type errors',
         failures: [],
         logPath: ctx.logPath,
       };
     }
 
     const failures: ParsedFailure[] = [];
-    for (const line of raw.split("\n")) {
+    for (const line of raw.split('\n')) {
       const m = line.match(TSC_LINE);
       if (!m) continue;
       const [, file, lineNum, , code, message] = m;
@@ -35,9 +35,9 @@ const parser: ParserModule = {
     }
 
     return {
-      tool: "tsc",
-      status: failures.length > 0 ? "fail" : "pass",
-      summary: failures.length > 0 ? `${failures.length} type errors` : "no type errors",
+      tool: 'tsc',
+      status: failures.length > 0 ? 'fail' : 'pass',
+      summary: failures.length > 0 ? `${failures.length} type errors` : 'no type errors',
       failures,
       logPath: ctx.logPath,
     };

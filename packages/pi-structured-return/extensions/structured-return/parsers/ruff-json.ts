@@ -1,6 +1,6 @@
-import path from "node:path";
-import type { ParserModule } from "../types";
-import { safeReadFile } from "./utils";
+import path from 'node:path';
+import type { ParserModule } from '../types';
+import { safeReadFile } from './utils';
 
 interface RuffItem {
   filename: string;
@@ -10,7 +10,7 @@ interface RuffItem {
 }
 
 const parser: ParserModule = {
-  id: "ruff-json",
+  id: 'ruff-json',
   async parse(ctx) {
     const stdout = safeReadFile(ctx.stdoutPath).trim();
     const items = stdout ? (JSON.parse(stdout) as RuffItem[]) : [];
@@ -25,9 +25,9 @@ const parser: ParserModule = {
       };
     });
     return {
-      tool: "ruff",
-      status: failures.length > 0 ? "fail" : "pass",
-      summary: failures.length > 0 ? `${failures.length} lint errors` : "no lint errors",
+      tool: 'ruff',
+      status: failures.length > 0 ? 'fail' : 'pass',
+      summary: failures.length > 0 ? `${failures.length} lint errors` : 'no lint errors',
       failures,
       logPath: ctx.logPath,
     };

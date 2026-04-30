@@ -1,6 +1,6 @@
-import path from "node:path";
-import type { ParserModule, ParsedFailure } from "../types";
-import { extractJsStackLocation, safeReadFile } from "./utils";
+import path from 'node:path';
+import type { ParserModule, ParsedFailure } from '../types';
+import { extractJsStackLocation, safeReadFile } from './utils';
 
 /**
  * Parses AVA's default text output (--no-color).
@@ -14,11 +14,11 @@ const SUMMARY_RE = /(\d+) tests? (passed|failed)/g;
 const FAIL_MARKER_RE = /^\s*✘\s+\[fail\]:\s+(.+?)(?:\s+Error thrown in test)?$/;
 
 const parser: ParserModule = {
-  id: "ava-text",
+  id: 'ava-text',
   async parse(ctx) {
     const stderr = safeReadFile(ctx.stdoutPath);
     if (!stderr.trim()) {
-      return { tool: "ava", status: "error", summary: "no output", logPath: ctx.logPath };
+      return { tool: 'ava', status: 'error', summary: 'no output', logPath: ctx.logPath };
     }
 
     // Extract pass/fail counts from summary lines at the end
@@ -27,19 +27,24 @@ const parser: ParserModule = {
     let m: RegExpExecArray | null;
     while ((m = SUMMARY_RE.exec(stderr)) !== null) {
       const count = parseInt(m[1], 10);
-      if (m[2] === "passed") passed = count;
+      if (m[2] === 'passed') passed = count;
       else failed = count;
     }
 
     if (passed === 0 && failed === 0) {
-      return { tool: "ava", status: "error", summary: "could not parse ava output", logPath: ctx.logPath };
+      return {
+        tool: 'ava',
+        status: 'error',
+        summary: 'could not parse ava output',
+        logPath: ctx.logPath,
+      };
     }
 
     const failures = parseFailureBlocks(stderr, ctx.cwd);
 
     return {
-      tool: "ava",
-      status: failed > 0 ? "fail" : "pass",
+      tool: 'ava',
+      status: failed > 0 ? 'fail' : 'pass',
       summary: failed > 0 ? `${failed} failed, ${passed} passed` : `${passed} passed`,
       failures,
       logPath: ctx.logPath,
@@ -58,7 +63,7 @@ export default parser;
  * by those names to get per-failure blocks.
  */
 function parseFailureBlocks(output: string, cwd: string): ParsedFailure[] {
-  const lines = output.split("\n");
+  const lines = output.split('\n');
 
   // Collect failed test names from ✘ markers
   const failedNames: string[] = [];
@@ -101,7 +106,7 @@ function parseFailureBlocks(output: string, cwd: string): ParsedFailure[] {
 
 function parseBlock(name: string, lines: string[], cwd: string): ParsedFailure {
   // Determine type by looking for "Error thrown in test:"
-  const isRuntimeError = lines.some((l) => l.trim() === "Error thrown in test:");
+  const isRuntimeError = lines.some((l) => l.trim() === 'Error thrown in test:');
 
   if (isRuntimeError) {
     return parseRuntimeError(name, lines, cwd);
@@ -129,14 +134,17 @@ function parseAssertionFailure(name: string, lines: string[], cwd: string): Pars
     }
 
     // Diff values: "- 12" (actual), "+ 99" (expected)
-    if (trimmed.startsWith("- ") && actual === undefined) {
+    if (trimmed.startsWith('- ') && actual === undefined) {
       actual = trimmed.slice(2);
-    } else if (trimmed.startsWith("+ ") && expected === undefined) {
+    } else if (trimmed.startsWith('+ ') && expected === undefined) {
       expected = trimmed.slice(2);
     }
   }
 
-  const message = actual !== undefined && expected !== undefined ? `expected ${expected}, got ${actual}` : undefined;
+  const message =
+    actual !== undefined && expected !== undefined
+      ? `expected ${expected}, got ${actual}`
+      : undefined;
 
   return { id: name, file, line, message };
 }
@@ -154,7 +162,7 @@ function parseRuntimeError(name: string, lines: string[], cwd: string): ParsedFa
   }
 
   // Extract file:line from the first user stack frame
-  const loc = extractJsStackLocation(lines.join("\n"));
+  const loc = extractJsStackLocation(lines.join('\n'));
   const file = loc.file ? path.relative(cwd, path.resolve(cwd, loc.file)) : undefined;
 
   return { id: name, file, line: loc.line, message };

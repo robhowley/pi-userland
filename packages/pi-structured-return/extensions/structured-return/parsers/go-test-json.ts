@@ -1,6 +1,6 @@
-import fs from "node:fs";
-import path from "node:path";
-import type { ParserModule, ParsedFailure } from "../types";
+import fs from 'node:fs';
+import path from 'node:path';
+import type { ParserModule, ParsedFailure } from '../types';
 
 interface GoTestEvent {
   Action: string;
@@ -11,7 +11,9 @@ interface GoTestEvent {
 }
 
 /** Extract file:line and message from a Go t.Error/t.Errorf output line. */
-function parseTestOutput(output: string): { file?: string; line?: number; message?: string } | undefined {
+function parseTestOutput(
+  output: string,
+): { file?: string; line?: number; message?: string } | undefined {
   // Format: "    file.go:line: message"
   const m = output.match(/^\s+(\S+\.go):(\d+):\s+(.+)/);
   if (m) return { file: m[1], line: Number(m[2]), message: m[3].trim() };
@@ -21,14 +23,14 @@ function parseTestOutput(output: string): { file?: string; line?: number; messag
 /** Extract panic message and user-code file:line from a stack trace. */
 function parsePanic(
   outputs: string[],
-  testName: string
+  testName: string,
 ): { message?: string; file?: string; line?: number } | undefined {
-  const panicLine = outputs.find((o) => o.trim().startsWith("panic:"));
+  const panicLine = outputs.find((o) => o.trim().startsWith('panic:'));
   if (!panicLine) return undefined;
   const message = panicLine
     .trim()
-    .replace(/^panic:\s*/, "")
-    .replace(/\s*\[.*\]$/, "")
+    .replace(/^panic:\s*/, '')
+    .replace(/\s*\[.*\]$/, '')
     .trim();
 
   // Find the user code frame: "module.TestName(..." followed by "\tfile.go:line"
@@ -42,15 +44,15 @@ function parsePanic(
 }
 
 const parser: ParserModule = {
-  id: "go-test-json",
+  id: 'go-test-json',
   async parse(ctx) {
-    const stdout = fs.readFileSync(ctx.stdoutPath, "utf8").trim();
+    const stdout = fs.readFileSync(ctx.stdoutPath, 'utf8').trim();
     if (!stdout) {
-      return { tool: "go test", status: "error", summary: "no output", logPath: ctx.logPath };
+      return { tool: 'go test', status: 'error', summary: 'no output', logPath: ctx.logPath };
     }
 
     const events: GoTestEvent[] = [];
-    for (const line of stdout.split("\n")) {
+    for (const line of stdout.split('\n')) {
       if (!line.trim()) continue;
       try {
         events.push(JSON.parse(line) as GoTestEvent);
@@ -66,20 +68,20 @@ const parser: ParserModule = {
 
     for (const e of events) {
       if (!e.Test) continue;
-      if (e.Action === "output") {
+      if (e.Action === 'output') {
         const outputs = testOutputs.get(e.Test) ?? [];
-        outputs.push(e.Output ?? "");
+        outputs.push(e.Output ?? '');
         testOutputs.set(e.Test, outputs);
-      } else if (e.Action === "pass") {
+      } else if (e.Action === 'pass') {
         passed++;
-      } else if (e.Action === "fail") {
+      } else if (e.Action === 'fail') {
         failed++;
       }
     }
 
     const failures: ParsedFailure[] = [];
     for (const e of events) {
-      if (e.Action !== "fail" || !e.Test) continue;
+      if (e.Action !== 'fail' || !e.Test) continue;
       const outputs = testOutputs.get(e.Test) ?? [];
 
       // Try parsing as a t.Error/t.Errorf output first
@@ -116,17 +118,17 @@ const parser: ParserModule = {
             id: e.Test,
             file: relFile,
             line: panic.line,
-            message: panic.message ?? "panic",
+            message: panic.message ?? 'panic',
           });
         } else {
-          failures.push({ id: e.Test, message: "test failed" });
+          failures.push({ id: e.Test, message: 'test failed' });
         }
       }
     }
 
     return {
-      tool: "go test",
-      status: failed > 0 ? "fail" : "pass",
+      tool: 'go test',
+      status: failed > 0 ? 'fail' : 'pass',
       summary: failed > 0 ? `${failed} failed, ${passed} passed` : `${passed} passed`,
       failures,
       logPath: ctx.logPath,

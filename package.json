@@ -5,11 +5,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "lint": "pnpm -r lint",
-    "format:check": "pnpm -r format:check",
-    "format:write": "pnpm -r format:write",
-    "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test"
+    "lint": "pnpm -r --filter './packages/*' lint",
+    "format:check": "pnpm -r --filter './packages/*' format:check",
+    "format:write": "pnpm -r --filter './packages/*' format:write",
+    "typecheck": "pnpm -r --filter './packages/*' typecheck",
+    "test": "pnpm -r --filter './packages/*' test",
+    "check": "pnpm lint && pnpm format:check && pnpm typecheck"
   },
   "pi": {
     "extensions": ["./packages/*/extensions"],
@@ -28,6 +29,7 @@
     "prettier": "^3.5.3",
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.33.1",
-    "vitest": "^3.1.3"
+    "vitest": "^3.1.3",
+    "@sinclair/typebox": "^0.34.0"
   }
 }

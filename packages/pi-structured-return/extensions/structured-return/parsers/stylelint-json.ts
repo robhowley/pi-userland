@@ -1,6 +1,6 @@
-import path from "node:path";
-import type { ParserModule, ParsedFailure } from "../types";
-import { safeReadFile } from "./utils";
+import path from 'node:path';
+import type { ParserModule, ParsedFailure } from '../types';
+import { safeReadFile } from './utils';
 
 interface StylelintWarning {
   line: number;
@@ -16,11 +16,17 @@ interface StylelintResult {
 }
 
 const parser: ParserModule = {
-  id: "stylelint-json",
+  id: 'stylelint-json',
   async parse(ctx) {
     const stdout = safeReadFile(ctx.stdoutPath).trim();
-    if (!stdout || stdout === "[]") {
-      return { tool: "stylelint", status: "pass", summary: "no lint errors", failures: [], logPath: ctx.logPath };
+    if (!stdout || stdout === '[]') {
+      return {
+        tool: 'stylelint',
+        status: 'pass',
+        summary: 'no lint errors',
+        failures: [],
+        logPath: ctx.logPath,
+      };
     }
 
     let results: StylelintResult[];
@@ -28,16 +34,18 @@ const parser: ParserModule = {
       results = JSON.parse(stdout) as StylelintResult[];
     } catch {
       return {
-        tool: "stylelint",
-        status: "error",
-        summary: "failed to parse stylelint JSON output",
+        tool: 'stylelint',
+        status: 'error',
+        summary: 'failed to parse stylelint JSON output',
         logPath: ctx.logPath,
       };
     }
 
     const failures: ParsedFailure[] = [];
     for (const result of results) {
-      const relPath = path.isAbsolute(result.source) ? path.relative(ctx.cwd, result.source) : result.source;
+      const relPath = path.isAbsolute(result.source)
+        ? path.relative(ctx.cwd, result.source)
+        : result.source;
       for (const w of result.warnings) {
         // Strip the trailing " (rule-name)" from text, but only if the
         // parenthesized content matches the actual rule name. Avoids
@@ -56,9 +64,9 @@ const parser: ParserModule = {
     }
 
     return {
-      tool: "stylelint",
-      status: failures.length > 0 ? "fail" : "pass",
-      summary: failures.length > 0 ? `${failures.length} lint errors` : "no lint errors",
+      tool: 'stylelint',
+      status: failures.length > 0 ? 'fail' : 'pass',
+      summary: failures.length > 0 ? `${failures.length} lint errors` : 'no lint errors',
       failures,
       logPath: ctx.logPath,
     };

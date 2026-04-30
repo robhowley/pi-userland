@@ -1,6 +1,6 @@
-import path from "node:path";
-import type { ParserModule, ParsedFailure } from "../types";
-import { safeReadFile } from "./utils";
+import path from 'node:path';
+import type { ParserModule, ParsedFailure } from '../types';
+import { safeReadFile } from './utils';
 
 interface ShellCheckItem {
   file: string;
@@ -12,14 +12,14 @@ interface ShellCheckItem {
 }
 
 const parser: ParserModule = {
-  id: "shellcheck-json",
+  id: 'shellcheck-json',
   async parse(ctx) {
     const stdout = safeReadFile(ctx.stdoutPath).trim();
-    if (!stdout || stdout === "[]") {
+    if (!stdout || stdout === '[]') {
       return {
-        tool: "shellcheck",
-        status: "pass",
-        summary: "no lint errors",
+        tool: 'shellcheck',
+        status: 'pass',
+        summary: 'no lint errors',
         failures: [],
         logPath: ctx.logPath,
       };
@@ -30,9 +30,9 @@ const parser: ParserModule = {
       items = JSON.parse(stdout) as ShellCheckItem[];
     } catch {
       return {
-        tool: "shellcheck",
-        status: "error",
-        summary: "failed to parse shellcheck JSON output",
+        tool: 'shellcheck',
+        status: 'error',
+        summary: 'failed to parse shellcheck JSON output',
         logPath: ctx.logPath,
       };
     }
@@ -49,9 +49,9 @@ const parser: ParserModule = {
     });
 
     return {
-      tool: "shellcheck",
-      status: failures.length > 0 ? "fail" : "pass",
-      summary: failures.length > 0 ? `${failures.length} lint errors` : "no lint errors",
+      tool: 'shellcheck',
+      status: failures.length > 0 ? 'fail' : 'pass',
+      summary: failures.length > 0 ? `${failures.length} lint errors` : 'no lint errors',
       failures,
       logPath: ctx.logPath,
     };

@@ -1,6 +1,6 @@
-import path from "node:path";
-import type { ParserModule, ParsedFailure } from "../types";
-import { extractJsStackLocation, safeReadFile } from "./utils";
+import path from 'node:path';
+import type { ParserModule, ParsedFailure } from '../types';
+import { extractJsStackLocation, safeReadFile } from './utils';
 
 interface MochaErr {
   message?: string;
@@ -30,28 +30,35 @@ function buildMessage(err: MochaErr): string {
     return `expected ${err.expected}, got ${err.actual}`;
   }
   // First line of message, stripped of newlines
-  const firstLine = (err.message ?? "test failed").split("\n")[0].trim();
+  const firstLine = (err.message ?? 'test failed').split('\n')[0].trim();
   return firstLine;
 }
 
 const parser: ParserModule = {
-  id: "mocha-json",
+  id: 'mocha-json',
   async parse(ctx) {
     const stdout = safeReadFile(ctx.stdoutPath).trim();
     if (!stdout) {
-      return { tool: "mocha", status: "error", summary: "no output", logPath: ctx.logPath };
+      return { tool: 'mocha', status: 'error', summary: 'no output', logPath: ctx.logPath };
     }
 
     let report: MochaReport;
     try {
       report = JSON.parse(stdout) as MochaReport;
     } catch {
-      return { tool: "mocha", status: "error", summary: "failed to parse mocha JSON output", logPath: ctx.logPath };
+      return {
+        tool: 'mocha',
+        status: 'error',
+        summary: 'failed to parse mocha JSON output',
+        logPath: ctx.logPath,
+      };
     }
 
     const failures: ParsedFailure[] = report.failures.map((test) => {
       const loc = extractJsStackLocation(test.err.stack);
-      const relFile = loc.file ? path.relative(ctx.cwd, path.resolve(ctx.cwd, loc.file)) : undefined;
+      const relFile = loc.file
+        ? path.relative(ctx.cwd, path.resolve(ctx.cwd, loc.file))
+        : undefined;
       return {
         id: test.fullTitle,
         file: relFile,
@@ -65,8 +72,8 @@ const parser: ParserModule = {
     const passed = report.stats.passes;
 
     return {
-      tool: "mocha",
-      status: failed > 0 ? "fail" : "pass",
+      tool: 'mocha',
+      status: failed > 0 ? 'fail' : 'pass',
       summary: failed > 0 ? `${failed} failed, ${passed} passed` : `${passed} passed`,
       failures,
       logPath: ctx.logPath,

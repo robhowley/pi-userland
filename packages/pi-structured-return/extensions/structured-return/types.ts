@@ -9,7 +9,7 @@ export type ParsedFailure = {
 export type ParsedResult = {
   tool: string;
   exitCode: number;
-  status: "pass" | "fail" | "error";
+  status: 'pass' | 'fail' | 'error';
   summary: string;
   cwd?: string;
   failures?: ParsedFailure[];
@@ -36,7 +36,7 @@ export type RunContext = {
 
 export type ParserModule = {
   id: string;
-  parse: (ctx: RunContext) => Promise<Omit<ParsedResult, "exitCode">>;
+  parse: (ctx: RunContext) => Promise<Omit<ParsedResult, 'exitCode'>>;
 };
 
 export type ParserRegistration = {

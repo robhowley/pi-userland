@@ -11,6 +11,9 @@ importers:
       '@eslint/js':
         specifier: ^9.31.0
         version: 9.39.4
+      '@sinclair/typebox':
+        specifier: ^0.34.0
+        version: 0.34.49
       '@types/node':
         specifier: ^22.15.17
         version: 22.19.17
@@ -61,6 +64,9 @@ importers:
       '@mariozechner/pi-coding-agent':
         specifier: '*'
         version: 0.68.1(ws@8.20.0)(zod@4.3.6)
+      '@mariozechner/pi-tui':
+        specifier: '*'
+        version: 0.68.1
       fast-xml-parser:
         specifier: ^5.4.1
         version: 5.5.8

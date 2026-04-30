@@ -1,6 +1,6 @@
-import path from "node:path";
-import type { ParserModule, ParsedFailure } from "../types";
-import { safeReadFile } from "./utils";
+import path from 'node:path';
+import type { ParserModule, ParsedFailure } from '../types';
+import { safeReadFile } from './utils';
 
 interface PyrightDiagnostic {
   file: string;
@@ -20,14 +20,14 @@ interface PyrightOutput {
 }
 
 const parser: ParserModule = {
-  id: "pyright-json",
+  id: 'pyright-json',
   async parse(ctx) {
     const stdout = safeReadFile(ctx.stdoutPath).trim();
     if (!stdout) {
       return {
-        tool: "pyright",
-        status: "pass",
-        summary: "no type errors",
+        tool: 'pyright',
+        status: 'pass',
+        summary: 'no type errors',
         failures: [],
         logPath: ctx.logPath,
       };
@@ -38,22 +38,22 @@ const parser: ParserModule = {
       output = JSON.parse(stdout);
     } catch {
       return {
-        tool: "pyright",
-        status: "error",
-        summary: "failed to parse pyright JSON output",
+        tool: 'pyright',
+        status: 'error',
+        summary: 'failed to parse pyright JSON output',
         logPath: ctx.logPath,
       };
     }
 
-    const diagnostics = (output.generalDiagnostics ?? []).filter((d) => d.severity === "error");
+    const diagnostics = (output.generalDiagnostics ?? []).filter((d) => d.severity === 'error');
     const failures: ParsedFailure[] = diagnostics.map((d) => {
       const relPath = path.relative(ctx.cwd, d.file);
       // pyright uses 0-based lines in JSON
       const line = d.range ? d.range.start.line + 1 : undefined;
       // Collapse multi-line messages (detail line after \n) into a single line
-      const message = d.message.split("\n")[0];
+      const message = d.message.split('\n')[0];
       return {
-        id: `${relPath}:${line}:${d.rule ?? "error"}`,
+        id: `${relPath}:${line}:${d.rule ?? 'error'}`,
         file: relPath,
         line,
         message,
@@ -64,14 +64,16 @@ const parser: ParserModule = {
     const summary = output.summary;
     const parts: string[] = [];
     if (summary) {
-      if (summary.errorCount) parts.push(`${summary.errorCount} error${summary.errorCount !== 1 ? "s" : ""}`);
-      if (summary.warningCount) parts.push(`${summary.warningCount} warning${summary.warningCount !== 1 ? "s" : ""}`);
+      if (summary.errorCount)
+        parts.push(`${summary.errorCount} error${summary.errorCount !== 1 ? 's' : ''}`);
+      if (summary.warningCount)
+        parts.push(`${summary.warningCount} warning${summary.warningCount !== 1 ? 's' : ''}`);
     }
 
     return {
-      tool: "pyright",
-      status: failures.length > 0 ? "fail" : "pass",
-      summary: parts.length > 0 ? parts.join(", ") : "no type errors",
+      tool: 'pyright',
+      status: failures.length > 0 ? 'fail' : 'pass',
+      summary: parts.length > 0 ? parts.join(', ') : 'no type errors',
       failures,
       logPath: ctx.logPath,
     };

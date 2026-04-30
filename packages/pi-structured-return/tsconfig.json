@@ -1,4 +1,4 @@
 {
   "extends": "../../tsconfig.base.json",
-  "include": ["extensions/structured-return/", "__tests__"]
+  "include": ["extensions/structured-return/", "__tests__", "examples/.pi/parsers/**/*.ts"]
 }

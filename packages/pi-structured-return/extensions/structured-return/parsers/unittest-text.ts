@@ -1,6 +1,6 @@
-import path from "node:path";
-import type { ParserModule, ParsedFailure } from "../types";
-import { safeReadFile } from "./utils";
+import path from 'node:path';
+import type { ParserModule, ParsedFailure } from '../types';
+import { safeReadFile } from './utils';
 
 // unittest output blocks are separated by ======
 // Each block starts with ERROR: or FAIL: line
@@ -10,12 +10,18 @@ const BLOCK_HEADER = /(ERROR|FAIL):\s+(\S+)\s+\(([^)]+)\)/;
 const FILE_LINE = /File\s+"([^"]+)",\s+line\s+(\d+)/;
 
 const parser: ParserModule = {
-  id: "unittest-text",
+  id: 'unittest-text',
   async parse(ctx) {
     // Python unittest writes all output (results, tracebacks, summary) to stderr.
     const stderr = safeReadFile(ctx.stderrPath).trim();
     if (!stderr) {
-      return { tool: "unittest", status: "pass", summary: "no output", failures: [], logPath: ctx.logPath };
+      return {
+        tool: 'unittest',
+        status: 'pass',
+        summary: 'no output',
+        failures: [],
+        logPath: ctx.logPath,
+      };
     }
 
     // Parse the summary line: "Ran N tests in Xs" and "FAILED (failures=N, errors=N)" or "OK"
@@ -24,13 +30,13 @@ const parser: ParserModule = {
     // Parse skipped count from "FAILED (failures=N, skipped=N)" or "OK (skipped=N)"
     const skippedMatch = stderr.match(/skipped=(\d+)/);
     const skipped = skippedMatch ? Number(skippedMatch[1]) : 0;
-    const isOk = stderr.includes("\nOK");
+    const isOk = stderr.includes('\nOK');
 
     if (isOk) {
       const passed = totalTests - skipped;
       return {
-        tool: "unittest",
-        status: "pass",
+        tool: 'unittest',
+        status: 'pass',
         summary: `${passed} passed`,
         failures: [],
         logPath: ctx.logPath,
@@ -46,7 +52,7 @@ const parser: ParserModule = {
       if (!headerMatch) continue;
 
       const [, kind, testName] = headerMatch;
-      const lines = block.split("\n");
+      const lines = block.split('\n');
 
       // Find the last File "..." line in the traceback (the user code, not framework)
       let file: string | undefined;
@@ -80,7 +86,7 @@ const parser: ParserModule = {
         traceLines.push(trimmed);
       }
       const nonEmpty = traceLines.filter(Boolean);
-      const errorLine = nonEmpty[nonEmpty.length - 1] ?? "test failed";
+      const errorLine = nonEmpty[nonEmpty.length - 1] ?? 'test failed';
 
       // For assertions, extract expected/actual from "AssertionError: X != Y"
       let message = errorLine;
@@ -89,14 +95,18 @@ const parser: ParserModule = {
         message = assertMatch[1];
       }
 
-      const relFile = file ? (path.isAbsolute(file) ? path.relative(ctx.cwd, file) : file) : undefined;
+      const relFile = file
+        ? path.isAbsolute(file)
+          ? path.relative(ctx.cwd, file)
+          : file
+        : undefined;
 
       failures.push({
         id: `${testName}`,
         file: relFile,
         line,
         message,
-        rule: kind === "ERROR" ? "error" : "assertion",
+        rule: kind === 'ERROR' ? 'error' : 'assertion',
       });
     }
 
@@ -104,8 +114,8 @@ const parser: ParserModule = {
     const passed = totalTests - failed - skipped;
 
     return {
-      tool: "unittest",
-      status: failed > 0 ? "fail" : "pass",
+      tool: 'unittest',
+      status: failed > 0 ? 'fail' : 'pass',
       summary: failed > 0 ? `${failed} failed, ${passed} passed` : `${passed} passed`,
       failures,
       logPath: ctx.logPath,
