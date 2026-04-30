@@ -37,7 +37,7 @@ packages/<name>/
 ├── __tests__/            # Test files
 ├── package.json
 ├── README.md
-└── tsconfig.json
+└── tsconfig.json         # Minimalist, relies on base config, no build
 ```
 
 Where `<basename>` is `<name>` without the `pi-` prefix (e.g., `session-hygiene` for package `pi-session-hygiene`).
@@ -147,7 +147,7 @@ After creating the package:
 
 1. Update `.github/release-please-config.json` to include the new package
 2. Update `.github/release-please-manifest.json` with initial version
-3. Update `README.md` to list the new package
+3. Update repo level `README.md` to list the new package
 
 ## Requirements
 
