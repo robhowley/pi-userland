@@ -1,0 +1,37 @@
+{
+  "name": "@robhowley/pi-session-hygiene",
+  "version": "0.1.0",
+  "type": "module",
+  "files": [
+    "extensions"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": ["./extensions/session-hygiene"]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/roberthowley/pi-userland.git",
+    "directory": "packages/pi-session-hygiene"
+  },
+  "homepage": "https://github.com/roberthowley/pi-userland/tree/main/packages/pi-session-hygiene",
+  "scripts": {
+    "lint": "eslint extensions/session-hygiene/ __tests__/",
+    "format:check": "prettier --check extensions/session-hygiene/ __tests__/",
+    "format:write": "prettier --write extensions/session-hygiene/ __tests__/",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.17"
+  }
+}

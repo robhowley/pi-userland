@@ -1,0 +1,21 @@
+name: PR Title Check
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+jobs:
+  check-title:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check conventional commit prefix
+        run: |
+          title="${{ github.event.pull_request.title }}"
+          if [[ "$title" =~ ^(feat|fix|docs|chore|refactor|test|style|perf|ci|build|revert)(\(.+\))?!?:\ .+ ]]; then
+            echo "PR title is valid: $title"
+          else
+            echo "ERROR: PR title must follow conventional commits format."
+            echo "Examples: 'feat: add login', 'fix: null pointer', 'feat!: rename API'"
+            echo "Got: $title"
+            exit 1
+          fi

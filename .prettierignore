@@ -1,0 +1,7 @@
+**/node_modules/
+**/dist/
+**/.turbo/
+.pnpm-store/
+*.tgz
+.pi-local/
+vite.config.ts.timestamp-*.mjs

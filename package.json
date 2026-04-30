@@ -1,0 +1,27 @@
+{
+  "name": "pi-userland",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Personal monorepo for independently publishable Pi packages",
+  "type": "module",
+  "scripts": {
+    "lint": "pnpm -r lint",
+    "format:check": "pnpm -r format:check",
+    "format:write": "pnpm -r format:write",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test"
+  },
+  "keywords": ["pi-package", "monorepo"],
+  "author": "Rob Howley",
+  "license": "MIT",
+  "devDependencies": {
+    "@eslint/js": "^9.31.0",
+    "@types/node": "^22.15.17",
+    "eslint": "^9.31.0",
+    "eslint-config-prettier": "^10.1.5",
+    "prettier": "^3.5.3",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.33.1",
+    "vitest": "^3.1.3"
+  }
+}
