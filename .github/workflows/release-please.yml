@@ -30,9 +30,8 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           echo "Released packages: ${{ steps.release.outputs.paths_released }}"
-          # paths_released is comma-separated, not JSON array
-          IFS=',' read -ra pkgs <<< "${{ steps.release.outputs.paths_released }}"
-          for pkg in "${pkgs[@]}"; do
+          # paths_released is a JSON array
+          echo '${{ steps.release.outputs.paths_released }}' | jq -r '.[]' | while read pkg; do
             echo "Publishing $pkg"
             cd "$pkg" && npm publish && cd -
           done
