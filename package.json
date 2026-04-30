@@ -11,6 +11,12 @@
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test"
   },
+  "pi": {
+    "extensions": ["./packages/*/extensions"],
+    "skills": ["./packages/*/skills"],
+    "prompts": ["./packages/*/prompts"],
+    "themes": ["./packages/*/themes"]
+  },
   "keywords": ["pi-package", "monorepo"],
   "author": "Rob Howley",
   "license": "MIT",
