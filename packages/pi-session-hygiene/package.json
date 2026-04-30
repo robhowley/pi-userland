@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "type": "module",
   "files": [
-    "extensions"
+    "extensions",
+    "README.md",
+    "../LICENSE"
   ],
   "publishConfig": {
     "access": "public"
