@@ -17,20 +17,29 @@ describe('checkstyle-xml parser', () => {
     };
   });
 
+  const fs = require('fs');
+  const path = require('path');
+
   const readFixture = (name: string): string => {
-    const fs = require('fs');
-    const path = require('path');
     return fs.readFileSync(
       path.join(__dirname, '..', 'fixtures', 'checkstyle', name),
       'utf8'
     );
   };
 
-  it('handles happy path with absolute path and FQCN source', async () => {
-    const fixturePath = '/tmp/happy-path.xml';
-    const fs = require('fs');
-    fs.writeFileSync(fixturePath, readFixture('happy-path.xml'));
+  const tempCounter = { n: 0 };
+  const writeTempXml = (content: string): string => {
+    const tempPath = `/tmp/checkstyle-${Date.now()}-${tempCounter.n++}.xml`;
+    fs.writeFileSync(tempPath, content);
+    return tempPath;
+  };
 
+  const cleanupTemp = (tempPath: string) => {
+    fs.unlinkSync(tempPath);
+  };
+
+  it('handles happy path with absolute path and FQCN source', async () => {
+    const fixturePath = writeTempXml(readFixture('happy-path.xml'));
     ctx.artifactPaths = [fixturePath];
 
     const result = await parser.parse(ctx);
@@ -55,14 +64,11 @@ describe('checkstyle-xml parser', () => {
     expect(result.failures[1].message).toBe('Expected indent of 8 characters, found 4.');
     expect(result.failures[1].rule).toBe('IndentationCheck');
 
-    fs.unlinkSync(fixturePath);
+    cleanupTemp(fixturePath);
   });
 
   it('handles multiple files with mixed absolute and relative paths', async () => {
-    const fixturePath = '/tmp/multi-file.xml';
-    const fs = require('fs');
-    fs.writeFileSync(fixturePath, readFixture('multi-file.xml'));
-
+    const fixturePath = writeTempXml(readFixture('multi-file.xml'));
     ctx.artifactPaths = [fixturePath];
 
     const result = await parser.parse(ctx);
@@ -86,14 +92,11 @@ describe('checkstyle-xml parser', () => {
     expect(result.failures[3].file).toBe('src/main/java/com/baz/ClassC.java');
     expect(result.failures[3].rule).toBe('JavadocClassCheck');
 
-    fs.unlinkSync(fixturePath);
+    cleanupTemp(fixturePath);
   });
 
   it('handles empty report (no errors)', async () => {
-    const fixturePath = '/tmp/empty.xml';
-    const fs = require('fs');
-    fs.writeFileSync(fixturePath, readFixture('empty.xml'));
-
+    const fixturePath = writeTempXml(readFixture('empty.xml'));
     ctx.artifactPaths = [fixturePath];
 
     const result = await parser.parse(ctx);
@@ -102,14 +105,11 @@ describe('checkstyle-xml parser', () => {
     expect(result.summary).toBe('no lint errors');
     expect(result.failures).toHaveLength(0);
 
-    fs.unlinkSync(fixturePath);
+    cleanupTemp(fixturePath);
   });
 
   it('handles malformed XML gracefully', async () => {
-    const fixturePath = '/tmp/malformed.xml';
-    const fs = require('fs');
-    fs.writeFileSync(fixturePath, 'not valid xml < broken');
-
+    const fixturePath = writeTempXml('not valid xml < broken');
     ctx.artifactPaths = [fixturePath];
 
     const result = await parser.parse(ctx);
@@ -118,7 +118,7 @@ describe('checkstyle-xml parser', () => {
     expect(result.summary).toBe('failed to parse checkstyle XML output');
     expect(result.failures).toHaveLength(0);
 
-    fs.unlinkSync(fixturePath);
+    cleanupTemp(fixturePath);
   });
 
   it('handles missing optional line attribute', async () => {
@@ -129,10 +129,7 @@ describe('checkstyle-xml parser', () => {
   </file>
 </checkstyle>`;
 
-    const fixturePath = '/tmp/no-line.xml';
-    const fs = require('fs');
-    fs.writeFileSync(fixturePath, xml);
-
+    const fixturePath = writeTempXml(xml);
     ctx.artifactPaths = [fixturePath];
 
     const result = await parser.parse(ctx);
@@ -143,7 +140,7 @@ describe('checkstyle-xml parser', () => {
     expect(result.failures[0].line).toBeUndefined();
     expect(result.failures[0].rule).toBe('BarCheck');
 
-    fs.unlinkSync(fixturePath);
+    cleanupTemp(fixturePath);
   });
 
   it('handles missing optional source attribute', async () => {
@@ -154,10 +151,7 @@ describe('checkstyle-xml parser', () => {
   </file>
 </checkstyle>`;
 
-    const fixturePath = '/tmp/no-source.xml';
-    const fs = require('fs');
-    fs.writeFileSync(fixturePath, xml);
-
+    const fixturePath = writeTempXml(xml);
     ctx.artifactPaths = [fixturePath];
 
     const result = await parser.parse(ctx);
@@ -166,7 +160,7 @@ describe('checkstyle-xml parser', () => {
     expect(result.failures).toHaveLength(1);
     expect(result.failures[0].rule).toBeUndefined();
 
-    fs.unlinkSync(fixturePath);
+    cleanupTemp(fixturePath);
   });
 
   it('handles missing optional severity attribute', async () => {
@@ -177,10 +171,7 @@ describe('checkstyle-xml parser', () => {
   </file>
 </checkstyle>`;
 
-    const fixturePath = '/tmp/no-severity.xml';
-    const fs = require('fs');
-    fs.writeFileSync(fixturePath, xml);
-
+    const fixturePath = writeTempXml(xml);
     ctx.artifactPaths = [fixturePath];
 
     const result = await parser.parse(ctx);
@@ -190,14 +181,11 @@ describe('checkstyle-xml parser', () => {
     // Missing severity defaults to error, showing breakdown format
     expect(result.summary).toBe('1 findings (1 errors)');
 
-    fs.unlinkSync(fixturePath);
+    cleanupTemp(fixturePath);
   });
 
   it('filters out severity="ignore" findings', async () => {
-    const fixturePath = '/tmp/mixed-severity.xml';
-    const fs = require('fs');
-    fs.writeFileSync(fixturePath, readFixture('mixed-severity.xml'));
-
+    const fixturePath = writeTempXml(readFixture('mixed-severity.xml'));
     ctx.artifactPaths = [fixturePath];
 
     const result = await parser.parse(ctx);
@@ -206,14 +194,11 @@ describe('checkstyle-xml parser', () => {
     // Verify the ignored one is not in the output
     expect(result.failures.every((f) => !f.message?.includes('Ignored'))).toBe(true);
 
-    fs.unlinkSync(fixturePath);
+    cleanupTemp(fixturePath);
   });
 
   it('handles mixed severities in summary', async () => {
-    const fixturePath = '/tmp/mixed-severity.xml';
-    const fs = require('fs');
-    fs.writeFileSync(fixturePath, readFixture('mixed-severity.xml'));
-
+    const fixturePath = writeTempXml(readFixture('mixed-severity.xml'));
     ctx.artifactPaths = [fixturePath];
 
     const result = await parser.parse(ctx);
@@ -221,14 +206,11 @@ describe('checkstyle-xml parser', () => {
     expect(result.status).toBe('fail');
     expect(result.summary).toBe('3 findings (1 errors, 1 warnings, 1 info)');
 
-    fs.unlinkSync(fixturePath);
+    cleanupTemp(fixturePath);
   });
 
   it('preserves ktlint-style source IDs (category:id format)', async () => {
-    const fixturePath = '/tmp/ktlint-style.xml';
-    const fs = require('fs');
-    fs.writeFileSync(fixturePath, readFixture('ktlint-style.xml'));
-
+    const fixturePath = writeTempXml(readFixture('ktlint-style.xml'));
     ctx.artifactPaths = [fixturePath];
 
     const result = await parser.parse(ctx);
@@ -236,7 +218,7 @@ describe('checkstyle-xml parser', () => {
     expect(result.failures).toHaveLength(1);
     expect(result.failures[0].rule).toBe('standard:semicolon'); // not mangled
 
-    fs.unlinkSync(fixturePath);
+    cleanupTemp(fixturePath);
   });
 
   it('does not mangle non-FQCN source names', async () => {
@@ -247,10 +229,7 @@ describe('checkstyle-xml parser', () => {
   </file>
 </checkstyle>`;
 
-    const fixturePath = '/tmp/custom-source.xml';
-    const fs = require('fs');
-    fs.writeFileSync(fixturePath, xml);
-
+    const fixturePath = writeTempXml(xml);
     ctx.artifactPaths = [fixturePath];
 
     const result = await parser.parse(ctx);
@@ -258,11 +237,10 @@ describe('checkstyle-xml parser', () => {
     expect(result.failures).toHaveLength(1);
     expect(result.failures[0].rule).toBe('my-custom-check');
 
-    fs.unlinkSync(fixturePath);
+    cleanupTemp(fixturePath);
   });
 
   it('aggregates multiple artifact paths', async () => {
-    const fs = require('fs');
     const xml1 = `<?xml version="1.0" encoding="UTF-8"?>
 <checkstyle version="10.12.3">
   <file name="File1.java">
@@ -277,10 +255,8 @@ describe('checkstyle-xml parser', () => {
   </file>
 </checkstyle>`;
 
-    const fixturePath1 = '/tmp/artifact1.xml';
-    const fixturePath2 = '/tmp/artifact2.xml';
-    fs.writeFileSync(fixturePath1, xml1);
-    fs.writeFileSync(fixturePath2, xml2);
+    const fixturePath1 = writeTempXml(xml1);
+    const fixturePath2 = writeTempXml(xml2);
 
     ctx.artifactPaths = [fixturePath1, fixturePath2];
 
@@ -290,12 +266,11 @@ describe('checkstyle-xml parser', () => {
     expect(result.failures[0].file).toBe('File1.java');
     expect(result.failures[1].file).toBe('File2.java');
 
-    fs.unlinkSync(fixturePath1);
-    fs.unlinkSync(fixturePath2);
+    cleanupTemp(fixturePath1);
+    cleanupTemp(fixturePath2);
   });
 
   it('falls back to stdoutPath when artifactPaths is empty', async () => {
-    const fs = require('fs');
     const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <checkstyle version="10.12.3">
   <file name="StdoutFile.java">
@@ -303,9 +278,7 @@ describe('checkstyle-xml parser', () => {
   </file>
 </checkstyle>`;
 
-    const stdoutPath = '/tmp/stdout.xml';
-    fs.writeFileSync(stdoutPath, xml);
-
+    const stdoutPath = writeTempXml(xml);
     ctx.artifactPaths = [];
     ctx.stdoutPath = stdoutPath;
 
@@ -314,14 +287,11 @@ describe('checkstyle-xml parser', () => {
     expect(result.failures).toHaveLength(1);
     expect(result.failures[0].file).toBe('StdoutFile.java');
 
-    fs.unlinkSync(stdoutPath);
+    cleanupTemp(stdoutPath);
   });
 
   it('handles ktlint checkstyle XML with category:id source format', async () => {
-    const fixturePath = '/tmp/ktlint-full.xml';
-    const fs = require('fs');
-    fs.writeFileSync(fixturePath, readFixture('ktlint-sample.xml'));
-
+    const fixturePath = writeTempXml(readFixture('ktlint-sample.xml'));
     ctx.artifactPaths = [fixturePath];
 
     const result = await parser.parse(ctx);
@@ -341,6 +311,6 @@ describe('checkstyle-xml parser', () => {
     expect(errorWithColumn).toBeDefined();
     expect(errorWithColumn?.severity).toBe('error');
 
-    fs.unlinkSync(fixturePath);
+    cleanupTemp(fixturePath);
   });
 });
