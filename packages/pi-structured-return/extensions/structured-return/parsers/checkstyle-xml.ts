@@ -134,8 +134,8 @@ const parser: ParserModule = {
           const failure: ParsedFailure = {
             id: generateId(normalizedFile, line, rule),
             file: normalizedFile,
-            line: Number.isNaN(line) ? undefined : line,
-            column: Number.isNaN(column) ? undefined : column,
+            line: line,
+            column: column,
             message: err.message?.trim() || undefined,
             rule: rule,
             severity: severity === 'unknown' ? undefined : severity,
@@ -163,16 +163,11 @@ const parser: ParserModule = {
       // Default to fail on any finding (error or warning), pass only on info
       status = errorCount > 0 || warningCount > 0 ? 'fail' : 'pass';
 
-      // Build summary
-      if (allErrors.length === 0) {
-        summary = 'no lint errors';
-      } else {
-        const parts = [];
-        if (errorCount > 0) parts.push(`${errorCount} errors`);
-        if (warningCount > 0) parts.push(`${warningCount} warnings`);
-        if (infoCount > 0) parts.push(`${infoCount} info`);
-        summary = `${allErrors.length} findings (${parts.join(', ')})`;
-      }
+      const parts = [];
+      if (errorCount > 0) parts.push(`${errorCount} errors`);
+      if (warningCount > 0) parts.push(`${warningCount} warnings`);
+      if (infoCount > 0) parts.push(`${infoCount} info`);
+      summary = `${allErrors.length} findings (${parts.join(', ')})`;
     }
 
     return {
