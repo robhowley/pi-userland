@@ -1,0 +1,9 @@
+{
+  "tool": "checkstyle",
+  "parser": "checkstyle-xml",
+  "rawTokens": 261,
+  "structuredTokens": 388,
+  "savings": -127,
+  "savingsPercent": -48.7,
+  "timestamp": "2026-05-01T17:07:34.558Z"
+}
