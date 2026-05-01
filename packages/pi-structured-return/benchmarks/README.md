@@ -7,7 +7,7 @@ Each benchmark runs the same scenario two ways — raw tool output (what the `ba
 Token counts use `cl100k_base` via [tiktoken](https://github.com/openai/tiktoken). Install it before running:
 
 ```bash
-pip install tiktoken
+pnpm add -D tiktoken
 ```
 
 Open a pi session in this directory and send the following prompt:
@@ -440,6 +440,16 @@ javac linters/javac/TypeCheck.java
 
 # structured
 structured_return({ command: "javac linters/javac/TypeCheck.java", parseAs: "javac-text" })
+```
+
+### checkstyle
+
+```bash
+# raw
+java -jar checkstyle-10.23.1-all.jar -c linters/checkstyle/checkstyle.xml linters/checkstyle/TypeCheck.java
+
+# structured
+structured_return({ command: "java -jar checkstyle-10.23.1-all.jar -c linters/checkstyle/checkstyle.xml -f xml linters/checkstyle/TypeCheck.java", parseAs: "checkstyle-xml" })
 ```
 
 ### htmlhint

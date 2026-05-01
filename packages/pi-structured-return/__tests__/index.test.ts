@@ -55,6 +55,22 @@ describe("formatResult", () => {
     expect(result).toContain("src/foo.ts:10");
     expect(result).not.toContain("/project/src/foo.ts");
   });
+
+  it("includes column and severity in failure lines", () => {
+    const result = formatResult({
+      tool: "checkstyle",
+      exitCode: 4,
+      status: "fail",
+      summary: "2 findings (2 errors)",
+      cwd: "/project",
+      failures: [
+        { id: "src/Test.java:5:1:LineLength", file: "src/Test.java", line: 5, column: 1, message: "Line is too long.", rule: "LineLength", severity: "error" },
+      ],
+    });
+    expect(result).toContain("src/Test.java:5:1");
+    expect(result).toContain("[error]");
+    expect(result).toContain("[LineLength]");
+  });
 });
 
 describe("finalizeResult", () => {

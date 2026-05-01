@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<checkstyle version="10.12.3">
+  <file name="src/main/java/Test.java">
+    <error line="5" message="Issue 1" source="com.puppycrawl.tools.checkstyle.TestCheck" severity="error"/>
+    <error line="10" message="Issue 2" source="com.puppycrawl.tools.checkstyle.AnotherCheck" severity="warning"/>
+    <error line="15" message="Issue 3" source="com.puppycrawl.tools.checkstyle.ThirdCheck" severity="info"/>
+    <error line="20" message="Ignored issue" source="com.puppycrawl.tools.checkstyle.IgnoreCheck" severity="ignore"/>
+  </file>
+</checkstyle>

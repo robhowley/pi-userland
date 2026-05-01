@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<checkstyle version="10.12.3">
+  <file name="src/main/java/Test.java">
+    <error message="Some issue" source="standard:semicolon" severity="error"/>
+  </file>
+</checkstyle>

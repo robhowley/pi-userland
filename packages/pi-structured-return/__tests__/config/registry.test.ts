@@ -19,6 +19,16 @@ describe("resolveParser priority", () => {
     expect(parser.id).toBe("eslint-json");
   });
 
+  it("explicit parseAs=checkstyle-xml works", async () => {
+    const parser = await resolveParser({
+      cwd: "/project",
+      parseAs: "checkstyle-xml",
+      argv: ["checkstyle", "src/"],
+      registrations: [],
+    });
+    expect(parser.id).toBe("checkstyle-xml");
+  });
+
   it("project registration wins over auto-detect", async () => {
     const parser = await resolveParser({
       cwd: "/project",
@@ -140,6 +150,18 @@ describe("AUTO_DETECT", () => {
 
     it("pytest --junitxml matches junit-xml", async () => {
       expect(await detect(["pytest", "--junitxml=report.xml"])).toBe("junit-xml");
+    });
+
+    it("checkstyle -f xml matches checkstyle-xml", async () => {
+      expect(await detect(["checkstyle", "-f", "xml", "src/"])).toBe("checkstyle-xml");
+    });
+
+    it("ktlint --reporter=checkstyle matches checkstyle-xml", async () => {
+      expect(await detect(["ktlint", "--reporter=checkstyle", "src/"])).toBe("checkstyle-xml");
+    });
+
+    it("ktlint --reporter checkstyle (split) matches checkstyle-xml", async () => {
+      expect(await detect(["ktlint", "--reporter", "checkstyle", "src/"])).toBe("checkstyle-xml");
     });
   });
 

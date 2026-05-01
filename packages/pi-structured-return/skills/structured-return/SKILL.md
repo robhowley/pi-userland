@@ -238,6 +238,13 @@ Pest supports the same JUnit XML logging flag as PHPUnit.
 
 - `structured_return({ command: "xcodebuild test -scheme [scheme] -destination '[destination]' 2>&1 | xcbeautify --report junit --output .tmp", parseAs: "junit-xml", artifactPaths: [".tmp/report.junit.xml"] })` — xcbeautify writes `report.junit.xml` into the `--output` directory; run `xcodebuild -showdestinations -scheme [scheme]` first to find the correct `[destination]` string for the project
 
+### checkstyle
+
+Checkstyle is the standard Java linter — `checkstyle-xml` parses its XML output. Supports both Checkstyle and ktlint (which emits compatible XML).
+
+- `structured_return({ command: "checkstyle -c [config.xml] -f xml [files]", parseAs: "checkstyle-xml" })` — Checkstyle native; scope goes in `[files]`
+- `structured_return({ command: "ktlint [files] --reporter=checkstyle", parseAs: "checkstyle-xml" })` — ktlint with built-in checkstyle reporter
+
 ## Already compact — use `bash` directly
 
 These tools were evaluated for structured parsing but their output is already compact enough that a parser adds no token reduction. Use `bash` instead of `structured_return`.

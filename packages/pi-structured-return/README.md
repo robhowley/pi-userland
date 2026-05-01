@@ -105,7 +105,7 @@ Benchmark: 1 file, 1–2 errors. Reduction scales with error count since raw out
 Benchmark: 1 file, 1–2 violations. Reduction is a conservative lower bound — scales with file and error count since raw output repeats paths, source snippets, and annotations per violation.
 
 | Tool               | Raw | Structured | Reduction | Notes                                                                            |
-| ------------------ | --- | ---------- | --------- | -------------------------------------------------------------------------------- |
+| ------------------ |-----|------------|-----------|----------------------------------------------------------------------------------|
 | `isort --check`    | 143 | 29         | **80%**   | strips diff hunks, absolute paths, timestamps; lists files with unsorted imports |
 | `black --check`    | 155 | 31         | **80%**   | strips diff hunks, emoji, timestamps; lists files needing reformatting           |
 | `ruff check`       | 107 | 52         | **51%**   | source context + help text per error                                             |
@@ -117,6 +117,7 @@ Benchmark: 1 file, 1–2 violations. Reduction is a conservative lower bound —
 | `rubocop`          | 149 | 90         | **40%**   | strips source snippets, caret indicators, summary line                           |
 | `tsc`              | 107 | 72         | **33%**   | vs `--pretty true` default; source snippets and underlines stripped              |
 | `stylelint`        | 70  | 51         | **27%**   | strips summary footer and fix hint                                               |
+| `checkstyle`       | 126 | 100        | **21%**   | relative paths, preamble, footer                                                 |
 | `pylint`           | 141 | 120        | **15%**   | strips header, score line, separator; scales with error count                    |
 | `prettier --check` | 38  | 33         | **13%**   | strips preamble, [warn] prefixes, footer hint; scales with file count            |
 | `hadolint`         | 178 | 156        | **12%**   | strips ANSI color codes and level labels; measured vs colored output             |

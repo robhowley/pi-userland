@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<checkstyle version="10.12.3">
+  <file name="src/main/java/com/foo/ClassA.java">
+    <error line="10" message="Unused import." source="com.puppycrawl.tools.checkstyle.checks.imports.IllegalImportCheck" severity="warning"/>
+    <error line="20" message="Line too long." source="com.puppycrawl.tools.checkstyle.checks.naming.ParameterNameCheck" severity="error"/>
+  </file>
+  <file name="src/main/java/com/bar/ClassB.java">
+    <error line="5" message="Whitespace around bracket." source="com.puppycrawl.tools.checkstyle.checks.whitespace.WhitespaceAroundCheck" severity="info"/>
+  </file>
+  <file name="src/main/java/com/baz/ClassC.java">
+    <error line="15" message="Missing Javadoc." source="com.puppycrawl.tools.checkstyle.checks.javadoc.JavadocClassCheck" severity="error"/>
+  </file>
+</checkstyle>
