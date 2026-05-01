@@ -1,0 +1,44 @@
+
+  ✔ adds two numbers correctly
+  ✘ [fail]: multiplies two numbers correctly
+  ✘ [fail]: does not divide by zero Error thrown in test
+  ─
+
+  multiplies two numbers correctly
+
+  test_math.js:8
+
+   7: test('multiplies two numbers correctly', t => {
+   8:     t.is(3 * 4, 99);                           
+   9: });                                            
+
+  Difference (- actual, + expected):
+
+  - 12
+  + 99
+
+
+
+  does not divide by zero
+
+  Error thrown in test:
+
+  TypeError {
+    message: 'Cannot read properties of null (reading \'value\')',
+  }
+
+  TypeError: Cannot read properties of null (reading 'value')
+      at /Users/roberthowley/src/github.com/pi-structured-return/benchmarks/test-runners/ava/test_math.js:12:29
+      at Test.callFn (file:///Users/roberthowley/src/github.com/pi-structured-return/benchmarks/test-runners/ava/node_modules/ava/lib/test.js:525:26)
+      at Test.run (file:///Users/roberthowley/src/github.com/pi-structured-return/benchmarks/test-runners/ava/node_modules/ava/lib/test.js:534:33)
+      at Runner.runSingle (file:///Users/roberthowley/src/github.com/pi-structured-return/benchmarks/test-runners/ava/node_modules/ava/lib/runner.js:280:33)
+      at Runner.runTest (file:///Users/roberthowley/src/github.com/pi-structured-return/benchmarks/test-runners/ava/node_modules/ava/lib/runner.js:362:30)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Promise.all (index 2)
+      at async file:///Users/roberthowley/src/github.com/pi-structured-return/benchmarks/test-runners/ava/node_modules/ava/lib/runner.js:515:21
+      at async Runner.start (file:///Users/roberthowley/src/github.com/pi-structured-return/benchmarks/test-runners/ava/node_modules/ava/lib/runner.js:523:15)
+
+  ─
+
+  2 tests failed
+  1 test passed

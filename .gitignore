@@ -41,3 +41,29 @@ pnpm-debug.log*
 
 # Vite
 vite.config.ts.timestamp-*.mjs
+
+# Benchmark build related
+.venv
+__pycache__
+.tmp/
+
+# Gradle
+benchmarks/test-runners/java/.gradle/
+benchmarks/test-runners/java/build/
+
+# Maven
+benchmarks/test-runners/maven/target/
+
+# .NET
+benchmarks/test-runners/dotnet/bin/
+benchmarks/test-runners/dotnet/obj/
+
+# Rust / Cargo
+benchmarks/test-runners/cargo/target/
+benchmarks/test-runners/cargo-build/target/
+
+# PHPUnit / Pest
+benchmarks/test-runners/phpunit/vendor/
+benchmarks/test-runners/phpunit/.phpunit.result.cache
+benchmarks/test-runners/pest/vendor/
+benchmarks/test-runners/pest/.phpunit.result.cache

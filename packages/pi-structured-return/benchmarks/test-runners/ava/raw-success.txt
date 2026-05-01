@@ -1,0 +1,4 @@
+  ✔ adds two numbers correctly
+  ─
+
+  1 test passed

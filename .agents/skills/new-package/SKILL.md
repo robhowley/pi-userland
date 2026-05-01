@@ -84,7 +84,7 @@ mkdir -p packages/$NAME/__tests__
     "format:check": "prettier --check extensions/",
     "format:write": "prettier --write extensions/",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run __tests__"
   },
   "peerDependencies": {
     "@mariozechner/pi-ai": "*",

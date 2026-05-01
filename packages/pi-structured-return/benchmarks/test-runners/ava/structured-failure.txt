@@ -1,0 +1,13 @@
+tool: ava
+status: fail
+summary: 2 failed, 1 passed
+failures:
+  - id: multiplies two numbers correctly
+    file: test_math.js
+    line: 8
+    message: expected 99, got 12
+  - id: does not divide by zero
+    file: benchmarks/test-runners/ava/test_math.js
+    line: 12
+    message: Cannot read properties of null (reading 'value')
+logPath: /tmp/sr-xxx/log

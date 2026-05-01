@@ -1,0 +1,4 @@
+tool: ava
+status: pass
+summary: 1 passed
+logPath: /tmp/sr-xxx/log
