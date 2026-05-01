@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<checkstyle version="10.12.3">
+  <file name="src/main/java/com/foo/BarCheck.java">
+    <error line="42" column="15" message="Missing a Javadoc comment." source="com.puppycrawl.tools.checkstyle.checks.javadoc.JavadocMethodCheck" severity="warning"/>
+    <error line="55" column="8" message="Expected indent of 8 characters, found 4." source="com.puppycrawl.tools.checkstyle.checks.indentation.IndentationCheck" severity="error"/>
+  </file>
+</checkstyle>

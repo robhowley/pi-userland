@@ -36,6 +36,7 @@ import jsonlintText from '../parsers/jsonlint-text';
 import npmAuditJson from '../parsers/npm-audit-json';
 import isortText from '../parsers/isort-text';
 import htmlhintJson from '../parsers/htmlhint-json';
+import checkstyleXml from '../parsers/checkstyle-xml';
 import tailFallback from '../parsers/tail-fallback';
 
 const builtIns: Record<string, ParserModule> = {
@@ -75,6 +76,7 @@ const builtIns: Record<string, ParserModule> = {
   'npm-audit-json': npmAuditJson,
   'isort-text': isortText,
   'htmlhint-json': htmlhintJson,
+  'checkstyle-xml': checkstyleXml,
   'tail-fallback': tailFallback,
 };
 
