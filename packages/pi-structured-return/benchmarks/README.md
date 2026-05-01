@@ -10,7 +10,7 @@ Token counts use `cl100k_base` via [tiktoken](https://github.com/openai/tiktoken
 pnpm add -D tiktoken
 ```
 
-Then open a pi session in this directory and send the following prompt:
+Open a pi session in this directory and send the following prompt:
 
 > Read benchmarks/README.md. For each tool listed, run both the raw command using the bash tool and the structured version using structured_return. For each pair, count the tokens in what was returned to you as the tool result using cl100k_base (tiktoken). Then produce a markdown table with columns: Parser, Raw (tokens), Structured (tokens), Reduction (%). One row per tool.
 
@@ -451,8 +451,6 @@ java -jar checkstyle-10.23.1-all.jar -c linters/checkstyle/checkstyle.xml linter
 # structured
 structured_return({ command: "java -jar checkstyle-10.23.1-all.jar -c linters/checkstyle/checkstyle.xml -f xml linters/checkstyle/TypeCheck.java", parseAs: "checkstyle-xml" })
 ```
-
-See [benchmarks/linters/checkstyle](linters/checkstyle/) for benchmark details.
 
 ### htmlhint
 
