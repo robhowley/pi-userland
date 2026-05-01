@@ -82,10 +82,17 @@ const builtIns: Record<string, ParserModule> = {
 
 /**
  * Check whether argv contains `--flag=value` (joined) or `--flag value` (adjacent).
+ * Also handles short flags like `-fxml` (no separator) or `-f xml` (adjacent).
  * Avoids false positives from bare `value` tokens appearing elsewhere in argv.
  */
 function hasFlag(argv: string[], flag: string, value: string): boolean {
-  if (argv.includes(`${flag}=${value}`)) return true;
+  // Handle joined flags like --flag=value or -f=xml
+  const joinedPattern = flag.length === 1 ? `-${flag}=${value}` : `${flag}=${value}`;
+  if (argv.includes(joinedPattern)) return true;
+  // Handle concatenated short flags like -fxml (no separator)
+  const concatenatedPattern = `-${flag}${value}`;
+  if (argv.includes(concatenatedPattern)) return true;
+  // Handle adjacent flags like --flag value or -f xml
   for (let i = 0; i < argv.length - 1; i++) {
     if (argv[i] === flag && argv[i + 1] === value) return true;
   }
@@ -247,6 +254,14 @@ const AUTO_DETECT: Array<{ parserId: string; detect: (argv: string[]) => boolean
         argv.includes('clang') ||
         argv.includes('clang++')) &&
       (argv.includes('-c') || argv.includes('-o')),
+  },
+  {
+    parserId: 'checkstyle-xml',
+    detect: (argv) => argv.includes('checkstyle') && hasFlag(argv, '-f', 'xml'),
+  },
+  {
+    parserId: 'checkstyle-xml',
+    detect: (argv) => argv.includes('ktlint') && hasFlag(argv, '--reporter', 'checkstyle'),
   },
 ];
 
