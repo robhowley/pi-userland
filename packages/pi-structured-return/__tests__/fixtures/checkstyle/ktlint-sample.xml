@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<checkstyle version="1.0.1">
+  <file name="/path/to/Source.kt">
+    <error line="5" column="1" source="standard:semicolon" severity="error" message="Expected semicolon but was &quot;new line&quot;"/>
+    <error line="12" column="5" source="standard:indent" severity="warning" message="Unexpected indentation (4) (must be multiple of 4)"/>
+    <error line="20" column="1" source="standard:max-line-length" severity="info" message="Line is longer than 120 characters (found 145)"/>
+  </file>
+  <file name="/path/to/AnotherFile.kt">
+    <error line="8" column="10" source="standard:spacing-around-colons" severity="error" message="Unexpected spacing around &quot;:&quot;"/>
+  </file>
+</checkstyle>

@@ -127,14 +127,18 @@ const parser: ParserModule = {
           if (isIgnoredSeverity(err.severity)) continue;
 
           const line = err.line !== undefined ? Number(err.line) : undefined;
+          const column = err.column !== undefined ? Number(err.column) : undefined;
           const rule = normalizeRule(err.source);
+          const severity = err.severity ? getSeverityCategory(err.severity) : undefined;
 
           const failure: ParsedFailure = {
             id: generateId(normalizedFile, line, rule),
             file: normalizedFile,
             line: Number.isNaN(line) ? undefined : line,
+            column: Number.isNaN(column) ? undefined : column,
             message: err.message?.trim() || undefined,
             rule: rule,
+            severity: severity === 'unknown' ? undefined : severity,
           };
 
           // Track severity for summary - count per category

@@ -316,4 +316,31 @@ describe('checkstyle-xml parser', () => {
 
     fs.unlinkSync(stdoutPath);
   });
+
+  it('handles ktlint checkstyle XML with category:id source format', async () => {
+    const fixturePath = '/tmp/ktlint-full.xml';
+    const fs = require('fs');
+    fs.writeFileSync(fixturePath, readFixture('ktlint-sample.xml'));
+
+    ctx.artifactPaths = [fixturePath];
+
+    const result = await parser.parse(ctx);
+
+    expect(result.status).toBe('fail');
+    expect(result.summary).toBe('4 findings (2 errors, 1 warnings, 1 info)');
+    expect(result.failures).toHaveLength(4);
+
+    // Verify ktlint-style category:id format is preserved
+    expect(result.failures.find((f) => f.rule === 'standard:semicolon')).toBeDefined();
+    expect(result.failures.find((f) => f.rule === 'standard:indent')).toBeDefined();
+    expect(result.failures.find((f) => f.rule === 'standard:max-line-length')).toBeDefined();
+    expect(result.failures.find((f) => f.rule === 'standard:spacing-around-colons')).toBeDefined();
+
+    // Verify column and severity are extracted
+    const errorWithColumn = result.failures.find((f) => f.column === 1);
+    expect(errorWithColumn).toBeDefined();
+    expect(errorWithColumn?.severity).toBe('error');
+
+    fs.unlinkSync(fixturePath);
+  });
 });

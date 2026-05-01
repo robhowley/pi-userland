@@ -2,8 +2,10 @@ export type ParsedFailure = {
   id: string;
   file?: string;
   line?: number;
+  column?: number;
   message?: string;
   rule?: string;
+  severity?: 'error' | 'warning' | 'info';
 };
 
 export type ParsedResult = {

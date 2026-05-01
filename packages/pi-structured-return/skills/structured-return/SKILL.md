@@ -244,7 +244,6 @@ Checkstyle is the standard Java linter — `checkstyle-xml` parses its XML outpu
 
 - `structured_return({ command: "checkstyle -c [config.xml] -f xml [files]", parseAs: "checkstyle-xml" })` — Checkstyle native; scope goes in `[files]`
 - `structured_return({ command: "ktlint [files] --reporter=checkstyle", parseAs: "checkstyle-xml" })` — ktlint with built-in checkstyle reporter
-- `structured_return({ command: "gradle spotlessCheck", parseAs: "checkstyle-xml", artifactPaths: ["**/build/reports/spotless/*.xml"] })` — Gradle Spotless writes one XML per file; use glob pattern to aggregate
 
 ## Already compact — use `bash` directly
 

@@ -181,10 +181,11 @@ export function formatResult(result: ParsedResult): string {
   if (result.cwd) lines.push(`cwd: ${result.cwd}`);
   lines.push(result.summary);
   for (const f of result.failures ?? []) {
-    const location = [f.file, f.line].filter(Boolean).join(':');
+    const location = [f.file, f.line, f.column].filter(Boolean).join(':');
+    const severity = f.severity ? `  [${f.severity}]` : '';
     const rule = f.rule ? `  [${f.rule}]` : '';
     const msgLines = (f.message ?? '').split('\n');
-    lines.push(`  ${location}  ${msgLines[0]}${rule}`);
+    lines.push(`  ${location}  ${msgLines[0]}${severity}${rule}`);
     for (const extra of msgLines.slice(1)) lines.push(`    ${extra}`);
   }
   // If the parser detected failures but couldn't extract details, surface the

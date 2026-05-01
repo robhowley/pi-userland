@@ -446,20 +446,10 @@ structured_return({ command: "javac linters/javac/TypeCheck.java", parseAs: "jav
 
 ```bash
 # raw
-java -jar checkstyle-10.23.1-all.jar -c linters/checkstyle/checkstyle.xml -f xml linters/checkstyle/TypeCheck.java
+java -jar checkstyle-10.23.1-all.jar -c linters/checkstyle/checkstyle.xml linters/checkstyle/TypeCheck.java
 
 # structured
 structured_return({ command: "java -jar checkstyle-10.23.1-all.jar -c linters/checkstyle/checkstyle.xml -f xml linters/checkstyle/TypeCheck.java", parseAs: "checkstyle-xml" })
-```
-
-For Gradle projects using Spotless:
-
-```bash
-# raw
-gradle spotlessCheck
-
-# structured
-structured_return({ command: "gradle spotlessCheck", parseAs: "checkstyle-xml", artifactPaths: ["**/build/reports/spotless/*.xml"] })
 ```
 
 See [benchmarks/linters/checkstyle](linters/checkstyle/) for benchmark details.
