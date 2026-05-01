@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import parser from '../../extensions/structured-return/parsers/checkstyle-xml';
 import type { ParserModule, RunContext } from '../../extensions/structured-return/types';
 
@@ -16,9 +18,6 @@ describe('checkstyle-xml parser', () => {
       logPath: '',
     };
   });
-
-  const fs = require('fs');
-  const path = require('path');
 
   const readFixture = (name: string): string => {
     return fs.readFileSync(
