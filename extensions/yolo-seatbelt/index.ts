@@ -22,7 +22,7 @@ export default function (pi: ExtensionAPI) {
     // Evaluate the command using the full pipeline
     const result = evaluate(command, {
       cwd: ctx.cwd,
-      config: { outsideWorkspace: "ask" },
+      config: { outsideWorkspace: "ask", logLevel: "none" },
     });
 
     // Log the decision
@@ -60,8 +60,5 @@ export default function (pi: ExtensionAPI) {
         return;
       }
     }
-    
-    // Default: allow the command if we get here
-    return;
   });
 }
