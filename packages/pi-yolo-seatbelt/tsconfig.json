@@ -1,8 +1,9 @@
 {
   "extends": "../../tsconfig.base.json",
+  "include": ["extensions/yolo-seatbelt/"],
   "compilerOptions": {
-    "outDir": "./dist",
-    "rootDir": "."
-  },
-  "include": ["extensions", "__tests__"]
+    "noUncheckedIndexedAccess": false,
+    "exactOptionalPropertyTypes": false,
+    "noPropertyAccessFromIndexSignature": false,
+  }
 }
