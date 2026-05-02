@@ -11,6 +11,7 @@ Small, focused packages to augment your Pi environment without adding unnecessar
 | [`pi-session-hygiene`](packages/pi-session-hygiene/README.md) | Status bar indicator for session cost, context, and cache rate to track session health                                                      |
 | [`pi-spinner-verbs`](packages/pi-spinner-verbs/README.md)     | Customizes thinking text with themed verbs (e.g., "Paying the iron price...", "With fire and blood...") for sessions with more personality. |
 | [`pi-structured-return`](packages/pi-structured-return/README.md) | Save money by turning noisy CLI output into compact structured results (fewer tokens), full logs preserved.                                 |
+| [`pi-yolo-seatbelt`](packages/pi-yolo-seatbelt/README.md)       | yolo ship it with a seatbelt, sets guardrails on the most destructive commands.                                                             |
 
 ## Install
 
@@ -37,9 +38,13 @@ pnpm install
 ### Checks
 
 ```bash
-pnpm lint
-pnpm typecheck
-pnpm format:check
+pnpm check
+```
+
+### Tests
+
+```bash
+pnpm test
 ```
 
 ### Add a package

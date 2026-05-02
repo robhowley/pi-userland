@@ -3,7 +3,8 @@
   "packages": {
     "packages/pi-session-hygiene": {},
     "packages/pi-spinner-verbs": {},
-    "packages/pi-structured-return": {}
+    "packages/pi-structured-return": {},
+    "packages/pi-yolo-seatbelt": {}
   },
   "separate-pull-requests": false,
   "pull-request-title-style": "conventional-commit",
