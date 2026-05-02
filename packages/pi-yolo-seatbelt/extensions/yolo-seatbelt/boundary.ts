@@ -39,8 +39,8 @@ export function isInsideWorkspace(resolvedPath: string, cwd: string): boolean {
       normalizedPathClean === normalizedCwdClean ||
       normalizedPathClean.startsWith(normalizedCwdClean + path.sep)
     );
-  } catch (error) {
-    // If path resolution fails, return null to signal safe default (ASK)
+  } catch {
+    // If path resolution fails, return false (safe default)
     return false;
   }
 }

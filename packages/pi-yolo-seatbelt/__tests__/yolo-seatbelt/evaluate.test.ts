@@ -1,12 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { evaluate, evaluateQuick, evaluateQuickResult, Decision, Config } from '../../extensions/yolo-seatbelt/evaluate.ts';
-import { BLOCK_PATTERNS, ASK_PATTERNS } from '../../extensions/yolo-seatbelt/patterns.ts';
-import { PROTECTED_PATHS } from '../../extensions/yolo-seatbelt/paths.ts';
-
-// Helper to create expected rule names
-function expectRule(prefix: string, name: string) {
-  return `${prefix}-${name}`;
-}
+import { evaluate, evaluateQuick, evaluateQuickResult, Decision } from '../../extensions/yolo-seatbelt/evaluate.ts';
 
 describe('evaluate', () => {
   describe('evaluation order', () => {

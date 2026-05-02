@@ -95,7 +95,7 @@ export function evaluate(command: string, context: Context): DecisionResult {
 
   // Step 1: Check if command contains protected paths (highest priority for path-based blocks)
   // Extract potential paths from command (simplified: look for patterns like /path or ./path)
-  const pathRegex = /(["']?)(\/(?:[^\/\s"']+\/?)+)\1|(["']?)\.\/([^\s"']+)["']?/g;
+  const pathRegex = /(["']?)(\/(?:[^\s"']+\/?)+)\1|(["']?)\.\/([^\s"']+)["']?/g;
   let match: RegExpExecArray | null;
   while ((match = pathRegex.exec(command)) !== null) {
     const pathStr = match[2] || match[4];
@@ -121,7 +121,7 @@ export function evaluate(command: string, context: Context): DecisionResult {
 
   // Step 3: Check workspace boundary
   // Check if command contains paths outside workspace
-  const absolutePathRegex = /(["']?)(\/(?:[^\/\s"']+\/?)+)\1/g;
+  const absolutePathRegex = /(["']?)(\/(?:[^\s"']+\/?)+)\1/g;
   while ((match = absolutePathRegex.exec(command)) !== null) {
     const pathStr = match[2];
     if (pathStr && !isInsideWorkspace(pathStr, cwd)) {
