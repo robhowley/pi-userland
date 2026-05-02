@@ -1,6 +1,6 @@
 /**
  * Evaluation pipeline for the yolo-seatbelt safety guard.
- * 
+ *
  * Wires together pattern matching, path detection, and boundary checks
  * into a unified decision function.
  */
@@ -49,14 +49,10 @@ export interface DecisionResult {
  */
 function getRuleName(patternIndex: number, type: 'BLOCK' | 'ASK'): string {
   const rulePrefix = type === 'BLOCK' ? 'block' : 'ask';
-  
+
   // Known pattern names for readable rule output
-  const blockPatternNames = [
-    'rm-rf-root',
-    'rm-rf-dot-git',
-    'rm-rf-tilde',
-  ];
-  
+  const blockPatternNames = ['rm-rf-root', 'rm-rf-dot-git', 'rm-rf-tilde'];
+
   const askPatternNames = [
     'rm-rf',
     'find-delete',
@@ -71,23 +67,23 @@ function getRuleName(patternIndex: number, type: 'BLOCK' | 'ASK'): string {
     'git-update-ref',
     'git-reflog-expire',
   ];
-  
+
   const names = type === 'BLOCK' ? blockPatternNames : askPatternNames;
   const name = names[patternIndex] || `unknown-${patternIndex}`;
-  
+
   return `${rulePrefix}-${name}`;
 }
 
 /**
  * Evaluate a command and return a detailed decision result.
- * 
+ *
  * Evaluation order:
  * 1. Check PROTECTED_PATHS (from command arguments) → return BLOCK
  * 2. Check BLOCK_PATTERNS → return BLOCK
  * 3. Check workspace boundary → return ASK or BLOCK (config)
  * 4. Check ASK_PATTERNS → return ASK
  * 5. Default → ALLOW
- * 
+ *
  * @param command - Raw command string to evaluate
  * @param context - Evaluation context (cwd, config)
  * @returns DecisionResult with decision, matchedRule, and message
@@ -96,7 +92,7 @@ export function evaluate(command: string, context: Context): DecisionResult {
   const cwd = context.cwd;
   const config = context.config || {};
   const outsideWorkspaceBehavior = config.outsideWorkspace || 'ask';
-  
+
   // Step 1: Check if command contains protected paths (highest priority for path-based blocks)
   // Extract potential paths from command (simplified: look for patterns like /path or ./path)
   const pathRegex = /(["']?)(\/(?:[^\/\s"']+\/?)+)\1|(["']?)\.\/([^\s"']+)["']?/g;
@@ -111,7 +107,7 @@ export function evaluate(command: string, context: Context): DecisionResult {
       };
     }
   }
-  
+
   // Step 2: Check BLOCK patterns (highest priority for pattern-based blocks)
   for (let i = 0; i < BLOCK_PATTERNS.length; i++) {
     if (BLOCK_PATTERNS[i]?.test(command)) {
@@ -122,7 +118,7 @@ export function evaluate(command: string, context: Context): DecisionResult {
       };
     }
   }
-  
+
   // Step 3: Check workspace boundary
   // Check if command contains paths outside workspace
   const absolutePathRegex = /(["']?)(\/(?:[^\/\s"']+\/?)+)\1/g;
@@ -144,7 +140,7 @@ export function evaluate(command: string, context: Context): DecisionResult {
       }
     }
   }
-  
+
   // Step 4: Check ASK patterns
   for (let i = 0; i < ASK_PATTERNS.length; i++) {
     if (ASK_PATTERNS[i]?.test(command)) {
@@ -155,7 +151,7 @@ export function evaluate(command: string, context: Context): DecisionResult {
       };
     }
   }
-  
+
   // Step 5: Default to ALLOW
   return {
     decision: Decision.ALLOW,
@@ -166,10 +162,10 @@ export function evaluate(command: string, context: Context): DecisionResult {
 
 /**
  * Quick evaluation that only checks BLOCK patterns and ASK patterns.
- * 
+ *
  * This is a simplified evaluation that doesn't check paths or workspace
  * boundaries. Useful for early filtering before more expensive checks.
- * 
+ *
  * @param command - Raw command string
  * @returns Decision (BLOCK, ASK, or ALLOW)
  */
@@ -179,13 +175,13 @@ export function evaluateQuick(command: string): Decision {
 
 /**
  * Get a decision result for a command using quick evaluation.
- * 
+ *
  * @param command - Raw command string
  * @returns DecisionResult with decision, matchedRule, and message
  */
 export function evaluateQuickResult(command: string): DecisionResult {
   const decision = evaluateQuick(command);
-  
+
   if (decision === Decision.BLOCK) {
     // Find which pattern matched
     for (let i = 0; i < BLOCK_PATTERNS.length; i++) {
@@ -198,7 +194,7 @@ export function evaluateQuickResult(command: string): DecisionResult {
       }
     }
   }
-  
+
   if (decision === Decision.ASK) {
     for (let i = 0; i < ASK_PATTERNS.length; i++) {
       if (ASK_PATTERNS[i]?.test(command)) {
@@ -210,7 +206,7 @@ export function evaluateQuickResult(command: string): DecisionResult {
       }
     }
   }
-  
+
   return {
     decision: Decision.ALLOW,
     matchedRule: 'allow-default',
