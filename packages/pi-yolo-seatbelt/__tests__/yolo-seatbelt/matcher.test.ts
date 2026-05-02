@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { classify, getMatchedPattern } from '../extensions/yolo-seatbelt/matcher.js';
-import { Decision } from '../extensions/yolo-seatbelt/patterns.js';
+import { classify, getMatchedPattern } from '../../extensions/yolo-seatbelt/matcher.js';
+import { Decision } from '../../extensions/yolo-seatbelt/patterns.js';
 
 describe('classify', () => {
   describe('BLOCK patterns', () => {
