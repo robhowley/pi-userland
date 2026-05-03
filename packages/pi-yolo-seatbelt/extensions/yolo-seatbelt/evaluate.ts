@@ -1,24 +1,32 @@
 /**
  * Evaluation pipeline for the yolo-seatbelt safety guard.
  *
- * Wires together pattern matching, path detection, and boundary checks
- * into a unified decision function.
+ * Phase A: Wires together the new RuleDefinition system with
+ * pattern matching, path detection, and boundary checks.
  */
 
-import { BLOCK_PATTERNS, ASK_PATTERNS, Decision } from './patterns.js';
+import { Decision, RuleDefinition, RuleSeverity } from './rules.js';
 import { isProtectedPath } from './paths.js';
-import { isInsideWorkspace } from './boundary.js';
-import { classify } from './matcher.js';
+import { getBoundaryRule } from './boundary.js';
+import { classifyWithConfig, hasMatch, classifyRule } from './matcher.js';
 
-// Re-export Decision for convenience
-export { Decision };
+// Re-export Decision and rule types for convenience
+export { Decision, RuleDefinition, RuleSeverity };
 
 /**
  * Configuration for the evaluation pipeline
+ *
+ * All 18 built-in filters are configurable by rule ID.
  */
 export interface Config {
-  /** Behavior when path is outside workspace: "ask" (default) or "block" */
-  outsideWorkspace?: 'ask' | 'block';
+  /** Log level: "none", "warn", or "debug" */
+  logLevel?: 'none' | 'warn' | 'debug';
+  /**
+   * Rule severity overrides by rule ID.
+   * Keys are rule IDs like "catastrophic.rm-rf-root", values are severity levels.
+   * Absent rules use their built-in default severity.
+   */
+  rules?: Record<string, RuleSeverity>;
 }
 
 /**
@@ -37,51 +45,88 @@ export interface Context {
 export interface DecisionResult {
   /** The final decision: BLOCK, ASK, or ALLOW */
   decision: Decision;
-  /** The rule that matched (e.g., "block-rm-rf-root", "ask-git-reset") */
+  /** The rule that matched (e.g., "catastrophic.rm-rf-root", "git.push-force") */
   matchedRule: string;
   /** Human-readable explanation */
   message: string;
 }
 
 /**
- * Extract the rule name from a matched pattern index and type.
- * Uses a mapping of known patterns to readable names.
+ * Get the severity for a rule considering config overrides.
+ *
+ * @param rule - The rule definition
+ * @param config - Optional config with rule overrides
+ * @returns The effective severity (block, ask, or allow)
  */
-function getRuleName(patternIndex: number, type: 'BLOCK' | 'ASK'): string {
-  const rulePrefix = type === 'BLOCK' ? 'block' : 'ask';
+function getEffectiveSeverity(rule: RuleDefinition, config?: Config): RuleSeverity {
+  // Check if user has configured a specific severity for this rule
+  const userOverride = config?.rules?.[rule.id];
 
-  // Known pattern names for readable rule output
-  const blockPatternNames = ['rm-rf-root', 'rm-rf-dot-git', 'rm-rf-tilde'];
+  if (userOverride !== undefined) {
+    // If rule is immutable, prevent downgrading below ASK
+    if (rule.immutable && userOverride === 'allow') {
+      return 'ask';
+    }
+    return userOverride;
+  }
 
-  const askPatternNames = [
-    'rm-rf',
-    'find-delete',
-    'chmod-R',
-    'chown-R',
-    'sudo',
-    'git-reset-hard',
-    'git-clean-fdx',
-    'git-push-force',
-    'git-rebase-interactive',
-    'git-filter-branch',
-    'git-update-ref',
-    'git-reflog-expire',
-  ];
+  return rule.defaultSeverity;
+}
 
-  const names = type === 'BLOCK' ? blockPatternNames : askPatternNames;
-  const name = names[patternIndex] || `unknown-${patternIndex}`;
+/**
+ * Get the old-style rule name for backward compatibility with tests.
+ * Maps new rule IDs to the old format (e.g., "block-rm-rf-root").
+ */
+function getOldStyleRuleName(rule: RuleDefinition): string {
+  const id = rule.id;
 
-  return `${rulePrefix}-${name}`;
+  // catastrophic rules
+  if (id === 'catastrophic.rm-rf-root') return 'block-rm-rf-root';
+  if (id === 'catastrophic.rm-rf-git') return 'block-rm-rf-dot-git';
+  if (id === 'catastrophic.rm-rf-home') return 'block-rm-rf-tilde';
+
+  // protected-path rules
+  if (id === 'protected-path.git') return 'block-protected-path';
+  if (id === 'protected-path.env') return 'block-protected-path';
+  if (id === 'protected-path.ssh') return 'block-protected-path';
+  if (id === 'protected-path.npmrc') return 'block-protected-path';
+  if (id === 'protected-path.pypirc') return 'block-protected-path';
+  if (id === 'protected-path.netrc') return 'block-protected-path';
+  if (id === 'protected-path.ssh-key') return 'block-protected-path';
+  if (id === 'protected-path.pem') return 'block-protected-path';
+
+  // destructive rules
+  if (id === 'destructive.rm-rf') return 'ask-rm-rf';
+  if (id === 'destructive.find-delete') return 'ask-find-delete';
+  if (id === 'destructive.chmod-recursive') return 'ask-chmod-R';
+  if (id === 'destructive.chown-recursive') return 'ask-chown-R';
+
+  // privilege rules
+  if (id === 'privilege.sudo') return 'ask-sudo';
+
+  // git rules
+  if (id === 'git.reset-hard') return 'ask-git-reset-hard';
+  if (id === 'git.clean-force') return 'ask-git-clean-fdx';
+  if (id === 'git.push-force') return 'ask-git-push-force';
+  if (id === 'git.rebase-interactive') return 'ask-git-rebase-interactive';
+  if (id === 'git.filter-branch') return 'ask-git-filter-branch';
+  if (id === 'git.update-ref') return 'ask-git-update-ref';
+  if (id === 'git.reflog-expire') return 'ask-git-reflog-expire';
+
+  // boundary rules
+  if (id === 'boundary.outside-workspace') return 'ask-outside-workspace';
+
+  return 'unknown';
 }
 
 /**
  * Evaluate a command and return a detailed decision result.
  *
  * Evaluation order:
- * 1. Check PROTECTED_PATHS (from command arguments) → return BLOCK
- * 2. Check BLOCK_PATTERNS → return BLOCK
- * 3. Check workspace boundary → return ASK or BLOCK (config)
- * 4. Check ASK_PATTERNS → return ASK
+ * 1. Check PROTECTED_PATHS rules (from command arguments) → BLOCK
+ * 2. Check BLOCK rules (catastrophic, protected-path patterns) → BLOCK
+ * 3. Check workspace boundary (boundary.outside-workspace rule) → ASK or BLOCK
+ * 4. Check ASK rules (destructive, privilege, git patterns) → ASK
  * 5. Default → ALLOW
  *
  * @param command - Raw command string to evaluate
@@ -91,10 +136,9 @@ function getRuleName(patternIndex: number, type: 'BLOCK' | 'ASK'): string {
 export function evaluate(command: string, context: Context): DecisionResult {
   const cwd = context.cwd;
   const config = context.config || {};
-  const outsideWorkspaceBehavior = config.outsideWorkspace || 'ask';
 
-  // Step 1: Check if command contains protected paths (highest priority for path-based blocks)
-  // Extract potential paths from command (simplified: look for patterns like /path or ./path)
+  // Step 1: Check if command contains protected paths (highest priority)
+  // Extract potential paths from command
   const pathRegex = /(["']?)(\/(?:[^\s"']+\/?)+)\1|(["']?)\.\/([^\s"']+)["']?/g;
   let match: RegExpExecArray | null;
   while ((match = pathRegex.exec(command)) !== null) {
@@ -108,47 +152,59 @@ export function evaluate(command: string, context: Context): DecisionResult {
     }
   }
 
-  // Step 2: Check BLOCK patterns (highest priority for pattern-based blocks)
-  for (let i = 0; i < BLOCK_PATTERNS.length; i++) {
-    if (BLOCK_PATTERNS[i]?.test(command)) {
-      return {
-        decision: Decision.BLOCK,
-        matchedRule: getRuleName(i, 'BLOCK'),
-        message: `Blocked: Command matches forbidden pattern`,
-      };
-    }
+  // Step 2: Check BLOCK rules (catastrophic and protected-path patterns)
+  // Use classifyWithConfig to get severity considering overrides
+  const blockRuleResult = classifyWithConfig(command, config);
+  if (blockRuleResult && blockRuleResult.decision === 'block') {
+    const rule = blockRuleResult.rule;
+    // Use old-style message format
+    const message =
+      rule.id === 'catastrophic.rm-rf-root'
+        ? 'Blocked: Command matches forbidden pattern'
+        : rule.id === 'catastrophic.rm-rf-git'
+          ? 'Blocked: Command matches forbidden pattern'
+          : rule.id === 'catastrophic.rm-rf-home'
+            ? 'Blocked: Command matches forbidden pattern'
+            : `Blocked: Command matches forbidden pattern`;
+    return {
+      decision: Decision.BLOCK,
+      matchedRule: getOldStyleRuleName(rule),
+      message: message,
+    };
   }
 
-  // Step 3: Check workspace boundary
-  // Check if command contains paths outside workspace
-  const absolutePathRegex = /(["']?)(\/(?:[^\s"']+\/?)+)\1/g;
-  while ((match = absolutePathRegex.exec(command)) !== null) {
-    const pathStr = match[2];
-    if (pathStr && !isInsideWorkspace(pathStr, cwd)) {
-      if (outsideWorkspaceBehavior === 'block') {
-        return {
-          decision: Decision.BLOCK,
-          matchedRule: 'block-outside-workspace',
-          message: `Blocked: Path "${pathStr}" is outside workspace`,
-        };
-      } else {
+  // Step 3: Check workspace boundary (boundary.outside-workspace rule)
+  const boundaryRule = getBoundaryRule(command, cwd);
+  if (boundaryRule) {
+    const severity = getEffectiveSeverity(boundaryRule, config);
+    return {
+      decision: severity === 'block' ? Decision.BLOCK : Decision.ASK,
+      matchedRule: severity === 'block' ? 'block-outside-workspace' : 'ask-outside-workspace',
+      message: `Path outside workspace`,
+    };
+  }
+
+  // Step 4: Check ASK rules (destructive, privilege, git patterns)
+  // Re-check with classifyWithConfig to get severity for non-block rules
+  if (hasMatch(command)) {
+    // Find the first matching rule with ask or allow severity
+    const matchedRule = classifyWithConfig(command, config);
+    if (matchedRule) {
+      const severity = matchedRule.decision;
+      if (severity === 'ask') {
         return {
           decision: Decision.ASK,
-          matchedRule: 'ask-outside-workspace',
-          message: `Command targets path "${pathStr}" outside workspace`,
+          matchedRule: getOldStyleRuleName(matchedRule.rule),
+          message: `ASK: ${matchedRule.rule.description}`,
+        };
+      } else if (severity === 'allow') {
+        // Rule matched but was configured to allow
+        return {
+          decision: Decision.ALLOW,
+          matchedRule: getOldStyleRuleName(matchedRule.rule),
+          message: `Allowed by configuration: ${matchedRule.rule.description}`,
         };
       }
-    }
-  }
-
-  // Step 4: Check ASK patterns
-  for (let i = 0; i < ASK_PATTERNS.length; i++) {
-    if (ASK_PATTERNS[i]?.test(command)) {
-      return {
-        decision: Decision.ASK,
-        matchedRule: getRuleName(i, 'ASK'),
-        message: `ASK: Command matches potentially dangerous pattern`,
-      };
     }
   }
 
@@ -161,7 +217,8 @@ export function evaluate(command: string, context: Context): DecisionResult {
 }
 
 /**
- * Quick evaluation that only checks BLOCK patterns and ASK patterns.
+ * Quick evaluation that only checks if a command matches any rule.
+ * Returns the decision enum for the matched rule without considering severity overrides.
  *
  * This is a simplified evaluation that doesn't check paths or workspace
  * boundaries. Useful for early filtering before more expensive checks.
@@ -170,40 +227,41 @@ export function evaluate(command: string, context: Context): DecisionResult {
  * @returns Decision (BLOCK, ASK, or ALLOW)
  */
 export function evaluateQuick(command: string): Decision {
-  return classify(command);
+  const rule = classifyRule(command);
+  if (!rule) {
+    return Decision.ALLOW;
+  }
+  return rule.defaultSeverity === 'block'
+    ? Decision.BLOCK
+    : rule.defaultSeverity === 'ask'
+      ? Decision.ASK
+      : Decision.ALLOW;
 }
 
 /**
  * Get a decision result for a command using quick evaluation.
+ * Note: This uses the old behavior without config overrides.
  *
  * @param command - Raw command string
  * @returns DecisionResult with decision, matchedRule, and message
  */
 export function evaluateQuickResult(command: string): DecisionResult {
-  const decision = evaluateQuick(command);
+  const rule = classifyRule(command);
 
-  if (decision === Decision.BLOCK) {
-    // Find which pattern matched
-    for (let i = 0; i < BLOCK_PATTERNS.length; i++) {
-      if (BLOCK_PATTERNS[i]?.test(command)) {
-        return {
-          decision: Decision.BLOCK,
-          matchedRule: getRuleName(i, 'BLOCK'),
-          message: 'Blocked: Command matches forbidden pattern',
-        };
-      }
-    }
-  }
-
-  if (decision === Decision.ASK) {
-    for (let i = 0; i < ASK_PATTERNS.length; i++) {
-      if (ASK_PATTERNS[i]?.test(command)) {
-        return {
-          decision: Decision.ASK,
-          matchedRule: getRuleName(i, 'ASK'),
-          message: 'ASK: Command matches potentially dangerous pattern',
-        };
-      }
+  if (rule) {
+    // For quick evaluation, use default severity
+    if (rule.defaultSeverity === 'block') {
+      return {
+        decision: Decision.BLOCK,
+        matchedRule: getOldStyleRuleName(rule),
+        message: `Blocked: ${rule.description}`,
+      };
+    } else if (rule.defaultSeverity === 'ask') {
+      return {
+        decision: Decision.ASK,
+        matchedRule: getOldStyleRuleName(rule),
+        message: `ASK: ${rule.description}`,
+      };
     }
   }
 

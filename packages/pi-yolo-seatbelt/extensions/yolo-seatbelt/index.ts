@@ -1,28 +1,42 @@
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
-import { evaluate } from "./evaluate.js";
-import { logAsk, logBlock } from "./logger.js";
+import type { ExtensionAPI } from '@mariozechner/pi-coding-agent';
+import { isToolCallEventType } from '@mariozechner/pi-coding-agent';
+import { evaluate, Decision } from './evaluate.js';
+import { logAsk, logBlock, logDebug } from './logger.js';
+import { loadConfig } from './config.js';
+import { getMatchingRuleIds } from './matcher.js';
 
 /**
  * Yolo-seatbelt safety guard extension
- * 
+ *
  * Intercepts bash tool calls and evaluates commands for safety.
  * Returns { block: true, reason } for dangerous commands.
+ *
+ * Phase A: All 18 built-in command filters are now user-configurable
+ * via rule IDs in the configuration file.
  */
 
 export default function (pi: ExtensionAPI) {
-  pi.on("tool_call", async (event, ctx) => {
+  pi.on('tool_call', async (event, ctx) => {
     // Only intercept bash tool calls
-    if (!isToolCallEventType("bash", event)) {
+    if (!isToolCallEventType('bash', event)) {
       return;
     }
 
     const command = event.input.command;
 
-    // Evaluate the command using the full pipeline
+    // Load config (cached after first load)
+    const config = loadConfig();
+
+    // Log matching rule IDs for debugging
+    const matchingRules = getMatchingRuleIds(command);
+    if (matchingRules.length > 0) {
+      logDebug(`Matching rules: ${matchingRules.join(', ')}`);
+    }
+
+    // Evaluate the command using the full pipeline with config
     const result = evaluate(command, {
       cwd: ctx.cwd,
-      config: { outsideWorkspace: "ask" },
+      config: config,
     });
 
     // Log the decision
@@ -31,7 +45,7 @@ export default function (pi: ExtensionAPI) {
 
     // Handle the decision
     switch (result.decision) {
-      case "BLOCK": {
+      case Decision.BLOCK: {
         // Block the command immediately
         return {
           block: true,
@@ -39,11 +53,11 @@ export default function (pi: ExtensionAPI) {
         };
       }
 
-      case "ASK": {
+      case Decision.ASK: {
         // Ask user for confirmation
         const confirmed = await ctx.ui.confirm(
-          "⚠️ Risky command detected",
-          `The command "${command}" matches a safety rule ("${result.matchedRule}").\n\nContinue?`
+          '⚠️ Risky command detected',
+          `The command "${command}" matches a safety rule ("${result.matchedRule}").\n\nContinue?`,
         );
 
         if (!confirmed) {
@@ -55,12 +69,12 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      case "ALLOW": {
+      case Decision.ALLOW: {
         // Allow the command to proceed normally
         return;
       }
     }
-    
+
     // Default: allow the command if we get here
     return;
   });

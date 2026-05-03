@@ -1,11 +1,16 @@
 /**
  * Protected path detection for the yolo-seatbelt safety guard.
  *
- * Detects writes/deletes targeting sensitive paths like .git, .env files,
- * SSH keys, and credentials files.
+ * Phase A: Now uses the RuleDefinition system with id 'protected-path.*'
+ * for user-configurable severity overrides.
  */
 
-/** List of protected path prefixes/patterns */
+import { PROTECTED_PATH_RULES, RuleDefinition } from './rules.js';
+
+/**
+ * List of protected path prefixes/patterns (legacy array for compatibility)
+ * @deprecated Use PROTECTED_PATH_RULES instead
+ */
 export const PROTECTED_PATHS = [
   '.git',
   '.env',
@@ -111,4 +116,21 @@ export function isProtectedPathSegment(pathSegment: string): boolean {
   }
 
   return false;
+}
+
+/**
+ * Get the protected path rule definition that matches a path.
+ * Returns the first matching rule from PROTECTED_PATH_RULES.
+ *
+ * @param resolvedPath - Absolute or normalized path to check
+ * @returns RuleDefinition if a protected path rule matches, undefined otherwise
+ */
+export function getProtectedPathRule(resolvedPath: string): RuleDefinition | undefined {
+  // Check protected path rules
+  for (const rule of PROTECTED_PATH_RULES) {
+    if (rule.pattern.test(resolvedPath)) {
+      return rule;
+    }
+  }
+  return undefined;
 }

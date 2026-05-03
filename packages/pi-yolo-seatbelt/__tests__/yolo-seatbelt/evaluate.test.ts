@@ -20,7 +20,7 @@ describe('evaluate', () => {
       // find with -delete is ASK pattern, not BLOCK - tests workspace boundary
       const result = evaluate('find /etc/passwd -delete', {
         cwd: '/repo',
-        config: { outsideWorkspace: 'block' },
+        config: { rules: { 'boundary.outside-workspace': 'block' } },
       });
       expect(result.decision).toBe(Decision.BLOCK);
       expect(result.matchedRule).toBe('block-outside-workspace');
@@ -96,7 +96,7 @@ describe('evaluate', () => {
       // find -delete is ASK pattern, not BLOCK - matches outside workspace with block config
       const result = evaluate('find /etc/passwd -delete', {
         cwd: '/repo',
-        config: { outsideWorkspace: 'block' },
+        config: { rules: { 'boundary.outside-workspace': 'block' } },
       });
       expect(result.decision).toBe(Decision.BLOCK);
       expect(result.matchedRule).toBe('block-outside-workspace');

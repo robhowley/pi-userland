@@ -1,10 +1,12 @@
 /**
  * Workspace boundary check for the yolo-seatbelt safety guard.
  *
- * Detects operations targeting paths outside the current working directory.
+ * Phase A: Now uses the RuleDefinition system with id 'boundary.outside-workspace'
+ * for user-configurable severity overrides.
  */
 
 import * as path from 'path';
+import { BOUNDARY_RULES, RuleDefinition } from './rules.js';
 
 /**
  * Check if a resolved path is inside the current working directory.
@@ -84,4 +86,37 @@ export function isOutsideWorkspaceQuickCheck(pathSegment: string, cwd: string): 
   }
 
   return false;
+}
+
+/**
+ * Check if a command targets paths outside the workspace.
+ * Returns the boundary rule if matched.
+ *
+ * @param command - Raw command string to check
+ * @param cwd - Current working directory
+ * @returns RuleDefinition if outside workspace pattern matches, undefined otherwise
+ */
+export function getBoundaryRule(command: string, cwd: string): RuleDefinition | undefined {
+  // Check for paths outside workspace
+  const absolutePathRegex = /(["']?)(\/(?:[^\s"']+\/?)+)\1/g;
+  let match: RegExpExecArray | null;
+  while ((match = absolutePathRegex.exec(command)) !== null) {
+    const pathStr = match[2];
+    if (pathStr && !isInsideWorkspace(pathStr, cwd)) {
+      return BOUNDARY_RULES[0]; // boundary.outside-workspace
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Get the boundary rule ID for outside workspace detection.
+ * @deprecated Use getBoundaryRule() instead
+ * @param command - Raw command string
+ * @param cwd - Current working directory
+ * @returns Rule ID if outside workspace, undefined otherwise
+ */
+export function getOutsideWorkspaceRuleId(command: string, cwd: string): string | undefined {
+  const rule = getBoundaryRule(command, cwd);
+  return rule?.id;
 }
