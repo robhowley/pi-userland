@@ -30,7 +30,8 @@ export interface UsageSummary {
   month: number;
   cap: number;
   burnRate: number;
-  topModels: { name: string; spend: number }[];
+  topModels7d: { name: string; spend: number }[];
+  topModels30d: { name: string; spend: number }[];
   byModel?: Record<string, number>;
   byKey?: Record<string, number>;
   byDay?: Record<string, number>;

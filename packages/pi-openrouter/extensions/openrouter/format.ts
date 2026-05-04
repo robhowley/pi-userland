@@ -29,8 +29,15 @@ export function aggregateUsage(
   const month = credits.total_usage;
 
   // Top models by 7d spend
-  const modelSpend = aggregateByModel(analytics ? analytics.data : []);
-  const topModels = Object.entries(modelSpend)
+  const modelSpend7d = aggregateByModel(weekData);
+  const topModels7d = Object.entries(modelSpend7d)
+    .map(([name, spend]) => ({ name, spend }))
+    .sort((a, b) => b.spend - a.spend)
+    .slice(0, 3);
+
+  // Top models by 30d spend
+  const modelSpend30d = aggregateByModel(analytics ? analytics.data : []);
+  const topModels30d = Object.entries(modelSpend30d)
     .map(([name, spend]) => ({ name, spend }))
     .sort((a, b) => b.spend - a.spend)
     .slice(0, 3);
@@ -41,7 +48,8 @@ export function aggregateUsage(
     month,
     cap: credits.total_credits,
     burnRate: (week / 7) * 30,
-    topModels,
+    topModels7d,
+    topModels30d,
   };
 
   const byModel = aggregateByModel(analytics ? analytics.data : []);

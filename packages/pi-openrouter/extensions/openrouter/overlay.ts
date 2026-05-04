@@ -98,11 +98,34 @@ export class UsageOverlayComponent {
       lines.push(emptyRow());
     }
 
-    // Top models (7d)
-    if (summary.topModels.length > 0) {
-      lines.push(row('Top models (7d)'));
-      for (const m of summary.topModels) {
-        lines.push(row(`  ${truncate(m.name, 20)} $${fmt(m.spend)}`));
+    // Top models - 7d and 30d as columns
+    if (summary.topModels7d.length > 0 || summary.topModels30d.length > 0) {
+      lines.push(row('Top models'));
+      
+      // Build spend map from 7d data
+      const spendMap = new Map<string, { spend7d: number; spend30d: number }>();
+      for (const m of summary.topModels7d) {
+        spendMap.set(m.name, { spend7d: m.spend, spend30d: 0 });
+      }
+      // Add/update with 30d data
+      for (const m of summary.topModels30d) {
+        const existing = spendMap.get(m.name);
+        spendMap.set(m.name, {
+          spend7d: existing?.spend7d ?? 0,
+          spend30d: m.spend,
+        });
+      }
+      
+      // Sort by 30d spend (primary), then 7d (secondary)
+      const sortedModels = Array.from(spendMap.entries())
+        .sort((a, b) => b[1].spend30d - a[1].spend30d || b[1].spend7d - a[1].spend7d)
+        .slice(0, 6); // Show top 6 models
+      
+      for (const [name, spends] of sortedModels) {
+        const spend7dStr = spends.spend7d > 0 ? `$${fmt(spends.spend7d)}` : '-';
+        const spend30dStr = spends.spend30d > 0 ? `$${fmt(spends.spend30d)}` : '-';
+        const modelLabel = truncate(name, 16);
+        lines.push(row(`  ${modelLabel} 7d:${spend7dStr} 30d:${spend30dStr}`));
       }
       lines.push(emptyRow());
     }

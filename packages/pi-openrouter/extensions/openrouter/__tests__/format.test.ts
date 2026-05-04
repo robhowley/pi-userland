@@ -74,6 +74,7 @@ describe('aggregateUsage', () => {
     expect(result.cap).toBe(30);
     expect(result.month).toBe(18.21);
     expect(result.week).toBe(0); // No analytics data
-    expect(result.topModels).toEqual([]); // No models without analytics
+    expect(result.topModels7d).toEqual([]); // No models without analytics
+    expect(result.topModels30d).toEqual([]); // No models without analytics
   });
 });
