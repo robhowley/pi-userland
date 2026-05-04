@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from '@mariozechner/pi-coding-agent';
-import type { UsageSummary } from './types.js';
+import type { AnalyticsResponse, UsageSummary } from './types.js';
 import { usageCache, lastFetchTime } from './cache.js';
 import { fetchCredits, fetchActivity } from './openrouter.js';
 import { aggregateUsage } from './format.js';
@@ -44,7 +44,14 @@ async function showUsageOverlay(ctx: ExtensionContext, subcommand?: string) {
     lastFetchTime.value = Date.now();
     const credits = await fetchCredits();
 
-    const analytics = await fetchActivity();
+    let analytics: AnalyticsResponse | null = null;
+    try {
+      analytics = await fetchActivity();
+    } catch (actErr) {
+      // Activity fetch failed (likely needs management key), continue with credits only
+      // This allows regular API key users to see usage data
+      console.log('Activity fetch failed (management key required):', actErr);
+    }
 
     summary = aggregateUsage(credits.data, analytics);
     usageCache.set('usage', summary);
@@ -72,12 +79,13 @@ async function showOverlay(
         error,
         cachedMinutesAgo,
         theme,
-        () => done(),
+        done,
       );
 
       return {
         handleInput: (data: string) => {
           overlayComponent.handleInput(data);
+          _tui.requestRender();
         },
         render: (width: number) => overlayComponent.render(width),
         invalidate: () => overlayComponent.invalidate(),

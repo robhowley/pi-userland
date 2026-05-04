@@ -8,15 +8,18 @@ export interface CreditsResponse {
 
 export interface AnalyticsResponse {
   data: Array<{
-    id: string;
-    type: 'model' | 'key';
+    date: string;
+    model_permaslug: string;
+    endpoint_id: string;
     usage: number;
-    tokens?: {
-      input: number;
-      output: number;
-      cached?: number;
-    };
-    timestamp?: string;
+    byok_usage_inference: number;
+    requests: number;
+    prompt_tokens: number;
+    completion_tokens: number;
+    reasoning_tokens: number;
+    byok_requests: number;
+    model: string;
+    provider_name: string;
   }>;
 }
 
@@ -25,7 +28,7 @@ export interface UsageSummary {
   today: number;
   week: number;
   month: number;
-  cap?: number;
+  cap: number;
   burnRate: number;
   cacheRate?: number;
   topModels: { name: string; spend: number }[];
