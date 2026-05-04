@@ -5,13 +5,15 @@
  * pattern matching, path detection, and boundary checks.
  */
 
-import { Decision, RuleDefinition, RuleSeverity } from './rules.js';
+import { Decision } from './rules.js';
 import { isProtectedPath } from './paths.js';
 import { getBoundaryRule } from './boundary.js';
 import { classifyWithConfig, hasMatch, classifyRule } from './matcher.js';
+import type { RuleDefinition, RuleSeverity } from './rules.js';
 
-// Re-export Decision and rule types for convenience
-export { Decision, RuleDefinition, RuleSeverity };
+// Re-export for convenience
+export { Decision };
+export type { RuleDefinition, RuleSeverity };
 
 /**
  * Configuration for the evaluation pipeline
