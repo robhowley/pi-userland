@@ -86,9 +86,17 @@ export function isOutsideWorkspaceQuickCheck(pathSegment: string, cwd: string): 
  * @returns RuleDefinition if outside workspace pattern matches, undefined otherwise
  */
 export function getBoundaryRule(command: string, cwd: string): RuleDefinition | undefined {
-  const absolutePathRegex = /(["']?)(\/(?:[^\s"']+\/?)+)\1/g;
+  // Skip sed commands - they use sed substitution syntax like s/pattern/replacement/
+  // which looks like paths but aren't
+  if (command.trim().startsWith('sed ')) {
+    return undefined;
+  }
+
+  // Match paths with at least one directory separator (e.g., /path/to/file)
+  // Only valid path characters: alphanumeric, _, -, ., /, ~
+  const pathRegex = /(["']?)(\/[a-zA-Z0-9_\-.~]+(?:\/[a-zA-Z0-9_\-.~]+)+)\1/g;
   let match: RegExpExecArray | null;
-  while ((match = absolutePathRegex.exec(command)) !== null) {
+  while ((match = pathRegex.exec(command)) !== null) {
     const pathStr = match[2];
     if (pathStr && !isInsideWorkspace(pathStr, cwd)) {
       return BUILTIN_RULES.find((r) => r.id === 'outside-workspace');

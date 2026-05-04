@@ -211,3 +211,31 @@ describe('evaluateQuickResult', () => {
     expect(result.matchedRule).toBe('allow-default');
   });
 });
+
+describe('evaluate > sed command edge cases', () => {
+  // Test cases: [command, cwd, expectedDecision, expectedRule, description]
+  const sedTestCases: [string, string, Decision, string, string][] = [
+    // sed substitution patterns should NOT trigger outside-workspace
+    ["sed -i '' '/immutable: true/d' /repo/file.txt", '/repo', Decision.ALLOW, 'allow-default', 'sed with delete pattern'],
+    ["sed 's/pattern/replacement/g' /repo/file.txt", '/repo', Decision.ALLOW, 'allow-default', 'sed with substitution'],
+    ["sed 's/foo/bar/' /repo/file.txt", '/repo', Decision.ALLOW, 'allow-default', 'sed with simple substitution'],
+    ["sed '/pattern/d' /repo/file.txt", '/repo', Decision.ALLOW, 'allow-default', 'sed with delete'],
+    // grep with regex patterns should NOT trigger outside-workspace
+    ["grep -E '/^[a-z]+/g' /repo/file.txt", '/repo', Decision.ALLOW, 'allow-default', 'grep with regex'],
+    // Path outside workspace with .. and .env (protected path) should be BLOCKED
+    ["cat ../secrets/.env", '/repo', Decision.BLOCK, 'block-protected-path', 'path with .. escaping and .env (protected)'],
+    // Absolute path outside workspace - boundary check matches
+    ["cat /etc/passwd", '/repo', Decision.ASK, 'ask-outside-workspace', 'absolute path outside workspace'],
+    // Real paths with directories should work
+    ["ls /repo/src/main.ts", '/repo', Decision.ALLOW, 'allow-default', 'real path inside workspace'],
+  ];
+
+  it.each(sedTestCases)(
+    'handles %p correctly',
+    (command, cwd, expectedDecision, expectedRule, _description) => {
+      const result = evaluate(command, { cwd });
+      expect(result.decision).toBe(expectedDecision);
+      expect(result.matchedRule).toBe(expectedRule);
+    }
+  );
+});

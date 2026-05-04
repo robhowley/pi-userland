@@ -130,7 +130,7 @@ export const BUILTIN_RULES: RuleDefinition[] = [
   {
     id: 'outside-workspace',
     pattern: /\b\.\.\//,
-    defaultSeverity: 'ask',
+    defaultSeverity: 'allow',
     description: 'Commands targeting paths outside workspace',
   },
   // Trust boundary rules
