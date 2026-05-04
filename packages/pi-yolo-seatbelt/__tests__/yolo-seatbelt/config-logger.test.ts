@@ -1,6 +1,7 @@
-import { describe, it, expect, vi } from 'vitest';
-import { loadConfig, DEFAULT_CONFIG, getConfigPath } from '../../extensions/yolo-seatbelt/config.js';
-import { logDecision, logBlock, logAsk } from '../../extensions/yolo-seatbelt/logger.js';
+import { describe, expect, it, vi } from 'vitest';
+import { DEFAULT_CONFIG, getConfigPath, loadConfig } from '../../extensions/yolo-seatbelt/config.js';
+import { logDecision } from '../../extensions/yolo-seatbelt/logger.js';
+import { RuleSeverity } from '../../extensions/yolo-seatbelt/rules';
 
 describe('config', () => {
   describe('getConfigPath', () => {
@@ -23,8 +24,8 @@ describe('logger', () => {
     it('does not log when logLevel is none', () => {
       const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       
-      logDecision('BLOCK', 'rm -rf /', 'block-rm-rf-root', { logLevel: 'none' });
-      logDecision('ASK', 'find . -delete', 'ask-find-delete', { logLevel: 'none' });
+      logDecision(RuleSeverity.BLOCK, 'rm -rf /', 'block-rm-rf-root', { logLevel: 'none' });
+      logDecision(RuleSeverity.ASK, 'find . -delete', 'ask-find-delete', { logLevel: 'none' });
       
       expect(consoleWarn).not.toHaveBeenCalled();
       consoleWarn.mockRestore();
@@ -33,13 +34,13 @@ describe('logger', () => {
     it('logs BLOCK and ASK when logLevel is warn', () => {
       const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       
-      logDecision('BLOCK', 'rm -rf /', 'block-rm-rf-root', { logLevel: 'warn' });
+      logDecision(RuleSeverity.BLOCK, 'rm -rf /', 'block-rm-rf-root', { logLevel: 'warn' });
       expect(consoleWarn).toHaveBeenCalledWith('[seatbelt] BLOCK: rm -rf / (rule: block-rm-rf-root)');
       
-      logDecision('ASK', 'find . -delete', 'ask-find-delete', { logLevel: 'warn' });
+      logDecision(RuleSeverity.ASK, 'find . -delete', 'ask-find-delete', { logLevel: 'warn' });
       expect(consoleWarn).toHaveBeenCalledWith('[seatbelt] ASK: find . -delete (rule: ask-find-delete)');
       
-      logDecision('ALLOW', 'echo hello', 'allow-default', { logLevel: 'warn' });
+      logDecision(RuleSeverity.ALLOW, 'echo hello', 'allow-default', { logLevel: 'warn' });
       expect(consoleWarn).not.toHaveBeenCalledWith('[seatbelt] ALLOW: echo hello');
       
       consoleWarn.mockRestore();
@@ -48,13 +49,13 @@ describe('logger', () => {
     it('logs all decisions when logLevel is debug', () => {
       const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => {});
       
-      logDecision('BLOCK', 'rm -rf /', 'block-rm-rf-root', { logLevel: 'debug' });
+      logDecision(RuleSeverity.BLOCK, 'rm -rf /', 'block-rm-rf-root', { logLevel: 'debug' });
       expect(consoleLog).toHaveBeenCalledWith('[seatbelt] BLOCK: rm -rf / (rule: block-rm-rf-root)');
       
-      logDecision('ASK', 'find . -delete', 'ask-find-delete', { logLevel: 'debug' });
+      logDecision(RuleSeverity.ASK, 'find . -delete', 'ask-find-delete', { logLevel: 'debug' });
       expect(consoleLog).toHaveBeenCalledWith('[seatbelt] ASK: find . -delete (rule: ask-find-delete)');
       
-      logDecision('ALLOW', 'echo hello', 'allow-default', { logLevel: 'debug' });
+      logDecision(RuleSeverity.ALLOW, 'echo hello', 'allow-default', { logLevel: 'debug' });
       expect(consoleLog).toHaveBeenCalledWith('[seatbelt] ALLOW: echo hello (rule: allow-default)');
       
       consoleLog.mockRestore();
@@ -65,8 +66,8 @@ describe('logger', () => {
     it('logs blocked commands', () => {
       const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       
-      logBlock('rm -rf /', 'Command matches forbidden pattern', { logLevel: 'warn' });
-      expect(consoleWarn).toHaveBeenCalledWith('[seatbelt] BLOCK: rm -rf / (reason: Command matches forbidden pattern)');
+      logDecision(RuleSeverity.BLOCK, 'rm -rf /', 'Command matches forbidden pattern', { logLevel: 'warn' });
+      expect(consoleWarn).toHaveBeenCalledWith('[seatbelt] BLOCK: rm -rf / (rule: Command matches forbidden pattern)');
       
       consoleWarn.mockRestore();
     });
@@ -76,8 +77,8 @@ describe('logger', () => {
     it('logs asked commands', () => {
       const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       
-      logAsk('find . -delete', { logLevel: 'warn' });
-      expect(consoleWarn).toHaveBeenCalledWith('[seatbelt] ASK: find . -delete');
+      logDecision(RuleSeverity.ASK, 'find . -delete', 'find-delete', { logLevel: 'warn' });
+      expect(consoleWarn).toHaveBeenCalledWith('[seatbelt] ASK: find . -delete (rule: find-delete)');
       
       consoleWarn.mockRestore();
     });

@@ -24,16 +24,6 @@ export interface Config {
 }
 
 /**
- * Context object for evaluation
- */
-export interface Context {
-  /** Current working directory */
-  cwd: string;
-  /** Configuration overrides */
-  config?: Config;
-}
-
-/**
  * Result of a decision evaluation
  */
 export interface DecisionResult {
@@ -50,13 +40,13 @@ export interface DecisionResult {
  * First match wins across all checks.
  *
  * @param command - Raw command string to evaluate
- * @param context - Evaluation context (cwd, config)
+ * @param config - Optional config object with overrides
  * @returns DecisionResult with decision, matchedRule, and message
  */
-export function evaluate(command: string, context: Context): DecisionResult {
-  const config = context.config || {};
+export function evaluate(command: string, config?: Config): DecisionResult {
+  const configR = config || {};
 
-  const matchedRule = classify(command, config);
+  const matchedRule = classify(command, configR);
 
   return {
     decision: matchedRule.decision,

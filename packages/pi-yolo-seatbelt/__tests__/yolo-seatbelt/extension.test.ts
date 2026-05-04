@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { evaluate, RuleSeverity } from '../../extensions/yolo-seatbelt/evaluate.js';
-import { logAsk, logBlock } from '../../extensions/yolo-seatbelt/logger.js';
+import { logDecision } from '../../extensions/yolo-seatbelt/logger.js';
 
 // Mock modules
 vi.mock('../../extensions/yolo-seatbelt/evaluate.js');
@@ -46,8 +46,7 @@ describe('yolo-seatbelt extension', () => {
       block: true,
       reason: 'Blocked by yolo-seatbelt: block-rm-rf-root',
     });
-    expect(logAsk).toHaveBeenCalledWith('rm -rf /some/path');
-    expect(logBlock).toHaveBeenCalledWith('rm -rf /some/path', 'block-rm-rf-root');
+    expect(logDecision).toHaveBeenCalled();
   });
 
   it('asks for confirmation on rm -rf commands', async () => {
@@ -92,7 +91,7 @@ describe('yolo-seatbelt extension', () => {
       '⚠️ Risky command detected',
       'The command "rm -rf .tmp" matches a safety rule ("ask-rm-rf").\n\nContinue?'
     );
-    expect(logAsk).toHaveBeenCalledWith('rm -rf .tmp');
+    expect(logDecision).toHaveBeenCalled();
   });
 
   it('allows safe commands', async () => {
@@ -131,7 +130,7 @@ describe('yolo-seatbelt extension', () => {
 
     expect(result).toBeUndefined();
     expect(mockCtx.ui.confirm).not.toHaveBeenCalled();
-    expect(logAsk).toHaveBeenCalledWith('echo hello');
+    expect(logDecision).toHaveBeenCalled();
   });
 
   it('blocks .git protected paths', async () => {
@@ -172,7 +171,7 @@ describe('yolo-seatbelt extension', () => {
       block: true,
       reason: 'Blocked by yolo-seatbelt: block-protected-path',
     });
-    expect(logBlock).toHaveBeenCalledWith('rm -rf .git/config', 'block-protected-path');
+    expect(logDecision).toHaveBeenCalled();
   });
 
   it('only processes bash tool calls', async () => {

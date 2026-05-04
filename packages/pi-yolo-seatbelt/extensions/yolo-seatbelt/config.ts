@@ -15,15 +15,14 @@ import { RuleSeverity } from './rules.js';
 /**
  * User configuration for yolo-seatbelt
  *
- * All 18 built-in filters are configurable by rule ID.
- * Examples: "irreversible.rm-rf-root", "trust-boundary.sudo", "git-history.push-force"
+ * All built-in filters are configurable by rule ID.
  */
 export interface Config {
   /** Log level: "none", "warn", or "debug" */
   logLevel: 'none' | 'warn' | 'debug';
   /**
    * Rule severity overrides by rule ID.
-   * Keys are rule IDs like "irreversible.rm-rf-root", values are severity levels.
+   * Keys are rule IDs values are severity levels.
    * Absent rules use their built-in default severity.
    */
   rules?: Record<string, RuleSeverity>;

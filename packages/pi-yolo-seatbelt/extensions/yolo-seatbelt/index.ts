@@ -1,9 +1,9 @@
 import type { ExtensionAPI } from '@mariozechner/pi-coding-agent';
 import { isToolCallEventType } from '@mariozechner/pi-coding-agent';
-import { evaluate, RuleSeverity, Config } from './evaluate.js';
-import { logAsk, logBlock, logDebug } from './logger.js';
+import { evaluate, RuleSeverity } from './evaluate.js';
+import { logDecision } from './logger.js';
 import { loadConfig } from './config.js';
-import { getMatchingRuleIds, BUILTIN_RULES, type RuleDefinition } from './matcher.js';
+import { BUILTIN_RULES, type RuleDefinition, SEVERITY_ORDER } from './matcher.js';
 
 /**
  * Yolo-seatbelt safety guard extension
@@ -24,14 +24,13 @@ export default function (pi: ExtensionAPI) {
       const logLevel = config.logLevel || 'none';
 
       // Format rules with their effective severity, sorted by severity (ALLOW, ASK, BLOCK)
-      const severityOrder: Record<RuleSeverity, number> = { allow: 1, ask: 2, block: 3 };
       const ruleList = [...BUILTIN_RULES]
         .map((rule: RuleDefinition) => {
-          const effectiveSeverity = (config as Config).rules?.[rule?.id] || rule.defaultSeverity;
+          const effectiveSeverity = config.rules?.[rule?.id] || rule.defaultSeverity;
           const status =
-            effectiveSeverity === 'block'
+            effectiveSeverity === RuleSeverity.BLOCK
               ? '🔴 BLOCK'
-              : effectiveSeverity === 'ask'
+              : effectiveSeverity === RuleSeverity.ASK
                 ? '🟠 ASK'
                 : '🟢 ALLOW';
           return {
@@ -39,7 +38,7 @@ export default function (pi: ExtensionAPI) {
             line: `  ${status}  ${rule?.id}  ${rule.description}`,
           };
         })
-        .sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity])
+        .sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity])
         .map((item) => item.line);
 
       // Build config info
@@ -82,21 +81,11 @@ export default function (pi: ExtensionAPI) {
     // Load config (cached after first load)
     const config = loadConfig();
 
-    // Log matching rule IDs for debugging
-    const matchingRules = getMatchingRuleIds(command);
-    if (matchingRules.length > 0) {
-      logDebug(`Matching rules: ${matchingRules.join(', ')}`);
-    }
-
     // Evaluate the command using the full pipeline with config
-    const result = evaluate(command, {
-      cwd: ctx.cwd,
-      config: config,
-    });
+    const result = evaluate(command, config);
 
     // Log the decision
-    logAsk(command);
-    logBlock(command, result?.matchedRule || 'unknown');
+    logDecision(result.decision, command, result.matchedRule || 'unknown', config);
 
     // Handle the decision
     switch (result.decision) {

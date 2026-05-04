@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classify, getMatchingRuleIds } from '../../extensions/yolo-seatbelt/matcher.js';
+import { classify } from '../../extensions/yolo-seatbelt/matcher.js';
 import { RuleSeverity } from '../../extensions/yolo-seatbelt/rules.js';
 
 describe('classify', () => {
@@ -111,28 +111,6 @@ describe('classify', () => {
     it('allows git push without force', () => {
       expect(classify('git push origin main').decision).toBe(RuleSeverity.ALLOW);
     });
-  });
-});
-
-describe('getMatchingRuleIds', () => {
-  it('returns matching rule IDs', () => {
-    const result = getMatchingRuleIds('rm -rf /');
-    // rm -rf / matches both rm-rf-root and rm-rf patterns
-    expect(result).toContain('rm-rf-root');
-    expect(result).toContain('rm-rf');
-  });
-
-  it('returns multiple matches', () => {
-    const result = getMatchingRuleIds('chmod -R . && rm -rf /');
-    // Order depends on which rule matches first in BUILTIN_RULES
-    expect(result).toContain('chmod-recursive');
-    expect(result).toContain('rm-rf-root');
-    expect(result.length).toBeGreaterThanOrEqual(2);
-  });
-
-  it('returns empty array when no match', () => {
-    const result = getMatchingRuleIds('echo hello');
-    expect(result).toEqual([]);
   });
 });
 

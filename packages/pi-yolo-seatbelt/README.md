@@ -19,26 +19,25 @@ yolo-seatbelt intercepts bash tool calls and evaluates commands against a set of
 
 ### Rule Categories
 
-| Category             | Rules                | Description            |
-|----------------------|----------------------|------------------------|
-| `rm-rf-root`         | `rm -rf /`           | delete entire filesystem |
-| `rm-rf-git`          | `rm -rf .git`        | delete repository      |
-| `rm-rf-home`         | `rm -rf ~`           | delete home directory  |
-| `rm-rf`              | `rm -rf`             | dangerous without path |
-| `find-delete`        | `find ... -delete`   | delete via find        |
-| `chmod-recursive`    | `chmod -R`           | recursive permissions  |
-| `chown-recursive`    | `chown -R`           | recursive ownership    |
-| `path-git`           | `.git`               | directory access       |
-| `path-env`           | `.env`               | file access            |
-| `path-ssh`           | `.ssh`               | directory access       |
-| `path-npmrc`         | `.npmrc`             | file access            |
-| `path-pypirc`        | `.pypirc`            | file access            |
-| `path-netrc`         | `.netrc`             | file access            |
-| `path-ssh-key`       |  `.ssh`              | SSH private keys       |
-| `path-pem`           | `.pem`               | certificate files |
-| `outside-workspace`  | `../`                | Paths outside workspace |
-| `sudo`               | | Privilege escalation |
-| `git.reset-hard`     | `git reset --hard`  | |
+| Category                 | Rules                | Description            |
+|--------------------------|----------------------|------------------------|
+| `rm-rf-root`             | `rm -rf /`           | delete entire filesystem |
+| `rm-rf-git`              | `rm -rf .git`        | delete repository      |
+| `rm-rf-home`             | `rm -rf ~`           | delete home directory  |
+| `rm-rf`                  | `rm -rf`             | dangerous without path |
+| `find-delete`            | `find ... -delete`   | delete via find        |
+| `chmod-recursive`        | `chmod -R`           | recursive permissions  |
+| `chown-recursive`        | `chown -R`           | recursive ownership    |
+| `path.git`               | `.git`               | directory access       |
+| `path.ssh`               | `.ssh`               | directory access       |
+| `path.npmrc`             | `.npmrc`             | file access            |
+| `path.pypirc`            | `.pypirc`            | file access            |
+| `path.netrc`             | `.netrc`             | file access            |
+| `path.ssh-key`           |  `.ssh`              | SSH private keys       |
+| `path.pem`               | `.pem`               | certificate files |
+| `outside-workspace`      | `../`                | Paths outside workspace |
+| `sudo`                   | | Privilege escalation |
+| `git.reset-hard`         | `git reset --hard`  | |
 | `git.clean-force`        | `git clean -f/d/x`   | |
 | `git.push-force`         | `git push --force`   | |
 | `git.rebase-interactive` | `git rebase -i`      | |

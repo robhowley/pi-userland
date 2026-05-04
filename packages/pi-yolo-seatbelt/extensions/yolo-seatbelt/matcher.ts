@@ -9,6 +9,8 @@ import { BUILTIN_RULES, RuleDefinition, RuleSeverity } from './rules.js';
 export { BUILTIN_RULES } from './rules.js';
 export type { RuleDefinition, RuleSeverity } from './rules.js';
 
+export const SEVERITY_ORDER: Record<RuleSeverity, number> = { block: 0, ask: 1, allow: 2 };
+
 /**
  * Get the effective severity for a rule (accounting for config overrides).
  */
@@ -27,7 +29,6 @@ function sortByEffectiveSeverity(
   rules: RuleDefinition[],
   config?: { rules?: Record<string, RuleSeverity> },
 ): RuleDefinition[] {
-  const SEVERITY_ORDER: Record<RuleSeverity, number> = { block: 0, ask: 1, allow: 2 };
   return [...rules].sort((a, b) => {
     const sevA = getEffectiveSeverity(a, config);
     const sevB = getEffectiveSeverity(b, config);
@@ -76,14 +77,4 @@ export function classify(
   const severity = getEffectiveSeverity(rule, config);
 
   return { decision: severity, rule };
-}
-
-/**
- * Get all matched rule IDs for a command.
- *
- * @param command - Raw command string
- * @returns Array of matching rule IDs
- */
-export function getMatchingRuleIds(command: string): string[] {
-  return BUILTIN_RULES.filter((rule) => rule.pattern.test(command)).map((rule) => rule.id);
 }
