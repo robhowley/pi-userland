@@ -1,9 +1,9 @@
 import type { ExtensionAPI } from '@mariozechner/pi-coding-agent';
 import { isToolCallEventType } from '@mariozechner/pi-coding-agent';
-import { evaluate, Decision } from './evaluate.js';
+import { evaluate, Decision, Config } from './evaluate.js';
 import { logAsk, logBlock, logDebug } from './logger.js';
 import { loadConfig } from './config.js';
-import { getMatchingRuleIds } from './matcher.js';
+import { getMatchingRuleIds, BUILTIN_RULES, type RuleDefinition } from './matcher.js';
 
 /**
  * Yolo-seatbelt safety guard extension
@@ -16,6 +16,53 @@ import { getMatchingRuleIds } from './matcher.js';
  */
 
 export default function (pi: ExtensionAPI) {
+  // Register /yolo-seatbelt-rules slash command
+  pi.registerCommand('yolo-seatbelt-rules', {
+    description: 'Show currently configured yolo-seatbelt rules and configuration',
+    handler: async (_args: string, ctx) => {
+      const config = loadConfig();
+      const logLevel = config.logLevel || 'none';
+      
+      // Format rules with their effective severity, sorted by severity (ALLOW, ASK, BLOCK)
+      const severityOrder: Record<string, number> = { allow: 1, ask: 2, block: 3 };
+      const ruleList = [...BUILTIN_RULES]
+        .map((rule: RuleDefinition) => {
+          const effectiveSeverity = (config as Config).rules?.[rule.id] || rule.defaultSeverity;
+          const status = effectiveSeverity === 'block' ? '🔴 BLOCK' : effectiveSeverity === 'ask' ? '🟠 ASK' : '🟢 ALLOW';
+          return { severity: effectiveSeverity, line: `  ${status}  ${rule.id}  ${rule.description}` };
+        })
+        .sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity])
+        .map((item) => item.line);
+      
+      // Build config info
+      const configInfo = [];
+      if (logLevel !== 'none') {
+        configInfo.push(`  📋 logLevel: ${logLevel}`);
+      }
+      
+      const ruleCount = Object.keys(config.rules || {}).length;
+      if (ruleCount > 0) {
+        configInfo.push(`  ⚙️  Custom rules: ${ruleCount}`);
+      }
+      
+      // Show in a selector
+      const items = [
+        '--- yolo-seatbelt Configuration ---',
+        ...configInfo,
+        '',
+        '--- Rules ---',
+        ...ruleList,
+        '',
+        '--- Legend ---',
+        '🔴 BLOCK - Command is blocked immediately',
+        '🟠 ASK - User is prompted for confirmation',
+        '🟢 ALLOW - Command proceeds without warning',
+      ];
+      
+      await ctx.ui.select('yolo-seatbelt Rules', items);
+    },
+  });
+
   pi.on('tool_call', async (event, ctx) => {
     // Only intercept bash tool calls
     if (!isToolCallEventType('bash', event)) {

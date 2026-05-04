@@ -4,7 +4,11 @@
  * Phase D: Simplified - single list of rules, no category concept.
  */
 
-import { RuleDefinition, RuleSeverity, BUILTIN_RULES, Decision } from './rules.js';
+import { BUILTIN_RULES, Decision } from './rules.js';
+import type { RuleDefinition, RuleSeverity } from './rules.js';
+
+export { BUILTIN_RULES, Decision } from './rules.js';
+export type { RuleDefinition, RuleSeverity } from './rules.js';
 
 /**
  * Get the matched rule for a command without checking severity.

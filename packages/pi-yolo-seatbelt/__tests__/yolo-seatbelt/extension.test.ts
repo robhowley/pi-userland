@@ -18,6 +18,7 @@ describe('yolo-seatbelt extension', () => {
       cwd: '/repo',
       ui: {
         confirm: vi.fn().mockResolvedValue(false),
+        select: vi.fn().mockResolvedValue(undefined),
       },
     } as any;
 
@@ -31,10 +32,7 @@ describe('yolo-seatbelt extension', () => {
     // Import the extension from its actual location
     const extensionModule = await import('../../extensions/yolo-seatbelt/index.js');
     const extension = extensionModule.default;
-    const pi = { on: vi.fn() } as any;
-    extension(pi);
-
-    // Get the handler and call it
+    const pi = { on: vi.fn(), registerCommand: vi.fn(), getCommands: vi.fn() } as any;
     const handlers: any[] = [];
     pi.on.mockImplementation((event: string, handler: any) => {
       handlers.push(handler);
@@ -63,6 +61,7 @@ describe('yolo-seatbelt extension', () => {
       cwd: '/repo',
       ui: {
         confirm: vi.fn().mockResolvedValue(false),
+        select: vi.fn().mockResolvedValue(undefined),
       },
     } as any;
 
@@ -75,7 +74,7 @@ describe('yolo-seatbelt extension', () => {
 
     const extensionModule = await import('../../extensions/yolo-seatbelt/index.js');
     const extension = extensionModule.default;
-    const pi = { on: vi.fn() } as any;
+    const pi = { on: vi.fn(), registerCommand: vi.fn(), getCommands: vi.fn() } as any;
     const handlers: any[] = [];
     pi.on.mockImplementation((event: string, handler: any) => {
       handlers.push(handler);
@@ -107,6 +106,7 @@ describe('yolo-seatbelt extension', () => {
       cwd: '/repo',
       ui: {
         confirm: vi.fn().mockResolvedValue(true),
+        select: vi.fn().mockResolvedValue(undefined),
       },
     } as any;
 
@@ -119,7 +119,7 @@ describe('yolo-seatbelt extension', () => {
 
     const extensionModule = await import('../../extensions/yolo-seatbelt/index.js');
     const extension = extensionModule.default;
-    const pi = { on: vi.fn() } as any;
+    const pi = { on: vi.fn(), registerCommand: vi.fn(), getCommands: vi.fn() } as any;
     const handlers: any[] = [];
     pi.on.mockImplementation((event: string, handler: any) => {
       handlers.push(handler);
@@ -145,6 +145,7 @@ describe('yolo-seatbelt extension', () => {
       cwd: '/repo',
       ui: {
         confirm: vi.fn().mockResolvedValue(false),
+        select: vi.fn().mockResolvedValue(undefined),
       },
     } as any;
 
@@ -157,7 +158,7 @@ describe('yolo-seatbelt extension', () => {
 
     const extensionModule = await import('../../extensions/yolo-seatbelt/index.js');
     const extension = extensionModule.default;
-    const pi = { on: vi.fn() } as any;
+    const pi = { on: vi.fn(), registerCommand: vi.fn(), getCommands: vi.fn() } as any;
     const handlers: any[] = [];
     pi.on.mockImplementation((event: string, handler: any) => {
       handlers.push(handler);
@@ -185,12 +186,13 @@ describe('yolo-seatbelt extension', () => {
       cwd: '/repo',
       ui: {
         confirm: vi.fn().mockResolvedValue(false),
+        select: vi.fn().mockResolvedValue(undefined),
       },
     } as any;
 
     const extensionModule = await import('../../extensions/yolo-seatbelt/index.js');
     const extension = extensionModule.default;
-    const pi = { on: vi.fn() } as any;
+    const pi = { on: vi.fn(), registerCommand: vi.fn(), getCommands: vi.fn() } as any;
     const handlers: any[] = [];
     pi.on.mockImplementation((event: string, handler: any) => {
       handlers.push(handler);
