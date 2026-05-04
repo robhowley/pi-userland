@@ -35,9 +35,6 @@ export function aggregateUsage(
     .sort((a, b) => b.spend - a.spend)
     .slice(0, 3);
 
-  // Cache rate needs to handle undefined case properly
-  const cacheRate = calculateCacheRate(analytics ? analytics.data : []);
-
   const result: UsageSummary = {
     today,
     week,
@@ -46,10 +43,6 @@ export function aggregateUsage(
     burnRate: (week / 7) * 30,
     topModels,
   };
-
-  if (cacheRate !== undefined) {
-    result.cacheRate = cacheRate;
-  }
 
   const byModel = aggregateByModel(analytics ? analytics.data : []);
   if (Object.keys(byModel).length > 0) {
@@ -84,10 +77,9 @@ function aggregateByModel(data: AnalyticsResponse['data']): Record<string, numbe
 
 function aggregateByKey(data: AnalyticsResponse['data']): Record<string, number> {
   return data
-    .filter((d) => d.endpoint_id)
     .reduce(
       (acc, d) => {
-        acc[d.endpoint_id] = (acc[d.endpoint_id] || 0) + d.usage;
+        acc[d.provider_name] = (acc[d.provider_name] || 0) + d.usage;
         return acc;
       },
       {} as Record<string, number>,
@@ -102,15 +94,4 @@ function aggregateByDay(data: AnalyticsResponse['data']): Record<string, number>
     byDay[day] = (byDay[day] || 0) + d.usage;
   }
   return byDay;
-}
-
-function calculateCacheRate(data: AnalyticsResponse['data']): number | undefined {
-  let totalInput = 0,
-    totalCached = 0;
-  for (const d of data) {
-    totalInput += d.prompt_tokens || 0;
-    totalCached += 0; // No cached token data available in API response
-  }
-  if (totalInput === 0) return undefined;
-  return totalCached / totalInput;
 }

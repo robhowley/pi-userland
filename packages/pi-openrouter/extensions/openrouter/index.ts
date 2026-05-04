@@ -11,9 +11,9 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand('usage', {
-    description: 'Show OpenRouter usage (try: /usage, /usage models, /usage keys, /usage 7d)',
+    description: 'Show OpenRouter usage (try: /usage, /usage models, /usage providers, /usage 7d)',
     getArgumentCompletions: (prefix) => {
-      const subcommands = ['models', 'keys', '7d'];
+      const subcommands = ['models', 'providers', '7d'];
       const filtered = subcommands.filter((s) => s.startsWith(prefix));
       return filtered.length > 0 ? filtered.map((s) => ({ value: s, label: s })) : null;
     },

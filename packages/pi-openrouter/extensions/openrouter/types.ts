@@ -30,7 +30,6 @@ export interface UsageSummary {
   month: number;
   cap: number;
   burnRate: number;
-  cacheRate?: number;
   topModels: { name: string; spend: number }[];
   byModel?: Record<string, number>;
   byKey?: Record<string, number>;

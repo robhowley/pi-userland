@@ -101,12 +101,6 @@ export class UsageOverlayComponent {
         lines.push(emptyRow());
       }
 
-      // Cache rate
-      if (summary.cacheRate !== undefined) {
-        lines.push(row(`Cache rate: ${Math.round(summary.cacheRate * 100)}%`));
-        lines.push(emptyRow());
-      }
-
       lines.push(boxBottom());
       lines.push(row(th.fg('dim', 'Press any key to close')));
 
@@ -135,15 +129,15 @@ export class UsageOverlayComponent {
     } else if (subcommand === 'keys') {
       if (summary.byKey) {
         lines.push('');
-        lines.push(boxTop('Usage by Key'));
+        lines.push(boxTop('Usage by Provider'));
         const sorted = Object.entries(summary.byKey).sort((a, b) => b[1] - a[1]);
-        for (const [hash, spend] of sorted) {
-          lines.push(row(`${truncate(hash, 28)} $${fmt(spend)}`));
+        for (const [provider, spend] of sorted) {
+          lines.push(row(`${truncate(provider, 28)} $${fmt(spend)}`));
         }
         lines.push(boxBottom());
       } else {
         lines.push('');
-        lines.push(boxTop('Usage by Key'));
+        lines.push(boxTop('Usage by Provider'));
         lines.push(row(th.fg('dim', 'Data not available (requires /analytics API)')));
         lines.push(row(th.fg('dim', 'Credits only show total usage')));
         lines.push(boxBottom());
