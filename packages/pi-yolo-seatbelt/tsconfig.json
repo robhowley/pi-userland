@@ -1,9 +1,4 @@
 {
   "extends": "../../tsconfig.base.json",
-  "include": ["extensions/yolo-seatbelt/"],
-  "compilerOptions": {
-    "noUncheckedIndexedAccess": false,
-    "exactOptionalPropertyTypes": false,
-    "noPropertyAccessFromIndexSignature": false,
-  }
+  "include": ["extensions/yolo-seatbelt/"]
 }

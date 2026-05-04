@@ -22,29 +22,37 @@ export default function (pi: ExtensionAPI) {
     handler: async (_args: string, ctx) => {
       const config = loadConfig();
       const logLevel = config.logLevel || 'none';
-      
+
       // Format rules with their effective severity, sorted by severity (ALLOW, ASK, BLOCK)
       const severityOrder: Record<string, number> = { allow: 1, ask: 2, block: 3 };
       const ruleList = [...BUILTIN_RULES]
         .map((rule: RuleDefinition) => {
           const effectiveSeverity = (config as Config).rules?.[rule.id] || rule.defaultSeverity;
-          const status = effectiveSeverity === 'block' ? '🔴 BLOCK' : effectiveSeverity === 'ask' ? '🟠 ASK' : '🟢 ALLOW';
-          return { severity: effectiveSeverity, line: `  ${status}  ${rule.id}  ${rule.description}` };
+          const status =
+            effectiveSeverity === 'block'
+              ? '🔴 BLOCK'
+              : effectiveSeverity === 'ask'
+                ? '🟠 ASK'
+                : '🟢 ALLOW';
+          return {
+            severity: effectiveSeverity,
+            line: `  ${status}  ${rule.id}  ${rule.description}`,
+          };
         })
         .sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity])
         .map((item) => item.line);
-      
+
       // Build config info
       const configInfo = [];
       if (logLevel !== 'none') {
         configInfo.push(`  📋 logLevel: ${logLevel}`);
       }
-      
+
       const ruleCount = Object.keys(config.rules || {}).length;
       if (ruleCount > 0) {
         configInfo.push(`  ⚙️  Custom rules: ${ruleCount}`);
       }
-      
+
       // Show in a selector
       const items = [
         '--- yolo-seatbelt Configuration ---',
@@ -58,7 +66,7 @@ export default function (pi: ExtensionAPI) {
         '🟠 ASK - User is prompted for confirmation',
         '🟢 ALLOW - Command proceeds without warning',
       ];
-      
+
       await ctx.ui.select('yolo-seatbelt Rules', items);
     },
   });
