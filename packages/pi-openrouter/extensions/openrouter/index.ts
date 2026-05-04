@@ -1,30 +1,33 @@
 import type { ExtensionAPI, ExtensionContext } from '@mariozechner/pi-coding-agent';
 import type { AnalyticsResponse, UsageSummary } from './types.js';
-import { usageCache, lastFetchTime } from './cache.js';
+import { usageCache, lastFetchTime, startBackgroundRefresh, stopBackgroundRefresh } from './cache.js';
 import { fetchCredits, fetchActivity } from './openrouter.js';
 import { aggregateUsage } from './format.js';
 import { UsageOverlayComponent } from './overlay.js';
 
 export default function (pi: ExtensionAPI) {
+  // Start background refresh on extension load
+  startBackgroundRefresh();
+
   pi.on('session_start', async (_event, ctx) => {
     ctx.ui.notify('OpenRouter extension loaded', 'info');
   });
 
+  // Stop background refresh on extension unload
+  pi.on('extension_unload', () => {
+    stopBackgroundRefresh();
+  });
+
   pi.registerCommand('usage', {
-    description: 'Show OpenRouter usage (try: /usage, /usage models, /usage providers, /usage 7d)',
-    getArgumentCompletions: (prefix) => {
-      const subcommands = ['models', 'providers', '7d'];
-      const filtered = subcommands.filter((s) => s.startsWith(prefix));
-      return filtered.length > 0 ? filtered.map((s) => ({ value: s, label: s })) : null;
-    },
+    description: 'Show OpenRouter usage',
+    getArgumentCompletions: () => null, // No subcommands
     handler: async (args, ctx) => {
-      const subcommand = args.trim(); // 'models', 'keys', '7d', or ''
-      await showUsageOverlay(ctx, subcommand || undefined);
+      await showUsageOverlay(ctx);
     },
   });
 }
 
-async function showUsageOverlay(ctx: ExtensionContext, subcommand?: string) {
+async function showUsageOverlay(ctx: ExtensionContext) {
   // Check cache first
   const cachedSummary = usageCache.get('usage');
   const cachedMinutesAgo = cachedSummary
@@ -32,7 +35,7 @@ async function showUsageOverlay(ctx: ExtensionContext, subcommand?: string) {
     : null;
 
   if (cachedSummary) {
-    await showOverlay(ctx, cachedSummary, subcommand, null, cachedMinutesAgo);
+    await showOverlay(ctx, cachedSummary, null, null, cachedMinutesAgo, lastFetchTime.value);
     return;
   }
 
@@ -56,11 +59,11 @@ async function showUsageOverlay(ctx: ExtensionContext, subcommand?: string) {
     summary = aggregateUsage(credits.data, analytics);
     usageCache.set('usage', summary);
 
-    await showOverlay(ctx, summary, subcommand, null, 0);
+    await showOverlay(ctx, summary, null, null, 0, lastFetchTime.value);
   } catch (error_) {
     const err = error_ as Error;
     error = `API Error: ${err.message}`;
-    await showOverlay(ctx, null, subcommand, error, cachedMinutesAgo || 0);
+    await showOverlay(ctx, null, null, error, cachedMinutesAgo || 0, lastFetchTime.value);
   }
 }
 
@@ -70,6 +73,7 @@ async function showOverlay(
   subcommand: string | undefined,
   error: string | null,
   cachedMinutesAgo: number | null,
+  lastRefreshTime: number | null,
 ) {
   await ctx.ui.custom<void>(
     (_tui, theme, _keybindings, done) => {
@@ -78,6 +82,7 @@ async function showOverlay(
         subcommand,
         error,
         cachedMinutesAgo,
+        lastRefreshTime,
         theme,
         done,
       );

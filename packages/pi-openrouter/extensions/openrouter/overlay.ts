@@ -14,20 +14,18 @@ export class UsageOverlayComponent {
     subcommand: string | undefined,
     error: string | null,
     cachedMinutesAgo: number | null,
+    lastRefreshTime: number | null,
     theme: Theme,
     onClose: () => void,
   ) {
     this.theme = theme;
     this.onClose = onClose;
-    this.lines = this.buildLines(summary, subcommand, error, cachedMinutesAgo);
+    this.lines = this.buildLines(summary, subcommand, error, cachedMinutesAgo, lastRefreshTime);
   }
 
   handleInput(data: string): void {
-    // Close on q, escape, or any key per spec
+    // Close on q, escape, or ctrl+c
     if (matchesKey(data, 'escape') || matchesKey(data, 'ctrl+c') || data === 'q') {
-      this.onClose();
-    } else {
-      // Any other key also closes (per spec: "any keypress")
       this.onClose();
     }
   }
@@ -49,6 +47,7 @@ export class UsageOverlayComponent {
     subcommand: string | undefined,
     error: string | null,
     cachedMinutesAgo: number | null,
+    lastRefreshTime: number | null,
   ): string[] {
     const th = this.theme;
     const lines: string[] = [];
@@ -61,7 +60,7 @@ export class UsageOverlayComponent {
         lines.push(row(th.fg('dim', `(last successful fetch: ${cachedMinutesAgo}m ago)`)));
       }
       lines.push(boxBottom());
-      lines.push(row(th.fg('dim', 'Press any key to close')));
+      lines.push(row(th.fg('dim', 'Press q/ESC/Ctrl+C to close')));
       return lines;
     }
 
@@ -70,103 +69,70 @@ export class UsageOverlayComponent {
       lines.push(boxTop('OpenRouter Usage'));
       lines.push(row(th.fg('dim', 'No usage data available.')));
       lines.push(boxBottom());
-      lines.push(row(th.fg('dim', 'Press any key to close')));
+      lines.push(row(th.fg('dim', 'Press q/ESC/Ctrl+C to close')));
       return lines;
     }
 
-    // Summary view (default)
-    if (!subcommand) {
-      lines.push('');
-      lines.push(boxTop('OpenRouter Usage'));
+    // Single view - all information
+    lines.push('');
+    lines.push(boxTop('OpenRouter Usage'));
+    lines.push(emptyRow());
+
+    // Summary section
+    // Month row with cap %
+    const capStr = summary.cap ? ` / $${fmt(summary.cap)} cap` : '';
+    const pctStr = summary.cap ? ` (${Math.round((summary.month / summary.cap) * 100)}%)` : '';
+    lines.push(row(`Month $${fmt(summary.month)}${capStr}${pctStr}`));
+
+    // 7d with burn rate
+    lines.push(row(`7d    $${fmt(summary.week)}    burn ~$${fmt(summary.burnRate)}`));
+
+    // Today
+    lines.push(row(`Today $${fmt(summary.today)}`));
+    lines.push(emptyRow());
+
+    // Last refresh time
+    if (lastRefreshTime !== null) {
+      const refreshMinutesAgo = Math.round((Date.now() - lastRefreshTime) / 60000);
+      lines.push(th.fg('dim', row(`Last refreshed: ${refreshMinutesAgo}m ago`)));
       lines.push(emptyRow());
-
-      // Month row with cap %
-      const capStr = summary.cap ? ` / $${fmt(summary.cap)} cap` : '';
-      const pctStr = summary.cap ? ` (${Math.round((summary.month / summary.cap) * 100)}%)` : '';
-      lines.push(row(`Month $${fmt(summary.month)}${capStr}${pctStr}`));
-
-      // 7d with burn rate
-      lines.push(row(`7d    $${fmt(summary.week)}    burn ~$${fmt(summary.burnRate)}`));
-
-      // Today
-      lines.push(row(`Today $${fmt(summary.today)}`));
-      lines.push(emptyRow());
-
-      // Top models
-      if (summary.topModels.length > 0) {
-        lines.push(row('Top models (7d)'));
-        for (const m of summary.topModels) {
-          lines.push(row(`  ${truncate(m.name, 20)} $${fmt(m.spend)}`));
-        }
-        lines.push(emptyRow());
-      }
-
-      lines.push(boxBottom());
-      lines.push(row(th.fg('dim', 'Press any key to close')));
-
-      return lines;
     }
 
-    // Subcommand views
-    if (subcommand === 'models') {
-      if (summary.byModel) {
-        lines.push('');
-        lines.push(boxTop('Usage by Model'));
-        const sorted = Object.entries(summary.byModel)
-          .sort((a, b) => b[1] - a[1])
-          .slice(0, 10);
-        for (const [name, spend] of sorted) {
-          lines.push(row(`${truncate(name, 28)} $${fmt(spend)}`));
-        }
-        lines.push(boxBottom());
-      } else {
-        lines.push('');
-        lines.push(boxTop('Usage by Model'));
-        lines.push(row(th.fg('dim', 'Data not available (requires /analytics API)')));
-        lines.push(row(th.fg('dim', 'Credits only show total usage')));
-        lines.push(boxBottom());
+    // Top models (7d)
+    if (summary.topModels.length > 0) {
+      lines.push(row('Top models (7d)'));
+      for (const m of summary.topModels) {
+        lines.push(row(`  ${truncate(m.name, 20)} $${fmt(m.spend)}`));
       }
-    } else if (subcommand === 'providers') {
-      if (summary.byKey) {
-        lines.push('');
-        lines.push(boxTop('Usage by Provider'));
-        const sorted = Object.entries(summary.byKey).sort((a, b) => b[1] - a[1]);
-        for (const [provider, spend] of sorted) {
-          lines.push(row(`${truncate(provider, 28)} $${fmt(spend)}`));
-        }
-        lines.push(boxBottom());
-      } else {
-        lines.push('');
-        lines.push(boxTop('Usage by Provider'));
-        lines.push(row(th.fg('dim', 'Data not available (requires /analytics API)')));
-        lines.push(row(th.fg('dim', 'Credits only show total usage')));
-        lines.push(boxBottom());
-      }
-    } else if (subcommand === '7d') {
-      if (summary.byDay) {
-        lines.push('');
-        lines.push(boxTop('Usage by Day'));
-        const sorted = Object.entries(summary.byDay).sort((a, b) => a[0].localeCompare(b[0]));
-        for (const [day, spend] of sorted) {
-          lines.push(row(`${day} $${fmt(spend)}`));
-        }
-        lines.push(boxBottom());
-      } else {
-        lines.push('');
-        lines.push(boxTop('Usage by Day'));
-        lines.push(row(th.fg('dim', 'Data not available (requires /analytics API)')));
-        lines.push(row(th.fg('dim', 'Credits only show total usage')));
-        lines.push(boxBottom());
-      }
-    } else {
-      // Fallback for unknown subcommand
-      lines.push('');
-      lines.push(boxTop('OpenRouter Usage'));
-      lines.push(row(th.fg('dim', 'Unknown subcommand.')));
-      lines.push(boxBottom());
+      lines.push(emptyRow());
     }
 
-    lines.push(row(th.fg('dim', 'Press any key to close')));
+    // Usage by Provider
+    if (summary.byKey && Object.keys(summary.byKey).length > 0) {
+      lines.push(row('By provider'));
+      const sortedProviders = Object.entries(summary.byKey)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 6);
+      for (const [provider, spend] of sortedProviders) {
+        lines.push(row(`  ${truncate(provider, 24)} $${fmt(spend)}`));
+      }
+      lines.push(emptyRow());
+    }
+
+    // Usage by Day (7d)
+    if (summary.byDay && Object.keys(summary.byDay).length > 0) {
+      lines.push(row('By day'));
+      const sortedDays = Object.entries(summary.byDay)
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .slice(-7); // Last 7 days
+      for (const [day, spend] of sortedDays) {
+        lines.push(row(`  ${day} $${fmt(spend)}`));
+      }
+      lines.push(emptyRow());
+    }
+
+    lines.push(boxBottom());
+    lines.push(row(th.fg('dim', 'Press q/ESC/Ctrl+C to close')));
     return lines;
   }
 }
