@@ -1,104 +1,70 @@
-import type { AnalyticsResponse, UsageSummary } from './types.js';
+import type { ActivityItem, UsageSummary } from './types.js';
 
 export function aggregateUsage(
-  credits: { total_usage: number; total_credits: number },
-  analytics: AnalyticsResponse | null,
+  credits: { totalUsage: number },
+  analytics: ActivityItem[]
 ): UsageSummary {
   const now = new Date();
   const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const startOfWeek = new Date(startOfDay);
   startOfWeek.setDate(startOfWeek.getDate() - 7);
 
-  // Filter by time periods (use empty array if no analytics)
-  const weekData = analytics
-    ? analytics.data.filter((d) => {
-        const ts = d.date ? new Date(d.date) : now;
-        return ts >= startOfWeek;
-      })
-    : [];
+  const weekData = analytics.filter(d => {
+    const ts = new Date(d.date);
+    return ts >= startOfWeek;
+  });
 
-  const todayData = analytics
-    ? analytics.data.filter((d) => {
-        const ts = d.date ? new Date(d.date) : now;
-        return ts >= startOfDay;
-      })
-    : [];
+  const todayData = analytics.filter(d => {
+    const ts = new Date(d.date);
+    return ts >= startOfDay;
+  });
 
   const week = sumSpend(weekData);
   const today = sumSpend(todayData);
-  const month = credits.total_usage;
+  const month = credits.totalUsage;
 
-  // Top models by 7d spend
-  const modelSpend7d = aggregateByModel(weekData);
-  const topModels7d = Object.entries(modelSpend7d)
+  const modelSpend = aggregateByModel(weekData);
+  const topModels = Object.entries(modelSpend)
     .map(([name, spend]) => ({ name, spend }))
     .sort((a, b) => b.spend - a.spend)
     .slice(0, 3);
 
-  // Top models by 30d spend
-  const modelSpend30d = aggregateByModel(analytics ? analytics.data : []);
-  const topModels30d = Object.entries(modelSpend30d)
-    .map(([name, spend]) => ({ name, spend }))
-    .sort((a, b) => b.spend - a.spend)
-    .slice(0, 3);
-
-  const result: UsageSummary = {
+  return {
     today,
     week,
     month,
-    cap: credits.total_credits,
+    cap: 0,
     burnRate: (week / 7) * 30,
-    topModels7d,
-    topModels30d,
+    topModels7d: topModels,
+    topModels30d: [],
+    byModel: aggregateByModel(analytics),
+    byKey: aggregateByEndpoint(analytics),
+    byDay: aggregateByDay(analytics),
   };
-
-  const byModel = aggregateByModel(analytics ? analytics.data : []);
-  if (Object.keys(byModel).length > 0) {
-    result.byModel = byModel;
-  }
-  const byKey = aggregateByKey(analytics ? analytics.data : []);
-  if (Object.keys(byKey).length > 0) {
-    result.byKey = byKey;
-  }
-  const byDay = aggregateByDay(analytics ? analytics.data : []);
-  if (Object.keys(byDay).length > 0) {
-    result.byDay = byDay;
-  }
-
-  return result;
 }
 
-function sumSpend(data: AnalyticsResponse['data']): number {
+function sumSpend(data: ActivityItem[]): number {
   return data.reduce((sum, d) => sum + d.usage, 0);
 }
 
-function aggregateByModel(data: AnalyticsResponse['data']): Record<string, number> {
-  return data
-    .reduce(
-      (acc, d) => {
-        acc[d.model_permaslug] = (acc[d.model_permaslug] || 0) + d.usage;
-        return acc;
-      },
-      {} as Record<string, number>,
-    );
+function aggregateByModel(data: ActivityItem[]): Record<string, number> {
+  return data.reduce((acc, d) => {
+    acc[d.model] = (acc[d.model] || 0) + d.usage;
+    return acc;
+  }, {} as Record<string, number>);
 }
 
-function aggregateByKey(data: AnalyticsResponse['data']): Record<string, number> {
-  return data
-    .reduce(
-      (acc, d) => {
-        acc[d.provider_name] = (acc[d.provider_name] || 0) + d.usage;
-        return acc;
-      },
-      {} as Record<string, number>,
-    );
+function aggregateByEndpoint(data: ActivityItem[]): Record<string, number> {
+  return data.reduce((acc, d) => {
+    acc[d.endpointId] = (acc[d.endpointId] || 0) + d.usage;
+    return acc;
+  }, {} as Record<string, number>);
 }
 
-function aggregateByDay(data: AnalyticsResponse['data']): Record<string, number> {
+function aggregateByDay(data: ActivityItem[]): Record<string, number> {
   const byDay: Record<string, number> = {};
   for (const d of data) {
-    // date format is "YYYY-MM-DD HH:MM:SS", extract just the date part
-    const day = d.date.split(' ')[0];
+    const day = d.date;
     byDay[day] = (byDay[day] || 0) + d.usage;
   }
   return byDay;

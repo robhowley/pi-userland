@@ -11,9 +11,14 @@
   "publishConfig": {
     "access": "public"
   },
-  "keywords": ["pi-package", "openrouter"],
+  "keywords": [
+    "pi-package",
+    "openrouter"
+  ],
   "pi": {
-    "extensions": ["./extensions/openrouter"]
+    "extensions": [
+      "./extensions/openrouter"
+    ]
   },
   "repository": {
     "type": "git",
@@ -29,7 +34,8 @@
     "test": "vitest run __tests__"
   },
   "dependencies": {
-    "@mariozechner/pi-tui": "*"
+    "@mariozechner/pi-tui": "*",
+    "@openrouter/sdk": "^0.12.21"
   },
   "peerDependencies": {
     "@mariozechner/pi-ai": "*",

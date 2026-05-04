@@ -1,6 +1,6 @@
-import type { UsageSummary } from './types.js';
+import type { UsageSummary, ActivityItem } from './types.js';
 import { aggregateUsage } from './format.js';
-import { fetchCredits, fetchActivity } from './openrouter.js';
+import { getCredits, getActivity } from './client.js';
 
 interface CacheEntry<T> {
   data: T;
@@ -30,25 +30,23 @@ export class TTLCache<T> {
 }
 
 export const usageCache = new TTLCache<UsageSummary>(45000);
-export const lastFetchTime = { value: 0 }; // For "cached Xm ago" display
+export const lastFetchTime = { value: 0 };
 
-// Background refresh - fetch new data every 60 seconds
 let refreshInterval: NodeJS.Timeout | null = null;
 
 export function startBackgroundRefresh(): void {
-  if (refreshInterval) return; // Already running
+  if (refreshInterval) return;
 
   refreshInterval = setInterval(async () => {
     try {
-      const credits = await fetchCredits();
-      let analytics: any = null;
+      const credits = await getCredits();
+      let analytics: ActivityItem[] | null = null;
       try {
-        analytics = await fetchActivity();
+        analytics = await getActivity();
       } catch (err) {
-        // Activity fetch failed (management key required), continue with credits only
         console.log('Activity fetch failed (management key required):', err);
       }
-      const summary = aggregateUsage(credits.data, analytics);
+      const summary = aggregateUsage(credits, analytics ?? []);
       usageCache.set('usage', summary);
       lastFetchTime.value = Date.now();
     } catch (err) {
@@ -64,5 +62,4 @@ export function stopBackgroundRefresh(): void {
   }
 }
 
-// Auto-start on module load
 startBackgroundRefresh();

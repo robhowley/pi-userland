@@ -1,80 +1,125 @@
 import { describe, it, expect } from 'vitest';
 import { aggregateUsage } from '../format.js';
+import type { ActivityItem } from '../types.js';
 
 describe('aggregateUsage', () => {
-  it('should include cap from credits', () => {
+  it('should calculate from analytics', () => {
     const credits = {
-      total_usage: 38.42,
-      total_credits: 100,
+      totalUsage: 38.42,
+      totalCredits: 100,
     };
-    const analytics = {
-      data: [
-        {
-          date: '2026-05-01 00:00:00',
-          model_permaslug: 'model-1',
-          endpoint_id: 'ep-1',
-          usage: 5.42,
-          byok_usage_inference: 0,
-          requests: 10,
-          prompt_tokens: 1000,
-          completion_tokens: 100,
-          reasoning_tokens: 0,
-          byok_requests: 0,
-          model: 'model-1',
-          provider_name: 'provider-1',
-        },
-        {
-          date: '2026-05-01 00:00:00',
-          model_permaslug: 'model-2',
-          endpoint_id: 'ep-2',
-          usage: 3.11,
-          byok_usage_inference: 0,
-          requests: 5,
-          prompt_tokens: 500,
-          completion_tokens: 50,
-          reasoning_tokens: 0,
-          byok_requests: 0,
-          model: 'model-2',
-          provider_name: 'provider-2',
-        },
-      ],
-    };
+    const today = new Date().toISOString().split('T')[0]!;
+    const analytics: ActivityItem[] = [
+      {
+        date: today,
+        model: 'model-1',
+        modelPermaslug: 'model-1-perma',
+        endpointId: 'ep-1',
+        usage: 5.42,
+        byokUsageInference: 0,
+        requests: 10,
+        promptTokens: 1000,
+        completionTokens: 100,
+        reasoningTokens: 0,
+        providerName: 'provider-1',
+      },
+      {
+        date: today,
+        model: 'model-2',
+        modelPermaslug: 'model-2-perma',
+        endpointId: 'ep-2',
+        usage: 3.11,
+        byokUsageInference: 0,
+        requests: 5,
+        promptTokens: 500,
+        completionTokens: 50,
+        reasoningTokens: 0,
+        providerName: 'provider-2',
+      },
+    ];
 
     const result = aggregateUsage(credits, analytics);
 
-    expect(result.cap).toBe(100);
     expect(result.month).toBe(38.42);
-    expect(result.week).toBe(8.53);
+    expect(result.week).toBeGreaterThan(0);
+    expect(result.today).toBeGreaterThan(0);
   });
 
-  it('should calculate cap percentage correctly', () => {
+  it('should calculate burn rate correctly', () => {
     const credits = {
-      total_usage: 38.42,
-      total_credits: 100,
+      totalUsage: 38.42,
+      totalCredits: 100,
     };
-    const analytics = {
-      data: [],
-    };
+    const analytics: ActivityItem[] = [];
 
     const result = aggregateUsage(credits, analytics);
 
-    // The overlay calculates percentage as Math.round((month / cap) * 100)
-    const expectedPercent = Math.round((result.month / result.cap) * 100); // 38%
-    expect(expectedPercent).toBe(38);
+    expect(result.burnRate).toBe(0);
+    expect(result.week).toBe(0);
+    expect(result.today).toBe(0);
   });
 
-  it('should handle missing analytics (regular API key)', () => {
+  it('should handle empty analytics', () => {
     const credits = {
-      total_usage: 18.21,
-      total_credits: 30,
+      totalUsage: 18.21,
+      totalCredits: 30,
     };
 
-    const result = aggregateUsage(credits, null);
+    const result = aggregateUsage(credits, []);
 
-    expect(result.cap).toBe(30);
     expect(result.month).toBe(18.21);
-    expect(result.week).toBe(0); // No analytics data
-    expect(result.topModels7d).toEqual([]); // No models without analytics
-    expect(result.topModels30d).toEqual([]); // No models without analytics
+    expect(result.week).toBe(0);
+    expect(result.today).toBe(0);
+    expect(result.topModels7d).toEqual([]);
+    expect(result.byModel).toEqual({});
+    expect(result.byKey).toEqual({});
+    expect(result.byDay).toEqual({});
+  });
+
+  it('should aggregate by model', () => {
+    const credits = {
+      totalUsage: 10,
+      totalCredits: 100,
+    };
+    const today = new Date().toISOString().split('T')[0]!;
+    const analytics: ActivityItem[] = [
+      {
+        date: today,
+        model: 'gpt-4',
+        modelPermaslug: 'gpt-4-perma',
+        endpointId: 'ep-1',
+        usage: 5.0,
+        byokUsageInference: 0,
+        requests: 5,
+        promptTokens: 100,
+        completionTokens: 50,
+        reasoningTokens: 0,
+        providerName: 'openai',
+      },
+      {
+        date: today,
+        model: 'claude-3',
+        modelPermaslug: 'claude-3-perma',
+        endpointId: 'ep-2',
+        usage: 3.0,
+        byokUsageInference: 0,
+        requests: 3,
+        promptTokens: 60,
+        completionTokens: 30,
+        reasoningTokens: 0,
+        providerName: 'anthropic',
+      },
+    ];
+
+    const result = aggregateUsage(credits, analytics);
+
+    expect(result.byModel).toEqual({
+      'gpt-4': 5.0,
+      'claude-3': 3.0,
+    });
+    expect(result.topModels7d).toHaveLength(2);
+    const first = result.topModels7d[0]!;
+    expect(first.name).toBe('gpt-4');
+    expect(first.spend).toBe(5.0);
   });
 });

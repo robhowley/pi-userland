@@ -92,7 +92,7 @@ export class UsageOverlayComponent {
 
   private buildLines(
     summary: UsageSummary | null,
-    subcommand: string | undefined,
+    _subcommand: string | undefined,
     error: string | null,
     cachedMinutesAgo: number | null,
     lastRefreshTime: number | null,
@@ -121,7 +121,7 @@ export class UsageOverlayComponent {
       return lines;
     }
 
-    // Single view - all information
+    // Summary view (subcommand views TODO)
     lines.push('');
     lines.push(boxTop('OpenRouter Usage', this.width));
     lines.push(emptyRow(this.width));
@@ -228,8 +228,8 @@ export class UsageOverlayComponent {
       lines.push(emptyRow(this.width));
     }
 
-    lines.push(boxBottom());
-    lines.push(row(th.fg('dim', 'Press q/ESC/Ctrl+C to close')));
+    lines.push(boxBottom(this.width));
+    lines.push(row(th.fg('dim', 'Press q/ESC/Ctrl+C to close'), this.width));
     return lines;
   }
 }
@@ -258,9 +258,4 @@ function row(content: string, width: number): string {
 
 function fmt(value: number): string {
   return value.toFixed(2);
-}
-
-function truncate(str: string, maxLen: number): string {
-  if (str.length <= maxLen) return str;
-  return str.slice(0, maxLen - 1) + '…';
 }

@@ -1,29 +1,6 @@
-// Raw API responses
-export interface CreditsResponse {
-  data: {
-    total_credits: number;
-    total_usage: number;
-  };
-}
+import type { ActivityItem } from './client.js';
+export type { ActivityItem };
 
-export interface AnalyticsResponse {
-  data: Array<{
-    date: string;
-    model_permaslug: string;
-    endpoint_id: string;
-    usage: number;
-    byok_usage_inference: number;
-    requests: number;
-    prompt_tokens: number;
-    completion_tokens: number;
-    reasoning_tokens: number;
-    byok_requests: number;
-    model: string;
-    provider_name: string;
-  }>;
-}
-
-// Domain types
 export interface UsageSummary {
   today: number;
   week: number;
@@ -35,4 +12,9 @@ export interface UsageSummary {
   byModel?: Record<string, number>;
   byKey?: Record<string, number>;
   byDay?: Record<string, number>;
+}
+
+export interface CacheEntry<T> {
+  data: T;
+  timestamp: number;
 }
