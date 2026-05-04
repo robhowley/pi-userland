@@ -43,19 +43,18 @@ describe('evaluate', () => {
   });
 
   describe('workspace boundary', () => {
-    it('allows paths inside workspace by default', () => {
+    it('asks for find -delete inside workspace', () => {
       // find -delete is ASK pattern, matches path inside workspace
       const result = evaluate('find /repo/src -delete', { cwd: '/repo' });
-      expect(result.decision).toBe(RuleSeverity.ALLOW); // ASK because of find -delete pattern
-      expect(result.matchedRule).toBe('find-delete');
+      expect(result.decision).toBe(RuleSeverity.ASK);
+      expect(result.matchedRule).toBe('find-delete');    
     });
 
-    it('allows paths outside workspace by default', () => {
-      // find -delete is ASK pattern, not BLOCK - matches outside workspace
-      // The outside-workspace rule has defaultSeverity: 'allow', so paths outside workspace are ALLOWED
+    it('asks for find -delete outside workspace', () => {
+      // find -delete is ASK pattern - the rule matches and returns ASK regardless of path location
       const result = evaluate('find /etc/passwd -delete', { cwd: '/repo' });
-      expect(result.decision).toBe(RuleSeverity.ALLOW);
-      expect(result.matchedRule).toBe('outside-workspace');
+      expect(result.decision).toBe(RuleSeverity.ASK);
+      expect(result.matchedRule).toBe('find-delete');
     })
   });
 
@@ -147,8 +146,8 @@ describe('evaluate > sed command edge cases', () => {
     ["grep -E '/^[a-z]+/g' /repo/file.txt", '/repo', RuleSeverity.ALLOW, 'allow-default', 'grep with regex'],
     // Path outside workspace with .. and .env (protected path) should be BLOCKED
     ["cat ../secrets/.env", '/repo', RuleSeverity.BLOCK, 'protected-path', 'path with .. escaping and .env (protected)'],
-    // Absolute path outside workspace - boundary check matches
-    ["cat /etc/passwd", '/repo', RuleSeverity.ALLOW, 'outside-workspace', 'absolute path outside workspace (default allow)'],
+    // Absolute path outside workspace - no rule matches (outside-workspace pattern only matches ../)
+    ["cat /etc/passwd", '/repo', RuleSeverity.ALLOW, 'allow-default', 'absolute path outside workspace (no rule match)'],
     // Real paths with directories should work
     ["ls /repo/src/main.ts", '/repo', RuleSeverity.ALLOW, 'allow-default', 'real path inside workspace'],
   ];
