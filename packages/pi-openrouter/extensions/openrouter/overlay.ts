@@ -126,7 +126,7 @@ export class UsageOverlayComponent {
         lines.push(row(th.fg('dim', 'Credits only show total usage')));
         lines.push(boxBottom());
       }
-    } else if (subcommand === 'keys') {
+    } else if (subcommand === 'providers') {
       if (summary.byKey) {
         lines.push('');
         lines.push(boxTop('Usage by Provider'));
