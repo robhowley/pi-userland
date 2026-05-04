@@ -25,7 +25,7 @@ describe('yolo-seatbelt extension', () => {
     // Mock evaluate to return BLOCK
     vi.mocked(evaluate).mockReturnValue({
       decision: RuleSeverity.BLOCK,
-      matchedRule: 'block-rm-rf-root',
+      matchedRule: 'rm-rf-root',
       message: 'Command matches forbidden pattern',
     });
 
@@ -44,7 +44,7 @@ describe('yolo-seatbelt extension', () => {
 
     expect(result).toEqual({
       block: true,
-      reason: 'Blocked by yolo-seatbelt: block-rm-rf-root',
+      reason: 'Blocked by yolo-seatbelt: rm-rf-root',
     });
     expect(logDecision).toHaveBeenCalled();
   });
@@ -67,7 +67,7 @@ describe('yolo-seatbelt extension', () => {
     // Mock evaluate to return ASK
     vi.mocked(evaluate).mockReturnValue({
       decision: RuleSeverity.ASK,
-      matchedRule: 'ask-rm-rf',
+      matchedRule: 'rm-rf',
       message: 'Command matches ask pattern',
     });
 
@@ -85,11 +85,11 @@ describe('yolo-seatbelt extension', () => {
 
     expect(result).toEqual({
       block: true,
-      reason: 'Blocked by user: ask-rm-rf',
+      reason: 'Blocked by user: rm-rf',
     });
     expect(mockCtx.ui.confirm).toHaveBeenCalledWith(
       '⚠️ Risky command detected',
-      'The command "rm -rf .tmp" matches a safety rule ("ask-rm-rf").\n\nContinue?'
+      'The command "rm -rf .tmp" matches a safety rule ("rm-rf").\n\nContinue?'
     );
     expect(logDecision).toHaveBeenCalled();
   });
@@ -151,7 +151,7 @@ describe('yolo-seatbelt extension', () => {
     // Mock evaluate to return BLOCK for protected path
     vi.mocked(evaluate).mockReturnValue({
       decision: RuleSeverity.BLOCK,
-      matchedRule: 'block-protected-path',
+      matchedRule: 'protected-path',
       message: 'Command targets protected path',
     });
 
@@ -169,7 +169,7 @@ describe('yolo-seatbelt extension', () => {
 
     expect(result).toEqual({
       block: true,
-      reason: 'Blocked by yolo-seatbelt: block-protected-path',
+      reason: 'Blocked by yolo-seatbelt: protected-path',
     });
     expect(logDecision).toHaveBeenCalled();
   });

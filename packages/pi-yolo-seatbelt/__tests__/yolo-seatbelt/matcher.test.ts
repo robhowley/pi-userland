@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { classify } from '../../extensions/yolo-seatbelt/matcher.js';
 import { RuleSeverity } from '../../extensions/yolo-seatbelt/rules.js';
 
@@ -139,5 +139,12 @@ describe('Pattern coverage', () => {
     for (const command of testCommands) {
       expect(classify(command).decision).toBe(RuleSeverity.ASK);
     }
+  });
+});
+
+describe('Matching respects config overrides', () => {
+  it('all BLOCK patterns should match and return BLOCK', () => {
+    expect(classify('rm -rf /', {rules: {'rm-rf': RuleSeverity.ALLOW, 'rm-rf-root': RuleSeverity.ALLOW}}).decision).toBe(RuleSeverity.ALLOW);
+    expect(classify('rm -rf /', {rules: {'rm-rf': RuleSeverity.ALLOW, 'rm-rf-root': RuleSeverity.ASK}}).decision).toBe(RuleSeverity.ASK);
   });
 });

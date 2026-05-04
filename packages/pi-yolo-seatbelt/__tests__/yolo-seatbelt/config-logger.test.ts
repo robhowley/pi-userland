@@ -24,8 +24,8 @@ describe('logger', () => {
     it('does not log when logLevel is none', () => {
       const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       
-      logDecision(RuleSeverity.BLOCK, 'rm -rf /', 'block-rm-rf-root', { logLevel: 'none' });
-      logDecision(RuleSeverity.ASK, 'find . -delete', 'ask-find-delete', { logLevel: 'none' });
+      logDecision(RuleSeverity.BLOCK, 'rm -rf /', 'rm-rf-root', { logLevel: 'none' });
+      logDecision(RuleSeverity.ASK, 'find . -delete', 'find-delete', { logLevel: 'none' });
       
       expect(consoleWarn).not.toHaveBeenCalled();
       consoleWarn.mockRestore();
@@ -34,11 +34,11 @@ describe('logger', () => {
     it('logs BLOCK and ASK when logLevel is warn', () => {
       const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       
-      logDecision(RuleSeverity.BLOCK, 'rm -rf /', 'block-rm-rf-root', { logLevel: 'warn' });
-      expect(consoleWarn).toHaveBeenCalledWith('[seatbelt] BLOCK: rm -rf / (rule: block-rm-rf-root)');
+      logDecision(RuleSeverity.BLOCK, 'rm -rf /', 'rm-rf-root', { logLevel: 'warn' });
+      expect(consoleWarn).toHaveBeenCalledWith('[seatbelt] BLOCK: rm -rf / (rule: rm-rf-root)');
       
-      logDecision(RuleSeverity.ASK, 'find . -delete', 'ask-find-delete', { logLevel: 'warn' });
-      expect(consoleWarn).toHaveBeenCalledWith('[seatbelt] ASK: find . -delete (rule: ask-find-delete)');
+      logDecision(RuleSeverity.ASK, 'find . -delete', 'find-delete', { logLevel: 'warn' });
+      expect(consoleWarn).toHaveBeenCalledWith('[seatbelt] ASK: find . -delete (rule: find-delete)');
       
       logDecision(RuleSeverity.ALLOW, 'echo hello', 'allow-default', { logLevel: 'warn' });
       expect(consoleWarn).not.toHaveBeenCalledWith('[seatbelt] ALLOW: echo hello');
@@ -49,11 +49,11 @@ describe('logger', () => {
     it('logs all decisions when logLevel is debug', () => {
       const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => {});
       
-      logDecision(RuleSeverity.BLOCK, 'rm -rf /', 'block-rm-rf-root', { logLevel: 'debug' });
-      expect(consoleLog).toHaveBeenCalledWith('[seatbelt] BLOCK: rm -rf / (rule: block-rm-rf-root)');
+      logDecision(RuleSeverity.BLOCK, 'rm -rf /', 'rm-rf-root', { logLevel: 'debug' });
+      expect(consoleLog).toHaveBeenCalledWith('[seatbelt] BLOCK: rm -rf / (rule: rm-rf-root)');
       
-      logDecision(RuleSeverity.ASK, 'find . -delete', 'ask-find-delete', { logLevel: 'debug' });
-      expect(consoleLog).toHaveBeenCalledWith('[seatbelt] ASK: find . -delete (rule: ask-find-delete)');
+      logDecision(RuleSeverity.ASK, 'find . -delete', 'find-delete', { logLevel: 'debug' });
+      expect(consoleLog).toHaveBeenCalledWith('[seatbelt] ASK: find . -delete (rule: find-delete)');
       
       logDecision(RuleSeverity.ALLOW, 'echo hello', 'allow-default', { logLevel: 'debug' });
       expect(consoleLog).toHaveBeenCalledWith('[seatbelt] ALLOW: echo hello (rule: allow-default)');
