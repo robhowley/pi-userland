@@ -35,7 +35,6 @@ yolo-seatbelt intercepts bash tool calls and evaluates commands against a set of
 | `path.netrc`             | `.netrc`             | file access            |
 | `path.ssh-key`           |  `.ssh`              | SSH private keys       |
 | `path.pem`               | `.pem`               | certificate files |
-| `outside-workspace`      | `../`                | Paths outside workspace |
 | `sudo`                   | | Privilege escalation |
 | `git.reset-hard`         | `git reset --hard`  | |
 | `git.clean-force`        | `git clean -f/d/x`   | |
@@ -54,8 +53,7 @@ Create `~/.pi/agent/yolo-seatbelt.json`:
   "logLevel": "warn",
   "rules": {
     "git.push-force": "allow",
-    "rm-rf-root": "block",
-    "outside-workspace": "ask"
+    "rm-rf-root": "block"
   }
 }
 ```

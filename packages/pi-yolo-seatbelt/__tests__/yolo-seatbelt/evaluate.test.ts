@@ -41,116 +41,83 @@ describe('evaluate', () => {
       // find -delete is ASK pattern, matches path inside workspace
       const result = evaluate('find /repo/src -delete');
       expect(result.decision).toBe(RuleSeverity.ASK);
-      expect(result.matchedRule).toBe('find-delete');    
-    });
-
-    it('asks for find -delete outside workspace', () => {
-      // find -delete is ASK pattern - the rule matches and returns ASK regardless of path location
-      const result = evaluate('find /etc/passwd -delete');
-      expect(result.decision).toBe(RuleSeverity.ASK);
-      expect(result.matchedRule).toBe('find-delete');
-    })
-  });
-
-  describe('ASK patterns', () => {
-    it('asks for find with -delete', () => {
-      const result = evaluate('find . -name "*.tmp" -delete');
-      expect(result.decision).toBe(RuleSeverity.ASK);
       expect(result.matchedRule).toBe('find-delete');
     });
 
-    it('asks for chmod -R', () => {
-      const result = evaluate('chmod -R 755 /path');
-      expect(result.decision).toBe(RuleSeverity.ASK);
-      expect(result.matchedRule).toBe('chmod-recursive');
+    describe('ASK patterns', () => {
+      it('asks for find with -delete', () => {
+        const result = evaluate('find . -name "*.tmp" -delete');
+        expect(result.decision).toBe(RuleSeverity.ASK);
+        expect(result.matchedRule).toBe('find-delete');
+      });
+
+      it('asks for chmod -R', () => {
+        const result = evaluate('chmod -R 755 /path');
+        expect(result.decision).toBe(RuleSeverity.ASK);
+        expect(result.matchedRule).toBe('chmod-recursive');
+      });
+
+      it('asks for chown -R', () => {
+        const result = evaluate('chown -R user:group /path');
+        expect(result.decision).toBe(RuleSeverity.ASK);
+        expect(result.matchedRule).toBe('chown-recursive');
+      });
+
+      it('asks for sudo', () => {
+        const result = evaluate('sudo apt update');
+        expect(result.decision).toBe(RuleSeverity.ASK);
+        expect(result.matchedRule).toBe('sudo');
+      });
+
+      it('asks for git reset --hard', () => {
+        const result = evaluate('git reset --hard');
+        expect(result.decision).toBe(RuleSeverity.ASK);
+        expect(result.matchedRule).toBe('git.reset-hard');
+      });
+
+      it('asks for git push with force', () => {
+        const result = evaluate('git push --force');
+        expect(result.decision).toBe(RuleSeverity.ASK);
+        expect(result.matchedRule).toBe('git.push-force');
+      });
     });
 
-    it('asks for chown -R', () => {
-      const result = evaluate('chown -R user:group /path');
-      expect(result.decision).toBe(RuleSeverity.ASK);
-      expect(result.matchedRule).toBe('chown-recursive');
+    describe('ALLOW cases', () => {
+      it('allows echo commands', () => {
+        const result = evaluate('echo "hello world"');
+        expect(result.decision).toBe(RuleSeverity.ALLOW);
+        expect(result.matchedRule).toBe('allow-default');
+      });
+
+      it('allows pytest', () => {
+        const result = evaluate('pytest');
+        expect(result.decision).toBe(RuleSeverity.ALLOW);
+        expect(result.matchedRule).toBe('allow-default');
+      });
+
+      it('allows git status', () => {
+        const result = evaluate('git status');
+        expect(result.decision).toBe(RuleSeverity.ALLOW);
+        expect(result.matchedRule).toBe('allow-default');
+      });
+
+      it('allows normal rm (not -rf)', () => {
+        const result = evaluate('rm file.txt');
+        expect(result.decision).toBe(RuleSeverity.ALLOW);
+        expect(result.matchedRule).toBe('allow-default');
+      });
     });
 
-    it('asks for sudo', () => {
-      const result = evaluate('sudo apt update');
-      expect(result.decision).toBe(RuleSeverity.ASK);
-      expect(result.matchedRule).toBe('sudo');
-    });
-
-    it('asks for git reset --hard', () => {
-      const result = evaluate('git reset --hard');
-      expect(result.decision).toBe(RuleSeverity.ASK);
-      expect(result.matchedRule).toBe('git.reset-hard');
-    });
-
-    it('asks for git push with force', () => {
-      const result = evaluate('git push --force');
-      expect(result.decision).toBe(RuleSeverity.ASK);
-      expect(result.matchedRule).toBe('git.push-force');
+    describe('DecisionResult structure', () => {
+      it('includes decision, matchedRule, and message', () => {
+        const result = evaluate('rm -rf /');
+        expect(result).toHaveProperty('decision');
+        expect(result).toHaveProperty('matchedRule');
+        expect(result).toHaveProperty('message');
+        expect(typeof result.decision).toBe('string');
+        expect(typeof result.matchedRule).toBe('string');
+        expect(typeof result.message).toBe('string');
+      });
     });
   });
-
-  describe('ALLOW cases', () => {
-    it('allows echo commands', () => {
-      const result = evaluate('echo "hello world"');
-      expect(result.decision).toBe(RuleSeverity.ALLOW);
-      expect(result.matchedRule).toBe('allow-default');
-    });
-
-    it('allows pytest', () => {
-      const result = evaluate('pytest');
-      expect(result.decision).toBe(RuleSeverity.ALLOW);
-      expect(result.matchedRule).toBe('allow-default');
-    });
-
-    it('allows git status', () => {
-      const result = evaluate('git status');
-      expect(result.decision).toBe(RuleSeverity.ALLOW);
-      expect(result.matchedRule).toBe('allow-default');
-    });
-
-    it('allows normal rm (not -rf)', () => {
-      const result = evaluate('rm file.txt');
-      expect(result.decision).toBe(RuleSeverity.ALLOW);
-      expect(result.matchedRule).toBe('allow-default');
-    });
-  });
-
-  describe('DecisionResult structure', () => {
-    it('includes decision, matchedRule, and message', () => {
-      const result = evaluate('rm -rf /');
-      expect(result).toHaveProperty('decision');
-      expect(result).toHaveProperty('matchedRule');
-      expect(result).toHaveProperty('message');
-      expect(typeof result.decision).toBe('string');
-      expect(typeof result.matchedRule).toBe('string');
-      expect(typeof result.message).toBe('string');
-    });
-  });
-
-describe('evaluate > sed command edge cases', () => {
-  // Test cases: [command, cwd, expectedDecision, expectedRule, description]
-  const sedTestCases: [string, string, RuleSeverity, string, string][] = [
-    // sed substitution patterns should NOT trigger outside-workspace
-    ["sed -i '' '/immutable: true/d' /repo/file.txt", '/repo', RuleSeverity.ALLOW, 'allow-default', 'sed with delete pattern'],
-    ["sed 's/pattern/replacement/g' /repo/file.txt", '/repo', RuleSeverity.ALLOW, 'allow-default', 'sed with substitution'],
-    ["sed 's/foo/bar/' /repo/file.txt", '/repo', RuleSeverity.ALLOW, 'allow-default', 'sed with simple substitution'],
-    ["sed '/pattern/d' /repo/file.txt", '/repo', RuleSeverity.ALLOW, 'allow-default', 'sed with delete'],
-    // grep with regex patterns should NOT trigger outside-workspace
-    ["grep -E '/^[a-z]+/g' /repo/file.txt", '/repo', RuleSeverity.ALLOW, 'allow-default', 'grep with regex'],
-    // Absolute path outside workspace - no rule matches (outside-workspace pattern only matches ../)
-    ["cat /etc/passwd", '/repo', RuleSeverity.ALLOW, 'allow-default', 'absolute path outside workspace (no rule match)'],
-    // Real paths with directories should work
-    ["ls /repo/src/main.ts", '/repo', RuleSeverity.ALLOW, 'allow-default', 'real path inside workspace'],
-  ];
-
-  it.each(sedTestCases)(
-    'handles %p correctly',
-    (command, cwd, expectedDecision, expectedRule, _description) => {
-      const result = evaluate(command);
-      expect(result.decision).toBe(expectedDecision);
-      expect(result.matchedRule).toBe(expectedRule);
-    }
-  );
 });
-})

@@ -118,12 +118,6 @@ export const BUILTIN_RULES: RuleDefinition[] = [
     defaultSeverity: RuleSeverity.BLOCK,
     description: 'Targets .pem certificate files',
   },
-  {
-    id: 'outside-workspace',
-    pattern: /\b\.\.\//,
-    defaultSeverity: RuleSeverity.ALLOW,
-    description: 'Commands targeting paths outside workspace',
-  },
   // Trust boundary rules
   {
     id: 'sudo',
