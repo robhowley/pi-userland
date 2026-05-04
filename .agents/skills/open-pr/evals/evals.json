@@ -1,0 +1,29 @@
+{
+  "skill_name": "open-pr",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I just finished adding a new CSV parser to the pi-structured-return package. Open a PR for me.",
+      "expected_output": "PR title: feat(pi-structured-return): add CSV parser. Description should have 1-3 terse bullet points focusing on what was added, not how it was implemented.",
+      "files": ["packages/pi-structured-return/src/parsers/csv.ts"]
+    },
+    {
+      "id": 2,
+      "prompt": "I fixed a bug in pi-spinner-verbs where null responses weren't being handled. Create a PR.",
+      "expected_output": "PR title: fix(pi-spinner-verbs): handle null response. Bullet points should be terse, e.g., '- handle null response gracefully'",
+      "files": ["packages/pi-spinner-verbs/src/index.ts"]
+    },
+    {
+      "id": 3,
+      "prompt": "I updated the GitHub Actions workflow to use a newer Node version. Open a PR.",
+      "expected_output": "PR title: ci(root): update Node version in workflows OR chore(root): update CI Node version. Description should be 1-2 bullet points about the change.",
+      "files": [".github/workflows/ci.yml"]
+    },
+    {
+      "id": 4,
+      "prompt": "Can you help me format a PR title? I added documentation for the new package.",
+      "expected_output": "Skill should trigger and offer to help format the PR title using conventional commits.",
+      "files": []
+    }
+  ]
+}
