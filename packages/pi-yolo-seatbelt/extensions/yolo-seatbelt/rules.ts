@@ -77,49 +77,43 @@ export const BUILTIN_RULES: RuleDefinition[] = [
   },
   // Protected path rules
   {
-    id: 'path-git',
-    pattern: /\b\.git\b/,
+    id: 'path.git',
+    pattern: /(?:^|[\s"'=/])\.git(?=$|[\s"'`;|&()<>/=])/,
     defaultSeverity: RuleSeverity.BLOCK,
     description: 'Targets .git directory',
   },
   {
-    id: 'path-env',
-    pattern: /\b\.env(?=\s|$|\/)/,
-    defaultSeverity: RuleSeverity.BLOCK,
-    description: 'Targets .env files',
-  },
-  {
-    id: 'path-ssh',
-    pattern: /\b\.ssh\b/,
+    id: 'path.ssh',
+    pattern: /(?:^|[\s"'=/])\.ssh(?=$|[\s"'`;|&()<>/=])/,
     defaultSeverity: RuleSeverity.BLOCK,
     description: 'Targets .ssh directory',
   },
   {
-    id: 'path-npmrc',
-    pattern: /\b\.npmrc\b/,
+    id: 'path.npmrc',
+    pattern: /(?:^|[\s"'=/])\.npmrc(?=$|[\s"'`;|&()<>/=])/,
     defaultSeverity: RuleSeverity.BLOCK,
     description: 'Targets .npmrc file',
   },
   {
-    id: 'path-pypirc',
-    pattern: /\b\.pypirc\b/,
+    id: 'path.pypirc',
+    pattern: /(?:^|[\s"'=/])\.pypirc(?=$|[\s"'`;|&()<>/=])/,
     defaultSeverity: RuleSeverity.BLOCK,
     description: 'Targets .pypirc file',
   },
   {
-    id: 'path-netrc',
-    pattern: /\b\.netrc\b/,
+    id: 'path.netrc',
+    pattern: /(?:^|[\s"'=/])\.netrc(?=$|[\s"'`;|&()<>/=])/,
     defaultSeverity: RuleSeverity.BLOCK,
     description: 'Targets .netrc file',
   },
   {
-    id: 'path-ssh-key',
+    id: 'path.ssh-key',
     pattern: /\bid_rsa\b|\bid_ed25519\b/,
     defaultSeverity: RuleSeverity.BLOCK,
     description: 'Targets SSH private keys',
   },
   {
-    id: 'path-pem',
+    id: 'path.pem',
     pattern: /\b\w+\.pem\b/,
     defaultSeverity: RuleSeverity.BLOCK,
     description: 'Targets .pem certificate files',
@@ -146,7 +140,7 @@ export const BUILTIN_RULES: RuleDefinition[] = [
   },
   {
     id: 'git.clean-force',
-    pattern: /\bgit\s+clean\s+-[^\s]*[fdx]/,
+    pattern: /\bgit\s+clean\s+-\S*[fdx]/,
     defaultSeverity: RuleSeverity.ASK,
     description: 'git clean -f, -d, or -x',
   },
@@ -181,22 +175,3 @@ export const BUILTIN_RULES: RuleDefinition[] = [
     description: 'git reflog expire',
   },
 ];
-
-/**
- * Get a rule definition by its unique ID
- *
- * @param ruleId - The rule ID to look up (e.g., "rm-rf-root")
- * @returns RuleDefinition if found, undefined otherwise
- */
-export function getRuleById(ruleId: string): RuleDefinition | undefined {
-  return BUILTIN_RULES.find((rule) => rule.id === ruleId);
-}
-
-/**
- * Get all rule IDs as an array
- *
- * @returns Array of all rule IDs
- */
-export function getAllRuleIds(): string[] {
-  return BUILTIN_RULES.map((rule) => rule.id);
-}

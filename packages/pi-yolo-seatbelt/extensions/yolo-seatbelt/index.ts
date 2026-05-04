@@ -3,11 +3,7 @@ import { isToolCallEventType } from '@mariozechner/pi-coding-agent';
 import { evaluate, RuleSeverity, Config } from './evaluate.js';
 import { logAsk, logBlock, logDebug } from './logger.js';
 import { loadConfig } from './config.js';
-import {
-  getMatchingRuleIds,
-  BUILTIN_RULES,
-  type RuleDefinition,
-} from './matcher.js';
+import { getMatchingRuleIds, BUILTIN_RULES, type RuleDefinition } from './matcher.js';
 
 /**
  * Yolo-seatbelt safety guard extension
@@ -100,7 +96,7 @@ export default function (pi: ExtensionAPI) {
 
     // Log the decision
     logAsk(command);
-    logBlock(command, result?.matchedRule || "unknown");
+    logBlock(command, result?.matchedRule || 'unknown');
 
     // Handle the decision
     switch (result.decision) {

@@ -45,7 +45,6 @@ export interface DecisionResult {
   message?: string;
 }
 
-
 /**
  * Evaluate a command and return a detailed decision result.
  * First match wins across all checks.

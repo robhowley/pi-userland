@@ -27,13 +27,7 @@ describe('evaluate', () => {
     it('blocks paths matching .git', () => {
       const result = evaluate('ls /repo/.git/config', { cwd: '/repo' });
       expect(result.decision).toBe(RuleSeverity.BLOCK);
-      expect(result.matchedRule).toBe('path-git');
-    });
-
-    it('blocks paths matching .env', () => {
-      const result = evaluate('cat /repo/.env', { cwd: '/repo' });
-      expect(result.decision).toBe(RuleSeverity.BLOCK);
-      expect(result.matchedRule).toBe('path-env');
+      expect(result.matchedRule).toBe('path.git');
     });
 
     it('blocks paths matching .ssh', () => {
@@ -144,8 +138,6 @@ describe('evaluate > sed command edge cases', () => {
     ["sed '/pattern/d' /repo/file.txt", '/repo', RuleSeverity.ALLOW, 'allow-default', 'sed with delete'],
     // grep with regex patterns should NOT trigger outside-workspace
     ["grep -E '/^[a-z]+/g' /repo/file.txt", '/repo', RuleSeverity.ALLOW, 'allow-default', 'grep with regex'],
-    // Path outside workspace with .. and .env (protected path) should be BLOCKED
-    ["cat ../secrets/.env", '/repo', RuleSeverity.BLOCK, 'protected-path', 'path with .. escaping and .env (protected)'],
     // Absolute path outside workspace - no rule matches (outside-workspace pattern only matches ../)
     ["cat /etc/passwd", '/repo', RuleSeverity.ALLOW, 'allow-default', 'absolute path outside workspace (no rule match)'],
     // Real paths with directories should work

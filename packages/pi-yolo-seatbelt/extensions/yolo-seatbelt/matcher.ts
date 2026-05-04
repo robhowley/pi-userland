@@ -57,7 +57,6 @@ export function classifyRule(
   return undefined;
 }
 
-
 /**
  * Get the severity for a command based on matched rules and config.
  *
