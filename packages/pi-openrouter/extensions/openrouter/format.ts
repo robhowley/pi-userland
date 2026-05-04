@@ -1,7 +1,7 @@
 import type { ActivityItem, UsageSummary } from './types.js';
 
 export function aggregateUsage(
-  credits: { totalUsage: number },
+  credits: { totalUsage: number; totalCredits?: number },
   analytics: ActivityItem[]
 ): UsageSummary {
   const now = new Date();
@@ -23,8 +23,16 @@ export function aggregateUsage(
   const today = sumSpend(todayData);
   const month = credits.totalUsage;
 
-  const modelSpend = aggregateByModel(weekData);
-  const topModels = Object.entries(modelSpend)
+  // Top models by 7d spend
+  const modelSpend7d = aggregateByModel(weekData);
+  const topModels7d = Object.entries(modelSpend7d)
+    .map(([name, spend]) => ({ name, spend }))
+    .sort((a, b) => b.spend - a.spend)
+    .slice(0, 3);
+
+  // Top models by 30d spend
+  const modelSpend30d = aggregateByModel(analytics);
+  const topModels30d = Object.entries(modelSpend30d)
     .map(([name, spend]) => ({ name, spend }))
     .sort((a, b) => b.spend - a.spend)
     .slice(0, 3);
@@ -33,12 +41,12 @@ export function aggregateUsage(
     today,
     week,
     month,
-    cap: 0,
+    cap: credits.totalCredits ?? 0,
     burnRate: (week / 7) * 30,
-    topModels7d: topModels,
-    topModels30d: [],
+    topModels7d,
+    topModels30d,
     byModel: aggregateByModel(analytics),
-    byKey: aggregateByEndpoint(analytics),
+    byKey: aggregateByProvider(analytics),
     byDay: aggregateByDay(analytics),
   };
 }
@@ -54,9 +62,9 @@ function aggregateByModel(data: ActivityItem[]): Record<string, number> {
   }, {} as Record<string, number>);
 }
 
-function aggregateByEndpoint(data: ActivityItem[]): Record<string, number> {
+function aggregateByProvider(data: ActivityItem[]): Record<string, number> {
   return data.reduce((acc, d) => {
-    acc[d.endpointId] = (acc[d.endpointId] || 0) + d.usage;
+    acc[d.providerName] = (acc[d.providerName] || 0) + d.usage;
     return acc;
   }, {} as Record<string, number>);
 }
