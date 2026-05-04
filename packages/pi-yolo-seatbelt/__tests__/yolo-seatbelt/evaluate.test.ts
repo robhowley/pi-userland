@@ -147,7 +147,7 @@ describe('evaluate > sed command edge cases', () => {
   it.each(sedTestCases)(
     'handles %p correctly',
     (command, cwd, expectedDecision, expectedRule, _description) => {
-      const result = evaluate(command, { cwd });
+      const result = evaluate(command);
       expect(result.decision).toBe(expectedDecision);
       expect(result.matchedRule).toBe(expectedRule);
     }
