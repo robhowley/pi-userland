@@ -1,4 +1,4 @@
-# yolo-seatbelt
+# pi-yolo-seatbelt
 
 Safety guard for bash commands in Pi agents. Blocks or prompts for dangerous commands like `rm -rf /`, `git reset --hard`, etc.
 Permissions for each of the supported commands are fully configurable. Keep your session as loose or strict as desired.
