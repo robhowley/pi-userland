@@ -54,7 +54,7 @@ export const BUILTIN_RULES: RuleDefinition[] = [
   {
     id: 'rm-rf',
     pattern: /\brm\s+-rf\b/,
-    defaultSeverity: RuleSeverity.ALLOW,
+    defaultSeverity: RuleSeverity.ASK,
     description: 'rm -rf operations',
   },
   {

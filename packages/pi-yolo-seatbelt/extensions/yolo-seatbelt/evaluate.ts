@@ -40,9 +40,9 @@ export interface DecisionResult {
   /** The final decision: BLOCK, ASK, or ALLOW */
   decision: RuleSeverity;
   /** The rule that matched (e.g., "rm-rf-root") */
-  matchedRule: string;
+  matchedRule?: string;
   /** Human-readable explanation */
-  message: string;
+  message?: string;
 }
 
 
@@ -57,29 +57,11 @@ export interface DecisionResult {
 export function evaluate(command: string, context: Context): DecisionResult {
   const config = context.config || {};
 
-  // ASK rules check
   const matchedRule = classify(command, config);
-  if (matchedRule) {
-    const severity = matchedRule.decision;
-    if (severity === 'ask') {
-      return {
-        decision: RuleSeverity.ASK,
-        matchedRule: matchedRule.rule.id,
-        message: `ASK: ${matchedRule.rule.description}`,
-      };
-    } else if (severity === 'allow') {
-      return {
-        decision: RuleSeverity.ALLOW,
-        matchedRule: matchedRule.rule.id,
-        message: `Allowed by configuration: ${matchedRule.rule.description}`,
-      };
-    }
-  }
 
-  // Default: allow the command
   return {
-    decision: RuleSeverity.ALLOW,
-    matchedRule: 'allow-default',
-    message: 'Command is allowed',
+    decision: matchedRule.decision,
+    matchedRule: matchedRule.rule?.id || 'allow-default',
+    message: `${matchedRule.decision.toUpperCase()}: ${matchedRule.rule?.description || 'Command is allowed'}`,
   };
 }

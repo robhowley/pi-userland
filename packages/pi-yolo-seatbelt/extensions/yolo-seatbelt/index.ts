@@ -1,13 +1,12 @@
 import type { ExtensionAPI } from '@mariozechner/pi-coding-agent';
 import { isToolCallEventType } from '@mariozechner/pi-coding-agent';
-import { evaluate, Decision, Config } from './evaluate.js';
+import { evaluate, RuleSeverity, Config } from './evaluate.js';
 import { logAsk, logBlock, logDebug } from './logger.js';
 import { loadConfig } from './config.js';
 import {
   getMatchingRuleIds,
   BUILTIN_RULES,
   type RuleDefinition,
-  type RuleSeverity,
 } from './matcher.js';
 
 /**
@@ -32,7 +31,7 @@ export default function (pi: ExtensionAPI) {
       const severityOrder: Record<RuleSeverity, number> = { allow: 1, ask: 2, block: 3 };
       const ruleList = [...BUILTIN_RULES]
         .map((rule: RuleDefinition) => {
-          const effectiveSeverity = (config as Config).rules?.[rule.id] || rule.defaultSeverity;
+          const effectiveSeverity = (config as Config).rules?.[rule?.id] || rule.defaultSeverity;
           const status =
             effectiveSeverity === 'block'
               ? '🔴 BLOCK'
@@ -41,7 +40,7 @@ export default function (pi: ExtensionAPI) {
                 : '🟢 ALLOW';
           return {
             severity: effectiveSeverity,
-            line: `  ${status}  ${rule.id}  ${rule.description}`,
+            line: `  ${status}  ${rule?.id}  ${rule.description}`,
           };
         })
         .sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity])
@@ -101,18 +100,18 @@ export default function (pi: ExtensionAPI) {
 
     // Log the decision
     logAsk(command);
-    logBlock(command, result.matchedRule);
+    logBlock(command, result?.matchedRule || "unknown");
 
     // Handle the decision
     switch (result.decision) {
-      case Decision.BLOCK: {
+      case RuleSeverity.BLOCK: {
         return {
           block: true,
           reason: `Blocked by yolo-seatbelt: ${result.matchedRule}`,
         };
       }
 
-      case Decision.ASK: {
+      case RuleSeverity.ASK: {
         const confirmed = await ctx.ui.confirm(
           '⚠️ Risky command detected',
           `The command "${command}" matches a safety rule ("${result.matchedRule}").\n\nContinue?`,
@@ -127,7 +126,7 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      case Decision.ALLOW: {
+      case RuleSeverity.ALLOW: {
         return;
       }
     }

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { evaluate, Decision } from '../../extensions/yolo-seatbelt/evaluate.js';
+import { evaluate, RuleSeverity } from '../../extensions/yolo-seatbelt/evaluate.js';
 import { logAsk, logBlock } from '../../extensions/yolo-seatbelt/logger.js';
 
 // Mock modules
@@ -24,7 +24,7 @@ describe('yolo-seatbelt extension', () => {
 
     // Mock evaluate to return BLOCK
     vi.mocked(evaluate).mockReturnValue({
-      decision: Decision.BLOCK,
+      decision: RuleSeverity.BLOCK,
       matchedRule: 'block-rm-rf-root',
       message: 'Command matches forbidden pattern',
     });
@@ -67,7 +67,7 @@ describe('yolo-seatbelt extension', () => {
 
     // Mock evaluate to return ASK
     vi.mocked(evaluate).mockReturnValue({
-      decision: Decision.ASK,
+      decision: RuleSeverity.ASK,
       matchedRule: 'ask-rm-rf',
       message: 'Command matches ask pattern',
     });
@@ -112,7 +112,7 @@ describe('yolo-seatbelt extension', () => {
 
     // Mock evaluate to return ALLOW
     vi.mocked(evaluate).mockReturnValue({
-      decision: Decision.ALLOW,
+      decision: RuleSeverity.ALLOW,
       matchedRule: 'allow-default',
       message: 'Command matches allow pattern',
     });
@@ -151,7 +151,7 @@ describe('yolo-seatbelt extension', () => {
 
     // Mock evaluate to return BLOCK for protected path
     vi.mocked(evaluate).mockReturnValue({
-      decision: Decision.BLOCK,
+      decision: RuleSeverity.BLOCK,
       matchedRule: 'block-protected-path',
       message: 'Command targets protected path',
     });

@@ -4,8 +4,7 @@
  * Simplified - single list of rules, no category concept.
  */
 
-import { BUILTIN_RULES } from './rules.js';
-import type { RuleDefinition, RuleSeverity } from './rules.js';
+import { BUILTIN_RULES, RuleDefinition, RuleSeverity } from './rules.js';
 
 export { BUILTIN_RULES } from './rules.js';
 export type { RuleDefinition, RuleSeverity } from './rules.js';
@@ -36,10 +35,10 @@ export function classifyRule(command: string): RuleDefinition | undefined {
 export function classify(
   command: string,
   config?: { rules?: Record<string, RuleSeverity> },
-): { decision: RuleSeverity; rule: RuleDefinition } | null {
+): { decision: RuleSeverity; rule: RuleDefinition | null } {
   const rule = classifyRule(command);
   if (!rule) {
-    return null;
+    return { decision: RuleSeverity.ALLOW, rule: null };
   }
 
   const severity = config?.rules?.[rule.id] ?? rule.defaultSeverity;
