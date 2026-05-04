@@ -65,10 +65,6 @@ function getEffectiveSeverity(rule: RuleDefinition, config?: Config): RuleSeveri
   const userOverride = config?.rules?.[rule.id];
 
   if (userOverride !== undefined) {
-    // If rule is immutable, prevent downgrading below ASK
-    if (rule.immutable && userOverride === 'allow') {
-      return 'ask';
-    }
     return userOverride;
   }
 

@@ -41,8 +41,6 @@ export interface RuleDefinition {
   defaultSeverity: RuleSeverity;
   /** Human-readable description of what the rule detects */
   description: string;
-  /** If true, rule cannot be downgraded below ASK (for safety) */
-  immutable?: boolean;
 }
 
 /**
@@ -50,7 +48,7 @@ export interface RuleDefinition {
  * All 18 filters defined as RuleDefinition objects with IDs
  */
 
-// Catastrophic rules (always block by default, immutable)
+// Catastrophic rules (always block by default)
 export const CATASTROPHIC_RULES: RuleDefinition[] = [
   {
     id: 'catastrophic.rm-rf-root',
@@ -58,7 +56,6 @@ export const CATASTROPHIC_RULES: RuleDefinition[] = [
     pattern: /\brm\s+-rf\s+\//,
     defaultSeverity: 'block',
     description: 'Blocks rm -rf / which would delete the entire filesystem',
-    immutable: true,
   },
   {
     id: 'catastrophic.rm-rf-git',
@@ -66,7 +63,6 @@ export const CATASTROPHIC_RULES: RuleDefinition[] = [
     pattern: /\brm\s+-rf\s+\.git\b/,
     defaultSeverity: 'block',
     description: 'Blocks rm -rf .git which would delete the git repository',
-    immutable: true,
   },
   {
     id: 'catastrophic.rm-rf-home',
@@ -74,11 +70,10 @@ export const CATASTROPHIC_RULES: RuleDefinition[] = [
     pattern: /\brm\s+-rf\s+~(?=\s|$)/,
     defaultSeverity: 'block',
     description: 'Blocks rm -rf ~ which would delete the home directory',
-    immutable: true,
   },
 ];
 
-// Protected path rules (always block by default, immutable)
+// Protected path rules (always block by default)
 export const PROTECTED_PATH_RULES: RuleDefinition[] = [
   {
     id: 'protected-path.git',
@@ -86,7 +81,6 @@ export const PROTECTED_PATH_RULES: RuleDefinition[] = [
     pattern: /\b\.git\b/,
     defaultSeverity: 'block',
     description: 'Blocks operations targeting .git directory',
-    immutable: true,
   },
   {
     id: 'protected-path.env',
@@ -94,7 +88,6 @@ export const PROTECTED_PATH_RULES: RuleDefinition[] = [
     pattern: /\b\.env(?=\s|$|\/)/,
     defaultSeverity: 'block',
     description: 'Blocks operations targeting .env files',
-    immutable: true,
   },
   {
     id: 'protected-path.ssh',
@@ -102,7 +95,6 @@ export const PROTECTED_PATH_RULES: RuleDefinition[] = [
     pattern: /\b\.ssh\b/,
     defaultSeverity: 'block',
     description: 'Blocks operations targeting .ssh directory',
-    immutable: true,
   },
   {
     id: 'protected-path.npmrc',
@@ -110,7 +102,6 @@ export const PROTECTED_PATH_RULES: RuleDefinition[] = [
     pattern: /\b\.npmrc\b/,
     defaultSeverity: 'block',
     description: 'Blocks operations targeting .npmrc file',
-    immutable: true,
   },
   {
     id: 'protected-path.pypirc',
@@ -118,7 +109,6 @@ export const PROTECTED_PATH_RULES: RuleDefinition[] = [
     pattern: /\b\.pypirc\b/,
     defaultSeverity: 'block',
     description: 'Blocks operations targeting .pypirc file',
-    immutable: true,
   },
   {
     id: 'protected-path.netrc',
@@ -126,7 +116,6 @@ export const PROTECTED_PATH_RULES: RuleDefinition[] = [
     pattern: /\b\.netrc\b/,
     defaultSeverity: 'block',
     description: 'Blocks operations targeting .netrc file',
-    immutable: true,
   },
   {
     id: 'protected-path.ssh-key',
@@ -134,7 +123,6 @@ export const PROTECTED_PATH_RULES: RuleDefinition[] = [
     pattern: /\bid_rsa\b|\bid_ed25519\b/,
     defaultSeverity: 'block',
     description: 'Blocks operations targeting SSH private keys',
-    immutable: true,
   },
   {
     id: 'protected-path.pem',
@@ -142,7 +130,6 @@ export const PROTECTED_PATH_RULES: RuleDefinition[] = [
     pattern: /\b\w+\.pem\b/,
     defaultSeverity: 'block',
     description: 'Blocks operations targeting .pem certificate files',
-    immutable: true,
   },
 ];
 
