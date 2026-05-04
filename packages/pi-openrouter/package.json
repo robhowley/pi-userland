@@ -2,6 +2,7 @@
   "name": "@robhowley/pi-openrouter",
   "version": "0.1.0",
   "type": "module",
+  "description": "Terminal overlay for OpenRouter usage: caps, spend, burn rate, and model breakdowns.",
   "files": [
     "extensions",
     "README.md",
@@ -10,7 +11,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "keywords": ["pi-package"],
+  "keywords": ["pi-package", "openrouter"],
   "pi": {
     "extensions": ["./extensions/openrouter"]
   },
@@ -26,6 +27,9 @@
     "format:write": "prettier --write extensions/",
     "typecheck": "tsc --noEmit",
     "test": "vitest run __tests__"
+  },
+  "dependencies": {
+    "@mariozechner/pi-tui": "*"
   },
   "peerDependencies": {
     "@mariozechner/pi-ai": "*",
