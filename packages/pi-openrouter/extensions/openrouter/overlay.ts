@@ -114,37 +114,61 @@ export class UsageOverlayComponent {
     }
 
     // Subcommand views
-    if (subcommand === 'models' && summary.byModel) {
-      lines.push('');
-      lines.push(boxTop('Usage by Model'));
-      const sorted = Object.entries(summary.byModel)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 10);
-      for (const [name, spend] of sorted) {
-        lines.push(row(`${truncate(name, 28)} $${fmt(spend)}`));
+    if (subcommand === 'models') {
+      if (summary.byModel) {
+        lines.push('');
+        lines.push(boxTop('Usage by Model'));
+        const sorted = Object.entries(summary.byModel)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 10);
+        for (const [name, spend] of sorted) {
+          lines.push(row(`${truncate(name, 28)} $${fmt(spend)}`));
+        }
+        lines.push(boxBottom());
+      } else {
+        lines.push('');
+        lines.push(boxTop('Usage by Model'));
+        lines.push(row(th.fg('dim', 'Data not available (requires /analytics API)')));
+        lines.push(row(th.fg('dim', 'Credits only show total usage')));
+        lines.push(boxBottom());
       }
-      lines.push(boxBottom());
-    } else if (subcommand === 'keys' && summary.byKey) {
-      lines.push('');
-      lines.push(boxTop('Usage by Key'));
-      const sorted = Object.entries(summary.byKey).sort((a, b) => b[1] - a[1]);
-      for (const [hash, spend] of sorted) {
-        lines.push(row(`${truncate(hash, 28)} $${fmt(spend)}`));
+    } else if (subcommand === 'keys') {
+      if (summary.byKey) {
+        lines.push('');
+        lines.push(boxTop('Usage by Key'));
+        const sorted = Object.entries(summary.byKey).sort((a, b) => b[1] - a[1]);
+        for (const [hash, spend] of sorted) {
+          lines.push(row(`${truncate(hash, 28)} $${fmt(spend)}`));
+        }
+        lines.push(boxBottom());
+      } else {
+        lines.push('');
+        lines.push(boxTop('Usage by Key'));
+        lines.push(row(th.fg('dim', 'Data not available (requires /analytics API)')));
+        lines.push(row(th.fg('dim', 'Credits only show total usage')));
+        lines.push(boxBottom());
       }
-      lines.push(boxBottom());
-    } else if (subcommand === '7d' && summary.byDay) {
-      lines.push('');
-      lines.push(boxTop('Usage by Day'));
-      const sorted = Object.entries(summary.byDay).sort((a, b) => a[0].localeCompare(b[0]));
-      for (const [day, spend] of sorted) {
-        lines.push(row(`${day} $${fmt(spend)}`));
+    } else if (subcommand === '7d') {
+      if (summary.byDay) {
+        lines.push('');
+        lines.push(boxTop('Usage by Day'));
+        const sorted = Object.entries(summary.byDay).sort((a, b) => a[0].localeCompare(b[0]));
+        for (const [day, spend] of sorted) {
+          lines.push(row(`${day} $${fmt(spend)}`));
+        }
+        lines.push(boxBottom());
+      } else {
+        lines.push('');
+        lines.push(boxTop('Usage by Day'));
+        lines.push(row(th.fg('dim', 'Data not available (requires /analytics API)')));
+        lines.push(row(th.fg('dim', 'Credits only show total usage')));
+        lines.push(boxBottom());
       }
-      lines.push(boxBottom());
     } else {
-      // Fallback for unknown subcommand or missing data
+      // Fallback for unknown subcommand
       lines.push('');
       lines.push(boxTop('OpenRouter Usage'));
-      lines.push(row(th.fg('dim', 'No data available for this view.')));
+      lines.push(row(th.fg('dim', 'Unknown subcommand.')));
       lines.push(boxBottom());
     }
 

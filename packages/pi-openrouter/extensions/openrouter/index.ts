@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from '@mariozechner/pi-coding-agent';
 import type { UsageSummary } from './types.js';
 import { usageCache, lastFetchTime } from './cache.js';
-import { fetchCredits, fetchAnalytics, AuthError, ApiError } from './openrouter.js';
+import { fetchCredits, fetchActivity } from './openrouter.js';
 import { aggregateUsage } from './format.js';
 import { UsageOverlayComponent } from './overlay.js';
 
@@ -36,30 +36,24 @@ async function showUsageOverlay(ctx: ExtensionContext, subcommand?: string) {
     return;
   }
 
-  // Show loading state
-  await showOverlay(ctx, null, subcommand, null, null);
+  // Fetch data
+  let error: string | null = null;
+  let summary: UsageSummary | null = null;
 
-  // Fetch data in background and re-render
   try {
     lastFetchTime.value = Date.now();
-    const [credits, analytics] = await Promise.all([
-      fetchCredits(),
-      fetchAnalytics(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), new Date()),
-    ]);
+    const credits = await fetchCredits();
 
-    const summary = aggregateUsage(credits.data, analytics);
+    const analytics = await fetchActivity();
+
+    summary = aggregateUsage(credits.data, analytics);
     usageCache.set('usage', summary);
 
     await showOverlay(ctx, summary, subcommand, null, 0);
-  } catch (error) {
-    const message =
-      error instanceof AuthError
-        ? error.message
-        : error instanceof ApiError
-          ? error.message
-          : 'Unknown error fetching usage data';
-
-    await showOverlay(ctx, null, subcommand, message, cachedMinutesAgo || 0);
+  } catch (error_) {
+    const err = error_ as Error;
+    error = `API Error: ${err.message}`;
+    await showOverlay(ctx, null, subcommand, error, cachedMinutesAgo || 0);
   }
 }
 
