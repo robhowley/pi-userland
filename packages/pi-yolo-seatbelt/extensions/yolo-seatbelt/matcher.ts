@@ -79,16 +79,6 @@ export function classify(
 }
 
 /**
- * Check if a command matches any rule.
- *
- * @param command - Raw command string
- * @returns true if command matches any built-in rule
- */
-// export function hasMatch(command: string): boolean {
-//   return classify(command) !== Decision.ALLOW;
-// }
-
-/**
  * Get all matched rule IDs for a command.
  *
  * @param command - Raw command string
