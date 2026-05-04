@@ -117,6 +117,19 @@ importers:
         specifier: ^1.52.0
         version: 1.59.1
 
+  packages/pi-yolo-seatbelt:
+    dependencies:
+      '@mariozechner/pi-ai':
+        specifier: '*'
+        version: 0.68.1(ws@8.20.0)(zod@4.3.6)
+      '@mariozechner/pi-coding-agent':
+        specifier: '*'
+        version: 0.68.1(ws@8.20.0)(zod@4.3.6)
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.17
+        version: 22.19.17
+
 packages:
 
   '@anthropic-ai/sdk@0.90.0':

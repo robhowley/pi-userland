@@ -1,0 +1,38 @@
+{
+  "name": "@robhowley/pi-yolo-seatbelt",
+  "version": "0.0.1",
+  "description": "Keep the YOLO workflow but avoid bash catastrophe with configurable guardrails for destructive commands.",
+  "type": "module",
+  "files": [
+    "extensions",
+    "README.md",
+    "../LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./extensions/yolo-seatbelt"]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/robhowley/pi-userland.git",
+    "directory": "packages/pi-yolo-seatbelt"
+  },
+  "homepage": "https://github.com/robhowley/pi-userland/tree/main/packages/pi-yolo-seatbelt",
+  "scripts": {
+    "lint": "eslint extensions/",
+    "format:check": "prettier --check extensions/",
+    "format:write": "prettier --write extensions/",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run __tests__"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.17"
+  }
+}
