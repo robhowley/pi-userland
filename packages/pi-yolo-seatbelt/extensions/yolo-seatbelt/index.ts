@@ -11,7 +11,7 @@ import { getMatchingRuleIds } from './matcher.js';
  * Intercepts bash tool calls and evaluates commands for safety.
  * Returns { block: true, reason } for dangerous commands.
  *
- * Phase A: All 18 built-in command filters are now user-configurable
+ * Phase D: All 18 built-in command filters are now user-configurable
  * via rule IDs in the configuration file.
  */
 
@@ -46,7 +46,6 @@ export default function (pi: ExtensionAPI) {
     // Handle the decision
     switch (result.decision) {
       case Decision.BLOCK: {
-        // Block the command immediately
         return {
           block: true,
           reason: `Blocked by yolo-seatbelt: ${result.matchedRule}`,
@@ -54,7 +53,6 @@ export default function (pi: ExtensionAPI) {
       }
 
       case Decision.ASK: {
-        // Ask user for confirmation
         const confirmed = await ctx.ui.confirm(
           '⚠️ Risky command detected',
           `The command "${command}" matches a safety rule ("${result.matchedRule}").\n\nContinue?`,
@@ -70,7 +68,6 @@ export default function (pi: ExtensionAPI) {
       }
 
       case Decision.ALLOW: {
-        // Allow the command to proceed normally
         return;
       }
     }

@@ -1,25 +1,28 @@
 /**
  * Pattern matching utilities for the yolo-seatbelt safety guard.
  *
- * Phase A: Now uses the RuleDefinition system for rule lookup.
- * Provides classification based on configured rules with severity overrides.
+ * Phase D: Simplified - single list of rules, no category concept.
  */
 
 import { RuleDefinition, RuleSeverity, BUILTIN_RULES, Decision } from './rules.js';
 
-// Re-export Decision for backward compatibility
-export { Decision };
+/**
+ * Get the matched rule for a command without checking severity.
+ *
+ * @param command - Raw command string to classify
+ * @returns RuleDefinition if matched, undefined otherwise
+ */
+export function classifyRule(command: string): RuleDefinition | undefined {
+  for (const rule of BUILTIN_RULES) {
+    if (rule.pattern.test(command)) {
+      return rule;
+    }
+  }
+  return undefined;
+}
 
 /**
  * Classify a command string into a decision based on pattern matching.
- *
- * Evaluation order:
- * 1. Check BLOCK rules → return BLOCK (highest priority)
- * 2. Check ASK rules → return ASK
- * 3. Default → ALLOW
- *
- * This uses the built-in rule definitions with their default severities.
- * For config-aware evaluation, use evaluate() from evaluate.ts.
  *
  * @param command - Raw command string to classify
  * @returns Decision indicating how to handle the command
@@ -34,22 +37,6 @@ export function classify(command: string): Decision {
     : rule.defaultSeverity === 'ask'
       ? Decision.ASK
       : Decision.ALLOW;
-}
-
-/**
- * Get the matched rule for a command without checking severity.
- *
- * @param command - Raw command string to classify
- * @returns RuleDefinition if matched, undefined otherwise
- */
-export function classifyRule(command: string): RuleDefinition | undefined {
-  // Check all rules in order of priority
-  for (const rule of BUILTIN_RULES) {
-    if (rule.pattern.test(command)) {
-      return rule;
-    }
-  }
-  return undefined;
 }
 
 /**
@@ -68,7 +55,6 @@ export function classifyWithConfig(
     return null;
   }
 
-  // Get severity from config override if present, otherwise use default
   const severity = config?.rules?.[rule.id] ?? rule.defaultSeverity;
 
   return { decision: severity, rule };
@@ -76,10 +62,6 @@ export function classifyWithConfig(
 
 /**
  * Quick classification that only checks if a command matches any rule.
- * Returns true if a rule matches (BLOCK or ASK), false otherwise (ALLOW).
- *
- * This is a simplified evaluation that doesn't check paths or workspace
- * boundaries. Useful for early filtering before more expensive checks.
  *
  * @param command - Raw command string
  * @returns true if command matches any built-in rule
@@ -92,7 +74,7 @@ export function hasMatch(command: string): boolean {
  * Get all rules that match a command.
  *
  * @param command - Raw command string
- * @returns Array of matching RuleDefinitions (usually just one)
+ * @returns Array of matching RuleDefinitions
  */
 export function getMatchingRules(command: string): RuleDefinition[] {
   return BUILTIN_RULES.filter((rule) => rule.pattern.test(command));
@@ -109,52 +91,49 @@ export function getMatchingRuleIds(command: string): string[] {
 }
 
 /**
- * Get the matched pattern and its type for a command.
- * Useful for debugging and logging.
- *
- * This maintains backward compatibility with the old pattern-based API.
- * Returns the pattern index and type ('BLOCK' or 'ASK').
- *
- * Old pattern indices:
- * BLOCK: 0=rm-rf-root, 1=rm-rf-dot-git, 2=rm-rf-tilde
- * ASK: 0=rm-rf, 1=find-delete, 2=chmod-R, 3=chown-R, 4=sudo, 5=git-reset-hard,
- *      6=git-clean-fdx, 7=git-push-force, 8=git-rebase-interactive, 9=git-filter-branch,
- *      10=git-update-ref, 11=git-reflog-expire
+ * Get the matched rule and its type for a command.
+ * Returns the rule ID for backward compatibility.
  *
  * @param command - Raw command string
- * @returns Object with matched pattern index and decision type, or null if no match
+ * @returns Object with matched rule ID, or null if no match
  */
 export function getMatchedPattern(
   command: string,
 ): { patternIndex: number; type: 'BLOCK' | 'ASK' } | null {
-  // Check all rules in order
-  for (const rule of BUILTIN_RULES) {
-    if (rule.pattern.test(command)) {
-      const type = rule.defaultSeverity === 'block' ? 'BLOCK' : 'ASK';
-
-      // Map to old-style pattern index for backward compatibility
-      // BLOCK patterns (indices 0-2)
-      if (rule.id === 'catastrophic.rm-rf-root') return { patternIndex: 0, type };
-      if (rule.id === 'catastrophic.rm-rf-git') return { patternIndex: 1, type };
-      if (rule.id === 'catastrophic.rm-rf-home') return { patternIndex: 2, type };
-
-      // ASK patterns (indices 0-11)
-      // rm-rf was index 0 (but now we use 'destructive.rm-rf' as id, not wildcard)
-      if (rule.id === 'destructive.rm-rf') return { patternIndex: 0, type };
-      if (rule.id === 'destructive.find-delete') return { patternIndex: 1, type };
-      if (rule.id === 'destructive.chmod-recursive') return { patternIndex: 2, type };
-      if (rule.id === 'destructive.chown-recursive') return { patternIndex: 3, type };
-      if (rule.id === 'privilege.sudo') return { patternIndex: 4, type };
-      if (rule.id === 'git.reset-hard') return { patternIndex: 5, type };
-      if (rule.id === 'git.clean-force') return { patternIndex: 6, type };
-      if (rule.id === 'git.push-force') return { patternIndex: 7, type };
-      if (rule.id === 'git.rebase-interactive') return { patternIndex: 8, type };
-      if (rule.id === 'git.filter-branch') return { patternIndex: 9, type };
-      if (rule.id === 'git.update-ref') return { patternIndex: 10, type };
-      if (rule.id === 'git.reflog-expire') return { patternIndex: 11, type };
-
-      return { patternIndex: 0, type };
-    }
+  const rule = classifyRule(command);
+  if (!rule) {
+    return null;
   }
+
+  const type = rule.defaultSeverity === 'block' ? 'BLOCK' : 'ASK';
+
+  // Map rule IDs to old-style pattern indices for backward compatibility
+  const BLOCK_PATTERN_IDS = ['rm-rf-root', 'rm-rf-git', 'rm-rf-home'];
+
+  const ASK_PATTERN_IDS = [
+    'rm-rf',
+    'find-delete',
+    'chmod-recursive',
+    'chown-recursive',
+    'sudo',
+    'reset-hard',
+    'clean-force',
+    'push-force',
+    'rebase-interactive',
+    'filter-branch',
+    'update-ref',
+    'reflog-expire',
+  ];
+
+  const blockIndex = BLOCK_PATTERN_IDS.indexOf(rule.id);
+  if (blockIndex >= 0) {
+    return { patternIndex: blockIndex, type };
+  }
+
+  const askIndex = ASK_PATTERN_IDS.indexOf(rule.id);
+  if (askIndex >= 0) {
+    return { patternIndex: askIndex, type };
+  }
+
   return null;
 }

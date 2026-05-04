@@ -3,8 +3,8 @@
  *
  * Loads user configuration from ~/.pi/agent/yolo-seatbelt.json
  *
- * Configuration is now fully rule-based - all 18 built-in filters
- * can be configured by their rule IDs.
+ * Configuration is fully rule-based - all 18 built-in filters
+ * can be configured by rule ID.
  */
 
 import * as fs from 'fs';
@@ -16,17 +16,17 @@ import { RuleSeverity } from './rules.js';
  * User configuration for yolo-seatbelt
  *
  * All 18 built-in filters are configurable by rule ID.
- * Examples: "catastrophic.rm-rf-root", "git.push-force", "boundary.outside-workspace"
+ * Examples: "irreversible.rm-rf-root", "trust-boundary.sudo", "git-history.push-force"
  */
 export interface Config {
   /** Log level: "none", "warn", or "debug" */
   logLevel?: 'none' | 'warn' | 'debug';
   /**
    * Rule severity overrides by rule ID.
-   * Keys are rule IDs like "catastrophic.rm-rf-root", values are severity levels.
+   * Keys are rule IDs like "irreversible.rm-rf-root", values are severity levels.
    * Absent rules use their built-in default severity.
    */
-  rules: Record<string, RuleSeverity>;
+  rules?: Record<string, RuleSeverity>;
 }
 
 /**

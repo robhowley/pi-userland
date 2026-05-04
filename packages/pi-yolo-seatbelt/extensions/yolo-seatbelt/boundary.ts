@@ -1,17 +1,16 @@
 /**
  * Workspace boundary check for the yolo-seatbelt safety guard.
  *
- * Phase A: Now uses the RuleDefinition system with id 'boundary.outside-workspace'
- * for user-configurable severity overrides.
+ * Phase D: Simplified - uses BUILTIN_RULES directly.
  */
 
 import * as path from 'path';
-import { BOUNDARY_RULES, RuleDefinition } from './rules.js';
+import { BUILTIN_RULES, RuleDefinition } from './rules.js';
 
 /**
  * Check if a resolved path is inside the current working directory.
  *
- * Handles relative paths (../, ./), normalizes the path, and verifies
+ * Handles relative paths, normalizes the path, and verifies
  * the resolved path is within the workspace boundary.
  *
  * @param resolvedPath - Absolute or normalized path to check
@@ -20,10 +19,8 @@ import { BOUNDARY_RULES, RuleDefinition } from './rules.js';
  */
 export function isInsideWorkspace(resolvedPath: string, cwd: string): boolean {
   try {
-    // Normalize cwd - remove trailing slashes
     const normalizedCwd = path.resolve(cwd).replace(/\/+$/, '');
 
-    // Resolve the path relative to cwd if it's not absolute
     let normalizedPath: string;
     if (path.isAbsolute(resolvedPath)) {
       normalizedPath = path.resolve(resolvedPath);
@@ -31,18 +28,14 @@ export function isInsideWorkspace(resolvedPath: string, cwd: string): boolean {
       normalizedPath = path.resolve(normalizedCwd, resolvedPath);
     }
 
-    // Normalize both paths for comparison
     const normalizedPathClean = normalizedPath.replace(/\/+$/, '');
     const normalizedCwdClean = normalizedCwd.replace(/\/+$/, '');
 
-    // Check if path is inside cwd
-    // Path must start with cwd followed by either end or a separator
     return (
       normalizedPathClean === normalizedCwdClean ||
       normalizedPathClean.startsWith(normalizedCwdClean + path.sep)
     );
   } catch {
-    // If path resolution fails, return false (safe default)
     return false;
   }
 }
@@ -60,27 +53,23 @@ export function isInsideWorkspace(resolvedPath: string, cwd: string): boolean {
 export function isOutsideWorkspaceQuickCheck(pathSegment: string, cwd: string): boolean {
   const normalizedCwd = path.resolve(cwd);
 
-  // Absolute paths that are not inside cwd
   if (path.isAbsolute(pathSegment)) {
     try {
       const resolvedPath = path.resolve(pathSegment);
       return !resolvedPath.startsWith(normalizedCwd + path.sep) && resolvedPath !== normalizedCwd;
     } catch {
-      return true; // Safe default
+      return true;
     }
   }
 
-  // Paths starting with ../ are likely outside
   if (pathSegment.startsWith('../')) {
     return true;
   }
 
-  // Paths with multiple ../ segments
   if (pathSegment.includes('../')) {
     return true;
   }
 
-  // Single .. segment
   if (pathSegment === '..' || pathSegment === '../') {
     return true;
   }
@@ -97,13 +86,12 @@ export function isOutsideWorkspaceQuickCheck(pathSegment: string, cwd: string): 
  * @returns RuleDefinition if outside workspace pattern matches, undefined otherwise
  */
 export function getBoundaryRule(command: string, cwd: string): RuleDefinition | undefined {
-  // Check for paths outside workspace
   const absolutePathRegex = /(["']?)(\/(?:[^\s"']+\/?)+)\1/g;
   let match: RegExpExecArray | null;
   while ((match = absolutePathRegex.exec(command)) !== null) {
     const pathStr = match[2];
     if (pathStr && !isInsideWorkspace(pathStr, cwd)) {
-      return BOUNDARY_RULES[0]; // boundary.outside-workspace
+      return BUILTIN_RULES.find((r) => r.id === 'outside-workspace');
     }
   }
   return undefined;
