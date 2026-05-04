@@ -1,6 +1,6 @@
 {
   "name": "@robhowley/pi-yolo-seatbelt",
-  "version": "0.0.1",
+  "version": "0.2.0",
   "description": "Keep the YOLO workflow but avoid bash catastrophe with configurable guardrails for destructive commands.",
   "type": "module",
   "files": [
@@ -11,9 +11,13 @@
   "publishConfig": {
     "access": "public"
   },
-  "keywords": ["pi-package"],
+  "keywords": [
+    "pi-package"
+  ],
   "pi": {
-    "extensions": ["./extensions/yolo-seatbelt"]
+    "extensions": [
+      "./extensions/yolo-seatbelt"
+    ]
   },
   "repository": {
     "type": "git",
