@@ -3,7 +3,12 @@ import { isToolCallEventType } from '@mariozechner/pi-coding-agent';
 import { evaluate, Decision, Config } from './evaluate.js';
 import { logAsk, logBlock, logDebug } from './logger.js';
 import { loadConfig } from './config.js';
-import { getMatchingRuleIds, BUILTIN_RULES, type RuleDefinition } from './matcher.js';
+import {
+  getMatchingRuleIds,
+  BUILTIN_RULES,
+  type RuleDefinition,
+  type RuleSeverity,
+} from './matcher.js';
 
 /**
  * Yolo-seatbelt safety guard extension
@@ -24,7 +29,7 @@ export default function (pi: ExtensionAPI) {
       const logLevel = config.logLevel || 'none';
 
       // Format rules with their effective severity, sorted by severity (ALLOW, ASK, BLOCK)
-      const severityOrder: Record<string, number> = { allow: 1, ask: 2, block: 3 };
+      const severityOrder: Record<RuleSeverity, number> = { allow: 1, ask: 2, block: 3 };
       const ruleList = [...BUILTIN_RULES]
         .map((rule: RuleDefinition) => {
           const effectiveSeverity = (config as Config).rules?.[rule.id] || rule.defaultSeverity;

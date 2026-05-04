@@ -20,7 +20,7 @@ import { RuleSeverity } from './rules.js';
  */
 export interface Config {
   /** Log level: "none", "warn", or "debug" */
-  logLevel?: 'none' | 'warn' | 'debug';
+  logLevel: 'none' | 'warn' | 'debug';
   /**
    * Rule severity overrides by rule ID.
    * Keys are rule IDs like "irreversible.rm-rf-root", values are severity levels.
