@@ -1,19 +1,19 @@
 import { describe, it, expect } from 'vitest';
-import { evaluate, evaluateQuick, evaluateQuickResult, Decision } from '../../extensions/yolo-seatbelt/evaluate.ts';
+import { evaluate, Decision } from '../../extensions/yolo-seatbelt/evaluate.ts';
 
 describe('evaluate', () => {
   describe('evaluation order', () => {
     it('BLOCK patterns have highest priority', () => {
       const result = evaluate('rm -rf /some/path', { cwd: '/repo' });
       expect(result.decision).toBe(Decision.BLOCK);
-      expect(result.matchedRule).toBe('block-rm-rf-root');
+      expect(result.matchedRule).toBe('rm-rf-root');
     });
 
     it('PROTECTED_PATHS check before workspace boundary', () => {
       // ls /repo/.git doesn't match any BLOCK pattern but has protected path
       const result = evaluate('ls /repo/.git/config', { cwd: '/repo' });
       expect(result.decision).toBe(Decision.BLOCK);
-      expect(result.matchedRule).toBe('block-protected-path');
+      expect(result.matchedRule).toBe('protected-path');
     });
 
     it('workspace boundary check before ASK patterns', () => {
@@ -23,13 +23,13 @@ describe('evaluate', () => {
         config: { rules: { 'outside-workspace': 'block' } },
       });
       expect(result.decision).toBe(Decision.BLOCK);
-      expect(result.matchedRule).toBe('block-outside-workspace');
+      expect(result.matchedRule).toBe('outside-workspace-block');
     });
 
     it('ASK patterns checked before default ALLOW', () => {
       const result = evaluate('find . -delete', { cwd: '/repo' });
       expect(result.decision).toBe(Decision.ASK);
-      expect(result.matchedRule).toBe('ask-find-delete');
+      expect(result.matchedRule).toBe('find-delete');
     });
 
     it('default ALLOW for safe commands', () => {
@@ -43,19 +43,19 @@ describe('evaluate', () => {
     it('blocks rm -rf /', () => {
       const result = evaluate('rm -rf /', { cwd: '/repo' });
       expect(result.decision).toBe(Decision.BLOCK);
-      expect(result.message).toBe('Blocked: Command matches forbidden pattern');
+      expect(result.message).toBe('Blocked: rm -rf / would delete the entire filesystem');
     });
 
     it('blocks rm -rf .git', () => {
       const result = evaluate('rm -rf .git', { cwd: '/repo' });
       expect(result.decision).toBe(Decision.BLOCK);
-      expect(result.matchedRule).toBe('block-rm-rf-dot-git');
+      expect(result.matchedRule).toBe('rm-rf-git');
     });
 
     it('blocks rm -rf ~', () => {
       const result = evaluate('rm -rf ~', { cwd: '/repo' });
       expect(result.decision).toBe(Decision.BLOCK);
-      expect(result.matchedRule).toBe('block-rm-rf-tilde');
+      expect(result.matchedRule).toBe('rm-rf-home');
     });
   });
 
@@ -63,7 +63,7 @@ describe('evaluate', () => {
     it('blocks paths matching .git', () => {
       const result = evaluate('ls /repo/.git/config', { cwd: '/repo' });
       expect(result.decision).toBe(Decision.BLOCK);
-      expect(result.matchedRule).toBe('block-protected-path');
+      expect(result.matchedRule).toBe('protected-path');
     });
 
     it('blocks paths matching .env', () => {
@@ -82,14 +82,15 @@ describe('evaluate', () => {
       // find -delete is ASK pattern, matches path inside workspace
       const result = evaluate('find /repo/src -delete', { cwd: '/repo' });
       expect(result.decision).toBe(Decision.ASK); // ASK because of find -delete pattern
-      expect(result.matchedRule).toBe('ask-find-delete');
+      expect(result.matchedRule).toBe('find-delete');
     });
 
-    it('asks about paths outside workspace by default', () => {
+    it('allows paths outside workspace by default', () => {
       // find -delete is ASK pattern, not BLOCK - matches outside workspace
+      // The outside-workspace rule has defaultSeverity: 'allow', so paths outside workspace are ALLOWED
       const result = evaluate('find /etc/passwd -delete', { cwd: '/repo' });
-      expect(result.decision).toBe(Decision.ASK);
-      expect(result.matchedRule).toBe('ask-outside-workspace');
+      expect(result.decision).toBe(Decision.ALLOW);
+      expect(result.matchedRule).toBe('outside-workspace');
     });
 
     it('blocks paths outside workspace when configured', () => {
@@ -99,7 +100,7 @@ describe('evaluate', () => {
         config: { rules: { 'outside-workspace': 'block' } },
       });
       expect(result.decision).toBe(Decision.BLOCK);
-      expect(result.matchedRule).toBe('block-outside-workspace');
+      expect(result.matchedRule).toBe('outside-workspace-block');
     });
   });
 
@@ -107,32 +108,37 @@ describe('evaluate', () => {
     it('asks for find with -delete', () => {
       const result = evaluate('find . -name "*.tmp" -delete', { cwd: '/repo' });
       expect(result.decision).toBe(Decision.ASK);
-      expect(result.matchedRule).toBe('ask-find-delete');
+      expect(result.matchedRule).toBe('find-delete');
     });
 
     it('asks for chmod -R', () => {
       const result = evaluate('chmod -R 755 /path', { cwd: '/repo' });
       expect(result.decision).toBe(Decision.ASK);
+      expect(result.matchedRule).toBe('chmod-recursive');
     });
 
     it('asks for chown -R', () => {
       const result = evaluate('chown -R user:group /path', { cwd: '/repo' });
       expect(result.decision).toBe(Decision.ASK);
+      expect(result.matchedRule).toBe('chown-recursive');
     });
 
     it('asks for sudo', () => {
       const result = evaluate('sudo apt update', { cwd: '/repo' });
       expect(result.decision).toBe(Decision.ASK);
+      expect(result.matchedRule).toBe('sudo');
     });
 
     it('asks for git reset --hard', () => {
       const result = evaluate('git reset --hard', { cwd: '/repo' });
       expect(result.decision).toBe(Decision.ASK);
+      expect(result.matchedRule).toBe('git.reset-hard');
     });
 
     it('asks for git push with force', () => {
       const result = evaluate('git push --force', { cwd: '/repo' });
       expect(result.decision).toBe(Decision.ASK);
+      expect(result.matchedRule).toBe('git.push-force');
     });
   });
 
@@ -146,16 +152,19 @@ describe('evaluate', () => {
     it('allows pytest', () => {
       const result = evaluate('pytest', { cwd: '/repo' });
       expect(result.decision).toBe(Decision.ALLOW);
+      expect(result.matchedRule).toBe('allow-default');
     });
 
     it('allows git status', () => {
       const result = evaluate('git status', { cwd: '/repo' });
       expect(result.decision).toBe(Decision.ALLOW);
+      expect(result.matchedRule).toBe('allow-default');
     });
 
     it('allows normal rm (not -rf)', () => {
       const result = evaluate('rm file.txt', { cwd: '/repo' });
       expect(result.decision).toBe(Decision.ALLOW);
+      expect(result.matchedRule).toBe('allow-default');
     });
   });
 
@@ -171,47 +180,6 @@ describe('evaluate', () => {
     });
   });
 });
-
-describe('evaluateQuick', () => {
-  it('returns BLOCK for blocked patterns', () => {
-    expect(evaluateQuick('rm -rf /')).toBe(Decision.BLOCK);
-    expect(evaluateQuick('rm -rf .git')).toBe(Decision.BLOCK);
-    expect(evaluateQuick('rm -rf ~')).toBe(Decision.BLOCK);
-  });
-
-  it('returns ASK for asked patterns', () => {
-    expect(evaluateQuick('find . -delete')).toBe(Decision.ASK);
-    expect(evaluateQuick('chmod -R 755 /path')).toBe(Decision.ASK);
-    expect(evaluateQuick('git reset --hard')).toBe(Decision.ASK);
-  });
-
-  it('returns ALLOW for safe commands', () => {
-    expect(evaluateQuick('echo "hello"')).toBe(Decision.ALLOW);
-    expect(evaluateQuick('pytest')).toBe(Decision.ALLOW);
-    expect(evaluateQuick('git status')).toBe(Decision.ALLOW);
-  });
-});
-
-describe('evaluateQuickResult', () => {
-  it('returns DecisionResult for blocked patterns', () => {
-    const result = evaluateQuickResult('rm -rf /');
-    expect(result.decision).toBe(Decision.BLOCK);
-    expect(result.matchedRule).toBe('block-rm-rf-root');
-  });
-
-  it('returns DecisionResult for asked patterns', () => {
-    const result = evaluateQuickResult('find . -delete');
-    expect(result.decision).toBe(Decision.ASK);
-    expect(result.matchedRule).toBe('ask-find-delete');
-  });
-
-  it('returns DecisionResult for allowed commands', () => {
-    const result = evaluateQuickResult('echo "hello"');
-    expect(result.decision).toBe(Decision.ALLOW);
-    expect(result.matchedRule).toBe('allow-default');
-  });
-});
-
 describe('evaluate > sed command edge cases', () => {
   // Test cases: [command, cwd, expectedDecision, expectedRule, description]
   const sedTestCases: [string, string, Decision, string, string][] = [
@@ -223,9 +191,9 @@ describe('evaluate > sed command edge cases', () => {
     // grep with regex patterns should NOT trigger outside-workspace
     ["grep -E '/^[a-z]+/g' /repo/file.txt", '/repo', Decision.ALLOW, 'allow-default', 'grep with regex'],
     // Path outside workspace with .. and .env (protected path) should be BLOCKED
-    ["cat ../secrets/.env", '/repo', Decision.BLOCK, 'block-protected-path', 'path with .. escaping and .env (protected)'],
+    ["cat ../secrets/.env", '/repo', Decision.BLOCK, 'protected-path', 'path with .. escaping and .env (protected)'],
     // Absolute path outside workspace - boundary check matches
-    ["cat /etc/passwd", '/repo', Decision.ASK, 'ask-outside-workspace', 'absolute path outside workspace'],
+    ["cat /etc/passwd", '/repo', Decision.ALLOW, 'outside-workspace', 'absolute path outside workspace (default allow)'],
     // Real paths with directories should work
     ["ls /repo/src/main.ts", '/repo', Decision.ALLOW, 'allow-default', 'real path inside workspace'],
   ];
