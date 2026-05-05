@@ -48,6 +48,14 @@ export class TTLCache<T> {
 export const usageCache = new TTLCache<UsageSummary>(CACHE_TTL_MS);
 
 let refreshInterval: NodeJS.Timeout | null = null;
+let consecutiveFailures = 0;
+const MAX_RETRY_BACKOFF = 5; // Max 2^5 = 32x base interval (16 min)
+const MAX_RETRY_COUNT = 4; // Stop after 4 consecutive failures
+
+function getBackoffInterval(): number {
+  const backoffMultiplier = Math.min(consecutiveFailures, MAX_RETRY_BACKOFF);
+  return BACKGROUND_REFRESH_INTERVAL_MS * Math.pow(2, backoffMultiplier);
+}
 
 export async function fetchAndAggregate(): Promise<UsageSummary> {
   const credits = await getCredits();
@@ -61,18 +69,42 @@ export async function fetchAndAggregate(): Promise<UsageSummary> {
   return aggregateUsage(credits, analytics ?? [], timestamp);
 }
 
-export function startBackgroundRefresh(): void {
-  if (refreshInterval) return;
+function scheduleRefresh(): void {
+  const delay = consecutiveFailures > 0 ? getBackoffInterval() : BACKGROUND_REFRESH_INTERVAL_MS;
 
   refreshInterval = setInterval(async () => {
     try {
       const summary = await fetchAndAggregate();
-      const timestamp = Date.now();
       usageCache.set('usage', summary);
+
+      // Reset failure count on success and restart with normal interval
+      if (consecutiveFailures > 0) {
+        consecutiveFailures = 0;
+        stopBackgroundRefresh();
+        scheduleRefresh();
+      }
     } catch (err) {
-      console.log('Background refresh failed:', err);
+      consecutiveFailures++;
+      console.log(`Background refresh failed (${consecutiveFailures}/${MAX_RETRY_COUNT}):`, err);
+
+      // Stop after max retries reached
+      if (consecutiveFailures >= MAX_RETRY_COUNT) {
+        console.log('Max retries reached, stopping background refresh');
+        stopBackgroundRefresh();
+        // TODO: Fire UI notification for persistent failure
+        return;
+      }
+
+      // Restart with backoff interval
+      stopBackgroundRefresh();
+      scheduleRefresh();
     }
-  }, BACKGROUND_REFRESH_INTERVAL_MS);
+  }, delay);
+}
+
+export function startBackgroundRefresh(): void {
+  if (refreshInterval) return;
+  scheduleRefresh();
 }
 
 export function stopBackgroundRefresh(): void {

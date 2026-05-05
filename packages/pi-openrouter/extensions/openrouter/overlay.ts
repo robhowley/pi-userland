@@ -70,11 +70,7 @@ export class UsageOverlayComponent {
     if (this.isDisposed) return;
     // Rebuild lines to update "last refreshed" time from fresh cached data
     const freshSummary = usageCache.get('usage');
-    this.lines = this.buildLines(
-      freshSummary || this.summary,
-      this.error,
-      this.cachedMinutesAgo,
-    );
+    this.lines = this.buildLines(freshSummary || this.summary, this.error, this.cachedMinutesAgo);
     this.requestRender();
   }
 

@@ -30,7 +30,7 @@ export default function (pi: ExtensionAPI) {
   });
 }
 
-async function showUsageOverlay(ctx: ExtensionContext, subcommand?: string) {
+async function showUsageOverlay(ctx: ExtensionContext, _subcommand?: string) {
   const cachedSummary = usageCache.get('usage');
   const lastFetchTimestamp = usageCache.getTimestamp('usage');
   const cachedMinutesAgo = lastFetchTimestamp
@@ -47,7 +47,6 @@ async function showUsageOverlay(ctx: ExtensionContext, subcommand?: string) {
 
   try {
     summary = await fetchAndAggregate();
-    const timestamp = Date.now();
     usageCache.set('usage', summary);
 
     await showOverlay(ctx, summary, null, 0);

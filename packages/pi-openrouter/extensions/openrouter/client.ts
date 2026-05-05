@@ -1,4 +1,4 @@
-import type { ActivityItem, ActivityResponse } from '@openrouter/sdk/models/index.js';
+import type { ActivityResponse } from '@openrouter/sdk/models/index.js';
 import type { GetCreditsResponse } from '@openrouter/sdk/models/operations/index.js';
 import { OpenRouter } from '@openrouter/sdk/sdk/sdk.js';
 
