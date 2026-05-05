@@ -127,7 +127,7 @@ export class UsageOverlayComponent {
         lines.push(row(th.fg('dim', `(last successful fetch: ${cachedMinutesAgo}m ago)`), this.width));
       }
       lines.push(boxBottom(this.width));
-      lines.push(row(th.fg('dim', 'Press q/ESC/Ctrl+C to close'), this.width));
+      lines.push(plainRow(th.fg('dim', 'Esc to close'), this.width));
       return lines;
     }
 
@@ -137,7 +137,7 @@ export class UsageOverlayComponent {
       lines.push(emptyRow(this.width));
       lines.push(row(th.fg('dim', 'No usage data available.'), this.width));
       lines.push(boxBottom(this.width));
-      lines.push(row(th.fg('dim', 'Press q/ESC/Ctrl+C to close'), this.width));
+      lines.push(plainRow(th.fg('dim', 'Esc to close'), this.width));
       return lines;
     }
 
@@ -215,7 +215,7 @@ export class UsageOverlayComponent {
       );
       
       lines.push(row('By provider', this.width));
-      lines.push(row(`  Provider${' '.repeat(maxProviderLen - 8)}  Amount`, this.width));
+      lines.push(row(`  Provider${' '.repeat(maxProviderLen - 8)}  30d`, this.width));
       lines.push(row(`  ${'-'.repeat(maxProviderLen)}  ------`, this.width));
       
       for (const [provider, spend] of sortedProviders) {
@@ -253,7 +253,7 @@ export class UsageOverlayComponent {
     }
 
     lines.push(boxBottom(this.width));
-    lines.push(row(th.fg('dim', 'Press q/ESC/Ctrl+C to close'), this.width));
+    lines.push(plainRow(th.fg('dim', 'Esc to close'), this.width));
     return lines;
   }
 }
@@ -274,6 +274,11 @@ function emptyRow(width: number): string {
 function row(content: string, width: number): string {
   const truncated = content.length > width - 2 ? content.slice(0, width - 2) : content;
   return `│${truncated}${' '.repeat(width - 2 - truncated.length)}│`;
+}
+
+function plainRow(content: string, width: number): string {
+  const truncated = content.length > width - 2 ? content.slice(0, width - 2) : content;
+  return ` ${truncated}${' '.repeat(width - 1 - truncated.length)} `;
 }
 
 // Helper to create a row with left content padded to align right content

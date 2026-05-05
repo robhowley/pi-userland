@@ -53,7 +53,7 @@ export function startBackgroundRefresh(): void {
     } catch (err) {
       console.log('Background refresh failed:', err);
     }
-  }, 90000);
+  }, 30000);
 }
 
 export function stopBackgroundRefresh(): void {
