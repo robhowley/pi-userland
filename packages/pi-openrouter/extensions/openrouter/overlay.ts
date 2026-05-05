@@ -17,6 +17,7 @@ export class UsageOverlayComponent {
   private cachedMinutesAgo: number | null;
   private refreshTimer: NodeJS.Timeout | null = null;
   private requestRender: () => void;
+  private isDisposed = false;
 
   constructor(
     summary: UsageSummary | null,
@@ -46,6 +47,7 @@ export class UsageOverlayComponent {
   }
 
   dispose(): void {
+    this.isDisposed = true;
     if (this.refreshTimer) {
       clearInterval(this.refreshTimer);
       this.refreshTimer = null;
@@ -68,6 +70,7 @@ export class UsageOverlayComponent {
   }
 
   invalidate(): void {
+    if (this.isDisposed) return;
     // Rebuild lines to update "last refreshed" time from fresh cached data
     const freshSummary = usageCache.get('usage');
     this.lines = this.buildLines(

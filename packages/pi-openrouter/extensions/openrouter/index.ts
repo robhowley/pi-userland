@@ -5,10 +5,9 @@ import {
   lastFetchTime,
   startBackgroundRefresh,
   stopBackgroundRefresh,
+  fetchAndAggregate,
 } from './cache.js';
-import { getCredits, getActivity, AuthError } from './client.js';
-import { aggregateUsage } from './format.js';
-import type { ActivityItem } from './types.js';
+import { AuthError } from './client.js';
 import { UsageOverlayComponent } from './overlay.js';
 
 export default function (pi: ExtensionAPI) {
@@ -47,18 +46,10 @@ async function showUsageOverlay(ctx: ExtensionContext, subcommand?: string) {
   let summary: UsageSummary | null = null;
 
   try {
-    const credits = await getCredits();
-
-    let analytics: ActivityItem[] | null = null;
-    try {
-      analytics = await getActivity();
-    } catch (actErr) {
-      console.log('Activity fetch failed (management key required):', actErr);
-    }
-
+    summary = await fetchAndAggregate();
     const timestamp = Date.now();
-    summary = aggregateUsage(credits, analytics ?? [], timestamp);
     usageCache.set('usage', summary);
+    lastFetchTime.value = timestamp;
 
     await showOverlay(ctx, summary, subcommand, null, 0);
   } catch (error_) {

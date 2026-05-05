@@ -34,20 +34,25 @@ export const lastFetchTime = { value: 0 };
 
 let refreshInterval: NodeJS.Timeout | null = null;
 
+export async function fetchAndAggregate(): Promise<UsageSummary> {
+  const credits = await getCredits();
+  let analytics: ActivityItem[] | null = null;
+  try {
+    analytics = await getActivity();
+  } catch (err) {
+    console.log('Activity fetch failed (management key required):', err);
+  }
+  const timestamp = Date.now();
+  return aggregateUsage(credits, analytics ?? [], timestamp);
+}
+
 export function startBackgroundRefresh(): void {
   if (refreshInterval) return;
 
   refreshInterval = setInterval(async () => {
     try {
-      const credits = await getCredits();
-      let analytics: ActivityItem[] | null = null;
-      try {
-        analytics = await getActivity();
-      } catch (err) {
-        console.log('Activity fetch failed (management key required):', err);
-      }
+      const summary = await fetchAndAggregate();
       const timestamp = Date.now();
-      const summary = aggregateUsage(credits, analytics ?? [], timestamp);
       usageCache.set('usage', summary);
       lastFetchTime.value = timestamp;
     } catch (err) {
