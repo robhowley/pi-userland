@@ -34,7 +34,7 @@ async function showUsageOverlay(ctx: ExtensionContext, subcommand?: string) {
     : null;
 
   if (cachedSummary) {
-    await showOverlay(ctx, cachedSummary, subcommand, null, cachedMinutesAgo, lastFetchTime.value);
+    await showOverlay(ctx, cachedSummary, subcommand, null, cachedMinutesAgo);
     return;
   }
 
@@ -42,7 +42,6 @@ async function showUsageOverlay(ctx: ExtensionContext, subcommand?: string) {
   let summary: UsageSummary | null = null;
 
   try {
-    lastFetchTime.value = Date.now();
     const credits = await getCredits();
 
     let analytics: ActivityItem[] | null = null;
@@ -52,16 +51,17 @@ async function showUsageOverlay(ctx: ExtensionContext, subcommand?: string) {
       console.log('Activity fetch failed (management key required):', actErr);
     }
 
-    summary = aggregateUsage(credits, analytics ?? []);
+    const timestamp = Date.now();
+    summary = aggregateUsage(credits, analytics ?? [], timestamp);
     usageCache.set('usage', summary);
 
-    await showOverlay(ctx, summary, subcommand, null, 0, lastFetchTime.value);
+    await showOverlay(ctx, summary, subcommand, null, 0);
   } catch (error_) {
     const err = error_ as Error;
     error = err instanceof AuthError
       ? 'OpenRouter API key not found. Set OPENROUTER_API_KEY to use /usage.'
       : `API Error: ${err.message}`;
-    await showOverlay(ctx, null, subcommand, error, cachedMinutesAgo || 0, lastFetchTime.value);
+    await showOverlay(ctx, null, subcommand, error, cachedMinutesAgo || 0);
   }
 }
 
@@ -71,7 +71,6 @@ async function showOverlay(
   subcommand: string | undefined,
   error: string | null,
   cachedMinutesAgo: number | null,
-  lastRefreshTime: number | null,
 ) {
   await ctx.ui.custom<void>(
     (_tui, theme, _keybindings, done) => {
@@ -80,7 +79,6 @@ async function showOverlay(
         subcommand,
         error,
         cachedMinutesAgo,
-        lastRefreshTime,
         theme,
         done,
       );
@@ -92,7 +90,9 @@ async function showOverlay(
         },
         render: (width: number) => overlayComponent.render(width),
         invalidate: () => overlayComponent.invalidate(),
-        dispose: () => {},
+        dispose: () => {
+          overlayComponent.dispose();
+        },
       };
     },
     { overlay: true },

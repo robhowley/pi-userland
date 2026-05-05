@@ -10,20 +10,40 @@ export class UsageOverlayComponent {
   private theme: Theme;
   private onClose: () => void;
   private width: number;
+  private summary: UsageSummary | null;
+  private subcommand: string | undefined;
+  private error: string | null;
+  private cachedMinutesAgo: number | null;
+  private refreshTimer: NodeJS.Timeout | null = null;
 
   constructor(
     summary: UsageSummary | null,
     subcommand: string | undefined,
     error: string | null,
     cachedMinutesAgo: number | null,
-    lastRefreshTime: number | null,
     theme: Theme,
     onClose: () => void,
   ) {
     this.theme = theme;
     this.onClose = onClose;
+    this.summary = summary;
+    this.subcommand = subcommand;
+    this.error = error;
+    this.cachedMinutesAgo = cachedMinutesAgo;
     this.width = this.calculateWidth(summary);
-    this.lines = this.buildLines(summary, subcommand, error, cachedMinutesAgo, lastRefreshTime);
+    this.lines = this.buildLines(summary, subcommand, error, cachedMinutesAgo);
+
+    // Set up timer to rebuild lines every 30 seconds to update "last refreshed" time
+    this.refreshTimer = setInterval(() => {
+      this.invalidate();
+    }, 30000);
+  }
+
+  dispose(): void {
+    if (this.refreshTimer) {
+      clearInterval(this.refreshTimer);
+      this.refreshTimer = null;
+    }
   }
 
   handleInput(data: string): void {
@@ -42,7 +62,8 @@ export class UsageOverlayComponent {
   }
 
   invalidate(): void {
-    // No-op — content is static for this view
+    // Rebuild lines to update "last refreshed" time from live global value
+    this.lines = this.buildLines(this.summary, this.subcommand, this.error, this.cachedMinutesAgo);
   }
 
   private calculateWidth(summary: UsageSummary | null): number {
@@ -75,7 +96,6 @@ export class UsageOverlayComponent {
 
     // Calculate width needed for by-day table
     if (summary.byDay && Object.keys(summary.byDay).length > 0) {
-      const amountWidth = 8;
       maxWidth = Math.max(maxWidth, 21);
     }
 
@@ -94,14 +114,14 @@ export class UsageOverlayComponent {
     _subcommand: string | undefined,
     error: string | null,
     cachedMinutesAgo: number | null,
-    lastRefreshTime: number | null,
   ): string[] {
     const th = this.theme;
     const lines: string[] = [];
 
     if (error) {
-      lines.push('');
-      lines.push(boxTop('OpenRouter Usage', this.width));
+      lines.push(boxTop(this.width));
+      lines.push(row('OpenRouter Usage', this.width));
+      lines.push(emptyRow(this.width));
       lines.push(row(th.fg('error', error), this.width));
       if (cachedMinutesAgo !== null) {
         lines.push(row(th.fg('dim', `(last successful fetch: ${cachedMinutesAgo}m ago)`), this.width));
@@ -112,8 +132,9 @@ export class UsageOverlayComponent {
     }
 
     if (!summary) {
-      lines.push('');
-      lines.push(boxTop('OpenRouter Usage', this.width));
+      lines.push(boxTop(this.width));
+      lines.push(row('OpenRouter Usage', this.width));
+      lines.push(emptyRow(this.width));
       lines.push(row(th.fg('dim', 'No usage data available.'), this.width));
       lines.push(boxBottom(this.width));
       lines.push(row(th.fg('dim', 'Press q/ESC/Ctrl+C to close'), this.width));
@@ -121,11 +142,9 @@ export class UsageOverlayComponent {
     }
 
     // Summary view (subcommand views TODO)
-    lines.push('');
-    lines.push(boxTop('OpenRouter Usage', this.width));
+    lines.push(boxTop(this.width));
+    lines.push(row('OpenRouter Usage', this.width));
     lines.push(emptyRow(this.width));
-
-    const boxInnerWidth = this.width - 2; // -2 for box borders
 
     // Month row: amount stays with label, cap percentage right-aligned
     const monthLeftBase = `Month $${fmt(summary.month)} / $${fmt(summary.cap)}`;
@@ -142,13 +161,6 @@ export class UsageOverlayComponent {
     lines.push(rowRightAligned(todayContent, '', this.width));
     lines.push(emptyRow(this.width));
 
-    // Last refresh time
-    if (lastRefreshTime !== null) {
-      const refreshMinutesAgo = Math.round((Date.now() - lastRefreshTime) / 60000);
-      lines.push(th.fg('dim', row(`Last refreshed: ${refreshMinutesAgo}m ago`, this.width)));
-      lines.push(emptyRow(this.width));
-    }
-
     // Top models - 7d and 30d as columns
     if (summary.topModels7d.length > 0 || summary.topModels30d.length > 0) {
       // Calculate column widths
@@ -162,7 +174,7 @@ export class UsageOverlayComponent {
       
       lines.push(row('Top models', this.width));
       lines.push(row(`  Model${' '.repeat(headerModelWidth - 5)}  ${'7d'.padStart(amountWidth)}  ${'30d'.padStart(amountWidth)}`, this.width));
-      lines.push(row(`  ${' '.repeat(headerModelWidth)}  ${'-'.repeat(amountWidth)}  ${'-'.repeat(amountWidth)}`, this.width));
+      lines.push(row(`  ${'-'.repeat(headerModelWidth)}  ${'-'.repeat(amountWidth)}  ${'-'.repeat(amountWidth)}`, this.width));
 
       // Build spend map from 7d data
       const spendMap = new Map<string, { spend7d: number; spend30d: number }>();
@@ -204,7 +216,7 @@ export class UsageOverlayComponent {
       
       lines.push(row('By provider', this.width));
       lines.push(row(`  Provider${' '.repeat(maxProviderLen - 8)}  Amount`, this.width));
-      lines.push(row(`  ${' '.repeat(maxProviderLen)}  ------`, this.width));
+      lines.push(row(`  ${'-'.repeat(maxProviderLen)}  ------`, this.width));
       
       for (const [provider, spend] of sortedProviders) {
         lines.push(row(`  ${provider}${' '.repeat(maxProviderLen - provider.length)}  $${fmt(spend)}`, this.width));
@@ -224,11 +236,19 @@ export class UsageOverlayComponent {
       
       lines.push(row('By day', this.width));
       lines.push(row(`  Date${' '.repeat(maxDateLen - 4)}  Amount`, this.width));
-      lines.push(row(`  ${' '.repeat(maxDateLen)}  ------`, this.width));
+      lines.push(row(`  ${'-'.repeat(maxDateLen)}  ------`, this.width));
       
       for (const [day, spend] of sortedDays) {
         lines.push(row(`  ${day}${' '.repeat(maxDateLen - day.length)}  $${fmt(spend)}`, this.width));
       }
+      lines.push(emptyRow(this.width));
+    }
+
+    // Last refresh time at the bottom
+    if (this.summary?.timestamp) {
+      const refreshDate = new Date(this.summary.timestamp);
+      const timestampStr = refreshDate.toLocaleTimeString();
+      lines.push(row(`Last refreshed: ${timestampStr}`, this.width));
       lines.push(emptyRow(this.width));
     }
 
@@ -239,12 +259,8 @@ export class UsageOverlayComponent {
 }
 
 // Helper functions
-function boxTop(title: string, width: number): string {
-  const content = ` ${title} `;
-  const padding = Math.max(0, (width - 2 - content.length) / 2);
-  const leftPad = ' '.repeat(Math.floor(padding));
-  const rightPad = ' '.repeat(Math.ceil(padding));
-  return `┌${leftPad}${content}${rightPad}┐`;
+function boxTop(width: number): string {
+  return `┌${'─'.repeat(width - 2)}┐`;
 }
 
 function boxBottom(width: number): string {

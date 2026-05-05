@@ -2,7 +2,8 @@ import type { ActivityItem, UsageSummary } from './types.js';
 
 export function aggregateUsage(
   credits: { totalUsage: number; totalCredits?: number },
-  analytics: ActivityItem[]
+  analytics: ActivityItem[],
+  timestamp: number = Date.now()
 ): UsageSummary {
   const now = new Date();
   const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -48,6 +49,7 @@ export function aggregateUsage(
     byModel: aggregateByModel(analytics),
     byKey: aggregateByProvider(analytics),
     byDay: aggregateByDay(analytics),
+    timestamp,
   };
 }
 

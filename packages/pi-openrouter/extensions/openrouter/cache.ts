@@ -46,13 +46,14 @@ export function startBackgroundRefresh(): void {
       } catch (err) {
         console.log('Activity fetch failed (management key required):', err);
       }
-      const summary = aggregateUsage(credits, analytics ?? []);
+      const timestamp = Date.now();
+      const summary = aggregateUsage(credits, analytics ?? [], timestamp);
       usageCache.set('usage', summary);
-      lastFetchTime.value = Date.now();
+      lastFetchTime.value = timestamp;
     } catch (err) {
       console.log('Background refresh failed:', err);
     }
-  }, 60000);
+  }, 90000);
 }
 
 export function stopBackgroundRefresh(): void {

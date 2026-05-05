@@ -12,6 +12,7 @@ export interface UsageSummary {
   byModel?: Record<string, number>;
   byKey?: Record<string, number>;
   byDay?: Record<string, number>;
+  timestamp: number;
 }
 
 export interface CacheEntry<T> {
