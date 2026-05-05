@@ -1,6 +1,6 @@
 {
   "name": "@robhowley/pi-openrouter",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "Terminal overlay for OpenRouter usage: caps, spend, burn rate, and model breakdowns.",
   "files": [
