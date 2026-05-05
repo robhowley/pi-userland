@@ -30,8 +30,6 @@ jobs:
 
       - name: Publish changed packages
         if: steps.release.outputs.releases_created == 'true'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           echo "Released packages: ${{ steps.release.outputs.paths_released }}"
           # paths_released is a JSON array
