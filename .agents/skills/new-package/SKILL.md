@@ -25,7 +25,8 @@ description: |
 
 1. Ask for the package name (e.g., `pi-session-hygiene`, `pi-spinner-verbs`)
 2. Confirm the name follows pattern: `pi-*` (lowercase, hyphenated)
-3. Create the package directory and files using the commands below
+3. Ask for a package description
+4. Create the package directory and files using the commands below
 
 ## Package structure
 
@@ -60,6 +61,7 @@ mkdir -p packages/$NAME/__tests__
   "name": "@robhowley/<name>",
   "version": "0.1.0",
   "type": "module",
+  "description": "<package_description>",
   "files": [
     "extensions",
     "<optional-subdir>",

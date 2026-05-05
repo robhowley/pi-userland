@@ -1,0 +1,47 @@
+{
+  "name": "@robhowley/pi-openrouter",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Terminal overlay for OpenRouter usage: caps, spend, burn rate, and model breakdowns.",
+  "files": [
+    "extensions",
+    "README.md",
+    "../LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "pi-package",
+    "openrouter"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/openrouter"
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/robhowley/pi-userland.git",
+    "directory": "packages/pi-openrouter"
+  },
+  "homepage": "https://github.com/robhowley/pi-userland/tree/main/packages/pi-openrouter",
+  "scripts": {
+    "lint": "eslint extensions/",
+    "format:check": "prettier --check extensions/",
+    "format:write": "prettier --write extensions/",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run __tests__"
+  },
+  "dependencies": {
+    "@mariozechner/pi-tui": "*",
+    "@openrouter/sdk": "^0.12.21"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.17"
+  }
+}
