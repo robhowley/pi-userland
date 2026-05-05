@@ -19,7 +19,7 @@
     "extensions": [
       "./extensions/openrouter"
     ],
-    "image": "https://raw.githubusercontent.com/roberthowley/pi-userland/main/packages/pi-openrouter/img/openrouter-usage-tui.png"
+    "image": "https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-openrouter/img/openrouter-usage-tui.png"
   },
   "repository": {
     "type": "git",
