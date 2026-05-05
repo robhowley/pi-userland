@@ -1,6 +1,7 @@
 import { matchesKey, truncateToWidth } from '@mariozechner/pi-tui';
 import type { Theme } from '@mariozechner/pi-coding-agent';
 import type { ModelStats, ProviderStats, UsageSummary } from './types.js';
+import { renderSpendBarChart } from './chart.js';
 import { usageCache } from './cache.js';
 
 const MIN_WIDTH = 44;
@@ -16,10 +17,14 @@ export class UsageOverlayComponent {
   };
 
   private static readonly TABLE_INNER_WIDTH =
-    UsageOverlayComponent.COLS.model + 2 +
-    UsageOverlayComponent.COLS.spend + 2 +
-    UsageOverlayComponent.COLS.tokens + 2 +
-    UsageOverlayComponent.COLS.costPerM + 2 +
+    UsageOverlayComponent.COLS.model +
+    2 +
+    UsageOverlayComponent.COLS.spend +
+    2 +
+    UsageOverlayComponent.COLS.tokens +
+    2 +
+    UsageOverlayComponent.COLS.costPerM +
+    2 +
     UsageOverlayComponent.COLS.reqs;
 
   private lines: string[];
@@ -106,7 +111,9 @@ export class UsageOverlayComponent {
 
     if (error) {
       lines.push(boxTop(this.width));
-      lines.push(row(th.fg('accent', th.bold('◈ OpenRouter Usage  ·  /openrouter-usage')), this.width));
+      lines.push(
+        row(th.fg('accent', th.bold('◈ OpenRouter Usage  ·  /openrouter-usage')), this.width),
+      );
       lines.push(emptyRow(this.width));
       lines.push(row(th.fg('error', error), this.width));
       if (cachedMinutesAgo !== null) {
@@ -121,7 +128,9 @@ export class UsageOverlayComponent {
 
     if (!summary) {
       lines.push(boxTop(this.width));
-      lines.push(row(th.fg('accent', th.bold('◈ OpenRouter Usage  ·  /openrouter-usage')), this.width));
+      lines.push(
+        row(th.fg('accent', th.bold('◈ OpenRouter Usage  ·  /openrouter-usage')), this.width),
+      );
       lines.push(emptyRow(this.width));
       lines.push(row(th.fg('dim', 'No usage data available.'), this.width));
       lines.push(boxBottom(this.width));
@@ -131,7 +140,9 @@ export class UsageOverlayComponent {
 
     // Summary view (subcommand views TODO)
     lines.push(boxTop(this.width));
-    lines.push(row(th.fg('accent', th.bold('◈ OpenRouter Usage  ·  /openrouter-usage')), this.width));
+    lines.push(
+      row(th.fg('accent', th.bold('◈ OpenRouter Usage  ·  /openrouter-usage')), this.width),
+    );
     lines.push(emptyRow(this.width));
 
     // Month row: amount stays with label, cap percentage right-aligned
@@ -150,9 +161,19 @@ export class UsageOverlayComponent {
     }
     lines.push(rowRightAligned(monthLeftBase, monthRight, this.width));
 
-    // 7d row: amount stays with label, burn rate right-aligned
+    // 7d row: amount stays with label, burn rate right-aligned with color coding
     const weekLeftBase = `7d    $${fmt(summary.week)}`;
-    const weekRight = `burn ~$${fmt(summary.burnRate)}`;
+    const burnRatio = summary.cap > 0 ? summary.burnRate / summary.cap : 0;
+    let weekRight: string;
+    if (burnRatio < 0.9) {
+      weekRight = th.fg('success', `burn ~$${fmt(summary.burnRate)}`);
+    } else if (burnRatio < 1.5) {
+      weekRight = th.fg('warning', `burn ~$${fmt(summary.burnRate)}`);
+    } else if (burnRatio < 2.0) {
+      weekRight = th.fg('error', `burn ~$${fmt(summary.burnRate)}`);
+    } else {
+      weekRight = th.bold(th.fg('error', `burn ~$${fmt(summary.burnRate)}`));
+    }
     lines.push(rowRightAligned(weekLeftBase, weekRight, this.width));
 
     // Today row on its own line
@@ -180,21 +201,13 @@ export class UsageOverlayComponent {
       lines.push(emptyRow(this.width));
     }
 
-    // Usage by Day (7d)
+    // Usage by Day (30d bar chart)
     if (summary.byDay && Object.keys(summary.byDay).length > 0) {
-      const sortedDays = Object.entries(summary.byDay)
-        .sort((a, b) => a[0].localeCompare(b[0]))
-        .slice(-7); // Last 7 days
-      const maxDateLen = sortedDays.reduce((max, [date]) => Math.max(max, date.length), 0);
-
-      lines.push(row('By day', this.width));
-      lines.push(row(`  Date${' '.repeat(maxDateLen - 4)}  Amount`, this.width));
-      lines.push(row(`  ${'-'.repeat(maxDateLen)}  ------`, this.width));
-
-      for (const [day, spend] of sortedDays) {
-        lines.push(
-          row(`  ${day}${' '.repeat(maxDateLen - day.length)}  $${fmt(spend)}`, this.width),
-        );
+      const chartOutput = renderSpendBarChart(summary.byDay, this.width);
+      lines.push(row('Spend (last 30 days)', this.width));
+      // Split multi-line chart output and add each line
+      for (const chartLine of chartOutput.split('\n')) {
+        lines.push(row(chartLine, this.width));
       }
       lines.push(emptyRow(this.width));
     }
@@ -240,16 +253,16 @@ export class UsageOverlayComponent {
     lines.push(
       row(
         `  ${'Model'.padEnd(COLS.model)}  ${`${label} $`.padStart(COLS.spend)}  ` +
-        `${`${label} tok`.padStart(COLS.tokens)}  ${'$/M'.padStart(COLS.costPerM)}  ` +
-        `${'reqs'.padStart(COLS.reqs)}`,
+          `${`${label} tok`.padStart(COLS.tokens)}  ${'$/M'.padStart(COLS.costPerM)}  ` +
+          `${'reqs'.padStart(COLS.reqs)}`,
         this.width,
       ),
     );
     lines.push(
       row(
         `  ${'-'.repeat(COLS.model)}  ${'-'.repeat(COLS.spend)}  ` +
-        `${'-'.repeat(COLS.tokens)}  ${'-'.repeat(COLS.costPerM)}  ` +
-        `${'-'.repeat(COLS.reqs)}`,
+          `${'-'.repeat(COLS.tokens)}  ${'-'.repeat(COLS.costPerM)}  ` +
+          `${'-'.repeat(COLS.reqs)}`,
         this.width,
       ),
     );
@@ -258,10 +271,7 @@ export class UsageOverlayComponent {
   }
 
   // Model table row builder
-  private buildModelTableRows(
-    models: ModelStats[],
-    period: '7d' | '30d',
-  ): string[] {
+  private buildModelTableRows(models: ModelStats[], period: '7d' | '30d'): string[] {
     const { COLS } = UsageOverlayComponent;
     const is7d = period === '7d';
 
@@ -278,10 +288,10 @@ export class UsageOverlayComponent {
 
       return row(
         `  ${truncate(m.name, COLS.model).padEnd(COLS.model)}  ` +
-        `${(`$${fmt(spend)}`).padStart(COLS.spend)}  ` +
-        `${this.fmtTokens(tokens).padStart(COLS.tokens)}  ` +
-        `${this.fmtCostPerM(spend, tokens).padStart(COLS.costPerM)}  ` +
-        `${this.fmtCount(reqs).padStart(COLS.reqs)}`,
+          `${`$${fmt(spend)}`.padStart(COLS.spend)}  ` +
+          `${this.fmtTokens(tokens).padStart(COLS.tokens)}  ` +
+          `${this.fmtCostPerM(spend, tokens).padStart(COLS.costPerM)}  ` +
+          `${this.fmtCount(reqs).padStart(COLS.reqs)}`,
         this.width,
       );
     });
@@ -297,33 +307,31 @@ export class UsageOverlayComponent {
     lines.push(
       row(
         `  ${'Provider'.padEnd(COLS.model)}  ${'$'.padStart(COLS.spend)}  ` +
-        `${'tok'.padStart(COLS.tokens)}  ${'$/M'.padStart(COLS.costPerM)}  ` +
-        `${'reqs'.padStart(COLS.reqs)}`,
+          `${'tok'.padStart(COLS.tokens)}  ${'$/M'.padStart(COLS.costPerM)}  ` +
+          `${'reqs'.padStart(COLS.reqs)}`,
         this.width,
       ),
     );
     lines.push(
       row(
         `  ${'-'.repeat(COLS.model)}  ${'-'.repeat(COLS.spend)}  ` +
-        `${'-'.repeat(COLS.tokens)}  ${'-'.repeat(COLS.costPerM)}  ` +
-        `${'-'.repeat(COLS.reqs)}`,
+          `${'-'.repeat(COLS.tokens)}  ${'-'.repeat(COLS.costPerM)}  ` +
+          `${'-'.repeat(COLS.reqs)}`,
         this.width,
       ),
     );
 
     // Data rows - top 4 providers
-    const sorted = providers
-      .filter((p) => p.spend > 0)
-      .slice(0, 4);
+    const sorted = providers.filter((p) => p.spend > 0).slice(0, 4);
 
     for (const p of sorted) {
       lines.push(
         row(
           `  ${truncate(p.name, COLS.model).padEnd(COLS.model)}  ` +
-          `${(`$${fmt(p.spend)}`).padStart(COLS.spend)}  ` +
-          `${this.fmtTokens(p.tokens.total).padStart(COLS.tokens)}  ` +
-          `${this.fmtCostPerM(p.spend, p.tokens.total).padStart(COLS.costPerM)}  ` +
-          `${this.fmtCount(p.requests).padStart(COLS.reqs)}`,
+            `${`$${fmt(p.spend)}`.padStart(COLS.spend)}  ` +
+            `${this.fmtTokens(p.tokens.total).padStart(COLS.tokens)}  ` +
+            `${this.fmtCostPerM(p.spend, p.tokens.total).padStart(COLS.costPerM)}  ` +
+            `${this.fmtCount(p.requests).padStart(COLS.reqs)}`,
           this.width,
         ),
       );
@@ -349,7 +357,7 @@ function emptyRow(width: number): string {
 function row(content: string, width: number): string {
   const innerWidth = width - 4; // -4 for box borders + padding spaces
   const visibleWidth = getVisibleWidth(content);
-  
+
   // Truncate based on visible width
   let truncated: string;
   if (visibleWidth > innerWidth) {
@@ -358,8 +366,10 @@ function row(content: string, width: number): string {
     let i = 0;
     while (i < content.length && visibleSoFar < innerWidth) {
       const char = content[i];
+
       if (char === '\x1b') {
         // Skip ANSI escape sequence
+        // eslint-disable-next-line no-control-regex
         const ansiMatch = content.slice(i).match(/^\x1b\[[0-9;]*m/);
         if (ansiMatch) {
           i += ansiMatch[0].length;
@@ -373,14 +383,14 @@ function row(content: string, width: number): string {
   } else {
     truncated = content;
   }
-  
+
   return `│ ${truncated}${' '.repeat(innerWidth - getVisibleWidth(truncated))} │`;
 }
 
 function plainRow(content: string, width: number): string {
   const innerWidth = width - 2; // -2 for outer spaces
   const visibleWidth = getVisibleWidth(content);
-  
+
   // Truncate based on visible width
   let truncated: string;
   if (visibleWidth > innerWidth) {
@@ -388,7 +398,9 @@ function plainRow(content: string, width: number): string {
     let i = 0;
     while (i < content.length && visibleSoFar < innerWidth) {
       const char = content[i];
+
       if (char === '\x1b') {
+        // eslint-disable-next-line no-control-regex
         const ansiMatch = content.slice(i).match(/^\x1b\[[0-9;]*m/);
         if (ansiMatch) {
           i += ansiMatch[0].length;
@@ -402,7 +414,7 @@ function plainRow(content: string, width: number): string {
   } else {
     truncated = content;
   }
-  
+
   return ` ${truncated}${' '.repeat(innerWidth - getVisibleWidth(truncated))} `;
 }
 
@@ -422,7 +434,7 @@ function rowRightAligned(leftContent: string, rightContent: string, width: numbe
 
   // Get visible version of left content for truncation check
   const leftVisible = getVisibleWidth(leftContent);
-  
+
   // Pad left content to align right content
   const leftPadded =
     leftVisible > remainingWidth
@@ -435,6 +447,7 @@ function rowRightAligned(leftContent: string, rightContent: string, width: numbe
 // Calculate visible width of a string, excluding ANSI escape codes
 function getVisibleWidth(str: string): number {
   // Remove ANSI escape codes - handles CSI sequences (ESC [ ... m)
+  // eslint-disable-next-line no-control-regex
   const ansiRegex = /\x1b\[[0-9;]*m/g;
   const cleanStr = str.replace(ansiRegex, '');
   return cleanStr.length;

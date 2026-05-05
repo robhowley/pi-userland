@@ -65,10 +65,7 @@ function aggregateRequests(data: ActivityItem[]): number {
   return data.reduce((sum, d) => sum + (d.requests || 0), 0);
 }
 
-function buildModelStats(
-  data7d: ActivityItem[],
-  data30d: ActivityItem[],
-): Map<string, ModelStats> {
+function buildModelStats(data7d: ActivityItem[], data30d: ActivityItem[]): Map<string, ModelStats> {
   const all = new Map<string, ModelStats>();
   const modelNames = new Set<string>();
 
