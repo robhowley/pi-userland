@@ -183,28 +183,28 @@ export class UsageOverlayComponent {
 
     // Top models (7d table)
     if (summary.topModels.length > 0) {
-      lines.push(...this.buildModelTableHeader('7d'));
+      lines.push(...this.buildModelTableHeader('7d', th));
       lines.push(...this.buildModelTableRows(summary.topModels, '7d'));
       lines.push(emptyRow(this.width));
     }
 
     // Top models (30d table)
     if (summary.topModels.length > 0) {
-      lines.push(...this.buildModelTableHeader('30d'));
+      lines.push(...this.buildModelTableHeader('30d', th));
       lines.push(...this.buildModelTableRows(summary.topModels, '30d'));
       lines.push(emptyRow(this.width));
     }
 
     // By provider (30d table with tokens)
     if (summary.byProvider.length > 0) {
-      lines.push(...this.buildProviderTable(summary.byProvider));
+      lines.push(...this.buildProviderTable(summary.byProvider, th));
       lines.push(emptyRow(this.width));
     }
 
     // Usage by Day (30d bar chart)
     if (summary.byDay && Object.keys(summary.byDay).length > 0) {
       const chartOutput = renderSpendBarChart(summary.byDay, this.width);
-      lines.push(row(` Spend (last 30 days)`, this.width));
+      lines.push(row(` Daily spend (30d)`, this.width));
       // Split multi-line chart output and add each line
       for (const chartLine of chartOutput.split('\n')) {
         lines.push(row(chartLine, this.width));
@@ -245,7 +245,7 @@ export class UsageOverlayComponent {
   }
 
   // Model table header builder
-  private buildModelTableHeader(label: '7d' | '30d'): string[] {
+  private buildModelTableHeader(label: '7d' | '30d', theme: Theme): string[] {
     const { COLS } = UsageOverlayComponent;
     const lines: string[] = [];
 
@@ -260,9 +260,9 @@ export class UsageOverlayComponent {
     );
     lines.push(
       row(
-        `    ${'-'.repeat(COLS.model)}  ${'-'.repeat(COLS.spend)}  ` +
-          `${'-'.repeat(COLS.tokens)}  ${'-'.repeat(COLS.costPerM)}  ` +
-          `${'-'.repeat(COLS.reqs)}`,
+        `    ${theme.fg('dim', '-'.repeat(COLS.model))}  ${theme.fg('dim', '-'.repeat(COLS.spend))}  ` +
+          `${theme.fg('dim', '-'.repeat(COLS.tokens))}  ${theme.fg('dim', '-'.repeat(COLS.costPerM))}  ` +
+          `${theme.fg('dim', '-'.repeat(COLS.reqs))}`,
         this.width,
       ),
     );
@@ -298,7 +298,7 @@ export class UsageOverlayComponent {
   }
 
   // Provider table builder
-  private buildProviderTable(providers: ProviderStats[]): string[] {
+  private buildProviderTable(providers: ProviderStats[], theme: Theme): string[] {
     const { COLS } = UsageOverlayComponent;
     const lines: string[] = [];
 
@@ -314,9 +314,9 @@ export class UsageOverlayComponent {
     );
     lines.push(
       row(
-        `    ${'-'.repeat(COLS.model)}  ${'-'.repeat(COLS.spend)}  ` +
-          `${'-'.repeat(COLS.tokens)}  ${'-'.repeat(COLS.costPerM)}  ` +
-          `${'-'.repeat(COLS.reqs)}`,
+        `    ${theme.fg('dim', '-'.repeat(COLS.model))}  ${theme.fg('dim', '-'.repeat(COLS.spend))}  ` +
+          `${theme.fg('dim', '-'.repeat(COLS.tokens))}  ${theme.fg('dim', '-'.repeat(COLS.costPerM))}  ` +
+          `${theme.fg('dim', '-'.repeat(COLS.reqs))}`,
         this.width,
       ),
     );
