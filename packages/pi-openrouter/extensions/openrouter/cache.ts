@@ -24,13 +24,24 @@ export class TTLCache<T> {
     return entry.data;
   }
 
+  getTimestamp(key: string): number | undefined {
+    const entry = this.cache.get(key);
+    if (!entry) return undefined;
+
+    if (Date.now() - entry.timestamp > this.ttlMs) {
+      this.cache.delete(key);
+      return undefined;
+    }
+
+    return entry.timestamp;
+  }
+
   set(key: string, data: T): void {
     this.cache.set(key, { data, timestamp: Date.now() });
   }
 }
 
 export const usageCache = new TTLCache<UsageSummary>(45000);
-export const lastFetchTime = { value: 0 };
 
 let refreshInterval: NodeJS.Timeout | null = null;
 
@@ -54,7 +65,6 @@ export function startBackgroundRefresh(): void {
       const summary = await fetchAndAggregate();
       const timestamp = Date.now();
       usageCache.set('usage', summary);
-      lastFetchTime.value = timestamp;
     } catch (err) {
       console.log('Background refresh failed:', err);
     }

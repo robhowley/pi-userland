@@ -2,7 +2,6 @@ import type { ExtensionAPI, ExtensionContext } from '@mariozechner/pi-coding-age
 import type { UsageSummary } from './types.js';
 import {
   usageCache,
-  lastFetchTime,
   startBackgroundRefresh,
   stopBackgroundRefresh,
   fetchAndAggregate,
@@ -33,8 +32,9 @@ export default function (pi: ExtensionAPI) {
 
 async function showUsageOverlay(ctx: ExtensionContext, subcommand?: string) {
   const cachedSummary = usageCache.get('usage');
-  const cachedMinutesAgo = cachedSummary
-    ? Math.round((Date.now() - lastFetchTime.value) / 60000)
+  const lastFetchTimestamp = usageCache.getTimestamp('usage');
+  const cachedMinutesAgo = lastFetchTimestamp
+    ? Math.round((Date.now() - lastFetchTimestamp) / 60000)
     : null;
 
   if (cachedSummary) {
@@ -49,7 +49,6 @@ async function showUsageOverlay(ctx: ExtensionContext, subcommand?: string) {
     summary = await fetchAndAggregate();
     const timestamp = Date.now();
     usageCache.set('usage', summary);
-    lastFetchTime.value = timestamp;
 
     await showOverlay(ctx, summary, subcommand, null, 0);
   } catch (error_) {
