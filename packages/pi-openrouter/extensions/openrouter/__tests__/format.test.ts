@@ -234,8 +234,8 @@ describe('renderSpendSparkline', () => {
     };
     const chartLines = renderSpendSparkline(byDay, 60);
 
-    // 4 bar + x-axis = 5
-    expect(chartLines).toHaveLength(5);
+    // 9 bar + 1 separator + 2 label lines = 12
+    expect(chartLines).toHaveLength(12);
     // First line should have bars (Unicode block characters)
     expect(chartLines[0]).toMatch(/[█]/);
   });
@@ -248,8 +248,8 @@ describe('renderSpendSparkline', () => {
     }
 
     const chartLines = renderSpendSparkline(byDay, 60);
-    // 4 bar + x-axis = 5
-    expect(chartLines).toHaveLength(5);
+    // 9 bar + 1 separator + 2 label lines = 12
+    expect(chartLines).toHaveLength(12);
     // First line should have bars
     expect(chartLines[0]).toMatch(/[█]/);
   });
@@ -259,11 +259,11 @@ describe('renderSpendSparkline', () => {
     const narrowChart = renderSpendSparkline(byDay, 30);
     const wideChart = renderSpendSparkline(byDay, 80);
 
-    // 4 bar + x-axis = 5
-    expect(narrowChart).toHaveLength(5);
-    expect(wideChart).toHaveLength(5);
+    // 9 bar + 1 separator + 2 label lines = 12
+    expect(narrowChart).toHaveLength(12);
+    expect(wideChart).toHaveLength(12);
     // Bar width should be constrained
-    expect(narrowChart[0]!.length).toBeLessThanOrEqual(26);
+    expect(narrowChart[0]!.length).toBeLessThanOrEqual(67);
     expect(wideChart[0]!.length).toBeGreaterThanOrEqual(narrowChart[0]!.length);
   });
 
@@ -275,17 +275,17 @@ describe('renderSpendSparkline', () => {
     }
 
     const chartLines = renderSpendSparkline(byDay, 80);
-    const xAxis = chartLines[4]; // x-axis is at line 4
+    const dayNumbersLine = chartLines[11]; // day numbers are at line 11
 
-    expect(xAxis).toBeDefined();
-    // Should contain dates for positions 0, 5, 10, 15, 20, 25, 29 (30 bars total)
-    // These are centered at positions 2, 7, 12, 17, 22, 27, 29
-    expect(xAxis).toContain('05-01'); // Day 0 (29 days ago from 05-30)
-    expect(xAxis).toContain('05-06'); // Day 5
-    expect(xAxis).toContain('05-11'); // Day 10
-    expect(xAxis).toContain('05-16'); // Day 15
-    expect(xAxis).toContain('05-21'); // Day 20
-    expect(xAxis).toContain('05-26'); // Day 25
-    expect(xAxis).toContain('05-30'); // Day 29 (today)
+    expect(dayNumbersLine).toBeDefined();
+    // Should contain day numbers for positions 0, 5, 10, 15, 20, 25, 29 (30 bars total)
+    // Each day number is 2 chars, so day 1=col4, day 6=col12, day 11=col20, etc
+    expect(dayNumbersLine).toContain('01'); // Day 0 (29 days ago from 05-30)
+    expect(dayNumbersLine).toContain('06'); // Day 5
+    expect(dayNumbersLine).toContain('11'); // Day 10
+    expect(dayNumbersLine).toContain('16'); // Day 15
+    expect(dayNumbersLine).toContain('21'); // Day 20
+    expect(dayNumbersLine).toContain('26'); // Day 25
+    expect(dayNumbersLine).toContain('30'); // Day 29 (today)
   });
 });

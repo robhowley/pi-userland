@@ -89,6 +89,11 @@ async function showOverlay(
         },
       };
     },
-    { overlay: true },
+    {
+      overlay: true,
+      overlayOptions: {
+        width: 100,
+      },
+    },
   );
 }

@@ -9,11 +9,11 @@ const MIN_WIDTH = 44;
 export class UsageOverlayComponent {
   // Column width constants (shared across all tables for alignment)
   private static readonly COLS = {
-    model: 26,
-    spend: 7,
-    tokens: 8,
-    costPerM: 7,
-    reqs: 6,
+    model: 30,
+    spend: 9,
+    tokens: 9,
+    costPerM: 8,
+    reqs: 7,
   };
 
   private static readonly TABLE_INNER_WIDTH =
@@ -98,7 +98,7 @@ export class UsageOverlayComponent {
   private calculateWidth(_summary: UsageSummary | null): number {
     // Use fixed table width for consistent layout across all views
     const innerWidth = UsageOverlayComponent.TABLE_INNER_WIDTH;
-    return Math.max(MIN_WIDTH, innerWidth + 4) + 2; // +4 for borders and padding, +2 for visual padding
+    return Math.max(MIN_WIDTH, innerWidth + 4) + 6; // +4 for borders, +6 for visual padding (3 on each side)
   }
 
   private buildLines(
@@ -112,7 +112,7 @@ export class UsageOverlayComponent {
     if (error) {
       lines.push(boxTop(this.width));
       lines.push(
-        row(th.fg('accent', th.bold('◈ OpenRouter Usage  ·  /openrouter-usage')), this.width),
+        row(th.fg('accent', th.bold(' ◈ OpenRouter Usage  ·  /openrouter-usage')), this.width),
       );
       lines.push(emptyRow(this.width));
       lines.push(row(th.fg('error', error), this.width));
@@ -129,7 +129,7 @@ export class UsageOverlayComponent {
     if (!summary) {
       lines.push(boxTop(this.width));
       lines.push(
-        row(th.fg('accent', th.bold('◈ OpenRouter Usage  ·  /openrouter-usage')), this.width),
+        row(th.fg('accent', th.bold(' ◈ OpenRouter Usage  ·  /openrouter-usage')), this.width),
       );
       lines.push(emptyRow(this.width));
       lines.push(row(th.fg('dim', 'No usage data available.'), this.width));
@@ -141,12 +141,12 @@ export class UsageOverlayComponent {
     // Summary view (subcommand views TODO)
     lines.push(boxTop(this.width));
     lines.push(
-      row(th.fg('accent', th.bold('◈ OpenRouter Usage  ·  /openrouter-usage')), this.width),
+      row(th.fg('accent', th.bold(' ◈ OpenRouter Usage  ·  /openrouter-usage')), this.width),
     );
     lines.push(emptyRow(this.width));
 
     // Month row: amount stays with label, cap percentage right-aligned
-    const monthLeftBase = `Month $${fmt(summary.month)} / $${fmt(summary.cap)}`;
+    const monthLeftBase = ` Month $${fmt(summary.month)} / $${fmt(summary.cap)}`;
     const monthPercent = summary.cap > 0 ? Math.round((summary.month / summary.cap) * 100) : 0;
     const monthRightText = `cap (${monthPercent}%)`;
     let monthRight: string;
@@ -159,10 +159,10 @@ export class UsageOverlayComponent {
     } else {
       monthRight = th.bold(th.fg('error', monthRightText));
     }
-    lines.push(rowRightAligned(monthLeftBase, monthRight, this.width));
+    lines.push(rowRightAligned(monthLeftBase, monthRight + '  ', this.width));
 
     // 7d row: amount stays with label, burn rate right-aligned with color coding
-    const weekLeftBase = `7d    $${fmt(summary.week)}`;
+    const weekLeftBase = ` 7d    $${fmt(summary.week)}`;
     const burnRatio = summary.cap > 0 ? summary.burnRate / summary.cap : 0;
     let weekRight: string;
     if (burnRatio < 0.9) {
@@ -174,11 +174,11 @@ export class UsageOverlayComponent {
     } else {
       weekRight = th.bold(th.fg('error', `burn ~$${fmt(summary.burnRate)}`));
     }
-    lines.push(rowRightAligned(weekLeftBase, weekRight, this.width));
+    lines.push(rowRightAligned(weekLeftBase, weekRight + '  ', this.width));
 
     // Today row on its own line
-    const todayContent = `Today $${fmt(summary.today)}`;
-    lines.push(rowRightAligned(todayContent, '', this.width));
+    const todayContent = ` Today $${fmt(summary.today)}`;
+    lines.push(rowRightAligned(todayContent, '  ', this.width));
     lines.push(emptyRow(this.width));
 
     // Top models (7d table)
@@ -204,7 +204,7 @@ export class UsageOverlayComponent {
     // Usage by Day (30d bar chart)
     if (summary.byDay && Object.keys(summary.byDay).length > 0) {
       const chartOutput = renderSpendBarChart(summary.byDay, this.width);
-      lines.push(row('Spend (last 30 days)', this.width));
+      lines.push(row(` Spend (last 30 days)`, this.width));
       // Split multi-line chart output and add each line
       for (const chartLine of chartOutput.split('\n')) {
         lines.push(row(chartLine, this.width));
@@ -216,7 +216,7 @@ export class UsageOverlayComponent {
     if (summary?.timestamp) {
       const refreshDate = new Date(summary.timestamp);
       const timestampStr = refreshDate.toLocaleTimeString();
-      lines.push(row(`Last refreshed: ${timestampStr}`, this.width));
+      lines.push(row(`  Last refreshed: ${timestampStr}`, this.width));
       lines.push(emptyRow(this.width));
     }
 
@@ -249,10 +249,10 @@ export class UsageOverlayComponent {
     const { COLS } = UsageOverlayComponent;
     const lines: string[] = [];
 
-    lines.push(row(`Top models (${label})`, this.width));
+    lines.push(row(` Top models (${label})`, this.width));
     lines.push(
       row(
-        `  ${'Model'.padEnd(COLS.model)}  ${`${label} $`.padStart(COLS.spend)}  ` +
+        `    ${'Model'.padEnd(COLS.model)}  ${`${label} $`.padStart(COLS.spend)}  ` +
           `${`${label} tok`.padStart(COLS.tokens)}  ${'$/M'.padStart(COLS.costPerM)}  ` +
           `${'reqs'.padStart(COLS.reqs)}`,
         this.width,
@@ -260,7 +260,7 @@ export class UsageOverlayComponent {
     );
     lines.push(
       row(
-        `  ${'-'.repeat(COLS.model)}  ${'-'.repeat(COLS.spend)}  ` +
+        `    ${'-'.repeat(COLS.model)}  ${'-'.repeat(COLS.spend)}  ` +
           `${'-'.repeat(COLS.tokens)}  ${'-'.repeat(COLS.costPerM)}  ` +
           `${'-'.repeat(COLS.reqs)}`,
         this.width,
@@ -287,7 +287,7 @@ export class UsageOverlayComponent {
       const reqs = is7d ? m.requests7d : m.requests30d;
 
       return row(
-        `  ${truncate(m.name, COLS.model).padEnd(COLS.model)}  ` +
+        `    ${truncate(m.name, COLS.model).padEnd(COLS.model)}  ` +
           `${`$${fmt(spend)}`.padStart(COLS.spend)}  ` +
           `${this.fmtTokens(tokens).padStart(COLS.tokens)}  ` +
           `${this.fmtCostPerM(spend, tokens).padStart(COLS.costPerM)}  ` +
@@ -303,10 +303,10 @@ export class UsageOverlayComponent {
     const lines: string[] = [];
 
     // Header
-    lines.push(row('By provider (30d)', this.width));
+    lines.push(row(` By provider (30d)`, this.width));
     lines.push(
       row(
-        `  ${'Provider'.padEnd(COLS.model)}  ${'$'.padStart(COLS.spend)}  ` +
+        `    ${'Provider'.padEnd(COLS.model)}  ${'$'.padStart(COLS.spend)}  ` +
           `${'tok'.padStart(COLS.tokens)}  ${'$/M'.padStart(COLS.costPerM)}  ` +
           `${'reqs'.padStart(COLS.reqs)}`,
         this.width,
@@ -314,7 +314,7 @@ export class UsageOverlayComponent {
     );
     lines.push(
       row(
-        `  ${'-'.repeat(COLS.model)}  ${'-'.repeat(COLS.spend)}  ` +
+        `    ${'-'.repeat(COLS.model)}  ${'-'.repeat(COLS.spend)}  ` +
           `${'-'.repeat(COLS.tokens)}  ${'-'.repeat(COLS.costPerM)}  ` +
           `${'-'.repeat(COLS.reqs)}`,
         this.width,
@@ -327,7 +327,7 @@ export class UsageOverlayComponent {
     for (const p of sorted) {
       lines.push(
         row(
-          `  ${truncate(p.name, COLS.model).padEnd(COLS.model)}  ` +
+          `    ${truncate(p.name, COLS.model).padEnd(COLS.model)}  ` +
             `${`$${fmt(p.spend)}`.padStart(COLS.spend)}  ` +
             `${this.fmtTokens(p.tokens.total).padStart(COLS.tokens)}  ` +
             `${this.fmtCostPerM(p.spend, p.tokens.total).padStart(COLS.costPerM)}  ` +
