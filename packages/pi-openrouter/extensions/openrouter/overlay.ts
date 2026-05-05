@@ -224,7 +224,7 @@ export class UsageOverlayComponent {
         const modelLabel = name; // Don't truncate - let the row function handle it
         lines.push(
           row(
-            `  ${modelLabel}${' '.repeat(headerModelWidth - name.length)}  ${spend7dStr.padStart(amountWidth)}  ${spend30dStr.padStart(amountWidth)}`,
+            `  ${modelLabel}${' '.repeat(Math.max(0, headerModelWidth - name.length))}  ${spend7dStr.padStart(amountWidth)}  ${spend30dStr.padStart(amountWidth)}`,
             this.width,
           ),
         );

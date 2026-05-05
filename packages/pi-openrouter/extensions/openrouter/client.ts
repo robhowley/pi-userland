@@ -30,10 +30,19 @@ export async function getActivity(): Promise<ActivityResponse['data']> {
   }
 }
 
+interface SDKError {
+  status?: number;
+  message?: string;
+}
+
+function isSDKError(err: unknown): err is SDKError {
+  return err !== null && typeof err === 'object' && 'status' in err;
+}
+
 function mapSdkError(err: unknown): Error {
-  if (err && typeof err === 'object' && 'status' in err) {
-    const status = (err as { status?: number }).status;
-    const message = (err as { message?: string }).message ?? 'Unknown error';
+  if (isSDKError(err)) {
+    const status = err.status;
+    const message = err.message ?? 'Unknown error';
     if (status === 401) return new AuthError(message);
     return new ApiError(`${status}: ${message}`);
   }
@@ -54,5 +63,3 @@ export class ApiError extends Error {
     this.name = 'ApiError';
   }
 }
-
-export type { ActivityItem };
