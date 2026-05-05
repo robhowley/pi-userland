@@ -32,6 +32,7 @@ export interface UsageSummary {
   byProvider: ProviderStats[];
   byDay: Record<string, number>;
   timestamp: number;
+  hasActivityData: boolean;
 }
 
 export interface CacheEntry<T> {

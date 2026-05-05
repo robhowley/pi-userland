@@ -218,6 +218,17 @@ export class UsageOverlayComponent {
       const timestampStr = refreshDate.toLocaleTimeString();
       lines.push(row(`  Last refreshed: ${timestampStr}`, this.width));
       lines.push(emptyRow(this.width));
+
+      // Warning if data is limited due to missing management key
+      if (!summary.hasActivityData) {
+        lines.push(
+          row(
+            th.fg('warning', '  Data limited - use management key for model breakdowns'),
+            this.width,
+          ),
+        );
+        lines.push(emptyRow(this.width));
+      }
     }
 
     lines.push(boxBottom(this.width));

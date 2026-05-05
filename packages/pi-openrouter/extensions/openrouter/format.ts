@@ -49,6 +49,7 @@ export function aggregateUsage(
     byProvider: buildProviderStats(analytics),
     byDay: aggregateByDay(analytics),
     timestamp,
+    hasActivityData: true, // aggregateUsage is only called when analytics data is available
   };
 }
 
