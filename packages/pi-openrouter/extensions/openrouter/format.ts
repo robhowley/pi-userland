@@ -1,4 +1,5 @@
-import type { ActivityItem, UsageSummary } from './types.js';
+import type { ActivityItem } from '@openrouter/sdk/models/index.js';
+import type { UsageSummary } from './types.js';
 
 export function aggregateUsage(
   credits: { totalUsage: number; totalCredits?: number },

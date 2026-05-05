@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { aggregateUsage } from '../format.js';
-import type { ActivityItem } from '../types.js';
+import type { ActivityItem } from '@openrouter/sdk/models/index.js';
 
 describe('aggregateUsage', () => {
   it('should calculate from analytics', () => {

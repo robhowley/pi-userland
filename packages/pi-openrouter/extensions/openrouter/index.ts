@@ -38,7 +38,7 @@ async function showUsageOverlay(ctx: ExtensionContext, subcommand?: string) {
     : null;
 
   if (cachedSummary) {
-    await showOverlay(ctx, cachedSummary, subcommand, null, cachedMinutesAgo);
+    await showOverlay(ctx, cachedSummary, null, cachedMinutesAgo);
     return;
   }
 
@@ -50,21 +50,20 @@ async function showUsageOverlay(ctx: ExtensionContext, subcommand?: string) {
     const timestamp = Date.now();
     usageCache.set('usage', summary);
 
-    await showOverlay(ctx, summary, subcommand, null, 0);
+    await showOverlay(ctx, summary, null, 0);
   } catch (error_) {
     const err = error_ as Error;
     error =
       err instanceof AuthError
-        ? 'OpenRouter API key not found. Set OPENROUTER_API_KEY to use /usage.'
+        ? 'OpenRouter API key not found. Set OPENROUTER_MANAGEMENT_KEY (preferred) or OPENROUTER_API_KEY to use /usage.'
         : `API Error: ${err.message}`;
-    await showOverlay(ctx, null, subcommand, error, cachedMinutesAgo || 0);
+    await showOverlay(ctx, null, error, cachedMinutesAgo || 0);
   }
 }
 
 async function showOverlay(
   ctx: ExtensionContext,
   summary: UsageSummary | null,
-  subcommand: string | undefined,
   error: string | null,
   cachedMinutesAgo: number | null,
 ) {
@@ -72,7 +71,6 @@ async function showOverlay(
     (_tui, theme, _keybindings, done) => {
       const overlayComponent = new UsageOverlayComponent(
         summary,
-        subcommand,
         error,
         cachedMinutesAgo,
         theme,

@@ -1,6 +1,3 @@
-import type { ActivityItem } from './client.js';
-export type { ActivityItem };
-
 export interface UsageSummary {
   today: number;
   week: number;

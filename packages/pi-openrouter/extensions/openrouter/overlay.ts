@@ -12,7 +12,6 @@ export class UsageOverlayComponent {
   private onClose: () => void;
   private width: number;
   private summary: UsageSummary | null;
-  private subcommand: string | undefined;
   private error: string | null;
   private cachedMinutesAgo: number | null;
   private refreshTimer: NodeJS.Timeout | null = null;
@@ -21,7 +20,6 @@ export class UsageOverlayComponent {
 
   constructor(
     summary: UsageSummary | null,
-    subcommand: string | undefined,
     error: string | null,
     cachedMinutesAgo: number | null,
     theme: Theme,
@@ -32,11 +30,10 @@ export class UsageOverlayComponent {
     this.onClose = onClose;
     this.requestRender = requestRender;
     this.summary = summary;
-    this.subcommand = subcommand;
     this.error = error;
     this.cachedMinutesAgo = cachedMinutesAgo;
     this.width = this.calculateWidth(summary);
-    this.lines = this.buildLines(summary, subcommand, error, cachedMinutesAgo);
+    this.lines = this.buildLines(summary, error, cachedMinutesAgo);
 
     // Set up timer to rebuild lines every 30 seconds to update "last refreshed" time
     this.refreshTimer = setInterval(() => {
@@ -75,7 +72,6 @@ export class UsageOverlayComponent {
     const freshSummary = usageCache.get('usage');
     this.lines = this.buildLines(
       freshSummary || this.summary,
-      this.subcommand,
       this.error,
       this.cachedMinutesAgo,
     );
@@ -127,7 +123,6 @@ export class UsageOverlayComponent {
 
   private buildLines(
     summary: UsageSummary | null,
-    _subcommand: string | undefined,
     error: string | null,
     cachedMinutesAgo: number | null,
   ): string[] {
