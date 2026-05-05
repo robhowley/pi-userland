@@ -10,8 +10,6 @@ import { AuthError } from './client.js';
 import { UsageOverlayComponent } from './overlay.js';
 
 export default function (pi: ExtensionAPI) {
-  startBackgroundRefresh();
-
   pi.on('session_start', async (_event, ctx) => {
     ctx.ui.notify('OpenRouter extension loaded', 'info');
   });
@@ -24,6 +22,7 @@ export default function (pi: ExtensionAPI) {
     description: 'Show OpenRouter usage: caps, spend, burn rate, and model breakdowns',
     getArgumentCompletions: () => null,
     handler: async (args, ctx) => {
+      startBackgroundRefresh(); // Start cache refresh on first use
       const subcommand = args.trim() || undefined;
       await showUsageOverlay(ctx, subcommand);
     },
@@ -47,9 +46,14 @@ async function showUsageOverlay(ctx: ExtensionContext, _subcommand?: string) {
 
   try {
     summary = await fetchAndAggregate();
-    usageCache.set('usage', summary);
+    if (!summary) {
+      error =
+        'OpenRouter API key not found. Set OPENROUTER_MANAGEMENT_KEY (preferred) or OPENROUTER_API_KEY to use /usage.';
+    } else {
+      usageCache.set('usage', summary);
+    }
 
-    await showOverlay(ctx, summary, null, 0);
+    await showOverlay(ctx, summary, error, 0);
   } catch (error_) {
     const err = error_ as Error;
     error =
@@ -89,6 +93,11 @@ async function showOverlay(
         },
       };
     },
-    { overlay: true },
+    {
+      overlay: true,
+      overlayOptions: {
+        width: 100,
+      },
+    },
   );
 }

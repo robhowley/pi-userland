@@ -57,16 +57,25 @@ function getBackoffInterval(): number {
   return BACKGROUND_REFRESH_INTERVAL_MS * Math.pow(2, backoffMultiplier);
 }
 
-export async function fetchAndAggregate(): Promise<UsageSummary> {
+export async function fetchAndAggregate(): Promise<UsageSummary | null> {
   const credits = await getCredits();
+  if (!credits) return null;
   let analytics: ActivityItem[] | null = null;
+  let hasActivityData = true;
   try {
     analytics = await getActivity();
+    if (!analytics) hasActivityData = false;
   } catch (err) {
-    console.log('Activity fetch failed (management key required):', err);
+    // getActivity() requires a management key; suppress this expected error
+    if (!(err instanceof Error) || !err.message.includes('management key')) {
+      console.log('Activity fetch failed:', err);
+    }
+    hasActivityData = false;
   }
   const timestamp = Date.now();
-  return aggregateUsage(credits, analytics ?? [], timestamp);
+  const summary = aggregateUsage(credits, analytics ?? [], timestamp);
+  summary.hasActivityData = hasActivityData;
+  return summary;
 }
 
 function scheduleRefresh(): void {
@@ -75,13 +84,15 @@ function scheduleRefresh(): void {
   refreshInterval = setInterval(async () => {
     try {
       const summary = await fetchAndAggregate();
-      usageCache.set('usage', summary);
+      if (summary) {
+        usageCache.set('usage', summary);
 
-      // Reset failure count on success and restart with normal interval
-      if (consecutiveFailures > 0) {
-        consecutiveFailures = 0;
-        stopBackgroundRefresh();
-        scheduleRefresh();
+        // Reset failure count on success and restart with normal interval
+        if (consecutiveFailures > 0) {
+          consecutiveFailures = 0;
+          stopBackgroundRefresh();
+          scheduleRefresh();
+        }
       }
     } catch (err) {
       consecutiveFailures++;
