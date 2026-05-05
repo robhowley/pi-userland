@@ -52,15 +52,13 @@ export class UsageOverlayComponent {
 
     // Calculate width needed for top models table
     if (summary.topModels7d.length > 0 || summary.topModels30d.length > 0) {
-      // Header: "Top models" (10 chars) + "  Model              7d      30d"
-      // Row: "  model-name            $X.XX   $X.XX"
-      // Max model name length + 30 chars for the rest (2 + 18 + 2 + 7 + 2 + 7 + 2)
       const allModelNames = [
         ...summary.topModels7d.map(m => m.name),
         ...summary.topModels30d.map(m => m.name),
       ];
       const maxModelNameLen = allModelNames.reduce((max, name) => Math.max(max, name.length), 0);
-      const rowWidth = 2 + maxModelNameLen + 2 + 7 + 2 + 7 + 2; // "  model  $X.XX  $X.XX"
+      const amountWidth = 8; // "$X.XX" + padding
+      const rowWidth = 2 + maxModelNameLen + 2 + amountWidth + 2 + amountWidth + 2;
       maxWidth = Math.max(maxWidth, rowWidth);
     }
 
@@ -70,22 +68,23 @@ export class UsageOverlayComponent {
         (max, name) => Math.max(max, name.length),
         0,
       );
-      // "  provider-name       $X.XX" = 2 + name + 2 + 7 + 2
-      const rowWidth = 2 + maxProviderLen + 2 + 7 + 2;
+      const amountWidth = 8;
+      const rowWidth = 2 + maxProviderLen + 2 + amountWidth + 2;
       maxWidth = Math.max(maxWidth, rowWidth);
     }
 
     // Calculate width needed for by-day table
     if (summary.byDay && Object.keys(summary.byDay).length > 0) {
-      // "  2026-04-29 $5.12" = 2 + 10 + 1 + 5 = 18 minimum
-      // But we want room for dates and amounts
-      maxWidth = Math.max(maxWidth, 30);
+      const amountWidth = 8;
+      maxWidth = Math.max(maxWidth, 21);
     }
 
     // Ensure we have room for main stats
-    // "Month $X.XX / $X.XX cap (XX%)" - max cap is 6 digits + 2 decimals = 8 chars
-    // So row is about 30-35 chars
-    maxWidth = Math.max(maxWidth, 40);
+    // "Month $X.XX / $X.XX cap (XX%)" - max ~35 chars
+    // "burn ~$X.XX" = 13 chars + space + "Today $X.XX" = 11
+    // Need: 35 + 1 + 13 + 2 (borders) = 51, or 35 + 1 + 11 + 2 = 49
+    // Use 46 as it fits both cases with proper padding
+    maxWidth = Math.max(maxWidth, 46);
 
     return Math.min(maxWidth, MAX_WIDTH);
   }
@@ -126,16 +125,21 @@ export class UsageOverlayComponent {
     lines.push(boxTop('OpenRouter Usage', this.width));
     lines.push(emptyRow(this.width));
 
-    // Month row with cap %
-    const capStr = summary.cap ? ` / $${fmt(summary.cap)} cap` : '';
-    const pctStr = summary.cap ? ` (${Math.round((summary.month / summary.cap) * 100)}%)` : '';
-    lines.push(row(`Month $${fmt(summary.month)}${capStr}${pctStr}`, this.width));
+    const boxInnerWidth = this.width - 2; // -2 for box borders
 
-    // 7d with burn rate
-    lines.push(row(`7d    $${fmt(summary.week)}    burn ~$${fmt(summary.burnRate)}`, this.width));
+    // Month row: amount stays with label, cap percentage right-aligned
+    const monthLeftBase = `Month $${fmt(summary.month)} / $${fmt(summary.cap)}`;
+    const monthRight = `cap (${Math.round((summary.month / summary.cap) * 100)}%)`;
+    lines.push(rowRightAligned(monthLeftBase, monthRight, this.width));
 
-    // Today
-    lines.push(row(`Today $${fmt(summary.today)}`, this.width));
+    // 7d row: amount stays with label, burn rate right-aligned
+    const weekLeftBase = `7d    $${fmt(summary.week)}`;
+    const weekRight = `burn ~$${fmt(summary.burnRate)}`;
+    lines.push(rowRightAligned(weekLeftBase, weekRight, this.width));
+
+    // Today row on its own line
+    const todayContent = `Today $${fmt(summary.today)}`;
+    lines.push(rowRightAligned(todayContent, '', this.width));
     lines.push(emptyRow(this.width));
 
     // Last refresh time
@@ -147,18 +151,18 @@ export class UsageOverlayComponent {
 
     // Top models - 7d and 30d as columns
     if (summary.topModels7d.length > 0 || summary.topModels30d.length > 0) {
-      // Calculate header and separator widths based on data
+      // Calculate column widths
       const allModelNames = [
         ...summary.topModels7d.map(m => m.name),
         ...summary.topModels30d.map(m => m.name),
       ];
       const maxModelNameLen = allModelNames.reduce((max, name) => Math.max(max, name.length), 0);
       const headerModelWidth = Math.max(7, maxModelNameLen);
-      const separator = ' '.repeat(headerModelWidth);
+      const amountWidth = 8; // "$X.XX" + padding
       
       lines.push(row('Top models', this.width));
-      lines.push(row(`  Model${' '.repeat(headerModelWidth - 5)}  7d      30d`, this.width));
-      lines.push(row(`  ${separator}  -------  -------`, this.width));
+      lines.push(row(`  Model${' '.repeat(headerModelWidth - 5)}  ${'7d'.padStart(amountWidth)}  ${'30d'.padStart(amountWidth)}`, this.width));
+      lines.push(row(`  ${' '.repeat(headerModelWidth)}  ${'-'.repeat(amountWidth)}  ${'-'.repeat(amountWidth)}`, this.width));
 
       // Build spend map from 7d data
       const spendMap = new Map<string, { spend7d: number; spend30d: number }>();
@@ -183,7 +187,7 @@ export class UsageOverlayComponent {
         const spend7dStr = spends.spend7d > 0 ? `$${fmt(spends.spend7d)}` : '-';
         const spend30dStr = spends.spend30d > 0 ? `$${fmt(spends.spend30d)}` : '-';
         const modelLabel = name; // Don't truncate - let the row function handle it
-        lines.push(row(`  ${modelLabel}  ${spend7dStr}  ${spend30dStr}`, this.width));
+        lines.push(row(`  ${modelLabel}${' '.repeat(headerModelWidth - name.length)}  ${spend7dStr.padStart(amountWidth)}  ${spend30dStr.padStart(amountWidth)}`, this.width));
       }
       lines.push(emptyRow(this.width));
     }
@@ -254,6 +258,28 @@ function emptyRow(width: number): string {
 function row(content: string, width: number): string {
   const truncated = content.length > width - 2 ? content.slice(0, width - 2) : content;
   return `│${truncated}${' '.repeat(width - 2 - truncated.length)}│`;
+}
+
+// Helper to create a row with left content padded to align right content
+function rowRightAligned(leftContent: string, rightContent: string, width: number): string {
+  const boxInnerWidth = width - 2; // -2 for box borders
+  const rightWidth = rightContent.length;
+  
+  if (rightWidth === 0) {
+    // No right content - just pad left to full width
+    const leftPadded = leftContent.padEnd(boxInnerWidth, ' ');
+    return row(leftPadded, width);
+  }
+  
+  // Account for the space between left and right content
+  const remainingWidth = boxInnerWidth - rightWidth - 1;
+  
+  // Pad left content to align right content
+  const leftPadded = leftContent.length > remainingWidth
+    ? leftContent.slice(0, remainingWidth - 3) + '...'
+    : leftContent.padEnd(remainingWidth, ' ');
+  
+  return row(`${leftPadded} ${rightContent}`, width);
 }
 
 function fmt(value: number): string {
