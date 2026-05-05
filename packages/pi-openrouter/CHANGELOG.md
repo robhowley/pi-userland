@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.3.0...pi-openrouter-v0.3.1) (2026-05-05)
+
+
+### Bug Fixes
+
+* **pi-openrouter:** pi image url ([#30](https://github.com/robhowley/pi-userland/issues/30)) ([61f2092](https://github.com/robhowley/pi-userland/commit/61f2092764681a2fe565f8ad299a808e6a2f9c3d))
+
 ## [0.3.0](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.2.0...pi-openrouter-v0.3.0) (2026-05-05)
 
 
