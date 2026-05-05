@@ -6,6 +6,20 @@ import { usageCache } from './cache.js';
 
 const MIN_WIDTH = 44;
 
+// Formatting utilities (shared, not class methods)
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return n.toString();
+}
+
+function fmtCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return n.toString();
+}
+
 export class UsageOverlayComponent {
   // Column width constants (shared across all tables for alignment)
   private static readonly COLS = {
@@ -235,22 +249,34 @@ export class UsageOverlayComponent {
   }
 
   // Formatting utilities
-  private fmtTokens(n: number): string {
-    if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
-    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-    if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-    return n.toString();
-  }
-
-  private fmtCount(n: number): string {
-    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-    if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-    return n.toString();
-  }
 
   private fmtCostPerM(spend: number, tokens: number): string {
     if (tokens === 0) return '-';
     return `$${((spend / tokens) * 1_000_000).toFixed(2)}`;
+  }
+
+  // Shared table row builder
+  private buildTableRow<T>(data: T[], renderRow: (item: T) => string, theme?: Theme): string[] {
+    const { COLS } = UsageOverlayComponent;
+    const lines: string[] = [];
+
+    if (theme) {
+      lines.push(
+        row(
+          `    ${theme.fg('dim', '-'.repeat(COLS.model))}  ${theme.fg('dim', '-'.repeat(COLS.spend))}  ` +
+            `${theme.fg('dim', '-'.repeat(COLS.tokens))}  ${theme.fg('dim', '-'.repeat(COLS.costPerM))}  ` +
+            `${theme.fg('dim', '-'.repeat(COLS.reqs))}`,
+          this.width,
+        ),
+      );
+    }
+
+    // Data rows
+    for (const item of data) {
+      lines.push(row(renderRow(item), this.width));
+    }
+
+    return lines;
   }
 
   // Model table header builder
@@ -290,20 +316,21 @@ export class UsageOverlayComponent {
       .sort((a, b) => (is7d ? b.spend7d - a.spend7d : b.spend30d - a.spend30d))
       .slice(0, 4);
 
-    return sorted.map((m) => {
+    const renderRow = (m: ModelStats) => {
       const spend = is7d ? m.spend7d : m.spend30d;
       const tokens = is7d ? m.tokens7d.total : m.tokens30d.total;
       const reqs = is7d ? m.requests7d : m.requests30d;
 
-      return row(
+      return (
         `    ${truncate(m.name, COLS.model).padEnd(COLS.model)}  ` +
-          `${`$${fmt(spend)}`.padStart(COLS.spend)}  ` +
-          `${this.fmtTokens(tokens).padStart(COLS.tokens)}  ` +
-          `${this.fmtCostPerM(spend, tokens).padStart(COLS.costPerM)}  ` +
-          `${this.fmtCount(reqs).padStart(COLS.reqs)}`,
-        this.width,
+        `${`$${fmt(spend)}`.padStart(COLS.spend)}  ` +
+        `${fmtTokens(tokens).padStart(COLS.tokens)}  ` +
+        `${this.fmtCostPerM(spend, tokens).padStart(COLS.costPerM)}  ` +
+        `${fmtCount(reqs).padStart(COLS.reqs)}`
       );
-    });
+    };
+
+    return this.buildTableRow(sorted, renderRow);
   }
 
   // Provider table builder
@@ -321,32 +348,21 @@ export class UsageOverlayComponent {
         this.width,
       ),
     );
-    lines.push(
-      row(
-        `    ${theme.fg('dim', '-'.repeat(COLS.model))}  ${theme.fg('dim', '-'.repeat(COLS.spend))}  ` +
-          `${theme.fg('dim', '-'.repeat(COLS.tokens))}  ${theme.fg('dim', '-'.repeat(COLS.costPerM))}  ` +
-          `${theme.fg('dim', '-'.repeat(COLS.reqs))}`,
-        this.width,
-      ),
-    );
 
     // Data rows - top 4 providers
     const sorted = providers.filter((p) => p.spend > 0).slice(0, 4);
 
-    for (const p of sorted) {
-      lines.push(
-        row(
-          `    ${truncate(p.name, COLS.model).padEnd(COLS.model)}  ` +
-            `${`$${fmt(p.spend)}`.padStart(COLS.spend)}  ` +
-            `${this.fmtTokens(p.tokens.total).padStart(COLS.tokens)}  ` +
-            `${this.fmtCostPerM(p.spend, p.tokens.total).padStart(COLS.costPerM)}  ` +
-            `${this.fmtCount(p.requests).padStart(COLS.reqs)}`,
-          this.width,
-        ),
+    const renderRow = (p: ProviderStats) => {
+      return (
+        `    ${truncate(p.name, COLS.model).padEnd(COLS.model)}  ` +
+        `${`$${fmt(p.spend)}`.padStart(COLS.spend)}  ` +
+        `${fmtTokens(p.tokens.total).padStart(COLS.tokens)}  ` +
+        `${this.fmtCostPerM(p.spend, p.tokens.total).padStart(COLS.costPerM)}  ` +
+        `${fmtCount(p.requests).padStart(COLS.reqs)}`
       );
-    }
+    };
 
-    return lines;
+    return [...lines, ...this.buildTableRow(sorted, renderRow, theme)];
   }
 }
 
@@ -363,67 +379,38 @@ function emptyRow(width: number): string {
   return `│ ${' '.repeat(width - 4)} │`;
 }
 
+// Truncate string to visible width, skipping ANSI escape codes
+function truncateToVisibleWidth(str: string, maxVisibleWidth: number): string {
+  let visibleSoFar = 0;
+  let i = 0;
+
+  while (i < str.length && visibleSoFar < maxVisibleWidth) {
+    const char = str[i];
+
+    if (char === '\x1b') {
+      // Skip ANSI escape sequence
+      // eslint-disable-next-line no-control-regex
+      const ansiMatch = str.slice(i).match(/^\x1b\[[0-9;]*m/);
+      if (ansiMatch) {
+        i += ansiMatch[0].length;
+        continue;
+      }
+    }
+    visibleSoFar++;
+    i++;
+  }
+  return str.slice(0, i);
+}
+
 function row(content: string, width: number): string {
   const innerWidth = width - 4; // -4 for box borders + padding spaces
-  const visibleWidth = getVisibleWidth(content);
-
-  // Truncate based on visible width
-  let truncated: string;
-  if (visibleWidth > innerWidth) {
-    // Need to find the slice point that gives us innerWidth visible chars
-    let visibleSoFar = 0;
-    let i = 0;
-    while (i < content.length && visibleSoFar < innerWidth) {
-      const char = content[i];
-
-      if (char === '\x1b') {
-        // Skip ANSI escape sequence
-        // eslint-disable-next-line no-control-regex
-        const ansiMatch = content.slice(i).match(/^\x1b\[[0-9;]*m/);
-        if (ansiMatch) {
-          i += ansiMatch[0].length;
-          continue;
-        }
-      }
-      visibleSoFar++;
-      i++;
-    }
-    truncated = content.slice(0, i);
-  } else {
-    truncated = content;
-  }
-
+  const truncated = truncateToVisibleWidth(content, innerWidth);
   return `│ ${truncated}${' '.repeat(innerWidth - getVisibleWidth(truncated))} │`;
 }
 
 function plainRow(content: string, width: number): string {
   const innerWidth = width - 2; // -2 for outer spaces
-  const visibleWidth = getVisibleWidth(content);
-
-  // Truncate based on visible width
-  let truncated: string;
-  if (visibleWidth > innerWidth) {
-    let visibleSoFar = 0;
-    let i = 0;
-    while (i < content.length && visibleSoFar < innerWidth) {
-      const char = content[i];
-
-      if (char === '\x1b') {
-        // eslint-disable-next-line no-control-regex
-        const ansiMatch = content.slice(i).match(/^\x1b\[[0-9;]*m/);
-        if (ansiMatch) {
-          i += ansiMatch[0].length;
-          continue;
-        }
-      }
-      visibleSoFar++;
-      i++;
-    }
-    truncated = content.slice(0, i);
-  } else {
-    truncated = content;
-  }
-
+  const truncated = truncateToVisibleWidth(content, innerWidth);
   return ` ${truncated}${' '.repeat(innerWidth - getVisibleWidth(truncated))} `;
 }
 
