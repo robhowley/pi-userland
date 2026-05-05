@@ -20,8 +20,8 @@ export default function (pi: ExtensionAPI) {
     stopBackgroundRefresh();
   });
 
-  pi.registerCommand('usage', {
-    description: 'Show OpenRouter usage',
+  pi.registerCommand('openrouter-usage', {
+    description: 'Show OpenRouter usage: caps, spend, burn rate, and model breakdowns',
     getArgumentCompletions: () => null,
     handler: async (args, ctx) => {
       const subcommand = args.trim() || undefined;
