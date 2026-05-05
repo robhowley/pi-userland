@@ -166,7 +166,7 @@ describe('aggregateUsage', () => {
 
     // byKey should use providerName, not endpointId
     expect(result.byKey).toEqual({
-      'openai': 8.0, // Total from both endpoints
+      openai: 8.0, // Total from both endpoints
     });
     // Should NOT contain endpoint IDs
     expect(result.byKey).not.toHaveProperty('ep-1');

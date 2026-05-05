@@ -1,6 +1,11 @@
 import type { ExtensionAPI, ExtensionContext } from '@mariozechner/pi-coding-agent';
 import type { UsageSummary } from './types.js';
-import { usageCache, lastFetchTime, startBackgroundRefresh, stopBackgroundRefresh } from './cache.js';
+import {
+  usageCache,
+  lastFetchTime,
+  startBackgroundRefresh,
+  stopBackgroundRefresh,
+} from './cache.js';
 import { getCredits, getActivity, AuthError } from './client.js';
 import { aggregateUsage } from './format.js';
 import type { ActivityItem } from './types.js';
@@ -58,9 +63,10 @@ async function showUsageOverlay(ctx: ExtensionContext, subcommand?: string) {
     await showOverlay(ctx, summary, subcommand, null, 0);
   } catch (error_) {
     const err = error_ as Error;
-    error = err instanceof AuthError
-      ? 'OpenRouter API key not found. Set OPENROUTER_API_KEY to use /usage.'
-      : `API Error: ${err.message}`;
+    error =
+      err instanceof AuthError
+        ? 'OpenRouter API key not found. Set OPENROUTER_API_KEY to use /usage.'
+        : `API Error: ${err.message}`;
     await showOverlay(ctx, null, subcommand, error, cachedMinutesAgo || 0);
   }
 }

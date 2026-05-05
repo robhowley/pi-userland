@@ -70,7 +70,12 @@ export class UsageOverlayComponent {
   invalidate(): void {
     // Rebuild lines to update "last refreshed" time from fresh cached data
     const freshSummary = usageCache.get('usage');
-    this.lines = this.buildLines(freshSummary || this.summary, this.subcommand, this.error, this.cachedMinutesAgo);
+    this.lines = this.buildLines(
+      freshSummary || this.summary,
+      this.subcommand,
+      this.error,
+      this.cachedMinutesAgo,
+    );
     this.requestRender();
   }
 
@@ -82,8 +87,8 @@ export class UsageOverlayComponent {
     // Calculate width needed for top models table
     if (summary.topModels7d.length > 0 || summary.topModels30d.length > 0) {
       const allModelNames = [
-        ...summary.topModels7d.map(m => m.name),
-        ...summary.topModels30d.map(m => m.name),
+        ...summary.topModels7d.map((m) => m.name),
+        ...summary.topModels30d.map((m) => m.name),
       ];
       const maxModelNameLen = allModelNames.reduce((max, name) => Math.max(max, name.length), 0);
       const amountWidth = 8; // "$X.XX" + padding
@@ -132,7 +137,9 @@ export class UsageOverlayComponent {
       lines.push(emptyRow(this.width));
       lines.push(row(th.fg('error', error), this.width));
       if (cachedMinutesAgo !== null) {
-        lines.push(row(th.fg('dim', `(last successful fetch: ${cachedMinutesAgo}m ago)`), this.width));
+        lines.push(
+          row(th.fg('dim', `(last successful fetch: ${cachedMinutesAgo}m ago)`), this.width),
+        );
       }
       lines.push(boxBottom(this.width));
       lines.push(plainRow(th.fg('dim', 'Esc to close'), this.width));
@@ -173,16 +180,26 @@ export class UsageOverlayComponent {
     if (summary.topModels7d.length > 0 || summary.topModels30d.length > 0) {
       // Calculate column widths
       const allModelNames = [
-        ...summary.topModels7d.map(m => m.name),
-        ...summary.topModels30d.map(m => m.name),
+        ...summary.topModels7d.map((m) => m.name),
+        ...summary.topModels30d.map((m) => m.name),
       ];
       const maxModelNameLen = allModelNames.reduce((max, name) => Math.max(max, name.length), 0);
       const headerModelWidth = Math.max(7, maxModelNameLen);
       const amountWidth = 8; // "$X.XX" + padding
-      
+
       lines.push(row('Top models', this.width));
-      lines.push(row(`  Model${' '.repeat(headerModelWidth - 5)}  ${'7d'.padStart(amountWidth)}  ${'30d'.padStart(amountWidth)}`, this.width));
-      lines.push(row(`  ${'-'.repeat(headerModelWidth)}  ${'-'.repeat(amountWidth)}  ${'-'.repeat(amountWidth)}`, this.width));
+      lines.push(
+        row(
+          `  Model${' '.repeat(headerModelWidth - 5)}  ${'7d'.padStart(amountWidth)}  ${'30d'.padStart(amountWidth)}`,
+          this.width,
+        ),
+      );
+      lines.push(
+        row(
+          `  ${'-'.repeat(headerModelWidth)}  ${'-'.repeat(amountWidth)}  ${'-'.repeat(amountWidth)}`,
+          this.width,
+        ),
+      );
 
       // Build spend map from 7d data
       const spendMap = new Map<string, { spend7d: number; spend30d: number }>();
@@ -207,7 +224,12 @@ export class UsageOverlayComponent {
         const spend7dStr = spends.spend7d > 0 ? `$${fmt(spends.spend7d)}` : '-';
         const spend30dStr = spends.spend30d > 0 ? `$${fmt(spends.spend30d)}` : '-';
         const modelLabel = name; // Don't truncate - let the row function handle it
-        lines.push(row(`  ${modelLabel}${' '.repeat(headerModelWidth - name.length)}  ${spend7dStr.padStart(amountWidth)}  ${spend30dStr.padStart(amountWidth)}`, this.width));
+        lines.push(
+          row(
+            `  ${modelLabel}${' '.repeat(headerModelWidth - name.length)}  ${spend7dStr.padStart(amountWidth)}  ${spend30dStr.padStart(amountWidth)}`,
+            this.width,
+          ),
+        );
       }
       lines.push(emptyRow(this.width));
     }
@@ -217,17 +239,19 @@ export class UsageOverlayComponent {
       const sortedProviders = Object.entries(summary.byKey)
         .sort((a, b) => b[1] - a[1])
         .slice(0, 6);
-      const maxProviderLen = sortedProviders.reduce(
-        (max, [name]) => Math.max(max, name.length),
-        0,
-      );
-      
+      const maxProviderLen = sortedProviders.reduce((max, [name]) => Math.max(max, name.length), 0);
+
       lines.push(row('By provider', this.width));
       lines.push(row(`  Provider${' '.repeat(maxProviderLen - 8)}  30d`, this.width));
       lines.push(row(`  ${'-'.repeat(maxProviderLen)}  ------`, this.width));
-      
+
       for (const [provider, spend] of sortedProviders) {
-        lines.push(row(`  ${provider}${' '.repeat(maxProviderLen - provider.length)}  $${fmt(spend)}`, this.width));
+        lines.push(
+          row(
+            `  ${provider}${' '.repeat(maxProviderLen - provider.length)}  $${fmt(spend)}`,
+            this.width,
+          ),
+        );
       }
       lines.push(emptyRow(this.width));
     }
@@ -237,17 +261,16 @@ export class UsageOverlayComponent {
       const sortedDays = Object.entries(summary.byDay)
         .sort((a, b) => a[0].localeCompare(b[0]))
         .slice(-7); // Last 7 days
-      const maxDateLen = sortedDays.reduce(
-        (max, [date]) => Math.max(max, date.length),
-        0,
-      );
-      
+      const maxDateLen = sortedDays.reduce((max, [date]) => Math.max(max, date.length), 0);
+
       lines.push(row('By day', this.width));
       lines.push(row(`  Date${' '.repeat(maxDateLen - 4)}  Amount`, this.width));
       lines.push(row(`  ${'-'.repeat(maxDateLen)}  ------`, this.width));
-      
+
       for (const [day, spend] of sortedDays) {
-        lines.push(row(`  ${day}${' '.repeat(maxDateLen - day.length)}  $${fmt(spend)}`, this.width));
+        lines.push(
+          row(`  ${day}${' '.repeat(maxDateLen - day.length)}  $${fmt(spend)}`, this.width),
+        );
       }
       lines.push(emptyRow(this.width));
     }
@@ -293,21 +316,22 @@ function plainRow(content: string, width: number): string {
 function rowRightAligned(leftContent: string, rightContent: string, width: number): string {
   const boxInnerWidth = width - 2; // -2 for box borders
   const rightWidth = rightContent.length;
-  
+
   if (rightWidth === 0) {
     // No right content - just pad left to full width
     const leftPadded = leftContent.padEnd(boxInnerWidth, ' ');
     return row(leftPadded, width);
   }
-  
+
   // Account for the space between left and right content
   const remainingWidth = boxInnerWidth - rightWidth - 1;
-  
+
   // Pad left content to align right content
-  const leftPadded = leftContent.length > remainingWidth
-    ? leftContent.slice(0, remainingWidth - 3) + '...'
-    : leftContent.padEnd(remainingWidth, ' ');
-  
+  const leftPadded =
+    leftContent.length > remainingWidth
+      ? leftContent.slice(0, remainingWidth - 3) + '...'
+      : leftContent.padEnd(remainingWidth, ' ');
+
   return row(`${leftPadded} ${rightContent}`, width);
 }
 

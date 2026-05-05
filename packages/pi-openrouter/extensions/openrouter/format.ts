@@ -3,19 +3,19 @@ import type { ActivityItem, UsageSummary } from './types.js';
 export function aggregateUsage(
   credits: { totalUsage: number; totalCredits?: number },
   analytics: ActivityItem[],
-  timestamp: number = Date.now()
+  timestamp: number = Date.now(),
 ): UsageSummary {
   const now = new Date();
   const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const startOfWeek = new Date(startOfDay);
   startOfWeek.setDate(startOfWeek.getDate() - 7);
 
-  const weekData = analytics.filter(d => {
+  const weekData = analytics.filter((d) => {
     const ts = new Date(d.date);
     return ts >= startOfWeek;
   });
 
-  const todayData = analytics.filter(d => {
+  const todayData = analytics.filter((d) => {
     const ts = new Date(d.date);
     return ts >= startOfDay;
   });
@@ -58,17 +58,23 @@ function sumSpend(data: ActivityItem[]): number {
 }
 
 function aggregateByModel(data: ActivityItem[]): Record<string, number> {
-  return data.reduce((acc, d) => {
-    acc[d.model] = (acc[d.model] || 0) + d.usage;
-    return acc;
-  }, {} as Record<string, number>);
+  return data.reduce(
+    (acc, d) => {
+      acc[d.model] = (acc[d.model] || 0) + d.usage;
+      return acc;
+    },
+    {} as Record<string, number>,
+  );
 }
 
 function aggregateByProvider(data: ActivityItem[]): Record<string, number> {
-  return data.reduce((acc, d) => {
-    acc[d.providerName] = (acc[d.providerName] || 0) + d.usage;
-    return acc;
-  }, {} as Record<string, number>);
+  return data.reduce(
+    (acc, d) => {
+      acc[d.providerName] = (acc[d.providerName] || 0) + d.usage;
+      return acc;
+    },
+    {} as Record<string, number>,
+  );
 }
 
 function aggregateByDay(data: ActivityItem[]): Record<string, number> {
