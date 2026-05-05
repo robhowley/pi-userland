@@ -47,6 +47,9 @@ vite.config.ts.timestamp-*.mjs
 __pycache__
 .tmp/
 
+# eval workspace for skills
+.agents/skills/*-workspace/
+
 # Gradle
 benchmarks/test-runners/java/.gradle/
 benchmarks/test-runners/java/build/
