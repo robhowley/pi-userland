@@ -136,7 +136,18 @@ export class UsageOverlayComponent {
 
     // Month row: amount stays with label, cap percentage right-aligned
     const monthLeftBase = `Month $${fmt(summary.month)} / $${fmt(summary.cap)}`;
-    const monthRight = `cap (${summary.cap > 0 ? Math.round((summary.month / summary.cap) * 100) : 0}%)`;
+    const monthPercent = summary.cap > 0 ? Math.round((summary.month / summary.cap) * 100) : 0;
+    const monthRightText = `cap (${monthPercent}%)`;
+    let monthRight: string;
+    if (monthPercent < 60) {
+      monthRight = th.fg('success', monthRightText);
+    } else if (monthPercent < 85) {
+      monthRight = th.fg('warning', monthRightText);
+    } else if (monthPercent < 100) {
+      monthRight = th.fg('warning', monthRightText);
+    } else {
+      monthRight = th.bold(th.fg('error', monthRightText));
+    }
     lines.push(rowRightAligned(monthLeftBase, monthRight, this.width));
 
     // 7d row: amount stays with label, burn rate right-aligned
@@ -337,37 +348,96 @@ function emptyRow(width: number): string {
 
 function row(content: string, width: number): string {
   const innerWidth = width - 4; // -4 for box borders + padding spaces
-  const truncated = content.length > innerWidth ? content.slice(0, innerWidth) : content;
-  return `│ ${truncated}${' '.repeat(innerWidth - truncated.length)} │`;
+  const visibleWidth = getVisibleWidth(content);
+  
+  // Truncate based on visible width
+  let truncated: string;
+  if (visibleWidth > innerWidth) {
+    // Need to find the slice point that gives us innerWidth visible chars
+    let visibleSoFar = 0;
+    let i = 0;
+    while (i < content.length && visibleSoFar < innerWidth) {
+      const char = content[i];
+      if (char === '\x1b') {
+        // Skip ANSI escape sequence
+        const ansiMatch = content.slice(i).match(/^\x1b\[[0-9;]*m/);
+        if (ansiMatch) {
+          i += ansiMatch[0].length;
+          continue;
+        }
+      }
+      visibleSoFar++;
+      i++;
+    }
+    truncated = content.slice(0, i);
+  } else {
+    truncated = content;
+  }
+  
+  return `│ ${truncated}${' '.repeat(innerWidth - getVisibleWidth(truncated))} │`;
 }
 
 function plainRow(content: string, width: number): string {
   const innerWidth = width - 2; // -2 for outer spaces
-  const truncated = content.length > innerWidth ? content.slice(0, innerWidth) : content;
-  return ` ${truncated}${' '.repeat(innerWidth - truncated.length)} `;
+  const visibleWidth = getVisibleWidth(content);
+  
+  // Truncate based on visible width
+  let truncated: string;
+  if (visibleWidth > innerWidth) {
+    let visibleSoFar = 0;
+    let i = 0;
+    while (i < content.length && visibleSoFar < innerWidth) {
+      const char = content[i];
+      if (char === '\x1b') {
+        const ansiMatch = content.slice(i).match(/^\x1b\[[0-9;]*m/);
+        if (ansiMatch) {
+          i += ansiMatch[0].length;
+          continue;
+        }
+      }
+      visibleSoFar++;
+      i++;
+    }
+    truncated = content.slice(0, i);
+  } else {
+    truncated = content;
+  }
+  
+  return ` ${truncated}${' '.repeat(innerWidth - getVisibleWidth(truncated))} `;
 }
 
 // Helper to create a row with left content padded to align right content
 function rowRightAligned(leftContent: string, rightContent: string, width: number): string {
   const innerWidth = width - 4; // -4 for box borders + padding spaces
-  const rightWidth = rightContent.length;
+  const rightVisibleWidth = getVisibleWidth(rightContent);
 
-  if (rightWidth === 0) {
+  if (rightVisibleWidth === 0) {
     // No right content - just pad left to full width
     const leftPadded = leftContent.padEnd(innerWidth, ' ');
     return row(leftPadded, width);
   }
 
   // Account for the space between left and right content
-  const remainingWidth = innerWidth - rightWidth - 1;
+  const remainingWidth = innerWidth - rightVisibleWidth - 1;
 
+  // Get visible version of left content for truncation check
+  const leftVisible = getVisibleWidth(leftContent);
+  
   // Pad left content to align right content
   const leftPadded =
-    leftContent.length > remainingWidth
+    leftVisible > remainingWidth
       ? leftContent.slice(0, remainingWidth - 3) + '...'
       : leftContent.padEnd(remainingWidth, ' ');
 
   return row(`${leftPadded} ${rightContent}`, width);
+}
+
+// Calculate visible width of a string, excluding ANSI escape codes
+function getVisibleWidth(str: string): number {
+  // Remove ANSI escape codes - handles CSI sequences (ESC [ ... m)
+  const ansiRegex = /\x1b\[[0-9;]*m/g;
+  const cleanStr = str.replace(ansiRegex, '');
+  return cleanStr.length;
 }
 
 function fmt(value: number): string {
