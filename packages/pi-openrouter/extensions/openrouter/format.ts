@@ -1,6 +1,14 @@
 import type { ActivityItem } from '@openrouter/sdk/models/index.js';
 import type { ModelStats, ProviderStats, TokenStats, UsageSummary } from './types.js';
 
+/** Convert a Date to YYYY-MM-DD string in local timezone (matching API format) */
+function localISODate(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 export function aggregateUsage(
   credits: { totalUsage: number; totalCredits?: number },
   analytics: ActivityItem[],
@@ -12,13 +20,13 @@ export function aggregateUsage(
   startOfWeek.setDate(startOfWeek.getDate() - 7);
 
   const weekData = analytics.filter((d) => {
-    const ts = new Date(d.date);
-    return ts >= startOfWeek;
+    // API dates are YYYY-MM-DD; compare by local date boundary
+    return d.date >= localISODate(startOfWeek);
   });
 
   const todayData = analytics.filter((d) => {
-    const ts = new Date(d.date);
-    return ts >= startOfDay;
+    // API dates are YYYY-MM-DD; compare by local date boundary
+    return d.date >= localISODate(startOfDay);
   });
 
   const week = sumSpend(weekData);

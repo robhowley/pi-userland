@@ -4,6 +4,41 @@ import { renderSpendSparkline } from '../chart.js';
 import type { ActivityItem } from '@openrouter/sdk/models/index.js';
 
 describe('aggregateUsage', () => {
+  it('should correctly aggregate today spend regardless of timezone', () => {
+    const credits = {
+      totalUsage: 10,
+      totalCredits: 100,
+    };
+
+    // Get today's date in YYYY-MM-DD format using LOCAL date
+    // This matches how the API returns dates (YYYY-MM-DD without timezone)
+    const now = new Date();
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
+    const analytics: ActivityItem[] = [
+      {
+        date: todayStr,
+        model: 'gpt-4',
+        modelPermaslug: 'gpt-4-perma',
+        endpointId: 'ep-1',
+        usage: 6.55,
+        byokUsageInference: 0,
+        requests: 10,
+        promptTokens: 1000,
+        completionTokens: 100,
+        reasoningTokens: 0,
+        providerName: 'openai',
+      },
+    ];
+
+    const result = aggregateUsage(credits, analytics);
+
+    // Today should include data from todayStr (date strings compared directly)
+    // This was previously a bug where dates were parsed as UTC timestamps
+    // causing timezone-related filtering errors
+    expect(result.today).toBe(6.55);
+  });
+
   it('should calculate from analytics', () => {
     const credits = {
       totalUsage: 38.42,
