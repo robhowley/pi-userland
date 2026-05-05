@@ -92,7 +92,10 @@ export class UsageOverlayComponent {
     // Rebuild lines to update "last refreshed" time from fresh cached data
     const freshSummary = usageCache.get('usage');
     this.lines = this.buildLines(freshSummary || this.summary, this.error, this.cachedMinutesAgo);
-    this.requestRender();
+    // Only request render if still not disposed after potential async work
+    if (!this.isDisposed) {
+      this.requestRender();
+    }
   }
 
   private calculateWidth(_summary: UsageSummary | null): number {
@@ -149,16 +152,11 @@ export class UsageOverlayComponent {
     const monthLeftBase = ` Month $${fmt(summary.month)} / $${fmt(summary.cap)}`;
     const monthPercent = summary.cap > 0 ? Math.round((summary.month / summary.cap) * 100) : 0;
     const monthRightText = `cap (${monthPercent}%)`;
-    let monthRight: string;
-    if (monthPercent < 60) {
-      monthRight = th.fg('success', monthRightText);
-    } else if (monthPercent < 85) {
-      monthRight = th.fg('warning', monthRightText);
-    } else if (monthPercent < 100) {
-      monthRight = th.fg('warning', monthRightText);
-    } else {
-      monthRight = th.bold(th.fg('error', monthRightText));
-    }
+    const monthColor = monthPercent < 60 ? 'success' : monthPercent < 100 ? 'warning' : 'error';
+    const monthRight =
+      monthPercent >= 100
+        ? th.bold(th.fg('error', monthRightText))
+        : th.fg(monthColor, monthRightText);
     lines.push(rowRightAligned(monthLeftBase, monthRight + '  ', this.width));
 
     // 7d row: amount stays with label, burn rate right-aligned with color coding

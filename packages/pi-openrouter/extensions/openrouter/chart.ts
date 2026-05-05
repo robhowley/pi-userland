@@ -20,9 +20,13 @@ export function renderSpendBarChart(byDay: Record<string, number>, _width: numbe
   }
 
   // Build 30-day window ending on the latest date in the data
-  const year = parseInt(dateMatch[1]!, 10);
-  const month = parseInt(dateMatch[2]!, 10);
-  const day = parseInt(dateMatch[3]!, 10);
+  const [, yearStr, monthStr, dayStr] = dateMatch;
+  if (!yearStr || !monthStr || !dayStr) {
+    return 'Invalid date format';
+  }
+  const year = parseInt(yearStr, 10);
+  const month = parseInt(monthStr, 10);
+  const day = parseInt(dayStr, 10);
 
   const values: number[] = [];
   const dates: string[] = [];
