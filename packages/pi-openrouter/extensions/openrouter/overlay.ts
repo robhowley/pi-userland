@@ -106,7 +106,7 @@ export class UsageOverlayComponent {
 
     if (error) {
       lines.push(boxTop(this.width));
-      lines.push(row('OpenRouter Usage', this.width));
+      lines.push(row(th.fg('accent', th.bold('◈ OpenRouter Usage  ·  /openrouter-usage')), this.width));
       lines.push(emptyRow(this.width));
       lines.push(row(th.fg('error', error), this.width));
       if (cachedMinutesAgo !== null) {
@@ -121,7 +121,7 @@ export class UsageOverlayComponent {
 
     if (!summary) {
       lines.push(boxTop(this.width));
-      lines.push(row('OpenRouter Usage', this.width));
+      lines.push(row(th.fg('accent', th.bold('◈ OpenRouter Usage  ·  /openrouter-usage')), this.width));
       lines.push(emptyRow(this.width));
       lines.push(row(th.fg('dim', 'No usage data available.'), this.width));
       lines.push(boxBottom(this.width));
@@ -131,7 +131,7 @@ export class UsageOverlayComponent {
 
     // Summary view (subcommand views TODO)
     lines.push(boxTop(this.width));
-    lines.push(row('OpenRouter Usage', this.width));
+    lines.push(row(th.fg('accent', th.bold('◈ OpenRouter Usage  ·  /openrouter-usage')), this.width));
     lines.push(emptyRow(this.width));
 
     // Month row: amount stays with label, cap percentage right-aligned
