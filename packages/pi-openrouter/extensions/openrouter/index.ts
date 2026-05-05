@@ -81,6 +81,7 @@ async function showOverlay(
         cachedMinutesAgo,
         theme,
         done,
+        () => _tui.requestRender(),
       );
 
       return {

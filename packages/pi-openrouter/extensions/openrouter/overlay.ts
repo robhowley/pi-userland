@@ -1,6 +1,7 @@
 import { matchesKey, truncateToWidth } from '@mariozechner/pi-tui';
 import type { Theme } from '@mariozechner/pi-coding-agent';
 import type { UsageSummary } from './types.js';
+import { usageCache } from './cache.js';
 
 const MIN_WIDTH = 44;
 const MAX_WIDTH = 80;
@@ -15,6 +16,7 @@ export class UsageOverlayComponent {
   private error: string | null;
   private cachedMinutesAgo: number | null;
   private refreshTimer: NodeJS.Timeout | null = null;
+  private requestRender: () => void;
 
   constructor(
     summary: UsageSummary | null,
@@ -23,9 +25,11 @@ export class UsageOverlayComponent {
     cachedMinutesAgo: number | null,
     theme: Theme,
     onClose: () => void,
+    requestRender: () => void,
   ) {
     this.theme = theme;
     this.onClose = onClose;
+    this.requestRender = requestRender;
     this.summary = summary;
     this.subcommand = subcommand;
     this.error = error;
@@ -36,6 +40,8 @@ export class UsageOverlayComponent {
     // Set up timer to rebuild lines every 30 seconds to update "last refreshed" time
     this.refreshTimer = setInterval(() => {
       this.invalidate();
+      // Force re-render by calling requestRender on the TUI
+      // We need to store a reference to requestRender to do this
     }, 30000);
   }
 
@@ -62,8 +68,10 @@ export class UsageOverlayComponent {
   }
 
   invalidate(): void {
-    // Rebuild lines to update "last refreshed" time from live global value
-    this.lines = this.buildLines(this.summary, this.subcommand, this.error, this.cachedMinutesAgo);
+    // Rebuild lines to update "last refreshed" time from fresh cached data
+    const freshSummary = usageCache.get('usage');
+    this.lines = this.buildLines(freshSummary || this.summary, this.subcommand, this.error, this.cachedMinutesAgo);
+    this.requestRender();
   }
 
   private calculateWidth(summary: UsageSummary | null): number {
@@ -245,8 +253,8 @@ export class UsageOverlayComponent {
     }
 
     // Last refresh time at the bottom
-    if (this.summary?.timestamp) {
-      const refreshDate = new Date(this.summary.timestamp);
+    if (summary?.timestamp) {
+      const refreshDate = new Date(summary.timestamp);
       const timestampStr = refreshDate.toLocaleTimeString();
       lines.push(row(`Last refreshed: ${timestampStr}`, this.width));
       lines.push(emptyRow(this.width));
