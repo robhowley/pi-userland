@@ -62,5 +62,3 @@ export function stopBackgroundRefresh(): void {
     refreshInterval = null;
   }
 }
-
-startBackgroundRefresh();

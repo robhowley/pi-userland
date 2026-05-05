@@ -163,7 +163,7 @@ export class UsageOverlayComponent {
 
     // Month row: amount stays with label, cap percentage right-aligned
     const monthLeftBase = `Month $${fmt(summary.month)} / $${fmt(summary.cap)}`;
-    const monthRight = `cap (${Math.round((summary.month / summary.cap) * 100)}%)`;
+    const monthRight = `cap (${summary.cap > 0 ? Math.round((summary.month / summary.cap) * 100) : 0}%)`;
     lines.push(rowRightAligned(monthLeftBase, monthRight, this.width));
 
     // 7d row: amount stays with label, burn rate right-aligned
