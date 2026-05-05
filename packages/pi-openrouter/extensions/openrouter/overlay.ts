@@ -75,6 +75,7 @@ export class UsageOverlayComponent {
 
   render(width: number): string[] {
     // Center the overlay if terminal is wider
+    // Width includes 2 extra characters for visual padding (1 space on each side)
     const padding = Math.max(0, Math.floor((width - this.width) / 2));
     const pad = ' '.repeat(padding);
 
@@ -92,7 +93,7 @@ export class UsageOverlayComponent {
   private calculateWidth(_summary: UsageSummary | null): number {
     // Use fixed table width for consistent layout across all views
     const innerWidth = UsageOverlayComponent.TABLE_INNER_WIDTH;
-    return Math.max(MIN_WIDTH, innerWidth + 4); // +4 for borders and padding
+    return Math.max(MIN_WIDTH, innerWidth + 4) + 2; // +4 for borders and padding, +2 for visual padding
   }
 
   private buildLines(
@@ -323,40 +324,42 @@ export class UsageOverlayComponent {
 
 // Helper functions
 function boxTop(width: number): string {
-  return `┌${'─'.repeat(width - 2)}┐`;
+  return `┌─${'─'.repeat(width - 4)}─┐`;
 }
 
 function boxBottom(width: number): string {
-  return `└${'─'.repeat(width - 2)}┘`;
+  return `└─${'─'.repeat(width - 4)}─┘`;
 }
 
 function emptyRow(width: number): string {
-  return `│${' '.repeat(width - 2)}│`;
+  return `│ ${' '.repeat(width - 4)} │`;
 }
 
 function row(content: string, width: number): string {
-  const truncated = content.length > width - 2 ? content.slice(0, width - 2) : content;
-  return `│${truncated}${' '.repeat(width - 2 - truncated.length)}│`;
+  const innerWidth = width - 4; // -4 for box borders + padding spaces
+  const truncated = content.length > innerWidth ? content.slice(0, innerWidth) : content;
+  return `│ ${truncated}${' '.repeat(innerWidth - truncated.length)} │`;
 }
 
 function plainRow(content: string, width: number): string {
-  const truncated = content.length > width - 2 ? content.slice(0, width - 2) : content;
-  return ` ${truncated}${' '.repeat(width - 1 - truncated.length)} `;
+  const innerWidth = width - 2; // -2 for outer spaces
+  const truncated = content.length > innerWidth ? content.slice(0, innerWidth) : content;
+  return ` ${truncated}${' '.repeat(innerWidth - truncated.length)} `;
 }
 
 // Helper to create a row with left content padded to align right content
 function rowRightAligned(leftContent: string, rightContent: string, width: number): string {
-  const boxInnerWidth = width - 2; // -2 for box borders
+  const innerWidth = width - 4; // -4 for box borders + padding spaces
   const rightWidth = rightContent.length;
 
   if (rightWidth === 0) {
     // No right content - just pad left to full width
-    const leftPadded = leftContent.padEnd(boxInnerWidth, ' ');
+    const leftPadded = leftContent.padEnd(innerWidth, ' ');
     return row(leftPadded, width);
   }
 
   // Account for the space between left and right content
-  const remainingWidth = boxInnerWidth - rightWidth - 1;
+  const remainingWidth = innerWidth - rightWidth - 1;
 
   // Pad left content to align right content
   const leftPadded =
