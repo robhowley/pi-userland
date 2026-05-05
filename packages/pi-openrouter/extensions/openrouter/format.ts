@@ -1,5 +1,5 @@
 import type { ActivityItem } from '@openrouter/sdk/models/index.js';
-import type { UsageSummary } from './types.js';
+import type { ModelStats, ProviderStats, TokenStats, UsageSummary } from './types.js';
 
 export function aggregateUsage(
   credits: { totalUsage: number; totalCredits?: number },
@@ -25,19 +25,11 @@ export function aggregateUsage(
   const today = sumSpend(todayData);
   const month = credits.totalUsage;
 
-  // Top models by 7d spend
-  const modelSpend7d = aggregateByModel(weekData);
-  const topModels7d = Object.entries(modelSpend7d)
-    .map(([name, spend]) => ({ name, spend }))
-    .sort((a, b) => b.spend - a.spend)
-    .slice(0, 3);
-
-  // Top models by 30d spend
-  const modelSpend30d = aggregateByModel(analytics);
-  const topModels30d = Object.entries(modelSpend30d)
-    .map(([name, spend]) => ({ name, spend }))
-    .sort((a, b) => b.spend - a.spend)
-    .slice(0, 3);
+  // Build model stats for both 7d and 30d windows
+  const modelStatsMap = buildModelStats(weekData, analytics);
+  const topModels = Array.from(modelStatsMap.values())
+    .sort((a, b) => b.spend30d - a.spend30d)
+    .slice(0, 10);
 
   return {
     today,
@@ -45,10 +37,8 @@ export function aggregateUsage(
     month,
     cap: credits.totalCredits ?? 0,
     burnRate: (week / 7) * 30,
-    topModels7d,
-    topModels30d,
-    byModel: aggregateByModel(analytics),
-    byKey: aggregateByProvider(analytics),
+    topModels,
+    byProvider: buildProviderStats(analytics),
     byDay: aggregateByDay(analytics),
     timestamp,
   };
@@ -58,24 +48,72 @@ function sumSpend(data: ActivityItem[]): number {
   return data.reduce((sum, d) => sum + d.usage, 0);
 }
 
-function aggregateByModel(data: ActivityItem[]): Record<string, number> {
+function aggregateTokens(data: ActivityItem[]): TokenStats {
   return data.reduce(
     (acc, d) => {
-      acc[d.model] = (acc[d.model] || 0) + d.usage;
+      acc.input += d.promptTokens || 0;
+      acc.output += d.completionTokens || 0;
+      acc.reasoning += d.reasoningTokens || 0;
+      acc.total += (d.promptTokens || 0) + (d.completionTokens || 0) + (d.reasoningTokens || 0);
       return acc;
     },
-    {} as Record<string, number>,
+    { input: 0, output: 0, reasoning: 0, total: 0 } as TokenStats,
   );
 }
 
-function aggregateByProvider(data: ActivityItem[]): Record<string, number> {
-  return data.reduce(
-    (acc, d) => {
-      acc[d.providerName] = (acc[d.providerName] || 0) + d.usage;
-      return acc;
-    },
-    {} as Record<string, number>,
-  );
+function aggregateRequests(data: ActivityItem[]): number {
+  return data.reduce((sum, d) => sum + (d.requests || 0), 0);
+}
+
+function buildModelStats(
+  data7d: ActivityItem[],
+  data30d: ActivityItem[],
+): Map<string, ModelStats> {
+  const all = new Map<string, ModelStats>();
+  const modelNames = new Set<string>();
+
+  // Collect all unique model names from both time windows
+  for (const d of data30d) modelNames.add(d.model);
+  for (const d of data7d) modelNames.add(d.model);
+
+  for (const name of modelNames) {
+    const data7dForModel = data7d.filter((d) => d.model === name);
+    const data30dForModel = data30d.filter((d) => d.model === name);
+
+    all.set(name, {
+      name,
+      spend7d: data7dForModel.reduce((s, d) => s + d.usage, 0),
+      spend30d: data30dForModel.reduce((s, d) => s + d.usage, 0),
+      tokens7d: aggregateTokens(data7dForModel),
+      tokens30d: aggregateTokens(data30dForModel),
+      requests7d: aggregateRequests(data7dForModel),
+      requests30d: aggregateRequests(data30dForModel),
+    });
+  }
+
+  return all;
+}
+
+function buildProviderStats(data: ActivityItem[]): ProviderStats[] {
+  const byName = new Map<string, ActivityItem[]>();
+
+  for (const d of data) {
+    const existing = byName.get(d.providerName) || [];
+    existing.push(d);
+    byName.set(d.providerName, existing);
+  }
+
+  const stats: ProviderStats[] = [];
+  for (const [name, items] of byName) {
+    stats.push({
+      name,
+      spend: items.reduce((s, d) => s + d.usage, 0),
+      tokens: aggregateTokens(items),
+      requests: aggregateRequests(items),
+    });
+  }
+
+  return stats.sort((a, b) => b.spend - a.spend);
 }
 
 function aggregateByDay(data: ActivityItem[]): Record<string, number> {

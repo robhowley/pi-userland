@@ -1,12 +1,27 @@
 import { matchesKey, truncateToWidth } from '@mariozechner/pi-tui';
 import type { Theme } from '@mariozechner/pi-coding-agent';
-import type { UsageSummary } from './types.js';
+import type { ModelStats, ProviderStats, UsageSummary } from './types.js';
 import { usageCache } from './cache.js';
 
 const MIN_WIDTH = 44;
-const MAX_WIDTH = 80;
 
 export class UsageOverlayComponent {
+  // Column width constants (shared across all tables for alignment)
+  private static readonly COLS = {
+    model: 26,
+    spend: 7,
+    tokens: 8,
+    costPerM: 7,
+    reqs: 6,
+  };
+
+  private static readonly TABLE_INNER_WIDTH =
+    UsageOverlayComponent.COLS.model + 2 +
+    UsageOverlayComponent.COLS.spend + 2 +
+    UsageOverlayComponent.COLS.tokens + 2 +
+    UsageOverlayComponent.COLS.costPerM + 2 +
+    UsageOverlayComponent.COLS.reqs;
+
   private lines: string[];
   private theme: Theme;
   private onClose: () => void;
@@ -74,47 +89,10 @@ export class UsageOverlayComponent {
     this.requestRender();
   }
 
-  private calculateWidth(summary: UsageSummary | null): number {
-    if (!summary) return MIN_WIDTH;
-
-    let maxWidth = MIN_WIDTH;
-
-    // Calculate width needed for top models table
-    if (summary.topModels7d.length > 0 || summary.topModels30d.length > 0) {
-      const allModelNames = [
-        ...summary.topModels7d.map((m) => m.name),
-        ...summary.topModels30d.map((m) => m.name),
-      ];
-      const maxModelNameLen = allModelNames.reduce((max, name) => Math.max(max, name.length), 0);
-      const amountWidth = 8; // "$X.XX" + padding
-      const rowWidth = 2 + maxModelNameLen + 2 + amountWidth + 2 + amountWidth + 2;
-      maxWidth = Math.max(maxWidth, rowWidth);
-    }
-
-    // Calculate width needed for provider table
-    if (summary.byKey && Object.keys(summary.byKey).length > 0) {
-      const maxProviderLen = Object.keys(summary.byKey).reduce(
-        (max, name) => Math.max(max, name.length),
-        0,
-      );
-      const amountWidth = 8;
-      const rowWidth = 2 + maxProviderLen + 2 + amountWidth + 2;
-      maxWidth = Math.max(maxWidth, rowWidth);
-    }
-
-    // Calculate width needed for by-day table
-    if (summary.byDay && Object.keys(summary.byDay).length > 0) {
-      maxWidth = Math.max(maxWidth, 21);
-    }
-
-    // Ensure we have room for main stats
-    // "Month $X.XX / $X.XX cap (XX%)" - max ~35 chars
-    // "burn ~$X.XX" = 13 chars + space + "Today $X.XX" = 11
-    // Need: 35 + 1 + 13 + 2 (borders) = 51, or 35 + 1 + 11 + 2 = 49
-    // Use 46 as it fits both cases with proper padding
-    maxWidth = Math.max(maxWidth, 46);
-
-    return Math.min(maxWidth, MAX_WIDTH);
+  private calculateWidth(_summary: UsageSummary | null): number {
+    // Use fixed table width for consistent layout across all views
+    const innerWidth = UsageOverlayComponent.TABLE_INNER_WIDTH;
+    return Math.max(MIN_WIDTH, innerWidth + 4); // +4 for borders and padding
   }
 
   private buildLines(
@@ -170,83 +148,23 @@ export class UsageOverlayComponent {
     lines.push(rowRightAligned(todayContent, '', this.width));
     lines.push(emptyRow(this.width));
 
-    // Top models - 7d and 30d as columns
-    if (summary.topModels7d.length > 0 || summary.topModels30d.length > 0) {
-      // Calculate column widths
-      const allModelNames = [
-        ...summary.topModels7d.map((m) => m.name),
-        ...summary.topModels30d.map((m) => m.name),
-      ];
-      const maxModelNameLen = allModelNames.reduce((max, name) => Math.max(max, name.length), 0);
-      const headerModelWidth = Math.max(7, maxModelNameLen);
-      const amountWidth = 8; // "$X.XX" + padding
-
-      lines.push(row('Top models', this.width));
-      lines.push(
-        row(
-          `  Model${' '.repeat(headerModelWidth - 5)}  ${'7d'.padStart(amountWidth)}  ${'30d'.padStart(amountWidth)}`,
-          this.width,
-        ),
-      );
-      lines.push(
-        row(
-          `  ${'-'.repeat(headerModelWidth)}  ${'-'.repeat(amountWidth)}  ${'-'.repeat(amountWidth)}`,
-          this.width,
-        ),
-      );
-
-      // Build spend map from 7d data
-      const spendMap = new Map<string, { spend7d: number; spend30d: number }>();
-      for (const m of summary.topModels7d) {
-        spendMap.set(m.name, { spend7d: m.spend, spend30d: 0 });
-      }
-      // Add/update with 30d data
-      for (const m of summary.topModels30d) {
-        const existing = spendMap.get(m.name);
-        spendMap.set(m.name, {
-          spend7d: existing?.spend7d ?? 0,
-          spend30d: m.spend,
-        });
-      }
-
-      // Sort by 30d spend (primary), then 7d (secondary)
-      const sortedModels = Array.from(spendMap.entries())
-        .sort((a, b) => b[1].spend30d - a[1].spend30d || b[1].spend7d - a[1].spend7d)
-        .slice(0, 6); // Show top 6 models
-
-      for (const [name, spends] of sortedModels) {
-        const spend7dStr = spends.spend7d > 0 ? `$${fmt(spends.spend7d)}` : '-';
-        const spend30dStr = spends.spend30d > 0 ? `$${fmt(spends.spend30d)}` : '-';
-        const modelLabel = name; // Don't truncate - let the row function handle it
-        lines.push(
-          row(
-            `  ${modelLabel}${' '.repeat(Math.max(0, headerModelWidth - name.length))}  ${spend7dStr.padStart(amountWidth)}  ${spend30dStr.padStart(amountWidth)}`,
-            this.width,
-          ),
-        );
-      }
+    // Top models (7d table)
+    if (summary.topModels.length > 0) {
+      lines.push(...this.buildModelTableHeader('7d'));
+      lines.push(...this.buildModelTableRows(summary.topModels, '7d'));
       lines.push(emptyRow(this.width));
     }
 
-    // Usage by Provider
-    if (summary.byKey && Object.keys(summary.byKey).length > 0) {
-      const sortedProviders = Object.entries(summary.byKey)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 6);
-      const maxProviderLen = sortedProviders.reduce((max, [name]) => Math.max(max, name.length), 0);
+    // Top models (30d table)
+    if (summary.topModels.length > 0) {
+      lines.push(...this.buildModelTableHeader('30d'));
+      lines.push(...this.buildModelTableRows(summary.topModels, '30d'));
+      lines.push(emptyRow(this.width));
+    }
 
-      lines.push(row('By provider', this.width));
-      lines.push(row(`  Provider${' '.repeat(maxProviderLen - 8)}  30d`, this.width));
-      lines.push(row(`  ${'-'.repeat(maxProviderLen)}  ------`, this.width));
-
-      for (const [provider, spend] of sortedProviders) {
-        lines.push(
-          row(
-            `  ${provider}${' '.repeat(maxProviderLen - provider.length)}  $${fmt(spend)}`,
-            this.width,
-          ),
-        );
-      }
+    // By provider (30d table with tokens)
+    if (summary.byProvider.length > 0) {
+      lines.push(...this.buildProviderTable(summary.byProvider));
       lines.push(emptyRow(this.width));
     }
 
@@ -279,6 +197,126 @@ export class UsageOverlayComponent {
 
     lines.push(boxBottom(this.width));
     lines.push(plainRow(th.fg('dim', 'Esc to close'), this.width));
+    return lines;
+  }
+
+  // Formatting utilities
+  private fmtTokens(n: number): string {
+    if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+    if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+    return n.toString();
+  }
+
+  private fmtCount(n: number): string {
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(0)}M`;
+    if (n >= 1_000) return `${(n / 1_000).toFixed(0)}k`;
+    return n.toString();
+  }
+
+  private fmtCostPerM(spend: number, tokens: number): string {
+    if (tokens === 0) return '-';
+    return `$${((spend / tokens) * 1_000_000).toFixed(2)}`;
+  }
+
+  // Model table header builder
+  private buildModelTableHeader(label: '7d' | '30d'): string[] {
+    const { COLS } = UsageOverlayComponent;
+    const lines: string[] = [];
+
+    lines.push(row(`Top models (${label})`, this.width));
+    lines.push(
+      row(
+        `  ${'Model'.padEnd(COLS.model)}  ${`${label} $`.padStart(COLS.spend)}  ` +
+        `${`${label} tok`.padStart(COLS.tokens)}  ${'$/M'.padStart(COLS.costPerM)}  ` +
+        `${'reqs'.padStart(COLS.reqs)}`,
+        this.width,
+      ),
+    );
+    lines.push(
+      row(
+        `  ${'-'.repeat(COLS.model)}  ${'-'.repeat(COLS.spend)}  ` +
+        `${'-'.repeat(COLS.tokens)}  ${'-'.repeat(COLS.costPerM)}  ` +
+        `${'-'.repeat(COLS.reqs)}`,
+        this.width,
+      ),
+    );
+
+    return lines;
+  }
+
+  // Model table row builder
+  private buildModelTableRows(
+    models: ModelStats[],
+    period: '7d' | '30d',
+  ): string[] {
+    const { COLS } = UsageOverlayComponent;
+    const is7d = period === '7d';
+
+    // Filter to models with spend in this period, sort by spend desc, limit to 4
+    const sorted = models
+      .filter((m) => (is7d ? m.spend7d > 0 : m.spend30d > 0))
+      .sort((a, b) => (is7d ? b.spend7d - a.spend7d : b.spend30d - a.spend30d))
+      .slice(0, 4);
+
+    return sorted.map((m) => {
+      const spend = is7d ? m.spend7d : m.spend30d;
+      const tokens = is7d ? m.tokens7d.total : m.tokens30d.total;
+      const reqs = is7d ? m.requests7d : m.requests30d;
+
+      return row(
+        `  ${truncate(m.name, COLS.model).padEnd(COLS.model)}  ` +
+        `${(`$${fmt(spend)}`).padStart(COLS.spend)}  ` +
+        `${this.fmtTokens(tokens).padStart(COLS.tokens)}  ` +
+        `${this.fmtCostPerM(spend, tokens).padStart(COLS.costPerM)}  ` +
+        `${this.fmtCount(reqs).padStart(COLS.reqs)}`,
+        this.width,
+      );
+    });
+  }
+
+  // Provider table builder
+  private buildProviderTable(providers: ProviderStats[]): string[] {
+    const { COLS } = UsageOverlayComponent;
+    const lines: string[] = [];
+
+    // Header
+    lines.push(row('By provider (30d)', this.width));
+    lines.push(
+      row(
+        `  ${'Provider'.padEnd(COLS.model)}  ${'$'.padStart(COLS.spend)}  ` +
+        `${'tok'.padStart(COLS.tokens)}  ${'$/M'.padStart(COLS.costPerM)}  ` +
+        `${'reqs'.padStart(COLS.reqs)}`,
+        this.width,
+      ),
+    );
+    lines.push(
+      row(
+        `  ${'-'.repeat(COLS.model)}  ${'-'.repeat(COLS.spend)}  ` +
+        `${'-'.repeat(COLS.tokens)}  ${'-'.repeat(COLS.costPerM)}  ` +
+        `${'-'.repeat(COLS.reqs)}`,
+        this.width,
+      ),
+    );
+
+    // Data rows - top 4 providers
+    const sorted = providers
+      .filter((p) => p.spend > 0)
+      .slice(0, 4);
+
+    for (const p of sorted) {
+      lines.push(
+        row(
+          `  ${truncate(p.name, COLS.model).padEnd(COLS.model)}  ` +
+          `${(`$${fmt(p.spend)}`).padStart(COLS.spend)}  ` +
+          `${this.fmtTokens(p.tokens.total).padStart(COLS.tokens)}  ` +
+          `${this.fmtCostPerM(p.spend, p.tokens.total).padStart(COLS.costPerM)}  ` +
+          `${this.fmtCount(p.requests).padStart(COLS.reqs)}`,
+          this.width,
+        ),
+      );
+    }
+
     return lines;
   }
 }
@@ -331,4 +369,11 @@ function rowRightAligned(leftContent: string, rightContent: string, width: numbe
 
 function fmt(value: number): string {
   return value.toFixed(2);
+}
+
+// Truncate string to max length, adding ellipsis if needed
+function truncate(str: string, maxLen: number): string {
+  if (str.length <= maxLen) return str;
+  if (maxLen <= 3) return str.slice(0, maxLen);
+  return str.slice(0, maxLen - 3) + '...';
 }
