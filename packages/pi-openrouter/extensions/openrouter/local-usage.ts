@@ -28,6 +28,9 @@ export function getUtcDateFromTimestamp(isoString: string): string {
  */
 export function addUtcDays(dateStr: string, days: number): string {
   const date = new Date(dateStr + 'T00:00:00Z');
+  if (isNaN(date.getTime())) {
+    throw new Error(`Invalid date string: ${dateStr}`);
+  }
   date.setUTCDate(date.getUTCDate() + days);
   return date.toISOString().slice(0, 10);
 }

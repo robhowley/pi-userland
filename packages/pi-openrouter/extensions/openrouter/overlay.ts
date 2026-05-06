@@ -237,8 +237,10 @@ export class UsageOverlayComponent {
 
       if (summary.officialThroughDate) {
         const date = new Date(summary.officialThroughDate + 'T00:00:00Z');
-        const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-        footerParts.push(`Official through May ${dateStr}`);
+        if (!isNaN(date.getTime())) {
+          const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+          footerParts.push(`Official through ${dateStr}`);
+        }
       }
 
       // Show "Today from local turn logs" if we have local data
