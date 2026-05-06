@@ -189,7 +189,7 @@ export class UsageOverlayComponent {
     lines.push(rowRightAligned(weekLeftBase, weekRight + '  ', this.width));
 
     // Today row on its own line - shows tilde since from local logs
-    lines.push(rowRightAligned(` Today ~$${fmt(summary.combined.cost)}`, '  ', this.width));
+    lines.push(rowRightAligned(` Today ~$${fmt(summary.local.cost)}`, '  ', this.width));
     lines.push(emptyRow(this.width));
 
     // Top models (7d table)
@@ -229,26 +229,29 @@ export class UsageOverlayComponent {
       const timestampStr = refreshDate.toLocaleTimeString('en-US', {
         hour: 'numeric',
         minute: '2-digit',
+        second: '2-digit',
       });
 
-      // Build footer parts
+      // Build footer parts (always show all parts)
       const footerParts: string[] = [];
-      footerParts.push(timestampStr);
+      footerParts.push(`Updated ${timestampStr}`);
 
+      // Official through date - show if available
       if (summary.officialThroughDate) {
         const date = new Date(summary.officialThroughDate + 'T00:00:00Z');
         if (!isNaN(date.getTime())) {
           const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-          footerParts.push(`Official through ${dateStr}`);
+          footerParts.push(`API through ${dateStr}`);
         }
+      } else {
+        // Show placeholder when no activity data is available
+        footerParts.push('API data pending');
       }
 
-      // Show "Today from local turn logs" if we have local data
-      if (summary.local.cost > 0 || summary.local.requests > 0) {
-        footerParts.push('Today from local turn logs');
-      }
+      // Today from tracked turns
+      footerParts.push('Today from tracked turns');
 
-      lines.push(row(` Last refreshed: ${footerParts.join('  ·  ')}`, this.width));
+      lines.push(row(` ${footerParts.join('  ·  ')}`, this.width));
       lines.push(emptyRow(this.width));
 
       // Warning if data is limited due to missing management key

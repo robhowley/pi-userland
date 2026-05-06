@@ -80,11 +80,15 @@ export async function fetchAndAggregate(): Promise<UsageSummary | null> {
   const officialThroughDate = (function (): string | undefined {
     if (!analytics || analytics.length === 0) return undefined;
     let maxDate = '';
-    const dateRE = /^\d{4}-\d{2}-\d{2}$/;
+    // Match YYYY-MM-DD or YYYY-MM-DD HH:MM:SS
+    const dateRE = /^\d{4}-\d{2}-\d{2}/;
     for (let i = 0; i < analytics.length; i++) {
       const d = analytics[i];
-      if (d && d.date && dateRE.test(d.date) && d.date > maxDate) {
-        maxDate = d.date;
+      if (d && d.date && dateRE.test(d.date)) {
+        const datePart = d.date.slice(0, 10); // Extract YYYY-MM-DD
+        if (datePart > maxDate) {
+          maxDate = datePart;
+        }
       }
     }
     return maxDate || undefined;
