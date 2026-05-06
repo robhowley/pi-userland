@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.3.1...pi-openrouter-v0.4.0) (2026-05-06)
+
+
+### Features
+
+* **pi-openrouter:** add automatic session_id tagging to OpenRouter requests ([#32](https://github.com/robhowley/pi-userland/issues/32)) ([82b3c4a](https://github.com/robhowley/pi-userland/commit/82b3c4a9f60d81a3e91ad4186e2aa7a1e0261418))
+
 ## [0.3.1](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.3.0...pi-openrouter-v0.3.1) (2026-05-05)
 
 
