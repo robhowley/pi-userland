@@ -9,6 +9,7 @@ import {
 import { AuthError } from './client.js';
 import { UsageOverlayComponent } from './overlay.js';
 import { formatSessionId, isOpenRouterRequest, type OpenRouterSessionState } from './session.js';
+import { writeLocalUsage, type LocalUsageEvent } from './local-usage.js';
 import crypto from 'node:crypto';
 
 // Store the current session state for use in command handlers
@@ -78,6 +79,68 @@ export default function (pi: ExtensionAPI) {
       }
     });
   }
+
+  // Hook turn_end to capture completed OpenRouter turns for local logging
+  pi.on('turn_end', (event, ctx) => {
+    try {
+      const turnEvent = event as unknown as Record<string, unknown>;
+      const message = turnEvent['message'] as Record<string, unknown> | undefined;
+      if (!message) return;
+
+      // Check if this is an OpenRouter request based on the message content/model
+      const isOpenRouter = isOpenRouterRequest(
+        { type: 'before_provider_request', payload: message } as unknown as Parameters<
+          typeof isOpenRouterRequest
+        >[0],
+        ctx,
+      );
+      if (!isOpenRouter) return;
+
+      // Check if the message has usage data
+      const usage = (message as { usage?: unknown })['usage'];
+      if (!usage) return;
+
+      // Extract cost from headers if available
+      const headers = (message as { headers?: Record<string, string> })['headers'];
+      const cost = headers?.['x-cost'] ? parseFloat(headers['x-cost']) : undefined;
+
+      // Extract provider from headers (e.g., "ionstream/fp8")
+      const provider = headers?.['x-provider'];
+
+      // Extract model from the message payload
+      const payload = (message as { payload?: Record<string, unknown> })['payload'];
+      const model = payload?.['model'] as string | undefined;
+
+      // Extract token usage from usage data
+      const usageData = usage as {
+        input?: number;
+        output?: number;
+        reasoning?: number;
+        total?: number;
+      };
+
+      const localEvent = {
+        id: crypto.randomUUID(),
+        sessionId: getCurrentSessionId(ctx),
+        completedAt: new Date().toISOString(),
+        requests: 1,
+        model: model as string | undefined,
+        provider: (provider && provider !== 'openrouter' ? provider : undefined) as
+          | string
+          | undefined,
+        promptTokens: usageData.input as number | undefined,
+        completionTokens: usageData.output as number | undefined,
+        reasoningTokens: usageData.reasoning as number | undefined,
+        cost: cost as number | undefined,
+        estimated: cost === undefined,
+      } as LocalUsageEvent;
+
+      // Write to local JSONL - fail open (don't throw)
+      writeLocalUsage(localEvent).catch(() => {});
+    } catch {
+      // Fail open - silently ignore errors
+    }
+  });
 
   pi.on('session_shutdown', () => {
     stopBackgroundRefresh();

@@ -4,6 +4,8 @@ import * as os from 'node:os';
 import type { LocalUsageEvent, UsageAggregate } from './types.js';
 import { ZERO_AGGREGATE } from './types.js';
 
+export type { LocalUsageEvent };
+
 const LOCAL_USAGE_DIR = path.join(os.homedir(), '.pi', 'openrouter', 'usage');
 
 /**
