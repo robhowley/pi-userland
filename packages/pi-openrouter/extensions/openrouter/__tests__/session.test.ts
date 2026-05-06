@@ -2,18 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   installOpenRouterSessionTracking,
   installOpenRouterSessionCommand,
-  formatSessionId,
   type OpenRouterSessionState,
 } from '../session.js';
-
-// Mock context with sessionManager
-function createMockContext(sessionId: string = 'test-session-id-123') {
-  return {
-    sessionManager: {
-      getSessionId: () => sessionId,
-    },
-  };
-}
 
 // =============================================================================
 // Mock Pi for hook tests
@@ -35,24 +25,17 @@ function createMockPi() {
   };
 }
 
-// =============================================================================
-// formatSessionId Tests
-// =============================================================================
-
-describe('formatSessionId', () => {
-  it('adds pi: prefix to session ID', () => {
-    const rawId = 'abc123-def456';
-    const formatted = formatSessionId(rawId);
-    expect(formatted).toBe('pi:abc123-def456');
-  });
-
-  it('works with UUID format', () => {
-    const uuid = '550e8400-e29b-41d4-a716-446655440000';
-    const formatted = formatSessionId(uuid);
-    expect(formatted).toBe(`pi:${uuid}`);
-    expect(formatted).toMatch(/^pi:/);
-  });
-});
+// Mock context for baseUrl tests
+function createMockContextWithBaseUrl(baseUrl: string) {
+  return {
+    sessionManager: {
+      getSessionId: () => 'test-session-id',
+    },
+    model: {
+      baseUrl,
+    },
+  };
+}
 
 // =============================================================================
 // Request Detection Tests
@@ -70,7 +53,10 @@ describe('isOpenRouterRequest (via installOpenRouterSessionTracking)', () => {
 
   const invokeHook = (event: unknown, ctx?: unknown) => {
     const handler = mockPi.getHandler('before_provider_request');
-    return handler?.(event, ctx);
+    if (!handler) {
+      throw new Error('Handler not registered');
+    }
+    return handler(event, ctx);
   };
 
   // AC7: Skips non-OpenRouter request
@@ -117,10 +103,7 @@ describe('isOpenRouterRequest (via installOpenRouterSessionTracking)', () => {
 
   // AC4: Injects into OpenRouter request (by baseUrl)
   it('injects session_id when baseUrl contains openrouter.ai', () => {
-    const ctx = createMockContext();
-    ctx.model = {
-      baseUrl: 'https://openrouter.ai/api/v1',
-    };
+    const ctx = createMockContextWithBaseUrl('https://openrouter.ai/api/v1');
     const event = {
       payload: { model: 'qwen/qwen3-coder-next' },
     };
@@ -194,6 +177,9 @@ describe('AC2 - Session ID reuse', () => {
     installOpenRouterSessionTracking(mockPi as any, state);
 
     const handler = mockPi.getHandler('before_provider_request');
+    if (!handler) {
+      throw new Error('Handler not registered');
+    }
 
     // First request
     const event1 = {
@@ -264,6 +250,9 @@ describe('AC10 - Fail open', () => {
     installOpenRouterSessionTracking(mockPi as any, state);
 
     const handler = mockPi.getHandler('before_provider_request');
+    if (!handler) {
+      throw new Error('Handler not registered');
+    }
 
     // Should not throw
     expect(() => handler(null, {})).not.toThrow();
