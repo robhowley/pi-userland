@@ -68,7 +68,7 @@ export async function fetchAndAggregate(): Promise<UsageSummary | null> {
   } catch (err) {
     // getActivity() requires a management key; suppress this expected error
     if (!(err instanceof Error) || !err.message.includes('management key')) {
-      console.log('Activity fetch failed:', err);
+      console.log('Activity fetch failed');
     }
     hasActivityData = false;
   }
@@ -94,9 +94,9 @@ function scheduleRefresh(): void {
           scheduleRefresh();
         }
       }
-    } catch (err) {
+    } catch {
       consecutiveFailures++;
-      console.log(`Background refresh failed (${consecutiveFailures}/${MAX_RETRY_COUNT}):`, err);
+      console.log(`Background refresh failed (${consecutiveFailures}/${MAX_RETRY_COUNT})`);
 
       // Stop after max retries reached
       if (consecutiveFailures >= MAX_RETRY_COUNT) {
