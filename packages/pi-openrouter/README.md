@@ -2,6 +2,33 @@
 
 A [Pi](https://pi.dev/) extension that adds an `/openrouter-usage` command for viewing OpenRouter spend, caps, burn rate, and model breakdowns in a terminal overlay.
 
+## Session ID tracking
+
+`pi-openrouter` automatically tags OpenRouter requests with OpenRouter's native `session_id` field.
+
+Each Pi runtime gets one opaque ID:
+
+```text
+pi:550e8400-e29b-41d4-a716-446655440000
+```
+
+Every OpenRouter request from that runtime gets the same ID, so requests can be grouped in OpenRouter dashboards and logs.
+
+Show the current ID:
+
+```bash
+/openrouter-session
+```
+
+Example output:
+
+```text
+OpenRouter session_id
+pi:550e8400-e29b-41d4-a716-446655440000
+```
+
+This feature is always on. It does not use Pi session names, local paths, repo names, branches, or other local identifiers.
+
 ## Installation
 
 ```shell

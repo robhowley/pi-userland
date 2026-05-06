@@ -8,8 +8,21 @@ import {
 } from './cache.js';
 import { AuthError } from './client.js';
 import { UsageOverlayComponent } from './overlay.js';
+// NEW: Import session tracking
+import {
+  createOpenRouterSessionState,
+  installOpenRouterSessionTracking,
+  installOpenRouterSessionCommand,
+} from './session.js';
 
 export default function (pi: ExtensionAPI) {
+  // NEW: FR1 - Generate session ID once per runtime
+  const sessionState = createOpenRouterSessionState();
+
+  // NEW: Install session tracking and command
+  installOpenRouterSessionTracking(pi, sessionState);
+  installOpenRouterSessionCommand(pi, sessionState);
+
   pi.on('session_start', async (_event, ctx) => {
     ctx.ui.notify('OpenRouter extension loaded', 'info');
   });
@@ -22,9 +35,18 @@ export default function (pi: ExtensionAPI) {
     description: 'Show OpenRouter usage: caps, spend, burn rate, and model breakdowns',
     getArgumentCompletions: () => null,
     handler: async (args, ctx) => {
-      startBackgroundRefresh(); // Start cache refresh on first use
+      startBackgroundRefresh();
       const subcommand = args.trim() || undefined;
       await showUsageOverlay(ctx, subcommand);
+    },
+  });
+
+  pi.registerCommand('openrouter-session', {
+    description: 'Show the current OpenRouter session ID for request grouping',
+    getArgumentCompletions: () => null,
+    handler: async (_args, ctx) => {
+      const output = `OpenRouter session_id\n${sessionState.sessionId}`;
+      ctx.ui.notify(output, 'info');
     },
   });
 }
