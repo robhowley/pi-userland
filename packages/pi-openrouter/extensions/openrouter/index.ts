@@ -8,37 +8,76 @@ import {
 } from './cache.js';
 import { AuthError } from './client.js';
 import { UsageOverlayComponent } from './overlay.js';
-// NEW: Import session tracking
-import {
-  installOpenRouterSessionTracking,
-  installOpenRouterSessionCommand,
-  formatSessionId,
-  type OpenRouterSessionState,
-} from './session.js';
+import { formatSessionId, isOpenRouterRequest, type OpenRouterSessionState } from './session.js';
 import crypto from 'node:crypto';
 
 // Store the current session state for use in command handlers
 let currentSessionState: OpenRouterSessionState | null = null;
+let sessionTrackingInstalled = false;
 
-export default function (pi: ExtensionAPI) {
-  // Install session tracking on agent start
-  pi.on('agent_start', async (_event, ctx) => {
-    const sessionId = ctx.sessionManager?.getSessionId?.();
+// =============================================================================
+// Session State Management
+// =============================================================================
+
+function getCurrentSessionId(ctx: { sessionManager: { getSessionId(): string } }): string {
+  if (currentSessionState) {
+    return currentSessionState.sessionId;
+  }
+
+  try {
+    const sessionId = ctx.sessionManager.getSessionId();
     let formattedSessionId: string;
-
-    if (sessionId) {
+    if (sessionId && sessionId !== '') {
       formattedSessionId = formatSessionId(sessionId);
     } else {
-      // Fallback: generate a runtime-based ID if session ID is not available
       formattedSessionId = formatSessionId(crypto.randomUUID());
     }
 
     currentSessionState = { sessionId: formattedSessionId };
+    return formattedSessionId;
+  } catch {
+    // Generate fallback on any error
+    const fallbackId = formatSessionId(crypto.randomUUID());
+    currentSessionState = { sessionId: fallbackId };
+    return fallbackId;
+  }
+}
 
-    installOpenRouterSessionTracking(pi, currentSessionState);
-    installOpenRouterSessionCommand(pi, currentSessionState);
-    ctx.ui.notify('OpenRouter extension loaded', 'info');
-  });
+export default function (pi: ExtensionAPI) {
+  // Install before_provider_request hook once
+  if (!sessionTrackingInstalled) {
+    sessionTrackingInstalled = true;
+    pi.on('before_provider_request', (event, ctx) => {
+      try {
+        // Validate the payload exists
+        const ev = event as unknown as Record<string, unknown>;
+        const payload = ev['payload'] as Record<string, unknown> | undefined;
+        if (!payload) {
+          return;
+        }
+
+        // Check if this is an OpenRouter request
+        const isOpenRouter = isOpenRouterRequest(event, ctx);
+        if (!isOpenRouter) {
+          return;
+        }
+
+        // Do not overwrite existing session_id
+        if ('session_id' in payload && payload['session_id'] !== undefined) {
+          return;
+        }
+
+        // Add session_id to the payload (OpenRouter-specific field)
+        return {
+          ...payload,
+          session_id: getCurrentSessionId(ctx),
+        };
+      } catch {
+        // Fail open - silently ignore errors
+        return;
+      }
+    });
+  }
 
   pi.on('session_shutdown', () => {
     stopBackgroundRefresh();
@@ -58,10 +97,8 @@ export default function (pi: ExtensionAPI) {
     description: 'Show the current OpenRouter session ID for request grouping',
     getArgumentCompletions: () => null,
     handler: async (_args, ctx) => {
-      const sessionId = ctx.sessionManager?.getSessionId?.();
-      const formattedSessionId = sessionId ? formatSessionId(sessionId) : 'unknown';
-      const output = `OpenRouter session_id\n${formattedSessionId}`;
-      ctx.ui.notify(output, 'info');
+      const idToShow = getCurrentSessionId(ctx);
+      ctx.ui.notify(`OpenRouter session_id\n${idToShow}`, 'info');
     },
   });
 }

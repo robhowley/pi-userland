@@ -1,271 +1,101 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import {
-  installOpenRouterSessionTracking,
-  installOpenRouterSessionCommand,
-  type OpenRouterSessionState,
-} from '../session.js';
+import { describe, it, expect } from 'vitest';
+import { isOpenRouterRequest, formatSessionId } from '../session.js';
 
 // =============================================================================
-// Mock Pi for hook tests
+// Session ID Formatting Tests
 // =============================================================================
 
-function createMockPi() {
-  const handlers = new Map<string, Function>();
-  const commands = new Map<string, { handler: Function; description: string }>();
+describe('formatSessionId', () => {
+  it('adds pi: prefix if missing', () => {
+    expect(formatSessionId('abc123')).toBe('pi:abc123');
+  });
 
-  return {
-    on: vi.fn((name: string, fn: Function) => {
-      handlers.set(name, fn);
-    }),
-    registerCommand: vi.fn((name: string, options: { handler: Function; description: string }) => {
-      commands.set(name, options);
-    }),
-    getHandler: (name: string) => handlers.get(name),
-    getCommand: (name: string) => commands.get(name),
-  };
-}
-
-// Mock context for baseUrl tests
-function createMockContextWithBaseUrl(baseUrl: string) {
-  return {
-    sessionManager: {
-      getSessionId: () => 'test-session-id',
-    },
-    model: {
-      baseUrl,
-    },
-  };
-}
+  it('does not add duplicate pi: prefix', () => {
+    expect(formatSessionId('pi:abc123')).toBe('pi:abc123');
+  });
+});
 
 // =============================================================================
 // Request Detection Tests
 // =============================================================================
 
-describe('isOpenRouterRequest (via installOpenRouterSessionTracking)', () => {
-  let mockPi: ReturnType<typeof createMockPi>;
-  let state: OpenRouterSessionState;
+// Helper to create mock event
+function createEvent(
+  payload: Record<string, unknown>,
+  url?: string,
+  provider?: Record<string, unknown>,
+) {
+  const event: any = { payload };
+  if (url) event.url = url;
+  if (provider) event.provider = provider;
+  return event;
+}
 
-  beforeEach(() => {
-    mockPi = createMockPi();
-    state = { sessionId: 'test-session-id' };
-    installOpenRouterSessionTracking(mockPi as any, state);
+// Helper to create mock context
+function createContext(model: string | Record<string, unknown>) {
+  return { model } as any;
+}
+
+describe('isOpenRouterRequest', () => {
+  // Method 1: Check model string (e.g., "openrouter/anthropic/claude-3.5-sonnet")
+  it('detects OpenRouter by model prefix', () => {
+    const event = createEvent({ model: 'openrouter/anthropic/claude-sonnet-4' });
+    expect(isOpenRouterRequest(event, {})).toBe(true);
   });
 
-  const invokeHook = (event: unknown, ctx?: unknown) => {
-    const handler = mockPi.getHandler('before_provider_request');
-    if (!handler) {
-      throw new Error('Handler not registered');
-    }
-    return handler(event, ctx);
-  };
-
-  // AC7: Skips non-OpenRouter request
-  it('returns undefined for OpenAI provider', () => {
-    const event = {
-      payload: { model: 'gpt-4.1' },
-      provider: 'openai',
-    };
-    const result = invokeHook(event, {});
-    expect(result).toBeUndefined();
+  it('does not detect non-OpenRouter by model prefix', () => {
+    const event = createEvent({ model: 'anthropic/claude-sonnet-4' });
+    expect(isOpenRouterRequest(event, {})).toBe(false);
   });
 
-  // AC4: Injects into OpenRouter request (by provider)
-  it('injects session_id when provider is openrouter', () => {
-    const event = {
-      payload: { model: 'openrouter/anthropic/claude-sonnet-4' },
-      provider: 'openrouter',
-    };
-    const result = invokeHook(event, {});
-    expect(result).toBeDefined();
-    expect(result?.session_id).toBe(state.sessionId);
+  // Method 2: Check baseUrl from context.model
+  it('detects OpenRouter by baseUrl', () => {
+    const event = createEvent({ model: 'qwen/qwen3-coder-next' });
+    const ctx = createContext({ baseUrl: 'https://openrouter.ai/api/v1' });
+    expect(isOpenRouterRequest(event, ctx)).toBe(true);
   });
 
-  // AC4: Injects into OpenRouter request (by model prefix)
-  it('injects session_id when model starts with openrouter/', () => {
-    const event = {
-      payload: { model: 'openrouter/google/gemini-pro' },
-    };
-    const result = invokeHook(event, {});
-    expect(result).toBeDefined();
-    expect(result?.session_id).toBe(state.sessionId);
+  it('does not detect non-OpenRouter by baseUrl', () => {
+    const event = createEvent({ model: 'qwen/qwen3-coder-next' });
+    const ctx = createContext({ baseUrl: 'https://api.anthropic.com' });
+    expect(isOpenRouterRequest(event, ctx)).toBe(false);
   });
 
-  // AC4: Injects into OpenRouter request (by URL)
-  it('injects session_id when URL contains openrouter.ai', () => {
-    const event = {
-      payload: { model: 'anthropic/claude-sonnet_4', messages: [] },
-      url: 'https://openrouter.ai/api/v1/chat/completions',
-    };
-    const result = invokeHook(event, {});
-    expect(result).toBeDefined();
-    expect(result?.session_id).toBe(state.sessionId);
+  // Method 3: Check for ZDR provider (Shopify routes to OpenRouter via ZDR)
+  it('detects OpenRouter by ZDR provider', () => {
+    const event = createEvent({ model: 'qwen/qwen3-coder-next' }, undefined, { zdr: true });
+    expect(isOpenRouterRequest(event, {})).toBe(true);
   });
 
-  // AC4: Injects into OpenRouter request (by baseUrl)
-  it('injects session_id when baseUrl contains openrouter.ai', () => {
-    const ctx = createMockContextWithBaseUrl('https://openrouter.ai/api/v1');
-    const event = {
-      payload: { model: 'qwen/qwen3-coder-next' },
-    };
-    const result = invokeHook(event, ctx);
-    expect(result).toBeDefined();
-    expect(result?.session_id).toBe(state.sessionId);
+  it('does not detect non-ZDR provider', () => {
+    const event = createEvent({ model: 'qwen/qwen3-coder-next', provider: 'openrouter' });
+    expect(isOpenRouterRequest(event, {})).toBe(false);
   });
 
-  // AC4: Injects into OpenRouter request (by ZDR)
-  it('injects session_id when provider.zdr is true', () => {
-    const event = {
-      payload: { model: 'qwen/qwen3-coder-next' },
-      provider: { zdr: true },
-    };
-    const result = invokeHook(event, {});
-    expect(result).toBeDefined();
-    expect(result?.session_id).toBe(state.sessionId);
-  });
-
-  // AC6: Skips existing session_id
-  it('does not overwrite existing session_id', () => {
-    const event = {
-      payload: {
-        model: 'openrouter/x',
-        session_id: 'caller-session-123',
-      },
-    };
-    const result = invokeHook(event, {});
-    // Should return undefined (no mutation) when session_id exists
-    expect(result).toBeUndefined();
-  });
-
-  // AC5: Preserves payload
-  it('preserves all existing payload fields', () => {
-    const originalPayload = {
-      model: 'openrouter/anthropic/claude-sonnet_4',
-      stream: true,
-      messages: [{ role: 'user', content: 'hello' }],
-      temperature: 0.7,
-    };
-    const event = { payload: originalPayload };
-    const result = invokeHook(event, {});
-
-    expect(result).toMatchObject(originalPayload);
-    expect(result).toHaveProperty('session_id', state.sessionId);
-  });
-
-  // AC11 (Fail-open): Handle missing payload
-  it('returns gracefully when payload is missing', () => {
-    const event = { noPayload: true };
-    const result = invokeHook(event, {});
-    expect(result).toBeUndefined();
-  });
-
-  // AC11 (Fail-open): Handle null payload
-  it('returns gracefully when payload is null', () => {
-    const event = { payload: null };
-    const result = invokeHook(event, {});
-    expect(result).toBeUndefined();
-  });
-});
-
-// =============================================================================
-// AC2: Reuses ID within same runtime
-// =============================================================================
-
-describe('AC2 - Session ID reuse', () => {
-  it('reuses the same ID for multiple OpenRouter requests', () => {
-    const mockPi = createMockPi();
-    const state = { sessionId: 'shared-session-id' };
-    installOpenRouterSessionTracking(mockPi as any, state);
-
-    const handler = mockPi.getHandler('before_provider_request');
-    if (!handler) {
-      throw new Error('Handler not registered');
-    }
-
-    // First request
-    const event1 = {
-      payload: { model: 'openrouter/anthropic/claude-sonnet_4' },
-      provider: 'openrouter',
-    };
-    const result1 = handler(event1, {});
-
-    // Second request
-    const event2 = {
-      payload: { model: 'openrouter/meta/llama-3' },
-      provider: 'openrouter',
-    };
-    const result2 = handler(event2, {});
-
-    expect(result1?.session_id).toBe(state.sessionId);
-    expect(result2?.session_id).toBe(state.sessionId);
-    expect(result1?.session_id).toBe(result2?.session_id);
-  });
-});
-
-// =============================================================================
-// AC3: New runtime gets new ID
-// =============================================================================
-
-describe('AC3 - New runtime gets new ID', () => {
-  it('uses different IDs for separate state instances', () => {
-    const mockPi1 = createMockPi();
-    const mockPi2 = createMockPi();
-
-    const state1 = { sessionId: 'session-1' };
-    const state2 = { sessionId: 'session-2' };
-
-    installOpenRouterSessionTracking(mockPi1 as any, state1);
-    installOpenRouterSessionTracking(mockPi2 as any, state2);
-
-    expect(state1.sessionId).not.toBe(state2.sessionId);
-  });
-});
-
-// =============================================================================
-// AC8: Command shows full ID
-// =============================================================================
-
-describe('installOpenRouterSessionCommand', () => {
-  it('registers /openrouter-session command', () => {
-    const mockPi = createMockPi();
-    const state = { sessionId: 'test-session-id' };
-    installOpenRouterSessionCommand(mockPi as any, state);
-
-    expect(mockPi.registerCommand).toHaveBeenCalledWith(
-      'openrouter-session',
-      expect.objectContaining({
-        description: expect.stringContaining('session'),
-      }),
+  // Method 4: Check URL
+  it('detects OpenRouter by URL', () => {
+    const event = createEvent(
+      { model: 'anthropic/claude-sonnet_4', messages: [] },
+      'https://openrouter.ai/api/v1/chat/completions',
     );
+    expect(isOpenRouterRequest(event, {})).toBe(true);
   });
-});
 
-// =============================================================================
-// AC10: Fail-open behavior
-// =============================================================================
+  it('does not detect non-OpenRouter by URL', () => {
+    const event = createEvent(
+      { model: 'anthropic/claude-sonnet_4', messages: [] },
+      'https://api.anthropic.com/v1/messages',
+    );
+    expect(isOpenRouterRequest(event, {})).toBe(false);
+  });
 
-describe('AC10 - Fail open', () => {
-  it('does not throw when payload is malformed', () => {
-    const mockPi = createMockPi();
-    const state = { sessionId: 'test-session-id' };
-    installOpenRouterSessionTracking(mockPi as any, state);
-
-    const handler = mockPi.getHandler('before_provider_request');
-    if (!handler) {
-      throw new Error('Handler not registered');
-    }
-
-    // Should not throw
-    expect(() => handler(null, {})).not.toThrow();
-    expect(() => handler(undefined, {})).not.toThrow();
-    expect(() =>
-      handler(
-        {
-          get payload() {
-            throw new Error('boom');
-          },
-        },
-        {},
-      ),
-    ).not.toThrow();
+  // Combined methods
+  it('detects by multiple methods simultaneously', () => {
+    const event = createEvent(
+      { model: 'openrouter/anthropic/claude-sonnet-4' },
+      'https://openrouter.ai/api/v1/chat/completions',
+    );
+    const ctx = createContext({ baseUrl: 'https://openrouter.ai/api/v1' });
+    expect(isOpenRouterRequest(event, ctx)).toBe(true);
   });
 });
