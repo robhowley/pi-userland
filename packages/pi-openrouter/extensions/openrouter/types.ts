@@ -51,6 +51,9 @@ export interface LocalUsageEvent {
   /** UUID for deduplication */
   id: string;
 
+  /** Generation ID from OpenRouter **/
+  generationId: string;
+
   /** Existing pi-openrouter session ID */
   sessionId: string;
 
@@ -71,10 +74,9 @@ export interface LocalUsageEvent {
   promptTokens?: number;
   completionTokens?: number;
   reasoningTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
   cost?: number;
-
-  /** True if cost was computed, not from API response */
-  estimated?: boolean;
 }
 
 export interface UsageAggregate {
@@ -82,13 +84,9 @@ export interface UsageAggregate {
   promptTokens: number;
   completionTokens: number;
   reasoningTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
   cost: number;
-
-  /**
-   * True if ANY contributing event had estimated === true.
-   * Activity API data is always estimated: false.
-   */
-  estimated: boolean;
 }
 
 export const ZERO_AGGREGATE: UsageAggregate = {
@@ -96,8 +94,9 @@ export const ZERO_AGGREGATE: UsageAggregate = {
   promptTokens: 0,
   completionTokens: 0,
   reasoningTokens: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
   cost: 0,
-  estimated: false,
 };
 
 export interface CacheEntry<T> {

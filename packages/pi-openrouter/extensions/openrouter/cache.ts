@@ -144,8 +144,9 @@ export async function fetchAndAggregate(): Promise<UsageSummary | null> {
     promptTokens: officialAggregate.promptTokens + localAggregate.promptTokens,
     completionTokens: officialAggregate.completionTokens + localAggregate.completionTokens,
     reasoningTokens: officialAggregate.reasoningTokens + localAggregate.reasoningTokens,
+    cacheReadTokens: officialAggregate.cacheReadTokens + localAggregate.cacheReadTokens,
+    cacheWriteTokens: officialAggregate.cacheWriteTokens + localAggregate.cacheWriteTokens,
     cost: officialAggregate.cost + localAggregate.cost,
-    estimated: officialAggregate.estimated || localAggregate.estimated,
   };
 
   // Build full summary with local events included for 7d/30d totals

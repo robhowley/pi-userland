@@ -48,6 +48,7 @@ export default function (pi: ExtensionAPI) {
   // Install before_provider_request hook once
   if (!sessionTrackingInstalled) {
     sessionTrackingInstalled = true;
+
     pi.on('before_provider_request', (event, ctx) => {
       try {
         // Validate the payload exists
@@ -84,6 +85,7 @@ export default function (pi: ExtensionAPI) {
   pi.on('turn_end', async (event, ctx) => {
     try {
       const turnEvent = event as unknown as Record<string, unknown>;
+
       const message = turnEvent['message'] as Record<string, unknown> | undefined;
       if (!message) return;
 
@@ -104,7 +106,13 @@ export default function (pi: ExtensionAPI) {
             cacheRead?: number;
             cacheWrite?: number;
             totalTokens?: number;
-            cost?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; total?: number };
+            cost?: {
+              input?: number;
+              output?: number;
+              cacheRead?: number;
+              cacheWrite?: number;
+              total?: number;
+            };
           }
         | undefined;
       if (!usage) return;
@@ -114,22 +122,20 @@ export default function (pi: ExtensionAPI) {
       const responseModel = message['responseModel'] as string | undefined;
       const modelToLog = model || responseModel;
 
-      // Calculate total cost from usage.cost.total (not available in headers)
+      // Calculate total cost from usage.cost.total
       const totalCost = usage.cost?.total;
 
       const localEvent = {
         id: crypto.randomUUID(),
+        generationId: message['responseId'],
         sessionId: getCurrentSessionId(ctx),
         completedAt: new Date().toISOString(),
-        requests: 1,
         model: modelToLog,
-        provider: message['provider'] as string | undefined,
         promptTokens: usage.input,
         completionTokens: usage.output,
-        // No reasoning tokens in this shape
-        reasoningTokens: undefined as number | undefined,
+        cacheReadTokens: usage.cacheRead,
+        cacheWriteTokens: usage.cacheWrite,
         cost: totalCost,
-        estimated: false,
       } as LocalUsageEvent;
 
       // Write to local JSONL - fail open (don't throw)

@@ -189,8 +189,11 @@ export class UsageOverlayComponent {
     lines.push(rowRightAligned(weekLeftBase, weekRight + '  ', this.width));
 
     // Today row on its own line - shows tilde since from local logs
-    const todayReqStr = summary.local.requests > 0 ? ` · ${fmtCount(summary.local.requests)} reqs` : '';
-    lines.push(rowRightAligned(` Today ~$${fmt(summary.local.cost)}${todayReqStr}`, '  ', this.width));
+    const todayReqStr =
+      summary.local.requests > 0 ? ` · ${fmtCount(summary.local.requests)} reqs` : '';
+    lines.push(
+      rowRightAligned(` Today ~$${fmt(summary.local.cost)}${todayReqStr}`, '  ', this.width),
+    );
     lines.push(emptyRow(this.width));
 
     // Top models (7d table)

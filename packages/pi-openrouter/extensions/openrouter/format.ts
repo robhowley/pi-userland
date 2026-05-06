@@ -73,7 +73,8 @@ export function aggregateUsage(
   const allData = [...analytics, ...localItems] as any[];
 
   // Build model stats for both 7d and 30d windows
-  const modelStatsMap = buildModelStats(weekData, analytics);
+  // Use allData (combined API + local) for 30d, weekData (combined) for 7d
+  const modelStatsMap = buildModelStats(weekData, allData);
   const topModels = Array.from(modelStatsMap.values())
     .sort((a, b) => b.spend30d - a.spend30d)
     .slice(0, 10);
@@ -109,8 +110,9 @@ function aggregateTokens(data: ActivityItem[]): TokenStats {
     (acc, d) => {
       acc.input += d.promptTokens || 0;
       acc.output += d.completionTokens || 0;
-      acc.reasoning += d.reasoningTokens || 0;
-      acc.total += (d.promptTokens || 0) + (d.completionTokens || 0) + (d.reasoningTokens || 0);
+      acc.reasoning += (d.reasoningTokens || 0) as number;
+      acc.total +=
+        (d.promptTokens || 0) + (d.completionTokens || 0) + ((d.reasoningTokens || 0) as number);
       return acc;
     },
     { input: 0, output: 0, reasoning: 0, total: 0 } as TokenStats,

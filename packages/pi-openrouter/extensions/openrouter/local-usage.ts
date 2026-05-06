@@ -131,20 +131,18 @@ export function aggregateLocal(events: LocalUsageEvent[]): UsageAggregate {
   }
 
   // Aggregate
-  let anyEstimated = false;
   const result = unique.reduce(
     (acc, event) => {
       acc.requests += event.requests || 0;
       acc.promptTokens += event.promptTokens || 0;
       acc.completionTokens += event.completionTokens || 0;
       acc.reasoningTokens += event.reasoningTokens || 0;
+      acc.cacheReadTokens += event.cacheReadTokens || 0;
+      acc.cacheWriteTokens += event.cacheWriteTokens || 0;
       acc.cost += event.cost || 0;
-      if (event.estimated) anyEstimated = true;
       return acc;
     },
     { ...ZERO_AGGREGATE },
   );
-
-  result.estimated = anyEstimated;
   return result;
 }
