@@ -1,17 +1,11 @@
 import type { ActivityItem } from '@openrouter/sdk/models/index.js';
 import type { ModelStats, ProviderStats, TokenStats, UsageSummary } from './types.js';
 import { ZERO_AGGREGATE, type LocalUsageEvent } from './types.js';
+import { getUtcDateFromTimestamp } from './local-usage.js';
 
 /** Convert a Date to YYYY-MM-DD string in UTC (matching OpenRouter API format) */
 function utcISODate(date: Date): string {
   return date.toISOString().slice(0, 10);
-}
-
-/** Extract date part (YYYY-MM-DD) from a local usage event */
-function getEventDate(event: LocalUsageEvent): string {
-  // event.completedAt is ISO 8601 UTC timestamp like "2026-05-06T14:30:00.000Z"
-  // Extract YYYY-MM-DD part
-  return event.completedAt.slice(0, 10);
 }
 
 export function aggregateUsage(
@@ -42,10 +36,10 @@ export function aggregateUsage(
 
   // Add local events to compute combined totals
   const weekFromLocal = localEvents
-    .filter((e) => getEventDate(e) >= utcISODate(startOfWeek))
+    .filter((e) => getUtcDateFromTimestamp(e.completedAt) >= utcISODate(startOfWeek))
     .reduce((sum, e) => sum + (e.cost || 0), 0);
   const todayFromLocal = localEvents
-    .filter((e) => getEventDate(e) >= utcISODate(startOfDay))
+    .filter((e) => getUtcDateFromTimestamp(e.completedAt) >= utcISODate(startOfDay))
     .reduce((sum, e) => sum + (e.cost || 0), 0);
 
   const week = weekFromAnalytics + weekFromLocal;
@@ -54,7 +48,7 @@ export function aggregateUsage(
   // Merge analytics with local events for model/provider stats
   // Convert local events to ActivityItem-like format for existing functions
   const localItems = localEvents.map((e) => ({
-    date: getEventDate(e),
+    date: getUtcDateFromTimestamp(e.completedAt),
     usage: e.cost || 0,
     promptTokens: e.promptTokens || 0,
     completionTokens: e.completionTokens || 0,
