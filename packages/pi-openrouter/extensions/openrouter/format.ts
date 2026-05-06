@@ -97,8 +97,6 @@ export function aggregateUsage(
   } as UsageSummary;
 
   return summary;
-
-  return summary;
 }
 
 function sumSpend(data: ActivityItem[]): number {

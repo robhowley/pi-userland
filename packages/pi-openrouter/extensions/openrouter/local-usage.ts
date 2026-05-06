@@ -133,7 +133,7 @@ export function aggregateLocal(events: LocalUsageEvent[]): UsageAggregate {
   // Aggregate
   const result = unique.reduce(
     (acc, event) => {
-      acc.requests += event.requests || 0;
+      acc.requests += event.requests ?? 1;
       acc.promptTokens += event.promptTokens || 0;
       acc.completionTokens += event.completionTokens || 0;
       acc.reasoningTokens += event.reasoningTokens || 0;

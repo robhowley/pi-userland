@@ -60,8 +60,8 @@ export interface LocalUsageEvent {
   /** ISO 8601 UTC timestamp */
   completedAt: string;
 
-  /** Always 1 per completed turn */
-  requests: 1;
+  /** Always 1 per completed turn; typed as number for flexibility */
+  requests?: number;
 
   model?: string;
 

@@ -1,4 +1,4 @@
-import type { UsageSummary } from './types.js';
+import type { CacheEntry, UsageSummary } from './types.js';
 import type { ActivityItem } from '@openrouter/sdk/models/index.js';
 import { aggregateUsage } from './format.js';
 import { getCredits, getActivity } from './client.js';
@@ -7,11 +7,6 @@ import { ZERO_AGGREGATE } from './types.js';
 
 export const CACHE_TTL_MS = 45000;
 export const BACKGROUND_REFRESH_INTERVAL_MS = 30000;
-
-interface CacheEntry<T> {
-  data: T;
-  timestamp: number;
-}
 
 export class TTLCache<T> {
   private cache = new Map<string, CacheEntry<T>>();
