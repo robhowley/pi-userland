@@ -1,6 +1,6 @@
 import type { ActivityItem } from '@openrouter/sdk/models/index.js';
 import type { ModelStats, ProviderStats, TokenStats, UsageSummary } from './types.js';
-import { ZERO_AGGREGATE } from './types.js';
+import { ZERO_AGGREGATE, type LocalUsageEvent } from './types.js';
 
 /** Convert a Date to YYYY-MM-DD string in local timezone (matching API format) */
 function localISODate(date: Date): string {
@@ -10,10 +10,18 @@ function localISODate(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
+/** Extract date part (YYYY-MM-DD) from a local usage event */
+function getEventDate(event: LocalUsageEvent): string {
+  // event.completedAt is ISO 8601 UTC timestamp like "2026-05-06T14:30:00.000Z"
+  // Extract YYYY-MM-DD part
+  return event.completedAt.slice(0, 10);
+}
+
 export function aggregateUsage(
   credits: { totalUsage: number; totalCredits?: number },
   analytics: ActivityItem[],
   timestamp: number = Date.now(),
+  localEvents: LocalUsageEvent[] = [],
 ): UsageSummary {
   const now = new Date();
   const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -30,9 +38,39 @@ export function aggregateUsage(
     return d.date >= localISODate(startOfDay);
   });
 
-  const week = sumSpend(weekData);
-  const today = sumSpend(todayData);
+  const weekFromAnalytics = sumSpend(weekData);
+  const todayFromAnalytics = sumSpend(todayData);
   const month = credits.totalUsage;
+
+  // Add local events to compute combined totals
+  const weekFromLocal = localEvents
+    .filter((e) => getEventDate(e) >= localISODate(startOfWeek))
+    .reduce((sum, e) => sum + (e.cost || 0), 0);
+  const todayFromLocal = localEvents
+    .filter((e) => getEventDate(e) >= localISODate(startOfDay))
+    .reduce((sum, e) => sum + (e.cost || 0), 0);
+
+  const week = weekFromAnalytics + weekFromLocal;
+  const today = todayFromAnalytics + todayFromLocal;
+
+  // Merge analytics with local events for model/provider stats
+  // Convert local events to ActivityItem-like format for existing functions
+  const localItems = localEvents.map((e) => ({
+    date: getEventDate(e),
+    usage: e.cost || 0,
+    promptTokens: e.promptTokens || 0,
+    completionTokens: e.completionTokens || 0,
+    reasoningTokens: e.reasoningTokens || 0,
+    requests: e.requests || 1,
+    model: e.model || 'unknown',
+    providerName: e.provider || 'unknown',
+    // Required fields that aren't used by our functions
+    byokUsageInference: 0,
+    endpointId: 'local-turns',
+    modelPermaslug: e.model || 'unknown',
+  }));
+
+  const allData = [...analytics, ...localItems] as any[];
 
   // Build model stats for both 7d and 30d windows
   const modelStatsMap = buildModelStats(weekData, analytics);
@@ -47,8 +85,8 @@ export function aggregateUsage(
     cap: credits.totalCredits ?? 0,
     burnRate: (week / 7) * 30,
     topModels,
-    byProvider: buildProviderStats(analytics),
-    byDay: aggregateByDay(analytics),
+    byProvider: buildProviderStats(allData),
+    byDay: aggregateByDay(allData),
     timestamp,
     hasActivityData: true, // aggregateUsage is only called when analytics data is available
     officialThroughDate: undefined as string | undefined,

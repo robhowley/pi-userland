@@ -148,8 +148,8 @@ export async function fetchAndAggregate(): Promise<UsageSummary | null> {
     estimated: officialAggregate.estimated || localAggregate.estimated,
   };
 
-  // Build full summary
-  const summary = aggregateUsage(credits, analytics ?? [], timestamp);
+  // Build full summary with local events included for 7d/30d totals
+  const summary = aggregateUsage(credits, analytics ?? [], timestamp, localEvents);
   summary.hasActivityData = hasActivityData;
   summary.officialThroughDate = (officialThroughDate as string | undefined) ?? undefined;
   summary.official = officialAggregate;

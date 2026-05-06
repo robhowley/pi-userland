@@ -81,7 +81,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   // Hook turn_end to capture completed OpenRouter turns for local logging
-  pi.on('turn_end', (event, ctx) => {
+  pi.on('turn_end', async (event, ctx) => {
     try {
       const turnEvent = event as unknown as Record<string, unknown>;
       const message = turnEvent['message'] as Record<string, unknown> | undefined;
@@ -97,42 +97,39 @@ export default function (pi: ExtensionAPI) {
       if (!isOpenRouter) return;
 
       // Check if the message has usage data
-      const usage = (message as { usage?: unknown })['usage'];
+      const usage = (message as { usage?: unknown })['usage'] as
+        | {
+            input?: number;
+            output?: number;
+            cacheRead?: number;
+            cacheWrite?: number;
+            totalTokens?: number;
+            cost?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; total?: number };
+          }
+        | undefined;
       if (!usage) return;
 
-      // Extract cost from headers if available
-      const headers = (message as { headers?: Record<string, string> })['headers'];
-      const cost = headers?.['x-cost'] ? parseFloat(headers['x-cost']) : undefined;
+      // Extract model from the message
+      const model = message['model'] as string | undefined;
+      const responseModel = message['responseModel'] as string | undefined;
+      const modelToLog = model || responseModel;
 
-      // Extract provider from headers (e.g., "ionstream/fp8")
-      const provider = headers?.['x-provider'];
-
-      // Extract model from the message payload
-      const payload = (message as { payload?: Record<string, unknown> })['payload'];
-      const model = payload?.['model'] as string | undefined;
-
-      // Extract token usage from usage data
-      const usageData = usage as {
-        input?: number;
-        output?: number;
-        reasoning?: number;
-        total?: number;
-      };
+      // Calculate total cost from usage.cost.total (not available in headers)
+      const totalCost = usage.cost?.total;
 
       const localEvent = {
         id: crypto.randomUUID(),
         sessionId: getCurrentSessionId(ctx),
         completedAt: new Date().toISOString(),
         requests: 1,
-        model: model as string | undefined,
-        provider: (provider && provider !== 'openrouter' ? provider : undefined) as
-          | string
-          | undefined,
-        promptTokens: usageData.input as number | undefined,
-        completionTokens: usageData.output as number | undefined,
-        reasoningTokens: usageData.reasoning as number | undefined,
-        cost: cost as number | undefined,
-        estimated: cost === undefined,
+        model: modelToLog,
+        provider: message['provider'] as string | undefined,
+        promptTokens: usage.input,
+        completionTokens: usage.output,
+        // No reasoning tokens in this shape
+        reasoningTokens: undefined as number | undefined,
+        cost: totalCost,
+        estimated: false,
       } as LocalUsageEvent;
 
       // Write to local JSONL - fail open (don't throw)
