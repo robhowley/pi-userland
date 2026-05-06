@@ -188,9 +188,8 @@ export class UsageOverlayComponent {
     }
     lines.push(rowRightAligned(weekLeftBase, weekRight + '  ', this.width));
 
-    // Today row on its own line
-    const todayContent = ` Today $${fmt(summary.today)}`;
-    lines.push(rowRightAligned(todayContent, '  ', this.width));
+    // Today row on its own line - shows tilde since from local logs
+    lines.push(rowRightAligned(` Today ~$${fmt(summary.combined.cost)}`, '  ', this.width));
     lines.push(emptyRow(this.width));
 
     // Top models (7d table)
@@ -227,8 +226,27 @@ export class UsageOverlayComponent {
     // Last refresh time at the bottom
     if (summary?.timestamp) {
       const refreshDate = new Date(summary.timestamp);
-      const timestampStr = refreshDate.toLocaleTimeString();
-      lines.push(row(` Last refreshed: ${timestampStr}`, this.width));
+      const timestampStr = refreshDate.toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+      });
+
+      // Build footer parts
+      const footerParts: string[] = [];
+      footerParts.push(timestampStr);
+
+      if (summary.officialThroughDate) {
+        const date = new Date(summary.officialThroughDate + 'T00:00:00Z');
+        const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        footerParts.push(`Official through May ${dateStr}`);
+      }
+
+      // Show "Today from local turn logs" if we have local data
+      if (summary.local.cost > 0 || summary.local.requests > 0) {
+        footerParts.push('Today from local turn logs');
+      }
+
+      lines.push(row(` Last refreshed: ${footerParts.join('  ·  ')}`, this.width));
       lines.push(emptyRow(this.width));
 
       // Warning if data is limited due to missing management key
