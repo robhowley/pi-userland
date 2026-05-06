@@ -1,6 +1,6 @@
 {
   "name": "@robhowley/pi-openrouter",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "type": "module",
   "description": "OpenRouter usage TUI overlay with caps, spend, burn rate, models, and session_id tracking.",
   "files": [
