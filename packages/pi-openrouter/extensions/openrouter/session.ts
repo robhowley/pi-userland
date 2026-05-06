@@ -15,8 +15,20 @@ export type OpenRouterSessionState = {
 
 export function createOpenRouterSessionState(): OpenRouterSessionState {
   return {
-    sessionId: `pi:${crypto.randomUUID()}`,
+    sessionId: crypto.randomUUID(),
   };
+}
+
+export function createOpenRouterSessionStateFromCtx(ctx: {
+  sessionManager: { getSessionId(): string };
+}): OpenRouterSessionState {
+  return {
+    sessionId: ctx.sessionManager.getSessionId(),
+  };
+}
+
+export function formatSessionId(sessionId: string): string {
+  return `pi:${sessionId}`;
 }
 
 // =============================================================================

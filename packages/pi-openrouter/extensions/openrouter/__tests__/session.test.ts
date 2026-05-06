@@ -1,37 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
-  createOpenRouterSessionState,
   installOpenRouterSessionTracking,
   installOpenRouterSessionCommand,
+  formatSessionId,
   type OpenRouterSessionState,
 } from '../session.js';
 
-// =============================================================================
-// AC1: Generates valid ID
-// =============================================================================
-
-describe('createOpenRouterSessionState', () => {
-  it('generates ID starting with pi:', () => {
-    const state = createOpenRouterSessionState();
-    expect(state.sessionId).toMatch(/^pi:/);
-  });
-
-  it('generates ID with valid UUID shape after prefix', () => {
-    const state = createOpenRouterSessionState();
-    const uuidPart = state.sessionId.slice(3); // Remove 'pi:' prefix
-
-    // UUID format: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
-    expect(uuidPart).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
-    );
-  });
-
-  it('generates different IDs on each call', () => {
-    const state1 = createOpenRouterSessionState();
-    const state2 = createOpenRouterSessionState();
-    expect(state1.sessionId).not.toBe(state2.sessionId);
-  });
-});
+// Mock context with sessionManager
+function createMockContext(sessionId: string = 'test-session-id-123') {
+  return {
+    sessionManager: {
+      getSessionId: () => sessionId,
+    },
+  };
+}
 
 // =============================================================================
 // Mock Pi for hook tests
@@ -54,6 +36,25 @@ function createMockPi() {
 }
 
 // =============================================================================
+// formatSessionId Tests
+// =============================================================================
+
+describe('formatSessionId', () => {
+  it('adds pi: prefix to session ID', () => {
+    const rawId = 'abc123-def456';
+    const formatted = formatSessionId(rawId);
+    expect(formatted).toBe('pi:abc123-def456');
+  });
+
+  it('works with UUID format', () => {
+    const uuid = '550e8400-e29b-41d4-a716-446655440000';
+    const formatted = formatSessionId(uuid);
+    expect(formatted).toBe(`pi:${uuid}`);
+    expect(formatted).toMatch(/^pi:/);
+  });
+});
+
+// =============================================================================
 // Request Detection Tests
 // =============================================================================
 
@@ -63,7 +64,7 @@ describe('isOpenRouterRequest (via installOpenRouterSessionTracking)', () => {
 
   beforeEach(() => {
     mockPi = createMockPi();
-    state = createOpenRouterSessionState();
+    state = { sessionId: 'test-session-id' };
     installOpenRouterSessionTracking(mockPi as any, state);
   });
 
@@ -108,6 +109,31 @@ describe('isOpenRouterRequest (via installOpenRouterSessionTracking)', () => {
     const event = {
       payload: { model: 'anthropic/claude-sonnet_4', messages: [] },
       url: 'https://openrouter.ai/api/v1/chat/completions',
+    };
+    const result = invokeHook(event, {});
+    expect(result).toBeDefined();
+    expect(result?.session_id).toBe(state.sessionId);
+  });
+
+  // AC4: Injects into OpenRouter request (by baseUrl)
+  it('injects session_id when baseUrl contains openrouter.ai', () => {
+    const ctx = createMockContext();
+    ctx.model = {
+      baseUrl: 'https://openrouter.ai/api/v1',
+    };
+    const event = {
+      payload: { model: 'qwen/qwen3-coder-next' },
+    };
+    const result = invokeHook(event, ctx);
+    expect(result).toBeDefined();
+    expect(result?.session_id).toBe(state.sessionId);
+  });
+
+  // AC4: Injects into OpenRouter request (by ZDR)
+  it('injects session_id when provider.zdr is true', () => {
+    const event = {
+      payload: { model: 'qwen/qwen3-coder-next' },
+      provider: { zdr: true },
     };
     const result = invokeHook(event, {});
     expect(result).toBeDefined();
@@ -164,7 +190,7 @@ describe('isOpenRouterRequest (via installOpenRouterSessionTracking)', () => {
 describe('AC2 - Session ID reuse', () => {
   it('reuses the same ID for multiple OpenRouter requests', () => {
     const mockPi = createMockPi();
-    const state = createOpenRouterSessionState();
+    const state = { sessionId: 'shared-session-id' };
     installOpenRouterSessionTracking(mockPi as any, state);
 
     const handler = mockPi.getHandler('before_provider_request');
@@ -194,12 +220,12 @@ describe('AC2 - Session ID reuse', () => {
 // =============================================================================
 
 describe('AC3 - New runtime gets new ID', () => {
-  it('generates different IDs for separate state instances', () => {
+  it('uses different IDs for separate state instances', () => {
     const mockPi1 = createMockPi();
     const mockPi2 = createMockPi();
 
-    const state1 = createOpenRouterSessionState();
-    const state2 = createOpenRouterSessionState();
+    const state1 = { sessionId: 'session-1' };
+    const state2 = { sessionId: 'session-2' };
 
     installOpenRouterSessionTracking(mockPi1 as any, state1);
     installOpenRouterSessionTracking(mockPi2 as any, state2);
@@ -215,7 +241,7 @@ describe('AC3 - New runtime gets new ID', () => {
 describe('installOpenRouterSessionCommand', () => {
   it('registers /openrouter-session command', () => {
     const mockPi = createMockPi();
-    const state = createOpenRouterSessionState();
+    const state = { sessionId: 'test-session-id' };
     installOpenRouterSessionCommand(mockPi as any, state);
 
     expect(mockPi.registerCommand).toHaveBeenCalledWith(
@@ -234,7 +260,7 @@ describe('installOpenRouterSessionCommand', () => {
 describe('AC10 - Fail open', () => {
   it('does not throw when payload is malformed', () => {
     const mockPi = createMockPi();
-    const state = createOpenRouterSessionState();
+    const state = { sessionId: 'test-session-id' };
     installOpenRouterSessionTracking(mockPi as any, state);
 
     const handler = mockPi.getHandler('before_provider_request');

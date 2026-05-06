@@ -10,20 +10,33 @@ import { AuthError } from './client.js';
 import { UsageOverlayComponent } from './overlay.js';
 // NEW: Import session tracking
 import {
-  createOpenRouterSessionState,
   installOpenRouterSessionTracking,
   installOpenRouterSessionCommand,
+  formatSessionId,
+  type OpenRouterSessionState,
 } from './session.js';
+import crypto from 'node:crypto';
+
+// Store the current session state for use in command handlers
+let currentSessionState: OpenRouterSessionState | null = null;
 
 export default function (pi: ExtensionAPI) {
-  // NEW: FR1 - Generate session ID once per runtime
-  const sessionState = createOpenRouterSessionState();
+  // Install session tracking on agent start
+  pi.on('agent_start', async (_event, ctx) => {
+    const sessionId = ctx.sessionManager?.getSessionId?.();
+    let formattedSessionId: string;
 
-  // NEW: Install session tracking and command
-  installOpenRouterSessionTracking(pi, sessionState);
-  installOpenRouterSessionCommand(pi, sessionState);
+    if (sessionId) {
+      formattedSessionId = formatSessionId(sessionId);
+    } else {
+      // Fallback: generate a runtime-based ID if session ID is not available
+      formattedSessionId = formatSessionId(crypto.randomUUID());
+    }
 
-  pi.on('session_start', async (_event, ctx) => {
+    currentSessionState = { sessionId: formattedSessionId };
+
+    installOpenRouterSessionTracking(pi, currentSessionState);
+    installOpenRouterSessionCommand(pi, currentSessionState);
     ctx.ui.notify('OpenRouter extension loaded', 'info');
   });
 
@@ -45,7 +58,9 @@ export default function (pi: ExtensionAPI) {
     description: 'Show the current OpenRouter session ID for request grouping',
     getArgumentCompletions: () => null,
     handler: async (_args, ctx) => {
-      const output = `OpenRouter session_id\n${sessionState.sessionId}`;
+      const sessionId = ctx.sessionManager?.getSessionId?.();
+      const formattedSessionId = sessionId ? formatSessionId(sessionId) : 'unknown';
+      const output = `OpenRouter session_id\n${formattedSessionId}`;
       ctx.ui.notify(output, 'info');
     },
   });
