@@ -2,12 +2,9 @@ import type { ActivityItem } from '@openrouter/sdk/models/index.js';
 import type { ModelStats, ProviderStats, TokenStats, UsageSummary } from './types.js';
 import { ZERO_AGGREGATE, type LocalUsageEvent } from './types.js';
 
-/** Convert a Date to YYYY-MM-DD string in local timezone (matching API format) */
-function localISODate(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+/** Convert a Date to YYYY-MM-DD string in UTC (matching OpenRouter API format) */
+function utcISODate(date: Date): string {
+  return date.toISOString().slice(0, 10);
 }
 
 /** Extract date part (YYYY-MM-DD) from a local usage event */
@@ -24,18 +21,19 @@ export function aggregateUsage(
   localEvents: LocalUsageEvent[] = [],
 ): UsageSummary {
   const now = new Date();
-  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  // Use UTC dates to match OpenRouter API (which uses UTC)
+  const startOfDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   const startOfWeek = new Date(startOfDay);
-  startOfWeek.setDate(startOfWeek.getDate() - 7);
+  startOfWeek.setUTCDate(startOfWeek.getUTCDate() - 7);
 
   const weekData = analytics.filter((d) => {
-    // API dates are YYYY-MM-DD; compare by local date boundary
-    return d.date >= localISODate(startOfWeek);
+    // API dates are YYYY-MM-DD in UTC; compare by UTC date boundary
+    return d.date >= utcISODate(startOfWeek);
   });
 
   const todayData = analytics.filter((d) => {
-    // API dates are YYYY-MM-DD; compare by local date boundary
-    return d.date >= localISODate(startOfDay);
+    // API dates are YYYY-MM-DD in UTC; compare by UTC date boundary
+    return d.date >= utcISODate(startOfDay);
   });
 
   const weekFromAnalytics = sumSpend(weekData);
@@ -44,10 +42,10 @@ export function aggregateUsage(
 
   // Add local events to compute combined totals
   const weekFromLocal = localEvents
-    .filter((e) => getEventDate(e) >= localISODate(startOfWeek))
+    .filter((e) => getEventDate(e) >= utcISODate(startOfWeek))
     .reduce((sum, e) => sum + (e.cost || 0), 0);
   const todayFromLocal = localEvents
-    .filter((e) => getEventDate(e) >= localISODate(startOfDay))
+    .filter((e) => getEventDate(e) >= utcISODate(startOfDay))
     .reduce((sum, e) => sum + (e.cost || 0), 0);
 
   const week = weekFromAnalytics + weekFromLocal;

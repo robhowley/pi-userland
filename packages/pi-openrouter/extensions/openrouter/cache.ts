@@ -106,7 +106,6 @@ export async function fetchAndAggregate(): Promise<UsageSummary | null> {
                 completionTokens: item.completionTokens,
                 reasoningTokens: item.reasoningTokens,
                 cost: item.usage,
-                estimated: false,
               }) as any,
           ),
         )
