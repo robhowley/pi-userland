@@ -1,5 +1,6 @@
 import type { ActivityItem } from '@openrouter/sdk/models/index.js';
 import type { ModelStats, ProviderStats, TokenStats, UsageSummary } from './types.js';
+import { ZERO_AGGREGATE } from './types.js';
 
 /** Convert a Date to YYYY-MM-DD string in local timezone (matching API format) */
 function localISODate(date: Date): string {
@@ -39,7 +40,7 @@ export function aggregateUsage(
     .sort((a, b) => b.spend30d - a.spend30d)
     .slice(0, 10);
 
-  return {
+  const summary = {
     today,
     week,
     month,
@@ -50,7 +51,15 @@ export function aggregateUsage(
     byDay: aggregateByDay(analytics),
     timestamp,
     hasActivityData: true, // aggregateUsage is only called when analytics data is available
-  };
+    officialThroughDate: undefined as string | undefined,
+    official: ZERO_AGGREGATE,
+    local: ZERO_AGGREGATE,
+    combined: ZERO_AGGREGATE,
+  } as UsageSummary;
+
+  return summary;
+
+  return summary;
 }
 
 function sumSpend(data: ActivityItem[]): number {
