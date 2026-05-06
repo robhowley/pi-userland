@@ -35,7 +35,7 @@ export interface UsageSummary {
   hasActivityData: boolean;
 
   /** Date of latest official Activity API data (YYYY-MM-DD) */
-  officialThroughDate?: string;
+  officialThroughDate?: string | undefined;
 
   /** Aggregate from Activity API (always estimated: false) */
   official: UsageAggregate;
