@@ -1,6 +1,6 @@
 # pi-openrouter
 
-A [Pi](https://pi.dev/) extension that adds an `/openrouter-usage` command for viewing OpenRouter spend, caps, burn rate, and model breakdowns in a terminal overlay.
+A [Pi](https://pi.dev/) extension for OpenRouter usage and session visibility, with an `/openrouter-usage` terminal overlay for spend, caps, burn rate, and model breakdowns, plus automatic `session_id` tagging for dashboard grouping.
 
 ## Installation
 
@@ -35,11 +35,26 @@ The extension refreshes data in the background every 30 seconds (with exponentia
 
 Press `q`, `Esc`, or `Ctrl+C` to close the overlay.
 
-## Features
+## Session tracking
 
-- Ephemeral TUI overlay — doesn't clutter chat history
-- Auto-refreshing cache — data stays fresh without repeated API calls
-- Graceful degradation — works with API key only (no model breakdowns)
+`pi-openrouter` automatically tags OpenRouter requests with `session_id` field set to the Pi session's ID.
+
+Can view the Pi session ID with
+
+```bash
+/session  # [uuid]
+```
+
+The session can be tracked in OpenRouter's logs under the following ID:
+
+```bash
+/openrouter-session
+
+# OpenRouter session_id
+pi:[uuid]
+```
+
+This feature allows for session level tracking the OpenRouter → Logs → Sessions page. It does not use Pi session names, local paths, repo names, branches, or other local identifiers.
 
 ## License
 

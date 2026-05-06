@@ -8,11 +8,76 @@ import {
 } from './cache.js';
 import { AuthError } from './client.js';
 import { UsageOverlayComponent } from './overlay.js';
+import { formatSessionId, isOpenRouterRequest, type OpenRouterSessionState } from './session.js';
+import crypto from 'node:crypto';
+
+// Store the current session state for use in command handlers
+let currentSessionState: OpenRouterSessionState | null = null;
+let sessionTrackingInstalled = false;
+
+// =============================================================================
+// Session State Management
+// =============================================================================
+
+function getCurrentSessionId(ctx: { sessionManager: { getSessionId(): string } }): string {
+  if (currentSessionState) {
+    return currentSessionState.sessionId;
+  }
+
+  try {
+    const sessionId = ctx.sessionManager.getSessionId();
+    let formattedSessionId: string;
+    if (sessionId && sessionId !== '') {
+      formattedSessionId = formatSessionId(sessionId);
+    } else {
+      formattedSessionId = formatSessionId(crypto.randomUUID());
+    }
+
+    currentSessionState = { sessionId: formattedSessionId };
+    return formattedSessionId;
+  } catch {
+    // Generate fallback on any error
+    const fallbackId = formatSessionId(crypto.randomUUID());
+    currentSessionState = { sessionId: fallbackId };
+    return fallbackId;
+  }
+}
 
 export default function (pi: ExtensionAPI) {
-  pi.on('session_start', async (_event, ctx) => {
-    ctx.ui.notify('OpenRouter extension loaded', 'info');
-  });
+  // Install before_provider_request hook once
+  if (!sessionTrackingInstalled) {
+    sessionTrackingInstalled = true;
+    pi.on('before_provider_request', (event, ctx) => {
+      try {
+        // Validate the payload exists
+        const ev = event as unknown as Record<string, unknown>;
+        const payload = ev['payload'] as Record<string, unknown> | undefined;
+        if (!payload) {
+          return;
+        }
+
+        // Check if this is an OpenRouter request
+        const isOpenRouter = isOpenRouterRequest(event, ctx);
+        if (!isOpenRouter) {
+          return;
+        }
+
+        // Do not overwrite existing session_id
+        if ('session_id' in payload && payload['session_id'] !== undefined) {
+          return;
+        }
+
+        // Add session_id to the payload (OpenRouter-specific field)
+        return {
+          ...payload,
+          session_id: getCurrentSessionId(ctx),
+        };
+      } catch {
+        // Fail open - silently ignore errors
+        return;
+      }
+    });
+  }
 
   pi.on('session_shutdown', () => {
     stopBackgroundRefresh();
@@ -22,9 +87,18 @@ export default function (pi: ExtensionAPI) {
     description: 'Show OpenRouter usage: caps, spend, burn rate, and model breakdowns',
     getArgumentCompletions: () => null,
     handler: async (args, ctx) => {
-      startBackgroundRefresh(); // Start cache refresh on first use
+      startBackgroundRefresh();
       const subcommand = args.trim() || undefined;
       await showUsageOverlay(ctx, subcommand);
+    },
+  });
+
+  pi.registerCommand('openrouter-session', {
+    description: 'Show the current OpenRouter session ID for request grouping',
+    getArgumentCompletions: () => null,
+    handler: async (_args, ctx) => {
+      const idToShow = getCurrentSessionId(ctx);
+      ctx.ui.notify(`OpenRouter session_id\n${idToShow}`, 'info');
     },
   });
 }
