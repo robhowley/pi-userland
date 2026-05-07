@@ -35,13 +35,64 @@ export async function getAccountCredits(): Promise<number | null> {
 
 import type { GetCurrentKeyData, ListData } from '@openrouter/sdk/models/operations/index.js';
 
+// Workspace ID for the default workspace (empty string) - used when workspaceId is not specified
+const DEFAULT_WORKSPACE_ID = '';
+
 export async function getAllKeys(): Promise<KeyInfo[] | null> {
   const client = getClient();
   if (!client) return null;
+
   try {
-    const response = await client.apiKeys.list();
-    const rawKeys = response.data;
-    return rawKeys.map(rawToKeyInfo);
+    // First, get all workspaces
+    const workspacesResponse = await client.workspaces.list();
+    const workspaces: Array<{ id: string; name: string }> = [];
+    for await (const response of workspacesResponse) {
+      // response.result contains the ListWorkspacesResponse with data array
+      for (const workspace of response.result.data) {
+        workspaces.push({ id: workspace.id, name: workspace.name });
+      }
+    }
+
+    // Debug: log all workspaces and keys to file
+    const workspaceInfo = workspaces.map((w) => `  - ${w.name} (${w.id})`).join('\n');
+    
+    // Fetch keys from each workspace and combine them
+    const allKeys: KeyInfo[] = [];
+    const workspaceKeys: Record<string, number> = {};
+
+    for (const workspace of workspaces) {
+      const workspaceId = workspace.id || DEFAULT_WORKSPACE_ID;
+      const response = await client.apiKeys.list({ workspaceId });
+      const rawKeys = response.data;
+      const keys = rawKeys.map(rawToKeyInfo);
+      workspaceKeys[workspace.name] = keys.length;
+      allKeys.push(...keys);
+    }
+    
+    const debugInfo = [
+      `[openrouter-account] Workspaces found: ${workspaces.length}`,
+      workspaceInfo,
+      '',
+      `[openrouter-account] Keys per workspace:`,
+      ...Object.entries(workspaceKeys).map(([name, count]) => `  - ${name}: ${count} key(s)`),
+      '',
+      `[openrouter-account] Total keys: ${allKeys.length}`,
+    ].join('\n');
+    
+    // Write to file for debugging
+    const fs = await import('fs');
+    const os = await import('os');
+    const logPath = `${os.homedir()}/.pi/debug/openrouter-account.log`;
+    
+    // Ensure directory exists
+    const dirPath = `${os.homedir()}/.pi/debug`;
+    if (!fs.existsSync(dirPath)) {
+      fs.mkdirSync(dirPath, { recursive: true });
+    }
+    
+    fs.writeFileSync(logPath, `${new Date().toISOString()}\n${debugInfo}\n\n`, { flag: 'a' });
+    
+    return allKeys;
   } catch (err) {
     // If management key fails, fall back to current key only
     if (err instanceof ApiError && (err as any).statusCode === 403) {
