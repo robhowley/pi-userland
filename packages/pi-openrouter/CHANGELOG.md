@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.5.0...pi-openrouter-v0.5.1) (2026-05-07)
+
+
+### Bug Fixes
+
+* **pi-openrouter:** fix 30d header for provider ([03df0e6](https://github.com/robhowley/pi-userland/commit/03df0e62fb272e9308cceb085cfa02f4f2b94fab))
+
 ## [0.5.0](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.4.0...pi-openrouter-v0.5.0) (2026-05-07)
 
 
