@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.4.0...pi-openrouter-v0.5.0) (2026-05-07)
+
+
+### Features
+
+* **pi-openrouter:** add request session tracking and logging ([#34](https://github.com/robhowley/pi-userland/issues/34)) ([a9a0110](https://github.com/robhowley/pi-userland/commit/a9a011019f63c2468246e657942e6d36585306fe))
+
 ## [0.4.0](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.3.1...pi-openrouter-v0.4.0) (2026-05-06)
 
 
