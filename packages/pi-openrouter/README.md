@@ -8,12 +8,14 @@ A [Pi](https://pi.dev/) extension for OpenRouter usage and session visibility, w
 pi install npm:@robhowley/pi-openrouter
 ```
 
+![OpenRouter Usage Overlay](https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-openrouter/img/openrouter-usage-tui.png)
+
 ## Requirements
 
 Set one of these environment variables:
 
-- `OPENROUTER_MANAGEMENT_KEY` (preferred) — provides full usage data including model breakdowns
-- `OPENROUTER_API_KEY` — basic usage data only
+- `OPENROUTER_MANAGEMENT_KEY` (preferred), provides full usage data including model breakdowns
+- `OPENROUTER_API_KEY`, basic usage data only
 
 ```shell
 export OPENROUTER_MANAGEMENT_KEY=sk-or-...
@@ -26,10 +28,10 @@ Type `/openrouter-usage` in Pi to open the usage overlay.
 The overlay shows:
 - **Month spend** vs cap with percentage
 - **7-day spend** with burn rate projection
-- **Today's spend**
+- **Today's spend** from live tracked turns when the Activity API is lagged
 - **Top models** (7d and 30d)
 - **Usage by provider** (30d)
-- **Usage by day** (last 7 days)
+- **Daily spend** (30d)
 
 The extension refreshes data in the background every 30 seconds (with exponential backoff on errors).
 
@@ -39,7 +41,7 @@ Press `q`, `Esc`, or `Ctrl+C` to close the overlay.
 
 `pi-openrouter` automatically tags OpenRouter requests with `session_id` field set to the Pi session's ID.
 
-Can view the Pi session ID with
+View the Pi session ID with
 
 ```bash
 /session  # [uuid]
@@ -54,7 +56,7 @@ The session can be tracked in OpenRouter's logs under the following ID:
 pi:[uuid]
 ```
 
-This feature allows for session level tracking the OpenRouter → Logs → Sessions page. It does not use Pi session names, local paths, repo names, branches, or other local identifiers.
+This enables session-level tracking in the OpenRouter Logs → Sessions page.
 
 ## License
 
