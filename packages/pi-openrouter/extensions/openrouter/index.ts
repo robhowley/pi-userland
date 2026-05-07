@@ -306,6 +306,7 @@ async function showAccountOverlayComponent(
         dispose: () => {
           overlayComponent.dispose();
         },
+        wantsKeyRelease: false,
       };
     },
     {

@@ -23,6 +23,7 @@ export class AccountOverlayComponent {
   private rollupStatus: RollupStatus;
   private currentHash: string | undefined;
   private error: string | null;
+  private selectedIndex: number;
   private refreshTimer: NodeJS.Timeout | null = null;
   private requestRender: () => void;
   private isDisposed = false;
@@ -45,6 +46,7 @@ export class AccountOverlayComponent {
     this.rollupStatus = rollupStatus;
     this.currentHash = currentHash;
     this.error = error;
+    this.selectedIndex = 0;
     this.width = this.calculateWidth();
     this.lines = this.buildLines();
 
@@ -66,8 +68,22 @@ export class AccountOverlayComponent {
     // Close on q, escape, or ctrl+c
     if (matchesKey(data, 'escape') || matchesKey(data, 'ctrl+c') || data === 'q') {
       this.onClose();
+      return;
+    }
+
+    // Key selection with arrow keys
+    if (this.keyInfo && this.keyInfo.length > 0) {
+      if (matchesKey(data, 'up')) {
+        this.selectedIndex = Math.max(0, this.selectedIndex - 1);
+        this.invalidate();
+      } else if (matchesKey(data, 'down')) {
+        this.selectedIndex = Math.min(this.keyInfo.length - 1, this.selectedIndex + 1);
+        this.invalidate();
+      }
     }
   }
+
+  wantsKeyRelease = false;
 
   render(width: number): string[] {
     // Center the overlay if terminal is wider
@@ -81,6 +97,10 @@ export class AccountOverlayComponent {
     if (this.isDisposed) return;
     // Rebuild lines to update "last refreshed" time
     this.lines = this.buildLines();
+    // Clamp selected index if key list shrunk after re-sort
+    if (this.keyInfo && this.selectedIndex >= this.keyInfo.length) {
+      this.selectedIndex = this.keyInfo.length - 1;
+    }
     if (!this.isDisposed) {
       this.requestRender();
     }
@@ -128,8 +148,8 @@ export class AccountOverlayComponent {
       // Sort keys - current key first (though hash matching is v1 follow-up)
       const sortedKeys = sortKeys(this.keyInfo, this.currentHash);
 
-      // Current key section - show for first key (v1: no hash matching yet)
-      const currentKey = sortedKeys[0]!; // Non-null assertion - array is not empty
+      // Current key section - show for selected key
+      const currentKey = sortedKeys[this.selectedIndex]!; // Non-null assertion - array is not empty
       lines.push(row(` ${th.fg('accent', 'Current key')}`, this.width));
       lines.push(...this.buildKeyDetails(currentKey, th));
       lines.push(emptyRow(this.width));
@@ -137,8 +157,8 @@ export class AccountOverlayComponent {
       // All keys section - show all keys in compact format (including current key)
       lines.push(emptyRow(this.width));
       lines.push(row(` ${th.fg('accent', 'All keys')}`, this.width));
-      for (const key of sortedKeys) {
-        lines.push(this.buildCompactKeyRow(key, th));
+      for (let i = 0; i < sortedKeys.length; i++) {
+        lines.push(this.buildCompactKeyRow(sortedKeys[i]!, th, i === this.selectedIndex));
       }
       lines.push(emptyRow(this.width));
     } else {
@@ -170,11 +190,8 @@ export class AccountOverlayComponent {
     // Format BYOK
     const byokText = key.byok || 'unknown';
 
-    // Add current session marker
-    const keyLabel = key.hash === this.currentHash ? `● ${key.label}` : key.label;
-
     lines.push(row(`  name     ${truncate(key.name, 30)}`, this.width));
-    lines.push(row(`  key      ${truncate(keyLabel, 30)}`, this.width));
+    lines.push(row(`  key      ${truncate(key.label, 30)}`, this.width));
     lines.push(row(`  status   ${formattedStatus}`, this.width));
     lines.push(row(`  used     ${usedLimitText}`, this.width));
     lines.push(
@@ -190,7 +207,7 @@ export class AccountOverlayComponent {
     return lines;
   }
 
-  private buildCompactKeyRow(key: KeyInfo, theme: Theme): string {
+  private buildCompactKeyRow(key: KeyInfo, theme: Theme, isSelected: boolean): string {
     // Format status with color
     const statusColor = this.getStatusColor(key.status);
     const statusText = key.status;
@@ -203,8 +220,12 @@ export class AccountOverlayComponent {
     const name = truncate(key.name, 18);
     const workspace = truncate(key.workspaceName, 20);
 
+    // Selection indicator - use single space prefix for unselected to match widths
+    // ● = 1 char, ○ = 1 char, but we want visual distinction with consistent width
+    const selectionIndicator = isSelected ? '●' : '○';
+
     return row(
-      `    ${workspace.padEnd(20)}  ${name.padEnd(18)}  ${formattedStatus.padEnd(10)}  ${byokText.padEnd(6)}`,
+      `  ${selectionIndicator} ${workspace.padEnd(20)}  ${name.padEnd(18)}  ${formattedStatus.padEnd(10)}  ${byokText.padEnd(6)}`,
       this.width,
     );
   }
