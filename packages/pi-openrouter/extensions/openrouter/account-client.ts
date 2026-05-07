@@ -53,9 +53,9 @@ export async function getAllKeys(): Promise<KeyInfo[] | null> {
       }
     }
 
-    // Debug: log all workspaces and keys to file
+    // Debug: log all workspaces and keys to file (for troubleshooting)
     const workspaceInfo = workspaces.map((w) => `  - ${w.name} (${w.id})`).join('\n');
-    
+
     // Fetch keys from each workspace and combine them
     const allKeys: KeyInfo[] = [];
     const workspaceKeys: Record<string, number> = {};
@@ -68,7 +68,8 @@ export async function getAllKeys(): Promise<KeyInfo[] | null> {
       workspaceKeys[workspace.name] = keys.length;
       allKeys.push(...keys);
     }
-    
+
+    // Debug info (optional - comment out for production)
     const debugInfo = [
       `[openrouter-account] Workspaces found: ${workspaces.length}`,
       workspaceInfo,
@@ -78,20 +79,19 @@ export async function getAllKeys(): Promise<KeyInfo[] | null> {
       '',
       `[openrouter-account] Total keys: ${allKeys.length}`,
     ].join('\n');
-    
-    // Write to file for debugging
-    const fs = await import('fs');
-    const os = await import('os');
-    const logPath = `${os.homedir()}/.pi/debug/openrouter-account.log`;
-    
-    // Ensure directory exists
-    const dirPath = `${os.homedir()}/.pi/debug`;
-    if (!fs.existsSync(dirPath)) {
-      fs.mkdirSync(dirPath, { recursive: true });
-    }
-    
-    fs.writeFileSync(logPath, `${new Date().toISOString()}\n${debugInfo}\n\n`, { flag: 'a' });
-    
+     
+    console.log(debugInfo);
+
+    // Write to file for debugging (optional - comment out for production)
+    // const fs = await import('fs');
+    // const os = await import('os');
+    // const logPath = `${os.homedir()}/.pi/debug/openrouter-account.log`;
+    // const dirPath = `${os.homedir()}/.pi/debug`;
+    // if (!fs.existsSync(dirPath)) {
+    //   fs.mkdirSync(dirPath, { recursive: true });
+    // }
+    // fs.writeFileSync(logPath, `${new Date().toISOString()}\n${debugInfo}\n\n`, { flag: 'a' });
+
     return allKeys;
   } catch (err) {
     // If management key fails, fall back to current key only

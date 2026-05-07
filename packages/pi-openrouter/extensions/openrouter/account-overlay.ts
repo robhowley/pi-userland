@@ -134,14 +134,13 @@ export class AccountOverlayComponent {
       lines.push(...this.buildKeyDetails(currentKey, th));
       lines.push(emptyRow(this.width));
 
-      // Other keys section
+      // Other keys section - compact horizontal format
       const otherKeys = sortedKeys.slice(1);
       lines.push(emptyRow(this.width));
       lines.push(row(` ${th.fg('accent', 'Other visible keys')}`, this.width));
       if (otherKeys.length > 0) {
         for (const key of otherKeys) {
-          lines.push(...this.buildKeyDetails(key, th));
-          lines.push(emptyRow(this.width));
+          lines.push(this.buildCompactKeyRow(key, th));
         }
       } else {
         lines.push(row(` ${th.fg('dim', '  none')}`, this.width));
@@ -194,6 +193,24 @@ export class AccountOverlayComponent {
     lines.push(row(`  BYOK     ${byokText}`, this.width));
 
     return lines;
+  }
+
+  private buildCompactKeyRow(key: KeyInfo, theme: Theme): string {
+    // Format status with color
+    const statusColor = this.getStatusColor(key.status);
+    const statusText = key.status;
+    const formattedStatus = theme.fg(statusColor as ThemeColor, statusText);
+
+    // Format BYOK
+    const byokText = key.byok || 'unknown';
+
+    // Truncate name for compact display
+    const name = truncate(key.name, 15);
+
+    return row(
+      `  ${name.padEnd(15)}  ${formattedStatus.padEnd(12)}  ${byokText.padEnd(6)}`,
+      this.width,
+    );
   }
 
   private getStatusColor(status: KeyStatus): ThemeColor {
