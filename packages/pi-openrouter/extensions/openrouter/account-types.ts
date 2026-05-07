@@ -18,7 +18,8 @@ export type ResetCadence = 'monthly' | 'daily' | 'never' | 'partial';
 
 /** Information about a single OpenRouter key */
 export interface KeyInfo {
-  label: string; // Key name/label only
+  name: string; // Human-readable name (e.g., "Production", "Development")
+  label: string; // Key value (masked, e.g., "sk-or-v1-4a0...459")
   status: KeyStatus; // Current health status
   used: number; // Current usage (currency)
   limit?: number; // Key cap (optional)

@@ -99,6 +99,9 @@ function rawToKeyInfo(raw: GetCurrentKeyData | ListData): KeyInfo {
   // Determine hash (ListData has hash, GetCurrentKeyData doesn't)
   const hash = 'hash' in raw ? (raw as ListData).hash : 'unknown';
 
+  // Determine name (ListData has name, GetCurrentKeyData doesn't - use label as fallback)
+  const name = 'name' in raw ? (raw as ListData).name : raw.label;
+
   // Get disabled status (ListData has it, GetCurrentKeyData doesn't)
   const disabled = 'disabled' in raw ? (raw as ListData).disabled : false;
 
@@ -120,6 +123,7 @@ function rawToKeyInfo(raw: GetCurrentKeyData | ListData): KeyInfo {
 
   // Create the object with explicit undefined for optional properties
   const keyInfo: KeyInfo = {
+    name,
     label: raw.label,
     status: 'healthy',
     used,

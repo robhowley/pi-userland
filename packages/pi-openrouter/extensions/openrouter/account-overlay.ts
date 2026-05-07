@@ -179,6 +179,7 @@ export class AccountOverlayComponent {
     // Add current session marker
     const keyLabel = key.hash === this.currentHash ? `● ${key.label}` : key.label;
 
+    lines.push(row(`  name     ${truncate(key.name, 30)}`, this.width));
     lines.push(row(`  key      ${truncate(keyLabel, 30)}`, this.width));
     lines.push(row(`  status   ${formattedStatus}`, this.width));
     lines.push(row(`  used     ${usedLimitText}`, this.width));
