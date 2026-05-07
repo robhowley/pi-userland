@@ -9,6 +9,7 @@ import {
 import { AuthError } from './client.js';
 import { UsageOverlayComponent } from './overlay.js';
 import { formatSessionId, isOpenRouterRequest, type OpenRouterSessionState } from './session.js';
+import { writeLocalUsage, type LocalUsageEvent } from './local-usage.js';
 import crypto from 'node:crypto';
 
 // Store the current session state for use in command handlers
@@ -47,6 +48,7 @@ export default function (pi: ExtensionAPI) {
   // Install before_provider_request hook once
   if (!sessionTrackingInstalled) {
     sessionTrackingInstalled = true;
+
     pi.on('before_provider_request', (event, ctx) => {
       try {
         // Validate the payload exists
@@ -78,6 +80,70 @@ export default function (pi: ExtensionAPI) {
       }
     });
   }
+
+  // Hook turn_end to capture completed OpenRouter turns for local logging
+  pi.on('turn_end', async (event, ctx) => {
+    try {
+      const turnEvent = event as unknown as Record<string, unknown>;
+
+      const message = turnEvent['message'] as Record<string, unknown> | undefined;
+      if (!message) return;
+
+      // Check if this is an OpenRouter request based on the message content/model
+      const isOpenRouter = isOpenRouterRequest(
+        { type: 'before_provider_request', payload: message } as unknown as Parameters<
+          typeof isOpenRouterRequest
+        >[0],
+        ctx,
+      );
+      if (!isOpenRouter) return;
+
+      // Check if the message has usage data
+      const usage = (message as { usage?: unknown })['usage'] as
+        | {
+            input?: number;
+            output?: number;
+            cacheRead?: number;
+            cacheWrite?: number;
+            totalTokens?: number;
+            cost?: {
+              input?: number;
+              output?: number;
+              cacheRead?: number;
+              cacheWrite?: number;
+              total?: number;
+            };
+          }
+        | undefined;
+      if (!usage) return;
+
+      // Extract model from the message
+      const model = message['model'] as string | undefined;
+      const responseModel = message['responseModel'] as string | undefined;
+      const modelToLog = model || responseModel;
+
+      // Calculate total cost from usage.cost.total
+      const totalCost = usage.cost?.total;
+
+      const localEvent = {
+        id: crypto.randomUUID(),
+        generationId: message['responseId'],
+        sessionId: getCurrentSessionId(ctx),
+        completedAt: new Date().toISOString(),
+        model: modelToLog,
+        promptTokens: usage.input,
+        completionTokens: usage.output,
+        cacheReadTokens: usage.cacheRead,
+        cacheWriteTokens: usage.cacheWrite,
+        cost: totalCost,
+      } as LocalUsageEvent;
+
+      // Write to local JSONL - fail open (don't throw)
+      writeLocalUsage(localEvent).catch(() => {});
+    } catch {
+      // Fail open - silently ignore errors
+    }
+  });
 
   pi.on('session_shutdown', () => {
     stopBackgroundRefresh();

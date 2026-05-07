@@ -28,11 +28,14 @@ jobs:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
 
+      - name: Update npm
+        if: steps.release.outputs.releases_created == 'true'
+        run: npm install -g npm@latest
+
       - name: Publish changed packages
         if: steps.release.outputs.releases_created == 'true'
         run: |
           echo "Released packages: ${{ steps.release.outputs.paths_released }}"
-          # paths_released is a JSON array
           echo '${{ steps.release.outputs.paths_released }}' | jq -r '.[]' | while read pkg; do
             echo "Publishing $pkg"
             (cd "$pkg" && npm publish)

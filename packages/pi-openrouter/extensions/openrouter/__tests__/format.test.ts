@@ -4,16 +4,17 @@ import { renderSpendSparkline } from '../chart.js';
 import type { ActivityItem } from '@openrouter/sdk/models/index.js';
 
 describe('aggregateUsage', () => {
-  it('should correctly aggregate today spend regardless of timezone', () => {
+  it('should correctly aggregate today spend using UTC date', () => {
     const credits = {
       totalUsage: 10,
       totalCredits: 100,
     };
 
-    // Get today's date in YYYY-MM-DD format using LOCAL date
+    // Get today's date in YYYY-MM-DD format using UTC date
     // This matches how the API returns dates (YYYY-MM-DD without timezone)
+    // and how the implementation calculates 'today' (using UTC)
     const now = new Date();
-    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const todayStr = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-${String(now.getUTCDate()).padStart(2, '0')}`;
 
     const analytics: ActivityItem[] = [
       {
@@ -33,9 +34,6 @@ describe('aggregateUsage', () => {
 
     const result = aggregateUsage(credits, analytics);
 
-    // Today should include data from todayStr (date strings compared directly)
-    // This was previously a bug where dates were parsed as UTC timestamps
-    // causing timezone-related filtering errors
     expect(result.today).toBe(6.55);
   });
 

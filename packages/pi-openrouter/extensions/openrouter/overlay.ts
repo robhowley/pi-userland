@@ -188,9 +188,12 @@ export class UsageOverlayComponent {
     }
     lines.push(rowRightAligned(weekLeftBase, weekRight + '  ', this.width));
 
-    // Today row on its own line
-    const todayContent = ` Today $${fmt(summary.today)}`;
-    lines.push(rowRightAligned(todayContent, '  ', this.width));
+    // Today row on its own line - shows tilde since from local logs
+    const todayReqStr =
+      summary.local.requests > 0 ? ` · ${fmtCount(summary.local.requests)} reqs` : '';
+    lines.push(
+      rowRightAligned(` Today ~$${fmt(summary.local.cost)}${todayReqStr}`, '  ', this.width),
+    );
     lines.push(emptyRow(this.width));
 
     // Top models (7d table)
@@ -227,8 +230,32 @@ export class UsageOverlayComponent {
     // Last refresh time at the bottom
     if (summary?.timestamp) {
       const refreshDate = new Date(summary.timestamp);
-      const timestampStr = refreshDate.toLocaleTimeString();
-      lines.push(row(` Last refreshed: ${timestampStr}`, this.width));
+      const timestampStr = refreshDate.toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+        second: '2-digit',
+      });
+
+      // Build footer parts (always show all parts)
+      const footerParts: string[] = [];
+      footerParts.push(`Updated ${timestampStr}`);
+
+      // Official through date - show if available
+      if (summary.officialThroughDate) {
+        const date = new Date(summary.officialThroughDate + 'T00:00:00Z');
+        if (!isNaN(date.getTime())) {
+          const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+          footerParts.push(`API through ${dateStr}`);
+        }
+      } else {
+        // Show placeholder when no activity data is available
+        footerParts.push('API data pending');
+      }
+
+      // Today from tracked turns
+      footerParts.push('Today from tracked turns');
+
+      lines.push(row(` ${footerParts.join('  ·  ')}`, this.width));
       lines.push(emptyRow(this.width));
 
       // Warning if data is limited due to missing management key

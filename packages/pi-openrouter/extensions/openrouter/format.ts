@@ -1,56 +1,94 @@
 import type { ActivityItem } from '@openrouter/sdk/models/index.js';
 import type { ModelStats, ProviderStats, TokenStats, UsageSummary } from './types.js';
+import { ZERO_AGGREGATE, type LocalUsageEvent } from './types.js';
+import { getUtcDateFromTimestamp } from './local-usage.js';
 
-/** Convert a Date to YYYY-MM-DD string in local timezone (matching API format) */
-function localISODate(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+/** Convert a Date to YYYY-MM-DD string in UTC (matching OpenRouter API format) */
+function utcISODate(date: Date): string {
+  return date.toISOString().slice(0, 10);
 }
 
 export function aggregateUsage(
   credits: { totalUsage: number; totalCredits?: number },
   analytics: ActivityItem[],
   timestamp: number = Date.now(),
+  localEvents: LocalUsageEvent[] = [],
 ): UsageSummary {
   const now = new Date();
-  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  // Use UTC dates to match OpenRouter API (which uses UTC)
+  const startOfDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   const startOfWeek = new Date(startOfDay);
-  startOfWeek.setDate(startOfWeek.getDate() - 7);
+  startOfWeek.setUTCDate(startOfWeek.getUTCDate() - 7);
 
   const weekData = analytics.filter((d) => {
-    // API dates are YYYY-MM-DD; compare by local date boundary
-    return d.date >= localISODate(startOfWeek);
+    // API dates are YYYY-MM-DD in UTC; compare by UTC date boundary
+    return d.date >= utcISODate(startOfWeek);
   });
 
   const todayData = analytics.filter((d) => {
-    // API dates are YYYY-MM-DD; compare by local date boundary
-    return d.date >= localISODate(startOfDay);
+    // API dates are YYYY-MM-DD in UTC; compare by UTC date boundary
+    return d.date >= utcISODate(startOfDay);
   });
 
-  const week = sumSpend(weekData);
-  const today = sumSpend(todayData);
+  const weekFromAnalytics = sumSpend(weekData);
+  const todayFromAnalytics = sumSpend(todayData);
   const month = credits.totalUsage;
 
+  // Add local events to compute combined totals
+  const weekFromLocal = localEvents
+    .filter((e) => getUtcDateFromTimestamp(e.completedAt) >= utcISODate(startOfWeek))
+    .reduce((sum, e) => sum + (e.cost || 0), 0);
+  const todayFromLocal = localEvents
+    .filter((e) => getUtcDateFromTimestamp(e.completedAt) >= utcISODate(startOfDay))
+    .reduce((sum, e) => sum + (e.cost || 0), 0);
+
+  const week = weekFromAnalytics + weekFromLocal;
+  const today = todayFromAnalytics + todayFromLocal;
+
+  // Merge analytics with local events for model/provider stats
+  // Convert local events to ActivityItem-like format for existing functions
+  const localItems = localEvents.map((e) => ({
+    date: getUtcDateFromTimestamp(e.completedAt),
+    usage: e.cost || 0,
+    promptTokens: e.promptTokens || 0,
+    completionTokens: e.completionTokens || 0,
+    reasoningTokens: e.reasoningTokens || 0,
+    requests: e.requests || 1,
+    model: e.model || 'unknown',
+    providerName: e.provider || 'unknown',
+    // Required fields that aren't used by our functions
+    byokUsageInference: 0,
+    endpointId: 'local-turns',
+    modelPermaslug: e.model || 'unknown',
+  }));
+
+  const allData = [...analytics, ...localItems] as any[];
+
   // Build model stats for both 7d and 30d windows
-  const modelStatsMap = buildModelStats(weekData, analytics);
+  // Use allData (combined API + local) for 30d, weekData (combined) for 7d
+  const modelStatsMap = buildModelStats(weekData, allData);
   const topModels = Array.from(modelStatsMap.values())
     .sort((a, b) => b.spend30d - a.spend30d)
     .slice(0, 10);
 
-  return {
+  const summary = {
     today,
     week,
     month,
     cap: credits.totalCredits ?? 0,
     burnRate: (week / 7) * 30,
     topModels,
-    byProvider: buildProviderStats(analytics),
-    byDay: aggregateByDay(analytics),
+    byProvider: buildProviderStats(allData),
+    byDay: aggregateByDay(allData),
     timestamp,
     hasActivityData: true, // aggregateUsage is only called when analytics data is available
-  };
+    officialThroughDate: undefined as string | undefined,
+    official: ZERO_AGGREGATE,
+    local: ZERO_AGGREGATE,
+    combined: ZERO_AGGREGATE,
+  } as UsageSummary;
+
+  return summary;
 }
 
 function sumSpend(data: ActivityItem[]): number {
@@ -62,8 +100,9 @@ function aggregateTokens(data: ActivityItem[]): TokenStats {
     (acc, d) => {
       acc.input += d.promptTokens || 0;
       acc.output += d.completionTokens || 0;
-      acc.reasoning += d.reasoningTokens || 0;
-      acc.total += (d.promptTokens || 0) + (d.completionTokens || 0) + (d.reasoningTokens || 0);
+      acc.reasoning += (d.reasoningTokens || 0) as number;
+      acc.total +=
+        (d.promptTokens || 0) + (d.completionTokens || 0) + ((d.reasoningTokens || 0) as number);
       return acc;
     },
     { input: 0, output: 0, reasoning: 0, total: 0 } as TokenStats,
