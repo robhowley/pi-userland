@@ -1,29 +1,13 @@
 import { matchesKey, truncateToWidth } from '@mariozechner/pi-tui';
 import type { Theme, ThemeColor } from '@mariozechner/pi-coding-agent';
 import type { KeyInfo, KeyStatus, RollupStatus } from './account-types.js';
-import { computeKeyStatus, formatCurrency, formatLeft, formatRemaining, sortKeys } from './account-format.js';
+import { formatCurrency, formatLeft, formatRemaining, sortKeys } from './account-format.js';
 
 // =============================================================================
 // Constants
 // =============================================================================
 
-const MIN_WIDTH = 80;
-const COLS = {
-  key: 25,
-  status: 12,
-  used: 20,  // Was 15, increased to fit "unlimited" text
-  left: 12,
-  reset: 12,
-  byok: 6,
-};
-
-const TABLE_INNER_WIDTH =
-  COLS.key + 2 +
-  COLS.status + 2 +
-  COLS.used + 2 +
-  COLS.left + 2 +
-  COLS.reset + 2 +
-  COLS.byok;
+const MIN_WIDTH = 50;
 
 // =============================================================================
 // Account Overlay Component
@@ -103,7 +87,7 @@ export class AccountOverlayComponent {
   }
 
   private calculateWidth(): number {
-    return Math.max(MIN_WIDTH, TABLE_INNER_WIDTH + 10);
+    return Math.max(MIN_WIDTH, this.keyInfo && this.keyInfo.length > 0 ? 55 : 50);
   }
 
   private buildLines(): string[] {
@@ -140,41 +124,35 @@ export class AccountOverlayComponent {
     lines.push(row(` status    ${statusLine}`, this.width));
     lines.push(emptyRow(this.width));
 
-    // Key table header
-    lines.push(
-      row(
-        ` ${'Key'.padEnd(COLS.key)}  ${'STATUS'.padEnd(COLS.status)}  ${'USED / LIMIT'.padEnd(COLS.used)}  ${'LEFT'.padEnd(COLS.left)}  ${'RESET'.padEnd(COLS.reset)}  ${'BYOK'.padEnd(COLS.byok)}`,
-        this.width,
-      ),
-    );
-
-    // Key table separator
-    lines.push(
-      row(
-        ` ${'─'.repeat(COLS.key)}  ${'─'.repeat(COLS.status)}  ${'─'.repeat(COLS.used)}  ${'─'.repeat(COLS.left)}  ${'─'.repeat(COLS.reset)}  ${'─'.repeat(COLS.byok)}`,
-        this.width,
-      ),
-    );
-
-    // Key table rows
     if (this.keyInfo && this.keyInfo.length > 0) {
-      // Compute status for each key
-      const keysWithStatus = this.keyInfo.map(k => ({
-        ...k,
-        status: computeKeyStatus(k.used, k.limit, k.disabled),
-      }));
-      
-      // Sort keys
-      const sortedKeys = sortKeys(keysWithStatus, this.currentHash);
-      
-      // Mark current session key with ●
-      const markedKeys = sortedKeys.map(k => ({
-        ...k,
-        isCurrentSession: k.hash === this.currentHash,
-      }));
+      // Sort keys - current key first
+      const sortedKeys = sortKeys(this.keyInfo, this.currentHash);
 
-      for (const key of markedKeys) {
-        lines.push(this.buildKeyRow(key, th));
+      // Check if we have a current key to highlight
+      const hasCurrentKey = sortedKeys.some((k) => k.hash === this.currentHash);
+
+      // Current key section
+      if (hasCurrentKey) {
+        lines.push(row(` ${th.fg('accent', 'Current key')}`, this.width));
+        const currentKey = sortedKeys.find((k) => k.hash === this.currentHash);
+        if (currentKey) {
+          lines.push(...this.buildKeyDetails(currentKey, th));
+        }
+        lines.push(emptyRow(this.width));
+      }
+
+      // Other keys section
+      const otherKeys = sortedKeys.filter((k) => k.hash !== this.currentHash);
+      if (otherKeys.length > 0) {
+        lines.push(row(` ${th.fg('accent', 'Other visible keys')}`, this.width));
+        for (const key of otherKeys) {
+          lines.push(...this.buildKeyDetails(key, th));
+          lines.push(emptyRow(this.width));
+        }
+      } else if (!hasCurrentKey) {
+        lines.push(row(` ${th.fg('dim', '  none')}`, this.width));
+      } else {
+        lines.push(row(` ${th.fg('dim', '  none')}`, this.width));
       }
     } else {
       // No keys available
@@ -186,7 +164,9 @@ export class AccountOverlayComponent {
     return lines;
   }
 
-  private buildKeyRow(key: KeyInfo & { isCurrentSession: boolean }, theme: Theme): string {
+  private buildKeyDetails(key: KeyInfo, theme: Theme): string[] {
+    const lines: string[] = [];
+
     // Format status with color
     const statusColor = this.getStatusColor(key.status);
     const statusText = key.status;
@@ -199,25 +179,28 @@ export class AccountOverlayComponent {
     const leftText = formatLeft(key.remaining);
 
     // Format reset cadence
-    const resetText = key.resetCadence;
+    const resetText = key.resetCadence || 'never';
 
     // Format BYOK
-    const byokText = key.byok;
+    const byokText = key.byok || 'unknown';
 
     // Add current session marker
-    const keyLabel = key.isCurrentSession 
-      ? `● ${key.label}`
-      : `  ${key.label}`;
+    const keyLabel = key.hash === this.currentHash ? `● ${key.label}` : key.label;
 
-    return row(
-      ` ${truncate(keyLabel, COLS.key).padEnd(COLS.key)}  ` +
-      `${formattedStatus.padEnd(COLS.status)}  ` +
-      `${truncate(usedLimitText, COLS.used).padEnd(COLS.used)}  ` +
-      `${truncate(leftText, COLS.left).padEnd(COLS.left)}  ` +
-      `${truncate(resetText, COLS.reset).padEnd(COLS.reset)}  ` +
-      `${truncate(byokText, COLS.byok).padEnd(COLS.byok)}`,
-      this.width,
+    lines.push(row(`  key      ${truncate(keyLabel, 30)}`, this.width));
+    lines.push(row(`  status   ${formattedStatus}`, this.width));
+    lines.push(row(`  used     ${usedLimitText}`, this.width));
+    lines.push(
+      row(
+        `  limit    ${key.limit === undefined ? 'unlimited' : formatCurrency(key.limit)}`,
+        this.width,
+      ),
     );
+    lines.push(row(`  left     ${leftText}`, this.width));
+    lines.push(row(`  reset    ${resetText}`, this.width));
+    lines.push(row(`  BYOK     ${byokText}`, this.width));
+
+    return lines;
   }
 
   private getStatusColor(status: KeyStatus): ThemeColor {

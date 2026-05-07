@@ -182,7 +182,7 @@ export default function (pi: ExtensionAPI) {
 
 async function showAccountOverlay(ctx: ExtensionContext) {
   const currentKeyHash = getCurrentKeyHash();
-  
+
   let error: string | null = null;
   let keyInfo: any[] | null = null;
   let credits: number | null = null;
@@ -196,7 +196,7 @@ async function showAccountOverlay(ctx: ExtensionContext) {
       // getAllKeys() returns null or empty array when management key isn't available
       // or when the API call fails with 403
       error = 'Key list unavailable - set OPENROUTER_MANAGEMENT_KEY for full key inventory.';
-      
+
       // Fall back to current key only
       try {
         const currentKey = await getCurrentKey();
@@ -220,12 +220,14 @@ async function showAccountOverlay(ctx: ExtensionContext) {
       error =
         'OpenRouter API key not found. Set OPENROUTER_MANAGEMENT_KEY (preferred) or OPENROUTER_API_KEY to use /openrouter-account.';
     }
-    
+
     // Set error if we have credits but no keys
     if (!keyInfo && credits !== null) {
-      error = error || 'Key information unavailable. Set OPENROUTER_MANAGEMENT_KEY for full key inventory.';
+      error =
+        error ||
+        'Key information unavailable. Set OPENROUTER_MANAGEMENT_KEY for full key inventory.';
     }
-    
+
     // Compute rollup status
     const rollupStatus = keyInfo
       ? computeRollupStatus(keyInfo)
@@ -234,7 +236,7 @@ async function showAccountOverlay(ctx: ExtensionContext) {
     // Sort keys and mark current session
     if (keyInfo) {
       const sortedKeys = sortKeys(keyInfo, currentKeyHash);
-      keyInfo = sortedKeys.map(k => ({
+      keyInfo = sortedKeys.map((k) => ({
         ...k,
         isCurrentSession: k.hash === currentKeyHash,
       }));
@@ -247,7 +249,7 @@ async function showAccountOverlay(ctx: ExtensionContext) {
       err instanceof AuthError
         ? 'OpenRouter API key not found. Set OPENROUTER_MANAGEMENT_KEY (preferred) or OPENROUTER_API_KEY to use /openrouter-account.'
         : `API Error: ${err.message}`;
-    
+
     // Try to get current key for overlay even on error
     try {
       const currentKey = await getCurrentKey();
@@ -257,11 +259,11 @@ async function showAccountOverlay(ctx: ExtensionContext) {
     } catch {
       // Ignore secondary errors
     }
-    
+
     const rollupStatus = keyInfo
       ? computeRollupStatus(keyInfo)
       : { status: 'unavailable' as const };
-    
+
     await showAccountOverlayComponent(ctx, keyInfo, credits, rollupStatus, currentKeyHash, error);
   }
 }

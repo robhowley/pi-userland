@@ -8,13 +8,13 @@ import type { KeyInfo, KeyStatus, RollupStatus } from './account-types.js';
 export function computeKeyStatus(used: number, limit?: number, disabled?: boolean): KeyStatus {
   // Disabled keys always show disabled
   if (disabled) return 'disabled';
-  
+
   // No limit means unbounded
   if (limit === undefined) return 'unbounded';
-  
+
   const usageRatio = used / limit;
-  
-  if (usageRatio < 0.70) {
+
+  if (usageRatio < 0.7) {
     return 'healthy';
   } else if (usageRatio < 0.85) {
     return 'watch';
@@ -63,16 +63,16 @@ export function sortKeys(keys: KeyInfo[], currentHash?: string): KeyInfo[] {
     healthy: 5,
     unbounded: 6,
   };
-  
+
   return [...keys].sort((a, b) => {
     // Current key first
     if (a.hash === currentHash && b.hash !== currentHash) return -1;
     if (b.hash === currentHash && a.hash !== currentHash) return 1;
-    
+
     // Then by status priority
     const statusDiff = (statusPriority[a.status] ?? 0) - (statusPriority[b.status] ?? 0);
     if (statusDiff !== 0) return statusDiff;
-    
+
     // Then alphabetically by label
     return a.label.localeCompare(b.label);
   });
@@ -83,92 +83,89 @@ export function sortKeys(keys: KeyInfo[], currentHash?: string): KeyInfo[] {
 // =============================================================================
 
 /** Compute overall account status from individual key statuses */
-export function computeRollupStatus(
-  keys: KeyInfo[], 
-  currentKey?: KeyInfo
-): RollupStatus {
+export function computeRollupStatus(keys: KeyInfo[], currentKey?: KeyInfo): RollupStatus {
   if (keys.length === 0) {
     return { status: 'unavailable' as const };
   }
-  
-  const hasDisabled = keys.some(k => k.status === 'disabled');
-  const hasDanger = keys.some(k => k.status === 'danger');
-  const hasCaution = keys.some(k => k.status === 'caution');
-  const hasWatch = keys.some(k => k.status === 'watch');
-  
+
+  const hasDisabled = keys.some((k) => k.status === 'disabled');
+  const hasDanger = keys.some((k) => k.status === 'danger');
+  const hasCaution = keys.some((k) => k.status === 'caution');
+  const hasWatch = keys.some((k) => k.status === 'watch');
+
   // Check if current key is special
   const currentIsDanger = currentKey?.status === 'danger';
   const currentIsCaution = currentKey?.status === 'caution';
   const currentIsWatch = currentKey?.status === 'watch';
-  
+
   // Disabled keys take precedence
   if (hasDisabled) {
-    const disabledKeys = keys.filter(k => k.status === 'disabled');
-    const labels = disabledKeys.map(k => k.label).join(', ');
-    return { 
+    const disabledKeys = keys.filter((k) => k.status === 'disabled');
+    const labels = disabledKeys.map((k) => k.label).join(', ');
+    return {
       status: 'disabled' as const,
-      message: `${disabledKeys.length} key${disabledKeys.length > 1 ? 's' : ''} disabled: ${labels}` 
+      message: `${disabledKeys.length} key${disabledKeys.length > 1 ? 's' : ''} disabled: ${labels}`,
     };
   }
-  
+
   // Prioritize current runtime key status
   if (currentKey) {
     if (currentIsDanger) {
-      return { 
+      return {
         status: 'danger' as const,
-        message: 'current key nearly exhausted' 
+        message: 'current key nearly exhausted',
       };
     }
     if (currentIsCaution) {
-      return { 
+      return {
         status: 'caution' as const,
-        message: 'current key near cap' 
+        message: 'current key near cap',
       };
     }
     if (currentIsWatch) {
-      return { 
+      return {
         status: 'watch' as const,
-        message: 'current key above 70%' 
+        message: 'current key above 70%',
       };
     }
   }
-  
+
   // Otherwise: any danger/caution/watch among all keys
   if (hasDanger) {
-    const dangerKeys = keys.filter(k => k.status === 'danger');
-    const labels = dangerKeys.map(k => k.label).join(', ');
-    return { 
+    const dangerKeys = keys.filter((k) => k.status === 'danger');
+    const labels = dangerKeys.map((k) => k.label).join(', ');
+    return {
       status: 'danger' as const,
-      message: `${dangerKeys.length} key${dangerKeys.length > 1 ? 's' : ''} at limit: ${labels}` 
+      message: `${dangerKeys.length} key${dangerKeys.length > 1 ? 's' : ''} at limit: ${labels}`,
     };
   }
-  
+
   if (hasCaution) {
-    const cautionKeys = keys.filter(k => k.status === 'caution');
-    return { 
+    const cautionKeys = keys.filter((k) => k.status === 'caution');
+    return {
       status: 'caution' as const,
-      message: `${cautionKeys.length} key${cautionKeys.length > 1 ? 's' : ''} near cap` 
+      message: `${cautionKeys.length} key${cautionKeys.length > 1 ? 's' : ''} near cap`,
     };
   }
-  
+
   if (hasWatch) {
-    const watchKeys = keys.filter(k => k.status === 'watch');
-    return { 
+    const watchKeys = keys.filter((k) => k.status === 'watch');
+    return {
       status: 'watch' as const,
-      message: `${watchKeys.length} key${watchKeys.length > 1 ? 's' : ''} above 70%` 
+      message: `${watchKeys.length} key${watchKeys.length > 1 ? 's' : ''} above 70%`,
     };
   }
-  
+
   // All healthy or unbounded
-  if (keys.every(k => k.status === 'unbounded')) {
-    return { 
+  if (keys.every((k) => k.status === 'unbounded')) {
+    return {
       status: 'healthy' as const,
-      message: `${keys.length} key${keys.length > 1 ? 's' : ''} visible (unlimited)` 
+      message: `${keys.length} key${keys.length > 1 ? 's' : ''} visible (unlimited)`,
     };
   }
-  
-  return { 
+
+  return {
     status: 'healthy' as const,
-    message: `${keys.length} of ${keys.length} keys healthy` 
+    message: `${keys.length} of ${keys.length} keys healthy`,
   };
 }
