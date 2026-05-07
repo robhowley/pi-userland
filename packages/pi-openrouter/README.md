@@ -8,8 +8,6 @@ A [Pi](https://pi.dev/) extension for OpenRouter usage and session visibility, w
 pi install npm:@robhowley/pi-openrouter
 ```
 
-![OpenRouter Usage Overlay](https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-openrouter/img/openrouter-usage-tui.png)
-
 ## Requirements
 
 Set one of these environment variables:
@@ -28,14 +26,14 @@ Type `/openrouter-usage` in Pi to open the usage overlay.
 The overlay shows:
 - **Month spend** vs cap with percentage
 - **7-day spend** with burn rate projection
-- **Today's spend** from live tracked turns when the Activity API is lagged
+- **Today's spend** from live tracked turns while Activity API data catches up
 - **Top models** (7d and 30d)
 - **Usage by provider** (30d)
 - **Daily spend** (30d)
 
 The extension refreshes data in the background every 30 seconds (with exponential backoff on errors).
 
-Press `q`, `Esc`, or `Ctrl+C` to close the overlay.
+<img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-openrouter/img/openrouter-usage-tui.png" alt="OpenRouter Usage Overlay" width="600">
 
 ## Session tracking
 
