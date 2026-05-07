@@ -231,7 +231,7 @@ export class AccountOverlayComponent {
       // All keys section - show all keys in compact format (including current key)
       lines.push(emptyRow(this.width));
       lines.push(row(` ${th.fg('accent', 'All keys')}`, this.width));
-      lines.push(row(`   Workspace   Key name           Active  Spend    Usage   `, this.width));
+      lines.push(row(`   Workspace   Key name           Active   Spend    Usage   `, this.width));
       for (let i = 0; i < sortedKeys.length; i++) {
         lines.push(this.buildCompactKeyRow(sortedKeys[i]!, th, i === this.selectedIndex));
       }
@@ -287,9 +287,6 @@ export class AccountOverlayComponent {
   }
 
   private buildCompactKeyRow(key: KeyInfo, theme: Theme, isSelected: boolean): string {
-    // Format enabled/disabled indicator
-    const enabledIcon = key.disabled ? '❌' : '✅';
-
     // Format spend
     let spendText: string;
     if (key.disabled) {
@@ -308,7 +305,8 @@ export class AccountOverlayComponent {
       spendColor = 'warning';
     }
 
-    const formattedSpend = theme.fg(spendColor as ThemeColor, spendText);
+    // Pad spend to 8 chars for alignment based on visible width
+    const paddedSpend = padToWidth(theme.fg(spendColor as ThemeColor, spendText), 8);
 
     // Calculate usage percentage
     let usageText: string;
@@ -342,7 +340,11 @@ export class AccountOverlayComponent {
       }
     }
 
-    const formattedUsage = theme.fg(usageColor as ThemeColor, usageText);
+    // Pad usage to 6 chars for alignment based on visible width
+    const paddedUsage = padToWidth(theme.fg(usageColor as ThemeColor, usageText), 6);
+
+    const enabledIcon = key.disabled ? '❌' : '✅';
+    const paddedEnabledIcon = padToWidth(enabledIcon, 2);
 
     // Truncate name and workspace for compact display
     const name = truncate(key.name, 28);
@@ -352,7 +354,7 @@ export class AccountOverlayComponent {
     const selectionIndicator = isSelected ? '●' : '○';
 
     return row(
-      ` ${selectionIndicator} ${workspace.padEnd(10)}  ${name.padEnd(20)} ${enabledIcon}    ${formattedSpend}    ${formattedUsage}`,
+      ` ${selectionIndicator} ${workspace.padEnd(10)}  ${name.padEnd(20)} ${paddedEnabledIcon}    ${paddedSpend}  ${paddedUsage} `,
       this.width,
     );
   }
@@ -459,4 +461,12 @@ function truncate(str: string, maxLen: number): string {
   if (str.length <= maxLen) return str;
   if (maxLen <= 3) return str.slice(0, maxLen);
   return str.slice(0, maxLen - 3) + '...';
+}
+
+// Pad string to fixed width, accounting for ANSI escape codes
+function padToWidth(str: string, width: number): string {
+  const visibleWidth = getVisibleWidth(str);
+  const paddingNeeded = width - visibleWidth;
+  if (paddingNeeded <= 0) return str;
+  return str + ' '.repeat(paddingNeeded);
 }
