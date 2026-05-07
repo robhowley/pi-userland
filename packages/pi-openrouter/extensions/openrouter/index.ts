@@ -191,13 +191,6 @@ async function showAccountOverlay(ctx: ExtensionContext) {
     // Try to get all keys with management key
     const allKeys = await getAllKeys();
 
-    // Debug: show workspace/key info
-    if (allKeys) {
-      ctx.ui.notify(`[DEBUG] getAllKeys returned ${allKeys.length} key(s)`, 'info');
-    } else {
-      ctx.ui.notify('[DEBUG] getAllKeys returned null', 'info');
-    }
-
     if (allKeys && allKeys.length > 0) {
       keyInfo = allKeys;
     } else {

@@ -29,6 +29,7 @@ export interface KeyInfo {
   hash: string; // Key hash for identification
   disabled: boolean; // Whether key is disabled
   isCurrentSession: boolean; // Marked with ● if matches current session key
+  workspaceName: string; // Name of the workspace this key belongs to
 }
 
 /** Rollup status for the entire account */

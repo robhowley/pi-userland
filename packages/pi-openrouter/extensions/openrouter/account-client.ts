@@ -64,13 +64,22 @@ export async function getAllKeys(): Promise<KeyInfo[] | null> {
       const workspaceId = workspace.id || DEFAULT_WORKSPACE_ID;
       const response = await client.apiKeys.list({ workspaceId });
       const rawKeys = response.data;
-      const keys = rawKeys.map(rawToKeyInfo);
+
+      const keys = rawKeys.map((raw) => rawToKeyInfo(raw, workspace.name));
       workspaceKeys[workspace.name] = keys.length;
       allKeys.push(...keys);
     }
 
-    // Debug info (optional - comment out for production)
+    // Write debug info to file
+    const fs = await import('fs');
+    const os = await import('os');
+    const logPath = `${os.homedir()}/.pi/debug/openrouter-account.log`;
+    const dirPath = `${os.homedir()}/.pi/debug`;
+    if (!fs.existsSync(dirPath)) {
+      fs.mkdirSync(dirPath, { recursive: true });
+    }
     const debugInfo = [
+      `[openrouter-account] ${new Date().toISOString()}`,
       `[openrouter-account] Workspaces found: ${workspaces.length}`,
       workspaceInfo,
       '',
@@ -79,18 +88,7 @@ export async function getAllKeys(): Promise<KeyInfo[] | null> {
       '',
       `[openrouter-account] Total keys: ${allKeys.length}`,
     ].join('\n');
-     
-    console.log(debugInfo);
-
-    // Write to file for debugging (optional - comment out for production)
-    // const fs = await import('fs');
-    // const os = await import('os');
-    // const logPath = `${os.homedir()}/.pi/debug/openrouter-account.log`;
-    // const dirPath = `${os.homedir()}/.pi/debug`;
-    // if (!fs.existsSync(dirPath)) {
-    //   fs.mkdirSync(dirPath, { recursive: true });
-    // }
-    // fs.writeFileSync(logPath, `${new Date().toISOString()}\n${debugInfo}\n\n`, { flag: 'a' });
+    fs.writeFileSync(logPath, `${debugInfo}\n\n`, { flag: 'a' });
 
     return allKeys;
   } catch (err) {
@@ -107,7 +105,7 @@ export async function getCurrentKey(): Promise<KeyInfo | null> {
   if (!client) return null;
   try {
     const response = await client.apiKeys.getCurrentKeyMetadata();
-    return rawToKeyInfo(response.data);
+    return rawToKeyInfo(response.data, 'Current Workspace');
   } catch (err) {
     throw mapSdkError(err);
   }
@@ -117,7 +115,7 @@ export async function getCurrentKey(): Promise<KeyInfo | null> {
 // Helper Functions
 // =============================================================================
 
-function rawToKeyInfo(raw: GetCurrentKeyData | ListData): KeyInfo {
+function rawToKeyInfo(raw: GetCurrentKeyData | ListData, workspaceName: string): KeyInfo {
   const used = raw.usage ?? raw.usageMonthly ?? 0;
 
   // limit is number | null in both GetCurrentKeyData and ListData
@@ -183,6 +181,7 @@ function rawToKeyInfo(raw: GetCurrentKeyData | ListData): KeyInfo {
     hash,
     disabled,
     isCurrentSession: false,
+    workspaceName,
   };
 
   // Set optional properties explicitly

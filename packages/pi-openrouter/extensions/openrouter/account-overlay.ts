@@ -7,7 +7,7 @@ import { formatCurrency, formatLeft, formatRemaining, sortKeys } from './account
 // Constants
 // =============================================================================
 
-const MIN_WIDTH = 50;
+const MIN_WIDTH = 65;
 
 // =============================================================================
 // Account Overlay Component
@@ -134,16 +134,11 @@ export class AccountOverlayComponent {
       lines.push(...this.buildKeyDetails(currentKey, th));
       lines.push(emptyRow(this.width));
 
-      // Other keys section - compact horizontal format
-      const otherKeys = sortedKeys.slice(1);
+      // All keys section - show all keys in compact format (including current key)
       lines.push(emptyRow(this.width));
-      lines.push(row(` ${th.fg('accent', 'Other visible keys')}`, this.width));
-      if (otherKeys.length > 0) {
-        for (const key of otherKeys) {
-          lines.push(this.buildCompactKeyRow(key, th));
-        }
-      } else {
-        lines.push(row(` ${th.fg('dim', '  none')}`, this.width));
+      lines.push(row(` ${th.fg('accent', 'All keys')}`, this.width));
+      for (const key of sortedKeys) {
+        lines.push(this.buildCompactKeyRow(key, th));
       }
       lines.push(emptyRow(this.width));
     } else {
@@ -204,11 +199,12 @@ export class AccountOverlayComponent {
     // Format BYOK
     const byokText = key.byok || 'unknown';
 
-    // Truncate name for compact display
-    const name = truncate(key.name, 15);
+    // Truncate name and workspace for compact display
+    const name = truncate(key.name, 18);
+    const workspace = truncate(key.workspaceName, 20);
 
     return row(
-      `  ${name.padEnd(15)}  ${formattedStatus.padEnd(12)}  ${byokText.padEnd(6)}`,
+      `    ${workspace.padEnd(20)}  ${name.padEnd(18)}  ${formattedStatus.padEnd(10)}  ${byokText.padEnd(6)}`,
       this.width,
     );
   }
