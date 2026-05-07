@@ -30,6 +30,7 @@ export interface KeyInfo {
   disabled: boolean; // Whether key is disabled
   isCurrentSession: boolean; // Marked with ● if matches current session key
   workspaceName: string; // Name of the workspace this key belongs to
+  spend: number; // Spend associated with this key (in USD)
 }
 
 /** Rollup status for the entire account */

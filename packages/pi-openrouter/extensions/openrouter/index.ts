@@ -12,7 +12,12 @@ import { formatSessionId, isOpenRouterRequest, type OpenRouterSessionState } fro
 import { writeLocalUsage, type LocalUsageEvent } from './local-usage.js';
 import { AccountOverlayComponent } from './account-overlay.js';
 import { computeRollupStatus, sortKeys } from './account-format.js';
-import { getAllKeys, getCurrentKey, getAccountCredits, getCurrentKeyHash } from './account-client.js';
+import {
+  getAllKeys,
+  getCurrentKey,
+  getAccountCredits,
+  getCurrentKeyHash,
+} from './account-client.js';
 import crypto from 'node:crypto';
 
 // Store the current session state for use in command handlers

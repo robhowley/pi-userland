@@ -199,6 +199,7 @@ function rawToKeyInfo(raw: GetCurrentKeyData | ListData, workspaceName: string):
     label: raw.label,
     status,
     used,
+    spend: used, // spend is the same as usage (in USD)
     resetCadence,
     byok,
     hash,
