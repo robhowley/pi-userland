@@ -3,6 +3,7 @@
   "version": "0.4.0",
   "type": "module",
   "description": "OpenRouter usage TUI overlay with caps, burn rate, models, live tracking, and session_id tagging.",
+  "license": "MIT",
   "files": [
     "extensions",
     "README.md",
