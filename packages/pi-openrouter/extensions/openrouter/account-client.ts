@@ -1,5 +1,5 @@
 import { OpenRouter } from '@openrouter/sdk/sdk/sdk.js';
-import type { KeyInfo } from './account-types.js';
+import type { KeyInfo, KeyStatus } from './account-types.js';
 
 // Re-export error types from client.ts
 import { AuthError, ApiError } from './client.js';
@@ -62,7 +62,7 @@ export async function getAllKeys(): Promise<KeyInfo[] | null> {
 
     for (const workspace of workspaces) {
       const workspaceId = workspace.id || DEFAULT_WORKSPACE_ID;
-      const response = await client.apiKeys.list({ workspaceId });
+      const response = await client.apiKeys.list({ workspaceId, includeDisabled: true });
       const rawKeys = response.data;
 
       const keys = rawKeys.map((raw) => rawToKeyInfo(raw, workspace.name));
@@ -170,11 +170,34 @@ function rawToKeyInfo(raw: GetCurrentKeyData | ListData, workspaceName: string):
     remaining = remainingValue;
   }
 
+  // Calculate status based on usage percentage
+  let status: KeyStatus;
+  if (disabled) {
+    status = 'disabled';
+  } else if (limit === undefined || limit === null) {
+    status = 'unbounded';
+  } else if (remaining !== undefined && remaining < 0) {
+    status = 'danger';
+  } else if (limit === 0) {
+    status = 'danger';
+  } else {
+    const usedPercent = (used / limit) * 100;
+    if (usedPercent >= 95) {
+      status = 'danger';
+    } else if (usedPercent >= 85) {
+      status = 'caution';
+    } else if (usedPercent >= 70) {
+      status = 'watch';
+    } else {
+      status = 'healthy';
+    }
+  }
+
   // Create the object with explicit undefined for optional properties
   const keyInfo: KeyInfo = {
     name,
     label: raw.label,
-    status: 'healthy',
+    status,
     used,
     resetCadence,
     byok,
@@ -209,4 +232,10 @@ function mapSdkError(err: unknown): Error {
 
   if (err instanceof Error) return err;
   return new Error(String(err));
+}
+
+export function getCurrentKeyHash(): string | undefined {
+  // For v1, we don't hash the current API key for comparison
+  // This is a follow-up item from the planning docs
+  return undefined;
 }

@@ -1,7 +1,9 @@
 import { matchesKey, truncateToWidth } from '@mariozechner/pi-tui';
 import type { Theme, ThemeColor } from '@mariozechner/pi-coding-agent';
 import type { KeyInfo, KeyStatus, RollupStatus } from './account-types.js';
-import { formatCurrency, formatLeft, formatRemaining, sortKeys } from './account-format.js';
+import { computeRollupStatus, formatCurrency, formatLeft, formatRemaining, sortKeys } from './account-format.js';
+import { getAllKeys, getCurrentKey, getCurrentKeyHash, getAccountCredits } from './account-client.js';
+import type { ExtensionContext } from '@mariozechner/pi-coding-agent';
 
 // =============================================================================
 // Constants
@@ -27,6 +29,7 @@ export class AccountOverlayComponent {
   private refreshTimer: NodeJS.Timeout | null = null;
   private requestRender: () => void;
   private isDisposed = false;
+  private ctx: ExtensionContext | null = null;
 
   constructor(
     keyInfo: KeyInfo[] | null,
@@ -37,6 +40,7 @@ export class AccountOverlayComponent {
     theme: Theme,
     onClose: () => void,
     requestRender: () => void,
+    ctx?: ExtensionContext,
   ) {
     this.theme = theme;
     this.onClose = onClose;
@@ -47,6 +51,7 @@ export class AccountOverlayComponent {
     this.currentHash = currentHash;
     this.error = error;
     this.selectedIndex = 0;
+    this.ctx = ctx || null;
     this.width = this.calculateWidth();
     this.lines = this.buildLines();
 
@@ -68,6 +73,12 @@ export class AccountOverlayComponent {
     // Close on q, escape, or ctrl+c
     if (matchesKey(data, 'escape') || matchesKey(data, 'ctrl+c') || data === 'q') {
       this.onClose();
+      return;
+    }
+
+    // Refresh on r
+    if (matchesKey(data, 'r')) {
+      this.refresh();
       return;
     }
 
@@ -103,6 +114,56 @@ export class AccountOverlayComponent {
     }
     if (!this.isDisposed) {
       this.requestRender();
+    }
+  }
+
+  async refresh(): Promise<void> {
+    if (this.isDisposed || !this.ctx) return;
+    
+    try {
+      const currentKeyHash = getCurrentKeyHash();
+      const allKeys = await getAllKeys();
+      let credits: number | null = null;
+      try {
+        credits = await getAccountCredits();
+      } catch {
+        // Silently ignore credit fetch errors
+      }
+      
+      let error: string | null = null;
+      let keyInfo: KeyInfo[] | null = null;
+      
+      if (allKeys && allKeys.length > 0) {
+        keyInfo = allKeys;
+      } else {
+        error = 'Key list unavailable - set OPENROUTER_MANAGEMENT_KEY for full key inventory.';
+        try {
+          const currentKey = await getCurrentKey();
+          if (currentKey) {
+            keyInfo = [currentKey];
+          }
+        } catch {
+          // Ignore secondary errors
+        }
+      }
+      
+      const rollupStatus = keyInfo ? computeRollupStatus(keyInfo) : { status: 'unavailable' as const };
+      
+      // Update state
+      this.keyInfo = keyInfo;
+      this.credits = credits;
+      this.rollupStatus = rollupStatus;
+      this.error = error;
+      this.currentHash = currentKeyHash;
+      
+      // Reset selection and rebuild
+      this.selectedIndex = 0;
+      this.width = this.calculateWidth();
+      this.lines = this.buildLines();
+      
+      this.requestRender();
+    } catch {
+      // Silently ignore refresh errors
     }
   }
 

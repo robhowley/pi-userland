@@ -12,7 +12,7 @@ import { formatSessionId, isOpenRouterRequest, type OpenRouterSessionState } fro
 import { writeLocalUsage, type LocalUsageEvent } from './local-usage.js';
 import { AccountOverlayComponent } from './account-overlay.js';
 import { computeRollupStatus, sortKeys } from './account-format.js';
-import { getAllKeys, getCurrentKey, getAccountCredits } from './account-client.js';
+import { getAllKeys, getCurrentKey, getAccountCredits, getCurrentKeyHash } from './account-client.js';
 import crypto from 'node:crypto';
 
 // Store the current session state for use in command handlers
@@ -269,12 +269,6 @@ async function showAccountOverlay(ctx: ExtensionContext) {
   }
 }
 
-function getCurrentKeyHash(): string | undefined {
-  // For v1, we don't hash the current API key for comparison
-  // This is a follow-up item from the planning docs
-  return undefined;
-}
-
 async function showAccountOverlayComponent(
   ctx: ExtensionContext,
   keyInfo: any[] | null,
@@ -294,6 +288,7 @@ async function showAccountOverlayComponent(
         theme,
         done,
         () => _tui.requestRender(),
+        ctx,
       );
 
       return {
