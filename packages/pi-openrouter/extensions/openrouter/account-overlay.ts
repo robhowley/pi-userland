@@ -125,40 +125,32 @@ export class AccountOverlayComponent {
     lines.push(emptyRow(this.width));
 
     if (this.keyInfo && this.keyInfo.length > 0) {
-      // Sort keys - current key first
+      // Sort keys - current key first (though hash matching is v1 follow-up)
       const sortedKeys = sortKeys(this.keyInfo, this.currentHash);
 
-      // Check if we have a current key to highlight
-      const hasCurrentKey = sortedKeys.some((k) => k.hash === this.currentHash);
-
-      // Current key section
-      if (hasCurrentKey) {
-        lines.push(row(` ${th.fg('accent', 'Current key')}`, this.width));
-        const currentKey = sortedKeys.find((k) => k.hash === this.currentHash);
-        if (currentKey) {
-          lines.push(...this.buildKeyDetails(currentKey, th));
-        }
-        lines.push(emptyRow(this.width));
-      }
+      // Current key section - show for first key (v1: no hash matching yet)
+      const currentKey = sortedKeys[0]!; // Non-null assertion - array is not empty
+      lines.push(row(` ${th.fg('accent', 'Current key')}`, this.width));
+      lines.push(...this.buildKeyDetails(currentKey, th));
+      lines.push(emptyRow(this.width));
 
       // Other keys section
-      const otherKeys = sortedKeys.filter((k) => k.hash !== this.currentHash);
+      const otherKeys = sortedKeys.slice(1);
+      lines.push(emptyRow(this.width));
+      lines.push(row(` ${th.fg('accent', 'Other visible keys')}`, this.width));
       if (otherKeys.length > 0) {
-        lines.push(row(` ${th.fg('accent', 'Other visible keys')}`, this.width));
         for (const key of otherKeys) {
           lines.push(...this.buildKeyDetails(key, th));
           lines.push(emptyRow(this.width));
         }
-      } else if (!hasCurrentKey) {
-        lines.push(row(` ${th.fg('dim', '  none')}`, this.width));
       } else {
         lines.push(row(` ${th.fg('dim', '  none')}`, this.width));
       }
+      lines.push(emptyRow(this.width));
     } else {
       // No keys available
       lines.push(row(th.fg('dim', ' No keys available'), this.width));
     }
-
     lines.push(boxBottom(this.width));
     lines.push(plainRow(th.fg('dim', 'Esc to close'), this.width));
     return lines;
