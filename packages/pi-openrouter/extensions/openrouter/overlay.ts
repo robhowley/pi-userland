@@ -369,8 +369,8 @@ export class UsageOverlayComponent {
     lines.push(row(` By provider (30d)`, this.width));
     lines.push(
       row(
-        `    ${'Provider'.padEnd(COLS.model)}  ${'$'.padStart(COLS.spend)}  ` +
-          `${'tok'.padStart(COLS.tokens)}  ${'$/M'.padStart(COLS.costPerM)}  ` +
+        `    ${'Provider'.padEnd(COLS.model)}  ${'30d $'.padStart(COLS.spend)}  ` +
+          `${'30d tok'.padStart(COLS.tokens)}  ${'$/M'.padStart(COLS.costPerM)}  ` +
           `${'reqs'.padStart(COLS.reqs)}`,
         this.width,
       ),
