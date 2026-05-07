@@ -1,6 +1,6 @@
 {
   "name": "@robhowley/pi-openrouter",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "type": "module",
   "description": "OpenRouter usage TUI overlay with caps, burn rate, models, live tracking, and session_id tagging.",
   "license": "MIT",
