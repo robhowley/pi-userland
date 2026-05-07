@@ -34,3 +34,5 @@
 ### Features
 
 * **pi-openrouter:** add OpenRouter extension ([#25](https://github.com/robhowley/pi-userland/issues/25)) ([a1a5067](https://github.com/robhowley/pi-userland/commit/a1a50679a2bf4b2d55912c94f81294baf2b1f7b1))
+### Bug Fixes
+- **pi-openrouter:** fix 30d header labels for clarity (v0.5.1)
