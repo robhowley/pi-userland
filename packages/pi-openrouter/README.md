@@ -1,6 +1,6 @@
 # pi-openrouter
 
-A [Pi](https://pi.dev/) extension for OpenRouter usage and session visibility, with an `/openrouter-usage` terminal overlay for spend, caps, burn rate, live tracking, and model breakdowns, plus automatic `session_id` tagging for dashboard grouping.
+A [Pi](https://pi.dev/) extension for live OpenRouter visibility: TUI overlays for spend, credits, key limits, burn rate, and model usage, plus automatic `session_id` tagging for dashboard grouping.
 
 ## Installation
 
