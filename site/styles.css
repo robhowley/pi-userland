@@ -1,0 +1,687 @@
+:root {
+  /* Nord */
+  --bg: #2e3440;
+  --panel: #3b4252;
+  --panel-2: #434c5e;
+  --panel-3: #4c566a;
+  --text: #eceff4;
+  --muted: #d8dee9;
+  --dim: #a7adb9;
+  --accent: #8fbcbb;
+  --accent-2: #88c0d0;
+  --blue: #81a1c1;
+  --purple: #b48ead;
+  --yellow: #ebcb8b;
+  --red: #bf616a;
+  --green: #a3be8c;
+
+  --border: rgba(216, 222, 233, 0.16);
+  --border-strong: rgba(216, 222, 233, 0.32);
+  --terminal-bg: rgba(46, 52, 64, 0.74);
+  --terminal-border: rgba(216, 222, 233, 0.18);
+
+  --radius: 16px;
+  --radius-sm: 11px;
+  --content: 1180px;
+  --shadow: 0 18px 42px rgba(15, 17, 22, 0.18);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--bg);
+  color: var(--text);
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  line-height: 1.5;
+  background:
+    radial-gradient(circle at 16% 0%, rgba(136, 192, 208, 0.08), transparent 30rem),
+    radial-gradient(circle at 92% 10%, rgba(143, 188, 187, 0.08), transparent 28rem),
+    var(--bg);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+code,
+pre,
+.mono,
+.brand {
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    "Courier New",
+    monospace;
+}
+
+.wrap {
+  width: min(var(--content), calc(100% - 32px));
+  margin: 0 auto;
+}
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  border-bottom: 1px solid rgba(216, 222, 233, 0.1);
+  background: rgba(46, 52, 64, 0.88);
+  backdrop-filter: blur(12px);
+}
+
+.nav {
+  min-height: 68px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.brand {
+  color: var(--accent);
+  font-weight: 750;
+  letter-spacing: 0.015em;
+}
+
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.nav-links a {
+  color: var(--muted);
+  font-size: 0.92rem;
+  padding: 8px 10px;
+  border-radius: 999px;
+}
+
+.nav-links a:hover {
+  color: var(--text);
+  background: rgba(236, 239, 244, 0.05);
+}
+
+.nav-links .install-link {
+  margin-left: 4px;
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  background: rgba(236, 239, 244, 0.035);
+  padding-inline: 14px;
+}
+
+main {
+  padding: 46px 0 72px;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+/* Hero is intentionally one-column now.
+   The structured-return demo needs width. */
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 760px) minmax(300px, 380px);
+  gap: 30px clamp(40px, 8vw, 96px);
+  align-items: center;
+  padding: 18px 0 34px;
+}
+
+.hero-main {
+  min-width: 0;
+}
+
+.hero-aside {
+  justify-self: end;
+  width: 100%;
+  padding: 20px;
+}
+
+.hero-aside-label {
+  color: var(--accent);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 16px;
+}
+
+.hero-package-list {
+  display: grid;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.hero-package-list span {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.hero-package-list span::before {
+  content: "◆";
+  color: var(--accent);
+  font-size: 0.62rem;
+  flex: 0 0 auto;
+}
+
+.compare {
+  grid-column: 1 / -1;
+}
+
+.eyebrow {
+  color: var(--accent);
+  font-size: 0.92rem;
+  margin-bottom: 14px;
+}
+
+h1 {
+  max-width: 13ch;
+  font-size: clamp(2.6rem, 6vw, 5.15rem);
+  line-height: 0.94;
+  letter-spacing: -0.052em;
+  font-weight: 820;
+}
+
+.hero-copy {
+  max-width: 62ch;
+  margin-top: 20px;
+  color: var(--muted);
+  font-size: clamp(1rem, 1.3vw, 1.12rem);
+}
+
+.hero-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 28px;
+  flex-wrap: wrap;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 43px;
+  padding: 0 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  color: var(--text);
+  background: rgba(236, 239, 244, 0.035);
+  font-size: 0.94rem;
+  font-weight: 650;
+}
+
+.button.primary {
+  color: var(--accent);
+  border-color: rgba(143, 188, 187, 0.45);
+  background: rgba(143, 188, 187, 0.1);
+}
+
+.button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(143, 188, 187, 0.6);
+  transition: 150ms ease;
+}
+
+.surface {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: linear-gradient(
+    180deg,
+    rgba(76, 86, 106, 0.28),
+    rgba(59, 66, 82, 0.34)
+  );
+  box-shadow: var(--shadow);
+}
+
+/* Full-width before/after band */
+.compare {
+  margin-top: 42px;
+  display: grid;
+  grid-template-columns: minmax(420px, 1fr) auto minmax(420px, 1fr);
+  gap: 16px;
+  align-items: stretch;
+}
+
+.compare-card {
+  padding: 16px;
+}
+
+.compare-arrow {
+  align-self: center;
+  color: var(--accent);
+  font-size: 1.35rem;
+  opacity: 0.9;
+}
+
+.label {
+  color: var(--dim);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.015em;
+  margin-bottom: 10px;
+}
+
+.terminal {
+  min-width: 0;
+  border: 1px solid var(--terminal-border);
+  border-radius: var(--radius-sm);
+  background: var(--terminal-bg);
+  overflow: hidden;
+}
+
+.terminal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(216, 222, 233, 0.1);
+  color: var(--accent);
+  font-size: 0.79rem;
+  font-weight: 750;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.terminal-dots {
+  display: inline-flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.terminal-dots span {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--panel-3);
+  border: 1px solid rgba(236, 239, 244, 0.14);
+}
+
+.terminal-body {
+  padding: 12px;
+  overflow-x: auto;
+}
+
+pre {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.78rem;
+  line-height: 1.48;
+  white-space: pre;
+  tab-size: 2;
+}
+
+/* The before/after demo gets a little more room and polish. */
+.compare pre {
+  font-size: 0.765rem;
+  line-height: 1.5;
+}
+
+.muted {
+  color: var(--dim);
+}
+
+.accent {
+  color: var(--accent);
+}
+
+.blue {
+  color: var(--accent-2);
+}
+
+.green {
+  color: var(--green);
+}
+
+.yellow {
+  color: var(--yellow);
+}
+
+.red {
+  color: var(--red);
+}
+
+.purple {
+  color: var(--purple);
+}
+
+.section {
+  margin-top: 22px;
+}
+
+.featured {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 18px;
+  padding: 18px;
+}
+
+.section-kicker {
+  color: var(--accent);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 14px;
+}
+
+.featured-copy {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 4px 4px 2px;
+}
+
+.featured h2,
+.package h3 {
+  color: var(--text);
+  font-size: 1.42rem;
+  line-height: 1.08;
+  letter-spacing: -0.025em;
+}
+
+.featured-copy p,
+.package p {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.badge {
+  align-self: flex-start;
+  margin-top: 18px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(235, 203, 139, 0.28);
+  color: var(--yellow);
+  background: rgba(235, 203, 139, 0.09);
+  font-size: 0.78rem;
+  font-weight: 750;
+}
+
+.bullets {
+  display: grid;
+  gap: 10px;
+  margin-top: 20px;
+  color: var(--text);
+  font-size: 0.92rem;
+}
+
+.bullets span {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.bullets span::before {
+  content: "◆";
+  color: var(--accent);
+  font-size: 0.62rem;
+  flex: 0 0 auto;
+}
+
+.tui-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.tui pre {
+  font-size: 0.735rem;
+}
+
+.tui {
+  min-height: 430px;
+}
+
+.packages {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.package {
+  display: flex;
+  min-width: 0;
+  min-height: 360px;
+  flex-direction: column;
+  padding: 18px;
+}
+
+.package h3 {
+  font-size: 1.28rem;
+}
+
+.package p {
+  font-size: 0.91rem;
+  line-height: 1.45;
+}
+
+.package .terminal {
+  margin-top: 14px;
+  flex: 1;
+  max-height: 230px;
+  overflow: hidden;
+}
+
+.package .terminal-body {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.philosophy {
+  padding: 17px 22px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 1rem;
+}
+
+.philosophy strong {
+  color: var(--text);
+}
+
+.install-section {
+  padding: 18px;
+}
+
+.install-head {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 18px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.install-head h2 {
+  font-size: 1.35rem;
+  letter-spacing: -0.02em;
+}
+
+.install-head p {
+  color: var(--muted);
+  font-size: 0.94rem;
+}
+
+.install-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(270px, 1fr));
+  gap: 12px;
+}
+
+.cmd {
+  min-width: 0;
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  padding: 12px 13px;
+  border: 1px solid var(--terminal-border);
+  border-radius: var(--radius-sm);
+  background: rgba(46, 52, 64, 0.62);
+  font-size: 0.83rem;
+}
+
+.cmd .prompt {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-weight: 800;
+}
+
+.cmd code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.footer-note {
+  margin-top: 16px;
+  color: var(--dim);
+  text-align: center;
+  font-size: 0.86rem;
+}
+
+/* Avoid weird half-cramped tablet states. */
+@media (max-width: 1180px) {
+  .compare {
+    grid-template-columns: 1fr;
+  }
+
+  .compare-arrow {
+    justify-self: center;
+    transform: rotate(90deg);
+  }
+
+  .compare-card {
+    max-width: 860px;
+    width: 100%;
+    margin-inline: auto;
+  }
+
+  .packages {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 700px) {
+  .packages {
+      grid-template-columns: 1fr;
+  }
+ }
+
+@media (max-width: 1060px) {
+  .featured,
+  .tui-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .featured-copy {
+    padding-bottom: 4px;
+  }
+
+  .tui pre {
+    font-size: 0.76rem;
+  }
+}
+
+@media (max-width: 760px) {
+  .wrap {
+    width: min(var(--content), calc(100% - 20px));
+  }
+
+  main {
+    padding-top: 28px;
+  }
+
+  .nav {
+    min-height: auto;
+    padding: 14px 0;
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .nav-links a:not(.install-link) {
+    padding-left: 0;
+  }
+
+  .hero {
+    padding-top: 4px;
+  }
+
+  h1 {
+    max-width: none;
+    font-size: clamp(2.35rem, 14vw, 4rem);
+  }
+
+  .featured,
+  .compare-card,
+  .package,
+  .install-section {
+    padding: 14px;
+  }
+
+  pre,
+  .compare pre,
+  .tui pre {
+    font-size: 0.72rem;
+  }
+
+  .terminal-body {
+    padding: 11px;
+  }
+
+  .hero {
+    grid-template-columns: 1fr;
+  }
+
+  .hero-aside {
+    justify-self: stretch;
+    max-width: 520px;
+  }
+}
+
+.compare-meta {
+  margin-top: 10px;
+  display: grid;
+  gap: 4px;
+}
+
+.compare-metric {
+  color: var(--green);
+  font-size: 0.92rem;
+  font-weight: 750;
+}
+
+.compare-note {
+  color: var(--dim);
+  font-size: 0.9rem;
+}
