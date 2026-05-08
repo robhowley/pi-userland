@@ -206,16 +206,21 @@ export class AccountOverlayComponent {
     );
     lines.push(emptyRow(this.width));
 
-    // Credits line
-    if (this.credits !== null) {
-      lines.push(row(` credits   ${formatCurrency(this.credits)}`, this.width));
-    } else {
-      lines.push(row(th.fg('dim', ' credits   unavailable'), this.width));
+    // Total spend line (sum of all key spends)
+    if (this.keyInfo && this.keyInfo.length > 0) {
+      const totalSpend = this.keyInfo.reduce((sum, k) => sum + k.spend, 0);
+      lines.push(row(` usage      ${formatCurrency(totalSpend)}`, this.width));
     }
 
-    // Status line
-    const statusLine = this.formatRollupStatus(this.rollupStatus);
-    lines.push(row(` status    ${statusLine}`, this.width));
+    // Credits line
+    if (this.credits !== null) {
+      lines.push(row(` credits    ${formatCurrency(this.credits)}`, this.width));
+    } else {
+      lines.push(row(th.fg('dim', ' credits          unavailable'), this.width));
+    }
+
+    // Status by key line
+    lines.push(row(` status     ${this.rollupStatus.message}`, this.width));
     lines.push(emptyRow(this.width));
 
     if (this.keyInfo && this.keyInfo.length > 0) {
@@ -224,14 +229,14 @@ export class AccountOverlayComponent {
 
       // Current key section - show for selected key
       const currentKey = sortedKeys[this.selectedIndex]!; // Non-null assertion - array is not empty
-      lines.push(row(` ${th.fg('accent', 'Current key')}`, this.width));
+      lines.push(row(` ${th.fg('accent', 'Selected key')}`, this.width));
       lines.push(...this.buildKeyDetails(currentKey, th));
       lines.push(emptyRow(this.width));
 
       // All keys section - show all keys in compact format (including current key)
       lines.push(emptyRow(this.width));
       lines.push(row(` ${th.fg('accent', 'All keys')}`, this.width));
-      lines.push(row(`   Workspace    Key name           Active   Spend    Usage   `, this.width));
+      lines.push(row(`   Workspace    Key name           Active   Spend    Used   `, this.width));
       for (let i = 0; i < sortedKeys.length; i++) {
         lines.push(this.buildCompactKeyRow(sortedKeys[i]!, th, i === this.selectedIndex));
       }
@@ -265,18 +270,18 @@ export class AccountOverlayComponent {
     // Format spend
     const spendText = formatCurrency(key.spend);
 
-    lines.push(row(`  name     ${truncate(key.name, 30)}`, this.width));
-    lines.push(row(`  key      ${truncate(key.label, 30)}`, this.width));
-    lines.push(row(`  status   ${formattedStatus}`, this.width));
-    lines.push(row(`  used     ${usedLimitText}`, this.width));
+    lines.push(row(`  name      ${truncate(key.name, 30)}`, this.width));
+    lines.push(row(`  key       ${truncate(key.label, 30)}`, this.width));
+    lines.push(row(`  status    ${formattedStatus}`, this.width));
+    lines.push(row(`  used      ${usedLimitText}`, this.width));
     lines.push(
       row(
-        `  limit    ${key.limit === undefined ? 'unlimited' : formatCurrency(key.limit)}`,
+        `  limit     ${key.limit === undefined ? 'unlimited' : formatCurrency(key.limit)}`,
         this.width,
       ),
     );
-    lines.push(row(`  left     ${leftText}`, this.width));
-    lines.push(row(`  reset    ${resetText}`, this.width));
+    lines.push(row(`  left      ${leftText}`, this.width));
+    lines.push(row(`  reset     ${resetText}`, this.width));
     lines.push(row(`  spend    ${spendText}`, this.width));
 
     return lines;
@@ -376,23 +381,6 @@ export class AccountOverlayComponent {
         return 'success';
       default:
         return 'success';
-    }
-  }
-
-  private formatRollupStatus(status: RollupStatus): string {
-    switch (status.status) {
-      case 'unavailable':
-        return 'unavailable';
-      case 'healthy':
-        return this.theme.fg('success' as ThemeColor, status.message);
-      case 'watch':
-        return this.theme.fg('warning' as ThemeColor, status.message);
-      case 'caution':
-        return this.theme.fg('warning' as ThemeColor, status.message);
-      case 'danger':
-        return this.theme.fg('error' as ThemeColor, status.message);
-      case 'disabled':
-        return this.theme.fg('error' as ThemeColor, status.message);
     }
   }
 }
