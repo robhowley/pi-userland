@@ -3,9 +3,8 @@
 /** Status of a single key based on usage/limit ratio */
 export type KeyStatus =
   | 'healthy' // <70% used
-  | 'watch' // 70–84% used
-  | 'caution' // 85–94% used
-  | 'danger' // >=95% used
+  | 'caution' // 70-89% used
+  | 'danger' // >=90% used
   | 'unbounded' // no key cap
   | 'partial' // missing required fields
   | 'disabled'; // disabled key
@@ -37,7 +36,6 @@ export interface KeyInfo {
 export type RollupStatus =
   | { status: 'unavailable'; message?: never }
   | { status: 'healthy'; message: string }
-  | { status: 'watch'; message: string }
   | { status: 'caution'; message: string }
   | { status: 'danger'; message: string }
   | { status: 'disabled'; message: string };

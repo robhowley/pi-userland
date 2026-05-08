@@ -4,16 +4,10 @@ import type { KeyInfo, KeyStatus, RollupStatus } from './account-types.js';
 import {
   computeRollupStatus,
   formatCurrency,
-  formatLeft,
   formatRemaining,
   sortKeys,
 } from './account-format.js';
-import {
-  getAllKeys,
-  getCurrentKey,
-  getCurrentKeyHash,
-  getAccountCredits,
-} from './account-client.js';
+import { getAllKeys, getCurrentKey, getAccountCredits } from './account-client.js';
 import type { ExtensionContext } from '@mariozechner/pi-coding-agent';
 
 // =============================================================================
@@ -34,7 +28,6 @@ export class AccountOverlayComponent {
   private keyInfo: KeyInfo[] | null;
   private credits: number | null;
   private rollupStatus: RollupStatus;
-  private currentHash: string | undefined;
   private error: string | null;
   private selectedIndex: number;
   private refreshTimer: NodeJS.Timeout | null = null;
@@ -46,7 +39,6 @@ export class AccountOverlayComponent {
     keyInfo: KeyInfo[] | null,
     credits: number | null,
     rollupStatus: RollupStatus,
-    currentHash: string | undefined,
     error: string | null,
     theme: Theme,
     onClose: () => void,
@@ -59,7 +51,6 @@ export class AccountOverlayComponent {
     this.keyInfo = keyInfo;
     this.credits = credits;
     this.rollupStatus = rollupStatus;
-    this.currentHash = currentHash;
     this.error = error;
     this.selectedIndex = 0;
     this.ctx = ctx || null;
@@ -132,7 +123,6 @@ export class AccountOverlayComponent {
     if (this.isDisposed || !this.ctx) return;
 
     try {
-      const currentKeyHash = getCurrentKeyHash();
       const allKeys = await getAllKeys();
       let credits: number | null = null;
       try {
@@ -167,7 +157,6 @@ export class AccountOverlayComponent {
       this.credits = credits;
       this.rollupStatus = rollupStatus;
       this.error = error;
-      this.currentHash = currentKeyHash;
 
       // Reset selection and rebuild
       this.selectedIndex = 0;
@@ -224,8 +213,8 @@ export class AccountOverlayComponent {
     lines.push(emptyRow(this.width));
 
     if (this.keyInfo && this.keyInfo.length > 0) {
-      // Sort keys - current key first (though hash matching is v1 follow-up)
-      const sortedKeys = sortKeys(this.keyInfo, this.currentHash);
+      // Sort keys - active first, then spend desc, then usage % desc
+      const sortedKeys = sortKeys(this.keyInfo);
 
       // Current key section - show for selected key
       const currentKey = sortedKeys[this.selectedIndex]!; // Non-null assertion - array is not empty
@@ -234,7 +223,6 @@ export class AccountOverlayComponent {
       lines.push(emptyRow(this.width));
 
       // All keys section - show all keys in compact format (including current key)
-      lines.push(emptyRow(this.width));
       lines.push(row(` ${th.fg('accent', 'All keys')}`, this.width));
       lines.push(row(`   Workspace    Key name           Active   Spend    Used   `, this.width));
       for (let i = 0; i < sortedKeys.length; i++) {
@@ -246,7 +234,7 @@ export class AccountOverlayComponent {
       lines.push(row(th.fg('dim', ' No keys available'), this.width));
     }
     lines.push(boxBottom(this.width));
-    lines.push(plainRow(th.fg('dim', 'Esc to close'), this.width));
+    lines.push(plainRow(th.fg('dim', 'Esc to close  ·  r to refresh'), this.width));
     return lines;
   }
 
@@ -261,28 +249,15 @@ export class AccountOverlayComponent {
     // Format used/limit
     const usedLimitText = formatRemaining(key.used, key.limit);
 
-    // Format left
-    const leftText = formatLeft(key.remaining);
-
     // Format reset cadence
     const resetText = key.resetCadence || 'never';
-
-    // Format spend
-    const spendText = formatCurrency(key.spend);
 
     lines.push(row(`  name      ${truncate(key.name, 30)}`, this.width));
     lines.push(row(`  key       ${truncate(key.label, 30)}`, this.width));
     lines.push(row(`  status    ${formattedStatus}`, this.width));
     lines.push(row(`  used      ${usedLimitText}`, this.width));
-    lines.push(
-      row(
-        `  limit     ${key.limit === undefined ? 'unlimited' : formatCurrency(key.limit)}`,
-        this.width,
-      ),
-    );
-    lines.push(row(`  left      ${leftText}`, this.width));
     lines.push(row(`  reset     ${resetText}`, this.width));
-    lines.push(row(`  spend    ${spendText}`, this.width));
+    lines.push(row(`  byok      ${key.byok}`, this.width));
 
     return lines;
   }
@@ -370,8 +345,6 @@ export class AccountOverlayComponent {
       case 'danger':
         return 'error';
       case 'caution':
-        return 'warning';
-      case 'watch':
         return 'warning';
       case 'disabled':
         return 'error';

@@ -12,12 +12,7 @@ import { formatSessionId, isOpenRouterRequest, type OpenRouterSessionState } fro
 import { writeLocalUsage, type LocalUsageEvent } from './local-usage.js';
 import { AccountOverlayComponent } from './account-overlay.js';
 import { computeRollupStatus, sortKeys } from './account-format.js';
-import {
-  getAllKeys,
-  getCurrentKey,
-  getAccountCredits,
-  getCurrentKeyHash,
-} from './account-client.js';
+import { getAllKeys, getCurrentKey, getAccountCredits } from './account-client.js';
 import crypto from 'node:crypto';
 
 // Store the current session state for use in command handlers
@@ -186,8 +181,6 @@ export default function (pi: ExtensionAPI) {
 }
 
 async function showAccountOverlay(ctx: ExtensionContext) {
-  const currentKeyHash = getCurrentKeyHash();
-
   let error: string | null = null;
   let keyInfo: any[] | null = null;
   let credits: number | null = null;
@@ -241,14 +234,14 @@ async function showAccountOverlay(ctx: ExtensionContext) {
 
     // Sort keys and mark current session
     if (keyInfo) {
-      const sortedKeys = sortKeys(keyInfo, currentKeyHash);
+      const sortedKeys = sortKeys(keyInfo);
       keyInfo = sortedKeys.map((k) => ({
         ...k,
-        isCurrentSession: k.hash === currentKeyHash,
+        isCurrentSession: false, // current key tracking via hash removed
       }));
     }
 
-    await showAccountOverlayComponent(ctx, keyInfo, credits, rollupStatus, currentKeyHash, error);
+    await showAccountOverlayComponent(ctx, keyInfo, credits, rollupStatus, error);
   } catch (error_) {
     const err = error_ as Error;
     error =
@@ -270,7 +263,7 @@ async function showAccountOverlay(ctx: ExtensionContext) {
       ? computeRollupStatus(keyInfo)
       : { status: 'unavailable' as const };
 
-    await showAccountOverlayComponent(ctx, keyInfo, credits, rollupStatus, currentKeyHash, error);
+    await showAccountOverlayComponent(ctx, keyInfo, credits, rollupStatus, error);
   }
 }
 
@@ -279,7 +272,6 @@ async function showAccountOverlayComponent(
   keyInfo: any[] | null,
   credits: number | null,
   rollupStatus: any,
-  currentKeyHash: string | undefined,
   error: string | null,
 ) {
   await ctx.ui.custom<void>(
@@ -288,7 +280,6 @@ async function showAccountOverlayComponent(
         keyInfo,
         credits,
         rollupStatus,
-        currentKeyHash,
         error,
         theme,
         done,

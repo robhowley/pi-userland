@@ -16,9 +16,7 @@ export function computeKeyStatus(used: number, limit?: number, disabled?: boolea
 
   if (usageRatio < 0.7) {
     return 'healthy';
-  } else if (usageRatio < 0.85) {
-    return 'watch';
-  } else if (usageRatio < 0.95) {
+  } else if (usageRatio < 0.9) {
     return 'caution';
   } else {
     return 'danger';
@@ -52,29 +50,28 @@ export function formatLeft(remaining?: number): string {
 // Sorting
 // =============================================================================
 
-/** Sort keys by priority: current key first, then by status, then alphabetically */
-export function sortKeys(keys: KeyInfo[], currentHash?: string): KeyInfo[] {
-  const statusPriority: Record<string, number> = {
-    danger: 0,
-    caution: 1,
-    watch: 2,
-    disabled: 3,
-    partial: 4,
-    healthy: 5,
-    unbounded: 6,
-  };
-
+/** Sort keys by priority: active first, then spend desc, then usage % desc */
+export function sortKeys(keys: KeyInfo[]): KeyInfo[] {
   return [...keys].sort((a, b) => {
-    // Current key first
-    if (a.hash === currentHash && b.hash !== currentHash) return -1;
-    if (b.hash === currentHash && a.hash !== currentHash) return 1;
+    // Active keys first (disabled = false before disabled = true)
+    if (a.disabled !== b.disabled) {
+      return a.disabled ? 1 : -1;
+    }
 
-    // Then by status priority
-    const statusDiff = (statusPriority[a.status] ?? 0) - (statusPriority[b.status] ?? 0);
-    if (statusDiff !== 0) return statusDiff;
+    // Within active group: spend descending
+    if (a.spend !== b.spend) {
+      return b.spend - a.spend;
+    }
 
-    // Then alphabetically by label
-    return a.label.localeCompare(b.label);
+    // Within active group with same spend: usage % descending
+    const usagePercentA = a.limit ? (a.used / a.limit) * 100 : 0;
+    const usagePercentB = b.limit ? (b.used / b.limit) * 100 : 0;
+    if (usagePercentA !== usagePercentB) {
+      return usagePercentB - usagePercentA;
+    }
+
+    // Alphabetically by name as tiebreaker
+    return a.name.localeCompare(b.name);
   });
 }
 
@@ -89,9 +86,9 @@ export function computeRollupStatus(keys: KeyInfo[]): RollupStatus {
   }
 
   // Count keys by traffic light status
-  const red = keys.filter(k => k.status === 'disabled' || k.status === 'danger').length;
-  const yellow = keys.filter(k => k.status === 'caution' || k.status === 'watch').length;
-  const green = keys.filter(k => k.status === 'healthy' || k.status === 'unbounded').length;
+  const red = keys.filter((k) => k.status === 'disabled' || k.status === 'danger').length;
+  const yellow = keys.filter((k) => k.status === 'caution').length;
+  const green = keys.filter((k) => k.status === 'healthy' || k.status === 'unbounded').length;
 
   return {
     status: 'healthy' as const,

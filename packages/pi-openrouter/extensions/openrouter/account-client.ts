@@ -182,12 +182,10 @@ function rawToKeyInfo(raw: GetCurrentKeyData | ListData, workspaceName: string):
     status = 'danger';
   } else {
     const usedPercent = (used / limit) * 100;
-    if (usedPercent >= 95) {
+    if (usedPercent >= 90) {
       status = 'danger';
-    } else if (usedPercent >= 85) {
-      status = 'caution';
     } else if (usedPercent >= 70) {
-      status = 'watch';
+      status = 'caution';
     } else {
       status = 'healthy';
     }
