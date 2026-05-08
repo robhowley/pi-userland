@@ -53,12 +53,8 @@ export async function getAllKeys(): Promise<KeyInfo[] | null> {
       }
     }
 
-    // Debug: log all workspaces and keys to file (for troubleshooting)
-    const workspaceInfo = workspaces.map((w) => `  - ${w.name} (${w.id})`).join('\n');
-
     // Fetch keys from each workspace and combine them
     const allKeys: KeyInfo[] = [];
-    const workspaceKeys: Record<string, number> = {};
 
     for (const workspace of workspaces) {
       const workspaceId = workspace.id || DEFAULT_WORKSPACE_ID;
@@ -66,29 +62,8 @@ export async function getAllKeys(): Promise<KeyInfo[] | null> {
       const rawKeys = response.data;
 
       const keys = rawKeys.map((raw) => rawToKeyInfo(raw, workspace.name));
-      workspaceKeys[workspace.name] = keys.length;
       allKeys.push(...keys);
     }
-
-    // Write debug info to file
-    const fs = await import('fs');
-    const os = await import('os');
-    const logPath = `${os.homedir()}/.pi/debug/openrouter-account.log`;
-    const dirPath = `${os.homedir()}/.pi/debug`;
-    if (!fs.existsSync(dirPath)) {
-      fs.mkdirSync(dirPath, { recursive: true });
-    }
-    const debugInfo = [
-      `[openrouter-account] ${new Date().toISOString()}`,
-      `[openrouter-account] Workspaces found: ${workspaces.length}`,
-      workspaceInfo,
-      '',
-      `[openrouter-account] Keys per workspace:`,
-      ...Object.entries(workspaceKeys).map(([name, count]) => `  - ${name}: ${count} key(s)`),
-      '',
-      `[openrouter-account] Total keys: ${allKeys.length}`,
-    ].join('\n');
-    fs.writeFileSync(logPath, `${debugInfo}\n\n`, { flag: 'a' });
 
     return allKeys;
   } catch (err) {
@@ -191,7 +166,7 @@ function rawToKeyInfo(raw: GetCurrentKeyData | ListData, workspaceName: string):
     }
   }
 
-  // Create the object with explicit undefined for optional properties
+  // Create the object
   const keyInfo: KeyInfo = {
     name,
     label: raw.label,
@@ -202,7 +177,6 @@ function rawToKeyInfo(raw: GetCurrentKeyData | ListData, workspaceName: string):
     byok,
     hash,
     disabled,
-    isCurrentSession: false,
     workspaceName,
   };
 

@@ -232,13 +232,10 @@ async function showAccountOverlay(ctx: ExtensionContext) {
       ? computeRollupStatus(keyInfo)
       : { status: 'unavailable' as const };
 
-    // Sort keys and mark current session
+    // Sort keys
     if (keyInfo) {
       const sortedKeys = sortKeys(keyInfo);
-      keyInfo = sortedKeys.map((k) => ({
-        ...k,
-        isCurrentSession: false, // current key tracking via hash removed
-      }));
+      keyInfo = sortedKeys;
     }
 
     await showAccountOverlayComponent(ctx, keyInfo, credits, rollupStatus, error);

@@ -217,10 +217,14 @@ export class AccountOverlayComponent {
       const sortedKeys = sortKeys(this.keyInfo);
 
       // Current key section - show for selected key
-      const currentKey = sortedKeys[this.selectedIndex]!; // Non-null assertion - array is not empty
-      lines.push(row(` ${th.fg('accent', 'Selected key')}`, this.width));
-      lines.push(...this.buildKeyDetails(currentKey, th));
-      lines.push(emptyRow(this.width));
+      // Defensive: ensure index is within bounds before accessing
+      const index = Math.max(0, Math.min(this.selectedIndex, sortedKeys.length - 1));
+      const currentKey = sortedKeys[index];
+      if (currentKey) {
+        lines.push(row(` ${th.fg('accent', 'Selected key')}`, this.width));
+        lines.push(...this.buildKeyDetails(currentKey, th));
+        lines.push(emptyRow(this.width));
+      }
 
       // All keys section - show all keys in compact format (including current key)
       lines.push(row(` ${th.fg('accent', 'All keys')}`, this.width));
@@ -234,7 +238,7 @@ export class AccountOverlayComponent {
       lines.push(row(th.fg('dim', ' No keys available'), this.width));
     }
     lines.push(boxBottom(this.width));
-    lines.push(plainRow(th.fg('dim', 'Esc to close  ·  r to refresh'), this.width));
+    lines.push(plainRow(th.fg('dim', 'Esc to close  ·  r to refresh  ·  ↑/↓ to select'), this.width));
     return lines;
   }
 

@@ -27,7 +27,6 @@ export interface KeyInfo {
   byok: BYOKStatus; // incl (true), excl (false), ? (unavailable)
   hash: string; // Key hash for identification
   disabled: boolean; // Whether key is disabled
-  isCurrentSession: boolean; // Marked with ● if matches current session key
   workspaceName: string; // Name of the workspace this key belongs to
   spend: number; // Spend associated with this key (in USD)
 }

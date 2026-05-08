@@ -64,9 +64,6 @@ export async function fetchAndAggregate(): Promise<UsageSummary | null> {
     if (!analytics) hasActivityData = false;
   } catch (err) {
     // getActivity() requires a management key; suppress this expected error
-    if (!(err instanceof Error) || !err.message.includes('management key')) {
-      console.log('Activity fetch failed');
-    }
     hasActivityData = false;
   }
   const timestamp = Date.now();
@@ -125,7 +122,6 @@ export async function fetchAndAggregate(): Promise<UsageSummary | null> {
       localEvents.push(...localEventsList);
     } catch (err) {
       // Fail open - if local read fails, continue with empty local
-      console.log('Local usage read failed:', err);
     }
   }
 
@@ -172,11 +168,9 @@ function scheduleRefresh(): void {
       }
     } catch {
       consecutiveFailures++;
-      console.log(`Background refresh failed (${consecutiveFailures}/${MAX_RETRY_COUNT})`);
 
       // Stop after max retries reached
       if (consecutiveFailures >= MAX_RETRY_COUNT) {
-        console.log('Max retries reached, stopping background refresh');
         stopBackgroundRefresh();
         // TODO: Fire UI notification for persistent failure
         return;
