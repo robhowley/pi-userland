@@ -231,7 +231,7 @@ export class AccountOverlayComponent {
       // All keys section - show all keys in compact format (including current key)
       lines.push(emptyRow(this.width));
       lines.push(row(` ${th.fg('accent', 'All keys')}`, this.width));
-      lines.push(row(`   Workspace   Key name           Active   Spend    Usage   `, this.width));
+      lines.push(row(`   Workspace    Key name           Active   Spend    Usage   `, this.width));
       for (let i = 0; i < sortedKeys.length; i++) {
         lines.push(this.buildCompactKeyRow(sortedKeys[i]!, th, i === this.selectedIndex));
       }
@@ -341,10 +341,11 @@ export class AccountOverlayComponent {
     }
 
     // Pad usage to 6 chars for alignment based on visible width
-    const paddedUsage = padToWidth(theme.fg(usageColor as ThemeColor, usageText), 6);
+    const paddedUsage = padToWidth(theme.fg(usageColor as ThemeColor, usageText), 5);
 
-    const enabledIcon = key.disabled ? '❌' : '✅';
-    const paddedEnabledIcon = padToWidth(enabledIcon, 2);
+    const enabledIcon = key.disabled
+      ? this.theme.fg('error' as ThemeColor, '\u2717')
+      : this.theme.fg('success' as ThemeColor, '\u2713');
 
     // Truncate name and workspace for compact display
     const name = truncate(key.name, 28);
@@ -354,7 +355,7 @@ export class AccountOverlayComponent {
     const selectionIndicator = isSelected ? '●' : '○';
 
     return row(
-      ` ${selectionIndicator} ${workspace.padEnd(10)}  ${name.padEnd(20)} ${paddedEnabledIcon}    ${paddedSpend}  ${paddedUsage} `,
+      ` ${selectionIndicator} ${workspace.padEnd(11)}  ${name.padEnd(21)} ${enabledIcon}     ${paddedSpend}  ${paddedUsage}`,
       this.width,
     );
   }
