@@ -13,6 +13,8 @@ import { writeLocalUsage, type LocalUsageEvent } from './local-usage.js';
 import { AccountOverlayComponent } from './account-overlay.js';
 import { computeRollupStatus, sortKeys } from './account-format.js';
 import { getAllKeys, getCurrentKey, getAccountCredits } from './account-client.js';
+import type { KeyInfo } from './account-types.js';
+import type { RollupStatus } from './account-types.js';
 import crypto from 'node:crypto';
 
 // Store the current session state for use in command handlers
@@ -182,7 +184,7 @@ export default function (pi: ExtensionAPI) {
 
 async function showAccountOverlay(ctx: ExtensionContext) {
   let error: string | null = null;
-  let keyInfo: any[] | null = null;
+  let keyInfo: KeyInfo[] | null = null;
   let credits: number | null = null;
 
   try {
@@ -266,9 +268,9 @@ async function showAccountOverlay(ctx: ExtensionContext) {
 
 async function showAccountOverlayComponent(
   ctx: ExtensionContext,
-  keyInfo: any[] | null,
+  keyInfo: KeyInfo[] | null,
   credits: number | null,
-  rollupStatus: any,
+  rollupStatus: RollupStatus,
   error: string | null,
 ) {
   await ctx.ui.custom<void>(

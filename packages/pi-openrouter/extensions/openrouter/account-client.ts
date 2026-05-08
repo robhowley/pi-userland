@@ -67,8 +67,9 @@ export async function getAllKeys(): Promise<KeyInfo[] | null> {
 
     return allKeys;
   } catch (err) {
-    // If management key fails, fall back to current key only
-    if (err instanceof ApiError && (err as any).statusCode === 403) {
+    // If management key fails (403), fall back to current key only
+    const sdkErr = err as { status?: number };
+    if (sdkErr.status === 403) {
       return null;
     }
     throw mapSdkError(err);

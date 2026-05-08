@@ -238,7 +238,9 @@ export class AccountOverlayComponent {
       lines.push(row(th.fg('dim', ' No keys available'), this.width));
     }
     lines.push(boxBottom(this.width));
-    lines.push(plainRow(th.fg('dim', 'Esc to close  ·  r to refresh  ·  ↑/↓ to select'), this.width));
+    lines.push(
+      plainRow(th.fg('dim', 'Esc to close  ·  r to refresh  ·  ↑/↓ to select'), this.width),
+    );
     return lines;
   }
 

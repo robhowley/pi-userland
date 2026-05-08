@@ -1,4 +1,4 @@
-import type { CacheEntry, UsageSummary } from './types.js';
+import type { CacheEntry, UsageSummary, LocalUsageEvent, UsageAggregate } from './types.js';
 import type { ActivityItem } from '@openrouter/sdk/models/index.js';
 import { aggregateUsage } from './format.js';
 import { getCredits, getActivity } from './client.js';
@@ -62,7 +62,7 @@ export async function fetchAndAggregate(): Promise<UsageSummary | null> {
   try {
     analytics = await getActivity();
     if (!analytics) hasActivityData = false;
-  } catch (err) {
+  } catch {
     // getActivity() requires a management key; suppress this expected error
     hasActivityData = false;
   }
@@ -103,13 +103,13 @@ export async function fetchAndAggregate(): Promise<UsageSummary | null> {
                 completionTokens: item.completionTokens,
                 reasoningTokens: item.reasoningTokens,
                 cost: item.usage,
-              }) as any,
+              }) as LocalUsageEvent,
           ),
         )
       : ZERO_AGGREGATE;
 
   // Read local JSONL after officialThroughDate
-  const localEvents: any[] = [];
+  const localEvents: LocalUsageEvent[] = [];
   if (officialThroughDate) {
     // Read from the day after officialThroughDate to today
     const localFrom = addUtcDays(officialThroughDate, 1);
@@ -120,7 +120,7 @@ export async function fetchAndAggregate(): Promise<UsageSummary | null> {
         toDateUtc: localTo,
       });
       localEvents.push(...localEventsList);
-    } catch (err) {
+    } catch {
       // Fail open - if local read fails, continue with empty local
     }
   }
@@ -129,7 +129,7 @@ export async function fetchAndAggregate(): Promise<UsageSummary | null> {
   const localAggregate = aggregateLocal(localEvents);
 
   // Combine official + local
-  const combinedAggregate: any = {
+  const combinedAggregate: UsageAggregate = {
     requests: officialAggregate.requests + localAggregate.requests,
     promptTokens: officialAggregate.promptTokens + localAggregate.promptTokens,
     completionTokens: officialAggregate.completionTokens + localAggregate.completionTokens,

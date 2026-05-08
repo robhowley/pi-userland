@@ -62,7 +62,7 @@ export function aggregateUsage(
     modelPermaslug: e.model || 'unknown',
   }));
 
-  const allData = [...analytics, ...localItems] as any[];
+  const allData = [...analytics, ...localItems];
 
   // Build model stats for both 7d and 30d windows
   // Use allData (combined API + local) for 30d, weekData (combined) for 7d
