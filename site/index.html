@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <title>pi-userland</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap nav">
+      <a class="brand" href="#">pi-userland</a>
+      <nav class="nav-links" aria-label="Primary navigation">
+        <a href="#packages">Packages</a>
+        <a href="https://pi.dev/">Pi</a>
+        <a href="https://github.com/robhowley/pi-userland">GitHub</a>
+        <a class="install-link" href="#install">Install</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="hero">
+      <div>
+        <div class="eyebrow mono">&gt; Pi userland</div>
+        <h1>Pi extensions for sharper agent sessions.</h1>
+        <p class="hero-copy">
+          Usage overlays, structured command returns, session health lights, bash guardrails, and a little terminal personality for long-running Pi work.
+        </p>
+        <div class="hero-actions">
+          <a class="button primary" href="#packages">Browse packages</a>
+          <a class="button" href="https://github.com/robhowley/pi-userland">View GitHub</a>
+        </div>
+      </div>
+
+      <div class="compare" aria-label="Structured return before and after comparison">
+        <article class="compare-card surface">
+          <div class="label mono">before · raw pytest</div>
+          <div class="terminal">
+            <div class="terminal-head mono">
+              <span>pytest</span>
+              <span class="terminal-dots" aria-hidden="true"><span></span><span></span><span></span></span>
+            </div>
+            <div class="terminal-body">
+              <pre>================ test session starts ================
+collected 3 items
+
+test_math.py::test_adds_two_numbers_correctly PASSED
+test_math.py::test_multiplies_two_numbers_correctly FAILED
+test_math.py::test_does_not_divide_by_zero FAILED
+
+____________ test_multiplies_two_numbers_correctly ____________
+&gt;       assert 3 * 4 == 99
+E       assert (3 * 4) == 99
+
+test_math.py:5: AssertionError
+____________ test_does_not_divide_by_zero ____________
+&gt;       result = 1 / 0
+E       ZeroDivisionError: division by zero</pre>
+            </div>
+          </div>
+        </article>
+
+        <div class="compare-arrow mono" aria-hidden="true">→</div>
+
+        <article class="compare-card surface">
+          <div class="label mono">after · structured_return</div>
+          <div class="terminal">
+            <div class="terminal-head mono">
+              <span>structured_return</span>
+              <span class="terminal-dots" aria-hidden="true"><span></span><span></span><span></span></span>
+            </div>
+            <div class="terminal-body">
+              <pre><span class="accent">&gt;</span> pytest test_math.py --junitxml=.tmp/report.xml
+<span class="muted">cwd: project</span>
+
+<span class="red">2 failed</span>, <span class="green">1 passed</span>
+  test_math.py:5  assert (3 * 4) == 99
+  test_math.py:8  ZeroDivisionError: division by zero
+
+<span class="green">262 → 56 tokens</span>
+<span class="muted">full log preserved on disk</span></pre>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section id="packages" class="section featured surface" aria-label="Featured package">
+      <div class="featured-copy">
+        <div class="section-kicker mono">Featured</div>
+        <h2 class="mono">pi-openrouter</h2>
+        <p>
+          Live OpenRouter visibility inside Pi: spend, credits, key limits, burn rate, model/provider usage, and automatic <code>session_id</code> tagging.
+        </p>
+        <div class="badge mono">Rapidly expanding</div>
+        <div class="bullets mono" aria-label="pi-openrouter features">
+          <span>/openrouter-usage</span>
+          <span>/openrouter-account</span>
+          <span>/openrouter-session</span>
+        </div>
+      </div>
+
+      <div class="tui-grid">
+        <article class="terminal tui" aria-label="OpenRouter Account TUI preview">
+          <div class="terminal-head mono">
+            <span>◆ OpenRouter Account · /openrouter-account</span>
+            <span class="terminal-dots" aria-hidden="true"><span></span><span></span><span></span></span>
+          </div>
+          <div class="terminal-body">
+            <pre>usage      $39.22
+credits    $40.00
+status     <span class="red">● 2</span>  <span class="yellow">● 0</span>  <span class="green">● 1</span>
+
+<span class="accent">Selected key</span>
+  name      local-dev
+  key       sk-or-v1-929...f6b
+  status    <span class="red">danger</span>
+  used      $39.22 / $42.00
+  reset     monthly
+  byok      excl
+
+<span class="accent">All keys</span>
+  Workspace    Key name          Active   Spend    Used
+  ● dev        local-dev         <span class="green">✓</span>        $39.22   <span class="red">93%</span>
+  ○ Default    default-space-key <span class="green">✓</span>        $0.00    <span class="green">0%</span>
+
+<span class="muted">Esc to close · r to refresh · ↑/↓ to select</span></pre>
+          </div>
+        </article>
+
+        <article class="terminal tui" aria-label="OpenRouter Usage TUI preview">
+          <div class="terminal-head mono">
+            <span>◆ OpenRouter Usage · /openrouter-usage</span>
+            <span class="terminal-dots" aria-hidden="true"><span></span><span></span><span></span></span>
+          </div>
+          <div class="terminal-body">
+            <pre>Month $39.25 / $40.00                    <span class="yellow">cap (98%)</span>
+7d    $32.84                         <span class="red">burn ~$140.76</span>
+Today ~$1.11 · 281 reqs
+
+<span class="accent">Top models (7d)</span>
+  qwen/qwen3-coder-next      $25.67   302.7M   $0.08
+  moonshotai/kimi-k2.5       $6.06     33.4M   $0.18
+
+<span class="accent">By provider (30d)</span>
+  ionstream/fp8              $20.09   207.4M
+  parasail/bf16              $11.30   150.6M
+  unknown                     $4.43    13.4M
+
+<span class="accent">Daily spend (30d)</span>
+ 8 |                        █ █
+ 6 |                  █     █ █  █
+ 4 |                  █   █ █ █ █
+ 2 |                  █ ███ █ ███
+ 0 +------------------------------
+      Apr 29             May 08
+
+<span class="muted">Updated 11:56 PM · today from tracked turns</span></pre>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section packages" aria-label="Packages">
+      <article class="package surface">
+        <h3 class="mono">pi-structured-return</h3>
+        <p>Explicit <code>structured_return</code> tool alongside bash. Compact parsed results with full logs preserved.</p>
+        <div class="terminal" aria-label="structured return preview">
+          <div class="terminal-head mono">
+            <span>structured_return</span>
+            <span class="terminal-dots" aria-hidden="true"><span></span><span></span><span></span></span>
+          </div>
+          <div class="terminal-body">
+            <pre><span class="accent">&gt;</span> structured_return pytest test_math.py
+
+<span class="red">2 failed</span>, <span class="green">1 passed</span>
+  test_math.py:5  assert (3 * 4) == 99
+  test_math.py:8  ZeroDivisionError: division by zero
+
+<span class="muted">full log: .pi/structured-return/logs/...</span>
+<span class="green">60–95% fewer tokens on noisy tools</span></pre>
+          </div>
+        </div>
+      </article>
+
+      <article class="package surface">
+        <h3 class="mono">session-hygiene</h3>
+        <p>Status bar health light based on cumulative assistant cost, context tokens, and optional cache-rate info.</p>
+        <div class="terminal" aria-label="session hygiene status preview">
+          <div class="terminal-head mono">
+            <span>status bar</span>
+            <span class="terminal-dots" aria-hidden="true"><span></span><span></span><span></span></span>
+          </div>
+          <div class="terminal-body">
+            <pre>~/src/my-project (main)
+↑34 ↓18k R868k W175k $1.982 7.4%/1.0M (auto)
+<span class="yellow">🟡 session growing</span> · <span class="green">98% cache</span>
+
+<span class="accent">/session-hygiene</span>  <span class="muted">configure thresholds</span></pre>
+          </div>
+        </div>
+      </article>
+
+      <article class="package surface">
+        <h3 class="mono">pi-yolo-seatbelt</h3>
+        <p>Configurable bash safety guard. Block catastrophic commands, ask on destructive ones, allow the rest.</p>
+        <div class="terminal" aria-label="yolo seatbelt preview">
+          <div class="terminal-head mono">
+            <span>bash guardrail</span>
+            <span class="terminal-dots" aria-hidden="true"><span></span><span></span><span></span></span>
+          </div>
+          <div class="terminal-body">
+            <pre><span class="accent">&gt;</span> rm -rf /
+<span class="red">BLOCK</span>  rm-rf-root
+<span class="muted">catastrophic filesystem delete</span>
+
+<span class="accent">&gt;</span> git push --force
+<span class="yellow">ASK</span>    git.push-force
+<span class="muted">confirm before history rewrite</span>
+
+<span class="accent">/yolo-seatbelt-rules</span></pre>
+          </div>
+        </div>
+      </article>
+
+      <article class="package surface">
+        <h3 class="mono">pi-spinner-verbs</h3>
+        <p>Replace default spinner text with themed verbs. Pick a theme, randomize each session, or point to your own verbs file.</p>
+        <div class="terminal" aria-label="spinner verbs preview">
+          <div class="terminal-head mono">
+            <span>spinner verbs</span>
+            <span class="terminal-dots" aria-hidden="true"><span></span><span></span><span></span></span>
+          </div>
+          <div class="terminal-body">
+            <pre><span class="accent">&gt;</span> /verbs
+  game-of-thrones
+  lord-of-the-rings
+  doc-emrick
+  weird-legalese
+
+<span class="accent">&gt;</span> /verbs doc-emrick
+<span class="blue">Shunting...</span>
+<span class="blue">Fiddling...</span>
+
+<span class="accent">/verb-status</span></pre>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section class="section philosophy surface">
+      <strong>Independent packages.</strong> Shared taste. Install one or compose several.
+    </section>
+
+    <section id="install" class="section install-section surface" aria-label="Install commands">
+      <div class="install-head">
+        <div>
+          <div class="section-kicker mono">Install</div>
+          <h2>Direct from npm into Pi</h2>
+        </div>
+        <p>Use one package at a time, or build your own stack.</p>
+      </div>
+
+      <div class="install-grid">
+        <div class="cmd"><span class="prompt mono">&gt;</span><code>pi install npm:@robhowley/pi-openrouter</code></div>
+        <div class="cmd"><span class="prompt mono">&gt;</span><code>pi install npm:@robhowley/pi-structured-return</code></div>
+        <div class="cmd"><span class="prompt mono">&gt;</span><code>pi install npm:@robhowley/session-hygiene</code></div>
+        <div class="cmd"><span class="prompt mono">&gt;</span><code>pi install npm:@robhowley/pi-yolo-seatbelt</code></div>
+        <div class="cmd"><span class="prompt mono">&gt;</span><code>pi install npm:@robhowley/pi-spinner-verbs</code></div>
+      </div>
+
+      <div class="footer-note">
+        Built for Pi power users who want more visibility, less noise, and a few guardrails.
+      </div>
+    </section>
+  </main>
+</body>
+</html>
