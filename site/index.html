@@ -22,17 +22,28 @@
 
   <main class="wrap">
     <section class="hero">
-      <div>
-        <div class="eyebrow mono">&gt; Pi userland</div>
-        <h1>Pi extensions for sharper agent sessions.</h1>
-        <p class="hero-copy">
-          Usage overlays, structured command returns, session health lights, bash guardrails, and a little terminal personality for long-running Pi work.
-        </p>
-        <div class="hero-actions">
-          <a class="button primary" href="#packages">Browse packages</a>
-          <a class="button" href="https://github.com/robhowley/pi-userland">View GitHub</a>
-        </div>
-      </div>
+      <div class="hero-main">
+    <div class="eyebrow mono">&gt; Pi userland</div>
+    <h1>Pi extensions for sharper agent sessions.</h1>
+    <p class="hero-copy">
+      Usage overlays, structured command returns, session health lights, bash guardrails, and a little terminal personality for long-running Pi work.
+    </p>
+    <div class="hero-actions">
+      <a class="button primary" href="#packages">Browse packages</a>
+      <a class="button" href="https://github.com/robhowley/pi-userland">View GitHub</a>
+    </div>
+  </div>
+
+  <aside class="hero-aside surface">
+    <div class="hero-aside-label mono">current packages</div>
+    <div class="hero-package-list mono">
+      <span>pi-openrouter</span>
+      <span>pi-structured-return</span>
+      <span>session-hygiene</span>
+      <span>pi-yolo-seatbelt</span>
+      <span>pi-spinner-verbs</span>
+    </div>
+  </aside>
 
       <div class="compare" aria-label="Structured return before and after comparison">
         <article class="compare-card surface">
@@ -65,25 +76,28 @@ E       ZeroDivisionError: division by zero</pre>
         <div class="compare-arrow mono" aria-hidden="true">→</div>
 
         <article class="compare-card surface">
-          <div class="label mono">after · structured_return</div>
-          <div class="terminal">
-            <div class="terminal-head mono">
-              <span>structured_return</span>
-              <span class="terminal-dots" aria-hidden="true"><span></span><span></span><span></span></span>
-            </div>
-            <div class="terminal-body">
-              <pre><span class="accent">&gt;</span> pytest test_math.py --junitxml=.tmp/report.xml
+  <div class="label mono">after · structured_return</div>
+
+  <div class="terminal">
+    <div class="terminal-head mono">
+      <span>structured_return</span>
+      <span class="terminal-dots" aria-hidden="true"><span></span><span></span><span></span></span>
+    </div>
+    <div class="terminal-body">
+      <pre><span class="accent">&gt;</span> pytest test_math.py --junitxml=.tmp/report.xml
 <span class="muted">cwd: project</span>
 
 <span class="red">2 failed</span>, <span class="green">1 passed</span>
   test_math.py:5  assert (3 * 4) == 99
-  test_math.py:8  ZeroDivisionError: division by zero
+  test_math.py:8  ZeroDivisionError: division by zero</pre>
+    </div>
+  </div>
 
-<span class="green">262 → 56 tokens</span>
-<span class="muted">full log preserved on disk</span></pre>
-            </div>
-          </div>
-        </article>
+  <div class="compare-meta">
+    <div class="compare-metric mono">262 → 56 tokens</div>
+    <div class="compare-note">Full log preserved on disk</div>
+  </div>
+</article>
       </div>
     </section>
 
@@ -152,10 +166,11 @@ Today ~$1.11 · 281 reqs
 <span class="accent">Daily spend (30d)</span>
  8 |                        █ █
  6 |                  █     █ █  █
- 4 |                  █   █ █ █ █
- 2 |                  █ ███ █ ███
+ 4 |                  █   █ █ █ ██
+ 2 |                  █ ███ █ ████
  0 +------------------------------
-      Apr 29             May 08
+      Apr               May
+    25        30       04      08
 
 <span class="muted">Updated 11:56 PM · today from tracked turns</span></pre>
           </div>
@@ -179,8 +194,7 @@ Today ~$1.11 · 281 reqs
   test_math.py:5  assert (3 * 4) == 99
   test_math.py:8  ZeroDivisionError: division by zero
 
-<span class="muted">full log: .pi/structured-return/logs/...</span>
-<span class="green">60–95% fewer tokens on noisy tools</span></pre>
+<span class="green">60–95% fewer tokens</span></pre>
           </div>
         </div>
       </article>

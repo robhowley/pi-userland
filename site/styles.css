@@ -143,12 +143,55 @@ p {
 /* Hero is intentionally one-column now.
    The structured-return demo needs width. */
 .hero {
-  display: block;
+  display: grid;
+  grid-template-columns: minmax(0, 760px) minmax(300px, 380px);
+  gap: 30px clamp(40px, 8vw, 96px);
+  align-items: center;
   padding: 18px 0 34px;
 }
 
-.hero > div:first-child {
-  max-width: 760px;
+.hero-main {
+  min-width: 0;
+}
+
+.hero-aside {
+  justify-self: end;
+  width: 100%;
+  padding: 20px;
+}
+
+.hero-aside-label {
+  color: var(--accent);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 16px;
+}
+
+.hero-package-list {
+  display: grid;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.hero-package-list span {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.hero-package-list span::before {
+  content: "◆";
+  color: var(--accent);
+  font-size: 0.62rem;
+  flex: 0 0 auto;
+}
+
+.compare {
+  grid-column: 1 / -1;
 }
 
 .eyebrow {
@@ -408,7 +451,7 @@ pre {
 .tui-grid {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
 }
 
@@ -416,23 +459,43 @@ pre {
   font-size: 0.735rem;
 }
 
+.tui {
+  min-height: 430px;
+}
+
 .packages {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 16px;
 }
 
 .package {
   display: flex;
   min-width: 0;
-  min-height: 278px;
+  min-height: 360px;
   flex-direction: column;
   padding: 18px;
+}
+
+.package h3 {
+  font-size: 1.28rem;
+}
+
+.package p {
+  font-size: 0.91rem;
+  line-height: 1.45;
 }
 
 .package .terminal {
   margin-top: 14px;
   flex: 1;
+  max-height: 230px;
+  overflow: hidden;
+}
+
+.package .terminal-body {
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .philosophy {
@@ -523,7 +586,17 @@ pre {
     width: 100%;
     margin-inline: auto;
   }
+
+  .packages {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
+
+@media (max-width: 700px) {
+  .packages {
+      grid-template-columns: 1fr;
+  }
+ }
 
 @media (max-width: 1060px) {
   .featured,
@@ -585,4 +658,30 @@ pre {
   .terminal-body {
     padding: 11px;
   }
+
+  .hero {
+    grid-template-columns: 1fr;
+  }
+
+  .hero-aside {
+    justify-self: stretch;
+    max-width: 520px;
+  }
+}
+
+.compare-meta {
+  margin-top: 10px;
+  display: grid;
+  gap: 4px;
+}
+
+.compare-metric {
+  color: var(--green);
+  font-size: 0.92rem;
+  font-weight: 750;
+}
+
+.compare-note {
+  color: var(--dim);
+  font-size: 0.9rem;
 }
