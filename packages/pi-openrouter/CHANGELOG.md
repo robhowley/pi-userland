@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.5.1...pi-openrouter-v0.6.0) (2026-05-08)
+
+
+### Features
+
+* **pi-openrouter:** add account api key management TUI ([#39](https://github.com/robhowley/pi-userland/issues/39)) ([0230656](https://github.com/robhowley/pi-userland/commit/0230656971d5240797cc34f43e94ba3ce963a67e))
+
 ## [0.5.1](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.5.0...pi-openrouter-v0.5.1) (2026-05-07)
 
 
