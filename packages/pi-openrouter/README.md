@@ -35,6 +35,25 @@ The extension refreshes data in the background every 30 seconds (with exponentia
 
 <img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-openrouter/img/openrouter-usage-tui.png" alt="OpenRouter Usage Overlay" width="600">
 
+## Account health
+
+Type `/openrouter-account` in Pi to open the account health overlay.
+
+The overlay shows:
+
+- **Credits** balance
+- **Total usage** against available credits
+- **Status by key**
+- **Selected key** details
+- **Key spend** vs configured limit
+- **Reset cadence**
+- **BYOK limit behavior**
+- **All visible keys**, when a management key is configured
+
+Select a key from the list to inspect its limit, usage, reset cadence, and BYOK behavior.
+
+<img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-openrouter/img/openrouter-account-tui.png" alt="OpenRouter Account Overlay" width="600">
+
 ## Session tracking
 
 `pi-openrouter` automatically tags OpenRouter requests with `session_id` field set to the Pi session's ID.
