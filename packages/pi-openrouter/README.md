@@ -1,6 +1,6 @@
 # pi-openrouter
 
-A [Pi](https://pi.dev/) extension for OpenRouter usage and session visibility, with an `/openrouter-usage` terminal overlay for spend, caps, burn rate, live tracking, and model breakdowns, plus automatic `session_id` tagging for dashboard grouping.
+A [Pi](https://pi.dev/) extension for live OpenRouter visibility: TUI overlays for spend, credits, key limits, burn rate, and model usage, plus automatic `session_id` tagging for dashboard grouping.
 
 ## Installation
 
@@ -34,6 +34,25 @@ The overlay shows:
 The extension refreshes data in the background every 30 seconds (with exponential backoff on errors).
 
 <img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-openrouter/img/openrouter-usage-tui.png" alt="OpenRouter Usage Overlay" width="600">
+
+## Account health
+
+Type `/openrouter-account` in Pi to open the account health overlay.
+
+The overlay shows:
+
+- **Credits** balance
+- **Total usage** against available credits
+- **Status by key**
+- **Selected key** details
+- **Key spend** vs configured limit
+- **Reset cadence**
+- **BYOK limit behavior**
+- **All visible keys**, when a management key is configured
+
+Select a key from the list to inspect its limit, usage, reset cadence, and BYOK behavior.
+
+<img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-openrouter/img/openrouter-account-tui.png" alt="OpenRouter Account Overlay" width="600">
 
 ## Session tracking
 

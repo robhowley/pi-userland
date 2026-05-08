@@ -10,6 +10,11 @@ import { AuthError } from './client.js';
 import { UsageOverlayComponent } from './overlay.js';
 import { formatSessionId, isOpenRouterRequest, type OpenRouterSessionState } from './session.js';
 import { writeLocalUsage, type LocalUsageEvent } from './local-usage.js';
+import { AccountOverlayComponent } from './account-overlay.js';
+import { computeRollupStatus, sortKeys } from './account-format.js';
+import { getAllKeys, getCurrentKey, getAccountCredits } from './account-client.js';
+import type { KeyInfo } from './account-types.js';
+import type { RollupStatus } from './account-types.js';
 import crypto from 'node:crypto';
 
 // Store the current session state for use in command handlers
@@ -167,6 +172,140 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.notify(`OpenRouter session_id\n${idToShow}`, 'info');
     },
   });
+
+  pi.registerCommand('openrouter-account', {
+    description: 'Show OpenRouter account and key health',
+    getArgumentCompletions: () => null,
+    handler: async (_args, ctx) => {
+      await showAccountOverlay(ctx);
+    },
+  });
+}
+
+async function showAccountOverlay(ctx: ExtensionContext) {
+  let error: string | null = null;
+  let keyInfo: KeyInfo[] | null = null;
+  let credits: number | null = null;
+
+  try {
+    // Try to get all keys with management key
+    const allKeys = await getAllKeys();
+
+    if (allKeys && allKeys.length > 0) {
+      keyInfo = allKeys;
+    } else {
+      // getAllKeys() returns null or empty array when management key isn't available
+      // or when the API call fails with 403
+      error = 'Key list unavailable - set OPENROUTER_MANAGEMENT_KEY for full key inventory.';
+
+      // Fall back to current key only
+      try {
+        const currentKey = await getCurrentKey();
+        if (currentKey) {
+          keyInfo = [currentKey];
+          // Clear the error since we successfully got current key
+          error = null;
+        } else {
+          error = 'Failed to retrieve current key metadata. Check your API key permissions.';
+        }
+      } catch (err) {
+        error = `Failed to retrieve current key: ${(err as Error).message}`;
+      }
+    }
+
+    // Try to get account credits
+    credits = await getAccountCredits();
+
+    // Set error if we have no keys and no credits
+    if (!keyInfo && !credits) {
+      error =
+        'OpenRouter API key not found. Set OPENROUTER_MANAGEMENT_KEY (preferred) or OPENROUTER_API_KEY to use /openrouter-account.';
+    }
+
+    // Set error if we have credits but no keys
+    if (!keyInfo && credits !== null) {
+      error =
+        error ||
+        'Key information unavailable. Set OPENROUTER_MANAGEMENT_KEY for full key inventory.';
+    }
+
+    // Compute rollup status
+    const rollupStatus = keyInfo
+      ? computeRollupStatus(keyInfo)
+      : { status: 'unavailable' as const };
+
+    // Sort keys
+    if (keyInfo) {
+      const sortedKeys = sortKeys(keyInfo);
+      keyInfo = sortedKeys;
+    }
+
+    await showAccountOverlayComponent(ctx, keyInfo, credits, rollupStatus, error);
+  } catch (error_) {
+    const err = error_ as Error;
+    error =
+      err instanceof AuthError
+        ? 'OpenRouter API key not found. Set OPENROUTER_MANAGEMENT_KEY (preferred) or OPENROUTER_API_KEY to use /openrouter-account.'
+        : `API Error: ${err.message}`;
+
+    // Try to get current key for overlay even on error
+    try {
+      const currentKey = await getCurrentKey();
+      if (currentKey) {
+        keyInfo = [currentKey];
+      }
+    } catch {
+      // Ignore secondary errors
+    }
+
+    const rollupStatus = keyInfo
+      ? computeRollupStatus(keyInfo)
+      : { status: 'unavailable' as const };
+
+    await showAccountOverlayComponent(ctx, keyInfo, credits, rollupStatus, error);
+  }
+}
+
+async function showAccountOverlayComponent(
+  ctx: ExtensionContext,
+  keyInfo: KeyInfo[] | null,
+  credits: number | null,
+  rollupStatus: RollupStatus,
+  error: string | null,
+) {
+  await ctx.ui.custom<void>(
+    (_tui, theme, _keybindings, done) => {
+      const overlayComponent = new AccountOverlayComponent(
+        keyInfo,
+        credits,
+        rollupStatus,
+        error,
+        theme,
+        done,
+        () => _tui.requestRender(),
+        ctx,
+      );
+
+      return {
+        handleInput: (data: string) => {
+          overlayComponent.handleInput(data);
+          _tui.requestRender();
+        },
+        render: (width: number) => overlayComponent.render(width),
+        invalidate: () => overlayComponent.invalidate(),
+        dispose: () => {
+          overlayComponent.dispose();
+        },
+        wantsKeyRelease: false,
+      };
+    },
+    {
+      overlay: true,
+      overlayOptions: {
+        width: 100,
+      },
+    },
+  );
 }
 
 async function showUsageOverlay(ctx: ExtensionContext, _subcommand?: string) {
