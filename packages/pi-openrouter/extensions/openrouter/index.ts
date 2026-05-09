@@ -180,6 +180,46 @@ export default function (pi: ExtensionAPI) {
       await showAccountOverlay(ctx);
     },
   });
+
+  // Single entry point with subcommands: /openrouter [usage|account|session]
+  pi.registerCommand('openrouter', {
+    description: 'OpenRouter commands: usage, account, session',
+    getArgumentCompletions: (prefix: string) => {
+      const subcommands = ['usage', 'account', 'session'];
+      const items = subcommands
+        .filter((s) => s.startsWith(prefix))
+        .map((s) => ({ value: s, label: s }));
+      return items.length > 0 ? items : null;
+    },
+    handler: async (args, ctx) => {
+      const subcommand = args.trim().split(/\s+/)[0] || '';
+
+      switch (subcommand) {
+        case 'usage': {
+          startBackgroundRefresh();
+          await showUsageOverlay(ctx, undefined);
+          break;
+        }
+        case 'account': {
+          await showAccountOverlay(ctx);
+          break;
+        }
+        case 'session': {
+          ctx.ui.notify(`OpenRouter session_id\n${getCurrentSessionId(ctx)}`, 'info');
+          break;
+        }
+        default: {
+          const available = ['usage', 'account', 'session'];
+          const message =
+            available.length > 0
+              ? `Available subcommands: ${available.join(', ')}${available.length > 1 ? '' : ''}`
+              : 'No subcommands available';
+          ctx.ui.notify(`OpenRouter subcommands\n${message}`, 'error');
+          break;
+        }
+      }
+    },
+  });
 }
 
 async function showAccountOverlay(ctx: ExtensionContext) {

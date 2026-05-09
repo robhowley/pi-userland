@@ -173,15 +173,21 @@ export class AccountOverlayComponent {
     return Math.max(MIN_WIDTH, this.keyInfo && this.keyInfo.length > 0 ? 55 : 50);
   }
 
+  /** Get the header row for the account overlay */
+  private getAccountHeaderRow(): string {
+    return row(
+      this.theme.fg('accent', this.theme.bold(' ◈ OpenRouter Account  ·  /openrouter account')),
+      this.width,
+    );
+  }
+
   private buildLines(): string[] {
     const th = this.theme;
     const lines: string[] = [];
 
     if (this.error) {
       lines.push(boxTop(this.width));
-      lines.push(
-        row(th.fg('accent', th.bold(' ◈ OpenRouter Account  ·  /openrouter-account')), this.width),
-      );
+      lines.push(this.getAccountHeaderRow());
       lines.push(emptyRow(this.width));
       lines.push(row(th.fg('error', this.error), this.width));
       lines.push(boxBottom(this.width));
@@ -190,9 +196,7 @@ export class AccountOverlayComponent {
     }
 
     lines.push(boxTop(this.width));
-    lines.push(
-      row(th.fg('accent', th.bold(' ◈ OpenRouter Account  ·  /openrouter-account')), this.width),
-    );
+    lines.push(this.getAccountHeaderRow());
     lines.push(emptyRow(this.width));
 
     // Total spend line (sum of all key spends)

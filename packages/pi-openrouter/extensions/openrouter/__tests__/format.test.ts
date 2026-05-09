@@ -43,8 +43,10 @@ describe('aggregateUsage', () => {
       totalCredits: 100,
     };
     // Use a date that's within the last 7 days of when the test runs.
-    // We use a date from the past month that's been long enough to survive timezone offsets.
-    const date = '2026-05-01';
+    // Get today's date in UTC and subtract a few days to ensure it's in the week window.
+    const now = new Date();
+    const testDate = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000); // 3 days ago
+    const date = `${testDate.getUTCFullYear()}-${String(testDate.getUTCMonth() + 1).padStart(2, '0')}-${String(testDate.getUTCDate()).padStart(2, '0')}`;
     const analytics: ActivityItem[] = [
       {
         date: date,
@@ -77,9 +79,9 @@ describe('aggregateUsage', () => {
     const result = aggregateUsage(credits, analytics);
 
     expect(result.month).toBe(38.42);
-    // Data from May 1 should be in the week (but may not be in "today" depending on timezone)
+    // Data from the test date should be in the week (7 days ago window)
     expect(result.week).toBeGreaterThan(0);
-    // Today's data might not be from May 1 due to timezone, so just check month
+    // Today's data might not be from the test date due to timezone, so just check month
   });
 
   it('should calculate burn rate correctly', () => {
