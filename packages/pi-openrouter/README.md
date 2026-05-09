@@ -56,15 +56,9 @@ Select a key from the list to inspect its limit, usage, reset cadence, and BYOK 
 
 ## Session tracking
 
-`pi-openrouter` automatically tags OpenRouter requests with `session_id` field set to the Pi session's ID.
+`pi-openrouter` automatically tags OpenRouter requests with a `session_id` derived from the Pi session ID.
 
-View the Pi session ID with
-
-```bash
-/session  # [uuid]
-```
-
-The session can be tracked in OpenRouter's logs under the following ID:
+View the OpenRouter session tag with:
 
 ```bash
 /openrouter session
@@ -72,8 +66,6 @@ The session can be tracked in OpenRouter's logs under the following ID:
 # OpenRouter session_id
 pi:[uuid]
 ```
-
-This enables session-level tracking in the OpenRouter Logs → Sessions page.
 
 ## License
 
