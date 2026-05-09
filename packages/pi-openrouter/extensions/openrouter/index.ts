@@ -214,7 +214,7 @@ export default function (pi: ExtensionAPI) {
             available.length > 0
               ? `Available subcommands: ${available.join(', ')}${available.length > 1 ? '' : ''}`
               : 'No subcommands available';
-          ctx.ui.notify(`OpenRouter subcommands\n${message}`, 'info');
+          ctx.ui.notify(`OpenRouter subcommands\n${message}`, 'error');
           break;
         }
       }

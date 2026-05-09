@@ -21,7 +21,7 @@ export OPENROUTER_MANAGEMENT_KEY=sk-or-...
 
 ## Usage
 
-Type `/openrouter-usage` in Pi to open the usage overlay.
+Type `/openrouter usage` in Pi to open the usage overlay.
 
 The overlay shows:
 - **Month spend** vs cap with percentage
@@ -37,7 +37,7 @@ The extension refreshes data in the background every 30 seconds (with exponentia
 
 ## Account health
 
-Type `/openrouter-account` in Pi to open the account health overlay.
+Type `/openrouter account` in Pi to open the account health overlay.
 
 The overlay shows:
 
@@ -67,7 +67,7 @@ View the Pi session ID with
 The session can be tracked in OpenRouter's logs under the following ID:
 
 ```bash
-/openrouter-session
+/openrouter session
 
 # OpenRouter session_id
 pi:[uuid]
