@@ -1,6 +1,6 @@
 {
   "name": "@robhowley/pi-openrouter",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "type": "module",
   "description": "Live OpenRouter TUI overlays for spend, credits, key limits, burn rate, model usage, and session tagging.",
   "license": "MIT",

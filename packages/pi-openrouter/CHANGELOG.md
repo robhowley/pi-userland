@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.6.0...pi-openrouter-v0.7.0) (2026-05-09)
+
+
+### Features
+
+* **pi-openrouter:** add unified openrouter command with subcommands ([#43](https://github.com/robhowley/pi-userland/issues/43)) ([f12a5a0](https://github.com/robhowley/pi-userland/commit/f12a5a0711624e1e507d890f30f02b18b27099f6))
+
 ## [0.6.0](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.5.1...pi-openrouter-v0.6.0) (2026-05-08)
 
 
