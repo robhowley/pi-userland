@@ -270,7 +270,7 @@ export default function (pi: ExtensionAPI) {
           const groupedReasons = groupSkipReasons(skipReasons);
 
           if (!state) {
-            ctx.ui.notify('OpenRouter models: not synced', 'info');
+            ctx.ui.notify('OpenRouter models: not synced', 'error');
           } else if (state.success) {
             const skipCount = skipReasons.length;
             let message = `OpenRouter models healthy\n${state.registeredCount} registered${skipCount > 0 ? ` · ${skipCount} skipped` : ''} · cache ${state.cacheUpdated ? 'updated' : 'not updated'}`;
