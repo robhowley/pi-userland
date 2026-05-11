@@ -8,9 +8,35 @@ import { mapOpenRouterModels } from './mapper.js';
 import { loadCache, saveCache } from './cache.js';
 import type { ExtensionContext } from '@mariozechner/pi-coding-agent';
 import type { SyncResult, PiModelConfig, ModelsCache, OpenRouterModel } from './types.js';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
 
 // Store the current sync state for status display.
 let currentSyncState: SyncResult | null = null;
+
+/**
+ * Check if model sync is enabled via user config.
+ * Default is true (sync enabled) if config is not set.
+ *
+ * Reads from ~/.pi/agent/settings.json (global settings).
+ */
+function isSyncEnabled(): boolean {
+  // Get global settings path
+  const globalSettingsPath = join(homedir(), '.pi', 'agent', 'settings.json');
+
+  if (!existsSync(globalSettingsPath)) {
+    return true; // Default to enabled if no settings file
+  }
+
+  try {
+    const settings = JSON.parse(readFileSync(globalSettingsPath, 'utf-8'));
+    // Default is true (enabled) - only disabled if explicitly set to false
+    return settings['openrouterModelSync'] !== false;
+  } catch {
+    return true; // Default to enabled if settings file can't be read
+  }
+}
 
 /**
  * Set the current sync state.
@@ -42,9 +68,9 @@ async function registerModelsWithProvider(
   // 2. Register each config with the provider
   //
   // Example of likely API:
-  // await ctx.providers.openrouter.clearModels();
+  // await _ctx.providers.openrouter.clearModels();
   // for (const config of configs) {
-  //   await ctx.providers.openrouter.registerModel(config);
+  //   await _ctx.providers.openrouter.registerModel(config);
   // }
 
   // For now, just log registration
@@ -66,14 +92,30 @@ async function registerModelsWithProvider(
  * @param ctx - Extension context for provider registration
  * @returns SyncResult with details of the operation
  */
-export async function syncModels(ctx: ExtensionContext): Promise<SyncResult> {
+export async function syncModels(_ctx: ExtensionContext): Promise<SyncResult> {
+  // Check if sync is enabled via user config
+  if (!isSyncEnabled()) {
+    console.log('[pi-openrouter] Model sync disabled by config');
+    const result: SyncResult = {
+      success: false,
+      registeredCount: 0,
+      skippedCount: 0,
+      source: 'none',
+      cacheUpdated: false,
+      cacheAgeMs: null,
+      error: 'openrouterModelSync is disabled',
+    };
+    setSyncState(result);
+    return result;
+  }
+
   // Attempt 1: Fetch from API
   try {
     const response = await fetchUserModels();
     const { configs, skipped } = mapOpenRouterModels(response.data);
 
     // Register with Pi's OpenRouter provider
-    await registerModelsWithProvider(ctx, configs);
+    await registerModelsWithProvider(_ctx, configs);
 
     // Convert SDK Model[] to OpenRouterModel[] for cache
     // Using explicit mapping to handle SDK's camelCase -> snake_case conversion
@@ -140,7 +182,7 @@ export async function syncModels(ctx: ExtensionContext): Promise<SyncResult> {
       // Attempt 2: Use cached models
       const { configs, skipped } = mapOpenRouterModels(cache.models);
 
-      await registerModelsWithProvider(ctx, configs);
+      await registerModelsWithProvider(_ctx, configs);
 
       const result: SyncResult = {
         success: false,
