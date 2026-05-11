@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.7.0...pi-openrouter-v0.7.1) (2026-05-11)
+
+
+### Bug Fixes
+
+* **pi-openrouter:** add provider name detection and fix turn_end event logging ([#45](https://github.com/robhowley/pi-userland/issues/45)) ([976a35f](https://github.com/robhowley/pi-userland/commit/976a35fc4655dc15b819e478b0a84ffa629fbee3))
+
 ## [0.7.0](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.6.0...pi-openrouter-v0.7.0) (2026-05-09)
 
 
