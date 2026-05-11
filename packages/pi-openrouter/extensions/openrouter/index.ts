@@ -95,10 +95,14 @@ export default function (pi: ExtensionAPI) {
       if (!message) return;
 
       // Check if this is an OpenRouter request based on the message content/model
+      // Include url/endpoint from turnEvent so isOpenRouterRequest can check them
       const isOpenRouter = isOpenRouterRequest(
-        { type: 'before_provider_request', payload: message } as unknown as Parameters<
-          typeof isOpenRouterRequest
-        >[0],
+        {
+          type: 'before_provider_request',
+          payload: message,
+          url: turnEvent['url'],
+          endpoint: turnEvent['endpoint'],
+        } as unknown as Parameters<typeof isOpenRouterRequest>[0],
         ctx,
       );
       if (!isOpenRouter) return;
@@ -130,18 +134,20 @@ export default function (pi: ExtensionAPI) {
       // Calculate total cost from usage.cost.total
       const totalCost = usage.cost?.total;
 
-      const localEvent = {
+      const localEvent: LocalUsageEvent = {
         id: crypto.randomUUID(),
-        generationId: message['responseId'],
+        generationId: String(message['responseId'] ?? ''),
         sessionId: getCurrentSessionId(ctx),
         completedAt: new Date().toISOString(),
-        model: modelToLog,
-        promptTokens: usage.input,
-        completionTokens: usage.output,
-        cacheReadTokens: usage.cacheRead,
-        cacheWriteTokens: usage.cacheWrite,
-        cost: totalCost,
-      } as LocalUsageEvent;
+        model: modelToLog ?? 'unknown',
+        requests: 1,
+        promptTokens: usage.input ?? 0,
+        completionTokens: usage.output ?? 0,
+        reasoningTokens: 0,
+        cacheReadTokens: usage.cacheRead ?? 0,
+        cacheWriteTokens: usage.cacheWrite ?? 0,
+        cost: totalCost ?? 0,
+      };
 
       // Write to local JSONL - fail open (don't throw)
       writeLocalUsage(localEvent).catch(() => {});
