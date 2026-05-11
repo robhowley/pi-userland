@@ -7,7 +7,13 @@ import type { ExtensionContext } from '@mariozechner/pi-coding-agent';
 import type { SyncResult } from '../types.js';
 
 // Import modules
-import { syncModels, setSyncState, getSyncState, getStatusText, areModelsAvailable } from '../sync.js';
+import {
+  syncModels,
+  setSyncState,
+  getSyncState,
+  getStatusText,
+  areModelsAvailable,
+} from '../sync.js';
 
 describe('syncModels', () => {
   const mockCtx = {} as ExtensionContext;
@@ -22,7 +28,7 @@ describe('syncModels', () => {
   it('should return failure when API key is missing and no cache', async () => {
     // Ensure API key is not set
     delete process.env['OPENROUTER_API_KEY'];
-    
+
     const result = await syncModels(mockCtx);
 
     expect(result.success).toBe(false);
@@ -45,7 +51,7 @@ describe('syncState management', () => {
     };
 
     setSyncState(mockResult);
-    
+
     const retrieved = getSyncState();
     expect(retrieved).toEqual(mockResult);
   });

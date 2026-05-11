@@ -29,27 +29,27 @@ export function getSyncState(): SyncResult | null {
 
 /**
  * Register mapped models with Pi's OpenRouter provider.
- * 
+ *
  * TODO: This is a placeholder. Update when Pi's provider API is finalized.
  * The actual implementation may differ based on the real API.
  */
 async function registerModelsWithProvider(
   _ctx: ExtensionContext,
-  _configs: PiModelConfig[]
+  _configs: PiModelConfig[],
 ): Promise<void> {
   // Placeholder: In real implementation, this would:
   // 1. Clear existing OpenRouter models from provider
   // 2. Register each config with the provider
-  // 
+  //
   // Example of likely API:
   // await ctx.providers.openrouter.clearModels();
   // for (const config of configs) {
   //   await ctx.providers.openrouter.registerModel(config);
   // }
-  
+
   // For now, just log registration
   console.log(`[pi-openrouter] Registering models with provider`);
-  
+
   // Simulate async work
   await Promise.resolve();
 }
@@ -60,9 +60,9 @@ async function registerModelsWithProvider(
  * 2. Map to Pi model config
  * 3. Register with provider
  * 4. Update cache
- * 
+ *
  * On API failure, falls back to cached models if available.
- * 
+ *
  * @param ctx - Extension context for provider registration
  * @returns SyncResult with details of the operation
  */
@@ -130,17 +130,16 @@ export async function syncModels(ctx: ExtensionContext): Promise<SyncResult> {
 
     setSyncState(result);
     return result;
-
   } catch (error) {
     // API failed - try cache fallback
     const errorMsg = error instanceof Error ? error.message : String(error);
-    
+
     const cache = await loadCache();
-    
+
     if (cache) {
       // Attempt 2: Use cached models
       const { configs, skipped } = mapOpenRouterModels(cache.models);
-      
+
       await registerModelsWithProvider(ctx, configs);
 
       const result: SyncResult = {
@@ -178,11 +177,11 @@ export async function syncModels(ctx: ExtensionContext): Promise<SyncResult> {
  */
 export function getStatusText(): string {
   const state = getSyncState();
-  
+
   if (!state) {
     return 'OpenRouter models: not synced';
   }
-  
+
   // Derive status from result
   let status: string;
   if (state.success) {
@@ -192,7 +191,7 @@ export function getStatusText(): string {
   } else {
     status = 'broken';
   }
-  
+
   return `OpenRouter models: ${status} (${state.registeredCount} registered)`;
 }
 
@@ -202,6 +201,6 @@ export function getStatusText(): string {
 export function areModelsAvailable(): boolean {
   const state = getSyncState();
   if (!state) return false;
-  
+
   return state.registeredCount > 0 || state.source === 'cache';
 }

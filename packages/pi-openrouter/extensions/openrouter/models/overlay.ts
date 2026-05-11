@@ -12,14 +12,17 @@ import type { SyncResult } from './types.js';
  */
 export async function showSyncResultOverlay(
   ctx: ExtensionContext,
-  result: SyncResult | null
+  result: SyncResult | null,
 ): Promise<void> {
   const { custom } = ctx.ui;
 
-  await custom<void>((_tui, theme, _kb, done) => {
-    const overlay = createOverlay(theme, result, done);
-    return overlay.component;
-  }, { overlay: true });
+  await custom<void>(
+    (_tui, theme, _kb, done) => {
+      const overlay = createOverlay(theme, result, done);
+      return overlay.component;
+    },
+    { overlay: true },
+  );
 }
 
 /**
@@ -28,14 +31,17 @@ export async function showSyncResultOverlay(
  */
 export async function showStatusOverlay(
   ctx: ExtensionContext,
-  state: SyncResult | null
+  state: SyncResult | null,
 ): Promise<void> {
   const { custom } = ctx.ui;
 
-  await custom<void>((_tui, theme, _kb, done) => {
-    const overlay = createOverlay(theme, state, done);
-    return overlay.component;
-  }, { overlay: true });
+  await custom<void>(
+    (_tui, theme, _kb, done) => {
+      const overlay = createOverlay(theme, state, done);
+      return overlay.component;
+    },
+    { overlay: true },
+  );
 }
 
 // ============== RENDERING FUNCTIONS ==============

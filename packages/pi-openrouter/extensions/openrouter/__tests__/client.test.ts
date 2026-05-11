@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { fetchUserModels, isConfigured, getApiKey, ApiError, AuthError } from '../client.js';
 
-// Mock fetch globally
-const mockFetch = vi.fn();
-global.fetch = mockFetch;
+// Mock SDK at the module level
+vi.mock('@openrouter/sdk/sdk/sdk.js', () => ({
+  OpenRouter: vi.fn(),
+}));
 
 describe('fetchUserModels', () => {
   const originalEnv = process.env;
@@ -24,7 +25,7 @@ describe('fetchUserModels', () => {
     await expect(fetchUserModels()).rejects.toBeInstanceOf(AuthError);
   });
 
-  it('should fetch models with correct headers', async () => {
+  it('should fetch models with SDK', async () => {
     process.env['OPENROUTER_API_KEY'] = 'test-key';
 
     const mockResponse = {
@@ -38,35 +39,70 @@ describe('fetchUserModels', () => {
       ],
     };
 
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => mockResponse,
-    });
+    // Mock SDK OpenRouter class
+    const MockOpenRouter = vi.mocked((await import('@openrouter/sdk/sdk/sdk.js')).OpenRouter);
+    const mockClient = {
+      models: { listForUser: vi.fn().mockResolvedValue(mockResponse) },
+      credits: {},
+      analytics: {},
+      chat: {},
+      embeddings: {},
+      images: {},
+      fine_tuning: {},
+      batches: {},
+      files: {},
+      audio: {},
+      moderation: {},
+      beta: {},
+      webhooks: {},
+      fineTunes: {},
+      jobs: {},
+      uploads: {},
+      assistants: {},
+      threads: {},
+      runs: {},
+      messages: {},
+      vectorStores: {},
+      tools: {},
+    };
+    MockOpenRouter.mockImplementation(() => mockClient as any);
 
     const result = await fetchUserModels();
 
     expect(result!.data).toHaveLength(1);
     expect(result!.data[0]!.id).toBe('openai/gpt-4');
-
-    expect(global.fetch).toHaveBeenCalledWith(
-      'https://openrouter.ai/api/v1/models/user',
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          Authorization: 'Bearer test-key',
-          'Content-Type': 'application/json',
-        }),
-      }),
-    );
+    expect(mockClient.models.listForUser).toHaveBeenCalled();
   });
 
   it('should throw ApiError on 401 unauthorized', async () => {
     process.env['OPENROUTER_API_KEY'] = 'invalid-key';
 
-    mockFetch.mockResolvedValueOnce({
-      ok: false,
-      status: 401,
-      statusText: 'Unauthorized',
-    });
+    const MockOpenRouter = vi.mocked((await import('@openrouter/sdk/sdk/sdk.js')).OpenRouter);
+    const mockClient = {
+      models: { listForUser: vi.fn().mockRejectedValue(new Error('Unauthorized')) },
+      credits: {},
+      analytics: {},
+      chat: {},
+      embeddings: {},
+      images: {},
+      fine_tuning: {},
+      batches: {},
+      files: {},
+      audio: {},
+      moderation: {},
+      beta: {},
+      webhooks: {},
+      fineTunes: {},
+      jobs: {},
+      uploads: {},
+      assistants: {},
+      threads: {},
+      runs: {},
+      messages: {},
+      vectorStores: {},
+      tools: {},
+    };
+    MockOpenRouter.mockImplementation(() => mockClient as any);
 
     const error = await fetchUserModels().catch((e) => e);
     expect(error).toBeInstanceOf(ApiError);
@@ -74,14 +110,35 @@ describe('fetchUserModels', () => {
     expect((error as ApiError).statusCode).toBe(401);
   });
 
-  it('should throw ApiError on 429 rate limit', async () => {
+  it('should throw ApiError on rate limit (429)', async () => {
     process.env['OPENROUTER_API_KEY'] = 'test-key';
 
-    mockFetch.mockResolvedValueOnce({
-      ok: false,
-      status: 429,
-      statusText: 'Too Many Requests',
-    });
+    const MockOpenRouter = vi.mocked((await import('@openrouter/sdk/sdk/sdk.js')).OpenRouter);
+    const mockClient = {
+      models: { listForUser: vi.fn().mockRejectedValue(new Error('Rate limited')) },
+      credits: {},
+      analytics: {},
+      chat: {},
+      embeddings: {},
+      images: {},
+      fine_tuning: {},
+      batches: {},
+      files: {},
+      audio: {},
+      moderation: {},
+      beta: {},
+      webhooks: {},
+      fineTunes: {},
+      jobs: {},
+      uploads: {},
+      assistants: {},
+      threads: {},
+      runs: {},
+      messages: {},
+      vectorStores: {},
+      tools: {},
+    };
+    MockOpenRouter.mockImplementation(() => mockClient as any);
 
     const error = await fetchUserModels().catch((e) => e);
     expect(error).toBeInstanceOf(ApiError);
@@ -92,29 +149,37 @@ describe('fetchUserModels', () => {
   it('should throw ApiError on server error', async () => {
     process.env['OPENROUTER_API_KEY'] = 'test-key';
 
-    mockFetch.mockResolvedValueOnce({
-      ok: false,
-      status: 503,
-      statusText: 'Service Unavailable',
-    });
+    const MockOpenRouter = vi.mocked((await import('@openrouter/sdk/sdk/sdk.js')).OpenRouter);
+    const mockClient = {
+      models: { listForUser: vi.fn().mockRejectedValue(new Error('Server error')) },
+      credits: {},
+      analytics: {},
+      chat: {},
+      embeddings: {},
+      images: {},
+      fine_tuning: {},
+      batches: {},
+      files: {},
+      audio: {},
+      moderation: {},
+      beta: {},
+      webhooks: {},
+      fineTunes: {},
+      jobs: {},
+      uploads: {},
+      assistants: {},
+      threads: {},
+      runs: {},
+      messages: {},
+      vectorStores: {},
+      tools: {},
+    };
+    MockOpenRouter.mockImplementation(() => mockClient as any);
 
     const error = await fetchUserModels().catch((e) => e);
     expect(error).toBeInstanceOf(ApiError);
-    expect(error.message).toContain('server error');
-    expect((error as ApiError).statusCode).toBe(503);
-  });
-
-  it('should throw ApiError on invalid response format', async () => {
-    process.env['OPENROUTER_API_KEY'] = 'test-key';
-
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ not_data: [] }),
-    });
-
-    const error = await fetchUserModels().catch((e) => e);
-    expect(error).toBeInstanceOf(ApiError);
-    expect(error.message).toContain('Invalid response format');
+    expect(error.message).toContain('Server error');
+    expect((error as ApiError).statusCode).toBe(500);
   });
 });
 

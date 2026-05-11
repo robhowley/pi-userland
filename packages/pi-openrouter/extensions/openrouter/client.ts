@@ -2,6 +2,7 @@ import type { ActivityResponse } from '@openrouter/sdk/models/index.js';
 import type { GetCreditsResponse } from '@openrouter/sdk/models/operations/index.js';
 import { OpenRouter } from '@openrouter/sdk/sdk/sdk.js';
 import type { ModelsListResponse } from '@openrouter/sdk/models/index.js';
+import { UnauthorizedResponseError } from '@openrouter/sdk/models/errors/index.js';
 
 let client: OpenRouter | null = null;
 
@@ -37,7 +38,7 @@ export async function getActivity(): Promise<ActivityResponse['data'] | null> {
 
 /**
  * Fetch the authenticated user's model catalog from OpenRouter.
- * Uses direct fetch to the /models/user endpoint.
+ * Uses the SDK for consistent error handling and retry behavior.
  */
 export async function fetchUserModels(): Promise<ModelsListResponse> {
   const key = getApiKey();
@@ -45,44 +46,13 @@ export async function fetchUserModels(): Promise<ModelsListResponse> {
     throw new AuthError('OPENROUTER_API_KEY not set');
   }
 
-  const response = await fetch('https://openrouter.ai/api/v1/models/user', {
-    headers: {
-      Authorization: `Bearer ${key}`,
-      'Content-Type': 'application/json',
-    },
-  });
-
-  if (!response.ok) {
-    const status = response.status || 0;
-    let message: string;
-
-    switch (status) {
-      case 401:
-        message = 'Unauthorized: Invalid or missing OpenRouter API key';
-        break;
-      case 429:
-        message = 'Rate limited: Too many requests to OpenRouter';
-        break;
-      case 500:
-      case 502:
-      case 503:
-        message = `OpenRouter server error (${status})`;
-        break;
-      default:
-        message = `Models fetch failed: ${status} ${response.statusText}`;
-    }
-
-    throw new ApiError(message, status);
+  try {
+    const sdkClient = new OpenRouter({ apiKey: key });
+    const response = await sdkClient.models.listForUser({ bearer: key }, {});
+    return response as ModelsListResponse;
+  } catch (err: unknown) {
+    throw mapSdkError(err);
   }
-
-  const data = (await response.json()) as ModelsListResponse;
-
-  // Validate response structure
-  if (!data || !Array.isArray(data.data)) {
-    throw new ApiError('Invalid response format from OpenRouter');
-  }
-
-  return data;
 }
 
 /**
@@ -99,23 +69,43 @@ export function getApiKey(): string | undefined {
   return process.env['OPENROUTER_API_KEY'];
 }
 
-interface SDKError {
-  status?: number;
-  message?: string;
-}
-
-function isSDKError(err: unknown): err is SDKError {
-  return err !== null && typeof err === 'object' && 'status' in err;
-}
-
+/**
+ * Map SDK errors to our error types with proper status codes.
+ */
 function mapSdkError(err: unknown): Error {
-  if (isSDKError(err)) {
-    const status = err.status;
-    const message = err.message ?? 'Unknown error';
-    if (status === 401) return new AuthError(message);
-    return new ApiError(`${status}: ${message}`);
+  // Handle UnauthorizedResponseError (401)
+  if (err instanceof UnauthorizedResponseError) {
+    return new ApiError('Unauthorized: Invalid or expired API key', 401);
   }
-  if (err instanceof Error) return err;
+
+  // Handle other SDK errors with statusCode
+  if (err instanceof Error && 'statusCode' in err) {
+    const statusCode = (err as { statusCode: number }).statusCode;
+    if (statusCode === 401) {
+      return new AuthError(err.message || 'Unauthorized');
+    }
+    return new ApiError(err.message || 'API error', statusCode);
+  }
+
+  // Map error messages to appropriate status codes
+  if (err instanceof Error) {
+    const message = err.message.toLowerCase();
+    if (message.includes('unauthorized')) {
+      return new ApiError('Unauthorized: Invalid or expired API key', 401);
+    }
+    if (message.includes('rate limit') || message.includes('rate limited')) {
+      return new ApiError('Rate limited: Too many requests', 429);
+    }
+    if (
+      message.includes('server error') ||
+      message.includes('internal') ||
+      message.includes('service unavailable')
+    ) {
+      return new ApiError(err.message || 'Server error', 500);
+    }
+    return new ApiError(err.message || 'API error', 500);
+  }
+
   return new Error(String(err));
 }
 

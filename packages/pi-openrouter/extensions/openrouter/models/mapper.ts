@@ -60,7 +60,7 @@ export function mapOpenRouterModel(model: OpenRouterModel | SDKModel): PiModelCo
   const openRouterModel: OpenRouterModel =
     'contextLength' in model
       ? sdkModelToOpenRouterModel(model as SDKModel)
-      : model as OpenRouterModel;
+      : (model as OpenRouterModel);
 
   // Skip: missing required id
   if (!openRouterModel.id) {
@@ -76,7 +76,8 @@ export function mapOpenRouterModel(model: OpenRouterModel | SDKModel): PiModelCo
   }
 
   // Skip: missing context window (both primary and fallback)
-  const contextWindow = openRouterModel.top_provider?.context_length ?? openRouterModel.context_length;
+  const contextWindow =
+    openRouterModel.top_provider?.context_length ?? openRouterModel.context_length;
   if (!contextWindow) {
     return null;
   }
