@@ -18,7 +18,7 @@ import type { RollupStatus } from './account-types.js';
 import crypto from 'node:crypto';
 
 // Import models sync and overlay
-import { syncModels, getSyncState } from './models/sync.js';
+import { syncModels, getSyncState, isSyncEnabled } from './models/sync.js';
 import { showSyncResultOverlay, showStatusOverlay } from './models/overlay.js';
 
 // Store the current session state for use in command handlers
@@ -185,29 +185,13 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // ============== MODELS COMMANDS ==============
-  pi.registerCommand('openrouter models sync', {
-    description: 'Sync OpenRouter model catalog',
-    getArgumentCompletions: () => null,
-    handler: async (_args, ctx) => {
-      const result = await syncModels(ctx);
-      await showSyncResultOverlay(ctx, result);
-    },
-  });
+  // ============== MODELS COMMANDS (subcommands of /openrouter) ==============
 
-  pi.registerCommand('openrouter models status', {
-    description: 'Show OpenRouter model sync status',
-    getArgumentCompletions: () => null,
-    handler: async (_args, ctx) => {
-      await showStatusOverlay(ctx, getSyncState());
-    },
-  });
-
-  // Single entry point with subcommands: /openrouter [usage|account|session]
+  // Single entry point with subcommands: /openrouter [usage|account|session|models-sync|models-status]
   pi.registerCommand('openrouter', {
-    description: 'OpenRouter commands: usage, account, session',
+    description: 'OpenRouter commands: usage, account, session, models-sync, models-status',
     getArgumentCompletions: (prefix: string) => {
-      const subcommands = ['usage', 'account', 'session'];
+      const subcommands = ['usage', 'account', 'session', 'models-sync', 'models-status'];
       const items = subcommands
         .filter((s) => s.startsWith(prefix))
         .map((s) => ({ value: s, label: s }));
@@ -230,8 +214,21 @@ export default function (pi: ExtensionAPI) {
           ctx.ui.notify(`OpenRouter session_id\n${getCurrentSessionId(ctx)}`, 'info');
           break;
         }
+        case 'models-sync': {
+          if (!isSyncEnabled()) {
+            ctx.ui.notify('OpenRouter model sync is disabled. Set openrouterModelSync: true in ~/.pi/agent/settings.json to enable.', 'error');
+            return;
+          }
+          const result = await syncModels(ctx);
+          await showSyncResultOverlay(ctx, result);
+          break;
+        }
+        case 'models-status': {
+          await showStatusOverlay(ctx, getSyncState());
+          break;
+        }
         default: {
-          const available = ['usage', 'account', 'session'];
+          const available = ['usage', 'account', 'session', 'models-sync', 'models-status'];
           const message =
             available.length > 0
               ? `Available subcommands: ${available.join(', ')}${available.length > 1 ? '' : ''}`

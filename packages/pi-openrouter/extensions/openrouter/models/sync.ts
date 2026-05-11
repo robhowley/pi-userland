@@ -21,7 +21,7 @@ let currentSyncState: SyncResult | null = null;
  *
  * Reads from ~/.pi/agent/settings.json (global settings).
  */
-function isSyncEnabled(): boolean {
+export function isSyncEnabled(): boolean {
   // Get global settings path
   const globalSettingsPath = join(homedir(), '.pi', 'agent', 'settings.json');
 
@@ -93,21 +93,8 @@ async function registerModelsWithProvider(
  * @returns SyncResult with details of the operation
  */
 export async function syncModels(_ctx: ExtensionContext): Promise<SyncResult> {
-  // Check if sync is enabled via user config
-  if (!isSyncEnabled()) {
-    console.log('[pi-openrouter] Model sync disabled by config');
-    const result: SyncResult = {
-      success: false,
-      registeredCount: 0,
-      skippedCount: 0,
-      source: 'none',
-      cacheUpdated: false,
-      cacheAgeMs: null,
-      error: 'openrouterModelSync is disabled',
-    };
-    setSyncState(result);
-    return result;
-  }
+  // Note: Config check (isSyncEnabled) is now handled at the command level
+  // in index.ts. This allows tests to run without file system dependencies.
 
   // Attempt 1: Fetch from API
   try {
