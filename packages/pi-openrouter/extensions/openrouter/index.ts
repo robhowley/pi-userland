@@ -17,6 +17,10 @@ import type { KeyInfo } from './account-types.js';
 import type { RollupStatus } from './account-types.js';
 import crypto from 'node:crypto';
 
+// Import models sync and overlay
+import { syncModels, getSyncState } from './models/sync.js';
+import { showSyncResultOverlay, showStatusOverlay } from './models/overlay.js';
+
 // Store the current session state for use in command handlers
 let currentSessionState: OpenRouterSessionState | null = null;
 let sessionTrackingInstalled = false;
@@ -178,6 +182,24 @@ export default function (pi: ExtensionAPI) {
     getArgumentCompletions: () => null,
     handler: async (_args, ctx) => {
       await showAccountOverlay(ctx);
+    },
+  });
+
+  // ============== MODELS COMMANDS ==============
+  pi.registerCommand('openrouter models sync', {
+    description: 'Sync OpenRouter model catalog',
+    getArgumentCompletions: () => null,
+    handler: async (_args, ctx) => {
+      const result = await syncModels(ctx);
+      await showSyncResultOverlay(ctx, result);
+    },
+  });
+
+  pi.registerCommand('openrouter models status', {
+    description: 'Show OpenRouter model sync status',
+    getArgumentCompletions: () => null,
+    handler: async (_args, ctx) => {
+      await showStatusOverlay(ctx, getSyncState());
     },
   });
 

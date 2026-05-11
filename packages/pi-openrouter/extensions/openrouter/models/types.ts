@@ -64,7 +64,7 @@ export interface SyncResult {
 }
 
 /**
- * Cache file structure
+ * Cache file structure - using our OpenRouterModel type for consistency
  */
 export interface ModelsCache {
   models: OpenRouterModel[];
