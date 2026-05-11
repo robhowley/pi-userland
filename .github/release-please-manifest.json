@@ -1,5 +1,5 @@
 {
-  "packages/pi-openrouter": "0.7.0",
+  "packages/pi-openrouter": "0.7.1",
   "packages/pi-session-hygiene": "0.2.1",
   "packages/pi-spinner-verbs": "3.3.1",
   "packages/pi-structured-return": "1.10.0",
