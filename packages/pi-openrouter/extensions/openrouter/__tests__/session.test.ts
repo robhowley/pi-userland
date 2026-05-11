@@ -217,7 +217,10 @@ describe('isOpenRouterRequest', () => {
     },
     {
       name: 'method4: url with openrouter.ai in path (not just domain)',
-      event: { payload: { model: 'qwen/coder' }, url: 'https://proxy.example.com/v1/openrouter.ai/endpoint' },
+      event: {
+        payload: { model: 'qwen/coder' },
+        url: 'https://proxy.example.com/v1/openrouter.ai/endpoint',
+      },
       ctx: {},
       expected: true,
       description: 'URL containing openrouter.ai anywhere in string should match',
@@ -275,7 +278,10 @@ describe('isOpenRouterRequest', () => {
     },
     {
       name: 'method4: url with openrouter.ai in path (not just domain)',
-      event: { payload: { model: 'qwen/coder' }, url: 'https://proxy.example.com/v1/openrouter.ai/endpoint' },
+      event: {
+        payload: { model: 'qwen/coder' },
+        url: 'https://proxy.example.com/v1/openrouter.ai/endpoint',
+      },
       ctx: {},
       expected: true,
       description: 'URL containing openrouter.ai anywhere in string should match',
@@ -408,10 +414,7 @@ describe('isOpenRouterRequest', () => {
   // Run all parameterized tests
   for (const testCase of detectionCases) {
     it(testCase.name, () => {
-      const result = isOpenRouterRequest(
-        testCase.event as any,
-        testCase.ctx as any,
-      );
+      const result = isOpenRouterRequest(testCase.event as any, testCase.ctx as any);
       expect(result).toBe(testCase.expected);
     });
   }

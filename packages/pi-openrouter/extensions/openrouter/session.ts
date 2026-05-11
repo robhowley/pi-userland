@@ -36,8 +36,8 @@ export function isOpenRouterRequest(event: BeforeProviderRequestEvent, _ctx: unk
       ? eventProvider
       : typeof payloadProvider === 'string'
         ? payloadProvider
-        : (eventProvider as Record<string, unknown> | undefined)?.['name'] ??
-          (payloadProvider as Record<string, unknown> | undefined)?.['name'];
+        : ((eventProvider as Record<string, unknown> | undefined)?.['name'] ??
+          (payloadProvider as Record<string, unknown> | undefined)?.['name']);
   if (providerName === 'openrouter') {
     return true;
   }
