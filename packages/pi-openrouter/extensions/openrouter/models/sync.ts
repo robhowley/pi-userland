@@ -77,6 +77,55 @@ async function registerModelsWithProvider(
 }
 
 /**
+ * Built-in OpenRouter router aliases that should always be available.
+ * These are special routing models that don't appear in /models/user endpoint.
+ */
+const BUILTIN_ROUTER_MODELS: PiModelConfig[] = [
+  {
+    id: 'openrouter/auto',
+    name: 'Auto Router',
+    reasoning: true,
+    input: ['text', 'image'],
+    cost: {
+      input: 0, // Costs vary by routed model
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    contextWindow: 2000000,
+    maxTokens: 4096,
+  },
+  {
+    id: 'openrouter/free',
+    name: 'Free Models Router',
+    reasoning: true,
+    input: ['text', 'image'],
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    contextWindow: 200000,
+    maxTokens: 4096,
+  },
+  {
+    id: 'openrouter/owl-alpha',
+    name: 'Owl Alpha',
+    reasoning: false,
+    input: ['text'],
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    contextWindow: 1048756,
+    maxTokens: 262144,
+  },
+];
+
+/**
  * Execute a full sync operation:
  * 1. Fetch models from OpenRouter API
  * 2. Map to Pi model config
@@ -97,8 +146,11 @@ export async function syncModels(_ctx: ExtensionContext): Promise<SyncResult> {
     const response = await fetchUserModels();
     const { configs, skipped } = mapOpenRouterModels(response.data);
 
+    // Add built-in router aliases that don't appear in /models/user endpoint
+    const configsWithRouters = [...configs, ...BUILTIN_ROUTER_MODELS];
+
     // Register with Pi's OpenRouter provider
-    await registerModelsWithProvider(_ctx, configs);
+    await registerModelsWithProvider(_ctx, configsWithRouters);
 
     // Convert SDK Model[] to OpenRouterModel[] for cache
     // Using explicit mapping to handle SDK's camelCase -> snake_case conversion
@@ -136,16 +188,62 @@ export async function syncModels(_ctx: ExtensionContext): Promise<SyncResult> {
       return result;
     });
 
-    // Update last-good cache
+    // Add built-in router models to cache (they're not in /models/user)
+    const routerCacheModels: OpenRouterModel[] = [
+      {
+        id: 'openrouter/auto',
+        name: 'Auto Router',
+        architecture: {
+          input_modalities: ['text', 'image'],
+          output_modalities: ['text'],
+        },
+        context_length: 2000000,
+        pricing: {
+          prompt: '0',
+          completion: '0',
+        },
+        supported_parameters: ['reasoning'],
+      },
+      {
+        id: 'openrouter/free',
+        name: 'Free Models Router',
+        architecture: {
+          input_modalities: ['text', 'image'],
+          output_modalities: ['text'],
+        },
+        context_length: 200000,
+        pricing: {
+          prompt: '0',
+          completion: '0',
+        },
+        supported_parameters: ['reasoning'],
+      },
+      {
+        id: 'openrouter/owl-alpha',
+        name: 'Owl Alpha',
+        architecture: {
+          input_modalities: ['text'],
+          output_modalities: ['text'],
+        },
+        context_length: 1048756,
+        pricing: {
+          prompt: '0',
+          completion: '0',
+        },
+        supported_parameters: [],
+      },
+    ];
+
+    // Update last-good cache (include routers)
     const cache: ModelsCache = {
-      models: cacheModels,
+      models: [...cacheModels, ...routerCacheModels],
       timestamp: Date.now(),
     };
     await saveCache(cache);
 
     const result: SyncResult = {
       success: true,
-      registeredCount: configs.length,
+      registeredCount: configsWithRouters.length,
       skippedCount: skipped,
       source: 'api',
       cacheUpdated: true,
