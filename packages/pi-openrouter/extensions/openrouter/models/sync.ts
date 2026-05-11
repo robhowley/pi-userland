@@ -389,3 +389,14 @@ export function formatSkipReasons(reasons: SkipReason[]): string {
   }
   return lines.join('\n');
 }
+
+/**
+ * Group skip reasons by reason type and return counts.
+ */
+export function groupSkipReasons(reasons: SkipReason[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const reason of reasons) {
+    counts[reason.reason] = (counts[reason.reason] || 0) + 1;
+  }
+  return counts;
+}

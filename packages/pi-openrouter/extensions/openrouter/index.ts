@@ -24,6 +24,7 @@ import {
   isSyncEnabled,
   getSkipReasonsAsync,
   formatSkipReasons,
+  groupSkipReasons,
 } from './models/sync.js';
 
 // Store the current session state for use in command handlers
@@ -214,7 +215,13 @@ export default function (pi: ExtensionAPI) {
       return items.length > 0 ? items : null;
     },
     handler: async (args, ctx) => {
-      const subcommand = args.trim().split(/\s+/)[0] || '';
+      // Parse subcommand and flags
+      const parts = args.trim().split(/\s+/);
+      const subcommand = parts[0] || '';
+      const flags = parts.slice(1).reduce((acc, flag) => {
+        acc[flag] = true;
+        return acc;
+      }, {} as Record<string, boolean>);
 
       switch (subcommand) {
         case 'usage': {
@@ -264,20 +271,53 @@ export default function (pi: ExtensionAPI) {
         }
         case 'models-status': {
           const state = getSyncState();
-          const skipReasons = await getSkipReasonsAsync(10); // Show up to 10 skip reasons
+          const skipReasons = await getSkipReasonsAsync();
+          const groupedReasons = groupSkipReasons(skipReasons);
 
           if (!state) {
             ctx.ui.notify('OpenRouter models: not synced', 'info');
           } else if (state.success) {
-            let message = `OpenRouter models healthy\n${state.registeredCount} registered\nSource: ${state.source}\nCache: ${state.cacheUpdated ? 'updated' : 'not updated'}`;
-            if (skipReasons.length > 0) {
-              message += `\n\nSkipped models (${skipReasons.length}):\n${formatSkipReasons(skipReasons)}`;
+            const skipCount = skipReasons.length;
+            let message = `OpenRouter models healthy\n${state.registeredCount} registered${skipCount > 0 ? ` · ${skipCount} skipped` : ''} · cache ${state.cacheUpdated ? 'updated' : 'not updated'}`;
+            
+            // Check if --skipped flag is set
+            if (flags['--skipped']) {
+              if (skipCount > 0) {
+                message += `\n\nOpenRouter skipped models: ${skipCount}\n`;
+                for (const [reason, count] of Object.entries(groupedReasons)) {
+                  message += `\n[${count} ${reason}]\n`;
+                  // Get models with this reason
+                  const modelsWithReason = skipReasons
+                    .filter((r) => r.reason === reason)
+                    .map((r) => r.id);
+                  for (const id of modelsWithReason) {
+                    message += `- ${id}\n`;
+                  }
+                }
+              } else {
+                message += '\n\nNo skipped models';
+              }
             }
             ctx.ui.notify(message, 'info');
           } else if (state.source === 'cache') {
-            let message = `OpenRouter models cached\n${state.registeredCount} registered\nCache age: ${formatModelAge(state.cacheAgeMs)}\nError: ${state.error}`;
-            if (skipReasons.length > 0) {
-              message += `\n\nSkipped models (${skipReasons.length}):\n${formatSkipReasons(skipReasons)}`;
+            const skipCount = skipReasons.length;
+            let message = `OpenRouter models cached\n${state.registeredCount} registered${skipCount > 0 ? ` · ${skipCount} skipped` : ''}\nCache age: ${formatModelAge(state.cacheAgeMs)}\nError: ${state.error}`;
+            
+            if (flags['--skipped']) {
+              if (skipCount > 0) {
+                message += `\n\nOpenRouter skipped models: ${skipCount}\n`;
+                for (const [reason, count] of Object.entries(groupedReasons)) {
+                  message += `\n[${count} ${reason}]\n`;
+                  const modelsWithReason = skipReasons
+                    .filter((r) => r.reason === reason)
+                    .map((r) => r.id);
+                  for (const id of modelsWithReason) {
+                    message += `- ${id}\n`;
+                  }
+                }
+              } else {
+                message += '\n\nNo skipped models';
+              }
             }
             ctx.ui.notify(message, 'warning');
           } else {
