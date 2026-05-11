@@ -25,6 +25,7 @@ import {
   getSkipReasonsAsync,
   groupSkipReasons,
 } from './models/sync.js';
+import { loadCache, getCacheAgeMs } from './models/cache.js';
 
 // Store the current session state for use in command handlers
 let currentSessionState: OpenRouterSessionState | null = null;
@@ -269,11 +270,15 @@ export default function (pi: ExtensionAPI) {
           const skipReasons = await getSkipReasonsAsync();
           const groupedReasons = groupSkipReasons(skipReasons);
 
+          // Get real-time cache age from disk
+          const cache = await loadCache();
+          const cacheAgeMs = cache ? getCacheAgeMs(cache) : null;
+
           if (!state) {
             ctx.ui.notify('OpenRouter models: not synced', 'error');
           } else if (state.success) {
             const skipCount = skipReasons.length;
-            let message = `OpenRouter models healthy\n${state.registeredCount} registered${skipCount > 0 ? ` · ${skipCount} skipped` : ''} · cache ${state.cacheUpdated ? 'updated' : 'not updated'}`;
+            let message = `OpenRouter models healthy\n${state.registeredCount} registered${skipCount > 0 ? ` · ${skipCount} skipped` : ''} · cache age: ${formatModelAge(cacheAgeMs)}`;
 
             // Check if --skipped flag is set
             if (flags['--skipped']) {
@@ -296,7 +301,7 @@ export default function (pi: ExtensionAPI) {
             ctx.ui.notify(message, 'info');
           } else if (state.source === 'cache') {
             const skipCount = skipReasons.length;
-            let message = `OpenRouter models cached\n${state.registeredCount} registered${skipCount > 0 ? ` · ${skipCount} skipped` : ''}\nCache age: ${formatModelAge(state.cacheAgeMs)}\nError: ${state.error}`;
+            let message = `OpenRouter models cached\n${state.registeredCount} registered${skipCount > 0 ? ` · ${skipCount} skipped` : ''}\nCache age: ${formatModelAge(cacheAgeMs)}\nError: ${state.error}`;
 
             if (flags['--skipped']) {
               if (skipCount > 0) {

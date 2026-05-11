@@ -255,7 +255,7 @@ export async function syncModels(_ctx: ExtensionContext): Promise<SyncResult> {
       skippedDetails: skippedDetails,
       source: 'api',
       cacheUpdated: true,
-      cacheAgeMs: null,
+      cacheAgeMs: 0, // Cache was just updated
       error: null,
     };
 

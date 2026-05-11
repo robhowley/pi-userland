@@ -4,20 +4,39 @@ import { homedir } from 'os';
 import type { ModelsCache } from './types.js';
 
 const CACHE_FILENAME = 'models-cache.json';
-const CACHE_DIR = join(homedir(), '.pi', 'openrouter');
+const DEFAULT_CACHE_DIR = join(homedir(), '.pi', 'openrouter');
+
+// Allow overriding cache directory for testing
+let cacheDirOverride: string | null = null;
+
+/**
+ * Get the cache directory.
+ * Uses override if set (for testing), otherwise uses default.
+ */
+function getCacheDir(): string {
+  return cacheDirOverride ?? DEFAULT_CACHE_DIR;
+}
+
+/**
+ * Set a custom cache directory (for testing).
+ * Pass null to reset to default.
+ */
+export function setCacheDir(dir: string | null): void {
+  cacheDirOverride = dir;
+}
 
 /**
  * Get the full path to the cache file.
  */
 function getCachePath(): string {
-  return join(CACHE_DIR, CACHE_FILENAME);
+  return join(getCacheDir(), CACHE_FILENAME);
 }
 
 /**
  * Ensure the cache directory exists.
  */
 async function ensureCacheDir(): Promise<void> {
-  await mkdir(CACHE_DIR, { recursive: true });
+  await mkdir(getCacheDir(), { recursive: true });
 }
 
 /**

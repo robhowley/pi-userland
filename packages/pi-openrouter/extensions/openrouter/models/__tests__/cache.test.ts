@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdir, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
-import { homedir } from 'os';
-import { loadCache, saveCache, getCacheAgeMs, formatCacheAge } from '../cache.js';
+import { tmpdir } from 'os';
+import { randomUUID } from 'crypto';
+import { loadCache, saveCache, getCacheAgeMs, formatCacheAge, setCacheDir } from '../cache.js';
 import type { ModelsCache, OpenRouterModel } from '../types.js';
 
-// Use the same cache directory as the implementation
-const CACHE_DIR = join(homedir(), '.pi', 'openrouter');
-const CACHE_FILE = join(CACHE_DIR, 'models-cache.json');
+// Each test gets its own isolated temp directory
+let testCacheDir: string;
 
 // Helper to create a mock cache
 function createMockCache(overrides: Partial<ModelsCache> = {}): ModelsCache {
@@ -26,16 +26,19 @@ function createMockCache(overrides: Partial<ModelsCache> = {}): ModelsCache {
 }
 
 async function setupTestCache(): Promise<void> {
-  try {
-    await mkdir(CACHE_DIR, { recursive: true });
-  } catch {
-    // Directory may already exist
-  }
+  // Create isolated temp directory for this test
+  testCacheDir = join(tmpdir(), `pi-openrouter-test-${randomUUID()}`);
+  await mkdir(testCacheDir, { recursive: true });
+  // Tell the cache module to use our test directory
+  setCacheDir(testCacheDir);
 }
 
 async function cleanupTestCache(): Promise<void> {
+  // Reset cache dir to default (null means use default)
+  setCacheDir(null);
+  // Clean up temp directory
   try {
-    await rm(CACHE_DIR, { recursive: true, force: true });
+    await rm(testCacheDir, { recursive: true, force: true });
   } catch {
     // Ignore cleanup errors
   }
@@ -62,16 +65,18 @@ describe('loadCache', () => {
   });
 
   it('should return null when cache file contains invalid JSON', async () => {
-    await mkdir(CACHE_DIR, { recursive: true });
-    await writeFile(CACHE_FILE, 'not valid json');
+    await mkdir(testCacheDir, { recursive: true });
+    const cacheFile = join(testCacheDir, 'models-cache.json');
+    await writeFile(cacheFile, 'not valid json');
 
     const result = await loadCache();
     expect(result).toBeNull();
   });
 
   it('should return null when cache structure is invalid', async () => {
-    await mkdir(CACHE_DIR, { recursive: true });
-    await writeFile(CACHE_FILE, JSON.stringify({ timestamp: 1234 })); // missing models
+    await mkdir(testCacheDir, { recursive: true });
+    const cacheFile = join(testCacheDir, 'models-cache.json');
+    await writeFile(cacheFile, JSON.stringify({ timestamp: 1234 })); // missing models
 
     const result = await loadCache();
     expect(result).toBeNull();
