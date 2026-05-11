@@ -7,7 +7,13 @@ import { fetchUserModels } from '../client.js';
 import { mapOpenRouterModels } from './mapper.js';
 import { loadCache, saveCache } from './cache.js';
 import type { ExtensionContext } from '@mariozechner/pi-coding-agent';
-import type { SyncResult, PiModelConfig, ModelsCache, OpenRouterModel } from './types.js';
+import type {
+  SyncResult,
+  PiModelConfig,
+  ModelsCache,
+  OpenRouterModel,
+  SkipReason,
+} from './types.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -144,7 +150,7 @@ export async function syncModels(_ctx: ExtensionContext): Promise<SyncResult> {
   // Attempt 1: Fetch from API
   try {
     const response = await fetchUserModels();
-    const { configs, skipped } = mapOpenRouterModels(response.data);
+    const { configs, skipped, skippedDetails } = mapOpenRouterModels(response.data);
 
     // Add built-in router aliases that don't appear in /models/user endpoint
     const configsWithRouters = [...configs, ...BUILTIN_ROUTER_MODELS];
@@ -234,9 +240,10 @@ export async function syncModels(_ctx: ExtensionContext): Promise<SyncResult> {
       },
     ];
 
-    // Update last-good cache (include routers)
+    // Update last-good cache (include routers and skip details)
     const cache: ModelsCache = {
       models: [...cacheModels, ...routerCacheModels],
+      skippedDetails: skippedDetails,
       timestamp: Date.now(),
     };
     await saveCache(cache);
@@ -245,6 +252,7 @@ export async function syncModels(_ctx: ExtensionContext): Promise<SyncResult> {
       success: true,
       registeredCount: configsWithRouters.length,
       skippedCount: skipped,
+      skippedDetails: skippedDetails,
       source: 'api',
       cacheUpdated: true,
       cacheAgeMs: null,
@@ -265,6 +273,9 @@ export async function syncModels(_ctx: ExtensionContext): Promise<SyncResult> {
 
       await registerModelsWithProvider(_ctx, configs);
 
+      // Use cached skip details if available
+      const cachedSkipDetails = cache.skippedDetails || [];
+
       const result: SyncResult = {
         success: false,
         registeredCount: configs.length,
@@ -273,6 +284,7 @@ export async function syncModels(_ctx: ExtensionContext): Promise<SyncResult> {
         cacheUpdated: false,
         cacheAgeMs: Date.now() - cache.timestamp,
         error: errorMsg,
+        skippedDetails: cachedSkipDetails,
       };
 
       setSyncState(result);
@@ -326,4 +338,54 @@ export function areModelsAvailable(): boolean {
   if (!state) return false;
 
   return state.registeredCount > 0 || state.source === 'cache';
+}
+
+/**
+ * Get skip reasons from the current sync state or cache.
+ * Note: For models-status (synchronous), we can't await here.
+ * For async usage, use getSkipReasonsAsync instead.
+ */
+export function getSkipReasons(maxResults: number = 10): SkipReason[] {
+  const state = getSyncState();
+  if (!state) return [];
+
+  // Prefer in-memory state
+  if (state.skippedDetails && state.skippedDetails.length > 0) {
+    return state.skippedDetails.slice(0, maxResults);
+  }
+
+  return [];
+}
+
+/**
+ * Async version of getSkipReasons that reads from cache if needed.
+ */
+export async function getSkipReasonsAsync(maxResults: number = 10): Promise<SkipReason[]> {
+  const state = getSyncState();
+
+  // First check in-memory state
+  if (state?.skippedDetails && state.skippedDetails.length > 0) {
+    return state.skippedDetails.slice(0, maxResults);
+  }
+
+  // Fall back to cache if not available in state
+  const cache = await loadCache();
+  if (cache?.skippedDetails && cache.skippedDetails.length > 0) {
+    return cache.skippedDetails.slice(0, maxResults);
+  }
+
+  return [];
+}
+
+/**
+ * Format skip reasons for display.
+ */
+export function formatSkipReasons(reasons: SkipReason[]): string {
+  if (reasons.length === 0) return '';
+
+  const lines: string[] = [];
+  for (const reason of reasons) {
+    lines.push(`  - ${reason.id}: ${reason.reason}`);
+  }
+  return lines.join('\n');
 }

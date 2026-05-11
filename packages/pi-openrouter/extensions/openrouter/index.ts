@@ -18,7 +18,13 @@ import type { RollupStatus } from './account-types.js';
 import crypto from 'node:crypto';
 
 // Import models sync
-import { syncModels, getSyncState, isSyncEnabled } from './models/sync.js';
+import {
+  syncModels,
+  getSyncState,
+  isSyncEnabled,
+  getSkipReasonsAsync,
+  formatSkipReasons,
+} from './models/sync.js';
 
 // Store the current session state for use in command handlers
 let currentSessionState: OpenRouterSessionState | null = null;
@@ -233,41 +239,47 @@ export default function (pi: ExtensionAPI) {
             return;
           }
           const result = await syncModels(ctx);
+          const skipReasons = result.skippedDetails || [];
+
           // Display result using same color scheme as overlays
           if (!result.success) {
+            let message = '';
             if (result.source === 'cache') {
-              ctx.ui.notify(
-                `OpenRouter models sync failed\n${result.registeredCount} registered from cache\nCache age: ${formatModelAge(result.cacheAgeMs)}\nError: ${result.error}`,
-                'warning',
-              );
+              message = `OpenRouter models sync failed\n${result.registeredCount} registered from cache\nCache age: ${formatModelAge(result.cacheAgeMs)}\nError: ${result.error}`;
             } else {
-              ctx.ui.notify(
-                `OpenRouter models unavailable\n0 registered\nError: ${result.error}`,
-                'error',
-              );
+              message = `OpenRouter models unavailable\n0 registered\nError: ${result.error}`;
             }
+            if (skipReasons.length > 0) {
+              message += `\n\nSkipped models (${result.skippedCount}):\n${formatSkipReasons(skipReasons)}`;
+            }
+            ctx.ui.notify(message, result.source === 'cache' ? 'warning' : 'error');
           } else {
-            ctx.ui.notify(
-              `OpenRouter models synced\n${result.registeredCount} registered\nSkipped: ${result.skippedCount}\nSource: /api/v1/models/user\nCache: updated`,
-              'info',
-            );
+            let message = `OpenRouter models synced\n${result.registeredCount} registered\nSkipped: ${result.skippedCount}\nSource: /api/v1/models/user\nCache: updated`;
+            if (skipReasons.length > 0) {
+              message += `\n\nSkipped models:\n${formatSkipReasons(skipReasons)}`;
+            }
+            ctx.ui.notify(message, 'info');
           }
           break;
         }
         case 'models-status': {
           const state = getSyncState();
+          const skipReasons = await getSkipReasonsAsync(10); // Show up to 10 skip reasons
+
           if (!state) {
             ctx.ui.notify('OpenRouter models: not synced', 'info');
           } else if (state.success) {
-            ctx.ui.notify(
-              `OpenRouter models healthy\n${state.registeredCount} registered\nSource: ${state.source}\nCache: ${state.cacheUpdated ? 'updated' : 'not updated'}`,
-              'info',
-            );
+            let message = `OpenRouter models healthy\n${state.registeredCount} registered\nSource: ${state.source}\nCache: ${state.cacheUpdated ? 'updated' : 'not updated'}`;
+            if (skipReasons.length > 0) {
+              message += `\n\nSkipped models (${skipReasons.length}):\n${formatSkipReasons(skipReasons)}`;
+            }
+            ctx.ui.notify(message, 'info');
           } else if (state.source === 'cache') {
-            ctx.ui.notify(
-              `OpenRouter models cached\n${state.registeredCount} registered\nCache age: ${formatModelAge(state.cacheAgeMs)}\nError: ${state.error}`,
-              'warning',
-            );
+            let message = `OpenRouter models cached\n${state.registeredCount} registered\nCache age: ${formatModelAge(state.cacheAgeMs)}\nError: ${state.error}`;
+            if (skipReasons.length > 0) {
+              message += `\n\nSkipped models (${skipReasons.length}):\n${formatSkipReasons(skipReasons)}`;
+            }
+            ctx.ui.notify(message, 'warning');
           } else {
             ctx.ui.notify(`OpenRouter models broken\n0 registered\nError: ${state.error}`, 'error');
           }

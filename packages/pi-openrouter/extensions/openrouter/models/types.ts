@@ -57,6 +57,7 @@ export interface SyncResult {
   success: boolean;
   registeredCount: number;
   skippedCount: number;
+  skippedDetails?: SkipReason[]; // Track why models were skipped
   source: 'api' | 'cache' | 'none';
   cacheUpdated: boolean;
   cacheAgeMs: number | null;
@@ -68,6 +69,7 @@ export interface SyncResult {
  */
 export interface ModelsCache {
   models: OpenRouterModel[];
+  skippedDetails?: SkipReason[]; // New field for tracking skip reasons
   timestamp: number;
 }
 
@@ -84,9 +86,18 @@ export interface SyncState {
 }
 
 /**
+ * Reason a model was skipped during mapping.
+ */
+export interface SkipReason {
+  id: string;
+  reason: string;
+}
+
+/**
  * Result of batch mapping operation
  */
 export interface MapResult {
   configs: PiModelConfig[];
   skipped: number;
+  skippedDetails: SkipReason[];
 }
