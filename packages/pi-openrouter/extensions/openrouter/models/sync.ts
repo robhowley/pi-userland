@@ -56,28 +56,24 @@ export function getSyncState(): SyncResult | null {
 /**
  * Register mapped models with Pi's OpenRouter provider.
  *
- * TODO: This is a placeholder. Update when Pi's provider API is finalized.
- * The actual implementation may differ based on the real API.
+ * Uses modelRegistry.registerProvider() to add models to the built-in openrouter provider.
+ * The models array replaces all existing models for the provider.
  */
 async function registerModelsWithProvider(
-  _ctx: ExtensionContext,
-  _configs: PiModelConfig[],
+  ctx: ExtensionContext,
+  configs: PiModelConfig[],
 ): Promise<void> {
-  // Placeholder: In real implementation, this would:
-  // 1. Clear existing OpenRouter models from provider
-  // 2. Register each config with the provider
-  //
-  // Example of likely API:
-  // await _ctx.providers.openrouter.clearModels();
-  // for (const config of configs) {
-  //   await _ctx.providers.openrouter.registerModel(config);
-  // }
+  // Register models with Pi's OpenRouter provider
+  // This replaces all existing models for the provider with our synced ones
+  ctx.modelRegistry.registerProvider('openrouter', {
+    baseUrl: 'https://openrouter.ai/api/v1',
+    apiKey: 'OPENROUTER_API_KEY',
+    api: 'openai-completions',
+    models: configs,
+    authHeader: true,
+  });
 
-  // For now, just log registration
-  console.log(`[pi-openrouter] Registering models with provider`);
-
-  // Simulate async work
-  await Promise.resolve();
+  console.log(`[pi-openrouter] Registered ${configs.length} models with OpenRouter provider`);
 }
 
 /**

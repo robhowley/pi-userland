@@ -17,9 +17,8 @@ import type { KeyInfo } from './account-types.js';
 import type { RollupStatus } from './account-types.js';
 import crypto from 'node:crypto';
 
-// Import models sync and overlay
+// Import models sync
 import { syncModels, getSyncState, isSyncEnabled } from './models/sync.js';
-import { showSyncResultOverlay, showStatusOverlay } from './models/overlay.js';
 
 // Store the current session state for use in command handlers
 let currentSessionState: OpenRouterSessionState | null = null;
@@ -187,6 +186,17 @@ export default function (pi: ExtensionAPI) {
 
   // ============== MODELS COMMANDS (subcommands of /openrouter) ==============
 
+  // Helper to format model sync age
+  function formatModelAge(ms: number | null): string {
+    if (ms === null) return 'unknown';
+    const minutes = Math.floor(ms / 60000);
+    if (minutes < 1) return '<1m';
+    if (minutes < 60) return `${minutes}m`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h`;
+    return `${Math.floor(hours / 24)}d`;
+  }
+
   // Single entry point with subcommands: /openrouter [usage|account|session|models-sync|models-status]
   pi.registerCommand('openrouter', {
     description: 'OpenRouter commands: usage, account, session, models-sync, models-status',
@@ -216,15 +226,51 @@ export default function (pi: ExtensionAPI) {
         }
         case 'models-sync': {
           if (!isSyncEnabled()) {
-            ctx.ui.notify('OpenRouter model sync is disabled. Set openrouterModelSync: true in ~/.pi/agent/settings.json to enable.', 'error');
+            ctx.ui.notify(
+              'OpenRouter model sync is disabled. Set openrouterModelSync: true in ~/.pi/agent/settings.json to enable.',
+              'error',
+            );
             return;
           }
           const result = await syncModels(ctx);
-          await showSyncResultOverlay(ctx, result);
+          // Display result using same color scheme as overlays
+          if (!result.success) {
+            if (result.source === 'cache') {
+              ctx.ui.notify(
+                `OpenRouter models sync failed\n${result.registeredCount} registered from cache\nCache age: ${formatModelAge(result.cacheAgeMs)}\nError: ${result.error}`,
+                'warning',
+              );
+            } else {
+              ctx.ui.notify(
+                `OpenRouter models unavailable\n0 registered\nError: ${result.error}`,
+                'error',
+              );
+            }
+          } else {
+            ctx.ui.notify(
+              `OpenRouter models synced\n${result.registeredCount} registered\nSkipped: ${result.skippedCount}\nSource: /api/v1/models/user\nCache: updated`,
+              'info',
+            );
+          }
           break;
         }
         case 'models-status': {
-          await showStatusOverlay(ctx, getSyncState());
+          const state = getSyncState();
+          if (!state) {
+            ctx.ui.notify('OpenRouter models: not synced', 'info');
+          } else if (state.success) {
+            ctx.ui.notify(
+              `OpenRouter models healthy\n${state.registeredCount} registered\nSource: ${state.source}\nCache: ${state.cacheUpdated ? 'updated' : 'not updated'}`,
+              'info',
+            );
+          } else if (state.source === 'cache') {
+            ctx.ui.notify(
+              `OpenRouter models cached\n${state.registeredCount} registered\nCache age: ${formatModelAge(state.cacheAgeMs)}\nError: ${state.error}`,
+              'warning',
+            );
+          } else {
+            ctx.ui.notify(`OpenRouter models broken\n0 registered\nError: ${state.error}`, 'error');
+          }
           break;
         }
         default: {
