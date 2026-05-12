@@ -119,8 +119,10 @@ describe('aggregateUsage', () => {
       totalUsage: 10,
       totalCredits: 100,
     };
-    // Use a fixed date that's definitely in the past
-    const date = '2026-05-04';
+    // Use a dynamic date that's within the last 7 days
+    const now = new Date();
+    const testDate = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000); // 3 days ago
+    const date = `${testDate.getUTCFullYear()}-${String(testDate.getUTCMonth() + 1).padStart(2, '0')}-${String(testDate.getUTCDate()).padStart(2, '0')}`;
     const analytics: ActivityItem[] = [
       {
         date: date,
