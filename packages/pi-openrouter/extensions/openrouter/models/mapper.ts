@@ -1,4 +1,5 @@
-import type { OpenRouterModel, PiModelConfig, SkipReason } from './types.js';
+import type { OpenRouterModel, PiModelConfig, SkipReason, MapResult } from './types.js';
+import { ROUTER_ALIASES } from './types.js';
 import type { Model as SDKModel } from '@openrouter/sdk/models/index.js';
 
 const COST_PER_MILLION = 1_000_000;
@@ -128,24 +129,6 @@ function buildPiConfig(model: OpenRouterModel, contextWindow: number): PiModelCo
       DEFAULT_MAX_TOKENS,
   };
 }
-
-/**
- * Mapping result with skip reason tracking
- */
-export interface MapResult {
-  configs: PiModelConfig[];
-  skipped: number;
-  skippedDetails: SkipReason[];
-}
-
-/**
- * Builtin router aliases that should always be available.
- */
-export const ROUTER_ALIASES: readonly string[] = [
-  'openrouter/auto',
-  'openrouter/free',
-  'openrouter/owl-alpha',
-];
 
 /**
  * Maps multiple OpenRouter models, tracking skips.

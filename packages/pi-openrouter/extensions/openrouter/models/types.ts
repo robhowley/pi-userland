@@ -89,3 +89,47 @@ export interface MapResult {
   skipped: number;
   skippedDetails: SkipReason[];
 }
+
+// =============================================================================
+// Built-in Router Definitions (Single Source of Truth)
+// =============================================================================
+
+/**
+ * Canonical router definitions for OpenRouter's special routing models.
+ * These don't appear in /models/user API but should always be available.
+ */
+export const ROUTER_DEFINITIONS = [
+  {
+    id: 'openrouter/auto',
+    name: 'Auto Router',
+    reasoning: true,
+    input: ['text', 'image'] as const,
+    output: ['text'] as const,
+    contextLength: 2000000,
+    maxTokens: 4096,
+  },
+  {
+    id: 'openrouter/free',
+    name: 'Free Models Router',
+    reasoning: true,
+    input: ['text', 'image'] as const,
+    output: ['text'] as const,
+    contextLength: 200000,
+    maxTokens: 4096,
+  },
+  {
+    id: 'openrouter/owl-alpha',
+    name: 'Owl Alpha',
+    reasoning: false,
+    input: ['text'] as const,
+    output: ['text'] as const,
+    contextLength: 1048756,
+    maxTokens: 262144,
+  },
+] as const;
+
+/**
+ * Router IDs extracted from ROUTER_DEFINITIONS for quick lookup.
+ * Use this for skip checks and filtering.
+ */
+export const ROUTER_ALIASES: readonly string[] = ROUTER_DEFINITIONS.map((r) => r.id);

@@ -15,6 +15,7 @@ import type {
   SkipReason,
 } from './types.js';
 import { existsSync, readFileSync } from 'node:fs';
+import { ROUTER_DEFINITIONS } from './types.js';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -83,38 +84,9 @@ async function registerModelsWithProvider(
 }
 
 /**
- * Built-in OpenRouter router aliases that should always be available.
- * These are special routing models that don't appear in /models/user endpoint.
+ * Built-in router models derived from ROUTER_DEFINITIONS in types.ts.
+ * This ensures sync with mapper.ts skip logic.
  */
-const ROUTER_DEFINITIONS = [
-  {
-    id: 'openrouter/auto',
-    name: 'Auto Router',
-    reasoning: true,
-    input: ['text', 'image'] as const,
-    output: ['text'] as const,
-    contextLength: 2000000,
-    maxTokens: 4096,
-  },
-  {
-    id: 'openrouter/free',
-    name: 'Free Models Router',
-    reasoning: true,
-    input: ['text', 'image'] as const,
-    output: ['text'] as const,
-    contextLength: 200000,
-    maxTokens: 4096,
-  },
-  {
-    id: 'openrouter/owl-alpha',
-    name: 'Owl Alpha',
-    reasoning: false,
-    input: ['text'] as const,
-    output: ['text'] as const,
-    contextLength: 1048756,
-    maxTokens: 262144,
-  },
-] as const;
 
 const BUILTIN_ROUTER_MODELS: PiModelConfig[] = ROUTER_DEFINITIONS.map((r) => ({
   id: r.id,
