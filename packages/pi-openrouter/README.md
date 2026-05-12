@@ -1,6 +1,6 @@
 # pi-openrouter
 
-A [Pi](https://pi.dev/) extension for live OpenRouter visibility: TUI overlays for spend, credits, key limits, burn rate, and model usage, plus automatic `session_id` tagging for dashboard grouping.
+A [Pi](https://pi.dev/) extension for live OpenRouter visibility and environment sync: TUI overlays for spend, credits, key limits, burn rate, and model usage, automatic session_id tagging, plus user-scoped model catalog sync.
 
 ## Installation
 
