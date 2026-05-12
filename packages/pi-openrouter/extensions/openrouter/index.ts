@@ -200,8 +200,10 @@ export default function (pi: ExtensionAPI) {
   });
 
   // Auto-sync models at Pi startup if sync is enabled and no cached models available
-  pi.on('session_start', async (event, ctx) => {
-    // Only sync on initial Pi startup, not on /reload, /new, /resume, /fork
+  // Use resources_discover instead of session_start to avoid interfering with
+  // provider registration flush and TUI initialization
+  pi.on('resources_discover', async (event, ctx) => {
+    // Only sync on initial Pi startup, not on /reload (which also fires resources_discover)
     if (event.reason !== 'startup') return;
     if (!isSyncEnabled()) return;
     if (areModelsAvailable()) return; // Already have models from cache
