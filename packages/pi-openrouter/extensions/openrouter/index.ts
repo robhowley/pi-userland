@@ -200,16 +200,15 @@ export default function (pi: ExtensionAPI) {
   });
 
   // Auto-sync models at Pi startup if sync is enabled and no cached models available
-  // Use resources_discover instead of session_start to avoid interfering with
-  // provider registration flush and TUI initialization
-  pi.on('resources_discover', async (event, ctx) => {
-    // Only sync on initial Pi startup, not on /reload (which also fires resources_discover)
-    if (event.reason !== 'startup') return;
+  // Defer with setImmediate to allow TUI initialization to complete first
+  pi.on('session_start', async (_event, ctx) => {
     if (!isSyncEnabled()) return;
     if (areModelsAvailable()) return; // Already have models from cache
 
-    // Fire-and-forget sync in background - don't block startup
-    syncModels(ctx).catch(() => {});
+    // Defer sync to next tick to avoid interfering with TUI initialization
+    setImmediate(() => {
+      syncModels(ctx).catch(() => {});
+    });
   });
 
   pi.registerCommand('openrouter-usage', {
