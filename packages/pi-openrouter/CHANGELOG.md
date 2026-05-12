@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.7.1...pi-openrouter-v0.8.0) (2026-05-12)
+
+
+### Features
+
+* **pi-openrouter:** add model sync and registration ([#47](https://github.com/robhowley/pi-userland/issues/47)) ([9796113](https://github.com/robhowley/pi-userland/commit/9796113d55b5c9580febbda537977a5213fe8794))
+
 ## [0.7.1](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.7.0...pi-openrouter-v0.7.1) (2026-05-11)
 
 
