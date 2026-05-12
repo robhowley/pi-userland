@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { aggregateUsage } from '../format.js';
 import { renderSpendSparkline } from '../chart.js';
+import { createTestDate, createActivityItem } from './fixtures.js';
 import type { ActivityItem } from '@openrouter/sdk/models/index.js';
 
 describe('aggregateUsage', () => {
@@ -13,24 +14,9 @@ describe('aggregateUsage', () => {
     // Get today's date in YYYY-MM-DD format using UTC date
     // This matches how the API returns dates (YYYY-MM-DD without timezone)
     // and how the implementation calculates 'today' (using UTC)
-    const now = new Date();
-    const todayStr = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-${String(now.getUTCDate()).padStart(2, '0')}`;
+    const todayStr = createTestDate(0);
 
-    const analytics: ActivityItem[] = [
-      {
-        date: todayStr,
-        model: 'gpt-4',
-        modelPermaslug: 'gpt-4-perma',
-        endpointId: 'ep-1',
-        usage: 6.55,
-        byokUsageInference: 0,
-        requests: 10,
-        promptTokens: 1000,
-        completionTokens: 100,
-        reasoningTokens: 0,
-        providerName: 'openai',
-      },
-    ];
+    const analytics: ActivityItem[] = [createActivityItem({ date: todayStr, usage: 6.55 })];
 
     const result = aggregateUsage(credits, analytics);
 
@@ -43,37 +29,27 @@ describe('aggregateUsage', () => {
       totalCredits: 100,
     };
     // Use a date that's within the last 7 days of when the test runs.
-    // Get today's date in UTC and subtract a few days to ensure it's in the week window.
-    const now = new Date();
-    const testDate = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000); // 3 days ago
-    const date = `${testDate.getUTCFullYear()}-${String(testDate.getUTCMonth() + 1).padStart(2, '0')}-${String(testDate.getUTCDate()).padStart(2, '0')}`;
+    const date = createTestDate(3); // 3 days ago
     const analytics: ActivityItem[] = [
-      {
-        date: date,
+      createActivityItem({
+        date,
         model: 'model-1',
         modelPermaslug: 'model-1-perma',
         endpointId: 'ep-1',
         usage: 5.42,
-        byokUsageInference: 0,
-        requests: 10,
-        promptTokens: 1000,
-        completionTokens: 100,
-        reasoningTokens: 0,
         providerName: 'provider-1',
-      },
-      {
-        date: date,
+      }),
+      createActivityItem({
+        date,
         model: 'model-2',
         modelPermaslug: 'model-2-perma',
         endpointId: 'ep-2',
         usage: 3.11,
-        byokUsageInference: 0,
         requests: 5,
         promptTokens: 500,
         completionTokens: 50,
-        reasoningTokens: 0,
         providerName: 'provider-2',
-      },
+      }),
     ];
 
     const result = aggregateUsage(credits, analytics);
@@ -119,35 +95,30 @@ describe('aggregateUsage', () => {
       totalUsage: 10,
       totalCredits: 100,
     };
-    // Use a fixed date that's definitely in the past
-    const date = '2026-05-04';
+    // Use a dynamic date that's within the last 7 days
+    const date = createTestDate(3); // 3 days ago
     const analytics: ActivityItem[] = [
-      {
-        date: date,
+      createActivityItem({
+        date,
         model: 'gpt-4',
         modelPermaslug: 'gpt-4-perma',
-        endpointId: 'ep-1',
         usage: 5.0,
-        byokUsageInference: 0,
         requests: 5,
         promptTokens: 100,
         completionTokens: 50,
-        reasoningTokens: 0,
         providerName: 'openai',
-      },
-      {
-        date: date,
+      }),
+      createActivityItem({
+        date,
         model: 'claude-3',
         modelPermaslug: 'claude-3-perma',
         endpointId: 'ep-2',
         usage: 3.0,
-        byokUsageInference: 0,
         requests: 3,
         promptTokens: 60,
         completionTokens: 30,
-        reasoningTokens: 0,
         providerName: 'anthropic',
-      },
+      }),
     ];
 
     const result = aggregateUsage(credits, analytics);
@@ -218,32 +189,27 @@ describe('aggregateUsage', () => {
     };
     const date = '2026-05-01';
     const analytics: ActivityItem[] = [
-      {
-        date: date,
+      createActivityItem({
+        date,
         model: 'gpt-4',
         modelPermaslug: 'gpt-4-perma',
-        endpointId: 'ep-1',
         usage: 5.0,
-        byokUsageInference: 0,
         requests: 5,
         promptTokens: 100,
         completionTokens: 50,
-        reasoningTokens: 0,
         providerName: 'openai',
-      },
-      {
-        date: date,
+      }),
+      createActivityItem({
+        date,
         model: 'claude-3',
         modelPermaslug: 'claude-3-perma',
         endpointId: 'ep-2',
         usage: 3.0,
-        byokUsageInference: 0,
         requests: 3,
         promptTokens: 60,
         completionTokens: 30,
-        reasoningTokens: 0,
-        providerName: 'openai', // Same provider, different endpoint
-      },
+        providerName: 'openai',
+      }),
     ];
 
     const result = aggregateUsage(credits, analytics);

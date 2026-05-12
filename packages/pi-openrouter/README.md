@@ -1,6 +1,6 @@
 # pi-openrouter
 
-A [Pi](https://pi.dev/) extension for live OpenRouter visibility: TUI overlays for spend, credits, key limits, burn rate, and model usage, plus automatic `session_id` tagging for dashboard grouping.
+A [Pi](https://pi.dev/) extension for live OpenRouter visibility and environment sync: usage/account TUI overlays, automatic `session_id` tagging, and user-scoped model catalog sync.
 
 ## Installation
 
@@ -13,13 +13,53 @@ pi install npm:@robhowley/pi-openrouter
 Set one of these environment variables:
 
 - `OPENROUTER_MANAGEMENT_KEY` (preferred), provides full usage data including model breakdowns
-- `OPENROUTER_API_KEY`, basic usage data only
+- `OPENROUTER_API_KEY`, basic usage data plus user-scoped model sync
 
 ```shell
 export OPENROUTER_MANAGEMENT_KEY=sk-or-...
 ```
 
-## Usage
+## Commands
+
+```bash
+/openrouter usage                    # usage/spend overlay
+/openrouter account                  # credits, key limits, account health
+/openrouter session                  # current OpenRouter session_id
+/openrouter models-sync              # sync user-scoped OpenRouter models into Pi
+/openrouter models-status            # show model sync/cache status
+/openrouter models-status --skipped  # show skipped model reasons
+```
+
+## Model catalog sync
+
+`pi-openrouter` can sync Pi’s OpenRouter model catalog from your user-scoped OpenRouter model list.
+
+`/openrouter models-sync`
+
+The sync uses OpenRouter’s authenticated user model catalog, so Pi can see the models available to your account instead of only the default provider list.
+
+`/openrouter models-status`
+
+Example status output:
+
+```text
+OpenRouter models healthy
+363 registered · 2 skipped · cache age: 2m
+```
+
+To see why models were skipped:
+
+`/openrouter models-status --skipped`
+
+Skipped models do not make the sync fail; models are skipped when required metadata cannot be safely mapped into Pi’s provider model config. The last successful catalog is cached so Pi can keep using it if a later refresh fails, and the cache persists across sessions. If a session starts with a cached catalog that has not been registered yet, status will show:
+
+```text
+OpenRouter models cached
+368 models in cache · age: 4m
+Run '/openrouter models-sync' to register models
+```
+
+## Usage overlay
 
 Type `/openrouter usage` in Pi to open the usage overlay.
 
