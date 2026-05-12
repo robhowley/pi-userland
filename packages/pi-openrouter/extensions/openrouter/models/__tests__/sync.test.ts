@@ -37,62 +37,91 @@ vi.mock('../cache.js', () => ({
   setCacheDir: vi.fn(),
 }));
 
-describe('syncModels', () => {
-  const mockRegisterProvider = vi.fn();
-  const mockCtx = {
+/**
+ * Factory for creating minimal mock ExtensionContext.
+ * Only implements methods/properties actually used by sync tests.
+ */
+function createMockExtensionContext(
+  overrides: {
+    registerProvider?: typeof vi.fn;
+  } = {},
+): ExtensionContext {
+  const mockFn = vi.fn;
+
+  return {
     modelRegistry: {
-      registerProvider: mockRegisterProvider,
+      registerProvider: overrides.registerProvider ?? mockFn(),
     } as unknown as ModelRegistry,
-    ui: {
-      select: vi.fn(),
-      confirm: vi.fn(),
-      input: vi.fn(),
-      notify: vi.fn(),
-      onTerminalInput: vi.fn(),
-      setStatus: vi.fn(),
-      setWorkingMessage: vi.fn(),
-      setWorkingIndicator: vi.fn(),
-      setHiddenThinkingLabel: vi.fn(),
-      setWidget: vi.fn(),
-      setFooter: vi.fn(),
-      setHeader: vi.fn(),
-      setTitle: vi.fn(),
-      custom: vi.fn(),
-      pasteToEditor: vi.fn(),
-      setEditorText: vi.fn(),
-      getEditorText: vi.fn(),
-      editor: vi.fn(),
-      setEditorComponent: vi.fn(),
-      theme: {} as any,
-      getAllThemes: vi.fn(),
-      getTheme: vi.fn(),
-      setTheme: vi.fn(),
-      getToolsExpanded: vi.fn(),
-      setToolsExpanded: vi.fn(),
-    },
+    ui: createMockUI(),
     hasUI: true,
     cwd: '/tmp',
-    sessionManager: {
-      getCurrentSessionId: vi.fn(),
-      getCurrentSessionPath: vi.fn(),
-      getEntry: vi.fn(),
-      getEntryHistory: vi.fn(),
-      getEntryById: vi.fn(),
-      getBranchEntries: vi.fn(),
-      getBranchSummary: vi.fn(),
-      getRecentEntries: vi.fn(),
-      getEntryCount: vi.fn(),
-    } as any,
+    sessionManager: createMockSessionManager(),
     model: undefined,
     isIdle: () => true,
     signal: undefined,
-    abort: vi.fn(),
+    abort: mockFn(),
     hasPendingMessages: () => false,
-    shutdown: vi.fn(),
-    getContextUsage: vi.fn(),
-    compact: vi.fn(),
-    getSystemPrompt: vi.fn(),
-  } as ExtensionContext;
+    shutdown: mockFn(),
+    getContextUsage: mockFn(),
+    compact: mockFn(),
+    getSystemPrompt: mockFn(),
+  } satisfies ExtensionContext;
+}
+
+function createMockUI(): ExtensionContext['ui'] {
+  const mockFn = vi.fn;
+  return {
+    select: mockFn(),
+    confirm: mockFn(),
+    input: mockFn(),
+    notify: mockFn(),
+    onTerminalInput: mockFn(),
+    setStatus: mockFn(),
+    setWorkingMessage: mockFn(),
+    setWorkingIndicator: mockFn(),
+    setHiddenThinkingLabel: mockFn(),
+    setWidget: mockFn(),
+    setFooter: mockFn(),
+    setHeader: mockFn(),
+    setTitle: mockFn(),
+    custom: mockFn(),
+    pasteToEditor: mockFn(),
+    setEditorText: mockFn(),
+    getEditorText: mockFn(),
+    editor: mockFn(),
+    setEditorComponent: mockFn(),
+    theme: {} as any,
+    getAllThemes: mockFn(),
+    getTheme: mockFn(),
+    setTheme: mockFn(),
+    getToolsExpanded: mockFn(),
+    setToolsExpanded: mockFn(),
+  };
+}
+
+/**
+ * Creates a mock session manager for testing.
+ * Uses `as any` since we only need the mock to satisfy ExtensionContext type,
+ * and sync tests don't actually use the session manager.
+ */
+function createMockSessionManager(): ExtensionContext['sessionManager'] {
+  const mockFn = vi.fn;
+  return {
+    getCurrentSessionId: mockFn(),
+    getCurrentSessionPath: mockFn(),
+    getEntry: mockFn(),
+    getEntryHistory: mockFn(),
+    getEntryById: mockFn(),
+    getBranchEntries: mockFn(),
+    getBranchSummary: mockFn(),
+    getRecentEntries: mockFn(),
+    getEntryCount: mockFn(),
+  } as any;
+}
+
+describe('syncModels', () => {
+  const mockRegisterProvider = vi.fn();
+  const mockCtx = createMockExtensionContext({ registerProvider: mockRegisterProvider });
 
   beforeEach(() => {
     vi.resetAllMocks();
@@ -115,6 +144,43 @@ describe('syncModels', () => {
     expect(result.registeredCount).toBe(0);
     expect(result.source).toBe('none');
     expect(result.error).toContain('OPENROUTER_API_KEY not set');
+  });
+
+  it('should sync models from API and register with provider', async () => {
+    // Mock successful API response with minimal model data
+    const mockModel = {
+      id: 'anthropic/claude-3-opus',
+      name: 'Claude 3 Opus',
+      architecture: {
+        inputModalities: ['text', 'image'],
+        outputModalities: ['text'],
+      },
+      contextLength: 200000,
+      pricing: {
+        prompt: 0.000015,
+        completion: 0.000075,
+        inputCacheRead: 0.0000015,
+        inputCacheWrite: 0.0000075,
+      },
+      supportedParameters: ['reasoning'],
+      topProvider: {
+        contextLength: 200000,
+        maxCompletionTokens: 4096,
+      },
+    };
+
+    vi.mocked(fetchUserModels).mockResolvedValueOnce({
+      data: [mockModel],
+    } as any);
+
+    vi.mocked(loadCache).mockResolvedValueOnce(null);
+
+    const result = await syncModels(mockCtx);
+
+    expect(result.success).toBe(true);
+    expect(result.source).toBe('api');
+    expect(result.registeredCount).toBeGreaterThan(0);
+    expect(mockRegisterProvider).toHaveBeenCalled();
   });
 });
 
