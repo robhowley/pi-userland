@@ -23,6 +23,7 @@ import {
   syncModels,
   getSyncState,
   isSyncEnabled,
+  areModelsAvailable,
   getSkipReasonsAsync,
   groupSkipReasons,
 } from './models/sync.js';
@@ -196,6 +197,17 @@ export default function (pi: ExtensionAPI) {
 
   pi.on('session_shutdown', () => {
     stopBackgroundRefresh();
+  });
+
+  // Auto-sync models at Pi startup if sync is enabled and no cached models available
+  pi.on('session_start', async (event, ctx) => {
+    // Only sync on initial Pi startup, not on /reload, /new, /resume, /fork
+    if (event.reason !== 'startup') return;
+    if (!isSyncEnabled()) return;
+    if (areModelsAvailable()) return; // Already have models from cache
+
+    // Fire-and-forget sync in background - don't block startup
+    syncModels(ctx).catch(() => {});
   });
 
   pi.registerCommand('openrouter-usage', {
