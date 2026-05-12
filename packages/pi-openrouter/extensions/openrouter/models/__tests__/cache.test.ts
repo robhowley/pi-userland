@@ -4,26 +4,10 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { loadCache, saveCache, getCacheAgeMs, formatCacheAge, setCacheDir } from '../cache.js';
-import type { ModelsCache, OpenRouterModel } from '../types.js';
+import { createMockCache } from '../../__tests__/fixtures.js';
 
 // Each test gets its own isolated temp directory
 let testCacheDir: string;
-
-// Helper to create a mock cache
-function createMockCache(overrides: Partial<ModelsCache> = {}): ModelsCache {
-  const mockModel: OpenRouterModel = {
-    id: 'test/model',
-    name: 'Test Model',
-    context_length: 128000,
-    pricing: { prompt: '0.000001', completion: '0.000003' },
-  };
-
-  return {
-    models: [mockModel],
-    timestamp: Date.now() - 1000, // 1 second ago
-    ...overrides,
-  };
-}
 
 async function setupTestCache(): Promise<void> {
   // Create isolated temp directory for this test

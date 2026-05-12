@@ -1,10 +1,42 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { fetchUserModels, isConfigured, getApiKey, ApiError, AuthError } from '../client.js';
+import type { Mock } from 'vitest';
 
 // Mock SDK at the module level
 vi.mock('@openrouter/sdk/sdk/sdk.js', () => ({
   OpenRouter: vi.fn(),
 }));
+
+/**
+ * Factory function to create a minimal mock SDK client.
+ * Reduces boilerplate from ~25 lines to 1 line per test.
+ */
+function createMockSDKClient(overrides: { listForUser?: Mock } = {}) {
+  return {
+    models: { listForUser: overrides.listForUser ?? vi.fn() },
+    credits: {},
+    analytics: {},
+    chat: {},
+    embeddings: {},
+    images: {},
+    fine_tuning: {},
+    batches: {},
+    files: {},
+    audio: {},
+    moderation: {},
+    beta: {},
+    webhooks: {},
+    fineTunes: {},
+    jobs: {},
+    uploads: {},
+    assistants: {},
+    threads: {},
+    runs: {},
+    messages: {},
+    vectorStores: {},
+    tools: {},
+  };
+}
 
 describe('fetchUserModels', () => {
   const originalEnv = process.env;
@@ -41,30 +73,9 @@ describe('fetchUserModels', () => {
 
     // Mock SDK OpenRouter class
     const MockOpenRouter = vi.mocked((await import('@openrouter/sdk/sdk/sdk.js')).OpenRouter);
-    const mockClient = {
-      models: { listForUser: vi.fn().mockResolvedValue(mockResponse) },
-      credits: {},
-      analytics: {},
-      chat: {},
-      embeddings: {},
-      images: {},
-      fine_tuning: {},
-      batches: {},
-      files: {},
-      audio: {},
-      moderation: {},
-      beta: {},
-      webhooks: {},
-      fineTunes: {},
-      jobs: {},
-      uploads: {},
-      assistants: {},
-      threads: {},
-      runs: {},
-      messages: {},
-      vectorStores: {},
-      tools: {},
-    };
+    const mockClient = createMockSDKClient({
+      listForUser: vi.fn().mockResolvedValue(mockResponse),
+    });
     MockOpenRouter.mockImplementation(() => mockClient as any);
 
     const result = await fetchUserModels();
@@ -78,30 +89,9 @@ describe('fetchUserModels', () => {
     process.env['OPENROUTER_API_KEY'] = 'invalid-key';
 
     const MockOpenRouter = vi.mocked((await import('@openrouter/sdk/sdk/sdk.js')).OpenRouter);
-    const mockClient = {
-      models: { listForUser: vi.fn().mockRejectedValue(new Error('Unauthorized')) },
-      credits: {},
-      analytics: {},
-      chat: {},
-      embeddings: {},
-      images: {},
-      fine_tuning: {},
-      batches: {},
-      files: {},
-      audio: {},
-      moderation: {},
-      beta: {},
-      webhooks: {},
-      fineTunes: {},
-      jobs: {},
-      uploads: {},
-      assistants: {},
-      threads: {},
-      runs: {},
-      messages: {},
-      vectorStores: {},
-      tools: {},
-    };
+    const mockClient = createMockSDKClient({
+      listForUser: vi.fn().mockRejectedValue(new Error('Unauthorized')),
+    });
     MockOpenRouter.mockImplementation(() => mockClient as any);
 
     const error = await fetchUserModels().catch((e) => e);
@@ -114,30 +104,9 @@ describe('fetchUserModels', () => {
     process.env['OPENROUTER_API_KEY'] = 'test-key';
 
     const MockOpenRouter = vi.mocked((await import('@openrouter/sdk/sdk/sdk.js')).OpenRouter);
-    const mockClient = {
-      models: { listForUser: vi.fn().mockRejectedValue(new Error('Rate limited')) },
-      credits: {},
-      analytics: {},
-      chat: {},
-      embeddings: {},
-      images: {},
-      fine_tuning: {},
-      batches: {},
-      files: {},
-      audio: {},
-      moderation: {},
-      beta: {},
-      webhooks: {},
-      fineTunes: {},
-      jobs: {},
-      uploads: {},
-      assistants: {},
-      threads: {},
-      runs: {},
-      messages: {},
-      vectorStores: {},
-      tools: {},
-    };
+    const mockClient = createMockSDKClient({
+      listForUser: vi.fn().mockRejectedValue(new Error('Rate limited')),
+    });
     MockOpenRouter.mockImplementation(() => mockClient as any);
 
     const error = await fetchUserModels().catch((e) => e);
@@ -150,30 +119,9 @@ describe('fetchUserModels', () => {
     process.env['OPENROUTER_API_KEY'] = 'test-key';
 
     const MockOpenRouter = vi.mocked((await import('@openrouter/sdk/sdk/sdk.js')).OpenRouter);
-    const mockClient = {
-      models: { listForUser: vi.fn().mockRejectedValue(new Error('Server error')) },
-      credits: {},
-      analytics: {},
-      chat: {},
-      embeddings: {},
-      images: {},
-      fine_tuning: {},
-      batches: {},
-      files: {},
-      audio: {},
-      moderation: {},
-      beta: {},
-      webhooks: {},
-      fineTunes: {},
-      jobs: {},
-      uploads: {},
-      assistants: {},
-      threads: {},
-      runs: {},
-      messages: {},
-      vectorStores: {},
-      tools: {},
-    };
+    const mockClient = createMockSDKClient({
+      listForUser: vi.fn().mockRejectedValue(new Error('Server error')),
+    });
     MockOpenRouter.mockImplementation(() => mockClient as any);
 
     const error = await fetchUserModels().catch((e) => e);

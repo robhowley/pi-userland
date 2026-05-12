@@ -1,0 +1,102 @@
+/**
+ * Shared test fixtures for OpenRouter extension tests.
+ *
+ * Centralizes common test data shapes to reduce duplication across test files.
+ * Import: import { createValidModel, createActivityItem, ... } from './fixtures.js'
+ */
+
+import type { OpenRouterModel, ModelsCache, PiModelConfig } from '../models/types.js';
+import type { ActivityItem } from '@openrouter/sdk/models/index.js';
+
+// =============================================================================
+// Model Fixtures
+// =============================================================================
+
+/**
+ * Creates a valid OpenRouterModel with sensible defaults.
+ * Use overrides to customize specific properties for test cases.
+ */
+export function createValidModel(overrides?: Partial<OpenRouterModel>): OpenRouterModel {
+  return {
+    id: 'test/model',
+    name: 'Test Model',
+    context_length: 128000,
+    pricing: {
+      prompt: '0.0000005',
+      completion: '0.0000015',
+    },
+    ...overrides,
+  };
+}
+
+/**
+ * Creates a valid ModelsCache with a single model.
+ */
+export function createMockCache(overrides: Partial<ModelsCache> = {}): ModelsCache {
+  return {
+    models: [createValidModel()],
+    timestamp: Date.now() - 1000, // 1 second ago
+    ...overrides,
+  };
+}
+
+// =============================================================================
+// Activity/Analytics Fixtures
+// =============================================================================
+
+/**
+ * Creates a UTC date string (YYYY-MM-DD) relative to now.
+ * @param daysAgo - Days to subtract from current UTC date (0 for today)
+ * @returns Date string in YYYY-MM-DD format using UTC
+ */
+export function createTestDate(daysAgo: number): string {
+  const now = new Date();
+  const targetDate = new Date(now.getTime() - daysAgo * 24 * 60 * 60 * 1000);
+  return `${targetDate.getUTCFullYear()}-${String(targetDate.getUTCMonth() + 1).padStart(2, '0')}-${String(targetDate.getUTCDate()).padStart(2, '0')}`;
+}
+
+/**
+ * Creates an ActivityItem with sensible defaults.
+ * Use overrides to customize specific properties for test cases.
+ */
+export function createActivityItem(overrides?: Partial<ActivityItem>): ActivityItem {
+  return {
+    date: createTestDate(0),
+    model: 'gpt-4',
+    modelPermaslug: 'gpt-4-perma',
+    endpointId: 'ep-1',
+    usage: 5.0,
+    byokUsageInference: 0,
+    requests: 10,
+    promptTokens: 1000,
+    completionTokens: 100,
+    reasoningTokens: 0,
+    providerName: 'openai',
+    ...overrides,
+  };
+}
+
+// =============================================================================
+// PiModelConfig Fixtures
+// =============================================================================
+
+/**
+ * Creates a valid PiModelConfig with sensible defaults.
+ */
+export function createPiModelConfig(overrides?: Partial<PiModelConfig>): PiModelConfig {
+  return {
+    id: 'test/model',
+    name: 'Test Model',
+    reasoning: false,
+    input: ['text'],
+    cost: {
+      input: 0.5,
+      output: 1.5,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    contextWindow: 128000,
+    maxTokens: 4096,
+    ...overrides,
+  };
+}

@@ -1,20 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { mapOpenRouterModel, mapOpenRouterModels } from '../mapper.js';
+import { createValidModel } from '../../__tests__/fixtures.js';
 import type { OpenRouterModel, MapResult } from '../types.js';
-
-// Helper to create a valid base model
-function createValidModel(overrides?: Partial<OpenRouterModel>): OpenRouterModel {
-  return {
-    id: 'test/model',
-    name: 'Test Model',
-    context_length: 128000,
-    pricing: {
-      prompt: '0.0000005',
-      completion: '0.0000015',
-    },
-    ...overrides,
-  };
-}
 
 describe('mapOpenRouterModel', () => {
   it('should map a valid model correctly', () => {
@@ -40,45 +27,34 @@ describe('mapOpenRouterModel', () => {
   });
 
   describe('skip conditions', () => {
-    it('should skip model with missing id', () => {
-      const model = createValidModel({ id: '' });
-      expect(mapOpenRouterModel(model)).toBeNull();
-    });
+    const skipCases: Array<{
+      name: string;
+      overrides: Partial<OpenRouterModel> | ((m: OpenRouterModel) => void);
+    }> = [
+      { name: 'empty id', overrides: { id: '' } },
+      { name: 'undefined id (deleted property)', overrides: (m) => delete (m as any).id },
+      { name: 'missing pricing.prompt', overrides: { pricing: { completion: '0.000001' } as any } },
+      { name: 'missing pricing.completion', overrides: { pricing: { prompt: '0.000001' } as any } },
+      {
+        name: 'missing context_length and top_provider',
+        overrides: { context_length: 0, top_provider: { context_length: 0 } },
+      },
+      {
+        name: 'non-text output modalities',
+        overrides: { architecture: { output_modalities: ['image', 'audio'] } as any },
+      },
+    ];
 
-    it('should skip model with undefined id', () => {
-      const model = createValidModel();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      delete (model as any).id;
-      expect(mapOpenRouterModel(model)).toBeNull();
-    });
-
-    it('should skip model with missing pricing.prompt', () => {
-      const model = createValidModel({
-        pricing: { completion: '0.000001' } as any,
+    skipCases.forEach(({ name, overrides }) => {
+      it(`should skip model with ${name}`, () => {
+        const model = createValidModel();
+        if (typeof overrides === 'function') {
+          overrides(model);
+        } else {
+          Object.assign(model, overrides);
+        }
+        expect(mapOpenRouterModel(model)).toBeNull();
       });
-      expect(mapOpenRouterModel(model)).toBeNull();
-    });
-
-    it('should skip model with missing pricing.completion', () => {
-      const model = createValidModel({
-        pricing: { prompt: '0.000001' } as any,
-      });
-      expect(mapOpenRouterModel(model)).toBeNull();
-    });
-
-    it('should skip model with missing context_length and top_provider', () => {
-      const model = createValidModel({
-        context_length: 0,
-        top_provider: { context_length: 0 },
-      });
-      expect(mapOpenRouterModel(model)).toBeNull();
-    });
-
-    it('should skip model with non-text output modalities', () => {
-      const model = createValidModel({
-        architecture: { output_modalities: ['image', 'audio'] } as any,
-      });
-      expect(mapOpenRouterModel(model)).toBeNull();
     });
   });
 
