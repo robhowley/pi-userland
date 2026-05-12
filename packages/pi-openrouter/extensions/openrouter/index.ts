@@ -33,6 +33,35 @@ let currentSessionState: OpenRouterSessionState | null = null;
 let sessionTrackingInstalled = false;
 
 // =============================================================================
+// Utility Functions
+// =============================================================================
+
+/**
+ * Format skipped models details for --skipped flag output.
+ */
+function formatSkippedDetails(
+  skipCount: number,
+  groupedReasons: Record<string, number>,
+  skipReasons: Array<{ id: string; reason: string }>,
+): string {
+  if (skipCount === 0) {
+    return '\n\nNo skipped models';
+  }
+
+  let details = `\n\nOpenRouter skipped models: ${skipCount}\n`;
+  for (const [reason, count] of Object.entries(groupedReasons)) {
+    details += `\n${count} ${reason}\n`;
+    const modelsWithReason = skipReasons
+      .filter((r) => r.reason === reason)
+      .map((r) => r.id);
+    for (const id of modelsWithReason) {
+      details += `- ${id}\n`;
+    }
+  }
+  return details;
+}
+
+// =============================================================================
 // Session State Management
 // =============================================================================
 
@@ -276,23 +305,8 @@ export default function (pi: ExtensionAPI) {
             const skipCount = skipReasons.length;
             let message = `OpenRouter models healthy\n${state.registeredCount} registered${skipCount > 0 ? ` · ${skipCount} skipped` : ''} · cache age: ${formatDuration(cacheAgeMs)}`;
 
-            // Check if --skipped flag is set
             if (flags['--skipped']) {
-              if (skipCount > 0) {
-                message += `\n\nOpenRouter skipped models: ${skipCount}\n`;
-                for (const [reason, count] of Object.entries(groupedReasons)) {
-                  message += `\n${count} ${reason}\n`;
-                  // Get models with this reason
-                  const modelsWithReason = skipReasons
-                    .filter((r) => r.reason === reason)
-                    .map((r) => r.id);
-                  for (const id of modelsWithReason) {
-                    message += `- ${id}\n`;
-                  }
-                }
-              } else {
-                message += '\n\nNo skipped models';
-              }
+              message += formatSkippedDetails(skipCount, groupedReasons, skipReasons);
             }
             ctx.ui.notify(message, 'info');
           } else if (state.source === 'cache') {
@@ -300,20 +314,7 @@ export default function (pi: ExtensionAPI) {
             let message = `OpenRouter models cached\n${state.registeredCount} registered${skipCount > 0 ? ` · ${skipCount} skipped` : ''}\nCache age: ${formatDuration(cacheAgeMs)}\nError: ${state.error}`;
 
             if (flags['--skipped']) {
-              if (skipCount > 0) {
-                message += `\n\nOpenRouter skipped models: ${skipCount}\n`;
-                for (const [reason, count] of Object.entries(groupedReasons)) {
-                  message += `\n${count} ${reason}\n`;
-                  const modelsWithReason = skipReasons
-                    .filter((r) => r.reason === reason)
-                    .map((r) => r.id);
-                  for (const id of modelsWithReason) {
-                    message += `- ${id}\n`;
-                  }
-                }
-              } else {
-                message += '\n\nNo skipped models';
-              }
+              message += formatSkippedDetails(skipCount, groupedReasons, skipReasons);
             }
             ctx.ui.notify(message, 'warning');
           } else {
