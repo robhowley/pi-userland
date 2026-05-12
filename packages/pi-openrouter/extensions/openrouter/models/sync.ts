@@ -237,12 +237,17 @@ export function getStatusText(): string {
 
 /**
  * Check if models are currently available (synced or cached).
+ * Checks in-memory state first, then falls back to cache file on disk.
  */
-export function areModelsAvailable(): boolean {
+export async function areModelsAvailable(): Promise<boolean> {
   const state = getSyncState();
-  if (!state) return false;
+  if (state) {
+    return state.registeredCount > 0 || state.source === 'cache';
+  }
 
-  return state.registeredCount > 0 || state.source === 'cache';
+  // Check cache file on disk
+  const cache = await loadCache();
+  return cache !== null && cache.models.length > 0;
 }
 
 /**

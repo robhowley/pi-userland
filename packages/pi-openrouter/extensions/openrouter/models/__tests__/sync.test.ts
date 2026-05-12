@@ -268,11 +268,11 @@ describe('areModelsAvailable', () => {
     (setSyncState as (result: SyncResult | null) => void)(null);
   });
 
-  it('should return false when no state', () => {
-    expect(areModelsAvailable()).toBe(false);
+  it('should return false when no state', async () => {
+    expect(await areModelsAvailable()).toBe(false);
   });
 
-  it('should return true when models are synced', () => {
+  it('should return true when models are synced', async () => {
     setSyncState({
       success: true,
       registeredCount: 10,
@@ -282,10 +282,10 @@ describe('areModelsAvailable', () => {
       cacheAgeMs: null,
       error: null,
     } as SyncResult);
-    expect(areModelsAvailable()).toBe(true);
+    expect(await areModelsAvailable()).toBe(true);
   });
 
-  it('should return true when using cache (models still available)', () => {
+  it('should return true when using cache (models still available)', async () => {
     setSyncState({
       success: false,
       registeredCount: 5,
@@ -295,10 +295,10 @@ describe('areModelsAvailable', () => {
       cacheAgeMs: 7200000,
       error: 'API error',
     } as SyncResult);
-    expect(areModelsAvailable()).toBe(true);
+    expect(await areModelsAvailable()).toBe(true);
   });
 
-  it('should return false when no models registered', () => {
+  it('should return false when no models registered', async () => {
     setSyncState({
       success: false,
       registeredCount: 0,
@@ -308,6 +308,6 @@ describe('areModelsAvailable', () => {
       cacheAgeMs: null,
       error: 'Complete failure',
     } as SyncResult);
-    expect(areModelsAvailable()).toBe(false);
+    expect(await areModelsAvailable()).toBe(false);
   });
 });
