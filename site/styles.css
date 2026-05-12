@@ -685,3 +685,41 @@ pre {
   color: var(--dim);
   font-size: 0.9rem;
 }
+
+.package h3 {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.readme-link {
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.readme-link:hover {
+  color: var(--accent-2);
+}
+
+.hero-package-list a {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  color: var(--muted);
+}
+
+.hero-package-list a::before {
+  content: "◆";
+  color: var(--accent);
+  font-size: 0.62rem;
+  flex: 0 0 auto;
+}
+
+.hero-package-list a:hover {
+  color: var(--text);
+}
