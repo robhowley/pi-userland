@@ -8,7 +8,7 @@ const DEFAULT_MAX_TOKENS = 4096;
  * Convert SDK Model to our OpenRouterModel type for compatibility.
  * Handles SDK's camelCase naming convention.
  */
-function sdkModelToOpenRouterModel(model: SDKModel): OpenRouterModel {
+export function sdkModelToOpenRouterModel(model: SDKModel): OpenRouterModel {
   const topProvider = model.topProvider
     ? {
         context_length: model.topProvider.contextLength ?? 0,
@@ -52,6 +52,84 @@ function sdkModelToOpenRouterModel(model: SDKModel): OpenRouterModel {
 }
 
 /**
+ * Normalize input model to OpenRouterModel format.
+ */
+function normalizeModel(model: OpenRouterModel | SDKModel): OpenRouterModel {
+  return 'contextLength' in model
+    ? sdkModelToOpenRouterModel(model as SDKModel)
+    : (model as OpenRouterModel);
+}
+
+/**
+ * Validation result for a model check.
+ */
+type ValidationResult =
+  | { valid: true; model: OpenRouterModel; contextWindow: number }
+  | { valid: false; reason: string; modelId: string };
+
+/**
+ * Validate a model and return either a valid result with extracted context window
+ * or a failure reason.
+ */
+function validateModel(model: OpenRouterModel): ValidationResult {
+  // Check: missing required id
+  if (!model.id) {
+    return { valid: false, reason: 'missing id', modelId: 'unknown' };
+  }
+
+  // Check: missing required pricing fields
+  if (!model.pricing?.prompt) {
+    return { valid: false, reason: 'missing prompt pricing', modelId: model.id };
+  }
+  if (!model.pricing?.completion) {
+    return { valid: false, reason: 'missing completion pricing', modelId: model.id };
+  }
+
+  // Check: missing context window (both primary and fallback)
+  const contextWindow = model.top_provider?.context_length ?? model.context_length;
+  if (!contextWindow) {
+    return { valid: false, reason: 'missing context window', modelId: model.id };
+  }
+
+  // Check: explicitly non-text output (if specified)
+  const outputModalities = model.architecture?.output_modalities;
+  if (outputModalities && !outputModalities.includes('text')) {
+    return { valid: false, reason: 'non-text output modalities', modelId: model.id };
+  }
+
+  return { valid: true, model, contextWindow };
+}
+
+/**
+ * Build PiModelConfig from a validated OpenRouterModel.
+ */
+function buildPiConfig(model: OpenRouterModel, contextWindow: number): PiModelConfig {
+  const supportedParams = model.supported_parameters ?? [];
+  const hasReasoning =
+    supportedParams.includes('reasoning') || supportedParams.includes('include_reasoning');
+  const inputModalities = model.architecture?.input_modalities;
+  const supportsImages = inputModalities?.includes('image') ?? false;
+
+  return {
+    id: model.id,
+    name: model.name ?? model.id,
+    reasoning: hasReasoning,
+    input: supportsImages ? ['text', 'image'] : ['text'],
+    cost: {
+      input: Number(model.pricing.prompt) * COST_PER_MILLION,
+      output: Number(model.pricing.completion) * COST_PER_MILLION,
+      cacheRead: Number(model.pricing.input_cache_read ?? 0) * COST_PER_MILLION,
+      cacheWrite: Number(model.pricing.input_cache_write ?? 0) * COST_PER_MILLION,
+    },
+    contextWindow,
+    maxTokens:
+      model.top_provider?.max_completion_tokens ??
+      model.per_request_limits?.completion_tokens ??
+      DEFAULT_MAX_TOKENS,
+  };
+}
+
+/**
  * Mapping result with skip reason tracking
  */
 export interface MapResult {
@@ -61,75 +139,13 @@ export interface MapResult {
 }
 
 /**
- * Maps a single OpenRouter model to Pi model config.
- * Returns null if the model should be skipped.
- */
-export function mapOpenRouterModel(model: OpenRouterModel | SDKModel): PiModelConfig | null {
-  // Convert SDK model if needed
-  const openRouterModel: OpenRouterModel =
-    'contextLength' in model
-      ? sdkModelToOpenRouterModel(model as SDKModel)
-      : (model as OpenRouterModel);
-
-  // Skip: missing required id
-  if (!openRouterModel.id) {
-    return null;
-  }
-
-  // Skip: missing required pricing fields
-  if (!openRouterModel.pricing?.prompt) {
-    return null;
-  }
-  if (!openRouterModel.pricing?.completion) {
-    return null;
-  }
-
-  // Skip: missing context window (both primary and fallback)
-  const contextWindow =
-    openRouterModel.top_provider?.context_length ?? openRouterModel.context_length;
-  if (!contextWindow) {
-    return null;
-  }
-
-  // Skip: explicitly non-text output (if specified)
-  const outputModalities = openRouterModel.architecture?.output_modalities;
-  if (outputModalities && !outputModalities.includes('text')) {
-    return null;
-  }
-
-  // Determine reasoning support
-  const supportedParams = openRouterModel.supported_parameters ?? [];
-  const hasReasoning =
-    supportedParams.includes('reasoning') || supportedParams.includes('include_reasoning');
-
-  // Determine input modalities
-  const inputModalities = openRouterModel.architecture?.input_modalities;
-  const supportsImages = inputModalities?.includes('image') ?? false;
-
-  // Build Pi model config
-  return {
-    id: openRouterModel.id,
-    name: openRouterModel.name ?? openRouterModel.id,
-    reasoning: hasReasoning,
-    input: supportsImages ? ['text', 'image'] : ['text'],
-    cost: {
-      input: Number(openRouterModel.pricing.prompt) * COST_PER_MILLION,
-      output: Number(openRouterModel.pricing.completion) * COST_PER_MILLION,
-      cacheRead: Number(openRouterModel.pricing.input_cache_read ?? 0) * COST_PER_MILLION,
-      cacheWrite: Number(openRouterModel.pricing.input_cache_write ?? 0) * COST_PER_MILLION,
-    },
-    contextWindow,
-    maxTokens:
-      openRouterModel.top_provider?.max_completion_tokens ??
-      openRouterModel.per_request_limits?.completion_tokens ??
-      DEFAULT_MAX_TOKENS,
-  };
-}
-
-/**
  * Builtin router aliases that should always be available.
  */
-const ROUTER_ALIASES = ['openrouter/auto', 'openrouter/free', 'openrouter/owl-alpha'];
+export const ROUTER_ALIASES: readonly string[] = [
+  'openrouter/auto',
+  'openrouter/free',
+  'openrouter/owl-alpha',
+];
 
 /**
  * Maps multiple OpenRouter models, tracking skips.
@@ -139,76 +155,45 @@ export function mapOpenRouterModels(models: OpenRouterModel[] | SDKModel[]): Map
   let skipped = 0;
   const skippedDetails: SkipReason[] = [];
 
-  for (const model of models) {
-    const openRouterModel: OpenRouterModel =
-      'contextLength' in model
-        ? sdkModelToOpenRouterModel(model as SDKModel)
-        : (model as OpenRouterModel);
+  for (const rawModel of models) {
+    const model = normalizeModel(rawModel);
 
     // Skip router aliases - they're added manually after mapping
-    if (ROUTER_ALIASES.includes(openRouterModel.id)) {
+    if (ROUTER_ALIASES.includes(model.id)) {
       continue;
     }
 
-    // Check skip conditions with detailed reasons
-    if (!openRouterModel.id) {
+    const validation = validateModel(model);
+
+    if (!validation.valid) {
       skipped++;
-      skippedDetails.push({ id: 'unknown', reason: 'missing id' });
+      skippedDetails.push({ id: validation.modelId, reason: validation.reason });
       continue;
     }
 
-    if (!openRouterModel.pricing?.prompt) {
-      skipped++;
-      skippedDetails.push({ id: openRouterModel.id, reason: 'missing prompt pricing' });
-      continue;
-    }
-
-    if (!openRouterModel.pricing?.completion) {
-      skipped++;
-      skippedDetails.push({ id: openRouterModel.id, reason: 'missing completion pricing' });
-      continue;
-    }
-
-    const contextWindow =
-      openRouterModel.top_provider?.context_length ?? openRouterModel.context_length;
-    if (!contextWindow) {
-      skipped++;
-      skippedDetails.push({ id: openRouterModel.id, reason: 'missing context window' });
-      continue;
-    }
-
-    const outputModalities = openRouterModel.architecture?.output_modalities;
-    if (outputModalities && !outputModalities.includes('text')) {
-      skipped++;
-      skippedDetails.push({ id: openRouterModel.id, reason: 'non-text output modalities' });
-      continue;
-    }
-
-    // Model passed all checks, build config
-    const supportedParams = openRouterModel.supported_parameters ?? [];
-    const hasReasoning =
-      supportedParams.includes('reasoning') || supportedParams.includes('include_reasoning');
-    const inputModalities = openRouterModel.architecture?.input_modalities;
-    const supportsImages = inputModalities?.includes('image') ?? false;
-
-    configs.push({
-      id: openRouterModel.id,
-      name: openRouterModel.name ?? openRouterModel.id,
-      reasoning: hasReasoning,
-      input: supportsImages ? ['text', 'image'] : ['text'],
-      cost: {
-        input: Number(openRouterModel.pricing.prompt) * COST_PER_MILLION,
-        output: Number(openRouterModel.pricing.completion) * COST_PER_MILLION,
-        cacheRead: Number(openRouterModel.pricing.input_cache_read ?? 0) * COST_PER_MILLION,
-        cacheWrite: Number(openRouterModel.pricing.input_cache_write ?? 0) * COST_PER_MILLION,
-      },
-      contextWindow,
-      maxTokens:
-        openRouterModel.top_provider?.max_completion_tokens ??
-        openRouterModel.per_request_limits?.completion_tokens ??
-        DEFAULT_MAX_TOKENS,
-    });
+    configs.push(buildPiConfig(model, validation.contextWindow));
   }
 
   return { configs, skipped, skippedDetails };
+}
+
+/**
+ * Maps a single OpenRouter model to Pi model config.
+ * Returns null if the model should be skipped.
+ */
+export function mapOpenRouterModel(model: OpenRouterModel | SDKModel): PiModelConfig | null {
+  const normalized = normalizeModel(model);
+
+  // Router aliases are handled separately, skip them here
+  if (ROUTER_ALIASES.includes(normalized.id)) {
+    return null;
+  }
+
+  const validation = validateModel(normalized);
+
+  if (!validation.valid) {
+    return null;
+  }
+
+  return buildPiConfig(normalized, validation.contextWindow);
 }

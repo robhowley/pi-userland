@@ -74,18 +74,6 @@ export interface ModelsCache {
 }
 
 /**
- * Current sync state for status display
- */
-export interface SyncState {
-  registeredCount: number;
-  skippedCount: number;
-  source: 'api' | 'cache' | 'none';
-  lastSuccessfulSync: number | null; // timestamp ms
-  lastError: string | null;
-  cacheAgeMs: number | null;
-}
-
-/**
  * Reason a model was skipped during mapping.
  */
 export interface SkipReason {
