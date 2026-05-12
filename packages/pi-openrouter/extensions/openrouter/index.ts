@@ -51,9 +51,7 @@ function formatSkippedDetails(
   let details = `\n\nOpenRouter skipped models: ${skipCount}\n`;
   for (const [reason, count] of Object.entries(groupedReasons)) {
     details += `\n${count} ${reason}\n`;
-    const modelsWithReason = skipReasons
-      .filter((r) => r.reason === reason)
-      .map((r) => r.id);
+    const modelsWithReason = skipReasons.filter((r) => r.reason === reason).map((r) => r.id);
     for (const id of modelsWithReason) {
       details += `- ${id}\n`;
     }

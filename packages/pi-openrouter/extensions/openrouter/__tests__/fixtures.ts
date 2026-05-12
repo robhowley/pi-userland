@@ -9,6 +9,38 @@ import type { OpenRouterModel, ModelsCache, PiModelConfig } from '../models/type
 import type { ActivityItem } from '@openrouter/sdk/models/index.js';
 
 // =============================================================================
+// Environment Helpers
+// =============================================================================
+
+/**
+ * Snapshot of process.env captured at module load time.
+ * Used as the baseline for restoreEnv() in tests.
+ */
+const originalEnvSnapshot: Record<string, string | undefined> = { ...process.env };
+
+/**
+ * Restore process.env to its original state.
+ * Call in beforeEach or afterEach to ensure clean environment between tests.
+ */
+export function restoreEnv(): void {
+  process.env = { ...originalEnvSnapshot };
+}
+
+/**
+ * Clear a specific environment variable.
+ */
+export function clearEnv(key: string): void {
+  delete process.env[key];
+}
+
+/**
+ * Set an environment variable for testing.
+ */
+export function setEnv(key: string, value: string): void {
+  process.env[key] = value;
+}
+
+// =============================================================================
 // Model Fixtures
 // =============================================================================
 

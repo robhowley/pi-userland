@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fetchUserModels, isConfigured, getApiKey, ApiError, AuthError } from '../client.js';
+import { restoreEnv } from './fixtures.js';
 import type { Mock } from 'vitest';
 
 // Mock SDK at the module level
@@ -39,15 +40,9 @@ function createMockSDKClient(overrides: { listForUser?: Mock } = {}) {
 }
 
 describe('fetchUserModels', () => {
-  const originalEnv = process.env;
-
   beforeEach(() => {
     vi.resetAllMocks();
-    process.env = { ...originalEnv };
-  });
-
-  afterEach(() => {
-    process.env = originalEnv;
+    restoreEnv();
   });
 
   it('should throw AuthError when API key not set', async () => {
@@ -132,14 +127,8 @@ describe('fetchUserModels', () => {
 });
 
 describe('isConfigured', () => {
-  const originalEnv = process.env;
-
   beforeEach(() => {
-    process.env = { ...originalEnv };
-  });
-
-  afterEach(() => {
-    process.env = originalEnv;
+    restoreEnv();
   });
 
   it('should return true when API key is set', () => {
@@ -159,14 +148,8 @@ describe('isConfigured', () => {
 });
 
 describe('getApiKey', () => {
-  const originalEnv = process.env;
-
   beforeEach(() => {
-    process.env = { ...originalEnv };
-  });
-
-  afterEach(() => {
-    process.env = originalEnv;
+    restoreEnv();
   });
 
   it('should return the API key when set', () => {

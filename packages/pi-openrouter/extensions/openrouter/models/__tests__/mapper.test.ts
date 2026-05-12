@@ -19,8 +19,8 @@ describe('mapOpenRouterModel', () => {
 
   it('should use name fallback to id when name missing', () => {
     const model = createValidModel();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (model as any).name = undefined;
+    // @ts-expect-error: intentionally setting name to undefined for test
+    model.name = undefined;
     const result = mapOpenRouterModel(model);
 
     expect(result!.name).toBe('test/model');
