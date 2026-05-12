@@ -198,8 +198,6 @@ export default function (pi: ExtensionAPI) {
     stopBackgroundRefresh();
   });
 
-
-
   pi.registerCommand('openrouter-usage', {
     description: 'Show OpenRouter usage: caps, spend, burn rate, and model breakdowns',
     getArgumentCompletions: () => null,
@@ -299,9 +297,14 @@ export default function (pi: ExtensionAPI) {
           const cache = await loadCache();
           const cacheAgeMs = cache ? getCacheAgeMs(cache) : null;
 
-          if (!state) {
+          if (!state && !cache) {
             ctx.ui.notify('OpenRouter models: not synced', 'error');
-          } else if (state.success) {
+          } else if (!state && cache) {
+            // Cache exists but no in-memory state (new Pi session)
+            const cachedCount = cache.models.length;
+            const message = `OpenRouter models cached\n${cachedCount} models in cache · age: ${formatDuration(cacheAgeMs)}\nRun '/openrouter models-sync' to register models`;
+            ctx.ui.notify(message, 'info');
+          } else if (state?.success) {
             const skipCount = skipReasons.length;
             let message = `OpenRouter models healthy\n${state.registeredCount} registered${skipCount > 0 ? ` · ${skipCount} skipped` : ''} · cache age: ${formatDuration(cacheAgeMs)}`;
 
@@ -309,7 +312,7 @@ export default function (pi: ExtensionAPI) {
               message += formatSkippedDetails(skipCount, groupedReasons, skipReasons);
             }
             ctx.ui.notify(message, 'info');
-          } else if (state.source === 'cache') {
+          } else if (state?.source === 'cache') {
             const skipCount = skipReasons.length;
             let message = `OpenRouter models cached\n${state.registeredCount} registered${skipCount > 0 ? ` · ${skipCount} skipped` : ''}\nCache age: ${formatDuration(cacheAgeMs)}\nError: ${state.error}`;
 
@@ -318,7 +321,10 @@ export default function (pi: ExtensionAPI) {
             }
             ctx.ui.notify(message, 'warning');
           } else {
-            ctx.ui.notify(`OpenRouter models broken\n0 registered\nError: ${state.error}`, 'error');
+            ctx.ui.notify(
+              `OpenRouter models broken\n0 registered\nError: ${state?.error}`,
+              'error',
+            );
           }
           break;
         }
