@@ -133,3 +133,16 @@ export const ROUTER_DEFINITIONS = [
  * Use this for skip checks and filtering.
  */
 export const ROUTER_ALIASES: readonly string[] = ROUTER_DEFINITIONS.map((r) => r.id);
+
+// =============================================================================
+// Time Constants
+// =============================================================================
+
+/** Milliseconds per minute */
+export const MS_PER_MINUTE = 60000;
+
+/** Milliseconds per hour */
+export const MS_PER_HOUR = 3600000;
+
+/** Milliseconds per day */
+export const MS_PER_DAY = 86400000;

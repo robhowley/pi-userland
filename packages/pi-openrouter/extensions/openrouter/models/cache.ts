@@ -2,6 +2,7 @@ import { readFile, writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
 import type { ModelsCache } from './types.js';
+import { MS_PER_MINUTE } from './types.js';
 
 const CACHE_FILENAME = 'models-cache.json';
 const DEFAULT_CACHE_DIR = join(homedir(), '.pi', 'openrouter');
@@ -78,23 +79,27 @@ export function getCacheAgeMs(cache: ModelsCache): number {
 }
 
 /**
+ * Format milliseconds duration for display.
+ * Examples: "<1m", "4m", "2h", "1d"
+ */
+export function formatDuration(ms: number | null): string {
+  if (ms === null) return 'unknown';
+
+  const minutes = Math.floor(ms / MS_PER_MINUTE);
+  if (minutes < 1) return '<1m';
+  if (minutes < 60) return `${minutes}m`;
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+
+  return `${Math.floor(hours / 24)}d`;
+}
+
+/**
  * Format cache age for display.
- * Examples: "4m", "2h", "1d"
+ * Examples: "4m", "2h", "1d" (returns null for null cache)
  */
 export function formatCacheAge(cache: ModelsCache | null): string | null {
   if (!cache) return null;
-
-  const ageMs = getCacheAgeMs(cache);
-  const minutes = Math.floor(ageMs / 60000);
-
-  if (minutes < 60) {
-    return `${minutes}m`;
-  }
-
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) {
-    return `${hours}h`;
-  }
-
-  return `${Math.floor(hours / 24)}d`;
+  return formatDuration(getCacheAgeMs(cache));
 }

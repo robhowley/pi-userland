@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from '@mariozechner/pi-coding-agent';
 import type { UsageSummary } from './types.js';
+import { MS_PER_MINUTE } from './models/types.js';
 import {
   usageCache,
   startBackgroundRefresh,
@@ -25,7 +26,7 @@ import {
   getSkipReasonsAsync,
   groupSkipReasons,
 } from './models/sync.js';
-import { loadCache, getCacheAgeMs } from './models/cache.js';
+import { loadCache, getCacheAgeMs, formatDuration } from './models/cache.js';
 
 // Store the current session state for use in command handlers
 let currentSessionState: OpenRouterSessionState | null = null;
@@ -199,17 +200,6 @@ export default function (pi: ExtensionAPI) {
 
   // ============== MODELS COMMANDS (subcommands of /openrouter) ==============
 
-  // Helper to format model sync age
-  function formatModelAge(ms: number | null): string {
-    if (ms === null) return 'unknown';
-    const minutes = Math.floor(ms / 60000);
-    if (minutes < 1) return '<1m';
-    if (minutes < 60) return `${minutes}m`;
-    const hours = Math.floor(minutes / 60);
-    if (hours < 24) return `${hours}h`;
-    return `${Math.floor(hours / 24)}d`;
-  }
-
   // Single entry point with subcommands: /openrouter [usage|account|session|models-sync|models-status]
   pi.registerCommand('openrouter', {
     description: 'OpenRouter commands: usage, account, session, models-sync, models-status',
@@ -260,7 +250,7 @@ export default function (pi: ExtensionAPI) {
           if (!result.success) {
             let message = '';
             if (result.source === 'cache') {
-              message = `OpenRouter models sync failed\n${result.registeredCount} registered from cache\nCache age: ${formatModelAge(result.cacheAgeMs)}\nError: ${result.error}`;
+              message = `OpenRouter models sync failed\n${result.registeredCount} registered from cache\nCache age: ${formatDuration(result.cacheAgeMs)}\nError: ${result.error}`;
             } else {
               message = `OpenRouter models unavailable\n0 registered\nError: ${result.error}`;
             }
@@ -284,7 +274,7 @@ export default function (pi: ExtensionAPI) {
             ctx.ui.notify('OpenRouter models: not synced', 'error');
           } else if (state.success) {
             const skipCount = skipReasons.length;
-            let message = `OpenRouter models healthy\n${state.registeredCount} registered${skipCount > 0 ? ` · ${skipCount} skipped` : ''} · cache age: ${formatModelAge(cacheAgeMs)}`;
+            let message = `OpenRouter models healthy\n${state.registeredCount} registered${skipCount > 0 ? ` · ${skipCount} skipped` : ''} · cache age: ${formatDuration(cacheAgeMs)}`;
 
             // Check if --skipped flag is set
             if (flags['--skipped']) {
@@ -307,7 +297,7 @@ export default function (pi: ExtensionAPI) {
             ctx.ui.notify(message, 'info');
           } else if (state.source === 'cache') {
             const skipCount = skipReasons.length;
-            let message = `OpenRouter models cached\n${state.registeredCount} registered${skipCount > 0 ? ` · ${skipCount} skipped` : ''}\nCache age: ${formatModelAge(cacheAgeMs)}\nError: ${state.error}`;
+            let message = `OpenRouter models cached\n${state.registeredCount} registered${skipCount > 0 ? ` · ${skipCount} skipped` : ''}\nCache age: ${formatDuration(cacheAgeMs)}\nError: ${state.error}`;
 
             if (flags['--skipped']) {
               if (skipCount > 0) {
@@ -475,7 +465,7 @@ async function showUsageOverlay(ctx: ExtensionContext, _subcommand?: string) {
   const cachedSummary = usageCache.get('usage');
   const lastFetchTimestamp = usageCache.getTimestamp('usage');
   const cachedMinutesAgo = lastFetchTimestamp
-    ? Math.round((Date.now() - lastFetchTimestamp) / 60000)
+    ? Math.round((Date.now() - lastFetchTimestamp) / MS_PER_MINUTE)
     : null;
 
   if (cachedSummary) {
