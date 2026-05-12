@@ -23,7 +23,6 @@ import {
   syncModels,
   getSyncState,
   isSyncEnabled,
-  areModelsAvailable,
   getSkipReasonsAsync,
   groupSkipReasons,
 } from './models/sync.js';
@@ -199,17 +198,7 @@ export default function (pi: ExtensionAPI) {
     stopBackgroundRefresh();
   });
 
-  // Auto-sync models at Pi startup if sync is enabled and no cached models available
-  // Defer with setImmediate to allow TUI initialization to complete first
-  pi.on('session_start', async (_event, ctx) => {
-    if (!isSyncEnabled()) return;
-    if (areModelsAvailable()) return; // Already have models from cache
 
-    // Defer sync to next tick to avoid interfering with TUI initialization
-    setImmediate(() => {
-      syncModels(ctx).catch(() => {});
-    });
-  });
 
   pi.registerCommand('openrouter-usage', {
     description: 'Show OpenRouter usage: caps, spend, burn rate, and model breakdowns',
