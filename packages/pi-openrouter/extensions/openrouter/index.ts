@@ -25,8 +25,10 @@ import {
   isSyncEnabled,
   getSkipReasonsAsync,
   groupSkipReasons,
+  registerModelsWithProvider,
 } from './models/sync.js';
 import { loadCache, getCacheAgeMs, formatDuration } from './models/cache.js';
+import { mapOpenRouterModels } from './models/mapper.js';
 
 // Store the current session state for use in command handlers
 let currentSessionState: OpenRouterSessionState | null = null;
@@ -88,6 +90,23 @@ function getCurrentSessionId(ctx: { sessionManager: { getSessionId(): string } }
 }
 
 export default function (pi: ExtensionAPI) {
+  // Eager cache load on startup - fire and forget
+  if (isSyncEnabled()) {
+    loadCache()
+      .then(async (cache) => {
+        if (cache && cache.models.length > 0) {
+          const { configs } = mapOpenRouterModels(cache.models);
+          await registerModelsWithProvider(
+            { modelRegistry: pi.modelRegistry } as ExtensionContext,
+            configs,
+          );
+        }
+      })
+      .catch(() => {
+        // Silent failure - no cache is fine
+      });
+  }
+
   // Install before_provider_request hook once
   if (!sessionTrackingInstalled) {
     sessionTrackingInstalled = true;
