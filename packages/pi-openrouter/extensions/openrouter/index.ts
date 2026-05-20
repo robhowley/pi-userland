@@ -25,7 +25,6 @@ import {
   isSyncEnabled,
   getSkipReasonsAsync,
   groupSkipReasons,
-  registerModelsWithProvider,
 } from './models/sync.js';
 import { loadCache, getCacheAgeMs, formatDuration } from './models/cache.js';
 import { mapOpenRouterModels } from './models/mapper.js';
@@ -96,10 +95,14 @@ export default function (pi: ExtensionAPI) {
       .then(async (cache) => {
         if (cache && cache.models.length > 0) {
           const { configs } = mapOpenRouterModels(cache.models);
-          await registerModelsWithProvider(
-            { modelRegistry: pi.modelRegistry } as ExtensionContext,
-            configs,
-          );
+          // Register models directly with Pi's OpenRouter provider
+          pi.registerProvider('openrouter', {
+            baseUrl: 'https://openrouter.ai/api/v1',
+            apiKey: 'OPENROUTER_API_KEY',
+            api: 'openai-completions',
+            models: configs,
+            authHeader: true,
+          });
         }
       })
       .catch(() => {
