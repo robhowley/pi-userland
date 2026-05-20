@@ -66,7 +66,7 @@ export function getSyncState(): SyncResult | null {
  * Uses modelRegistry.registerProvider() to add models to the built-in openrouter provider.
  * The models array replaces all existing models for the provider.
  */
-async function registerModelsWithProvider(
+export async function registerModelsWithProvider(
   ctx: ExtensionContext,
   configs: PiModelConfig[],
 ): Promise<void> {
@@ -79,8 +79,6 @@ async function registerModelsWithProvider(
     models: configs,
     authHeader: true,
   });
-
-  console.log(`[pi-openrouter] Registered ${configs.length} models with OpenRouter provider`);
 }
 
 /**

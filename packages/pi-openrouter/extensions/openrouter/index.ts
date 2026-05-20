@@ -27,10 +27,14 @@ import {
   groupSkipReasons,
 } from './models/sync.js';
 import { loadCache, getCacheAgeMs, formatDuration } from './models/cache.js';
+import { mapOpenRouterModels } from './models/mapper.js';
 
 // Store the current session state for use in command handlers
 let currentSessionState: OpenRouterSessionState | null = null;
 let sessionTrackingInstalled = false;
+
+// Store startup cache state for notifications
+let startupCacheInfo: { count: number; age: string } | undefined;
 
 // =============================================================================
 // Utility Functions
@@ -87,7 +91,36 @@ function getCurrentSessionId(ctx: { sessionManager: { getSessionId(): string } }
   }
 }
 
-export default function (pi: ExtensionAPI) {
+export default async function (pi: ExtensionAPI) {
+  // Eager cache load on extension startup (before any sessions)
+  startupCacheInfo = undefined;
+  let startupCacheWarning: string | undefined;
+  if (isSyncEnabled()) {
+    const cache = await loadCache().catch(() => null);
+
+    if (cache?.models.length) {
+      try {
+        const { configs } = mapOpenRouterModels(cache.models);
+
+        // Register models directly with Pi's OpenRouter provider
+        pi.registerProvider('openrouter', {
+          baseUrl: 'https://openrouter.ai/api/v1',
+          apiKey: 'OPENROUTER_API_KEY',
+          api: 'openai-completions',
+          models: configs,
+          authHeader: true,
+        });
+
+        // Store for session_start notification
+        const age = formatDuration(getCacheAgeMs(cache));
+        startupCacheInfo = { count: configs.length, age };
+      } catch (error) {
+        startupCacheInfo = undefined;
+        startupCacheWarning = `OpenRouter: cached models found but failed to register: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    }
+  }
+
   // Install before_provider_request hook once
   if (!sessionTrackingInstalled) {
     sessionTrackingInstalled = true;
@@ -196,6 +229,27 @@ export default function (pi: ExtensionAPI) {
 
   pi.on('session_shutdown', () => {
     stopBackgroundRefresh();
+  });
+
+  // Notify on first session start after extension load
+  pi.on('session_start', (event, ctx) => {
+    if (!ctx.hasUI) return;
+
+    // Show a persistent status indicator
+    if (startupCacheInfo) {
+      const statusText = `OpenRouter ${startupCacheInfo.count} models`;
+      ctx.ui.setStatus('openrouter', ctx.ui.theme.fg('dim', statusText));
+    }
+
+    // Show a one-time notification on startup
+    if (event.reason === 'startup' && startupCacheInfo) {
+      const notice = `OpenRouter: ${startupCacheInfo.count} models loaded from cache (${startupCacheInfo.age} old). Run /openrouter models-sync to refresh.`;
+      ctx.ui.notify(notice, 'info');
+    }
+
+    if (event.reason === 'startup' && startupCacheWarning) {
+      ctx.ui.notify(startupCacheWarning, 'warning');
+    }
   });
 
   pi.registerCommand('openrouter-usage', {
