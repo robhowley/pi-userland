@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.8.0...pi-openrouter-v0.8.1) (2026-05-20)
+
+
+### Bug Fixes
+
+* **pi-openrouter:** eager cache load on extension startup with UI notification ([#51](https://github.com/robhowley/pi-userland/issues/51)) ([958f61d](https://github.com/robhowley/pi-userland/commit/958f61de791fe03b9d19efd4f25437020fa47df0))
+
 ## [0.8.0](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.7.1...pi-openrouter-v0.8.0) (2026-05-12)
 
 
