@@ -103,6 +103,14 @@ export default function (pi: ExtensionAPI) {
             models: configs,
             authHeader: true,
           });
+
+          // Log to console for startup notification (UI not available during extension load)
+          const cacheAgeMs = getCacheAgeMs(cache);
+          console.log(
+            `[pi-openrouter] Models loaded from cache: ${configs.length} registered\n` +
+            `  Cache age: ${formatDuration(cacheAgeMs)}\n` +
+            `  Run /openrouter models-sync to update models`,
+          );
         }
       })
       .catch(() => {
