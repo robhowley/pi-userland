@@ -93,24 +93,31 @@ function getCurrentSessionId(ctx: { sessionManager: { getSessionId(): string } }
 
 export default async function (pi: ExtensionAPI) {
   // Eager cache load on extension startup (before any sessions)
+  startupCacheInfo = undefined;
+  let startupCacheWarning: string | undefined;
   if (isSyncEnabled()) {
     const cache = await loadCache().catch(() => null);
 
     if (cache?.models.length) {
-      const { configs } = mapOpenRouterModels(cache.models);
+      try {
+        const { configs } = mapOpenRouterModels(cache.models);
 
-      // Register models directly with Pi's OpenRouter provider
-      pi.registerProvider('openrouter', {
-        baseUrl: 'https://openrouter.ai/api/v1',
-        apiKey: 'OPENROUTER_API_KEY',
-        api: 'openai-completions',
-        models: configs,
-        authHeader: true,
-      });
+        // Register models directly with Pi's OpenRouter provider
+        pi.registerProvider('openrouter', {
+          baseUrl: 'https://openrouter.ai/api/v1',
+          apiKey: 'OPENROUTER_API_KEY',
+          api: 'openai-completions',
+          models: configs,
+          authHeader: true,
+        });
 
-      // Store for session_start notification
-      const age = formatDuration(getCacheAgeMs(cache));
-      startupCacheInfo = { count: configs.length, age };
+        // Store for session_start notification
+        const age = formatDuration(getCacheAgeMs(cache));
+        startupCacheInfo = { count: configs.length, age };
+      } catch (error) {
+        startupCacheInfo = undefined;
+        startupCacheWarning = `OpenRouter: cached models found but failed to register: ${error instanceof Error ? error.message : String(error)}`;
+      }
     }
   }
 
@@ -238,6 +245,10 @@ export default async function (pi: ExtensionAPI) {
     if (event.reason === 'startup' && startupCacheInfo) {
       const notice = `OpenRouter: ${startupCacheInfo.count} models loaded from cache (${startupCacheInfo.age} old). Run /openrouter models-sync to refresh.`;
       ctx.ui.notify(notice, 'info');
+    }
+
+    if (event.reason === 'startup' && startupCacheWarning) {
+      ctx.ui.notify(startupCacheWarning, 'warning');
     }
   });
 

@@ -79,8 +79,6 @@ export async function registerModelsWithProvider(
     models: configs,
     authHeader: true,
   });
-
-  console.log(`[pi-openrouter] Registered ${configs.length} models with OpenRouter provider`);
 }
 
 /**
