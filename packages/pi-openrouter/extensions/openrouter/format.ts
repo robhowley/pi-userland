@@ -63,9 +63,7 @@ export function aggregateUsage(
 
   // Build model stats for both 7d and 30d windows
   // Combine weekData with local events in the 7d window
-  const weekLocalItems = localItems.filter(
-    (e) => e.date >= utcISODate(startOfWeek)
-  );
+  const weekLocalItems = localItems.filter((e) => e.date >= utcISODate(startOfWeek));
   const weekAllData = [...weekData, ...weekLocalItems];
   const modelStatsMap = buildModelStats(weekAllData, allData);
   const topModels = Array.from(modelStatsMap.values())
