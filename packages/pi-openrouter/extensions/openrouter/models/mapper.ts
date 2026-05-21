@@ -21,7 +21,9 @@ async function loadBuiltInOpenRouterModels(): Promise<Map<string, PiModelConfig>
   try {
     // Import from pi-ai to get built-in model registry
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { getModels } = await import('@earendil-works/pi-ai') as { getModels: (provider: string) => unknown[] };
+    const { getModels } = (await import('@earendil-works/pi-ai')) as {
+      getModels: (provider: string) => unknown[];
+    };
 
     const openrouterModels = getModels('openrouter');
     if (Array.isArray(openrouterModels)) {
