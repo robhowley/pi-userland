@@ -132,3 +132,30 @@ export function createPiModelConfig(overrides?: Partial<PiModelConfig>): PiModel
     ...overrides,
   };
 }
+
+// =============================================================================
+// LocalUsageEvent Fixtures
+// =============================================================================
+
+import type { LocalUsageEvent } from '../types.js';
+
+/**
+ * Creates LocalUsageEvent objects for testing local usage aggregation.
+ * Use daysAgo=0 for today, daysAgo=3 for within 7d window, etc.
+ */
+export function createLocalEvents(
+  events: Array<{ daysAgo: number; cost: number; model?: string; provider?: string }>
+): LocalUsageEvent[] {
+  return events.map((e, i) => ({
+    id: `local-${i}`,
+    sessionId: 'test-session',
+    generationId: `gen-${i}`,
+    completedAt: `${createTestDate(e.daysAgo)}T12:00:00.000Z`,
+    requests: 1,
+    model: e.model ?? 'gpt-4',
+    provider: e.provider ?? 'openai',
+    promptTokens: 100,
+    completionTokens: 50,
+    cost: e.cost,
+  }));
+}
