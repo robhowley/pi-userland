@@ -25,13 +25,10 @@ export function aggregateUsage(
     return d.date >= utcISODate(startOfWeek);
   });
 
-  const todayData = analytics.filter((d) => {
-    // API dates are YYYY-MM-DD in UTC; compare by UTC date boundary
-    return d.date >= utcISODate(startOfDay);
-  });
-
   const weekFromAnalytics = sumSpend(weekData);
-  const todayFromAnalytics = sumSpend(todayData);
+  const todayFromAnalytics = analytics
+    .filter((d) => d.date >= utcISODate(startOfDay))
+    .reduce((sum, d) => sum + d.usage, 0);
   const month = credits.totalUsage;
 
   // Add local events to compute combined totals
@@ -65,8 +62,12 @@ export function aggregateUsage(
   const allData = [...analytics, ...localItems];
 
   // Build model stats for both 7d and 30d windows
-  // Use allData (combined API + local) for 30d, weekData (combined) for 7d
-  const modelStatsMap = buildModelStats(weekData, allData);
+  // Combine weekData with local events in the 7d window
+  const weekLocalItems = localItems.filter(
+    (e) => e.date >= utcISODate(startOfWeek)
+  );
+  const weekAllData = [...weekData, ...weekLocalItems];
+  const modelStatsMap = buildModelStats(weekAllData, allData);
   const topModels = Array.from(modelStatsMap.values())
     .sort((a, b) => b.spend30d - a.spend30d)
     .slice(0, 10);
