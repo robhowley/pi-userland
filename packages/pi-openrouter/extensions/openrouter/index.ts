@@ -100,7 +100,7 @@ export default async function (pi: ExtensionAPI) {
 
     if (cache?.models.length) {
       try {
-        const { configs } = mapOpenRouterModels(cache.models);
+        const { configs } = await mapOpenRouterModels(cache.models);
 
         // Register models directly with Pi's OpenRouter provider
         pi.registerProvider('openrouter', {

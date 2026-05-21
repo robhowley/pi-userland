@@ -33,6 +33,20 @@ export interface OpenRouterModelsResponse {
 }
 
 /**
+ * Pi thinking level map - copied from pi-ai's Model type.
+ * Levels mapped to null are hidden in Pi's UI.
+ * Levels mapped to strings are sent to the provider API.
+ */
+export interface ThinkingLevelMap {
+  off?: string | null;
+  minimal?: string | null;
+  low?: string | null;
+  medium?: string | null;
+  high?: string | null;
+  xhigh?: string | null;
+}
+
+/**
  * Mapped Pi model configuration for provider registration
  */
 export interface PiModelConfig {
@@ -48,6 +62,7 @@ export interface PiModelConfig {
   };
   contextWindow: number;
   maxTokens: number;
+  thinkingLevelMap?: ThinkingLevelMap;
 }
 
 /**

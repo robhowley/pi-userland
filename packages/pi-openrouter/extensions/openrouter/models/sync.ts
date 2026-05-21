@@ -132,7 +132,7 @@ export async function syncModels(_ctx: ExtensionContext): Promise<SyncResult> {
   // Attempt 1: Fetch from API
   try {
     const response = await fetchUserModels();
-    const { configs, skipped, skippedDetails } = mapOpenRouterModels(response.data);
+    const { configs, skipped, skippedDetails } = await mapOpenRouterModels(response.data);
 
     // Add built-in router aliases that don't appear in /models/user endpoint
     const configsWithRouters = [...configs, ...BUILTIN_ROUTER_MODELS];
@@ -172,7 +172,7 @@ export async function syncModels(_ctx: ExtensionContext): Promise<SyncResult> {
 
     if (cache) {
       // Attempt 2: Use cached models
-      const { configs, skipped } = mapOpenRouterModels(cache.models);
+      const { configs, skipped } = await mapOpenRouterModels(cache.models);
 
       await registerModelsWithProvider(_ctx, configs);
 

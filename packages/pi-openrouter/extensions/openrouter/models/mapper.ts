@@ -2,6 +2,65 @@ import type { OpenRouterModel, PiModelConfig, SkipReason, MapResult } from './ty
 import { ROUTER_ALIASES } from './types.js';
 import type { Model as SDKModel } from '@openrouter/sdk/models/index.js';
 
+// Cache for built-in OpenRouter models from pi-ai
+// Populated lazily on first access
+let builtInOpenRouterModels: Map<string, PiModelConfig> | undefined;
+
+/**
+ * Load built-in OpenRouter models from pi-ai package if available.
+ * This allows us to preserve thinkingLevelMap and other metadata from
+ * Pi's built-in registry when syncing models from OpenRouter API.
+ */
+async function loadBuiltInOpenRouterModels(): Promise<Map<string, PiModelConfig>> {
+  if (builtInOpenRouterModels !== undefined) {
+    return builtInOpenRouterModels;
+  }
+
+  const models = new Map<string, PiModelConfig>();
+
+  try {
+    // Use template strings to prevent TypeScript from eagerly resolving modules
+    const mod1 = '@mariozechner/pi-ai';
+    const mod2 = '@earendil-works/pi-ai';
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const piAi: { getModels?: (provider: string) => unknown[] } | null =
+      await import(/* @vite-ignore */ mod1).catch(() =>
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        import(/* @vite-ignore */ mod2).catch(() => null)
+      ) as { getModels?: (provider: string) => unknown[] } | null;
+
+    if (piAi && typeof piAi.getModels === 'function') {
+      const openrouterModels = piAi.getModels('openrouter');
+      if (Array.isArray(openrouterModels)) {
+        for (const model of openrouterModels) {
+          // Extract thinkingLevelMap from built-in model if present
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const modelWithThinking = model as { id: string; thinkingLevelMap?: unknown };
+          if (modelWithThinking.id) {
+            models.set(modelWithThinking.id, model as PiModelConfig);
+          }
+        }
+      }
+    }
+  } catch {
+    // Ignore - built-in registry not available, will sync without merging
+  }
+
+  builtInOpenRouterModels = models;
+  return models;
+}
+
+/**
+ * Get thinkingLevelMap from built-in registry for a model, if available.
+ */
+async function getBuiltInThinkingLevelMap(
+  modelId: string
+): Promise<PiModelConfig['thinkingLevelMap'] | undefined> {
+  const builtIn = await loadBuiltInOpenRouterModels();
+  return builtIn.get(modelId)?.thinkingLevelMap;
+}
+
 const COST_PER_MILLION = 1_000_000;
 const DEFAULT_MAX_TOKENS = 4096;
 
@@ -103,15 +162,24 @@ function validateModel(model: OpenRouterModel): ValidationResult {
 
 /**
  * Build PiModelConfig from a validated OpenRouterModel.
+ * Merges thinkingLevelMap from Pi's built-in registry if available.
  */
-function buildPiConfig(model: OpenRouterModel, contextWindow: number): PiModelConfig {
+async function buildPiConfig(
+  model: OpenRouterModel,
+  contextWindow: number
+): Promise<PiModelConfig> {
   const supportedParams = model.supported_parameters ?? [];
   const hasReasoning =
     supportedParams.includes('reasoning') || supportedParams.includes('include_reasoning');
   const inputModalities = model.architecture?.input_modalities;
   const supportsImages = inputModalities?.includes('image') ?? false;
 
-  return {
+  // Fetch thinkingLevelMap from built-in registry if this is a reasoning model
+  const thinkingLevelMap = hasReasoning
+    ? await getBuiltInThinkingLevelMap(model.id)
+    : undefined;
+
+  const config: PiModelConfig = {
     id: model.id,
     name: model.name ?? model.id,
     reasoning: hasReasoning,
@@ -128,12 +196,25 @@ function buildPiConfig(model: OpenRouterModel, contextWindow: number): PiModelCo
       model.per_request_limits?.completion_tokens ??
       DEFAULT_MAX_TOKENS,
   };
+
+  // Only add thinkingLevelMap if it's defined for exactOptionalPropertyTypes compatibility
+  if (thinkingLevelMap !== undefined) {
+    config.thinkingLevelMap = thinkingLevelMap;
+  }
+
+  return config;
 }
 
 /**
  * Maps multiple OpenRouter models, tracking skips.
+ * Async to allow fetching thinkingLevelMap from built-in registry.
  */
-export function mapOpenRouterModels(models: OpenRouterModel[] | SDKModel[]): MapResult {
+export async function mapOpenRouterModels(
+  models: OpenRouterModel[] | SDKModel[]
+): Promise<MapResult> {
+  // Pre-load built-in models for efficient lookup during mapping
+  await loadBuiltInOpenRouterModels();
+
   const configs: PiModelConfig[] = [];
   let skipped = 0;
   const skippedDetails: SkipReason[] = [];
@@ -154,7 +235,7 @@ export function mapOpenRouterModels(models: OpenRouterModel[] | SDKModel[]): Map
       continue;
     }
 
-    configs.push(buildPiConfig(model, validation.contextWindow));
+    configs.push(await buildPiConfig(model, validation.contextWindow));
   }
 
   return { configs, skipped, skippedDetails };
@@ -163,8 +244,13 @@ export function mapOpenRouterModels(models: OpenRouterModel[] | SDKModel[]): Map
 /**
  * Maps a single OpenRouter model to Pi model config.
  * Returns null if the model should be skipped.
+ * Async to allow fetching thinkingLevelMap from built-in registry.
  */
-export function mapOpenRouterModel(model: OpenRouterModel | SDKModel): PiModelConfig | null {
+export async function mapOpenRouterModel(
+  model: OpenRouterModel | SDKModel
+): Promise<PiModelConfig | null> {
+  await loadBuiltInOpenRouterModels();
+
   const normalized = normalizeModel(model);
 
   // Router aliases are handled separately, skip them here
