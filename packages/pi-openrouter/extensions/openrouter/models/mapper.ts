@@ -19,27 +19,18 @@ async function loadBuiltInOpenRouterModels(): Promise<Map<string, PiModelConfig>
   const models = new Map<string, PiModelConfig>();
 
   try {
-    // Use template strings to prevent TypeScript from eagerly resolving modules
-    const mod1 = '@mariozechner/pi-ai';
-    const mod2 = '@earendil-works/pi-ai';
-
+    // Import from pi-ai to get built-in model registry
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const piAi: { getModels?: (provider: string) => unknown[] } | null =
-      await import(/* @vite-ignore */ mod1).catch(() =>
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        import(/* @vite-ignore */ mod2).catch(() => null)
-      ) as { getModels?: (provider: string) => unknown[] } | null;
+    const { getModels } = await import('@earendil-works/pi-ai') as { getModels: (provider: string) => unknown[] };
 
-    if (piAi && typeof piAi.getModels === 'function') {
-      const openrouterModels = piAi.getModels('openrouter');
-      if (Array.isArray(openrouterModels)) {
-        for (const model of openrouterModels) {
-          // Extract thinkingLevelMap from built-in model if present
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const modelWithThinking = model as { id: string; thinkingLevelMap?: unknown };
-          if (modelWithThinking.id) {
-            models.set(modelWithThinking.id, model as PiModelConfig);
-          }
+    const openrouterModels = getModels('openrouter');
+    if (Array.isArray(openrouterModels)) {
+      for (const model of openrouterModels) {
+        // Extract thinkingLevelMap from built-in model if present
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const modelWithThinking = model as { id: string; thinkingLevelMap?: unknown };
+        if (modelWithThinking.id) {
+          models.set(modelWithThinking.id, model as PiModelConfig);
         }
       }
     }
@@ -55,7 +46,7 @@ async function loadBuiltInOpenRouterModels(): Promise<Map<string, PiModelConfig>
  * Get thinkingLevelMap from built-in registry for a model, if available.
  */
 async function getBuiltInThinkingLevelMap(
-  modelId: string
+  modelId: string,
 ): Promise<PiModelConfig['thinkingLevelMap'] | undefined> {
   const builtIn = await loadBuiltInOpenRouterModels();
   return builtIn.get(modelId)?.thinkingLevelMap;
@@ -166,7 +157,7 @@ function validateModel(model: OpenRouterModel): ValidationResult {
  */
 async function buildPiConfig(
   model: OpenRouterModel,
-  contextWindow: number
+  contextWindow: number,
 ): Promise<PiModelConfig> {
   const supportedParams = model.supported_parameters ?? [];
   const hasReasoning =
@@ -175,9 +166,7 @@ async function buildPiConfig(
   const supportsImages = inputModalities?.includes('image') ?? false;
 
   // Fetch thinkingLevelMap from built-in registry if this is a reasoning model
-  const thinkingLevelMap = hasReasoning
-    ? await getBuiltInThinkingLevelMap(model.id)
-    : undefined;
+  const thinkingLevelMap = hasReasoning ? await getBuiltInThinkingLevelMap(model.id) : undefined;
 
   const config: PiModelConfig = {
     id: model.id,
@@ -210,7 +199,7 @@ async function buildPiConfig(
  * Async to allow fetching thinkingLevelMap from built-in registry.
  */
 export async function mapOpenRouterModels(
-  models: OpenRouterModel[] | SDKModel[]
+  models: OpenRouterModel[] | SDKModel[],
 ): Promise<MapResult> {
   // Pre-load built-in models for efficient lookup during mapping
   await loadBuiltInOpenRouterModels();
@@ -247,7 +236,7 @@ export async function mapOpenRouterModels(
  * Async to allow fetching thinkingLevelMap from built-in registry.
  */
 export async function mapOpenRouterModel(
-  model: OpenRouterModel | SDKModel
+  model: OpenRouterModel | SDKModel,
 ): Promise<PiModelConfig | null> {
   await loadBuiltInOpenRouterModels();
 

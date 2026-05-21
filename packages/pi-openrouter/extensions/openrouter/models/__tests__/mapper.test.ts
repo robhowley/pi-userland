@@ -194,7 +194,9 @@ describe('mapOpenRouterModel', () => {
       expect(result).not.toBeNull();
       // If pi-ai is available and has this model, thinkingLevelMap will be set
       // Otherwise it will be undefined (which is valid)
-      expect(result!.thinkingLevelMap === undefined || typeof result!.thinkingLevelMap === 'object').toBe(true);
+      expect(
+        result!.thinkingLevelMap === undefined || typeof result!.thinkingLevelMap === 'object',
+      ).toBe(true);
     });
   });
 });
