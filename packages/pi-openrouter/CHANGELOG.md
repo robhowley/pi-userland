@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.3](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.8.2...pi-openrouter-v0.8.3) (2026-05-21)
+
+
+### Bug Fixes
+
+* **pi-openrouter:** include local usage in 7d model stats ([#57](https://github.com/robhowley/pi-userland/issues/57)) ([52cd231](https://github.com/robhowley/pi-userland/commit/52cd231ab57dc1e922a3c9882e463438f61d4347))
+
 ## [0.8.2](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.8.1...pi-openrouter-v0.8.2) (2026-05-21)
 
 
