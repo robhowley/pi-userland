@@ -253,13 +253,15 @@ describe('aggregateUsage', () => {
 
     const result = aggregateUsage(
       credits,
-      [createActivityItem({
-        date: createTestDate(api.daysAgo),
-        usage: api.cost,
-        model: api.model,
-      })],
+      [
+        createActivityItem({
+          date: createTestDate(api.daysAgo),
+          usage: api.cost,
+          model: api.model,
+        }),
+      ],
       Date.now(),
-      createLocalEvents([local])
+      createLocalEvents([local]),
     );
 
     if (expectModels) {

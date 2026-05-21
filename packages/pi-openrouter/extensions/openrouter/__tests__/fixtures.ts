@@ -144,7 +144,7 @@ import type { LocalUsageEvent } from '../types.js';
  * Use daysAgo=0 for today, daysAgo=3 for within 7d window, etc.
  */
 export function createLocalEvents(
-  events: Array<{ daysAgo: number; cost: number; model?: string; provider?: string }>
+  events: Array<{ daysAgo: number; cost: number; model?: string; provider?: string }>,
 ): LocalUsageEvent[] {
   return events.map((e, i) => ({
     id: `local-${i}`,
