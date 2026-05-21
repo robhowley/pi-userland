@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { aggregateUsage } from '../format.js';
 import { renderSpendSparkline } from '../chart.js';
-import { createTestDate, createActivityItem } from './fixtures.js';
+import { createTestDate, createActivityItem, createLocalEvents } from './fixtures.js';
 import type { ActivityItem } from '@openrouter/sdk/models/index.js';
 
 describe('aggregateUsage', () => {
@@ -223,6 +223,54 @@ describe('aggregateUsage', () => {
     expect(result.byProvider[0]?.tokens.input).toBe(160); // 100 + 60
     expect(result.byProvider[0]?.tokens.output).toBe(80); // 50 + 30
     expect(result.byProvider[0]?.requests).toBe(8); // 5 + 3
+  });
+
+  it.each([
+    {
+      name: 'local today included in 7d model stats',
+      api: { daysAgo: 3, cost: 5, model: 'gpt-4' },
+      local: { daysAgo: 0, cost: 2.5, model: 'gpt-4' },
+      expectSpend7d: 7.5,
+    },
+    {
+      name: 'local outside 7d window excluded from 7d stats',
+      api: { daysAgo: 3, cost: 5, model: 'gpt-4' },
+      local: { daysAgo: 10, cost: 100, model: 'gpt-4' },
+      expectSpend7d: 5,
+    },
+    {
+      name: 'different models tracked separately',
+      api: { daysAgo: 1, cost: 5, model: 'gpt-4' },
+      local: { daysAgo: 0, cost: 3, model: 'claude-3' },
+      expectSpend7d: null,
+      expectModels: [
+        { name: 'gpt-4', spend7d: 5 },
+        { name: 'claude-3', spend7d: 3 },
+      ],
+    },
+  ])('$name', ({ api, local, expectSpend7d, expectModels }) => {
+    const credits = { totalUsage: 1000, totalCredits: 2000 };
+
+    const result = aggregateUsage(
+      credits,
+      [
+        createActivityItem({
+          date: createTestDate(api.daysAgo),
+          usage: api.cost,
+          model: api.model,
+        }),
+      ],
+      Date.now(),
+      createLocalEvents([local]),
+    );
+
+    if (expectModels) {
+      for (const { name, spend7d } of expectModels) {
+        expect(result.topModels.find((m) => m.name === name)?.spend7d).toBe(spend7d);
+      }
+    } else {
+      expect(result.topModels[0]?.spend7d).toBe(expectSpend7d);
+    }
   });
 });
 
