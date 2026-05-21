@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.2](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.8.1...pi-openrouter-v0.8.2) (2026-05-21)
+
+
+### Bug Fixes
+
+* **pi-openrouter:** preserve thinkingLevelMap from Pi's built-in registry ([#54](https://github.com/robhowley/pi-userland/issues/54)) ([152c3c8](https://github.com/robhowley/pi-userland/commit/152c3c82599b8541f8cf1ac4239349678b73d009))
+
 ## [0.8.1](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.8.0...pi-openrouter-v0.8.1) (2026-05-20)
 
 
