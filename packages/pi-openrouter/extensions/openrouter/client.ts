@@ -8,7 +8,7 @@ let client: OpenRouter | null = null;
 
 function getClient(): OpenRouter | null {
   if (client) return client;
-  const apiKey = process.env['OPENROUTER_MANAGEMENT_KEY'] || process.env['OPENROUTER_API_KEY'];
+  const apiKey = getUsageApiKey();
   if (!apiKey) return null;
   client = new OpenRouter({ apiKey });
   return client;
@@ -41,9 +41,11 @@ export async function getActivity(): Promise<ActivityResponse['data'] | null> {
  * Uses the SDK for consistent error handling and retry behavior.
  */
 export async function fetchUserModels(): Promise<ModelsListResponse> {
-  const key = getApiKey();
+  const key = getModelSyncApiKey();
   if (!key) {
-    throw new AuthError('OPENROUTER_API_KEY not set');
+    throw new AuthError(
+      'OpenRouter API key not configured. Set OPENROUTER_API_KEY or OPENROUTER_MANAGEMENT_KEY.',
+    );
   }
 
   try {
@@ -67,6 +69,50 @@ export function isConfigured(): boolean {
  */
 export function getApiKey(): string | undefined {
   return process.env['OPENROUTER_API_KEY'];
+}
+
+/**
+ * Get the API key for usage/account endpoints.
+ * Prefers OPENROUTER_MANAGEMENT_KEY for full analytics access.
+ */
+export function getUsageApiKey(): string | undefined {
+  const mgmtKey = process.env['OPENROUTER_MANAGEMENT_KEY'];
+  const apiKey = process.env['OPENROUTER_API_KEY'];
+  // Treat empty strings as absent
+  return mgmtKey && mgmtKey.trim() !== ''
+    ? mgmtKey
+    : apiKey && apiKey.trim() !== ''
+      ? apiKey
+      : undefined;
+}
+
+/**
+ * Get the API key for model sync endpoint.
+ * Prefers OPENROUTER_API_KEY but falls back to OPENROUTER_MANAGEMENT_KEY.
+ */
+export function getModelSyncApiKey(): string | undefined {
+  const apiKey = process.env['OPENROUTER_API_KEY'];
+  const mgmtKey = process.env['OPENROUTER_MANAGEMENT_KEY'];
+  // Treat empty strings as absent
+  return apiKey && apiKey.trim() !== ''
+    ? apiKey
+    : mgmtKey && mgmtKey.trim() !== ''
+      ? mgmtKey
+      : undefined;
+}
+
+/**
+ * Check if model sync is configured.
+ */
+export function isConfiguredForModelSync(): boolean {
+  return !!getModelSyncApiKey();
+}
+
+/**
+ * Check if usage/account endpoints are configured.
+ */
+export function isConfiguredForUsage(): boolean {
+  return !!getUsageApiKey();
 }
 
 /**

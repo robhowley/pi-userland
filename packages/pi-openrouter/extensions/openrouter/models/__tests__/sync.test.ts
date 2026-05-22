@@ -133,8 +133,13 @@ describe('syncModels', () => {
   it('should return failure when API key is missing and no cache', async () => {
     // Ensure API key is not set
     delete process.env['OPENROUTER_API_KEY'];
+    delete process.env['OPENROUTER_MANAGEMENT_KEY'];
     // Mock fetchUserModels to throw AuthError
-    vi.mocked(fetchUserModels).mockRejectedValueOnce(new AuthError('OPENROUTER_API_KEY not set'));
+    vi.mocked(fetchUserModels).mockRejectedValueOnce(
+      new AuthError(
+        'OpenRouter API key not configured. Set OPENROUTER_API_KEY or OPENROUTER_MANAGEMENT_KEY.',
+      ),
+    );
     // Mock loadCache to return null (no cache available)
     vi.mocked(loadCache).mockResolvedValueOnce(null);
 
@@ -143,7 +148,7 @@ describe('syncModels', () => {
     expect(result.success).toBe(false);
     expect(result.registeredCount).toBe(0);
     expect(result.source).toBe('none');
-    expect(result.error).toContain('OPENROUTER_API_KEY not set');
+    expect(result.error).toContain('OpenRouter API key not configured');
   });
 
   it('should sync models from API and register with provider', async () => {

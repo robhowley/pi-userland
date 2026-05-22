@@ -12,12 +12,16 @@ pi install npm:@robhowley/pi-openrouter
 
 Set one of these environment variables:
 
-- `OPENROUTER_MANAGEMENT_KEY` (preferred), provides full usage data including model breakdowns
-- `OPENROUTER_API_KEY`, basic usage data plus user-scoped model sync
+- `OPENROUTER_MANAGEMENT_KEY` (preferred) — provides full usage/analytics and can be used for model sync
+- `OPENROUTER_API_KEY` — basic usage data and user-scoped model sync
 
 ```shell
 export OPENROUTER_MANAGEMENT_KEY=sk-or-...
 ```
+
+**Key selection:**
+- Usage/account commands prefer `OPENROUTER_MANAGEMENT_KEY` for full analytics, falling back to `OPENROUTER_API_KEY`
+- Model sync prefers `OPENROUTER_API_KEY` but will attempt `OPENROUTER_MANAGEMENT_KEY` if only that is set
 
 ## Commands
 
