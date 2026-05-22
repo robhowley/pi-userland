@@ -106,6 +106,35 @@ export interface MapResult {
 }
 
 // =============================================================================
+// User Override Types
+// =============================================================================
+
+/**
+ * User-defined override for any PiModelConfig field.
+ * Stored in ~/.pi/openrouter/model-overrides.json
+ *
+ * For type safety, fields must be validated before storage.
+ * Unknown fields are ignored during merge.
+ */
+export interface UserModelOverride {
+  // Nested thinking level map - mapped from 'thinking.X' scoped syntax
+  thinkingLevelMap?: Partial<ThinkingLevelMap>;
+
+  // Top-level PiModelConfig overrides
+  contextWindow?: number;
+  maxTokens?: number;
+  reasoning?: boolean;
+}
+
+/**
+ * The overrides file structure.
+ */
+export interface ModelOverridesFile {
+  version: number;
+  overrides: Record<string, UserModelOverride>;
+}
+
+// =============================================================================
 // Built-in Router Definitions (Single Source of Truth)
 // =============================================================================
 

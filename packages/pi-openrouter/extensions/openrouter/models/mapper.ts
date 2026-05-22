@@ -1,6 +1,7 @@
 import type { OpenRouterModel, PiModelConfig, SkipReason, MapResult } from './types.js';
 import { ROUTER_ALIASES } from './types.js';
 import type { Model as SDKModel } from '@openrouter/sdk/models/index.js';
+import { loadModelOverrides, getModelOverride } from './overrides.js';
 
 // Cache for built-in OpenRouter models from pi-ai
 // Populated lazily on first access
@@ -20,7 +21,6 @@ async function loadBuiltInOpenRouterModels(): Promise<Map<string, PiModelConfig>
 
   try {
     // Import from pi-ai to get built-in model registry
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { getModels } = (await import('@earendil-works/pi-ai')) as {
       getModels: (provider: string) => unknown[];
     };
@@ -29,7 +29,6 @@ async function loadBuiltInOpenRouterModels(): Promise<Map<string, PiModelConfig>
     if (Array.isArray(openrouterModels)) {
       for (const model of openrouterModels) {
         // Extract thinkingLevelMap from built-in model if present
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const modelWithThinking = model as { id: string; thinkingLevelMap?: unknown };
         if (modelWithThinking.id) {
           models.set(modelWithThinking.id, model as PiModelConfig);
@@ -155,11 +154,13 @@ function validateModel(model: OpenRouterModel): ValidationResult {
 
 /**
  * Build PiModelConfig from a validated OpenRouterModel.
- * Merges thinkingLevelMap from Pi's built-in registry if available.
+ * Merges thinkingLevelMap from Pi's built-in registry and user overrides.
+ * Priority: user overrides > built-in registry > API data
  */
 async function buildPiConfig(
   model: OpenRouterModel,
   contextWindow: number,
+  userOverrides?: Awaited<ReturnType<typeof loadModelOverrides>>,
 ): Promise<PiModelConfig> {
   const supportedParams = model.supported_parameters ?? [];
   const hasReasoning =
@@ -168,12 +169,25 @@ async function buildPiConfig(
   const supportsImages = inputModalities?.includes('image') ?? false;
 
   // Fetch thinkingLevelMap from built-in registry if this is a reasoning model
-  const thinkingLevelMap = hasReasoning ? await getBuiltInThinkingLevelMap(model.id) : undefined;
+  const builtInThinkingLevelMap = hasReasoning
+    ? await getBuiltInThinkingLevelMap(model.id)
+    : undefined;
+
+  // Fetch user override for this model
+  const userOverride = userOverrides ? getModelOverride(userOverrides, model.id) : undefined;
+
+  const thinkingLevelMap =
+    builtInThinkingLevelMap !== undefined || userOverride?.thinkingLevelMap !== undefined
+      ? {
+          ...builtInThinkingLevelMap,
+          ...userOverride?.thinkingLevelMap,
+        }
+      : undefined;
 
   const config: PiModelConfig = {
     id: model.id,
     name: model.name ?? model.id,
-    reasoning: hasReasoning,
+    reasoning: userOverride?.reasoning ?? hasReasoning,
     input: supportsImages ? ['text', 'image'] : ['text'],
     cost: {
       input: Number(model.pricing.prompt) * COST_PER_MILLION,
@@ -181,8 +195,9 @@ async function buildPiConfig(
       cacheRead: Number(model.pricing.input_cache_read ?? 0) * COST_PER_MILLION,
       cacheWrite: Number(model.pricing.input_cache_write ?? 0) * COST_PER_MILLION,
     },
-    contextWindow,
+    contextWindow: userOverride?.contextWindow ?? contextWindow,
     maxTokens:
+      userOverride?.maxTokens ??
       model.top_provider?.max_completion_tokens ??
       model.per_request_limits?.completion_tokens ??
       DEFAULT_MAX_TOKENS,
@@ -198,13 +213,14 @@ async function buildPiConfig(
 
 /**
  * Maps multiple OpenRouter models, tracking skips.
- * Async to allow fetching thinkingLevelMap from built-in registry.
+ * Async to allow fetching thinkingLevelMap from built-in registry and user overrides.
  */
 export async function mapOpenRouterModels(
   models: OpenRouterModel[] | SDKModel[],
 ): Promise<MapResult> {
-  // Pre-load built-in models for efficient lookup during mapping
+  // Pre-load built-in models and user overrides for efficient lookup during mapping
   await loadBuiltInOpenRouterModels();
+  const userOverrides = await loadModelOverrides();
 
   const configs: PiModelConfig[] = [];
   let skipped = 0;
@@ -226,7 +242,7 @@ export async function mapOpenRouterModels(
       continue;
     }
 
-    configs.push(await buildPiConfig(model, validation.contextWindow));
+    configs.push(await buildPiConfig(model, validation.contextWindow, userOverrides));
   }
 
   return { configs, skipped, skippedDetails };
@@ -241,6 +257,7 @@ export async function mapOpenRouterModel(
   model: OpenRouterModel | SDKModel,
 ): Promise<PiModelConfig | null> {
   await loadBuiltInOpenRouterModels();
+  const userOverrides = await loadModelOverrides();
 
   const normalized = normalizeModel(model);
 
@@ -255,5 +272,5 @@ export async function mapOpenRouterModel(
     return null;
   }
 
-  return buildPiConfig(normalized, validation.contextWindow);
+  return buildPiConfig(normalized, validation.contextWindow, userOverrides);
 }
