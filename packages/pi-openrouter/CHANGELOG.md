@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.8.3...pi-openrouter-v0.9.0) (2026-05-22)
+
+
+### Features
+
+* **pi-openrouter:** add user model overrides ([#56](https://github.com/robhowley/pi-userland/issues/56)) ([c17c3e0](https://github.com/robhowley/pi-userland/commit/c17c3e0b58c35b47d35e0d658f82210d6e255f35))
+
 ## [0.8.3](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.8.2...pi-openrouter-v0.8.3) (2026-05-21)
 
 
