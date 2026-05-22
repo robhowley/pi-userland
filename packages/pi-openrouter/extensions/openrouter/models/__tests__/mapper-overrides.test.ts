@@ -68,4 +68,35 @@ describe('mapOpenRouterModels overrides', () => {
       },
     });
   });
+
+  it('applies user thinkingLevelMap when the built-in registry has no map for the model', async () => {
+    loadModelOverrides.mockResolvedValue({
+      version: 1,
+      overrides: {
+        'new/model': {
+          thinkingLevelMap: {
+            high: 'high',
+            xhigh: 'max',
+          },
+        },
+      },
+    });
+
+    const result = await mapOpenRouterModels([
+      createValidModel({
+        id: 'new/model',
+        supported_parameters: ['reasoning'],
+      }),
+    ]);
+
+    expect(result.configs).toHaveLength(1);
+    expect(result.configs[0]).toMatchObject({
+      id: 'new/model',
+      reasoning: true,
+      thinkingLevelMap: {
+        high: 'high',
+        xhigh: 'max',
+      },
+    });
+  });
 });

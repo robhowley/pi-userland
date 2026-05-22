@@ -5,9 +5,6 @@ import {
   saveModelOverrides,
   setModelOverride,
   removeModelOverride,
-  getModelOverride,
-  getOverrideModelIds,
-  hasOverrides,
 } from '../overrides.js';
 import type { ModelOverridesFile, UserModelOverride } from '../types.js';
 import { existsSync } from 'node:fs';
@@ -132,30 +129,6 @@ describe('overrides', () => {
     });
   });
 
-  describe('getModelOverride', () => {
-    it('should return undefined for unknown model', () => {
-      const overrides: ModelOverridesFile = { version: 1, overrides: {} };
-
-      const result = getModelOverride(overrides, 'unknown/model');
-
-      expect(result).toBeUndefined();
-    });
-
-    it('should return override for known model', () => {
-      const override: UserModelOverride = {
-        thinkingLevelMap: { high: 'high' },
-      };
-      const overrides: ModelOverridesFile = {
-        version: 1,
-        overrides: { 'test/model': override },
-      };
-
-      const result = getModelOverride(overrides, 'test/model');
-
-      expect(result).toEqual(override);
-    });
-  });
-
   describe('setModelOverride', () => {
     it('should add new override', () => {
       const overrides: ModelOverridesFile = { version: 1, overrides: {} };
@@ -259,47 +232,6 @@ describe('overrides', () => {
       const result = removeModelOverride(overrides, 'unknown/model');
 
       expect(result).toEqual(overrides);
-    });
-  });
-
-  describe('getOverrideModelIds', () => {
-    it('should return empty array when no overrides', () => {
-      const overrides: ModelOverridesFile = { version: 1, overrides: {} };
-
-      const result = getOverrideModelIds(overrides);
-
-      expect(result).toEqual([]);
-    });
-
-    it('should return all model IDs with overrides', () => {
-      const overrides: ModelOverridesFile = {
-        version: 1,
-        overrides: {
-          'test/model1': {},
-          'test/model2': {},
-        },
-      };
-
-      const result = getOverrideModelIds(overrides);
-
-      expect(result).toEqual(['test/model1', 'test/model2']);
-    });
-  });
-
-  describe('hasOverrides', () => {
-    it('should return false when no overrides', () => {
-      const overrides: ModelOverridesFile = { version: 1, overrides: {} };
-
-      expect(hasOverrides(overrides)).toBe(false);
-    });
-
-    it('should return true when overrides exist', () => {
-      const overrides: ModelOverridesFile = {
-        version: 1,
-        overrides: { 'test/model': {} },
-      };
-
-      expect(hasOverrides(overrides)).toBe(true);
     });
   });
 });
