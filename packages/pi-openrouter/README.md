@@ -1,6 +1,6 @@
 # pi-openrouter
 
-A [Pi](https://pi.dev/) extension for live OpenRouter visibility and environment sync: usage/account TUI overlays, automatic `session_id` tagging, and user-scoped model catalog sync.
+A [Pi](https://pi.dev/) extension for live OpenRouter visibility and environment sync: usage/account TUI overlays, automatic `session_id` tagging, user-scoped model catalog sync, and local model field overrides.
 
 ## Installation
 
@@ -28,6 +28,9 @@ export OPENROUTER_MANAGEMENT_KEY=sk-or-...
 /openrouter models-sync              # sync user-scoped OpenRouter models into Pi
 /openrouter models-status            # show model sync/cache status
 /openrouter models-status --skipped  # show skipped model reasons
+/openrouter model-override-set       # set local model field overrides
+/openrouter model-override-list      # list local model field overrides
+/openrouter model-override-clear     # clear local model field overrides
 ```
 
 ## Model catalog sync
@@ -64,6 +67,7 @@ Run '/openrouter models-sync' to register models
 Type `/openrouter usage` in Pi to open the usage overlay.
 
 The overlay shows:
+
 - **Month spend** vs cap with percentage
 - **7-day spend** with burn rate projection
 - **Today's spend** from live tracked turns while Activity API data catches up
@@ -106,6 +110,50 @@ View the OpenRouter session tag with:
 # OpenRouter session_id
 pi:[uuid]
 ```
+
+## Model field overrides
+
+Some OpenRouter models don't have complete metadata in Pi's built-in registry or the OpenRouter model catalog. You can manually configure supported `PiModelConfig` fields using scoped syntax:
+
+```bash
+# Override thinking levels for DeepSeek V4 Pro
+/openrouter model-override-set deepseek/deepseek-v4-pro thinking.high=high thinking.xhigh=max
+
+# Same thing with exact field names
+/openrouter model-override-set deepseek/deepseek-v4-pro thinkingLevelMap.high=high thinkingLevelMap.xhigh=max
+
+# Override context window or max tokens
+/openrouter model-override-set custom/model contextWindow=128000 maxTokens=8192
+```
+
+**Scoped field names:**
+
+- `thinking.off`, `thinking.minimal`, `thinking.low`, `thinking.medium`, `thinking.high`, `thinking.xhigh` → map to `thinkingLevelMap.*`
+- `contextWindow` → `contextWindow` (number)
+- `maxTokens` → `maxTokens` (number)
+- `reasoning` → `reasoning` (boolean)
+
+Use `null` to hide a level from Pi's UI:
+
+```bash
+/openrouter model-override-set deepseek/deepseek-v4-pro thinking.off=null
+```
+
+List your overrides:
+
+```bash
+/openrouter model-override-list                    # all models
+/openrouter model-override-list --fields           # available fields
+/openrouter model-override-list deepseek/deepseek-v4-pro  # specific model
+```
+
+Clear overrides:
+
+```bash
+/openrouter model-override-clear deepseek/deepseek-v4-pro
+```
+
+Overrides are stored in `~/.pi/openrouter/model-overrides.json` and merge on top of OpenRouter catalog data and Pi's built-in registry. Run `/openrouter models-sync` after changing overrides to apply them to the registered OpenRouter model list.
 
 ## License
 

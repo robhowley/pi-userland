@@ -39,6 +39,12 @@ importers:
         specifier: ^3.1.3
         version: 3.2.4(@types/node@22.19.17)(jiti@2.7.0)(yaml@2.8.3)
 
+  ../../../.pi/agent-or/npm:
+    dependencies:
+      pi-subagents:
+        specifier: ^0.24.2
+        version: 0.24.2(@earendil-works/pi-agent-core@0.74.0(ws@8.20.0)(zod@4.3.6))(@earendil-works/pi-ai@0.74.0(ws@8.20.0)(zod@4.3.6))(@earendil-works/pi-coding-agent@0.74.0(ws@8.20.0)(zod@4.3.6))(@earendil-works/pi-tui@0.74.0)
+
   packages/pi-openrouter:
     dependencies:
       '@mariozechner/pi-tui':
@@ -2977,6 +2983,24 @@ packages:
   pend@1.2.0:
     resolution: {integrity: sha512-F3asv42UuXchdzt+xXqfW1OGlVBe+mxa2mqI0pg5yAHZPvFmY3Y6drSf/GQ1A86WgWEN9Kzh/WrgKa6iGcHXLg==}
 
+  pi-subagents@0.24.2:
+    resolution: {integrity: sha512-b3km170D5DhPWatSAUo++tyVteXm9/yRKCMyyyxmDKZqvH5nCXVw804IvGsO1qbuDX1UKckPMWSFacWn646GmQ==}
+    hasBin: true
+    peerDependencies:
+      '@earendil-works/pi-agent-core': '*'
+      '@earendil-works/pi-ai': '*'
+      '@earendil-works/pi-coding-agent': '*'
+      '@earendil-works/pi-tui': '*'
+    peerDependenciesMeta:
+      '@earendil-works/pi-agent-core':
+        optional: true
+      '@earendil-works/pi-ai':
+        optional: true
+      '@earendil-works/pi-coding-agent':
+        optional: true
+      '@earendil-works/pi-tui':
+        optional: true
+
   picocolors@1.1.1:
     resolution: {integrity: sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==}
 
@@ -5292,7 +5316,7 @@ snapshots:
 
   '@tokenizer/inflate@0.4.1':
     dependencies:
-      debug: 4.4.3(supports-color@8.1.1)
+      debug: 4.4.3
       token-types: 6.1.2
     transitivePeerDependencies:
       - supports-color
@@ -5910,6 +5934,10 @@ snapshots:
     dependencies:
       time-zone: 1.0.0
 
+  debug@4.4.3:
+    dependencies:
+      ms: 2.1.3
+
   debug@4.4.3(supports-color@8.1.1):
     dependencies:
       ms: 2.1.3
@@ -6127,7 +6155,7 @@ snapshots:
 
   extract-zip@2.0.1:
     dependencies:
-      debug: 4.4.3(supports-color@8.1.1)
+      debug: 4.4.3
       get-stream: 5.2.0
       yauzl: 2.10.0
     optionalDependencies:
@@ -6281,7 +6309,7 @@ snapshots:
     dependencies:
       basic-ftp: 5.3.0
       data-uri-to-buffer: 6.0.2
-      debug: 4.4.3(supports-color@8.1.1)
+      debug: 4.4.3
     transitivePeerDependencies:
       - supports-color
 
@@ -6371,14 +6399,14 @@ snapshots:
   http-proxy-agent@7.0.2:
     dependencies:
       agent-base: 7.1.4
-      debug: 4.4.3(supports-color@8.1.1)
+      debug: 4.4.3
     transitivePeerDependencies:
       - supports-color
 
   https-proxy-agent@7.0.6:
     dependencies:
       agent-base: 7.1.4
-      debug: 4.4.3(supports-color@8.1.1)
+      debug: 4.4.3
     transitivePeerDependencies:
       - supports-color
 
@@ -7111,7 +7139,7 @@ snapshots:
     dependencies:
       '@tootallnate/quickjs-emscripten': 0.23.0
       agent-base: 7.1.4
-      debug: 4.4.3(supports-color@8.1.1)
+      debug: 4.4.3
       get-uri: 6.0.5
       http-proxy-agent: 7.0.2
       https-proxy-agent: 7.0.6
@@ -7180,6 +7208,16 @@ snapshots:
   pathval@2.0.1: {}
 
   pend@1.2.0: {}
+
+  pi-subagents@0.24.2(@earendil-works/pi-agent-core@0.74.0(ws@8.20.0)(zod@4.3.6))(@earendil-works/pi-ai@0.74.0(ws@8.20.0)(zod@4.3.6))(@earendil-works/pi-coding-agent@0.74.0(ws@8.20.0)(zod@4.3.6))(@earendil-works/pi-tui@0.74.0):
+    dependencies:
+      jiti: 2.7.0
+      typebox: 1.1.38
+    optionalDependencies:
+      '@earendil-works/pi-agent-core': 0.74.0(ws@8.20.0)(zod@4.3.6)
+      '@earendil-works/pi-ai': 0.74.0(ws@8.20.0)(zod@4.3.6)
+      '@earendil-works/pi-coding-agent': 0.74.0(ws@8.20.0)(zod@4.3.6)
+      '@earendil-works/pi-tui': 0.74.0
 
   picocolors@1.1.1: {}
 
@@ -7254,7 +7292,7 @@ snapshots:
   proxy-agent@6.5.0:
     dependencies:
       agent-base: 7.1.4
-      debug: 4.4.3(supports-color@8.1.1)
+      debug: 4.4.3
       http-proxy-agent: 7.0.2
       https-proxy-agent: 7.0.6
       lru-cache: 7.18.3
@@ -7389,7 +7427,7 @@ snapshots:
   socks-proxy-agent@8.0.5:
     dependencies:
       agent-base: 7.1.4
-      debug: 4.4.3(supports-color@8.1.1)
+      debug: 4.4.3
       socks: 2.8.7
     transitivePeerDependencies:
       - supports-color
