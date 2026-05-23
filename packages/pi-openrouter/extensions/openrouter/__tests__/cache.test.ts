@@ -1,8 +1,15 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { fetchAndAggregate } from '../cache.js';
+import {
+  BACKGROUND_REFRESH_INTERVAL_MS,
+  fetchAndAggregate,
+  getRefreshState,
+  startBackgroundRefresh,
+  stopBackgroundRefresh,
+  usageCache,
+} from '../cache.js';
 import { getCredits, getActivity } from '../client.js';
 import { readLocalUsage } from '../local-usage.js';
-import type { LocalUsageEvent } from '../types.js';
+import type { LocalUsageEvent, UsageSummary } from '../types.js';
 import type { ActivityItem } from '@openrouter/sdk/models/index.js';
 
 // Mock dependencies
@@ -261,5 +268,197 @@ describe('fetchAndAggregate - Phase 3: Local usage merge when Activity API absen
     expect(summary).toBeDefined();
     expect(summary!.local.cost).toBe(0);
     expect(summary!.combined.cost).toBe(0);
+  });
+});
+
+function createUsageSummary(overrides: Partial<UsageSummary> = {}): UsageSummary {
+  return {
+    today: 0,
+    week: 0,
+    month: 0,
+    cap: 10,
+    burnRate: 0,
+    topModels: [],
+    byProvider: [],
+    byDay: {},
+    timestamp: Date.now(),
+    hasActivityData: true,
+    official: {
+      requests: 0,
+      promptTokens: 0,
+      completionTokens: 0,
+      reasoningTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      cost: 0,
+    },
+    local: {
+      requests: 0,
+      promptTokens: 0,
+      completionTokens: 0,
+      reasoningTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      cost: 0,
+    },
+    combined: {
+      requests: 0,
+      promptTokens: 0,
+      completionTokens: 0,
+      reasoningTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      cost: 0,
+    },
+    ...overrides,
+  };
+}
+
+describe('background refresh lifecycle', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    usageCache.clear();
+    stopBackgroundRefresh();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-22T12:00:00Z'));
+  });
+
+  afterEach(() => {
+    stopBackgroundRefresh();
+    usageCache.clear();
+    vi.useRealTimers();
+  });
+
+  function mockSuccessfulRefresh() {
+    mockGetCredits.mockResolvedValue({ totalUsage: 2, totalCredits: 10 });
+    mockGetActivity.mockResolvedValue([]);
+    mockReadLocalUsage.mockResolvedValue([]);
+  }
+
+  it('caches usage after an initial successful refresh and schedules the normal interval', async () => {
+    mockSuccessfulRefresh();
+
+    startBackgroundRefresh();
+    await vi.advanceTimersByTimeAsync(BACKGROUND_REFRESH_INTERVAL_MS);
+
+    expect(usageCache.get('usage')).toBeDefined();
+    expect(getRefreshState()).toMatchObject({
+      status: 'healthy',
+      consecutiveFailures: 0,
+      nextDelayMs: BACKGROUND_REFRESH_INTERVAL_MS,
+    });
+    expect(mockGetCredits).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps last-good stale data available after one refresh failure', async () => {
+    const staleSummary = createUsageSummary({ today: 1.23 });
+    usageCache.set('usage', staleSummary);
+    vi.setSystemTime(new Date('2026-05-22T12:01:00Z'));
+    mockGetCredits.mockRejectedValue(new Error('network down'));
+
+    startBackgroundRefresh();
+    await vi.advanceTimersByTimeAsync(BACKGROUND_REFRESH_INTERVAL_MS);
+
+    expect(usageCache.get('usage')).toBeUndefined();
+    expect(usageCache.get('usage', { allowStale: true })).toEqual(staleSummary);
+    expect(getRefreshState()).toMatchObject({
+      status: 'stale',
+      consecutiveFailures: 1,
+      lastError: 'network down',
+      nextDelayMs: BACKGROUND_REFRESH_INTERVAL_MS * 2,
+    });
+  });
+
+  it('continues refreshing after repeated failures instead of stopping permanently', async () => {
+    mockGetCredits.mockRejectedValue(new Error('still down'));
+
+    startBackgroundRefresh();
+
+    for (const expectedFailures of [1, 2, 3, 4, 5]) {
+      await vi.advanceTimersByTimeAsync(
+        getRefreshState().nextDelayMs ?? BACKGROUND_REFRESH_INTERVAL_MS,
+      );
+      expect(getRefreshState().consecutiveFailures).toBe(expectedFailures);
+      expect(getRefreshState().nextDelayMs).toBeLessThanOrEqual(
+        BACKGROUND_REFRESH_INTERVAL_MS * 32,
+      );
+    }
+
+    const callsAfterFiveFailures = mockGetCredits.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(
+      getRefreshState().nextDelayMs ?? BACKGROUND_REFRESH_INTERVAL_MS,
+    );
+
+    expect(mockGetCredits.mock.calls.length).toBeGreaterThan(callsAfterFiveFailures);
+    expect(getRefreshState().status).toBe('failed');
+  });
+
+  it('uses a longer capped backoff for rate-limit failures', async () => {
+    mockGetCredits.mockRejectedValue(new Error('429 rate limit exceeded'));
+
+    startBackgroundRefresh();
+    await vi.advanceTimersByTimeAsync(BACKGROUND_REFRESH_INTERVAL_MS);
+
+    expect(getRefreshState()).toMatchObject({
+      status: 'failed',
+      consecutiveFailures: 1,
+      nextDelayMs: BACKGROUND_REFRESH_INTERVAL_MS * 8,
+    });
+  });
+
+  it('resets failure state and returns to the normal interval after recovery', async () => {
+    mockGetCredits.mockRejectedValueOnce(new Error('temporary outage'));
+    mockGetCredits.mockResolvedValue({ totalUsage: 3, totalCredits: 10 });
+    mockGetActivity.mockResolvedValue([]);
+    mockReadLocalUsage.mockResolvedValue([]);
+
+    startBackgroundRefresh();
+    await vi.advanceTimersByTimeAsync(BACKGROUND_REFRESH_INTERVAL_MS);
+    expect(getRefreshState()).toMatchObject({
+      status: 'failed',
+      consecutiveFailures: 1,
+      nextDelayMs: BACKGROUND_REFRESH_INTERVAL_MS * 2,
+    });
+
+    await vi.advanceTimersByTimeAsync(BACKGROUND_REFRESH_INTERVAL_MS * 2);
+
+    expect(getRefreshState()).toMatchObject({
+      status: 'healthy',
+      consecutiveFailures: 0,
+      lastError: null,
+      nextDelayMs: BACKGROUND_REFRESH_INTERVAL_MS,
+    });
+    expect(usageCache.get('usage')).toBeDefined();
+  });
+
+  it('clears the timer on stop and prevents further refreshes', async () => {
+    mockSuccessfulRefresh();
+
+    startBackgroundRefresh();
+    stopBackgroundRefresh();
+    await vi.advanceTimersByTimeAsync(BACKGROUND_REFRESH_INTERVAL_MS * 4);
+
+    expect(mockGetCredits).not.toHaveBeenCalled();
+    expect(getRefreshState()).toMatchObject({
+      status: 'idle',
+      consecutiveFailures: 0,
+      nextDelayMs: null,
+    });
+  });
+
+  it('notifies via callback when refresh failures occur', async () => {
+    const onFailure = vi.fn();
+    mockGetCredits.mockRejectedValue(new Error('persistent failure'));
+
+    startBackgroundRefresh({ onFailure });
+    await vi.advanceTimersByTimeAsync(BACKGROUND_REFRESH_INTERVAL_MS);
+
+    expect(onFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'failed',
+        consecutiveFailures: 1,
+        lastError: 'persistent failure',
+      }),
+    );
   });
 });

@@ -8,29 +8,31 @@ import { ZERO_AGGREGATE } from './types.js';
 export const CACHE_TTL_MS = 45000;
 export const BACKGROUND_REFRESH_INTERVAL_MS = 30000;
 
+interface CacheGetOptions {
+  allowStale?: boolean;
+}
+
 export class TTLCache<T> {
   private cache = new Map<string, CacheEntry<T>>();
 
   constructor(private ttlMs: number = CACHE_TTL_MS) {}
 
-  get(key: string): T | undefined {
+  get(key: string, options: CacheGetOptions = {}): T | undefined {
     const entry = this.cache.get(key);
     if (!entry) return undefined;
 
-    if (Date.now() - entry.timestamp > this.ttlMs) {
-      this.cache.delete(key);
+    if (!options.allowStale && Date.now() - entry.timestamp > this.ttlMs) {
       return undefined;
     }
 
     return entry.data;
   }
 
-  getTimestamp(key: string): number | undefined {
+  getTimestamp(key: string, options: CacheGetOptions = {}): number | undefined {
     const entry = this.cache.get(key);
     if (!entry) return undefined;
 
-    if (Date.now() - entry.timestamp > this.ttlMs) {
-      this.cache.delete(key);
+    if (!options.allowStale && Date.now() - entry.timestamp > this.ttlMs) {
       return undefined;
     }
 
@@ -40,18 +42,123 @@ export class TTLCache<T> {
   set(key: string, data: T): void {
     this.cache.set(key, { data, timestamp: Date.now() });
   }
+
+  clear(key?: string): void {
+    if (key) {
+      this.cache.delete(key);
+      return;
+    }
+    this.cache.clear();
+  }
 }
 
 export const usageCache = new TTLCache<UsageSummary>(CACHE_TTL_MS);
 
-let refreshInterval: NodeJS.Timeout | null = null;
-let consecutiveFailures = 0;
-const MAX_RETRY_BACKOFF = 5; // Max 2^5 = 32x base interval (16 min)
-const MAX_RETRY_COUNT = 4; // Stop after 4 consecutive failures
+export type RefreshStatus = 'idle' | 'healthy' | 'refreshing' | 'stale' | 'failed';
 
-function getBackoffInterval(): number {
+export interface RefreshState {
+  status: RefreshStatus;
+  consecutiveFailures: number;
+  lastError: string | null;
+  lastSuccessAt: number | null;
+  nextDelayMs: number | null;
+}
+
+export interface StartBackgroundRefreshOptions {
+  onFailure?: (state: RefreshState) => void;
+}
+
+let refreshTimer: NodeJS.Timeout | null = null;
+let refreshActive = false;
+let consecutiveFailures = 0;
+let refreshFailureCallback: ((state: RefreshState) => void) | undefined;
+let refreshState: RefreshState = {
+  status: 'idle',
+  consecutiveFailures: 0,
+  lastError: null,
+  lastSuccessAt: null,
+  nextDelayMs: null,
+};
+const MAX_RETRY_BACKOFF = 5; // Max 2^5 = 32x base interval (16 min)
+const RATE_LIMIT_BACKOFF_MULTIPLIER = 8; // 4 minutes with the default 30s interval
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isRateLimitError(error: unknown): boolean {
+  const message = getErrorMessage(error).toLowerCase();
+  return (
+    message.includes('429') || message.includes('rate limit') || message.includes('rate-limit')
+  );
+}
+
+function getBackoffInterval(error?: unknown): number {
   const backoffMultiplier = Math.min(consecutiveFailures, MAX_RETRY_BACKOFF);
-  return BACKGROUND_REFRESH_INTERVAL_MS * Math.pow(2, backoffMultiplier);
+  const exponentialDelay = BACKGROUND_REFRESH_INTERVAL_MS * Math.pow(2, backoffMultiplier);
+  const cappedDelay = Math.min(
+    exponentialDelay,
+    BACKGROUND_REFRESH_INTERVAL_MS * Math.pow(2, MAX_RETRY_BACKOFF),
+  );
+
+  if (!isRateLimitError(error)) {
+    return cappedDelay;
+  }
+
+  const rateLimitDelay = BACKGROUND_REFRESH_INTERVAL_MS * RATE_LIMIT_BACKOFF_MULTIPLIER;
+  return Math.min(
+    Math.max(cappedDelay, rateLimitDelay),
+    BACKGROUND_REFRESH_INTERVAL_MS * Math.pow(2, MAX_RETRY_BACKOFF),
+  );
+}
+
+export function getRefreshState(): RefreshState {
+  return { ...refreshState };
+}
+
+function scheduleRefresh(delay: number): void {
+  if (!refreshActive) return;
+  refreshState = { ...refreshState, nextDelayMs: delay };
+
+  refreshTimer = setTimeout(async () => {
+    refreshTimer = null;
+    await runBackgroundRefreshOnce();
+    if (refreshActive) {
+      scheduleRefresh(refreshState.nextDelayMs ?? BACKGROUND_REFRESH_INTERVAL_MS);
+    }
+  }, delay);
+}
+
+async function runBackgroundRefreshOnce(): Promise<void> {
+  refreshState = { ...refreshState, status: 'refreshing' };
+
+  try {
+    const summary = await fetchAndAggregate();
+    if (!summary) {
+      throw new Error('OpenRouter usage unavailable: no configured API key or credits response.');
+    }
+
+    usageCache.set('usage', summary);
+    consecutiveFailures = 0;
+    refreshState = {
+      status: 'healthy',
+      consecutiveFailures,
+      lastError: null,
+      lastSuccessAt: Date.now(),
+      nextDelayMs: BACKGROUND_REFRESH_INTERVAL_MS,
+    };
+  } catch (error) {
+    consecutiveFailures++;
+    const hasStaleData = usageCache.get('usage', { allowStale: true }) !== undefined;
+    refreshState = {
+      status: hasStaleData ? 'stale' : 'failed',
+      consecutiveFailures,
+      lastError: getErrorMessage(error),
+      lastSuccessAt: refreshState.lastSuccessAt,
+      nextDelayMs: getBackoffInterval(error),
+    };
+    refreshFailureCallback?.(getRefreshState());
+  }
 }
 
 /**
@@ -178,47 +285,28 @@ export async function fetchAndAggregate(): Promise<UsageSummary | null> {
   return summary;
 }
 
-function scheduleRefresh(): void {
-  const delay = consecutiveFailures > 0 ? getBackoffInterval() : BACKGROUND_REFRESH_INTERVAL_MS;
-
-  refreshInterval = setInterval(async () => {
-    try {
-      const summary = await fetchAndAggregate();
-      if (summary) {
-        usageCache.set('usage', summary);
-
-        // Reset failure count on success and restart with normal interval
-        if (consecutiveFailures > 0) {
-          consecutiveFailures = 0;
-          stopBackgroundRefresh();
-          scheduleRefresh();
-        }
-      }
-    } catch {
-      consecutiveFailures++;
-
-      // Stop after max retries reached
-      if (consecutiveFailures >= MAX_RETRY_COUNT) {
-        stopBackgroundRefresh();
-        // TODO: Fire UI notification for persistent failure
-        return;
-      }
-
-      // Restart with backoff interval
-      stopBackgroundRefresh();
-      scheduleRefresh();
-    }
-  }, delay);
-}
-
-export function startBackgroundRefresh(): void {
-  if (refreshInterval) return;
-  scheduleRefresh();
+export function startBackgroundRefresh(options: StartBackgroundRefreshOptions = {}): void {
+  if (options.onFailure) {
+    refreshFailureCallback = options.onFailure;
+  }
+  if (refreshActive || refreshTimer) return;
+  refreshActive = true;
+  scheduleRefresh(BACKGROUND_REFRESH_INTERVAL_MS);
 }
 
 export function stopBackgroundRefresh(): void {
-  if (refreshInterval) {
-    clearInterval(refreshInterval);
-    refreshInterval = null;
+  refreshActive = false;
+  refreshFailureCallback = undefined;
+  if (refreshTimer) {
+    clearTimeout(refreshTimer);
+    refreshTimer = null;
   }
+  consecutiveFailures = 0;
+  refreshState = {
+    status: 'idle',
+    consecutiveFailures,
+    lastError: null,
+    lastSuccessAt: null,
+    nextDelayMs: null,
+  };
 }

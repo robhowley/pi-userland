@@ -287,7 +287,7 @@ export default async function (pi: ExtensionAPI) {
     description: 'Show OpenRouter usage: caps, spend, burn rate, and model breakdowns',
     getArgumentCompletions: () => null,
     handler: async (args, ctx) => {
-      startBackgroundRefresh();
+      startUsageBackgroundRefresh(ctx);
       const subcommand = args.trim() || undefined;
       await showUsageOverlay(ctx, subcommand);
     },
@@ -346,7 +346,7 @@ export default async function (pi: ExtensionAPI) {
 
       switch (subcommand) {
         case 'usage': {
-          startBackgroundRefresh();
+          startUsageBackgroundRefresh(ctx);
           await showUsageOverlay(ctx, undefined);
           break;
         }
@@ -940,6 +940,24 @@ async function showAccountOverlayComponent(
   );
 }
 
+function startUsageBackgroundRefresh(ctx: ExtensionContext): void {
+  startBackgroundRefresh({
+    onFailure: (state) => {
+      if (!ctx.hasUI || !state.lastError) return;
+
+      const isPersistent = state.consecutiveFailures >= 4;
+      const isRateLimited = state.lastError.toLowerCase().includes('rate limit');
+      if (!isPersistent && !isRateLimited) return;
+
+      const staleSuffix = state.status === 'stale' ? '\nShowing last successful usage data.' : '';
+      ctx.ui.notify(
+        `OpenRouter usage refresh ${state.status}\n${state.lastError}${staleSuffix}`,
+        'warning',
+      );
+    },
+  });
+}
+
 async function showUsageOverlay(ctx: ExtensionContext, _subcommand?: string) {
   const cachedSummary = usageCache.get('usage');
   const lastFetchTimestamp = usageCache.getTimestamp('usage');
@@ -952,6 +970,12 @@ async function showUsageOverlay(ctx: ExtensionContext, _subcommand?: string) {
     return;
   }
 
+  const staleSummary = usageCache.get('usage', { allowStale: true });
+  const staleFetchTimestamp = usageCache.getTimestamp('usage', { allowStale: true });
+  const staleMinutesAgo = staleFetchTimestamp
+    ? Math.round((Date.now() - staleFetchTimestamp) / MS_PER_MINUTE)
+    : null;
+
   let error: string | null = null;
   let summary: UsageSummary | null = null;
 
@@ -960,6 +984,13 @@ async function showUsageOverlay(ctx: ExtensionContext, _subcommand?: string) {
     if (!summary) {
       error =
         'OpenRouter API key not found. Set OPENROUTER_MANAGEMENT_KEY (preferred) or OPENROUTER_API_KEY to use /usage.';
+      await showOverlay(
+        ctx,
+        staleSummary ?? null,
+        staleSummary ? `${error}\nShowing last successful usage data.` : error,
+        staleSummary ? staleMinutesAgo : 0,
+      );
+      return;
     } else {
       usageCache.set('usage', summary);
     }
@@ -971,7 +1002,12 @@ async function showUsageOverlay(ctx: ExtensionContext, _subcommand?: string) {
       err instanceof AuthError
         ? 'OpenRouter API key not found. Set OPENROUTER_MANAGEMENT_KEY (preferred) or OPENROUTER_API_KEY to use /usage.'
         : `API Error: ${err.message}`;
-    await showOverlay(ctx, null, error, cachedMinutesAgo || 0);
+    await showOverlay(
+      ctx,
+      staleSummary ?? null,
+      staleSummary ? `${error}\nShowing last successful usage data.` : error,
+      staleSummary ? staleMinutesAgo : cachedMinutesAgo || 0,
+    );
   }
 }
 
