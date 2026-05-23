@@ -2,7 +2,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import type { LocalUsageEvent, UsageAggregate } from './types.js';
-import { ZERO_AGGREGATE } from './types.js';
+import { createZeroAggregate } from './types.js';
 
 export type { LocalUsageEvent };
 
@@ -170,7 +170,7 @@ export async function readLocalUsage(options: ReadLocalUsageOptions): Promise<Lo
  */
 export function aggregateLocal(events: LocalUsageEvent[]): UsageAggregate {
   if (events.length === 0) {
-    return ZERO_AGGREGATE;
+    return createZeroAggregate();
   }
 
   // Deduplicate by id
@@ -184,19 +184,16 @@ export function aggregateLocal(events: LocalUsageEvent[]): UsageAggregate {
   }
 
   // Aggregate
-  const result = unique.reduce(
-    (acc, event) => {
-      acc.requests += event.requests ?? 1;
-      acc.promptTokens += event.promptTokens || 0;
-      acc.completionTokens += event.completionTokens || 0;
-      acc.reasoningTokens += event.reasoningTokens || 0;
-      acc.cacheReadTokens += event.cacheReadTokens || 0;
-      acc.cacheWriteTokens += event.cacheWriteTokens || 0;
-      acc.cost += event.cost || 0;
-      return acc;
-    },
-    { ...ZERO_AGGREGATE },
-  );
+  const result = unique.reduce((acc, event) => {
+    acc.requests += event.requests ?? 1;
+    acc.promptTokens += event.promptTokens || 0;
+    acc.completionTokens += event.completionTokens || 0;
+    acc.reasoningTokens += event.reasoningTokens || 0;
+    acc.cacheReadTokens += event.cacheReadTokens || 0;
+    acc.cacheWriteTokens += event.cacheWriteTokens || 0;
+    acc.cost += event.cost || 0;
+    return acc;
+  }, createZeroAggregate());
   return result;
 }
 

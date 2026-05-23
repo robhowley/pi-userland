@@ -26,6 +26,16 @@ const mockGetCredits = vi.mocked(getCredits);
 const mockGetActivity = vi.mocked(getActivity);
 const mockReadLocalUsage = vi.mocked(readLocalUsage);
 
+const usageAggregateFields = [
+  'requests',
+  'promptTokens',
+  'completionTokens',
+  'reasoningTokens',
+  'cacheReadTokens',
+  'cacheWriteTokens',
+  'cost',
+] as const;
+
 describe('fetchAndAggregate - Phase 3: Local usage merge when Activity API absent/empty', () => {
   beforeEach(() => {
     vi.resetAllMocks();
@@ -223,8 +233,7 @@ describe('fetchAndAggregate - Phase 3: Local usage merge when Activity API absen
     });
   });
 
-  it('should preserve Activity-only aggregation when no local events exist', async () => {
-    // Setup: Activity data exists, no local events
+  it('should keep official-only summary behavior unchanged when no local events exist', async () => {
     mockGetCredits.mockResolvedValue({
       totalUsage: 4.0,
       totalCredits: 10.0,
@@ -248,9 +257,53 @@ describe('fetchAndAggregate - Phase 3: Local usage merge when Activity API absen
     const summary = await fetchAndAggregate();
 
     expect(summary).toBeDefined();
-    expect(summary!.official.cost).toBe(0.15);
-    expect(summary!.local.cost).toBe(0);
-    expect(summary!.combined.cost).toBe(0.15);
+    expect(summary).toMatchObject({
+      today: 0,
+      week: 0.15,
+      month: 4.0,
+      hasActivityData: true,
+      officialThroughDate: '2026-05-21',
+    });
+    expect(summary!.topModels[0]).toMatchObject({
+      name: 'openai/gpt-4',
+      spend7d: 0.15,
+      spend30d: 0.15,
+      requests7d: 3,
+      requests30d: 3,
+    });
+    expect(summary!.byProvider).toEqual([
+      {
+        name: 'openai',
+        spend: 0.15,
+        tokens: {
+          input: 3000,
+          output: 600,
+          reasoning: 0,
+          total: 3600,
+        },
+        requests: 3,
+      },
+    ]);
+    expect(summary!.byDay).toEqual({ '2026-05-21': 0.15 });
+    expect(summary!.official).toEqual({
+      requests: 3,
+      promptTokens: 3000,
+      completionTokens: 600,
+      reasoningTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      cost: 0.15,
+    });
+    expect(summary!.local).toEqual({
+      requests: 0,
+      promptTokens: 0,
+      completionTokens: 0,
+      reasoningTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      cost: 0,
+    });
+    expect(summary!.combined).toEqual(summary!.official);
   });
 
   it('should fail open when local read throws error', async () => {
@@ -268,6 +321,49 @@ describe('fetchAndAggregate - Phase 3: Local usage merge when Activity API absen
     expect(summary).toBeDefined();
     expect(summary!.local.cost).toBe(0);
     expect(summary!.combined.cost).toBe(0);
+  });
+
+  it('should keep combined aggregate equal to official plus local for every numeric field', async () => {
+    mockGetCredits.mockResolvedValue({
+      totalUsage: 9.0,
+      totalCredits: 10.0,
+    });
+    mockGetActivity.mockResolvedValue([
+      {
+        date: '2026-05-21',
+        model: 'openai/gpt-4',
+        providerName: 'openai',
+        requests: 2,
+        promptTokens: 120,
+        completionTokens: 30,
+        reasoningTokens: 7,
+        usage: 0.02,
+      },
+    ] as ActivityItem[]);
+    mockReadLocalUsage.mockResolvedValue([
+      {
+        id: 'local-aggregate-invariant',
+        generationId: 'gen-aggregate-invariant',
+        sessionId: 'session-aggregate-invariant',
+        completedAt: '2026-05-22T10:00:00Z',
+        requests: 3,
+        model: 'anthropic/claude-sonnet-4',
+        provider: 'anthropic',
+        promptTokens: 200,
+        completionTokens: 40,
+        reasoningTokens: 9,
+        cacheReadTokens: 11,
+        cacheWriteTokens: 13,
+        cost: 0.05,
+      },
+    ]);
+
+    const summary = await fetchAndAggregate();
+
+    expect(summary).toBeDefined();
+    for (const field of usageAggregateFields) {
+      expect(summary!.combined[field]).toBe(summary!.official[field] + summary!.local[field]);
+    }
   });
 });
 

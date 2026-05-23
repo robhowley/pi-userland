@@ -1,9 +1,9 @@
-import type { CacheEntry, UsageSummary, LocalUsageEvent, UsageAggregate } from './types.js';
+import type { CacheEntry, UsageSummary, LocalUsageEvent } from './types.js';
 import type { ActivityItem } from '@openrouter/sdk/models/index.js';
 import { aggregateUsage } from './format.js';
 import { getCredits, getActivity } from './client.js';
 import { readLocalUsage, aggregateLocal, getCurrentUtcDate, addUtcDays } from './local-usage.js';
-import { ZERO_AGGREGATE } from './types.js';
+import { combineUsageAggregates, createZeroAggregate } from './types.js';
 
 export const CACHE_TTL_MS = 45000;
 export const BACKGROUND_REFRESH_INTERVAL_MS = 30000;
@@ -246,7 +246,7 @@ export async function fetchAndAggregate(): Promise<UsageSummary | null> {
               }) as LocalUsageEvent,
           ),
         )
-      : ZERO_AGGREGATE;
+      : createZeroAggregate();
 
   // Read local JSONL for bounded recent window
   // Always compute local read range when credits exist (Activity API may be absent/empty)
@@ -264,15 +264,7 @@ export async function fetchAndAggregate(): Promise<UsageSummary | null> {
   const localAggregate = aggregateLocal(localEvents);
 
   // Combine official + local
-  const combinedAggregate: UsageAggregate = {
-    requests: officialAggregate.requests + localAggregate.requests,
-    promptTokens: officialAggregate.promptTokens + localAggregate.promptTokens,
-    completionTokens: officialAggregate.completionTokens + localAggregate.completionTokens,
-    reasoningTokens: officialAggregate.reasoningTokens + localAggregate.reasoningTokens,
-    cacheReadTokens: officialAggregate.cacheReadTokens + localAggregate.cacheReadTokens,
-    cacheWriteTokens: officialAggregate.cacheWriteTokens + localAggregate.cacheWriteTokens,
-    cost: officialAggregate.cost + localAggregate.cost,
-  };
+  const combinedAggregate = combineUsageAggregates(officialAggregate, localAggregate);
 
   // Build full summary with local events included for 7d/30d totals
   const summary = aggregateUsage(credits, analytics ?? [], timestamp, localEvents);

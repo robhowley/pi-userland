@@ -90,6 +90,25 @@ describe('aggregateUsage', () => {
     expect(result.byDay).toEqual({});
   });
 
+  it('should create fresh zero aggregates for official, local, and combined', () => {
+    const result = aggregateUsage({ totalUsage: 0, totalCredits: 0 }, []);
+
+    expect(result.official).toEqual({
+      requests: 0,
+      promptTokens: 0,
+      completionTokens: 0,
+      reasoningTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      cost: 0,
+    });
+    expect(result.local).toEqual(result.official);
+    expect(result.combined).toEqual(result.official);
+    expect(result.official).not.toBe(result.local);
+    expect(result.official).not.toBe(result.combined);
+    expect(result.local).not.toBe(result.combined);
+  });
+
   it('should aggregate by model', () => {
     const credits = {
       totalUsage: 10,
