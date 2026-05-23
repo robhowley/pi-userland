@@ -412,3 +412,182 @@ describe('handleModelOverrideList', () => {
     );
   });
 });
+
+// Phase 2: Session tagging integration tests
+describe('addSessionIdToOpenRouterRequest', () => {
+  // Need to dynamically import to get fresh module state
+  beforeEach(async () => {
+    vi.resetModules();
+  });
+
+  it('should add session_id to OpenRouter requests', async () => {
+    const { addSessionIdToOpenRouterRequest } = await import('../index.js');
+
+    const mockCtx = {
+      sessionManager: {
+        getSessionId: () => 'stable-session-123',
+      },
+    };
+
+    const mockEvent = {
+      type: 'before_provider_request',
+      provider: 'openrouter',
+      payload: {
+        model: 'openrouter/anthropic/claude-sonnet-4',
+        messages: [],
+      },
+    };
+
+    const result = addSessionIdToOpenRouterRequest(mockEvent, mockCtx);
+
+    expect(result).toBeDefined();
+    expect(result?.['session_id']).toBe('pi:stable-session-123');
+    expect(result?.['model']).toBe('openrouter/anthropic/claude-sonnet-4');
+  });
+
+  it('should return same session_id for multiple OpenRouter requests in same session', async () => {
+    const { addSessionIdToOpenRouterRequest } = await import('../index.js');
+
+    const mockCtx = {
+      sessionManager: {
+        getSessionId: () => 'stable-session-123',
+      },
+    };
+
+    const mockEvent1 = {
+      provider: 'openrouter',
+      payload: { model: 'openrouter/model-1', messages: [] },
+    };
+
+    const mockEvent2 = {
+      provider: 'openrouter',
+      payload: { model: 'openrouter/model-2', messages: [] },
+    };
+
+    const result1 = addSessionIdToOpenRouterRequest(mockEvent1, mockCtx);
+    const result2 = addSessionIdToOpenRouterRequest(mockEvent2, mockCtx);
+
+    expect(result1?.['session_id']).toBe('pi:stable-session-123');
+    expect(result2?.['session_id']).toBe('pi:stable-session-123');
+    expect(result1?.['session_id']).toBe(result2?.['session_id']);
+  });
+
+  it('should not overwrite existing session_id in payload', async () => {
+    const { addSessionIdToOpenRouterRequest } = await import('../index.js');
+
+    const mockCtx = {
+      sessionManager: {
+        getSessionId: () => 'new-session',
+      },
+    };
+
+    const mockEvent = {
+      provider: 'openrouter',
+      payload: {
+        model: 'openrouter/anthropic/claude-sonnet-4',
+        messages: [],
+        session_id: 'existing-session-id',
+      },
+    };
+
+    const result = addSessionIdToOpenRouterRequest(mockEvent, mockCtx);
+
+    // Should return undefined (no modification) when session_id exists
+    expect(result).toBeUndefined();
+    // Original payload should be unchanged
+    expect(mockEvent.payload.session_id).toBe('existing-session-id');
+  });
+
+  it('should not tag non-OpenRouter requests', async () => {
+    const { addSessionIdToOpenRouterRequest } = await import('../index.js');
+
+    const mockCtx = {
+      sessionManager: {
+        getSessionId: () => 'my-session',
+      },
+    };
+
+    const mockEvent = {
+      provider: 'anthropic',
+      payload: {
+        model: 'claude-sonnet-4',
+        messages: [],
+      },
+    };
+
+    const result = addSessionIdToOpenRouterRequest(mockEvent, mockCtx);
+
+    // Should return undefined (no modification) for non-OpenRouter
+    expect(result).toBeUndefined();
+  });
+
+  it('should fail open when payload is missing', async () => {
+    const { addSessionIdToOpenRouterRequest } = await import('../index.js');
+
+    const mockCtx = {
+      sessionManager: {
+        getSessionId: () => 'my-session',
+      },
+    };
+
+    const mockEvent = {
+      provider: 'openrouter',
+      // No payload
+    };
+
+    const result = addSessionIdToOpenRouterRequest(mockEvent, mockCtx);
+
+    // Should return undefined (no modification) when payload missing
+    expect(result).toBeUndefined();
+  });
+
+  it('should generate fallback UUID when session manager throws', async () => {
+    const { addSessionIdToOpenRouterRequest } = await import('../index.js');
+
+    const mockCtx = {
+      sessionManager: {
+        getSessionId: () => {
+          throw new Error('Session manager error');
+        },
+      },
+    };
+
+    const mockEvent = {
+      provider: 'openrouter',
+      payload: {
+        model: 'openrouter/model',
+        messages: [],
+      },
+    };
+
+    const result = addSessionIdToOpenRouterRequest(mockEvent, mockCtx);
+
+    // Should generate a fallback UUID session_id
+    expect(result).toBeDefined();
+    expect(result?.['session_id']).toMatch(
+      /^pi:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+  });
+
+  it('should fail open when payload getter throws', async () => {
+    const { addSessionIdToOpenRouterRequest } = await import('../index.js');
+
+    const mockCtx = {
+      sessionManager: {
+        getSessionId: () => 'my-session',
+      },
+    };
+
+    // Create an event with a throwing payload getter
+    const mockEvent = {
+      provider: 'openrouter',
+      get payload() {
+        throw new Error('Payload getter error');
+      },
+    };
+
+    // Should not throw and should return undefined
+    const result = addSessionIdToOpenRouterRequest(mockEvent, mockCtx);
+    expect(result).toBeUndefined();
+  });
+});

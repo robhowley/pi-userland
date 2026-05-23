@@ -1,4 +1,8 @@
-import type { ExtensionAPI, ExtensionContext } from '@mariozechner/pi-coding-agent';
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  BeforeProviderRequestEvent,
+} from '@mariozechner/pi-coding-agent';
 import type { UsageSummary } from './types.js';
 import { MS_PER_MINUTE } from './models/types.js';
 import {
@@ -9,14 +13,14 @@ import {
 } from './cache.js';
 import { AuthError } from './client.js';
 import { UsageOverlayComponent } from './overlay.js';
-import { formatSessionId, isOpenRouterRequest, type OpenRouterSessionState } from './session.js';
+import { isOpenRouterRequest } from './session.js';
+import { createSessionState, type SessionState } from './session-state.js';
 import { writeLocalUsage, type LocalUsageEvent } from './local-usage.js';
 import { AccountOverlayComponent } from './account-overlay.js';
 import { computeRollupStatus, sortKeys } from './account-format.js';
 import { getAllKeys, getCurrentKey, getAccountCredits } from './account-client.js';
 import type { KeyInfo } from './account-types.js';
 import type { RollupStatus } from './account-types.js';
-import crypto from 'node:crypto';
 
 // Import models sync
 import {
@@ -39,8 +43,8 @@ import {
 } from './models/overrides.js';
 import type { UserModelOverride, ThinkingLevelMap, ModelOverridesFile } from './models/types.js';
 
-// Store the current session state for use in command handlers
-let currentSessionState: OpenRouterSessionState | null = null;
+// Store the session state manager (created per extension load, reset per Pi session)
+let sessionState: SessionState | null = null;
 let sessionTrackingInstalled = false;
 
 // Store startup cache state for notifications
@@ -81,31 +85,61 @@ function formatSkippedDetails(
 // Session State Management
 // =============================================================================
 
-function getCurrentSessionId(ctx: { sessionManager: { getSessionId(): string } }): string {
-  if (currentSessionState) {
-    return currentSessionState.sessionId;
+/**
+ * Get the current OpenRouter session ID.
+ * Returns a stable formatted session ID for the active Pi session.
+ * @internal Exposed for testing
+ */
+export function getCurrentSessionId(ctx: { sessionManager: { getSessionId(): string } }): string {
+  if (!sessionState) {
+    // Defensive: should never happen as sessionState is initialized in extension load
+    sessionState = createSessionState();
   }
+  return sessionState.getCurrentSessionId(ctx);
+}
 
+/**
+ * Add session_id to OpenRouter requests before they are sent.
+ * Returns modified payload with session_id, or undefined if no modification needed.
+ */
+export function addSessionIdToOpenRouterRequest(
+  event: unknown,
+  ctx: { sessionManager: { getSessionId(): string } },
+): Record<string, unknown> | undefined {
   try {
-    const sessionId = ctx.sessionManager.getSessionId();
-    let formattedSessionId: string;
-    if (sessionId && sessionId !== '') {
-      formattedSessionId = formatSessionId(sessionId);
-    } else {
-      formattedSessionId = formatSessionId(crypto.randomUUID());
+    // Validate the payload exists
+    const ev = event as unknown as Record<string, unknown>;
+    const payload = ev['payload'] as Record<string, unknown> | undefined;
+    if (!payload) {
+      return;
     }
 
-    currentSessionState = { sessionId: formattedSessionId };
-    return formattedSessionId;
+    // Check if this is an OpenRouter request
+    const isOpenRouter = isOpenRouterRequest(event as unknown as BeforeProviderRequestEvent, ctx);
+    if (!isOpenRouter) {
+      return;
+    }
+
+    // Do not overwrite existing session_id
+    if ('session_id' in payload && payload['session_id'] !== undefined) {
+      return;
+    }
+
+    // Add session_id to the payload (OpenRouter-specific field)
+    return {
+      ...payload,
+      session_id: getCurrentSessionId(ctx),
+    };
   } catch {
-    // Generate fallback on any error
-    const fallbackId = formatSessionId(crypto.randomUUID());
-    currentSessionState = { sessionId: fallbackId };
-    return fallbackId;
+    // Fail open - silently ignore errors
+    return;
   }
 }
 
 export default async function (pi: ExtensionAPI) {
+  // Initialize session state manager
+  sessionState = createSessionState();
+
   // Eager cache load on extension startup (before any sessions)
   startupCacheInfo = undefined;
   let startupCacheWarning: string | undefined;
@@ -140,34 +174,7 @@ export default async function (pi: ExtensionAPI) {
     sessionTrackingInstalled = true;
 
     pi.on('before_provider_request', (event, ctx) => {
-      try {
-        // Validate the payload exists
-        const ev = event as unknown as Record<string, unknown>;
-        const payload = ev['payload'] as Record<string, unknown> | undefined;
-        if (!payload) {
-          return;
-        }
-
-        // Check if this is an OpenRouter request
-        const isOpenRouter = isOpenRouterRequest(event, ctx);
-        if (!isOpenRouter) {
-          return;
-        }
-
-        // Do not overwrite existing session_id
-        if ('session_id' in payload && payload['session_id'] !== undefined) {
-          return;
-        }
-
-        // Add session_id to the payload (OpenRouter-specific field)
-        return {
-          ...payload,
-          session_id: getCurrentSessionId(ctx),
-        };
-      } catch {
-        // Fail open - silently ignore errors
-        return;
-      }
+      return addSessionIdToOpenRouterRequest(event as unknown, ctx);
     });
   }
 
@@ -243,10 +250,20 @@ export default async function (pi: ExtensionAPI) {
 
   pi.on('session_shutdown', () => {
     stopBackgroundRefresh();
+    // Reset session state for the next session
+    if (sessionState) {
+      sessionState.reset();
+    }
   });
 
   // Notify on first session start after extension load
   pi.on('session_start', (event, ctx) => {
+    // Update session state on each new session start
+    // Only resets if raw session ID changes
+    if (sessionState) {
+      sessionState.startSession(ctx);
+    }
+
     if (!ctx.hasUI) return;
 
     // Show a persistent status indicator
