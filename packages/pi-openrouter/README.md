@@ -20,6 +20,7 @@ export OPENROUTER_MANAGEMENT_KEY=sk-or-...
 ```
 
 **Key selection:**
+
 - Usage/account commands prefer `OPENROUTER_MANAGEMENT_KEY` for full analytics, falling back to `OPENROUTER_API_KEY`
 - Model sync prefers `OPENROUTER_API_KEY` but will attempt `OPENROUTER_MANAGEMENT_KEY` if only that is set
 
@@ -114,6 +115,20 @@ View the OpenRouter session tag with:
 # OpenRouter session_id
 pi:[uuid]
 ```
+
+## Local usage tracking
+
+The extension logs completed OpenRouter turns to local JSONL files in `~/.pi/openrouter/usage/` to provide near-real-time usage data for "Today's spend" in the usage overlay. This supplements the OpenRouter Activity API, which typically has a delay.
+
+**Retention:** Local usage files are automatically cleaned up after 90 days.
+
+**Debug logging:** By default, file operations are quiet (fail-open). To enable verbose logging for troubleshooting:
+
+```bash
+export PI_OPENROUTER_DEBUG_USAGE=1
+```
+
+This logs write/read errors, malformed lines, and cleanup operations to the console.
 
 ## Model field overrides
 
