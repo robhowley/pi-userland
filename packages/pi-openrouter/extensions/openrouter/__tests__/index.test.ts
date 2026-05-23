@@ -168,3 +168,45 @@ describe('addSessionIdToOpenRouterRequest', () => {
     expect(result).toBeUndefined();
   });
 });
+
+describe('default extension export', () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it('composes startup cache loading, hook installation, and command registration', async () => {
+    const initializeSessionState = vi.fn();
+    const loadStartupCacheState = vi
+      .fn()
+      .mockResolvedValue({ info: { count: 3, age: '1 minute' } });
+    const installOpenRouterHooks = vi.fn();
+    const registerOpenRouterCommands = vi.fn();
+
+    vi.doMock('../hooks.js', () => ({
+      addSessionIdToOpenRouterRequest: vi.fn(),
+      getCurrentSessionId: vi.fn(),
+      initializeSessionState,
+      loadStartupCacheState,
+      installOpenRouterHooks,
+    }));
+    vi.doMock('../commands.js', () => ({
+      registerOpenRouterCommands,
+    }));
+
+    const { default: openRouterExtension } = await import('../index.js');
+    const pi = {
+      on: vi.fn(),
+      registerCommand: vi.fn(),
+      registerProvider: vi.fn(),
+    } as any;
+
+    await openRouterExtension(pi);
+
+    expect(initializeSessionState).toHaveBeenCalledTimes(1);
+    expect(loadStartupCacheState).toHaveBeenCalledWith(pi);
+    expect(installOpenRouterHooks).toHaveBeenCalledWith(pi, {
+      info: { count: 3, age: '1 minute' },
+    });
+    expect(registerOpenRouterCommands).toHaveBeenCalledWith(pi);
+  });
+});
