@@ -29,6 +29,7 @@ import {
   isSyncEnabled,
   getSkipReasonsAsync,
   groupSkipReasons,
+  includeBuiltinRouterModels,
 } from './models/sync.js';
 import { loadCache, getCacheAgeMs, formatDuration } from './models/cache.js';
 import { mapOpenRouterModels } from './models/mapper.js';
@@ -149,19 +150,20 @@ export default async function (pi: ExtensionAPI) {
     if (cache?.models.length) {
       try {
         const { configs } = await mapOpenRouterModels(cache.models);
+        const configsWithRouters = includeBuiltinRouterModels(configs);
 
         // Register models directly with Pi's OpenRouter provider
         pi.registerProvider('openrouter', {
           baseUrl: 'https://openrouter.ai/api/v1',
           apiKey: 'OPENROUTER_API_KEY',
           api: 'openai-completions',
-          models: configs,
+          models: configsWithRouters,
           authHeader: true,
         });
 
         // Store for session_start notification
         const age = formatDuration(getCacheAgeMs(cache));
-        startupCacheInfo = { count: configs.length, age };
+        startupCacheInfo = { count: configsWithRouters.length, age };
       } catch (error) {
         startupCacheInfo = undefined;
         startupCacheWarning = `OpenRouter: cached models found but failed to register: ${error instanceof Error ? error.message : String(error)}`;

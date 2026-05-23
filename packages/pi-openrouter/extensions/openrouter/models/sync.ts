@@ -63,15 +63,13 @@ export function getSyncState(): SyncResult | null {
 /**
  * Register mapped models with Pi's OpenRouter provider.
  *
- * Uses modelRegistry.registerProvider() to add models to the built-in openrouter provider.
- * The models array replaces all existing models for the provider.
+ * Uses modelRegistry.registerProvider() to replace the provider's model list with the synced
+ * user-scoped catalog plus the built-in router aliases that do not appear in /models/user.
  */
 export async function registerModelsWithProvider(
   ctx: ExtensionContext,
   configs: PiModelConfig[],
 ): Promise<void> {
-  // Register models with Pi's OpenRouter provider
-  // This replaces all existing models for the provider with our synced ones
   ctx.modelRegistry.registerProvider('openrouter', {
     baseUrl: 'https://openrouter.ai/api/v1',
     apiKey: 'OPENROUTER_API_KEY',
@@ -95,6 +93,18 @@ const BUILTIN_ROUTER_MODELS: PiModelConfig[] = ROUTER_DEFINITIONS.map((r) => ({
   contextWindow: r.contextLength,
   maxTokens: r.maxTokens,
 }));
+
+/**
+ * Add built-in router aliases exactly once to a synced user catalog.
+ *
+ * The OpenRouter provider registration replaces the built-in list, so router aliases are the
+ * only built-ins we intentionally preserve in this cleanup pass.
+ */
+export function includeBuiltinRouterModels(configs: PiModelConfig[]): PiModelConfig[] {
+  const seen = new Set(configs.map((config) => config.id));
+  const routersToAdd = BUILTIN_ROUTER_MODELS.filter((router) => !seen.has(router.id));
+  return [...configs, ...routersToAdd];
+}
 
 /**
  * Convert router definitions to OpenRouterModel format for cache storage.
@@ -134,8 +144,8 @@ export async function syncModels(_ctx: ExtensionContext): Promise<SyncResult> {
     const response = await fetchUserModels();
     const { configs, skipped, skippedDetails } = await mapOpenRouterModels(response.data);
 
-    // Add built-in router aliases that don't appear in /models/user endpoint
-    const configsWithRouters = [...configs, ...BUILTIN_ROUTER_MODELS];
+    // Add built-in router aliases that don't appear in /models/user endpoint.
+    const configsWithRouters = includeBuiltinRouterModels(configs);
 
     // Register with Pi's OpenRouter provider
     await registerModelsWithProvider(_ctx, configsWithRouters);
@@ -173,15 +183,16 @@ export async function syncModels(_ctx: ExtensionContext): Promise<SyncResult> {
     if (cache) {
       // Attempt 2: Use cached models
       const { configs, skipped } = await mapOpenRouterModels(cache.models);
+      const configsWithRouters = includeBuiltinRouterModels(configs);
 
-      await registerModelsWithProvider(_ctx, configs);
+      await registerModelsWithProvider(_ctx, configsWithRouters);
 
       // Use cached skip details if available
       const cachedSkipDetails = cache.skippedDetails || [];
 
       const result: SyncResult = {
         success: false,
-        registeredCount: configs.length,
+        registeredCount: configsWithRouters.length,
         skippedCount: skipped,
         source: 'cache',
         cacheUpdated: false,
@@ -245,7 +256,7 @@ export async function areModelsAvailable(): Promise<boolean> {
 
   // Check cache file on disk
   const cache = await loadCache();
-  return cache !== null && cache.models.length > 0;
+  return !!cache && cache.models.length > 0;
 }
 
 /**

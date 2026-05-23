@@ -43,7 +43,7 @@ export OPENROUTER_MANAGEMENT_KEY=sk-or-...
 
 `/openrouter models-sync`
 
-The sync uses OpenRouter’s authenticated user model catalog, so Pi can see the models available to your account instead of only the default provider list.
+The sync uses OpenRouter’s authenticated user model catalog, so Pi can see the models available to your account instead of only the default provider list. This intentionally replaces Pi's OpenRouter provider model list with your user-scoped catalog plus OpenRouter's built-in router aliases (`openrouter/auto`, `openrouter/free`, and `openrouter/owl-alpha`). It does not merge in every built-in model unless that model is returned by your OpenRouter account catalog.
 
 `/openrouter models-status`
 
