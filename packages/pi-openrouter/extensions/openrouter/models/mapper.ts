@@ -2,6 +2,7 @@ import type { OpenRouterModel, PiModelConfig, SkipReason, MapResult } from './ty
 import { ROUTER_ALIASES } from './types.js';
 import type { Model as SDKModel } from '@openrouter/sdk/models/index.js';
 import { loadModelOverrides, getModelOverride } from './overrides.js';
+import { normalizeOpenRouterModel } from '../normalizers.js';
 
 // Cache for built-in OpenRouter models from pi-ai
 // Populated lazily on first access
@@ -55,62 +56,6 @@ async function getBuiltInThinkingLevelMap(
 
 const COST_PER_MILLION = 1_000_000;
 const DEFAULT_MAX_TOKENS = 4096;
-
-/**
- * Convert SDK Model to our OpenRouterModel type for compatibility.
- * Handles SDK's camelCase naming convention.
- */
-export function sdkModelToOpenRouterModel(model: SDKModel): OpenRouterModel {
-  const topProvider = model.topProvider
-    ? {
-        context_length: model.topProvider.contextLength ?? 0,
-        max_completion_tokens: model.topProvider.maxCompletionTokens ?? 0,
-      }
-    : undefined;
-
-  const perRequestLimits = model.perRequestLimits
-    ? {
-        completion_tokens: model.perRequestLimits.completionTokens ?? 0,
-      }
-    : undefined;
-
-  // Build the object conditionally to avoid undefined property issues
-  const result: OpenRouterModel = {
-    id: model.id,
-    name: model.name,
-    architecture: {
-      input_modalities: model.architecture.inputModalities ?? [],
-      output_modalities: model.architecture.outputModalities ?? [],
-    },
-    context_length: model.contextLength ?? 0,
-    pricing: {
-      prompt: String(model.pricing.prompt ?? 0),
-      completion: String(model.pricing.completion ?? 0),
-      input_cache_read: String(model.pricing.inputCacheRead ?? 0),
-      input_cache_write: String(model.pricing.inputCacheWrite ?? 0),
-    },
-    supported_parameters: model.supportedParameters,
-  };
-
-  // Conditionally add optional properties to avoid explicit undefined
-  if (topProvider) {
-    result.top_provider = topProvider;
-  }
-  if (perRequestLimits) {
-    result.per_request_limits = perRequestLimits;
-  }
-
-  return result;
-}
-
-/**
- * Normalize input model to OpenRouterModel format.
- */
-function normalizeModel(model: OpenRouterModel | SDKModel): OpenRouterModel {
-  return 'contextLength' in model
-    ? sdkModelToOpenRouterModel(model as SDKModel)
-    : (model as OpenRouterModel);
-}
 
 /**
  * Validation result for a model check.
@@ -227,7 +172,7 @@ export async function mapOpenRouterModels(
   const skippedDetails: SkipReason[] = [];
 
   for (const rawModel of models) {
-    const model = normalizeModel(rawModel);
+    const model = normalizeOpenRouterModel(rawModel);
 
     // Skip router aliases - they're added manually after mapping
     if (ROUTER_ALIASES.includes(model.id)) {
@@ -259,7 +204,7 @@ export async function mapOpenRouterModel(
   await loadBuiltInOpenRouterModels();
   const userOverrides = await loadModelOverrides();
 
-  const normalized = normalizeModel(model);
+  const normalized = normalizeOpenRouterModel(model);
 
   // Router aliases are handled separately, skip them here
   if (ROUTER_ALIASES.includes(normalized.id)) {

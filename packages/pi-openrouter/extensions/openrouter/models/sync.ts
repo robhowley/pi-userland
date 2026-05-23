@@ -4,7 +4,8 @@
  */
 
 import { fetchUserModels } from '../client.js';
-import { mapOpenRouterModels, sdkModelToOpenRouterModel } from './mapper.js';
+import { mapOpenRouterModels } from './mapper.js';
+import { sdkModelToOpenRouterModel } from '../normalizers.js';
 import { loadCache, saveCache } from './cache.js';
 import type { ExtensionContext } from '@mariozechner/pi-coding-agent';
 import type {
