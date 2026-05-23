@@ -54,6 +54,54 @@ function getBackoffInterval(): number {
   return BACKGROUND_REFRESH_INTERVAL_MS * Math.pow(2, backoffMultiplier);
 }
 
+/**
+ * Extract the latest date from Activity API data.
+ * Returns undefined if analytics is null, empty, or has no valid dates.
+ */
+function getOfficialThroughDate(analytics: ActivityItem[] | null): string | undefined {
+  if (!analytics || analytics.length === 0) return undefined;
+  let maxDate = '';
+  // Match YYYY-MM-DD or YYYY-MM-DD HH:MM:SS
+  const dateRE = /^\d{4}-\d{2}-\d{2}/;
+  for (let i = 0; i < analytics.length; i++) {
+    const d = analytics[i];
+    if (d && d.date && dateRE.test(d.date)) {
+      const datePart = d.date.slice(0, 10); // Extract YYYY-MM-DD
+      if (datePart > maxDate) {
+        maxDate = datePart;
+      }
+    }
+  }
+  return maxDate || undefined;
+}
+
+/**
+ * Compute the date range for reading local JSONL usage.
+ * Returns { fromDateUtc, toDateUtc } for the bounded window.
+ *
+ * Product decision:
+ * - If officialThroughDate exists: read from day after through today
+ * - If no official data: read from today - 29 days through today (30 days total)
+ */
+function getLocalUsageReadRange(
+  officialThroughDate: string | undefined,
+  now: string,
+): { fromDateUtc: string; toDateUtc: string } {
+  if (officialThroughDate) {
+    // Read from the day after officialThroughDate to today
+    return {
+      fromDateUtc: addUtcDays(officialThroughDate, 1),
+      toDateUtc: now,
+    };
+  } else {
+    // No official data: read bounded 30-day window (today - 29 through today)
+    return {
+      fromDateUtc: addUtcDays(now, -29),
+      toDateUtc: now,
+    };
+  }
+}
+
 export async function fetchAndAggregate(): Promise<UsageSummary | null> {
   const credits = await getCredits();
   if (!credits) return null;
@@ -69,22 +117,7 @@ export async function fetchAndAggregate(): Promise<UsageSummary | null> {
   const timestamp = Date.now();
 
   // Get official aggregate from Activity API data
-  const officialThroughDate = (function (): string | undefined {
-    if (!analytics || analytics.length === 0) return undefined;
-    let maxDate = '';
-    // Match YYYY-MM-DD or YYYY-MM-DD HH:MM:SS
-    const dateRE = /^\d{4}-\d{2}-\d{2}/;
-    for (let i = 0; i < analytics.length; i++) {
-      const d = analytics[i];
-      if (d && d.date && dateRE.test(d.date)) {
-        const datePart = d.date.slice(0, 10); // Extract YYYY-MM-DD
-        if (datePart > maxDate) {
-          maxDate = datePart;
-        }
-      }
-    }
-    return maxDate || undefined;
-  })();
+  const officialThroughDate = getOfficialThroughDate(analytics);
 
   // Compute official aggregate (only from Activity API data up to officialThroughDate)
   const officialAggregate =
@@ -108,21 +141,16 @@ export async function fetchAndAggregate(): Promise<UsageSummary | null> {
         )
       : ZERO_AGGREGATE;
 
-  // Read local JSONL after officialThroughDate
+  // Read local JSONL for bounded recent window
+  // Always compute local read range when credits exist (Activity API may be absent/empty)
+  const now = getCurrentUtcDate();
+  const localReadRange = getLocalUsageReadRange(officialThroughDate, now);
   const localEvents: LocalUsageEvent[] = [];
-  if (officialThroughDate) {
-    // Read from the day after officialThroughDate to today
-    const localFrom = addUtcDays(officialThroughDate, 1);
-    const localTo = getCurrentUtcDate();
-    try {
-      const localEventsList = await readLocalUsage({
-        fromDateUtc: localFrom,
-        toDateUtc: localTo,
-      });
-      localEvents.push(...localEventsList);
-    } catch {
-      // Fail open - if local read fails, continue with empty local
-    }
+  try {
+    const localEventsList = await readLocalUsage(localReadRange);
+    localEvents.push(...localEventsList);
+  } catch {
+    // Fail open - if local read fails, continue with empty local
   }
 
   // Aggregate local events
