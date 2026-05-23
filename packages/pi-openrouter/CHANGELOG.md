@@ -7,6 +7,7 @@
 * **model-sync:** Accept `OPENROUTER_MANAGEMENT_KEY` as fallback for model sync when `OPENROUTER_API_KEY` is not set. Previously, users with only the management key would see `OPENROUTER_API_KEY not set` error when running `/openrouter models-sync`, despite the README indicating management key as preferred.
 * **credential-selection:** Add purpose-specific credential helpers: `getModelSyncApiKey()` prefers API key but falls back to management key; `getUsageApiKey()` prefers management key for full analytics.
 * **error-messages:** Improve error message when no keys are configured to mention both key options.
+* **model-overrides:** Finish extracting override DSL handlers into `models/override-commands.ts`, keep `/openrouter model-override-list <model-id>` behavior stable, and conservatively validate CLI thinking values while preserving `~/.pi/openrouter/model-overrides.json` as the advanced escape hatch.
 
 ## [0.9.0](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.8.3...pi-openrouter-v0.9.0) (2026-05-22)
 

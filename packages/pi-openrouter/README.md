@@ -152,11 +152,15 @@ Some OpenRouter models don't have complete metadata in Pi's built-in registry or
 - `maxTokens` → `maxTokens` (number)
 - `reasoning` → `reasoning` (boolean)
 
+For CLI `thinking.*` / `thinkingLevelMap.*` assignments, `pi-openrouter` only accepts the conservative documented value set: `off`, `minimal`, `low`, `medium`, `high`, `max`, `xhigh`, or `null`.
+
 Use `null` to hide a level from Pi's UI:
 
 ```bash
 /openrouter model-override-set deepseek/deepseek-v4-pro thinking.off=null
 ```
+
+If you need an advanced or experimental thinking value outside that CLI set, edit `~/.pi/openrouter/model-overrides.json` directly. The JSON file is the escape hatch; the CLI intentionally stays conservative.
 
 List your overrides:
 
@@ -172,7 +176,15 @@ Clear overrides:
 /openrouter model-override-clear deepseek/deepseek-v4-pro
 ```
 
-Overrides are stored in `~/.pi/openrouter/model-overrides.json` and merge on top of OpenRouter catalog data and Pi's built-in registry. Run `/openrouter models-sync` after changing overrides to apply them to the registered OpenRouter model list.
+Overrides are stored in `~/.pi/openrouter/model-overrides.json`.
+
+Precedence is:
+
+1. Pi's built-in registry
+2. OpenRouter's user-scoped model catalog
+3. Local overrides from `~/.pi/openrouter/model-overrides.json`
+
+That means local overrides win. Run `/openrouter models-sync` after changing overrides to apply them to the registered OpenRouter model list.
 
 ## License
 
