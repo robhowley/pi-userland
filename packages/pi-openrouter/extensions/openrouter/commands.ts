@@ -18,6 +18,7 @@ import {
 } from './models/sync.js';
 import { loadCache, getCacheAgeMs, formatDuration } from './models/cache.js';
 import { loadModelOverrides } from './models/overrides.js';
+import { getSkipReasonHint } from './models/skip-hints.js';
 import type { ModelOverridesFile } from './models/types.js';
 import {
   handleModelOverrideSet,
@@ -300,7 +301,7 @@ function getErrorMessage(error: unknown): string {
 function formatSkippedDetails(
   skipCount: number,
   groupedReasons: Record<string, number>,
-  skipReasons: Array<{ id: string; reason: string }>,
+  skipReasons: Array<{ id: string; reason: string; hint?: string }>,
 ): string {
   if (skipCount === 0) {
     return '\n\nNo skipped models';
@@ -309,6 +310,13 @@ function formatSkippedDetails(
   let details = `\n\nOpenRouter skipped models: ${skipCount}\n`;
   for (const [reason, count] of Object.entries(groupedReasons)) {
     details += `\n${count} ${reason}\n`;
+
+    const hint =
+      skipReasons.find((item) => item.reason === reason)?.hint ?? getSkipReasonHint(reason);
+    if (hint) {
+      details += `  suggestion: ${hint}\n`;
+    }
+
     const modelsWithReason = skipReasons
       .filter((item) => item.reason === reason)
       .map((item) => item.id);

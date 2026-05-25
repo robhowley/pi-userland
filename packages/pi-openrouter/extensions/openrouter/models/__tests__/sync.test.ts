@@ -18,7 +18,7 @@ import {
   includeBuiltinRouterModels,
 } from '../sync.js';
 import { fetchUserModels, AuthError } from '../../client.js';
-import { loadCache } from '../cache.js';
+import { loadCache, saveCache } from '../cache.js';
 
 // Mock the client module to control API behavior
 vi.mock('../../client.js', () => ({
@@ -228,7 +228,13 @@ describe('syncModels', () => {
     vi.mocked(fetchUserModels).mockRejectedValueOnce(new Error('api down'));
     vi.mocked(loadCache).mockResolvedValueOnce({
       models: [createValidModel({ id: 'cached/model-a', name: 'Cached Model A' })],
-      skippedDetails: [{ id: 'bad/model', reason: 'missing context window' }],
+      skippedDetails: [
+        {
+          id: 'bad/model',
+          reason: 'missing context window',
+          hint: "Add a local contextWindow override with '/openrouter model-override-set <model-id> contextWindow=<tokens>' if the model's limit is known.",
+        },
+      ],
       timestamp: Date.now() - 60000,
     });
 
@@ -239,7 +245,81 @@ describe('syncModels', () => {
     expect(result.source).toBe('cache');
     expect(result.registeredCount).toBe(1 + ROUTER_ALIASES.length);
     expect(registeredIds).toEqual(['cached/model-a', ...ROUTER_ALIASES]);
-    expect(result.skippedDetails).toEqual([{ id: 'bad/model', reason: 'missing context window' }]);
+    expect(result.skippedDetails).toEqual([
+      {
+        id: 'bad/model',
+        reason: 'missing context window',
+        hint: "Add a local contextWindow override with '/openrouter model-override-set <model-id> contextWindow=<tokens>' if the model's limit is known.",
+      },
+    ]);
+  });
+
+  it('should persist skipped reason hints in the saved cache', async () => {
+    vi.mocked(fetchUserModels).mockResolvedValueOnce({
+      data: [
+        {
+          id: 'user/model-a',
+          name: 'User Model A',
+          architecture: {
+            inputModalities: ['text'],
+            outputModalities: ['text'],
+          },
+          contextLength: 128000,
+          pricing: {
+            prompt: 0.000001,
+            completion: 0.000002,
+          },
+          supportedParameters: [],
+          topProvider: {
+            contextLength: 128000,
+            maxCompletionTokens: 4096,
+          },
+        },
+        {
+          id: 'bad/model',
+          name: 'Bad Model',
+          architecture: {
+            inputModalities: ['text'],
+            outputModalities: ['text'],
+          },
+          contextLength: 0,
+          pricing: {
+            prompt: 0.000001,
+            completion: 0.000002,
+          },
+          supportedParameters: [],
+          topProvider: {
+            contextLength: 0,
+            maxCompletionTokens: 4096,
+          },
+        },
+      ],
+    } as any);
+
+    const result = await syncModels(mockCtx);
+
+    expect(result.skippedDetails).toEqual([
+      {
+        id: 'bad/model',
+        reason: 'missing context window',
+        hint: expect.stringContaining(
+          '/openrouter model-override-set <model-id> contextWindow=<tokens>',
+        ),
+      },
+    ]);
+    expect(vi.mocked(saveCache)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        skippedDetails: [
+          {
+            id: 'bad/model',
+            reason: 'missing context window',
+            hint: expect.stringContaining(
+              '/openrouter model-override-set <model-id> contextWindow=<tokens>',
+            ),
+          },
+        ],
+      }),
+    );
   });
 
   it('should include router aliases at most once', () => {

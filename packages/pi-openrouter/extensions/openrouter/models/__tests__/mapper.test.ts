@@ -213,6 +213,7 @@ describe('mapOpenRouterModels', () => {
 
     expect(result.configs).toHaveLength(2);
     expect(result.skipped).toBe(1);
+    expect(result.skippedDetails).toEqual([{ id: 'unknown', reason: 'missing id' }]);
     expect(result.configs[0]!.id).toBe('model/valid-1');
     expect(result.configs[1]!.id).toBe('model/valid-2');
   });
@@ -236,5 +237,32 @@ describe('mapOpenRouterModels', () => {
     const result = await mapOpenRouterModels(models);
     expect(result.configs).toHaveLength(0);
     expect(result.skipped).toBe(3);
+  });
+
+  it('should add optional human-readable hints without changing reason codes', async () => {
+    const result = await mapOpenRouterModels([
+      createValidModel({
+        id: 'provider/no-context',
+        context_length: 0,
+        top_provider: { context_length: 0 },
+      }),
+      createValidModel({
+        id: 'provider/no-pricing',
+        pricing: { prompt: '0.000001' } as any,
+      }),
+    ]);
+
+    expect(result.skippedDetails).toEqual([
+      {
+        id: 'provider/no-context',
+        reason: 'missing context window',
+        hint: expect.stringContaining('contextWindow'),
+      },
+      {
+        id: 'provider/no-pricing',
+        reason: 'missing completion pricing',
+        hint: expect.stringContaining('cost safely'),
+      },
+    ]);
   });
 });

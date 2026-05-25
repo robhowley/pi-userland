@@ -1,5 +1,6 @@
 import type { OpenRouterModel, PiModelConfig, SkipReason, MapResult } from './types.js';
 import { ROUTER_ALIASES } from './types.js';
+import { getSkipReasonHint } from './skip-hints.js';
 import type { Model as SDKModel } from '@openrouter/sdk/models/index.js';
 import { loadModelOverrides, getModelOverride } from './overrides.js';
 import { normalizeOpenRouterModel } from '../normalizers.js';
@@ -62,7 +63,15 @@ const DEFAULT_MAX_TOKENS = 4096;
  */
 type ValidationResult =
   | { valid: true; model: OpenRouterModel; contextWindow: number }
-  | { valid: false; reason: string; modelId: string };
+  | { valid: false; reason: string; modelId: string; hint?: string };
+
+/**
+ * Build a failed validation result with a stable machine reason and optional hint.
+ */
+function invalidModel(reason: string, modelId: string): ValidationResult {
+  const hint = getSkipReasonHint(reason);
+  return hint ? { valid: false, reason, modelId, hint } : { valid: false, reason, modelId };
+}
 
 /**
  * Validate a model and return either a valid result with extracted context window
@@ -71,27 +80,27 @@ type ValidationResult =
 function validateModel(model: OpenRouterModel): ValidationResult {
   // Check: missing required id
   if (!model.id) {
-    return { valid: false, reason: 'missing id', modelId: 'unknown' };
+    return invalidModel('missing id', 'unknown');
   }
 
   // Check: missing required pricing fields
   if (!model.pricing?.prompt) {
-    return { valid: false, reason: 'missing prompt pricing', modelId: model.id };
+    return invalidModel('missing prompt pricing', model.id);
   }
   if (!model.pricing?.completion) {
-    return { valid: false, reason: 'missing completion pricing', modelId: model.id };
+    return invalidModel('missing completion pricing', model.id);
   }
 
   // Check: missing context window (both primary and fallback)
   const contextWindow = model.top_provider?.context_length ?? model.context_length;
   if (!contextWindow) {
-    return { valid: false, reason: 'missing context window', modelId: model.id };
+    return invalidModel('missing context window', model.id);
   }
 
   // Check: explicitly non-text output (if specified)
   const outputModalities = model.architecture?.output_modalities;
   if (outputModalities && !outputModalities.includes('text')) {
-    return { valid: false, reason: 'non-text output modalities', modelId: model.id };
+    return invalidModel('non-text output modalities', model.id);
   }
 
   return { valid: true, model, contextWindow };
@@ -183,7 +192,14 @@ export async function mapOpenRouterModels(
 
     if (!validation.valid) {
       skipped++;
-      skippedDetails.push({ id: validation.modelId, reason: validation.reason });
+      const skippedDetail: SkipReason = {
+        id: validation.modelId,
+        reason: validation.reason,
+      };
+      if (validation.hint) {
+        skippedDetail.hint = validation.hint;
+      }
+      skippedDetails.push(skippedDetail);
       continue;
     }
 

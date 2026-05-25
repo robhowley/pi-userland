@@ -282,13 +282,17 @@ describe('registerOpenRouterCommands', () => {
     );
   });
 
-  it('keeps models-status skipped-details output unchanged', async () => {
+  it('shows grouped skipped-details hints once per reason', async () => {
     const { commands, pi } = createMockPi();
     const ctx = createMockContext();
 
     mocks.getSyncState.mockReturnValue({ success: true, registeredCount: 7 });
     mocks.getSkipReasonsAsync.mockResolvedValue([
-      { id: 'provider/a', reason: 'missing context window' },
+      {
+        id: 'provider/a',
+        reason: 'missing context window',
+        hint: "Add a local contextWindow override with '/openrouter model-override-set <model-id> contextWindow=<tokens>' if the model's limit is known.",
+      },
       { id: 'provider/b', reason: 'missing context window' },
     ]);
     mocks.groupSkipReasons.mockReturnValue({ 'missing context window': 2 });
@@ -300,7 +304,7 @@ describe('registerOpenRouterCommands', () => {
     await commands.get('openrouter').handler('models-status --skipped', ctx);
 
     expect(ctx.ui.notify).toHaveBeenCalledWith(
-      'OpenRouter models healthy\n7 registered · 2 skipped · cache age: 1 minute\n\nOpenRouter skipped models: 2\n\n2 missing context window\n- provider/a\n- provider/b\n',
+      "OpenRouter models healthy\n7 registered · 2 skipped · cache age: 1 minute\n\nOpenRouter skipped models: 2\n\n2 missing context window\n  suggestion: Add a local contextWindow override with '/openrouter model-override-set <model-id> contextWindow=<tokens>' if the model's limit is known.\n- provider/a\n- provider/b\n",
       'info',
     );
   });

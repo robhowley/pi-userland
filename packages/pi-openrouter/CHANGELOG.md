@@ -8,6 +8,7 @@
 * **credential-selection:** Add purpose-specific credential helpers: `getModelSyncApiKey()` prefers API key but falls back to management key; `getUsageApiKey()` prefers management key for full analytics.
 * **error-messages:** Improve error message when no keys are configured to mention both key options.
 * **model-overrides:** Finish extracting override DSL handlers into `models/override-commands.ts`, keep `/openrouter model-override-list <model-id>` behavior stable, and conservatively validate CLI thinking values while preserving `~/.pi/openrouter/model-overrides.json` as the advanced escape hatch.
+* **model-sync:** Add optional human-readable skipped-model suggestions while keeping stable machine-readable skip reason codes unchanged.
 
 ## [0.9.0](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.8.3...pi-openrouter-v0.9.0) (2026-05-22)
 

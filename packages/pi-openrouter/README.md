@@ -59,6 +59,8 @@ To see why models were skipped:
 
 `/openrouter models-status --skipped`
 
+Skipped output may include a grouped suggestion when Pi can offer a safe next step, such as adding a local `contextWindow` override for incomplete metadata.
+
 Skipped models do not make the sync fail; models are skipped when required metadata cannot be safely mapped into Pi’s provider model config. The last successful catalog is cached so Pi can keep using it if a later refresh fails, and the cache persists across sessions. If a session starts with a cached catalog that has not been registered yet, status will show:
 
 ```text

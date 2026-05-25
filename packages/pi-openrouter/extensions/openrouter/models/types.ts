@@ -94,6 +94,7 @@ export interface ModelsCache {
 export interface SkipReason {
   id: string;
   reason: string;
+  hint?: string;
 }
 
 /**
