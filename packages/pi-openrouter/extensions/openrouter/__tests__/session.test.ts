@@ -33,110 +33,111 @@ describe('formatSessionId', () => {
 
 describe('isOpenRouterRequest', () => {
   // =============================================================================
-  // Parameterized Tests - All Detection Methods (single source of truth)
+  // Parameterized tests - detection signals (single source of truth)
   // =============================================================================
 
   const detectionCases: DetectionTestCase[] = [
-    // Method 1: Model string prefix
+    // Model prefix signal
     {
-      name: 'method1: openrouter/ prefix',
+      name: 'model prefix: openrouter/',
       event: { payload: { model: 'openrouter/anthropic/claude-3' } },
       ctx: {},
       expected: true,
       description: 'Model with openrouter/ prefix should be detected',
     },
     {
-      name: 'method1: no prefix - should fail',
+      name: 'model prefix: missing prefix',
       event: { payload: { model: 'anthropic/claude-3' } },
       ctx: {},
       expected: false,
-      description: 'Model without openrouter/ prefix should not be detected by method 1',
+      description:
+        'Model without openrouter/ prefix should not be detected by the model-prefix signal',
     },
     {
-      name: 'method1: similar but not prefix',
+      name: 'model prefix: similar but not prefix',
       event: { payload: { model: 'my-openrouter-model' } },
       ctx: {},
       expected: false,
       description: 'Model containing openrouter but not as prefix should not match',
     },
 
-    // Method 2: baseUrl in context.model
+    // Context baseUrl signal
     {
-      name: 'method2: baseUrl contains openrouter.ai',
+      name: 'context baseUrl: contains openrouter.ai',
       event: { payload: { model: 'qwen/coder' } },
       ctx: { model: { baseUrl: 'https://openrouter.ai/api/v1' } },
       expected: true,
       description: 'Context with openrouter.ai baseUrl should be detected',
     },
     {
-      name: 'method2: different baseUrl',
+      name: 'context baseUrl: different baseUrl',
       event: { payload: { model: 'claude-3' } },
       ctx: { model: { baseUrl: 'https://api.anthropic.com' } },
       expected: false,
       description: 'Non-OpenRouter baseUrl should not be detected',
     },
     {
-      name: 'method2: missing baseUrl',
+      name: 'context baseUrl: missing baseUrl',
       event: { payload: { model: 'claude-3' } },
       ctx: { model: {} },
       expected: false,
-      description: 'Missing baseUrl should not be detected by method 2',
+      description: 'Missing baseUrl should not be detected by the context baseUrl signal',
     },
     {
-      name: 'method2: no model in context',
+      name: 'context baseUrl: no model in context',
       event: { payload: { model: 'claude-3' } },
       ctx: {},
       expected: false,
-      description: 'Empty context should not crash method 2',
+      description: 'Empty context should not crash the context baseUrl signal',
     },
 
-    // Method 3: ZDR provider
+    // ZDR provider signal
     {
-      name: 'method3: ZDR provider flag',
+      name: 'zdr provider: flag set',
       event: { payload: { model: 'qwen/coder' }, provider: { zdr: true } },
       ctx: {},
       expected: true,
       description: 'Provider with zdr: true should be detected',
     },
     {
-      name: 'method3: non-ZDR provider',
+      name: 'zdr provider: flag not set',
       event: { payload: { model: 'qwen/coder' }, provider: { zdr: false } },
       ctx: {},
       expected: false,
       description: 'Provider with zdr: false should not be detected',
     },
     {
-      name: 'method3: no provider object',
+      name: 'zdr provider: no provider object',
       event: { payload: { model: 'qwen/coder' } },
       ctx: {},
       expected: false,
-      description: 'Missing provider should not be detected by method 3',
+      description: 'Missing provider should not be detected by the ZDR provider signal',
     },
 
-    // Method 4: URL check
+    // URL / endpoint signal
     {
-      name: 'method4: url contains openrouter.ai',
+      name: 'url: contains openrouter.ai',
       event: { payload: { model: 'qwen/coder' }, url: 'https://openrouter.ai/api/v1/chat' },
       ctx: {},
       expected: true,
       description: 'URL containing openrouter.ai should be detected',
     },
     {
-      name: 'method4: endpoint property (alternative to url)',
+      name: 'endpoint: alternative to url',
       event: { payload: { model: 'qwen/coder' }, endpoint: 'https://openrouter.ai/api/v1/chat' },
       ctx: {},
       expected: true,
       description: 'Endpoint property should also be checked (fallback to url)',
     },
     {
-      name: 'method4: non-OpenRouter url',
+      name: 'url: non-OpenRouter url',
       event: { payload: { model: 'qwen/coder' }, url: 'https://api.anthropic.com/v1/messages' },
       ctx: {},
       expected: false,
       description: 'Non-OpenRouter URL should not be detected',
     },
     {
-      name: 'method4: url with openrouter.ai in path (not just domain)',
+      name: 'url: contains openrouter.ai in path',
       event: {
         payload: { model: 'qwen/coder' },
         url: 'https://proxy.example.com/v1/openrouter.ai/endpoint',
@@ -146,58 +147,58 @@ describe('isOpenRouterRequest', () => {
       description: 'URL containing openrouter.ai anywhere in string should match',
     },
     {
-      name: 'method4: url without openrouter.ai string',
+      name: 'url: without openrouter.ai string',
       event: { payload: { model: 'qwen/coder' }, url: 'https://example.com/api' },
       ctx: {},
       expected: false,
       description: 'URL without openrouter.ai should not be detected',
     },
 
-    // Method 5: Provider name check (Pi coding agent uses "openrouter" provider)
+    // Provider name signal (Pi coding agent uses "openrouter" provider)
     {
-      name: 'method5: provider as string "openrouter" at event level',
+      name: 'provider name: event-level string "openrouter"',
       event: { payload: { model: 'claude-3' }, provider: 'openrouter' },
       ctx: {},
       expected: true,
       description: 'Provider name "openrouter" as string should be detected',
     },
     {
-      name: 'method5: provider as string "openrouter" in payload',
+      name: 'provider name: payload string "openrouter"',
       event: { payload: { model: 'claude-3', provider: 'openrouter' } },
       ctx: {},
       expected: true,
       description: 'Provider name "openrouter" in payload should be detected',
     },
     {
-      name: 'method5: provider object with name "openrouter"',
+      name: 'provider name: event-level object name "openrouter"',
       event: { payload: { model: 'claude-3' }, provider: { name: 'openrouter' } },
       ctx: {},
       expected: true,
       description: 'Provider object with name "openrouter" should be detected',
     },
     {
-      name: 'method5: provider in payload with object name',
+      name: 'provider name: payload object name "openrouter"',
       event: { payload: { model: 'claude-3', provider: { name: 'openrouter' } } },
       ctx: {},
       expected: true,
       description: 'Provider object in payload with name "openrouter" should be detected',
     },
     {
-      name: 'method5: different provider name',
+      name: 'provider name: different provider name',
       event: { payload: { model: 'claude-3', provider: 'anthropic' } },
       ctx: {},
       expected: false,
       description: 'Different provider name should not be detected',
     },
     {
-      name: 'method5: similar but not exact provider name',
+      name: 'provider name: similar but not exact',
       event: { payload: { model: 'claude-3', provider: 'openrouter-proxy' } },
       ctx: {},
       expected: false,
       description: 'Provider name containing but not exactly "openrouter" should not match',
     },
     {
-      name: 'method4: url with openrouter.ai in path (not just domain)',
+      name: 'url: contains openrouter.ai in path (duplicate coverage)',
       event: {
         payload: { model: 'qwen/coder' },
         url: 'https://proxy.example.com/v1/openrouter.ai/endpoint',
@@ -207,14 +208,14 @@ describe('isOpenRouterRequest', () => {
       description: 'URL containing openrouter.ai anywhere in string should match',
     },
     {
-      name: 'method4: url without openrouter.ai string',
+      name: 'url: without openrouter.ai string (duplicate coverage)',
       event: { payload: { model: 'qwen/coder' }, url: 'https://example.com/api' },
       ctx: {},
       expected: false,
       description: 'URL without openrouter.ai should not be detected',
     },
 
-    // Edge cases - missing all detection methods
+    // Edge cases - missing all detection signals
     {
       name: 'edge: empty event',
       event: {},
@@ -279,9 +280,9 @@ describe('isOpenRouterRequest', () => {
       description: 'turn_end without URL/endpoint and without openrouter/ prefix would fail',
     },
 
-    // Multiple methods at once
+    // Multiple signals at once
     {
-      name: 'multi: all methods satisfied',
+      name: 'multi: all signals satisfied',
       event: {
         payload: { model: 'openrouter/anthropic/claude-3' },
         url: 'https://openrouter.ai/api/v1/chat',
@@ -289,34 +290,34 @@ describe('isOpenRouterRequest', () => {
       },
       ctx: { model: { baseUrl: 'https://openrouter.ai/api/v1' } },
       expected: true,
-      description: 'All detection methods satisfied should return true',
+      description: 'All detection signals satisfied should return true',
     },
     {
-      name: 'multi: only method 4 (url) satisfied',
+      name: 'multi: only url signal satisfied',
       event: {
         payload: { model: 'any-model-name' },
         url: 'https://openrouter.ai/api/v1',
       },
       ctx: {},
       expected: true,
-      description: 'Only URL method satisfied should be sufficient',
+      description: 'Only URL signal satisfied should be sufficient',
     },
     {
-      name: 'multi: only method 2 (baseUrl) satisfied',
+      name: 'multi: only context baseUrl signal satisfied',
       event: { payload: { model: 'any-model' } },
       ctx: { model: { baseUrl: 'https://openrouter.ai/api/v1' } },
       expected: true,
-      description: 'Only baseUrl method satisfied should be sufficient',
+      description: 'Only context baseUrl signal satisfied should be sufficient',
     },
     {
-      name: 'multi: only method 3 (zdr) satisfied',
+      name: 'multi: only ZDR provider signal satisfied',
       event: {
         payload: { model: 'any-model' },
         provider: { zdr: true },
       },
       ctx: {},
       expected: true,
-      description: 'Only ZDR method satisfied should be sufficient',
+      description: 'Only ZDR provider signal satisfied should be sufficient',
     },
 
     // Cache mismatch - model appears openrouter but URL doesn't (edge case)

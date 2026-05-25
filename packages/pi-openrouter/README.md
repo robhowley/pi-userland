@@ -109,6 +109,8 @@ Select a key from the list to inspect its limit, usage, reset cadence, and BYOK 
 
 `pi-openrouter` automatically tags OpenRouter requests with a `session_id` derived from the Pi session ID.
 
+Request detection is intentionally broad: the extension checks provider metadata, `openrouter/...` model ids, configured OpenRouter base URLs, Shopify's ZDR provider flag, and request URLs/endpoints so tagging still works across different Pi event shapes.
+
 View the OpenRouter session tag with:
 
 ```bash
