@@ -159,3 +159,89 @@ export function createLocalEvents(
     cost: e.cost,
   }));
 }
+
+// =============================================================================
+// Session Context Fixtures
+// =============================================================================
+
+/**
+ * Special marker for session contexts that should throw when getSessionId is called.
+ */
+export const THROW_SESSION_ID = Symbol('THROW_SESSION_ID');
+
+/**
+ * Creates a mock context with a sessionManager for testing.
+ *
+ * @param sessionIdOrMarker - Session ID string, empty string, or THROW_SESSION_ID symbol
+ * @returns Context object with sessionManager.getSessionId() method
+ *
+ * @example
+ * // Normal session ID
+ * const ctx = createSessionCtx('my-session');
+ *
+ * // Empty string fallback
+ * const ctx = createSessionCtx('');
+ *
+ * // Throwing session manager
+ * const ctx = createSessionCtx(THROW_SESSION_ID);
+ */
+export function createSessionCtx(sessionIdOrMarker: string | symbol): {
+  sessionManager: { getSessionId: () => string };
+} {
+  if (sessionIdOrMarker === THROW_SESSION_ID) {
+    return {
+      sessionManager: {
+        getSessionId: () => {
+          throw new Error('Session manager error');
+        },
+      },
+    };
+  }
+  return {
+    sessionManager: {
+      getSessionId: () => sessionIdOrMarker as string,
+    },
+  };
+}
+
+// =============================================================================
+// Request Event Fixtures
+// =============================================================================
+
+/**
+ * Creates an OpenRouter request event for testing.
+ *
+ * @param overrides - Override default provider, payload, or other event properties
+ * @returns Request event object suitable for hook tests
+ *
+ * @example
+ * // Default OpenRouter request
+ * const event = createOpenRouterRequest();
+ *
+ * // With custom model
+ * const event = createOpenRouterRequest({ payload: { model: 'custom/model', messages: [] } });
+ *
+ * // Non-OpenRouter provider
+ * const event = createOpenRouterRequest({ provider: 'anthropic' });
+ */
+export function createOpenRouterRequest(overrides?: {
+  type?: string;
+  provider?: string;
+  payload?: Record<string, unknown>;
+  url?: string;
+}): {
+  type: string;
+  provider: string;
+  payload?: Record<string, unknown>;
+  url?: string;
+} {
+  return {
+    type: 'before_provider_request',
+    provider: 'openrouter',
+    payload: {
+      model: 'openrouter/anthropic/claude-sonnet-4',
+      messages: [],
+    },
+    ...overrides,
+  };
+}

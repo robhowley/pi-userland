@@ -19,6 +19,23 @@ vi.mock('@openrouter/sdk/sdk/sdk.js', () => ({
 }));
 
 /**
+ * Helper to set or clear OPENROUTER_API_KEY and OPENROUTER_MANAGEMENT_KEY.
+ * Pass undefined to delete the env var.
+ */
+function setKeys(apiKey?: string, mgmtKey?: string) {
+  if (apiKey === undefined) {
+    delete process.env['OPENROUTER_API_KEY'];
+  } else {
+    process.env['OPENROUTER_API_KEY'] = apiKey;
+  }
+  if (mgmtKey === undefined) {
+    delete process.env['OPENROUTER_MANAGEMENT_KEY'];
+  } else {
+    process.env['OPENROUTER_MANAGEMENT_KEY'] = mgmtKey;
+  }
+}
+
+/**
  * Factory function to create a minimal mock SDK client.
  * Reduces boilerplate from ~25 lines to 1 line per test.
  */
@@ -56,15 +73,14 @@ describe('fetchUserModels', () => {
   });
 
   it('should throw AuthError when API key not set', async () => {
-    delete process.env['OPENROUTER_API_KEY'];
-    delete process.env['OPENROUTER_MANAGEMENT_KEY'];
+    setKeys(undefined, undefined);
 
     await expect(fetchUserModels()).rejects.toThrow('OpenRouter API key not configured');
     await expect(fetchUserModels()).rejects.toBeInstanceOf(AuthError);
   });
 
   it('should fetch models with SDK', async () => {
-    process.env['OPENROUTER_API_KEY'] = 'test-key';
+    setKeys('test-key', undefined);
 
     const mockResponse = {
       data: [
@@ -92,7 +108,7 @@ describe('fetchUserModels', () => {
   });
 
   it('should throw ApiError on 401 unauthorized', async () => {
-    process.env['OPENROUTER_API_KEY'] = 'invalid-key';
+    setKeys('invalid-key', undefined);
 
     const MockOpenRouter = vi.mocked((await import('@openrouter/sdk/sdk/sdk.js')).OpenRouter);
     const mockClient = createMockSDKClient({
@@ -107,7 +123,7 @@ describe('fetchUserModels', () => {
   });
 
   it('should throw ApiError on rate limit (429)', async () => {
-    process.env['OPENROUTER_API_KEY'] = 'test-key';
+    setKeys('test-key', undefined);
 
     const MockOpenRouter = vi.mocked((await import('@openrouter/sdk/sdk/sdk.js')).OpenRouter);
     const mockClient = createMockSDKClient({
@@ -122,7 +138,7 @@ describe('fetchUserModels', () => {
   });
 
   it('should throw ApiError on server error', async () => {
-    process.env['OPENROUTER_API_KEY'] = 'test-key';
+    setKeys('test-key', undefined);
 
     const MockOpenRouter = vi.mocked((await import('@openrouter/sdk/sdk/sdk.js')).OpenRouter);
     const mockClient = createMockSDKClient({
@@ -143,17 +159,17 @@ describe('isConfigured', () => {
   });
 
   it('should return true when API key is set', () => {
-    process.env['OPENROUTER_API_KEY'] = 'test-key';
+    setKeys('test-key', undefined);
     expect(isConfigured()).toBe(true);
   });
 
   it('should return false when API key is not set', () => {
-    delete process.env['OPENROUTER_API_KEY'];
+    setKeys(undefined, undefined);
     expect(isConfigured()).toBe(false);
   });
 
   it('should return false when API key is empty string', () => {
-    process.env['OPENROUTER_API_KEY'] = '';
+    setKeys('', undefined);
     expect(isConfigured()).toBe(false);
   });
 });
@@ -164,17 +180,17 @@ describe('getApiKey', () => {
   });
 
   it('should return the API key when set', () => {
-    process.env['OPENROUTER_API_KEY'] = 'test-key';
+    setKeys('test-key', undefined);
     expect(getApiKey()).toBe('test-key');
   });
 
   it('should return undefined when API key is not set', () => {
-    delete process.env['OPENROUTER_API_KEY'];
+    setKeys(undefined, undefined);
     expect(getApiKey()).toBeUndefined();
   });
 
   it('should return empty string when API key is empty', () => {
-    process.env['OPENROUTER_API_KEY'] = '';
+    setKeys('', undefined);
     expect(getApiKey()).toBe('');
   });
 });
@@ -185,34 +201,40 @@ describe('getModelSyncApiKey', () => {
     restoreEnv();
   });
 
-  it('should return OPENROUTER_API_KEY when both keys are present', () => {
-    process.env['OPENROUTER_API_KEY'] = 'api-key';
-    process.env['OPENROUTER_MANAGEMENT_KEY'] = 'mgmt-key';
-    expect(getModelSyncApiKey()).toBe('api-key');
-  });
-
-  it('should return OPENROUTER_MANAGEMENT_KEY when only management key is present', () => {
-    delete process.env['OPENROUTER_API_KEY'];
-    process.env['OPENROUTER_MANAGEMENT_KEY'] = 'mgmt-key';
-    expect(getModelSyncApiKey()).toBe('mgmt-key');
-  });
-
-  it('should return undefined when no keys are present', () => {
-    delete process.env['OPENROUTER_API_KEY'];
-    delete process.env['OPENROUTER_MANAGEMENT_KEY'];
-    expect(getModelSyncApiKey()).toBeUndefined();
-  });
-
-  it('should treat empty strings as absent', () => {
-    process.env['OPENROUTER_API_KEY'] = '';
-    process.env['OPENROUTER_MANAGEMENT_KEY'] = 'mgmt-key';
-    expect(getModelSyncApiKey()).toBe('mgmt-key');
-  });
-
-  it('should treat whitespace-only strings as absent', () => {
-    process.env['OPENROUTER_API_KEY'] = '  ';
-    process.env['OPENROUTER_MANAGEMENT_KEY'] = 'mgmt-key';
-    expect(getModelSyncApiKey()).toBe('mgmt-key');
+  it.each([
+    {
+      apiKey: 'api-key',
+      mgmtKey: 'mgmt-key',
+      expected: 'api-key',
+      desc: 'should return OPENROUTER_API_KEY when both keys are present',
+    },
+    {
+      apiKey: undefined,
+      mgmtKey: 'mgmt-key',
+      expected: 'mgmt-key',
+      desc: 'should return OPENROUTER_MANAGEMENT_KEY when only management key is present',
+    },
+    {
+      apiKey: undefined,
+      mgmtKey: undefined,
+      expected: undefined,
+      desc: 'should return undefined when no keys are present',
+    },
+    {
+      apiKey: '',
+      mgmtKey: 'mgmt-key',
+      expected: 'mgmt-key',
+      desc: 'should treat empty strings as absent',
+    },
+    {
+      apiKey: '  ',
+      mgmtKey: 'mgmt-key',
+      expected: 'mgmt-key',
+      desc: 'should treat whitespace-only strings as absent',
+    },
+  ])('$desc', ({ apiKey, mgmtKey, expected }) => {
+    setKeys(apiKey, mgmtKey);
+    expect(getModelSyncApiKey()).toBe(expected);
   });
 });
 
@@ -221,34 +243,40 @@ describe('getUsageApiKey', () => {
     restoreEnv();
   });
 
-  it('should return OPENROUTER_MANAGEMENT_KEY when both keys are present', () => {
-    process.env['OPENROUTER_API_KEY'] = 'api-key';
-    process.env['OPENROUTER_MANAGEMENT_KEY'] = 'mgmt-key';
-    expect(getUsageApiKey()).toBe('mgmt-key');
-  });
-
-  it('should return OPENROUTER_API_KEY when only API key is present', () => {
-    delete process.env['OPENROUTER_MANAGEMENT_KEY'];
-    process.env['OPENROUTER_API_KEY'] = 'api-key';
-    expect(getUsageApiKey()).toBe('api-key');
-  });
-
-  it('should return undefined when no keys are present', () => {
-    delete process.env['OPENROUTER_API_KEY'];
-    delete process.env['OPENROUTER_MANAGEMENT_KEY'];
-    expect(getUsageApiKey()).toBeUndefined();
-  });
-
-  it('should treat empty strings as absent', () => {
-    process.env['OPENROUTER_MANAGEMENT_KEY'] = '';
-    process.env['OPENROUTER_API_KEY'] = 'api-key';
-    expect(getUsageApiKey()).toBe('api-key');
-  });
-
-  it('should treat whitespace-only strings as absent', () => {
-    process.env['OPENROUTER_API_KEY'] = '  ';
-    process.env['OPENROUTER_MANAGEMENT_KEY'] = 'mgmt-key';
-    expect(getUsageApiKey()).toBe('mgmt-key');
+  it.each([
+    {
+      apiKey: 'api-key',
+      mgmtKey: 'mgmt-key',
+      expected: 'mgmt-key',
+      desc: 'should return OPENROUTER_MANAGEMENT_KEY when both keys are present',
+    },
+    {
+      apiKey: 'api-key',
+      mgmtKey: undefined,
+      expected: 'api-key',
+      desc: 'should return OPENROUTER_API_KEY when only API key is present',
+    },
+    {
+      apiKey: undefined,
+      mgmtKey: undefined,
+      expected: undefined,
+      desc: 'should return undefined when no keys are present',
+    },
+    {
+      apiKey: 'api-key',
+      mgmtKey: '',
+      expected: 'api-key',
+      desc: 'should treat empty strings as absent',
+    },
+    {
+      apiKey: '  ',
+      mgmtKey: 'mgmt-key',
+      expected: 'mgmt-key',
+      desc: 'should treat whitespace-only strings as absent',
+    },
+  ])('$desc', ({ apiKey, mgmtKey, expected }) => {
+    setKeys(apiKey, mgmtKey);
+    expect(getUsageApiKey()).toBe(expected);
   });
 });
 
@@ -257,21 +285,28 @@ describe('isConfiguredForModelSync', () => {
     restoreEnv();
   });
 
-  it('should return true when API key is set', () => {
-    process.env['OPENROUTER_API_KEY'] = 'api-key';
-    expect(isConfiguredForModelSync()).toBe(true);
-  });
-
-  it('should return true when management key is set', () => {
-    delete process.env['OPENROUTER_API_KEY'];
-    process.env['OPENROUTER_MANAGEMENT_KEY'] = 'mgmt-key';
-    expect(isConfiguredForModelSync()).toBe(true);
-  });
-
-  it('should return false when no keys are set', () => {
-    delete process.env['OPENROUTER_API_KEY'];
-    delete process.env['OPENROUTER_MANAGEMENT_KEY'];
-    expect(isConfiguredForModelSync()).toBe(false);
+  it.each([
+    {
+      apiKey: 'api-key',
+      mgmtKey: undefined,
+      expected: true,
+      desc: 'should return true when API key is set',
+    },
+    {
+      apiKey: undefined,
+      mgmtKey: 'mgmt-key',
+      expected: true,
+      desc: 'should return true when management key is set',
+    },
+    {
+      apiKey: undefined,
+      mgmtKey: undefined,
+      expected: false,
+      desc: 'should return false when no keys are set',
+    },
+  ])('$desc', ({ apiKey, mgmtKey, expected }) => {
+    setKeys(apiKey, mgmtKey);
+    expect(isConfiguredForModelSync()).toBe(expected);
   });
 });
 
@@ -280,21 +315,28 @@ describe('isConfiguredForUsage', () => {
     restoreEnv();
   });
 
-  it('should return true when management key is set', () => {
-    process.env['OPENROUTER_MANAGEMENT_KEY'] = 'mgmt-key';
-    expect(isConfiguredForUsage()).toBe(true);
-  });
-
-  it('should return true when API key is set', () => {
-    delete process.env['OPENROUTER_MANAGEMENT_KEY'];
-    process.env['OPENROUTER_API_KEY'] = 'api-key';
-    expect(isConfiguredForUsage()).toBe(true);
-  });
-
-  it('should return false when no keys are set', () => {
-    delete process.env['OPENROUTER_API_KEY'];
-    delete process.env['OPENROUTER_MANAGEMENT_KEY'];
-    expect(isConfiguredForUsage()).toBe(false);
+  it.each([
+    {
+      apiKey: undefined,
+      mgmtKey: 'mgmt-key',
+      expected: true,
+      desc: 'should return true when management key is set',
+    },
+    {
+      apiKey: 'api-key',
+      mgmtKey: undefined,
+      expected: true,
+      desc: 'should return true when API key is set',
+    },
+    {
+      apiKey: undefined,
+      mgmtKey: undefined,
+      expected: false,
+      desc: 'should return false when no keys are set',
+    },
+  ])('$desc', ({ apiKey, mgmtKey, expected }) => {
+    setKeys(apiKey, mgmtKey);
+    expect(isConfiguredForUsage()).toBe(expected);
   });
 });
 
@@ -305,8 +347,7 @@ describe('fetchUserModels with management key fallback', () => {
   });
 
   it('should accept OPENROUTER_MANAGEMENT_KEY when only management key is present', async () => {
-    delete process.env['OPENROUTER_API_KEY'];
-    process.env['OPENROUTER_MANAGEMENT_KEY'] = 'mgmt-key';
+    setKeys(undefined, 'mgmt-key');
 
     const mockResponse = {
       data: [
@@ -333,8 +374,7 @@ describe('fetchUserModels with management key fallback', () => {
   });
 
   it('should prefer OPENROUTER_API_KEY when both keys are present', async () => {
-    process.env['OPENROUTER_API_KEY'] = 'api-key';
-    process.env['OPENROUTER_MANAGEMENT_KEY'] = 'mgmt-key';
+    setKeys('api-key', 'mgmt-key');
 
     const mockResponse = {
       data: [
@@ -367,8 +407,7 @@ describe('getCredits with usage API key selection', () => {
   });
 
   it('should use OPENROUTER_MANAGEMENT_KEY when both keys are present', async () => {
-    process.env['OPENROUTER_API_KEY'] = 'api-key';
-    process.env['OPENROUTER_MANAGEMENT_KEY'] = 'mgmt-key';
+    setKeys('api-key', 'mgmt-key');
 
     const mockResponse = {
       data: {
@@ -392,8 +431,7 @@ describe('getCredits with usage API key selection', () => {
   });
 
   it('should fall back to OPENROUTER_API_KEY when only API key is present', async () => {
-    delete process.env['OPENROUTER_MANAGEMENT_KEY'];
-    process.env['OPENROUTER_API_KEY'] = 'api-key';
+    setKeys('api-key', undefined);
 
     const mockResponse = {
       data: {
@@ -416,8 +454,7 @@ describe('getCredits with usage API key selection', () => {
   });
 
   it('should fall back to API key when management key is whitespace', async () => {
-    process.env['OPENROUTER_MANAGEMENT_KEY'] = '  ';
-    process.env['OPENROUTER_API_KEY'] = 'api-key';
+    setKeys('api-key', '  ');
 
     const mockResponse = {
       data: {
@@ -441,8 +478,7 @@ describe('getCredits with usage API key selection', () => {
   });
 
   it('should return null when no keys are configured', async () => {
-    delete process.env['OPENROUTER_API_KEY'];
-    delete process.env['OPENROUTER_MANAGEMENT_KEY'];
+    setKeys(undefined, undefined);
 
     const { getCredits } = await import('../client.js');
     const result = await getCredits();

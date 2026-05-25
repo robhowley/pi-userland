@@ -11,6 +11,7 @@ import { getCredits, getActivity } from '../client.js';
 import { readLocalUsage } from '../local-usage.js';
 import type { LocalUsageEvent, UsageSummary } from '../types.js';
 import type { ActivityItem } from '@openrouter/sdk/models/index.js';
+import { createActivityItem, createLocalEvents } from './fixtures.js';
 
 // Mock dependencies
 vi.mock('../client.js');
@@ -47,114 +48,64 @@ describe('fetchAndAggregate - Phase 3: Local usage merge when Activity API absen
     vi.useRealTimers();
   });
 
-  it('should include local cost when Activity API is null and local events exist today', async () => {
-    // Setup: credits available, Activity API returns null, local events exist
-    mockGetCredits.mockResolvedValue({
-      totalUsage: 5.0,
-      totalCredits: 10.0,
-    });
-    mockGetActivity.mockResolvedValue(null);
+  it.each([
+    {
+      label: 'Activity API returns null',
+      officialResponse: null as null | ActivityItem[],
+      expectedHasActivityData: false,
+      model: 'anthropic/claude-sonnet-4',
+      provider: 'anthropic',
+      cost: 0.05,
+    },
+    {
+      label: 'Activity API returns empty array',
+      officialResponse: [] as ActivityItem[],
+      expectedHasActivityData: true,
+      model: 'openai/gpt-4',
+      provider: 'openai',
+      cost: 0.1,
+    },
+  ])(
+    'should include local cost when $label and local events exist',
+    async ({ officialResponse, expectedHasActivityData, model, provider, cost }) => {
+      // Setup: credits available, Activity API absent/empty, local events exist
+      mockGetCredits.mockResolvedValue({
+        totalUsage: 5.0,
+        totalCredits: 10.0,
+      });
+      mockGetActivity.mockResolvedValue(officialResponse);
 
-    const localEvents: LocalUsageEvent[] = [
-      {
-        id: 'local-1',
-        generationId: 'gen-1',
-        sessionId: 'session-1',
-        completedAt: '2026-05-22T10:00:00Z',
+      const localEvents = createLocalEvents([{ daysAgo: 0, cost, model, provider }]);
+      mockReadLocalUsage.mockResolvedValue(localEvents);
+
+      const summary = await fetchAndAggregate();
+
+      expect(summary).toBeDefined();
+      expect(summary!.hasActivityData).toBe(expectedHasActivityData);
+      expect(summary!.local.cost).toBeGreaterThan(0);
+      expect(summary!.local.cost).toBe(cost);
+      expect(summary!.combined.cost).toBe(cost);
+      expect(summary!.today).toBe(cost);
+      expect(summary!.topModels[0]).toMatchObject({
+        name: model,
+        spend7d: cost,
+        spend30d: cost,
+        requests7d: 1,
+        requests30d: 1,
+      });
+      expect(summary!.byProvider[0]).toMatchObject({
+        name: provider,
+        spend: cost,
         requests: 1,
-        model: 'anthropic/claude-sonnet-4',
-        provider: 'anthropic',
-        cost: 0.05,
-        promptTokens: 1000,
-        completionTokens: 200,
-        reasoningTokens: 0,
-        cacheReadTokens: 0,
-        cacheWriteTokens: 0,
-      },
-    ];
-    mockReadLocalUsage.mockResolvedValue(localEvents);
-
-    const summary = await fetchAndAggregate();
-
-    expect(summary).toBeDefined();
-    expect(summary!.hasActivityData).toBe(false);
-    expect(summary!.local.cost).toBeGreaterThan(0);
-    expect(summary!.local.cost).toBe(0.05);
-    expect(summary!.combined.cost).toBe(0.05);
-    expect(summary!.today).toBe(0.05);
-    expect(summary!.topModels[0]).toMatchObject({
-      name: 'anthropic/claude-sonnet-4',
-      spend7d: 0.05,
-      spend30d: 0.05,
-      requests7d: 1,
-      requests30d: 1,
-    });
-    expect(summary!.byProvider[0]).toMatchObject({
-      name: 'anthropic',
-      spend: 0.05,
-      requests: 1,
-    });
-    expect(summary!.byDay['2026-05-22']).toBe(0.05);
-    // Verify bounded read range: today - 29 days through today
-    expect(mockReadLocalUsage).toHaveBeenCalledWith({
-      fromDateUtc: '2026-04-23', // 29 days before 2026-05-22
-      toDateUtc: '2026-05-22',
-    });
-  });
-
-  it('should include local cost when Activity API returns empty array and local events exist', async () => {
-    // Setup: credits available, Activity API returns empty array, local events exist
-    mockGetCredits.mockResolvedValue({
-      totalUsage: 5.0,
-      totalCredits: 10.0,
-    });
-    mockGetActivity.mockResolvedValue([]);
-
-    const localEvents: LocalUsageEvent[] = [
-      {
-        id: 'local-2',
-        generationId: 'gen-2',
-        sessionId: 'session-2',
-        completedAt: '2026-05-22T11:00:00Z',
-        requests: 1,
-        model: 'openai/gpt-4',
-        provider: 'openai',
-        cost: 0.1,
-        promptTokens: 2000,
-        completionTokens: 400,
-        reasoningTokens: 0,
-        cacheReadTokens: 0,
-        cacheWriteTokens: 0,
-      },
-    ];
-    mockReadLocalUsage.mockResolvedValue(localEvents);
-
-    const summary = await fetchAndAggregate();
-
-    expect(summary).toBeDefined();
-    expect(summary!.hasActivityData).toBe(true); // Activity was called but returned empty
-    expect(summary!.local.cost).toBe(0.1);
-    expect(summary!.combined.cost).toBe(0.1);
-    expect(summary!.today).toBe(0.1);
-    expect(summary!.topModels[0]).toMatchObject({
-      name: 'openai/gpt-4',
-      spend7d: 0.1,
-      spend30d: 0.1,
-      requests7d: 1,
-      requests30d: 1,
-    });
-    expect(summary!.byProvider[0]).toMatchObject({
-      name: 'openai',
-      spend: 0.1,
-      requests: 1,
-    });
-    expect(summary!.byDay['2026-05-22']).toBe(0.1);
-    // Verify bounded read range when no official data
-    expect(mockReadLocalUsage).toHaveBeenCalledWith({
-      fromDateUtc: '2026-04-23',
-      toDateUtc: '2026-05-22',
-    });
-  });
+      });
+      expect(summary!.byDay['2026-05-22']).toBe(cost);
+      // Verify bounded read range: today - 29 days through today
+      expect(mockReadLocalUsage).toHaveBeenCalledWith({
+        fromDateUtc: '2026-04-23', // 29 days before 2026-05-22
+        toDateUtc: '2026-05-22',
+      });
+    },
+  );
 
   it('should request only local rows after officialThroughDate', async () => {
     // Setup: Activity API has data through 2026-05-20
@@ -164,7 +115,7 @@ describe('fetchAndAggregate - Phase 3: Local usage merge when Activity API absen
     });
 
     const officialData = [
-      {
+      createActivityItem({
         date: '2026-05-20',
         model: 'anthropic/claude-sonnet-4',
         providerName: 'anthropic',
@@ -173,8 +124,8 @@ describe('fetchAndAggregate - Phase 3: Local usage merge when Activity API absen
         completionTokens: 200,
         reasoningTokens: 0,
         usage: 0.03,
-      },
-    ] as ActivityItem[];
+      }),
+    ];
     mockGetActivity.mockResolvedValue(officialData);
 
     // readLocalUsage should only return rows after officialThroughDate because
@@ -240,7 +191,7 @@ describe('fetchAndAggregate - Phase 3: Local usage merge when Activity API absen
     });
 
     const officialData = [
-      {
+      createActivityItem({
         date: '2026-05-21',
         model: 'openai/gpt-4',
         providerName: 'openai',
@@ -249,8 +200,8 @@ describe('fetchAndAggregate - Phase 3: Local usage merge when Activity API absen
         completionTokens: 600,
         reasoningTokens: 0,
         usage: 0.15,
-      },
-    ] as ActivityItem[];
+      }),
+    ];
     mockGetActivity.mockResolvedValue(officialData);
     mockReadLocalUsage.mockResolvedValue([]);
 
@@ -329,7 +280,7 @@ describe('fetchAndAggregate - Phase 3: Local usage merge when Activity API absen
       totalCredits: 10.0,
     });
     mockGetActivity.mockResolvedValue([
-      {
+      createActivityItem({
         date: '2026-05-21',
         model: 'openai/gpt-4',
         providerName: 'openai',
@@ -338,8 +289,8 @@ describe('fetchAndAggregate - Phase 3: Local usage merge when Activity API absen
         completionTokens: 30,
         reasoningTokens: 7,
         usage: 0.02,
-      },
-    ] as ActivityItem[]);
+      }),
+    ]);
     mockReadLocalUsage.mockResolvedValue([
       {
         id: 'local-aggregate-invariant',

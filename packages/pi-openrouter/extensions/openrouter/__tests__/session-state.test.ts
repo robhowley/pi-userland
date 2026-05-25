@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createSessionState } from '../session-state.js';
 import type { SessionState } from '../session-state.js';
+import { createSessionCtx, THROW_SESSION_ID } from './fixtures.js';
 
 describe('SessionState', () => {
   describe('createSessionState', () => {
@@ -15,17 +16,8 @@ describe('SessionState', () => {
       const state1 = createSessionState();
       const state2 = createSessionState();
 
-      // Create fake context
-      const mockCtx = {
-        sessionManager: {
-          getSessionId: () => 'test-session-1',
-        },
-      };
-      const mockCtx2 = {
-        sessionManager: {
-          getSessionId: () => 'test-session-2',
-        },
-      };
+      const mockCtx = createSessionCtx('test-session-1');
+      const mockCtx2 = createSessionCtx('test-session-2');
 
       const id1 = state1.getCurrentSessionId(mockCtx);
       const id2 = state2.getCurrentSessionId(mockCtx2);
@@ -44,11 +36,7 @@ describe('SessionState', () => {
     });
 
     it('should return the same ID on multiple calls within same session', () => {
-      const mockCtx = {
-        sessionManager: {
-          getSessionId: () => 'stable-session',
-        },
-      };
+      const mockCtx = createSessionCtx('stable-session');
 
       const id1 = state.getCurrentSessionId(mockCtx);
       const id2 = state.getCurrentSessionId(mockCtx);
@@ -60,16 +48,8 @@ describe('SessionState', () => {
     });
 
     it('should cache the session ID even if context changes', () => {
-      const mockCtx1 = {
-        sessionManager: {
-          getSessionId: () => 'session-1',
-        },
-      };
-      const mockCtx2 = {
-        sessionManager: {
-          getSessionId: () => 'session-2',
-        },
-      };
+      const mockCtx1 = createSessionCtx('session-1');
+      const mockCtx2 = createSessionCtx('session-2');
 
       const id1 = state.getCurrentSessionId(mockCtx1);
       // Second call with different context should return cached ID
@@ -79,57 +59,33 @@ describe('SessionState', () => {
       expect(id1).toBe('pi:session-1');
     });
 
-    it('should generate stable fallback UUID when sessionManager returns empty string', () => {
-      const mockCtx = {
-        sessionManager: {
-          getSessionId: () => '',
-        },
-      };
+    it.each([
+      ['empty string', ''],
+      ['throwing manager', THROW_SESSION_ID],
+    ])(
+      'should generate stable fallback UUID when sessionManager returns %s',
+      (_label, sessionIdOrMarker) => {
+        const mockCtx = createSessionCtx(sessionIdOrMarker);
 
-      const id1 = state.getCurrentSessionId(mockCtx);
-      const id2 = state.getCurrentSessionId(mockCtx);
+        const id1 = state.getCurrentSessionId(mockCtx);
+        const id2 = state.getCurrentSessionId(mockCtx);
 
-      expect(id1).toBe(id2);
-      expect(id1).toMatch(
-        /^pi:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
-      );
-    });
-
-    it('should generate stable fallback UUID when sessionManager throws', () => {
-      const mockCtx = {
-        sessionManager: {
-          getSessionId: () => {
-            throw new Error('Session manager error');
-          },
-        },
-      };
-
-      const id1 = state.getCurrentSessionId(mockCtx);
-      const id2 = state.getCurrentSessionId(mockCtx);
-
-      expect(id1).toBe(id2);
-      expect(id1).toMatch(
-        /^pi:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
-      );
-    });
+        expect(id1).toBe(id2);
+        expect(id1).toMatch(
+          /^pi:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+        );
+      },
+    );
 
     it('should format session ID with pi: prefix', () => {
-      const mockCtx = {
-        sessionManager: {
-          getSessionId: () => 'my-session',
-        },
-      };
+      const mockCtx = createSessionCtx('my-session');
 
       const id = state.getCurrentSessionId(mockCtx);
       expect(id).toBe('pi:my-session');
     });
 
     it('should not double-prefix if session ID already starts with pi:', () => {
-      const mockCtx = {
-        sessionManager: {
-          getSessionId: () => 'pi:already-prefixed',
-        },
-      };
+      const mockCtx = createSessionCtx('pi:already-prefixed');
 
       const id = state.getCurrentSessionId(mockCtx);
       expect(id).toBe('pi:already-prefixed');
@@ -145,16 +101,8 @@ describe('SessionState', () => {
     });
 
     it('should clear cached session ID', () => {
-      const mockCtx1 = {
-        sessionManager: {
-          getSessionId: () => 'session-1',
-        },
-      };
-      const mockCtx2 = {
-        sessionManager: {
-          getSessionId: () => 'session-2',
-        },
-      };
+      const mockCtx1 = createSessionCtx('session-1');
+      const mockCtx2 = createSessionCtx('session-2');
 
       const id1 = state.getCurrentSessionId(mockCtx1);
       expect(id1).toBe('pi:session-1');
@@ -167,11 +115,7 @@ describe('SessionState', () => {
     });
 
     it('should allow new fallback UUID after reset', () => {
-      const mockCtx = {
-        sessionManager: {
-          getSessionId: () => '',
-        },
-      };
+      const mockCtx = createSessionCtx('');
 
       const id1 = state.getCurrentSessionId(mockCtx);
       state.reset();
@@ -195,22 +139,14 @@ describe('SessionState', () => {
     });
 
     it('should return cached session ID without initializing', () => {
-      const mockCtx = {
-        sessionManager: {
-          getSessionId: () => 'my-session',
-        },
-      };
+      const mockCtx = createSessionCtx('my-session');
 
       state.getCurrentSessionId(mockCtx);
       expect(state.peek()).toBe('pi:my-session');
     });
 
     it('should return null after reset', () => {
-      const mockCtx = {
-        sessionManager: {
-          getSessionId: () => 'my-session',
-        },
-      };
+      const mockCtx = createSessionCtx('my-session');
 
       state.getCurrentSessionId(mockCtx);
       expect(state.peek()).toBe('pi:my-session');
@@ -228,11 +164,7 @@ describe('SessionState', () => {
     });
 
     it('should preserve cached ID when raw session ID is the same', () => {
-      const mockCtx = {
-        sessionManager: {
-          getSessionId: () => 'stable-session',
-        },
-      };
+      const mockCtx = createSessionCtx('stable-session');
 
       // Initialize with first call
       const id1 = state.getCurrentSessionId(mockCtx);
@@ -248,16 +180,8 @@ describe('SessionState', () => {
     });
 
     it('should update ID when raw session ID changes', () => {
-      const mockCtx1 = {
-        sessionManager: {
-          getSessionId: () => 'session-1',
-        },
-      };
-      const mockCtx2 = {
-        sessionManager: {
-          getSessionId: () => 'session-2',
-        },
-      };
+      const mockCtx1 = createSessionCtx('session-1');
+      const mockCtx2 = createSessionCtx('session-2');
 
       // Initialize with first session
       const id1 = state.getCurrentSessionId(mockCtx1);
@@ -272,54 +196,18 @@ describe('SessionState', () => {
       expect(id2).not.toBe(id1);
     });
 
-    it('should clear state when session manager returns empty string', () => {
-      const mockCtx1 = {
-        sessionManager: {
-          getSessionId: () => 'my-session',
-        },
-      };
-      const mockCtx2 = {
-        sessionManager: {
-          getSessionId: () => '',
-        },
-      };
+    it.each([
+      ['empty string', ''],
+      ['throwing manager', THROW_SESSION_ID],
+    ])('should clear state when session manager returns %s', (_label, sessionIdOrMarker) => {
+      const mockCtx1 = createSessionCtx('my-session');
+      const mockCtx2 = createSessionCtx(sessionIdOrMarker);
 
       // Initialize with valid session
       state.getCurrentSessionId(mockCtx1);
       expect(state.peek()).toBe('pi:my-session');
 
-      // Call startSession with empty ID
-      state.startSession(mockCtx2);
-
-      // Should have cleared state
-      expect(state.peek()).toBeNull();
-
-      // Next getCurrentSessionId should generate fresh fallback
-      const newId = state.getCurrentSessionId(mockCtx2);
-      expect(newId).toMatch(
-        /^pi:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
-      );
-    });
-
-    it('should clear state when session manager throws', () => {
-      const mockCtx1 = {
-        sessionManager: {
-          getSessionId: () => 'my-session',
-        },
-      };
-      const mockCtx2 = {
-        sessionManager: {
-          getSessionId: () => {
-            throw new Error('Session manager error');
-          },
-        },
-      };
-
-      // Initialize with valid session
-      state.getCurrentSessionId(mockCtx1);
-      expect(state.peek()).toBe('pi:my-session');
-
-      // Call startSession with throwing manager
+      // Call startSession with fallback case
       state.startSession(mockCtx2);
 
       // Should have cleared state
@@ -333,11 +221,7 @@ describe('SessionState', () => {
     });
 
     it('should create and cache ID when called before getCurrentSessionId', () => {
-      const mockCtx = {
-        sessionManager: {
-          getSessionId: () => 'my-session',
-        },
-      };
+      const mockCtx = createSessionCtx('my-session');
 
       // Call startSession without prior getCurrentSessionId
       state.startSession(mockCtx);
