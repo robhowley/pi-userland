@@ -9,9 +9,9 @@ import {
 } from '../cache.js';
 import { getCredits, getActivity } from '../client.js';
 import { readLocalUsage } from '../local-usage.js';
-import type { LocalUsageEvent, UsageSummary } from '../types.js';
+import type { LocalUsageEvent } from '../types.js';
 import type { ActivityItem } from '@openrouter/sdk/models/index.js';
-import { createActivityItem, createLocalEvents } from './fixtures.js';
+import { createActivityItem, createLocalEvents, createUsageSummary } from './fixtures.js';
 
 // Mock dependencies
 vi.mock('../client.js');
@@ -318,48 +318,262 @@ describe('fetchAndAggregate - Phase 3: Local usage merge when Activity API absen
   });
 });
 
-function createUsageSummary(overrides: Partial<UsageSummary> = {}): UsageSummary {
-  return {
-    today: 0,
-    week: 0,
-    month: 0,
-    cap: 10,
-    burnRate: 0,
-    topModels: [],
-    byProvider: [],
-    byDay: {},
-    timestamp: Date.now(),
-    hasActivityData: true,
-    official: {
-      requests: 0,
-      promptTokens: 0,
-      completionTokens: 0,
-      reasoningTokens: 0,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-      cost: 0,
-    },
-    local: {
-      requests: 0,
-      promptTokens: 0,
-      completionTokens: 0,
-      reasoningTokens: 0,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-      cost: 0,
-    },
-    combined: {
-      requests: 0,
-      promptTokens: 0,
-      completionTokens: 0,
-      reasoningTokens: 0,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-      cost: 0,
-    },
-    ...overrides,
-  };
-}
+describe('fetchAndAggregate - Today/local cutover data contract', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-22T12:00:00Z'));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  describe('Activity API absent: bounded 30-day local fallback', () => {
+    it.each([
+      {
+        label: 'multi-day local with today event',
+        apiResponse: null as null | ActivityItem[],
+        localEvents: [
+          { daysAgo: 3, cost: 1.0, model: 'gpt-4', provider: 'openai' },
+          { daysAgo: 1, cost: 2.0, model: 'claude-3', provider: 'anthropic' },
+          { daysAgo: 0, cost: 0.5, model: 'gpt-4', provider: 'openai' },
+        ],
+        expectedLocalCost: 3.5,
+        expectedLocalRequests: 3,
+        expectedToday: 0.5,
+        expectedCombinedCost: 3.5,
+      },
+      {
+        label: 'empty Activity API with multi-day local',
+        apiResponse: [] as ActivityItem[],
+        localEvents: [
+          { daysAgo: 3, cost: 1.0, model: 'gpt-4', provider: 'openai' },
+          { daysAgo: 1, cost: 2.0, model: 'claude-3', provider: 'anthropic' },
+          { daysAgo: 0, cost: 0.5, model: 'gpt-4', provider: 'openai' },
+        ],
+        expectedLocalCost: 3.5,
+        expectedLocalRequests: 3,
+        expectedToday: 0.5,
+        expectedCombinedCost: 3.5,
+      },
+      {
+        label: 'local has only older events, no today',
+        apiResponse: [] as ActivityItem[],
+        localEvents: [
+          { daysAgo: 5, cost: 1.5, model: 'gpt-4', provider: 'openai' },
+          { daysAgo: 2, cost: 0.8, model: 'claude-3', provider: 'anthropic' },
+        ],
+        expectedLocalCost: 2.3,
+        expectedLocalRequests: 2,
+        expectedToday: 0,
+        expectedCombinedCost: 2.3,
+      },
+    ])(
+      'sets summary.local to multi-day but summary.today to UTC-today only: $label',
+      async ({
+        apiResponse,
+        localEvents,
+        expectedLocalCost,
+        expectedLocalRequests,
+        expectedToday,
+        expectedCombinedCost,
+      }) => {
+        mockGetCredits.mockResolvedValue({
+          totalUsage: 5.0,
+          totalCredits: 10.0,
+        });
+        mockGetActivity.mockResolvedValue(apiResponse);
+
+        const events = createLocalEvents(localEvents);
+        mockReadLocalUsage.mockResolvedValue(events);
+
+        const summary = await fetchAndAggregate();
+
+        expect(summary).toBeDefined();
+        expect(summary!.local.cost).toBe(expectedLocalCost);
+        expect(summary!.local.requests).toBe(expectedLocalRequests);
+        expect(summary!.today).toBe(expectedToday);
+        expect(summary!.combined.cost).toBe(expectedCombinedCost);
+        // Verify bounded 30-day read range
+        expect(mockReadLocalUsage).toHaveBeenCalledWith({
+          fromDateUtc: '2026-04-23', // 29 days before 2026-05-22
+          toDateUtc: '2026-05-22',
+        });
+      },
+    );
+  });
+
+  describe('Activity API behind: local spans multiple post-official days', () => {
+    it('sets summary.local to multi-day post-official aggregate but summary.today to UTC-today only', async () => {
+      // Scenario: Activity API through 2 days ago (2026-05-20).
+      // Local JSONL has events from yesterday (2026-05-21) and today (2026-05-22).
+      // summary.local should include both post-official days.
+      // summary.today should include only UTC-today (2026-05-22).
+      mockGetCredits.mockResolvedValue({
+        totalUsage: 10.0,
+        totalCredits: 20.0,
+      });
+
+      const officialData = [
+        createActivityItem({
+          date: '2026-05-20',
+          model: 'gpt-4',
+          providerName: 'openai',
+          requests: 5,
+          usage: 2.0,
+        }),
+      ];
+      mockGetActivity.mockResolvedValue(officialData);
+
+      // Create all events in a single call to avoid ID collision from spreading
+      const localEvents = createLocalEvents([
+        // Yesterday (2026-05-21)
+        { daysAgo: 1, cost: 3.0, model: 'claude-3', provider: 'anthropic' },
+        // Today (2026-05-22)
+        { daysAgo: 0, cost: 1.5, model: 'gpt-4', provider: 'openai' },
+      ]);
+      mockReadLocalUsage.mockResolvedValue(localEvents);
+
+      const summary = await fetchAndAggregate();
+
+      expect(summary).toBeDefined();
+      // official aggregate from API
+      expect(summary!.official.cost).toBe(2.0);
+      // local includes yesterday + today
+      expect(summary!.local.cost).toBe(4.5);
+      expect(summary!.local.requests).toBe(2);
+      // today includes only UTC-today event
+      expect(summary!.today).toBe(1.5);
+      // combined = official + local
+      expect(summary!.combined.cost).toBe(6.5);
+      // Verify read range starts day after officialThroughDate
+      expect(mockReadLocalUsage).toHaveBeenCalledWith({
+        fromDateUtc: '2026-05-21', // day after 2026-05-20
+        toDateUtc: '2026-05-22',
+      });
+    });
+
+    it('sets summary.today correctly when local has multiple post-official days but no today events', async () => {
+      // Edge case: Activity API through 5 days ago. Local has events from 3-4 days ago, but none today.
+      mockGetCredits.mockResolvedValue({
+        totalUsage: 15.0,
+        totalCredits: 20.0,
+      });
+
+      const officialData = [
+        createActivityItem({
+          date: '2026-05-17', // 5 days ago
+          model: 'gpt-4',
+          providerName: 'openai',
+          requests: 10,
+          usage: 5.0,
+        }),
+      ];
+      mockGetActivity.mockResolvedValue(officialData);
+
+      // Create all events in a single call to avoid ID collision from spreading
+      const localEvents = createLocalEvents([
+        { daysAgo: 4, cost: 2.0, model: 'claude-3', provider: 'anthropic' },
+        { daysAgo: 3, cost: 1.0, model: 'gpt-4', provider: 'openai' },
+      ]);
+      mockReadLocalUsage.mockResolvedValue(localEvents);
+
+      const summary = await fetchAndAggregate();
+
+      expect(summary).toBeDefined();
+      // local includes both post-official events
+      expect(summary!.local.cost).toBe(3.0);
+      // today should be 0 because no events from today
+      expect(summary!.today).toBe(0);
+    });
+  });
+
+  describe('Activity API includes today: local should be empty or minimal', () => {
+    it('sets summary.today from official when officialThroughDate is today and local is empty', async () => {
+      // Scenario: Activity API data through today (2026-05-22).
+      // Local read range starts tomorrow, so local should be empty.
+      mockGetCredits.mockResolvedValue({
+        totalUsage: 8.0,
+        totalCredits: 20.0,
+      });
+
+      const officialData = [
+        createActivityItem({
+          date: '2026-05-22', // today
+          model: 'gpt-4',
+          providerName: 'openai',
+          requests: 8,
+          usage: 3.0,
+        }),
+      ];
+      mockGetActivity.mockResolvedValue(officialData);
+
+      // When officialThroughDate is today, local read range is tomorrow through today,
+      // which is an empty range.
+      mockReadLocalUsage.mockResolvedValue([]);
+
+      const summary = await fetchAndAggregate();
+
+      expect(summary).toBeDefined();
+      expect(summary!.officialThroughDate).toBe('2026-05-22');
+      // official includes today's data
+      expect(summary!.official.cost).toBe(3.0);
+      // local is empty because read range starts tomorrow
+      expect(summary!.local.cost).toBe(0);
+      // today comes from official data
+      expect(summary!.today).toBe(3.0);
+      // combined = official only
+      expect(summary!.combined.cost).toBe(3.0);
+      // Verify read range: tomorrow through today = empty range
+      expect(mockReadLocalUsage).toHaveBeenCalledWith({
+        fromDateUtc: '2026-05-23', // day after 2026-05-22 (today)
+        toDateUtc: '2026-05-22', // today
+      });
+    });
+
+    it('sets summary.today from official when API includes today', async () => {
+      // Scenario: Activity API includes today (2026-05-22) among other days.
+      // officialThroughDate will be today, so local read range is empty.
+      mockGetCredits.mockResolvedValue({
+        totalUsage: 12.0,
+        totalCredits: 20.0,
+      });
+
+      const officialData = [
+        createActivityItem({
+          date: '2026-05-21', // yesterday
+          model: 'gpt-4',
+          providerName: 'openai',
+          requests: 5,
+          usage: 4.0,
+        }),
+        createActivityItem({
+          date: '2026-05-22', // today
+          model: 'claude-3',
+          providerName: 'anthropic',
+          requests: 3,
+          usage: 2.5,
+        }),
+      ];
+      mockGetActivity.mockResolvedValue(officialData);
+
+      // Local read range starts tomorrow when official includes today
+      mockReadLocalUsage.mockResolvedValue([]);
+
+      const summary = await fetchAndAggregate();
+
+      expect(summary).toBeDefined();
+      expect(summary!.officialThroughDate).toBe('2026-05-22');
+      // official includes both days
+      expect(summary!.official.cost).toBe(6.5);
+      // local is empty
+      expect(summary!.local.cost).toBe(0);
+      // today comes from official data (2026-05-22 row)
+      expect(summary!.today).toBe(2.5);
+    });
+  });
+});
 
 describe('background refresh lifecycle', () => {
   beforeEach(() => {

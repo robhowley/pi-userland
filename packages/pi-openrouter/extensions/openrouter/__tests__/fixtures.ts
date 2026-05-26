@@ -137,7 +137,8 @@ export function createPiModelConfig(overrides?: Partial<PiModelConfig>): PiModel
 // LocalUsageEvent Fixtures
 // =============================================================================
 
-import type { LocalUsageEvent } from '../types.js';
+import type { LocalUsageEvent, UsageAggregate, UsageSummary } from '../types.js';
+import { createZeroAggregate } from '../types.js';
 
 /**
  * Creates LocalUsageEvent objects for testing local usage aggregation.
@@ -242,6 +243,58 @@ export function createOpenRouterRequest(overrides?: {
       model: 'openrouter/anthropic/claude-sonnet-4',
       messages: [],
     },
+    ...overrides,
+  };
+}
+
+// =============================================================================
+// UsageAggregate Fixtures
+// =============================================================================
+
+/**
+ * Creates a UsageAggregate with overrides.
+ * Starts with zeros and allows customizing specific fields.
+ */
+export function createUsageAggregate(overrides?: Partial<UsageAggregate>): UsageAggregate {
+  return {
+    ...createZeroAggregate(),
+    ...overrides,
+  };
+}
+
+// =============================================================================
+// UsageSummary Fixtures
+// =============================================================================
+
+/**
+ * Creates a UsageSummary with sensible defaults.
+ * Use overrides to customize for specific test cases.
+ *
+ * @example
+ * // Minimal summary
+ * const summary = createUsageSummary();
+ *
+ * // With custom today/local split
+ * const summary = createUsageSummary({
+ *   today: 0.5,
+ *   local: createUsageAggregate({ cost: 2.0, requests: 10 })
+ * });
+ */
+export function createUsageSummary(overrides?: Partial<UsageSummary>): UsageSummary {
+  return {
+    today: 0,
+    week: 0,
+    month: 0,
+    cap: 10,
+    burnRate: 0,
+    topModels: [],
+    byProvider: [],
+    byDay: {},
+    timestamp: Date.now(),
+    hasActivityData: true,
+    official: createZeroAggregate(),
+    local: createZeroAggregate(),
+    combined: createZeroAggregate(),
     ...overrides,
   };
 }
