@@ -38,6 +38,7 @@ pnpm-debug.log*
 # Pi local testing
 .pi-local/
 .pi
+subagent-reports/
 
 # Vite
 vite.config.ts.timestamp-*.mjs
