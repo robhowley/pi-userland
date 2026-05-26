@@ -10,6 +10,7 @@ import { writeLocalUsage, type LocalUsageEvent } from './local-usage.js';
 import { loadCache, getCacheAgeMs, formatDuration } from './models/cache.js';
 import { mapOpenRouterModels } from './models/mapper.js';
 import { includeBuiltinRouterModels, isSyncEnabled } from './models/sync.js';
+import { loadOpenRouterStatusBar } from './status-bar.js';
 
 let sessionState: SessionState | null = null;
 let sessionTrackingInstalled = false;
@@ -129,15 +130,12 @@ function installSessionTaggingHook(pi: Pick<ExtensionAPI, 'on'>): void {
 }
 
 function installLocalUsageHook(pi: Pick<ExtensionAPI, 'on'>): void {
-  pi.on('turn_end', async (event, ctx) => {
-    await captureLocalUsage(event as unknown, ctx);
+  pi.on('turn_end', (event, ctx) => {
+    captureLocalUsage(event as unknown, ctx);
   });
 }
 
-async function captureLocalUsage(
-  event: unknown,
-  ctx: { sessionManager: { getSessionId(): string } },
-): Promise<void> {
+function captureLocalUsage(event: unknown, ctx: ExtensionContext): void {
   try {
     const turnEvent = event as Record<string, unknown>;
 
@@ -184,9 +182,29 @@ async function captureLocalUsage(
       cost: usage.cost?.total ?? 0,
     };
 
-    writeLocalUsage(localEvent).catch(() => {});
+    void writeLocalUsage(localEvent)
+      .then(() => refreshOpenRouterUsageStatus(ctx))
+      .catch(() => {});
   } catch {
     // Fail open - silently ignore errors
+  }
+}
+
+async function refreshOpenRouterUsageStatus(
+  ctx: Pick<ExtensionContext, 'hasUI' | 'ui'>,
+): Promise<void> {
+  if (!ctx.hasUI) return;
+
+  try {
+    const statusText = await loadOpenRouterStatusBar();
+    if (statusText === null) {
+      ctx.ui.setStatus('openrouter', undefined);
+      return;
+    }
+
+    ctx.ui.setStatus('openrouter', ctx.ui.theme.fg('dim', statusText));
+  } catch {
+    ctx.ui.setStatus('openrouter', undefined);
   }
 }
 
@@ -213,10 +231,7 @@ function handleSessionStart(
 
   if (!ctx.hasUI) return;
 
-  if (startupState.info) {
-    const statusText = `OpenRouter ${startupState.info.count} models`;
-    ctx.ui.setStatus('openrouter', ctx.ui.theme.fg('dim', statusText));
-  }
+  void refreshOpenRouterUsageStatus(ctx).catch(() => {});
 
   if (event.reason === 'startup' && startupState.info) {
     const notice = `OpenRouter: ${startupState.info.count} models loaded from cache (${startupState.info.age} old). Run /openrouter models-sync to refresh.`;

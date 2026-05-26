@@ -165,15 +165,9 @@ export async function readLocalUsage(options: ReadLocalUsageOptions): Promise<Lo
 }
 
 /**
- * Aggregate local usage events into UsageAggregate.
- * Deduplicates by id (first occurrence wins).
+ * Deduplicate local usage events by id (first occurrence wins).
  */
-export function aggregateLocal(events: LocalUsageEvent[]): UsageAggregate {
-  if (events.length === 0) {
-    return createZeroAggregate();
-  }
-
-  // Deduplicate by id
+export function dedupeLocalUsageEvents(events: LocalUsageEvent[]): LocalUsageEvent[] {
   const seen = new Set<string>();
   const unique: LocalUsageEvent[] = [];
 
@@ -183,8 +177,19 @@ export function aggregateLocal(events: LocalUsageEvent[]): UsageAggregate {
     unique.push(event);
   }
 
-  // Aggregate
-  const result = unique.reduce((acc, event) => {
+  return unique;
+}
+
+/**
+ * Aggregate local usage events into UsageAggregate.
+ * Deduplicates by id (first occurrence wins).
+ */
+export function aggregateLocal(events: LocalUsageEvent[]): UsageAggregate {
+  if (events.length === 0) {
+    return createZeroAggregate();
+  }
+
+  const result = dedupeLocalUsageEvents(events).reduce((acc, event) => {
     acc.requests += event.requests ?? 1;
     acc.promptTokens += event.promptTokens || 0;
     acc.completionTokens += event.completionTokens || 0;
