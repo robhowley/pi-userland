@@ -48,6 +48,8 @@ The sync uses OpenRouter’s authenticated user model catalog, so Pi can see the
 
 `/openrouter models-status`
 
+Model count and cache health live here. The Pi footer/status bar does not persistently show `OpenRouter {N} models` anymore.
+
 Example status output:
 
 ```text
@@ -61,7 +63,7 @@ To see why models were skipped:
 
 Skipped output may include a grouped suggestion when Pi can offer a safe next step, such as adding a local `contextWindow` override for incomplete metadata.
 
-Skipped models do not make the sync fail; models are skipped when required metadata cannot be safely mapped into Pi’s provider model config. The last successful catalog is cached so Pi can keep using it if a later refresh fails, and the cache persists across sessions. If a session starts with a cached catalog that has not been registered yet, status will show:
+Skipped models do not make the sync fail; models are skipped when required metadata cannot be safely mapped into Pi’s provider model config. The last successful catalog is cached so Pi can keep using it if a later refresh fails, and the cache persists across sessions. If a session starts with a cached catalog that has not been registered yet, `/openrouter models-status` will show:
 
 ```text
 OpenRouter models cached
@@ -122,7 +124,11 @@ pi:[uuid]
 
 ## Local usage tracking
 
-The extension logs completed OpenRouter turns to local JSONL files in `~/.pi/openrouter/usage/` to provide near-real-time usage data for "Today's spend" in the usage overlay. This supplements the OpenRouter Activity API, which typically has a delay.
+The extension logs completed OpenRouter turns to local JSONL files in `~/.pi/openrouter/usage/` to provide near-real-time usage data for the footer/status bar and for "Today's spend" in the usage overlay. This supplements the OpenRouter Activity API, which typically has a delay.
+
+When positive local spend exists in the last 30 UTC days, the footer/status bar shows local-only Today spend and a 30-day average multiplier, for example `OR $2.14 today · 1.3x 30d avg`.
+
+Model count and cache health remain available through `/openrouter models-status`.
 
 **Retention:** Local usage files are automatically cleaned up after 90 days.
 
