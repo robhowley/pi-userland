@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.9.1...pi-openrouter-v0.10.0) (2026-05-26)
+
+
+### Features
+
+* **pi-openrouter:** show local usage in status bar ([#62](https://github.com/robhowley/pi-userland/issues/62)) ([19c6997](https://github.com/robhowley/pi-userland/commit/19c6997816c3c97c919efbd64620c8021eb83d92))
+
 ## [0.9.1](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.9.0...pi-openrouter-v0.9.1) (2026-05-26)
 
 
