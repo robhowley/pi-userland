@@ -33,23 +33,35 @@ export function sdkModelToOpenRouterModel(model: SDKModel): OpenRouterModel {
       }
     : undefined;
 
+  const architecture = model.architecture
+    ? {
+        input_modalities: model.architecture.inputModalities ?? [],
+        output_modalities: model.architecture.outputModalities ?? [],
+      }
+    : undefined;
+
+  const pricing = model.pricing
+    ? {
+        prompt: String(model.pricing.prompt ?? 0),
+        completion: String(model.pricing.completion ?? 0),
+        input_cache_read: String(model.pricing.inputCacheRead ?? 0),
+        input_cache_write: String(model.pricing.inputCacheWrite ?? 0),
+      }
+    : undefined;
+
   const result: OpenRouterModel = {
     id: model.id,
     name: model.name,
-    architecture: {
-      input_modalities: model.architecture.inputModalities ?? [],
-      output_modalities: model.architecture.outputModalities ?? [],
-    },
     context_length: model.contextLength ?? 0,
-    pricing: {
-      prompt: String(model.pricing.prompt ?? 0),
-      completion: String(model.pricing.completion ?? 0),
-      input_cache_read: String(model.pricing.inputCacheRead ?? 0),
-      input_cache_write: String(model.pricing.inputCacheWrite ?? 0),
-    },
     supported_parameters: model.supportedParameters,
   };
 
+  if (architecture) {
+    result.architecture = architecture;
+  }
+  if (pricing) {
+    result.pricing = pricing;
+  }
   if (topProvider) {
     result.top_provider = topProvider;
   }

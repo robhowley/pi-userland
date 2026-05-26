@@ -33,6 +33,7 @@ const { mocks, overlayConstructorCalls, MockUsageOverlayComponent } = vi.hoisted
       usageCacheSet: vi.fn(),
       startBackgroundRefresh: vi.fn(),
       fetchAndAggregate: vi.fn(),
+      isRateLimitError: vi.fn(),
       getCurrentSessionId: vi.fn(),
       getAllKeys: vi.fn(),
       getCurrentKey: vi.fn(),
@@ -63,6 +64,7 @@ vi.mock('../cache.js', () => ({
   },
   startBackgroundRefresh: mocks.startBackgroundRefresh,
   fetchAndAggregate: mocks.fetchAndAggregate,
+  isRateLimitError: mocks.isRateLimitError,
 }));
 
 vi.mock('../client.js', () => ({
@@ -187,6 +189,12 @@ describe('registerOpenRouterCommands', () => {
     mocks.usageCacheGet.mockReturnValue(null);
     mocks.usageCacheGetTimestamp.mockReturnValue(null);
     mocks.fetchAndAggregate.mockResolvedValue({});
+    mocks.isRateLimitError.mockImplementation((error: unknown) => {
+      const message = String(error).toLowerCase();
+      return (
+        message.includes('429') || message.includes('rate limit') || message.includes('rate-limit')
+      );
+    });
     mocks.getAllKeys.mockResolvedValue([keyInfo]);
     mocks.getCurrentKey.mockResolvedValue(keyInfo);
     mocks.getAccountCredits.mockResolvedValue(25);
@@ -631,7 +639,26 @@ describe('registerOpenRouterCommands', () => {
         summary: null,
         error:
           'OpenRouter API key not found. Set OPENROUTER_MANAGEMENT_KEY (preferred) or OPENROUTER_API_KEY to use /usage.',
-        cachedMinutesAgo: 0,
+        cachedMinutesAgo: null,
+      });
+    });
+
+    it('shows error-only overlay with null cachedMinutesAgo when fetchAndAggregate throws and no stale data', async () => {
+      const { commands, pi } = createMockPi();
+      const ctx = createMockContext();
+
+      mocks.usageCacheGet.mockReturnValue(null);
+      mocks.usageCacheGetTimestamp.mockReturnValue(null);
+      mocks.fetchAndAggregate.mockRejectedValue(new Error('Network error'));
+
+      registerOpenRouterCommands(pi as any);
+      await commands.get('openrouter-usage').handler('', ctx);
+
+      expect(overlayConstructorCalls).toHaveLength(1);
+      expect(overlayConstructorCalls[0]).toEqual({
+        summary: null,
+        error: 'API Error: Network error',
+        cachedMinutesAgo: null,
       });
     });
   });
@@ -738,6 +765,31 @@ describe('registerOpenRouterCommands', () => {
         'warning',
       );
     });
+
+    it.each(['HTTP 429: Too Many Requests', 'rate-limit exceeded for this key'])(
+      'notifies for rate-limit error: %s',
+      async (lastError) => {
+        const { commands, pi } = createMockPi();
+        const ctx = createMockContext();
+
+        registerOpenRouterCommands(pi as any);
+        await commands.get('openrouter-usage').handler('', ctx);
+
+        const onFailure = mocks.startBackgroundRefresh.mock.calls[0]?.[0]?.onFailure;
+        expect(onFailure).toBeDefined();
+        onFailure!({
+          status: 'failed',
+          consecutiveFailures: 1,
+          lastError,
+          nextDelayMs: 60000,
+        });
+
+        expect(ctx.ui.notify).toHaveBeenCalledWith(
+          `OpenRouter usage refresh failed\n${lastError}`,
+          'warning',
+        );
+      },
+    );
 
     it('includes stale suffix when status is stale', async () => {
       const { commands, pi } = createMockPi();

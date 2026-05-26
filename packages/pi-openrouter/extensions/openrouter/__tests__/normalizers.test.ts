@@ -160,6 +160,61 @@ describe('sdkModelToOpenRouterModel', () => {
 
     expect(normalizeOpenRouterModel(model)).toBe(model);
   });
+
+  it('guards against null architecture without crashing', () => {
+    const normalized = sdkModelToOpenRouterModel(
+      createSdkModel({
+        architecture: null as unknown as SDKModel['architecture'],
+      }),
+    );
+
+    expect(normalized).toMatchObject({
+      id: 'test/model',
+      name: 'Test Model',
+      context_length: 128000,
+      pricing: {
+        prompt: '0.0000005',
+        completion: '0.0000015',
+      },
+    });
+    expect(normalized).not.toHaveProperty('architecture');
+  });
+
+  it('guards against null pricing without pretending the model is free', () => {
+    const normalized = sdkModelToOpenRouterModel(
+      createSdkModel({
+        pricing: null as unknown as SDKModel['pricing'],
+      }),
+    );
+
+    expect(normalized).toMatchObject({
+      id: 'test/model',
+      name: 'Test Model',
+      context_length: 128000,
+    });
+    expect(normalized).not.toHaveProperty('pricing');
+  });
+
+  it('guards against undefined architecture without crashing', () => {
+    const normalized = sdkModelToOpenRouterModel(
+      createSdkModel({
+        architecture: undefined as unknown as SDKModel['architecture'],
+      }),
+    );
+
+    expect(normalized).not.toHaveProperty('architecture');
+    expect(normalized.pricing).toBeDefined();
+  });
+
+  it('guards against undefined pricing without crashing', () => {
+    const normalized = sdkModelToOpenRouterModel(
+      createSdkModel({
+        pricing: undefined as unknown as SDKModel['pricing'],
+      }),
+    );
+
+    expect(normalized).not.toHaveProperty('pricing');
+  });
 });
 
 describe('normalizeSdkKeyMetadata', () => {

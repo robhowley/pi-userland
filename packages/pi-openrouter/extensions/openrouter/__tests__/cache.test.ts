@@ -166,6 +166,50 @@ describe('fetchAndAggregate - Phase 3: Local usage merge when Activity API absen
     });
   });
 
+  it.each([
+    {
+      label: 'official data is much older than the 30-day window',
+      officialThroughDate: '2026-02-11',
+      expectedFromDateUtc: '2026-04-23',
+    },
+    {
+      label: 'official data is exactly at the boundary',
+      officialThroughDate: '2026-04-22',
+      expectedFromDateUtc: '2026-04-23',
+    },
+    {
+      label: 'official data is recent',
+      officialThroughDate: '2026-05-20',
+      expectedFromDateUtc: '2026-05-21',
+    },
+  ])(
+    'caps local read range only when $label',
+    async ({ officialThroughDate, expectedFromDateUtc }) => {
+      mockGetCredits.mockResolvedValue({
+        totalUsage: 5.0,
+        totalCredits: 10.0,
+      });
+      mockGetActivity.mockResolvedValue([
+        createActivityItem({
+          date: officialThroughDate,
+          model: 'anthropic/claude-sonnet-4',
+          providerName: 'anthropic',
+          requests: 1,
+          usage: 0.1,
+        }),
+      ]);
+      mockReadLocalUsage.mockResolvedValue([]);
+
+      const summary = await fetchAndAggregate();
+
+      expect(summary!.officialThroughDate).toBe(officialThroughDate);
+      expect(mockReadLocalUsage).toHaveBeenCalledWith({
+        fromDateUtc: expectedFromDateUtc,
+        toDateUtc: '2026-05-22',
+      });
+    },
+  );
+
   it('should read at most 30 UTC days when no official data exists', async () => {
     // Setup: No Activity data, verify bounded read
     mockGetCredits.mockResolvedValue({

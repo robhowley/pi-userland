@@ -9,7 +9,7 @@ export interface OpenRouterModel {
     output_modalities?: string[];
   };
   context_length: number;
-  pricing: {
+  pricing?: {
     prompt: string; // per-token price as string
     completion: string;
     input_cache_read?: string;

@@ -86,7 +86,7 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function isRateLimitError(error: unknown): boolean {
+export function isRateLimitError(error: unknown): boolean {
   const message = getErrorMessage(error).toLowerCase();
   return (
     message.includes('429') || message.includes('rate limit') || message.includes('rate-limit')
@@ -187,23 +187,27 @@ function getOfficialThroughDate(analytics: ActivityItem[] | null): string | unde
  * Returns { fromDateUtc, toDateUtc } for the bounded window.
  *
  * Product decision:
- * - If officialThroughDate exists: read from day after through today
+ * - If officialThroughDate exists: read from day after through today,
+ *   but cap to 30-day window (never read more than today - 29 through today)
  * - If no official data: read from today - 29 days through today (30 days total)
  */
 function getLocalUsageReadRange(
   officialThroughDate: string | undefined,
   now: string,
 ): { fromDateUtc: string; toDateUtc: string } {
+  const fallbackStart = addUtcDays(now, -29); // 30-day window start
+
   if (officialThroughDate) {
-    // Read from the day after officialThroughDate to today
+    const dayAfterOfficial = addUtcDays(officialThroughDate, 1);
+    // Cap to 30-day window: use the later of dayAfterOfficial or fallbackStart
     return {
-      fromDateUtc: addUtcDays(officialThroughDate, 1),
+      fromDateUtc: dayAfterOfficial > fallbackStart ? dayAfterOfficial : fallbackStart,
       toDateUtc: now,
     };
   } else {
     // No official data: read bounded 30-day window (today - 29 through today)
     return {
-      fromDateUtc: addUtcDays(now, -29),
+      fromDateUtc: fallbackStart,
       toDateUtc: now,
     };
   }

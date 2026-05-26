@@ -33,6 +33,7 @@ describe('mapOpenRouterModel', () => {
     }> = [
       { name: 'empty id', overrides: { id: '' } },
       { name: 'undefined id (deleted property)', overrides: (m) => delete (m as any).id },
+      { name: 'missing pricing object', overrides: { pricing: undefined as any } },
       { name: 'missing pricing.prompt', overrides: { pricing: { completion: '0.000001' } as any } },
       { name: 'missing pricing.completion', overrides: { pricing: { prompt: '0.000001' } as any } },
       {

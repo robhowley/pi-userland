@@ -1,7 +1,12 @@
 import type { ExtensionAPI, ExtensionContext } from '@mariozechner/pi-coding-agent';
 import type { UsageSummary } from './types.js';
 import { MS_PER_MINUTE } from './models/types.js';
-import { usageCache, startBackgroundRefresh, fetchAndAggregate } from './cache.js';
+import {
+  usageCache,
+  startBackgroundRefresh,
+  fetchAndAggregate,
+  isRateLimitError,
+} from './cache.js';
 import { AuthError } from './client.js';
 import { UsageOverlayComponent } from './overlay.js';
 import { getCurrentSessionId } from './hooks.js';
@@ -447,7 +452,7 @@ function startUsageBackgroundRefresh(ctx: ExtensionContext): void {
       if (!ctx.hasUI || !state.lastError) return;
 
       const isPersistent = state.consecutiveFailures >= 4;
-      const isRateLimited = state.lastError.toLowerCase().includes('rate limit');
+      const isRateLimited = isRateLimitError(state.lastError);
       if (!isPersistent && !isRateLimited) return;
 
       const staleSuffix = state.status === 'stale' ? '\nShowing last successful usage data.' : '';
@@ -489,7 +494,7 @@ async function showUsageOverlay(ctx: ExtensionContext, _subcommand?: string) {
         ctx,
         staleSummary ?? null,
         staleSummary ? `${error}\nShowing last successful usage data.` : error,
-        staleSummary ? staleMinutesAgo : 0,
+        staleSummary ? staleMinutesAgo : null,
       );
       return;
     }
@@ -506,7 +511,7 @@ async function showUsageOverlay(ctx: ExtensionContext, _subcommand?: string) {
       ctx,
       staleSummary ?? null,
       staleSummary ? `${error}\nShowing last successful usage data.` : error,
-      staleSummary ? staleMinutesAgo : cachedMinutesAgo || 0,
+      staleSummary ? staleMinutesAgo : null,
     );
   }
 }

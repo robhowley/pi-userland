@@ -61,8 +61,12 @@ const DEFAULT_MAX_TOKENS = 4096;
 /**
  * Validation result for a model check.
  */
+type PricedOpenRouterModel = OpenRouterModel & {
+  pricing: NonNullable<OpenRouterModel['pricing']>;
+};
+
 type ValidationResult =
-  | { valid: true; model: OpenRouterModel; contextWindow: number }
+  | { valid: true; model: PricedOpenRouterModel; contextWindow: number }
   | { valid: false; reason: string; modelId: string; hint?: string };
 
 /**
@@ -84,10 +88,11 @@ function validateModel(model: OpenRouterModel): ValidationResult {
   }
 
   // Check: missing required pricing fields
-  if (!model.pricing?.prompt) {
+  const pricing = model.pricing;
+  if (!pricing?.prompt) {
     return invalidModel('missing prompt pricing', model.id);
   }
-  if (!model.pricing?.completion) {
+  if (!pricing.completion) {
     return invalidModel('missing completion pricing', model.id);
   }
 
@@ -103,7 +108,7 @@ function validateModel(model: OpenRouterModel): ValidationResult {
     return invalidModel('non-text output modalities', model.id);
   }
 
-  return { valid: true, model, contextWindow };
+  return { valid: true, model: { ...model, pricing }, contextWindow };
 }
 
 /**
@@ -112,7 +117,7 @@ function validateModel(model: OpenRouterModel): ValidationResult {
  * Priority: user overrides > built-in registry > API data
  */
 async function buildPiConfig(
-  model: OpenRouterModel,
+  model: PricedOpenRouterModel,
   contextWindow: number,
   userOverrides?: Awaited<ReturnType<typeof loadModelOverrides>>,
 ): Promise<PiModelConfig> {
@@ -203,7 +208,7 @@ export async function mapOpenRouterModels(
       continue;
     }
 
-    configs.push(await buildPiConfig(model, validation.contextWindow, userOverrides));
+    configs.push(await buildPiConfig(validation.model, validation.contextWindow, userOverrides));
   }
 
   return { configs, skipped, skippedDetails };
@@ -233,5 +238,5 @@ export async function mapOpenRouterModel(
     return null;
   }
 
-  return buildPiConfig(normalized, validation.contextWindow, userOverrides);
+  return buildPiConfig(validation.model, validation.contextWindow, userOverrides);
 }
