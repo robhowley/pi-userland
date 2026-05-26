@@ -132,19 +132,25 @@ export function validateThinkingValue(value: string | null): {
 // =============================================================================
 
 /**
+ * Result of parsing a scoped assignment.
+ */
+export type ParseResult =
+  | { ok: true; fullPath: string; value: unknown }
+  | { ok: false; code: 'invalid-assignment' }
+  | { ok: false; code: 'invalid-thinking-value'; field: string; message: string };
+
+/**
  * Parse a scoped assignment like "thinking.high=high" or "contextWindow=128000".
  */
-export function parseScopedAssignment(
-  assignment: string,
-): { fullPath: string; value: unknown } | null {
+export function parseScopedAssignment(assignment: string): ParseResult {
   const eqIdx = assignment.indexOf('=');
-  if (eqIdx === -1) return null;
+  if (eqIdx === -1) return { ok: false, code: 'invalid-assignment' };
 
   const scopedName = assignment.slice(0, eqIdx).trim();
   const rawValue = assignment.slice(eqIdx + 1).trim();
 
   const mapped = SCOPED_FIELD_MAP[scopedName];
-  if (!mapped) return null;
+  if (!mapped) return { ok: false, code: 'invalid-assignment' };
 
   // Parse value by type
   let parsedValue: unknown;
@@ -157,9 +163,12 @@ export function parseScopedAssignment(
       if (mapped.targetField.startsWith('thinkingLevelMap.')) {
         const validation = validateThinkingValue(stringValue);
         if (!validation.valid) {
-          // Return null to signal parse failure; caller will show generic "Invalid assignment" error
-          // This keeps CLI error messages consistent with existing behavior
-          return null;
+          return {
+            ok: false,
+            code: 'invalid-thinking-value',
+            field: scopedName,
+            message: validation.error!,
+          };
         }
       }
 
@@ -168,19 +177,20 @@ export function parseScopedAssignment(
     }
     case 'number': {
       const num = parseInt(rawValue, 10);
-      if (isNaN(num)) return null;
+      if (isNaN(num)) return { ok: false, code: 'invalid-assignment' };
       parsedValue = num;
       break;
     }
     case 'boolean':
-      if (rawValue !== 'true' && rawValue !== 'false') return null;
+      if (rawValue !== 'true' && rawValue !== 'false')
+        return { ok: false, code: 'invalid-assignment' };
       parsedValue = rawValue === 'true';
       break;
     default:
-      return null;
+      return { ok: false, code: 'invalid-assignment' };
   }
 
-  return { fullPath: mapped.targetField, value: parsedValue };
+  return { ok: true, fullPath: mapped.targetField, value: parsedValue };
 }
 
 /**
@@ -256,7 +266,13 @@ export async function handleModelOverrideSet(
 
   for (const assignment of assignments) {
     const parsed = parseScopedAssignment(assignment);
-    if (!parsed) {
+    if (!parsed.ok) {
+      if (parsed.code === 'invalid-thinking-value') {
+        return {
+          success: false,
+          message: `Invalid thinking value for "${parsed.field}": ${parsed.message}`,
+        };
+      }
       return {
         success: false,
         message: `Invalid assignment: "${assignment}"\nExpected format: field=value (e.g., thinking.high=high or contextWindow=128000)\nSee available fields with /openrouter model-override-list --fields`,

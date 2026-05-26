@@ -99,6 +99,7 @@ describe('parseScopedAssignment', () => {
   describe('existing documented behavior', () => {
     it('parses thinking shorthand aliases', () => {
       expect(parseScopedAssignment('thinking.high=high')).toEqual({
+        ok: true,
         fullPath: 'thinkingLevelMap.high',
         value: 'high',
       });
@@ -106,6 +107,7 @@ describe('parseScopedAssignment', () => {
 
     it('parses exact thinkingLevelMap field names', () => {
       expect(parseScopedAssignment('thinkingLevelMap.xhigh=max')).toEqual({
+        ok: true,
         fullPath: 'thinkingLevelMap.xhigh',
         value: 'max',
       });
@@ -113,6 +115,7 @@ describe('parseScopedAssignment', () => {
 
     it('parses null string values for thinking levels', () => {
       expect(parseScopedAssignment('thinking.off=null')).toEqual({
+        ok: true,
         fullPath: 'thinkingLevelMap.off',
         value: null,
       });
@@ -120,45 +123,119 @@ describe('parseScopedAssignment', () => {
 
     it('parses numeric and boolean top-level fields', () => {
       expect(parseScopedAssignment('contextWindow=64000')).toEqual({
+        ok: true,
         fullPath: 'contextWindow',
         value: 64000,
       });
       expect(parseScopedAssignment('maxTokens=8192')).toEqual({
+        ok: true,
         fullPath: 'maxTokens',
         value: 8192,
       });
       expect(parseScopedAssignment('reasoning=false')).toEqual({
+        ok: true,
         fullPath: 'reasoning',
         value: false,
       });
     });
 
     it('rejects malformed or unsupported assignments', () => {
-      expect(parseScopedAssignment('thinking.high')).toBeNull();
-      expect(parseScopedAssignment('unknown.field=value')).toBeNull();
-      expect(parseScopedAssignment('contextWindow=large')).toBeNull();
-      expect(parseScopedAssignment('reasoning=yes')).toBeNull();
+      expect(parseScopedAssignment('thinking.high')).toEqual({
+        ok: false,
+        code: 'invalid-assignment',
+      });
+      expect(parseScopedAssignment('unknown.field=value')).toEqual({
+        ok: false,
+        code: 'invalid-assignment',
+      });
+      expect(parseScopedAssignment('contextWindow=large')).toEqual({
+        ok: false,
+        code: 'invalid-assignment',
+      });
+      expect(parseScopedAssignment('reasoning=yes')).toEqual({
+        ok: false,
+        code: 'invalid-assignment',
+      });
     });
   });
 
   describe('validation enforcement (Phase 7)', () => {
-    it('rejects empty thinking values', () => {
-      expect(parseScopedAssignment('thinking.high=')).toBeNull();
+    it('rejects empty thinking values with specific error', () => {
+      const result = parseScopedAssignment('thinking.high=');
+      expect(result).toMatchObject({
+        ok: false,
+        code: 'invalid-thinking-value',
+        field: 'thinking.high',
+      });
+      if (result.ok === false && result.code === 'invalid-thinking-value') {
+        expect(result.message).toContain('empty');
+      }
     });
 
-    it('rejects whitespace-only thinking values', () => {
-      expect(parseScopedAssignment('thinking.high=   ')).toBeNull();
+    it('rejects whitespace-only thinking values with specific error', () => {
+      const result = parseScopedAssignment('thinking.high=   ');
+      expect(result).toMatchObject({
+        ok: false,
+        code: 'invalid-thinking-value',
+        field: 'thinking.high',
+      });
+      if (result.ok === false && result.code === 'invalid-thinking-value') {
+        expect(result.message).toContain('whitespace');
+      }
     });
 
-    it('rejects thinking values with control characters', () => {
-      expect(parseScopedAssignment('thinking.high=high\x00')).toBeNull();
-      expect(parseScopedAssignment('thinking.high=\x07high')).toBeNull();
+    it('rejects thinking values with control characters with specific error', () => {
+      const result1 = parseScopedAssignment('thinking.high=high\x00');
+      expect(result1).toMatchObject({
+        ok: false,
+        code: 'invalid-thinking-value',
+        field: 'thinking.high',
+      });
+      if (result1.ok === false && result1.code === 'invalid-thinking-value') {
+        expect(result1.message).toContain('control');
+      }
+
+      const result2 = parseScopedAssignment('thinking.high=\x07high');
+      expect(result2).toMatchObject({
+        ok: false,
+        code: 'invalid-thinking-value',
+        field: 'thinking.high',
+      });
+      if (result2.ok === false && result2.code === 'invalid-thinking-value') {
+        expect(result2.message).toContain('control');
+      }
     });
 
-    it('rejects undocumented thinking values', () => {
-      expect(parseScopedAssignment('thinking.high=ultra')).toBeNull();
-      expect(parseScopedAssignment('thinking.high=custom-value')).toBeNull();
-      expect(parseScopedAssignment('thinking.high=HIGH')).toBeNull();
+    it('rejects undocumented thinking values with specific error', () => {
+      const result1 = parseScopedAssignment('thinking.high=ultra');
+      expect(result1).toMatchObject({
+        ok: false,
+        code: 'invalid-thinking-value',
+        field: 'thinking.high',
+      });
+      if (result1.ok === false && result1.code === 'invalid-thinking-value') {
+        expect(result1.message).toContain('not in the allowed set');
+      }
+
+      const result2 = parseScopedAssignment('thinking.high=custom-value');
+      expect(result2).toMatchObject({
+        ok: false,
+        code: 'invalid-thinking-value',
+        field: 'thinking.high',
+      });
+      if (result2.ok === false && result2.code === 'invalid-thinking-value') {
+        expect(result2.message).toContain('not in the allowed set');
+      }
+
+      const result3 = parseScopedAssignment('thinking.high=HIGH');
+      expect(result3).toMatchObject({
+        ok: false,
+        code: 'invalid-thinking-value',
+        field: 'thinking.high',
+      });
+      if (result3.ok === false && result3.code === 'invalid-thinking-value') {
+        expect(result3.message).toContain('not in the allowed set');
+      }
     });
 
     it('accepts all documented thinking values', () => {
@@ -174,14 +251,17 @@ describe('parseScopedAssignment', () => {
 
       for (const [input, expectedValue] of validPairs) {
         const result = parseScopedAssignment(input);
-        expect(result).not.toBeNull();
-        expect(result?.value).toBe(expectedValue);
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+          expect(result.value).toBe(expectedValue);
+        }
       }
     });
 
     it('does not validate non-thinking fields', () => {
       // contextWindow and other fields should not be affected by thinking validation
       expect(parseScopedAssignment('contextWindow=999999')).toEqual({
+        ok: true,
         fullPath: 'contextWindow',
         value: 999999,
       });
@@ -261,22 +341,26 @@ describe('handleModelOverrideSet', () => {
     expect(saveModelOverrides).not.toHaveBeenCalled();
   });
 
-  it('rejects invalid thinking values in assignments', async () => {
+  it('rejects invalid thinking values in assignments with specific error', async () => {
     const result = await handleModelOverrideSet(
       'test/model thinking.high=ultra-max',
       emptyOverrides(),
     );
 
     expect(result.success).toBe(false);
-    expect(result.message).toContain('Invalid assignment: "thinking.high=ultra-max"');
+    expect(result.message).toContain('Invalid thinking value');
+    expect(result.message).toContain('thinking.high');
+    expect(result.message).toContain('not in the allowed set');
     expect(saveModelOverrides).not.toHaveBeenCalled();
   });
 
-  it('rejects empty thinking values in assignments', async () => {
+  it('rejects empty thinking values in assignments with specific error', async () => {
     const result = await handleModelOverrideSet('test/model thinking.high=', emptyOverrides());
 
     expect(result.success).toBe(false);
-    expect(result.message).toContain('Invalid assignment: "thinking.high="');
+    expect(result.message).toContain('Invalid thinking value');
+    expect(result.message).toContain('thinking.high');
+    expect(result.message).toContain('empty');
     expect(saveModelOverrides).not.toHaveBeenCalled();
   });
 
