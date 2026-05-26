@@ -4,7 +4,9 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ExtensionContext, ModelRegistry } from '@mariozechner/pi-coding-agent';
-import type { SyncResult } from '../types.js';
+import type { PiModelConfig, SyncResult } from '../types.js';
+import { ROUTER_ALIASES } from '../types.js';
+import { createPiModelConfig, createValidModel } from '../../__tests__/fixtures.js';
 
 // Import modules
 import {
@@ -13,9 +15,10 @@ import {
   getSyncState,
   getStatusText,
   areModelsAvailable,
+  includeBuiltinRouterModels,
 } from '../sync.js';
 import { fetchUserModels, AuthError } from '../../client.js';
-import { loadCache } from '../cache.js';
+import { loadCache, saveCache } from '../cache.js';
 
 // Mock the client module to control API behavior
 vi.mock('../../client.js', () => ({
@@ -133,8 +136,13 @@ describe('syncModels', () => {
   it('should return failure when API key is missing and no cache', async () => {
     // Ensure API key is not set
     delete process.env['OPENROUTER_API_KEY'];
+    delete process.env['OPENROUTER_MANAGEMENT_KEY'];
     // Mock fetchUserModels to throw AuthError
-    vi.mocked(fetchUserModels).mockRejectedValueOnce(new AuthError('OPENROUTER_API_KEY not set'));
+    vi.mocked(fetchUserModels).mockRejectedValueOnce(
+      new AuthError(
+        'OpenRouter API key not configured. Set OPENROUTER_API_KEY or OPENROUTER_MANAGEMENT_KEY.',
+      ),
+    );
     // Mock loadCache to return null (no cache available)
     vi.mocked(loadCache).mockResolvedValueOnce(null);
 
@@ -143,7 +151,7 @@ describe('syncModels', () => {
     expect(result.success).toBe(false);
     expect(result.registeredCount).toBe(0);
     expect(result.source).toBe('none');
-    expect(result.error).toContain('OPENROUTER_API_KEY not set');
+    expect(result.error).toContain('OpenRouter API key not configured');
   });
 
   it('should sync models from API and register with provider', async () => {
@@ -181,6 +189,150 @@ describe('syncModels', () => {
     expect(result.source).toBe('api');
     expect(result.registeredCount).toBeGreaterThan(0);
     expect(mockRegisterProvider).toHaveBeenCalled();
+  });
+
+  it('should register the API user catalog plus router aliases exactly once', async () => {
+    const mockModel = {
+      id: 'user/model-a',
+      name: 'User Model A',
+      architecture: {
+        inputModalities: ['text'],
+        outputModalities: ['text'],
+      },
+      contextLength: 128000,
+      pricing: {
+        prompt: 0.000001,
+        completion: 0.000002,
+      },
+      supportedParameters: [],
+      topProvider: {
+        contextLength: 128000,
+        maxCompletionTokens: 4096,
+      },
+    };
+
+    vi.mocked(fetchUserModels).mockResolvedValueOnce({
+      data: [mockModel],
+    } as any);
+
+    const result = await syncModels(mockCtx);
+    const providerConfig = mockRegisterProvider.mock.calls[0]![1] as { models: PiModelConfig[] };
+    const registeredIds = providerConfig.models.map((model) => model.id);
+
+    expect(result.registeredCount).toBe(1 + ROUTER_ALIASES.length);
+    expect(registeredIds).toEqual(['user/model-a', ...ROUTER_ALIASES]);
+    expect(registeredIds).not.toContain('anthropic/claude-3-opus');
+  });
+
+  it('should register cached user models plus router aliases on API failure', async () => {
+    vi.mocked(fetchUserModels).mockRejectedValueOnce(new Error('api down'));
+    vi.mocked(loadCache).mockResolvedValueOnce({
+      models: [createValidModel({ id: 'cached/model-a', name: 'Cached Model A' })],
+      skippedDetails: [
+        {
+          id: 'bad/model',
+          reason: 'missing context window',
+          hint: "Add a local contextWindow override with '/openrouter model-override-set <model-id> contextWindow=<tokens>' if the model's limit is known.",
+        },
+      ],
+      timestamp: Date.now() - 60000,
+    });
+
+    const result = await syncModels(mockCtx);
+    const providerConfig = mockRegisterProvider.mock.calls[0]![1] as { models: PiModelConfig[] };
+    const registeredIds = providerConfig.models.map((model) => model.id);
+
+    expect(result.source).toBe('cache');
+    expect(result.registeredCount).toBe(1 + ROUTER_ALIASES.length);
+    expect(registeredIds).toEqual(['cached/model-a', ...ROUTER_ALIASES]);
+    expect(result.skippedDetails).toEqual([
+      {
+        id: 'bad/model',
+        reason: 'missing context window',
+        hint: "Add a local contextWindow override with '/openrouter model-override-set <model-id> contextWindow=<tokens>' if the model's limit is known.",
+      },
+    ]);
+  });
+
+  it('should persist skipped reason hints in the saved cache', async () => {
+    vi.mocked(fetchUserModels).mockResolvedValueOnce({
+      data: [
+        {
+          id: 'user/model-a',
+          name: 'User Model A',
+          architecture: {
+            inputModalities: ['text'],
+            outputModalities: ['text'],
+          },
+          contextLength: 128000,
+          pricing: {
+            prompt: 0.000001,
+            completion: 0.000002,
+          },
+          supportedParameters: [],
+          topProvider: {
+            contextLength: 128000,
+            maxCompletionTokens: 4096,
+          },
+        },
+        {
+          id: 'bad/model',
+          name: 'Bad Model',
+          architecture: {
+            inputModalities: ['text'],
+            outputModalities: ['text'],
+          },
+          contextLength: 0,
+          pricing: {
+            prompt: 0.000001,
+            completion: 0.000002,
+          },
+          supportedParameters: [],
+          topProvider: {
+            contextLength: 0,
+            maxCompletionTokens: 4096,
+          },
+        },
+      ],
+    } as any);
+
+    const result = await syncModels(mockCtx);
+
+    expect(result.skippedDetails).toEqual([
+      {
+        id: 'bad/model',
+        reason: 'missing context window',
+        hint: expect.stringContaining(
+          '/openrouter model-override-set <model-id> contextWindow=<tokens>',
+        ),
+      },
+    ]);
+    expect(vi.mocked(saveCache)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        skippedDetails: [
+          {
+            id: 'bad/model',
+            reason: 'missing context window',
+            hint: expect.stringContaining(
+              '/openrouter model-override-set <model-id> contextWindow=<tokens>',
+            ),
+          },
+        ],
+      }),
+    );
+  });
+
+  it('should include router aliases at most once', () => {
+    const configs = includeBuiltinRouterModels([
+      createPiModelConfig({ id: 'user/model-a' }),
+      createPiModelConfig({ id: ROUTER_ALIASES[0]! }),
+    ]);
+    const registeredIds = configs.map((model) => model.id);
+
+    expect(registeredIds).toEqual(['user/model-a', ...ROUTER_ALIASES]);
+    for (const routerId of ROUTER_ALIASES) {
+      expect(registeredIds.filter((id) => id === routerId)).toHaveLength(1);
+    }
   });
 });
 

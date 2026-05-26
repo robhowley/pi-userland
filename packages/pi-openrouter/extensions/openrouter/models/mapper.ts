@@ -1,7 +1,9 @@
 import type { OpenRouterModel, PiModelConfig, SkipReason, MapResult } from './types.js';
 import { ROUTER_ALIASES } from './types.js';
+import { getSkipReasonHint } from './skip-hints.js';
 import type { Model as SDKModel } from '@openrouter/sdk/models/index.js';
 import { loadModelOverrides, getModelOverride } from './overrides.js';
+import { normalizeOpenRouterModel } from '../normalizers.js';
 
 // Cache for built-in OpenRouter models from pi-ai
 // Populated lazily on first access
@@ -57,67 +59,23 @@ const COST_PER_MILLION = 1_000_000;
 const DEFAULT_MAX_TOKENS = 4096;
 
 /**
- * Convert SDK Model to our OpenRouterModel type for compatibility.
- * Handles SDK's camelCase naming convention.
- */
-export function sdkModelToOpenRouterModel(model: SDKModel): OpenRouterModel {
-  const topProvider = model.topProvider
-    ? {
-        context_length: model.topProvider.contextLength ?? 0,
-        max_completion_tokens: model.topProvider.maxCompletionTokens ?? 0,
-      }
-    : undefined;
-
-  const perRequestLimits = model.perRequestLimits
-    ? {
-        completion_tokens: model.perRequestLimits.completionTokens ?? 0,
-      }
-    : undefined;
-
-  // Build the object conditionally to avoid undefined property issues
-  const result: OpenRouterModel = {
-    id: model.id,
-    name: model.name,
-    architecture: {
-      input_modalities: model.architecture.inputModalities ?? [],
-      output_modalities: model.architecture.outputModalities ?? [],
-    },
-    context_length: model.contextLength ?? 0,
-    pricing: {
-      prompt: String(model.pricing.prompt ?? 0),
-      completion: String(model.pricing.completion ?? 0),
-      input_cache_read: String(model.pricing.inputCacheRead ?? 0),
-      input_cache_write: String(model.pricing.inputCacheWrite ?? 0),
-    },
-    supported_parameters: model.supportedParameters,
-  };
-
-  // Conditionally add optional properties to avoid explicit undefined
-  if (topProvider) {
-    result.top_provider = topProvider;
-  }
-  if (perRequestLimits) {
-    result.per_request_limits = perRequestLimits;
-  }
-
-  return result;
-}
-
-/**
- * Normalize input model to OpenRouterModel format.
- */
-function normalizeModel(model: OpenRouterModel | SDKModel): OpenRouterModel {
-  return 'contextLength' in model
-    ? sdkModelToOpenRouterModel(model as SDKModel)
-    : (model as OpenRouterModel);
-}
-
-/**
  * Validation result for a model check.
  */
+type PricedOpenRouterModel = OpenRouterModel & {
+  pricing: NonNullable<OpenRouterModel['pricing']>;
+};
+
 type ValidationResult =
-  | { valid: true; model: OpenRouterModel; contextWindow: number }
-  | { valid: false; reason: string; modelId: string };
+  | { valid: true; model: PricedOpenRouterModel; contextWindow: number }
+  | { valid: false; reason: string; modelId: string; hint?: string };
+
+/**
+ * Build a failed validation result with a stable machine reason and optional hint.
+ */
+function invalidModel(reason: string, modelId: string): ValidationResult {
+  const hint = getSkipReasonHint(reason);
+  return hint ? { valid: false, reason, modelId, hint } : { valid: false, reason, modelId };
+}
 
 /**
  * Validate a model and return either a valid result with extracted context window
@@ -126,30 +84,31 @@ type ValidationResult =
 function validateModel(model: OpenRouterModel): ValidationResult {
   // Check: missing required id
   if (!model.id) {
-    return { valid: false, reason: 'missing id', modelId: 'unknown' };
+    return invalidModel('missing id', 'unknown');
   }
 
   // Check: missing required pricing fields
-  if (!model.pricing?.prompt) {
-    return { valid: false, reason: 'missing prompt pricing', modelId: model.id };
+  const pricing = model.pricing;
+  if (!pricing?.prompt) {
+    return invalidModel('missing prompt pricing', model.id);
   }
-  if (!model.pricing?.completion) {
-    return { valid: false, reason: 'missing completion pricing', modelId: model.id };
+  if (!pricing.completion) {
+    return invalidModel('missing completion pricing', model.id);
   }
 
   // Check: missing context window (both primary and fallback)
   const contextWindow = model.top_provider?.context_length ?? model.context_length;
   if (!contextWindow) {
-    return { valid: false, reason: 'missing context window', modelId: model.id };
+    return invalidModel('missing context window', model.id);
   }
 
   // Check: explicitly non-text output (if specified)
   const outputModalities = model.architecture?.output_modalities;
   if (outputModalities && !outputModalities.includes('text')) {
-    return { valid: false, reason: 'non-text output modalities', modelId: model.id };
+    return invalidModel('non-text output modalities', model.id);
   }
 
-  return { valid: true, model, contextWindow };
+  return { valid: true, model: { ...model, pricing }, contextWindow };
 }
 
 /**
@@ -158,7 +117,7 @@ function validateModel(model: OpenRouterModel): ValidationResult {
  * Priority: user overrides > built-in registry > API data
  */
 async function buildPiConfig(
-  model: OpenRouterModel,
+  model: PricedOpenRouterModel,
   contextWindow: number,
   userOverrides?: Awaited<ReturnType<typeof loadModelOverrides>>,
 ): Promise<PiModelConfig> {
@@ -227,7 +186,7 @@ export async function mapOpenRouterModels(
   const skippedDetails: SkipReason[] = [];
 
   for (const rawModel of models) {
-    const model = normalizeModel(rawModel);
+    const model = normalizeOpenRouterModel(rawModel);
 
     // Skip router aliases - they're added manually after mapping
     if (ROUTER_ALIASES.includes(model.id)) {
@@ -238,11 +197,18 @@ export async function mapOpenRouterModels(
 
     if (!validation.valid) {
       skipped++;
-      skippedDetails.push({ id: validation.modelId, reason: validation.reason });
+      const skippedDetail: SkipReason = {
+        id: validation.modelId,
+        reason: validation.reason,
+      };
+      if (validation.hint) {
+        skippedDetail.hint = validation.hint;
+      }
+      skippedDetails.push(skippedDetail);
       continue;
     }
 
-    configs.push(await buildPiConfig(model, validation.contextWindow, userOverrides));
+    configs.push(await buildPiConfig(validation.model, validation.contextWindow, userOverrides));
   }
 
   return { configs, skipped, skippedDetails };
@@ -259,7 +225,7 @@ export async function mapOpenRouterModel(
   await loadBuiltInOpenRouterModels();
   const userOverrides = await loadModelOverrides();
 
-  const normalized = normalizeModel(model);
+  const normalized = normalizeOpenRouterModel(model);
 
   // Router aliases are handled separately, skip them here
   if (ROUTER_ALIASES.includes(normalized.id)) {
@@ -272,5 +238,5 @@ export async function mapOpenRouterModel(
     return null;
   }
 
-  return buildPiConfig(normalized, validation.contextWindow, userOverrides);
+  return buildPiConfig(validation.model, validation.contextWindow, userOverrides);
 }

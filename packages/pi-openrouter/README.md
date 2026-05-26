@@ -12,12 +12,17 @@ pi install npm:@robhowley/pi-openrouter
 
 Set one of these environment variables:
 
-- `OPENROUTER_MANAGEMENT_KEY` (preferred), provides full usage data including model breakdowns
-- `OPENROUTER_API_KEY`, basic usage data plus user-scoped model sync
+- `OPENROUTER_MANAGEMENT_KEY` (preferred) — provides full usage/analytics and can be used for model sync
+- `OPENROUTER_API_KEY` — basic usage data and user-scoped model sync
 
 ```shell
 export OPENROUTER_MANAGEMENT_KEY=sk-or-...
 ```
+
+**Key selection:**
+
+- Usage/account commands prefer `OPENROUTER_MANAGEMENT_KEY` for full analytics, falling back to `OPENROUTER_API_KEY`
+- Model sync prefers `OPENROUTER_API_KEY` but will attempt `OPENROUTER_MANAGEMENT_KEY` if only that is set
 
 ## Commands
 
@@ -39,7 +44,7 @@ export OPENROUTER_MANAGEMENT_KEY=sk-or-...
 
 `/openrouter models-sync`
 
-The sync uses OpenRouter’s authenticated user model catalog, so Pi can see the models available to your account instead of only the default provider list.
+The sync uses OpenRouter’s authenticated user model catalog, so Pi can see the models available to your account instead of only the default provider list. This intentionally replaces Pi's OpenRouter provider model list with your user-scoped catalog plus OpenRouter's built-in router aliases (`openrouter/auto`, `openrouter/free`, and `openrouter/owl-alpha`). It does not merge in every built-in model unless that model is returned by your OpenRouter account catalog.
 
 `/openrouter models-status`
 
@@ -53,6 +58,8 @@ OpenRouter models healthy
 To see why models were skipped:
 
 `/openrouter models-status --skipped`
+
+Skipped output may include a grouped suggestion when Pi can offer a safe next step, such as adding a local `contextWindow` override for incomplete metadata.
 
 Skipped models do not make the sync fail; models are skipped when required metadata cannot be safely mapped into Pi’s provider model config. The last successful catalog is cached so Pi can keep using it if a later refresh fails, and the cache persists across sessions. If a session starts with a cached catalog that has not been registered yet, status will show:
 
@@ -102,6 +109,8 @@ Select a key from the list to inspect its limit, usage, reset cadence, and BYOK 
 
 `pi-openrouter` automatically tags OpenRouter requests with a `session_id` derived from the Pi session ID.
 
+Request detection is intentionally broad: the extension checks provider metadata, `openrouter/...` model ids, configured OpenRouter base URLs, Shopify's ZDR provider flag, and request URLs/endpoints so tagging still works across different Pi event shapes.
+
 View the OpenRouter session tag with:
 
 ```bash
@@ -110,6 +119,20 @@ View the OpenRouter session tag with:
 # OpenRouter session_id
 pi:[uuid]
 ```
+
+## Local usage tracking
+
+The extension logs completed OpenRouter turns to local JSONL files in `~/.pi/openrouter/usage/` to provide near-real-time usage data for "Today's spend" in the usage overlay. This supplements the OpenRouter Activity API, which typically has a delay.
+
+**Retention:** Local usage files are automatically cleaned up after 90 days.
+
+**Debug logging:** By default, file operations are quiet (fail-open). To enable verbose logging for troubleshooting:
+
+```bash
+export PI_OPENROUTER_DEBUG_USAGE=1
+```
+
+This logs write/read errors, malformed lines, and cleanup operations to the console.
 
 ## Model field overrides
 
@@ -133,11 +156,15 @@ Some OpenRouter models don't have complete metadata in Pi's built-in registry or
 - `maxTokens` → `maxTokens` (number)
 - `reasoning` → `reasoning` (boolean)
 
+For CLI `thinking.*` / `thinkingLevelMap.*` assignments, `pi-openrouter` only accepts the conservative documented value set: `off`, `minimal`, `low`, `medium`, `high`, `max`, `xhigh`, or `null`.
+
 Use `null` to hide a level from Pi's UI:
 
 ```bash
 /openrouter model-override-set deepseek/deepseek-v4-pro thinking.off=null
 ```
+
+If you need an advanced or experimental thinking value outside that CLI set, edit `~/.pi/openrouter/model-overrides.json` directly. The JSON file is the escape hatch; the CLI intentionally stays conservative.
 
 List your overrides:
 
@@ -153,7 +180,15 @@ Clear overrides:
 /openrouter model-override-clear deepseek/deepseek-v4-pro
 ```
 
-Overrides are stored in `~/.pi/openrouter/model-overrides.json` and merge on top of OpenRouter catalog data and Pi's built-in registry. Run `/openrouter models-sync` after changing overrides to apply them to the registered OpenRouter model list.
+Overrides are stored in `~/.pi/openrouter/model-overrides.json`.
+
+Precedence is:
+
+1. Pi's built-in registry
+2. OpenRouter's user-scoped model catalog
+3. Local overrides from `~/.pi/openrouter/model-overrides.json`
+
+That means local overrides win. Run `/openrouter models-sync` after changing overrides to apply them to the registered OpenRouter model list.
 
 ## License
 

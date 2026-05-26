@@ -1,9 +1,16 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdir, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
-import { loadCache, saveCache, getCacheAgeMs, formatCacheAge, setCacheDir } from '../cache.js';
+import {
+  loadCache,
+  saveCache,
+  getCacheAgeMs,
+  formatDuration,
+  formatCacheAge,
+  setCacheDir,
+} from '../cache.js';
 import { createMockCache } from '../../__tests__/fixtures.js';
 
 // Each test gets its own isolated temp directory
@@ -65,6 +72,18 @@ describe('loadCache', () => {
     const result = await loadCache();
     expect(result).toBeNull();
   });
+
+  it('should return null when cache timestamp is too far in the future', async () => {
+    await mkdir(testCacheDir, { recursive: true });
+    const cacheFile = join(testCacheDir, 'models-cache.json');
+    await writeFile(
+      cacheFile,
+      JSON.stringify(createMockCache({ timestamp: Date.now() + 6 * 60000 })),
+    );
+
+    const result = await loadCache();
+    expect(result).toBeNull();
+  });
 });
 
 describe('saveCache', () => {
@@ -93,6 +112,24 @@ describe('saveCache', () => {
     const loaded = await loadCache();
     expect(loaded!.timestamp).toBe(2000);
   });
+
+  it('should clamp future timestamps when saving', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-22T12:00:00.000Z'));
+
+    try {
+      const now = Date.now();
+      const mockCache = createMockCache({ timestamp: now + 60000 });
+
+      await saveCache(mockCache);
+
+      const loaded = await loadCache();
+      expect(loaded).not.toBeNull();
+      expect(loaded!.timestamp).toBe(now);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('getCacheAgeMs', () => {
@@ -110,6 +147,25 @@ describe('getCacheAgeMs', () => {
     const age = getCacheAgeMs(cache);
     expect(age).toBeGreaterThanOrEqual(0);
     expect(age).toBeLessThan(100);
+  });
+
+  it('should clamp small future skew to age 0', () => {
+    const cache = createMockCache({ timestamp: Date.now() + 60000 });
+    expect(getCacheAgeMs(cache)).toBe(0);
+  });
+});
+
+describe('formatDuration', () => {
+  it('should return unknown for null values', () => {
+    expect(formatDuration(null)).toBe('unknown');
+  });
+
+  it('should format zero as less than one minute', () => {
+    expect(formatDuration(0)).toBe('<1m');
+  });
+
+  it('should format negative values as less than one minute', () => {
+    expect(formatDuration(-1)).toBe('<1m');
   });
 });
 
@@ -136,5 +192,10 @@ describe('formatCacheAge', () => {
   it('should handle exact hour boundaries', () => {
     const cache = createMockCache({ timestamp: Date.now() - 60 * 60000 }); // exactly 1 hour
     expect(formatCacheAge(cache)).toBe('1h');
+  });
+
+  it('should clamp future cache age display to less than one minute', () => {
+    const cache = createMockCache({ timestamp: Date.now() + 60000 });
+    expect(formatCacheAge(cache)).toBe('<1m');
   });
 });

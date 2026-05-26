@@ -6,6 +6,7 @@ import { MS_PER_MINUTE } from './types.js';
 
 const CACHE_FILENAME = 'models-cache.json';
 const DEFAULT_CACHE_DIR = join(homedir(), '.pi', 'openrouter');
+const MAX_FUTURE_SKEW_MS = 5 * MS_PER_MINUTE;
 
 // Allow overriding cache directory for testing
 let cacheDirOverride: string | null = null;
@@ -41,6 +42,21 @@ async function ensureCacheDir(): Promise<void> {
 }
 
 /**
+ * Returns true when a cache timestamp is structurally valid and not too far in the future.
+ */
+function isValidCacheTimestamp(timestamp: number, now = Date.now()): boolean {
+  return Number.isFinite(timestamp) && timestamp <= now + MAX_FUTURE_SKEW_MS;
+}
+
+/**
+ * Clamp future timestamps when saving so new cache writes never persist negative ages.
+ */
+function normalizeTimestampForSave(timestamp: number, now = Date.now()): number {
+  if (!isValidCacheTimestamp(timestamp, now)) return now;
+  return Math.min(timestamp, now);
+}
+
+/**
  * Load cached models from disk.
  * Returns null if cache doesn't exist or is corrupted.
  */
@@ -52,6 +68,10 @@ export async function loadCache(): Promise<ModelsCache | null> {
 
     // Validate structure
     if (!parsed.models || !Array.isArray(parsed.models) || typeof parsed.timestamp !== 'number') {
+      return null;
+    }
+
+    if (!isValidCacheTimestamp(parsed.timestamp)) {
       return null;
     }
 
@@ -68,14 +88,18 @@ export async function loadCache(): Promise<ModelsCache | null> {
 export async function saveCache(cache: ModelsCache): Promise<void> {
   await ensureCacheDir();
   const cachePath = getCachePath();
-  await writeFile(cachePath, JSON.stringify(cache, null, 2));
+  const normalizedCache: ModelsCache = {
+    ...cache,
+    timestamp: normalizeTimestampForSave(cache.timestamp),
+  };
+  await writeFile(cachePath, JSON.stringify(normalizedCache, null, 2));
 }
 
 /**
  * Get the age of the cache in milliseconds.
  */
 export function getCacheAgeMs(cache: ModelsCache): number {
-  return Date.now() - cache.timestamp;
+  return Math.max(0, Date.now() - cache.timestamp);
 }
 
 /**
@@ -84,6 +108,7 @@ export function getCacheAgeMs(cache: ModelsCache): number {
  */
 export function formatDuration(ms: number | null): string {
   if (ms === null) return 'unknown';
+  if (ms <= 0) return '<1m';
 
   const minutes = Math.floor(ms / MS_PER_MINUTE);
   if (minutes < 1) return '<1m';

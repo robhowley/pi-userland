@@ -89,15 +89,34 @@ export interface UsageAggregate {
   cost: number;
 }
 
-export const ZERO_AGGREGATE: UsageAggregate = {
-  requests: 0,
-  promptTokens: 0,
-  completionTokens: 0,
-  reasoningTokens: 0,
-  cacheReadTokens: 0,
-  cacheWriteTokens: 0,
-  cost: 0,
-};
+export function createZeroAggregate(): UsageAggregate {
+  return {
+    requests: 0,
+    promptTokens: 0,
+    completionTokens: 0,
+    reasoningTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    cost: 0,
+  };
+}
+
+export function combineUsageAggregates(
+  official: UsageAggregate,
+  local: UsageAggregate,
+): UsageAggregate {
+  return {
+    requests: official.requests + local.requests,
+    promptTokens: official.promptTokens + local.promptTokens,
+    completionTokens: official.completionTokens + local.completionTokens,
+    reasoningTokens: official.reasoningTokens + local.reasoningTokens,
+    cacheReadTokens: official.cacheReadTokens + local.cacheReadTokens,
+    cacheWriteTokens: official.cacheWriteTokens + local.cacheWriteTokens,
+    cost: official.cost + local.cost,
+  };
+}
+
+export const ZERO_AGGREGATE: Readonly<UsageAggregate> = Object.freeze(createZeroAggregate());
 
 export interface CacheEntry<T> {
   data: T;

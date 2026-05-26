@@ -134,11 +134,13 @@ export class UsageOverlayComponent {
     const th = this.theme;
     const lines: string[] = [];
 
-    if (error) {
+    if (error && !summary) {
       lines.push(boxTop(this.width));
       lines.push(this.getUsageHeaderRow());
       lines.push(emptyRow(this.width));
-      lines.push(row(th.fg('error', error), this.width));
+      for (const errorLine of error.split('\n')) {
+        lines.push(row(th.fg('error', errorLine), this.width));
+      }
       if (cachedMinutesAgo !== null) {
         lines.push(
           row(th.fg('dim', `(last successful fetch: ${cachedMinutesAgo}m ago)`), this.width),
@@ -163,6 +165,19 @@ export class UsageOverlayComponent {
     lines.push(boxTop(this.width));
     lines.push(this.getUsageHeaderRow());
     lines.push(emptyRow(this.width));
+
+    if (error) {
+      lines.push(row(th.fg('warning', ' Stale usage data - refresh failed'), this.width));
+      for (const errorLine of error.split('\n')) {
+        lines.push(row(th.fg('dim', ` ${errorLine}`), this.width));
+      }
+      if (cachedMinutesAgo !== null) {
+        lines.push(
+          row(th.fg('dim', ` Last successful fetch: ${cachedMinutesAgo}m ago`), this.width),
+        );
+      }
+      lines.push(emptyRow(this.width));
+    }
 
     // Month row: amount stays with label, cap percentage right-aligned
     const monthLeftBase = ` Month $${fmt(summary.month)} / $${fmt(summary.cap)}`;
@@ -190,12 +205,8 @@ export class UsageOverlayComponent {
     }
     lines.push(rowRightAligned(weekLeftBase, weekRight + '  ', this.width));
 
-    // Today row on its own line - shows tilde since from local logs
-    const todayReqStr =
-      summary.local.requests > 0 ? ` · ${fmtCount(summary.local.requests)} reqs` : '';
-    lines.push(
-      rowRightAligned(` Today ~$${fmt(summary.local.cost)}${todayReqStr}`, '  ', this.width),
-    );
+    // Today row on its own line - shows tilde since it may include local tracked usage
+    lines.push(rowRightAligned(` Today ~$${fmt(summary.today)}`, '  ', this.width));
     lines.push(emptyRow(this.width));
 
     // Top models (7d table)

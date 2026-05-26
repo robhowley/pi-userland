@@ -23,6 +23,22 @@ export function formatSessionId(sessionId: string): string {
 // Detection Logic
 // =============================================================================
 
+/**
+ * Detect whether a provider request should be treated as an OpenRouter request.
+ *
+ * We intentionally use several overlapping signals because Pi events do not always
+ * expose provider metadata in the same place or at the same lifecycle stage.
+ * Different integrations can identify OpenRouter by:
+ * - provider name (`event.provider` or `event.payload.provider`) when Pi resolves it directly
+ * - model prefix (`openrouter/...`) when the request payload keeps the routed model id
+ * - `context.model.baseUrl` when the active model config points at OpenRouter
+ * - `provider.zdr === true` for Shopify's ZDR path that still routes through OpenRouter
+ * - request URL / endpoint as a last fallback for events that only expose transport details
+ *
+ * The checks stay intentionally redundant so session tagging and usage tracking keep
+ * working across request-time and `turn_end`-style event shapes without depending on
+ * a single field being present.
+ */
 export function isOpenRouterRequest(event: BeforeProviderRequestEvent, _ctx: unknown): boolean {
   const ev = event as unknown as Record<string, unknown>;
   const payload = ev['payload'] as Record<string, unknown> | undefined;

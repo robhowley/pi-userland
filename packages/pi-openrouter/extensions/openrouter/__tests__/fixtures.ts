@@ -137,7 +137,8 @@ export function createPiModelConfig(overrides?: Partial<PiModelConfig>): PiModel
 // LocalUsageEvent Fixtures
 // =============================================================================
 
-import type { LocalUsageEvent } from '../types.js';
+import type { LocalUsageEvent, UsageAggregate, UsageSummary } from '../types.js';
+import { createZeroAggregate } from '../types.js';
 
 /**
  * Creates LocalUsageEvent objects for testing local usage aggregation.
@@ -158,4 +159,142 @@ export function createLocalEvents(
     completionTokens: 50,
     cost: e.cost,
   }));
+}
+
+// =============================================================================
+// Session Context Fixtures
+// =============================================================================
+
+/**
+ * Special marker for session contexts that should throw when getSessionId is called.
+ */
+export const THROW_SESSION_ID = Symbol('THROW_SESSION_ID');
+
+/**
+ * Creates a mock context with a sessionManager for testing.
+ *
+ * @param sessionIdOrMarker - Session ID string, empty string, or THROW_SESSION_ID symbol
+ * @returns Context object with sessionManager.getSessionId() method
+ *
+ * @example
+ * // Normal session ID
+ * const ctx = createSessionCtx('my-session');
+ *
+ * // Empty string fallback
+ * const ctx = createSessionCtx('');
+ *
+ * // Throwing session manager
+ * const ctx = createSessionCtx(THROW_SESSION_ID);
+ */
+export function createSessionCtx(sessionIdOrMarker: string | symbol): {
+  sessionManager: { getSessionId: () => string };
+} {
+  if (sessionIdOrMarker === THROW_SESSION_ID) {
+    return {
+      sessionManager: {
+        getSessionId: () => {
+          throw new Error('Session manager error');
+        },
+      },
+    };
+  }
+  return {
+    sessionManager: {
+      getSessionId: () => sessionIdOrMarker as string,
+    },
+  };
+}
+
+// =============================================================================
+// Request Event Fixtures
+// =============================================================================
+
+/**
+ * Creates an OpenRouter request event for testing.
+ *
+ * @param overrides - Override default provider, payload, or other event properties
+ * @returns Request event object suitable for hook tests
+ *
+ * @example
+ * // Default OpenRouter request
+ * const event = createOpenRouterRequest();
+ *
+ * // With custom model
+ * const event = createOpenRouterRequest({ payload: { model: 'custom/model', messages: [] } });
+ *
+ * // Non-OpenRouter provider
+ * const event = createOpenRouterRequest({ provider: 'anthropic' });
+ */
+export function createOpenRouterRequest(overrides?: {
+  type?: string;
+  provider?: string;
+  payload?: Record<string, unknown>;
+  url?: string;
+}): {
+  type: string;
+  provider: string;
+  payload?: Record<string, unknown>;
+  url?: string;
+} {
+  return {
+    type: 'before_provider_request',
+    provider: 'openrouter',
+    payload: {
+      model: 'openrouter/anthropic/claude-sonnet-4',
+      messages: [],
+    },
+    ...overrides,
+  };
+}
+
+// =============================================================================
+// UsageAggregate Fixtures
+// =============================================================================
+
+/**
+ * Creates a UsageAggregate with overrides.
+ * Starts with zeros and allows customizing specific fields.
+ */
+export function createUsageAggregate(overrides?: Partial<UsageAggregate>): UsageAggregate {
+  return {
+    ...createZeroAggregate(),
+    ...overrides,
+  };
+}
+
+// =============================================================================
+// UsageSummary Fixtures
+// =============================================================================
+
+/**
+ * Creates a UsageSummary with sensible defaults.
+ * Use overrides to customize for specific test cases.
+ *
+ * @example
+ * // Minimal summary
+ * const summary = createUsageSummary();
+ *
+ * // With custom today/local split
+ * const summary = createUsageSummary({
+ *   today: 0.5,
+ *   local: createUsageAggregate({ cost: 2.0, requests: 10 })
+ * });
+ */
+export function createUsageSummary(overrides?: Partial<UsageSummary>): UsageSummary {
+  return {
+    today: 0,
+    week: 0,
+    month: 0,
+    cap: 10,
+    burnRate: 0,
+    topModels: [],
+    byProvider: [],
+    byDay: {},
+    timestamp: Date.now(),
+    hasActivityData: true,
+    official: createZeroAggregate(),
+    local: createZeroAggregate(),
+    combined: createZeroAggregate(),
+    ...overrides,
+  };
 }
