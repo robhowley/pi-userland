@@ -2,12 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { setLocalUsageDir, addUtcDays, dedupeLocalUsageEvents } from '../local-usage.js';
+import { setLocalUsageDir, dedupeLocalUsageEvents } from '../local-usage.js';
 import {
   calculateOpenRouterStatusStats,
   formatOpenRouterStatusBar,
   loadOpenRouterStatusBar,
   loadOpenRouterStatusStats,
+  type OpenRouterStatusStats,
 } from '../status-bar.js';
 import type { LocalUsageEvent } from '../types.js';
 
@@ -67,34 +68,20 @@ afterEach(async () => {
 });
 
 describe('calculateOpenRouterStatusStats', () => {
-  it('returns a clearable empty state for no local events', () => {
-    const stats = calculateOpenRouterStatusStats([], '2026-05-22');
-
-    expect(stats).toEqual({
-      todayLocalSpend: 0,
-      averageLocalDailySpendLast30Days: 0,
-      burnRateMultiplier: null,
-      hasLocalSpendInWindow: false,
-    });
-    expect(formatOpenRouterStatusBar(stats)).toBeNull();
+  it('returns null for no local events', () => {
+    expect(calculateOpenRouterStatusStats([], '2026-05-22')).toBeNull();
   });
 
-  it('clears the status when the full 30-day window totals zero local spend', () => {
-    const stats = calculateOpenRouterStatusStats(
-      [
-        createLocalUsageEvent('today-zero', '2026-05-22T09:15:00.000Z', 0),
-        createLocalUsageEvent('older-zero', '2026-05-12T09:15:00.000Z', 0),
-      ],
-      '2026-05-22',
-    );
-
-    expect(stats).toEqual({
-      todayLocalSpend: 0,
-      averageLocalDailySpendLast30Days: 0,
-      burnRateMultiplier: null,
-      hasLocalSpendInWindow: false,
-    });
-    expect(formatOpenRouterStatusBar(stats)).toBeNull();
+  it('returns null when the full 30-day window totals zero local spend', () => {
+    expect(
+      calculateOpenRouterStatusStats(
+        [
+          createLocalUsageEvent('today-zero', '2026-05-22T09:15:00.000Z', 0),
+          createLocalUsageEvent('older-zero', '2026-05-12T09:15:00.000Z', 0),
+        ],
+        '2026-05-22',
+      ),
+    ).toBeNull();
   });
 
   it('includes only UTC-today spend and divides by exactly 30 calendar days', () => {
@@ -106,10 +93,11 @@ describe('calculateOpenRouterStatusStats', () => {
       '2026-05-22',
     );
 
-    expect(stats.todayLocalSpend).toBe(3);
-    expect(stats.averageLocalDailySpendLast30Days).toBeCloseTo(0.4, 10);
-    expect(stats.burnRateMultiplier).toBeCloseTo(7.5, 10);
-    expect(stats.hasLocalSpendInWindow).toBe(true);
+    expect(stats).toEqual({
+      todayLocalSpend: 3,
+      averageLocalDailySpendLast30Days: 0.4,
+      burnRateMultiplier: 7.5,
+    });
   });
 
   it('uses only the today-29 through today window', () => {
@@ -123,9 +111,11 @@ describe('calculateOpenRouterStatusStats', () => {
       '2026-05-22',
     );
 
-    expect(stats.todayLocalSpend).toBe(1.5);
-    expect(stats.averageLocalDailySpendLast30Days).toBeCloseTo(0.35, 10);
-    expect(stats.burnRateMultiplier).toBeCloseTo(1.5 / 0.35, 10);
+    expect(stats).toEqual({
+      todayLocalSpend: 1.5,
+      averageLocalDailySpendLast30Days: 0.35,
+      burnRateMultiplier: 1.5 / 0.35,
+    });
   });
 
   it('deduplicates event ids exactly once across the full 30-day window', () => {
@@ -136,61 +126,55 @@ describe('calculateOpenRouterStatusStats', () => {
     ];
 
     expect(dedupeLocalUsageEvents(events)).toHaveLength(2);
-
-    const stats = calculateOpenRouterStatusStats(events, '2026-05-22');
-
-    expect(stats).toEqual({
+    expect(calculateOpenRouterStatusStats(events, '2026-05-22')).toEqual({
       todayLocalSpend: 2,
       averageLocalDailySpendLast30Days: 0.1,
       burnRateMultiplier: 20,
-      hasLocalSpendInWindow: true,
     });
   });
 });
 
 describe('formatOpenRouterStatusBar', () => {
   it('formats the representative status text exactly', () => {
-    const stats = calculateOpenRouterStatusStats(
-      [
-        createLocalUsageEvent('today', '2026-05-22T12:00:00.000Z', 2.14),
-        createLocalUsageEvent('older', '2026-05-12T12:00:00.000Z', 47.06),
-      ],
-      '2026-05-22',
-    );
+    const stats: OpenRouterStatusStats = {
+      todayLocalSpend: 2.14,
+      averageLocalDailySpendLast30Days: 1.64,
+      burnRateMultiplier: 1.3,
+    };
 
     expect(formatOpenRouterStatusBar(stats)).toBe('OR $2.14 today · 1.3x 30d avg');
   });
 
   it('formats $0.00 today · 0.0x 30d avg when prior 30-day spend exists but today spend is zero', () => {
-    const stats = calculateOpenRouterStatusStats(
-      [createLocalUsageEvent('older', '2026-05-12T12:00:00.000Z', 15)],
-      '2026-05-22',
-    );
+    const stats: OpenRouterStatusStats = {
+      todayLocalSpend: 0,
+      averageLocalDailySpendLast30Days: 0.5,
+      burnRateMultiplier: 0,
+    };
 
     expect(formatOpenRouterStatusBar(stats)).toBe('OR $0.00 today · 0.0x 30d avg');
   });
 
-  it('omits the multiplier when given a clearable stats object with no denominator', () => {
+  it('omits the multiplier when given a stats object with no denominator', () => {
     expect(
       formatOpenRouterStatusBar({
         todayLocalSpend: 2.14,
         averageLocalDailySpendLast30Days: 0,
         burnRateMultiplier: null,
-        hasLocalSpendInWindow: true,
       }),
     ).toBe('OR $2.14 today');
   });
 });
 
-describe('loadOpenRouterStatusStats', () => {
-  it('returns null for empty local usage data', async () => {
+describe('loadOpenRouterStatusStats and loadOpenRouterStatusBar', () => {
+  it('returns an empty result for empty local usage data', async () => {
     const now = new Date('2026-05-22T12:00:00.000Z');
 
     await expect(loadOpenRouterStatusStats(now)).resolves.toBeNull();
-    await expect(loadOpenRouterStatusBar(now)).resolves.toBeNull();
+    await expect(loadOpenRouterStatusBar(now)).resolves.toEqual({ kind: 'empty' });
   });
 
-  it('returns null when the 30-day window has only zero-cost local rows', async () => {
+  it('returns an empty result when the 30-day window has only zero-cost local rows', async () => {
     await writeDailyFile('2026-05-12', [
       createLocalUsageEvent('older-zero', '2026-05-12T12:00:00.000Z', 0),
     ]);
@@ -201,24 +185,19 @@ describe('loadOpenRouterStatusStats', () => {
     const now = new Date('2026-05-22T12:00:00.000Z');
 
     await expect(loadOpenRouterStatusStats(now)).resolves.toBeNull();
-    await expect(loadOpenRouterStatusBar(now)).resolves.toBeNull();
+    await expect(loadOpenRouterStatusBar(now)).resolves.toEqual({ kind: 'empty' });
   });
 
-  it('reads local files only from today-29 through today and ignores older files', async () => {
-    await writeDailyFile('2026-04-22', [
-      createLocalUsageEvent('too-old', '2026-04-22T12:00:00.000Z', 100),
-    ]);
-    await writeDailyFile('2026-04-23', [
-      createLocalUsageEvent('boundary', '2026-04-23T12:00:00.000Z', 1),
-    ]);
-    await writeDailyFile('2026-05-22', [
-      createLocalUsageEvent('today', '2026-05-22T12:00:00.000Z', 2),
-    ]);
-
+  it('requests local usage only from today-29 through today', async () => {
     vi.resetModules();
     const actualLocalUsage =
       await vi.importActual<typeof import('../local-usage.js')>('../local-usage.js');
-    const readLocalUsage = vi.fn(actualLocalUsage.readLocalUsage);
+    const readLocalUsage = vi
+      .fn()
+      .mockResolvedValue([
+        createLocalUsageEvent('boundary', '2026-04-23T12:00:00.000Z', 1),
+        createLocalUsageEvent('today', '2026-05-22T12:00:00.000Z', 2),
+      ]);
 
     vi.doMock('../local-usage.js', () => ({
       ...actualLocalUsage,
@@ -226,27 +205,20 @@ describe('loadOpenRouterStatusStats', () => {
     }));
 
     const { loadOpenRouterStatusStats: loadMockedStats } = await import('../status-bar.js');
-    const localUsage = await import('../local-usage.js');
-    localUsage.setLocalUsageDir(testDir);
 
-    const stats = await loadMockedStats(new Date('2026-05-22T12:00:00.000Z'));
-
-    expect(stats).toEqual({
+    await expect(loadMockedStats(new Date('2026-05-22T12:00:00.000Z'))).resolves.toEqual({
       todayLocalSpend: 2,
       averageLocalDailySpendLast30Days: 0.1,
       burnRateMultiplier: 20,
-      hasLocalSpendInWindow: true,
     });
     expect(readLocalUsage).toHaveBeenCalledTimes(1);
     expect(readLocalUsage).toHaveBeenCalledWith({
       fromDateUtc: '2026-04-23',
       toDateUtc: '2026-05-22',
     });
-
-    localUsage.setLocalUsageDir(null);
   });
 
-  it('tolerates missing files and malformed rows while still formatting the status', async () => {
+  it('tolerates missing files and malformed rows while returning a ready status', async () => {
     await writeDailyFile('2026-05-10', [
       createLocalUsageEvent('older', '2026-05-10T12:00:00.000Z', 4),
       '{not json}',
@@ -256,20 +228,20 @@ describe('loadOpenRouterStatusStats', () => {
       '',
     ]);
 
-    const stats = await loadOpenRouterStatusStats(new Date('2026-05-22T12:00:00.000Z'));
+    const now = new Date('2026-05-22T12:00:00.000Z');
 
-    expect(stats).toEqual({
+    await expect(loadOpenRouterStatusStats(now)).resolves.toEqual({
       todayLocalSpend: 2,
       averageLocalDailySpendLast30Days: 0.2,
       burnRateMultiplier: 10,
-      hasLocalSpendInWindow: true,
     });
-    expect(await loadOpenRouterStatusBar(new Date('2026-05-22T12:00:00.000Z'))).toBe(
-      'OR $2.00 today · 10.0x 30d avg',
-    );
+    await expect(loadOpenRouterStatusBar(now)).resolves.toEqual({
+      kind: 'ready',
+      text: 'OR $2.00 today · 10.0x 30d avg',
+    });
   });
 
-  it('returns null when the local usage read path throws unexpectedly', async () => {
+  it('returns a failed result when the local usage read path throws unexpectedly', async () => {
     vi.resetModules();
 
     const readLocalUsage = vi.fn().mockRejectedValue(new Error('disk exploded'));
@@ -281,17 +253,10 @@ describe('loadOpenRouterStatusStats', () => {
       };
     });
 
-    const { loadOpenRouterStatusStats: loadMockedStats, loadOpenRouterStatusBar: loadMockedBar } =
-      await import('../status-bar.js');
+    const { loadOpenRouterStatusBar: loadMockedBar } = await import('../status-bar.js');
 
-    const now = new Date('2026-05-22T12:00:00.000Z');
-    const expectedFromDateUtc = addUtcDays('2026-05-22', -29);
-
-    await expect(loadMockedStats(now)).resolves.toBeNull();
-    await expect(loadMockedBar(now)).resolves.toBeNull();
-    expect(readLocalUsage).toHaveBeenCalledWith({
-      fromDateUtc: expectedFromDateUtc,
-      toDateUtc: '2026-05-22',
+    await expect(loadMockedBar(new Date('2026-05-22T12:00:00.000Z'))).resolves.toEqual({
+      kind: 'failed',
     });
   });
 });

@@ -16,8 +16,12 @@ export interface OpenRouterStatusStats {
   todayLocalSpend: number;
   averageLocalDailySpendLast30Days: number;
   burnRateMultiplier: number | null;
-  hasLocalSpendInWindow: boolean;
 }
+
+export type OpenRouterStatusBarLoadResult =
+  | { kind: 'ready'; text: string }
+  | { kind: 'empty' }
+  | { kind: 'failed' };
 
 function getUtcDateForNow(now?: Date): string {
   return now ? now.toISOString().slice(0, 10) : getCurrentUtcDate();
@@ -26,7 +30,7 @@ function getUtcDateForNow(now?: Date): string {
 export function calculateOpenRouterStatusStats(
   events: LocalUsageEvent[],
   nowUtcDate: string = getCurrentUtcDate(),
-): OpenRouterStatusStats {
+): OpenRouterStatusStats | null {
   const windowStartUtc = addUtcDays(nowUtcDate, -(STATUS_WINDOW_DAYS - 1));
   const uniqueEvents = dedupeLocalUsageEvents(events);
 
@@ -47,6 +51,10 @@ export function calculateOpenRouterStatusStats(
     }
   }
 
+  if (totalLocalSpendInWindow <= 0) {
+    return null;
+  }
+
   const averageLocalDailySpendLast30Days = totalLocalSpendInWindow / STATUS_WINDOW_DAYS;
 
   return {
@@ -56,15 +64,10 @@ export function calculateOpenRouterStatusStats(
       averageLocalDailySpendLast30Days === 0
         ? null
         : todayLocalSpend / averageLocalDailySpendLast30Days,
-    hasLocalSpendInWindow: totalLocalSpendInWindow > 0,
   };
 }
 
-export function formatOpenRouterStatusBar(stats: OpenRouterStatusStats | null): string | null {
-  if (!stats || !stats.hasLocalSpendInWindow) {
-    return null;
-  }
-
+export function formatOpenRouterStatusBar(stats: OpenRouterStatusStats): string {
   const today = `${STATUS_PREFIX} $${stats.todayLocalSpend.toFixed(2)} today`;
   if (stats.burnRateMultiplier === null) {
     return today;
@@ -74,18 +77,25 @@ export function formatOpenRouterStatusBar(stats: OpenRouterStatusStats | null): 
 }
 
 export async function loadOpenRouterStatusStats(now?: Date): Promise<OpenRouterStatusStats | null> {
-  try {
-    const todayUtc = getUtcDateForNow(now);
-    const fromDateUtc = addUtcDays(todayUtc, -(STATUS_WINDOW_DAYS - 1));
-    const events = await readLocalUsage({ fromDateUtc, toDateUtc: todayUtc });
-    const stats = calculateOpenRouterStatusStats(events, todayUtc);
+  const todayUtc = getUtcDateForNow(now);
+  const fromDateUtc = addUtcDays(todayUtc, -(STATUS_WINDOW_DAYS - 1));
+  const events = await readLocalUsage({ fromDateUtc, toDateUtc: todayUtc });
 
-    return stats.hasLocalSpendInWindow ? stats : null;
-  } catch {
-    return null;
-  }
+  return calculateOpenRouterStatusStats(events, todayUtc);
 }
 
-export async function loadOpenRouterStatusBar(now?: Date): Promise<string | null> {
-  return formatOpenRouterStatusBar(await loadOpenRouterStatusStats(now));
+export async function loadOpenRouterStatusBar(now?: Date): Promise<OpenRouterStatusBarLoadResult> {
+  try {
+    const stats = await loadOpenRouterStatusStats(now);
+    if (!stats) {
+      return { kind: 'empty' };
+    }
+
+    return {
+      kind: 'ready',
+      text: formatOpenRouterStatusBar(stats),
+    };
+  } catch {
+    return { kind: 'failed' };
+  }
 }

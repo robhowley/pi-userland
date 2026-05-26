@@ -14,6 +14,9 @@ import { loadOpenRouterStatusBar } from './status-bar.js';
 
 let sessionState: SessionState | null = null;
 let sessionTrackingInstalled = false;
+let openRouterStatusRolloverTimer: ReturnType<typeof setTimeout> | null = null;
+
+type StatusContext = Pick<ExtensionContext, 'hasUI' | 'ui'>;
 
 export interface StartupCacheState {
   info?: {
@@ -190,22 +193,61 @@ function captureLocalUsage(event: unknown, ctx: ExtensionContext): void {
   }
 }
 
-async function refreshOpenRouterUsageStatus(
-  ctx: Pick<ExtensionContext, 'hasUI' | 'ui'>,
-): Promise<void> {
+async function refreshOpenRouterUsageStatus(ctx: StatusContext): Promise<void> {
   if (!ctx.hasUI) return;
 
   try {
-    const statusText = await loadOpenRouterStatusBar();
-    if (statusText === null) {
-      ctx.ui.setStatus('openrouter', undefined);
-      return;
-    }
+    const statusResult = await loadOpenRouterStatusBar();
 
-    ctx.ui.setStatus('openrouter', ctx.ui.theme.fg('dim', statusText));
+    switch (statusResult.kind) {
+      case 'ready':
+        ctx.ui.setStatus('openrouter', ctx.ui.theme.fg('dim', statusResult.text));
+        return;
+      case 'empty':
+        ctx.ui.setStatus('openrouter', undefined);
+        return;
+      case 'failed':
+        return;
+    }
   } catch {
-    ctx.ui.setStatus('openrouter', undefined);
+    // Fail open - preserve the existing status on unexpected refresh errors.
   }
+}
+
+function clearOpenRouterStatusRolloverTimer(): void {
+  if (openRouterStatusRolloverTimer !== null) {
+    clearTimeout(openRouterStatusRolloverTimer);
+    openRouterStatusRolloverTimer = null;
+  }
+}
+
+function getMillisecondsUntilNextUtcMidnight(now: Date = new Date()): number {
+  const nextUtcMidnight = Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate() + 1,
+    0,
+    0,
+    0,
+    0,
+  );
+
+  return Math.max(0, nextUtcMidnight - now.getTime());
+}
+
+function scheduleOpenRouterStatusRollover(ctx: StatusContext): void {
+  clearOpenRouterStatusRolloverTimer();
+
+  if (!ctx.hasUI) {
+    return;
+  }
+
+  openRouterStatusRolloverTimer = setTimeout(() => {
+    openRouterStatusRolloverTimer = null;
+    void refreshOpenRouterUsageStatus(ctx).catch(() => {});
+    scheduleOpenRouterStatusRollover(ctx);
+  }, getMillisecondsUntilNextUtcMidnight());
+  openRouterStatusRolloverTimer.unref?.();
 }
 
 function installLifecycleHooks(
@@ -213,6 +255,7 @@ function installLifecycleHooks(
   startupState: StartupCacheState,
 ): void {
   pi.on('session_shutdown', () => {
+    clearOpenRouterStatusRolloverTimer();
     stopBackgroundRefresh();
     sessionState?.reset();
   });
@@ -232,6 +275,7 @@ function handleSessionStart(
   if (!ctx.hasUI) return;
 
   void refreshOpenRouterUsageStatus(ctx).catch(() => {});
+  scheduleOpenRouterStatusRollover(ctx);
 
   if (event.reason === 'startup' && startupState.info) {
     const notice = `OpenRouter: ${startupState.info.count} models loaded from cache (${startupState.info.age} old). Run /openrouter models-sync to refresh.`;

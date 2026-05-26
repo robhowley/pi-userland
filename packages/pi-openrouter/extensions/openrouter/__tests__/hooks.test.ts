@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   stopBackgroundRefresh: vi.fn(),
@@ -90,6 +90,7 @@ describe('openrouter hooks', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.resetAllMocks();
+    vi.useRealTimers();
 
     mocks.isOpenRouterRequest.mockReturnValue(true);
     mocks.writeLocalUsage.mockResolvedValue(undefined);
@@ -99,7 +100,11 @@ describe('openrouter hooks', () => {
     mocks.mapOpenRouterModels.mockResolvedValue({ configs: [{ id: 'model-a' }] });
     mocks.includeBuiltinRouterModels.mockReturnValue([{ id: 'model-a' }, { id: 'router' }]);
     mocks.isSyncEnabled.mockReturnValue(true);
-    mocks.loadOpenRouterStatusBar.mockResolvedValue(null);
+    mocks.loadOpenRouterStatusBar.mockResolvedValue({ kind: 'empty' });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('loads cached startup models and preserves startup cache info', async () => {
@@ -167,7 +172,10 @@ describe('openrouter hooks', () => {
     const ctx = createMockContext();
     const { initializeSessionState, installOpenRouterHooks } = await loadHooksModule();
 
-    mocks.loadOpenRouterStatusBar.mockResolvedValue('OR $2.14 today · 1.3x 30d avg');
+    mocks.loadOpenRouterStatusBar.mockResolvedValue({
+      kind: 'ready',
+      text: 'OR $2.14 today · 1.3x 30d avg',
+    });
 
     initializeSessionState();
     installOpenRouterHooks(pi as any, {
@@ -194,7 +202,7 @@ describe('openrouter hooks', () => {
     const { handlers, pi } = createMockPi();
     const ctx = createMockContext();
     const { initializeSessionState, installOpenRouterHooks } = await loadHooksModule();
-    const statusLoad = createDeferredPromise<string | null>();
+    const statusLoad = createDeferredPromise<{ kind: 'ready'; text: string } | { kind: 'empty' }>();
 
     mocks.loadOpenRouterStatusBar.mockReturnValue(statusLoad.promise);
 
@@ -212,7 +220,7 @@ describe('openrouter hooks', () => {
     );
     expect(ctx.ui.setStatus).not.toHaveBeenCalled();
 
-    statusLoad.resolve(null);
+    statusLoad.resolve({ kind: 'empty' });
 
     await vi.waitFor(() => {
       expect(ctx.ui.setStatus).toHaveBeenCalledWith('openrouter', undefined);
@@ -220,12 +228,12 @@ describe('openrouter hooks', () => {
     expect(ctx.ui.theme.fg).not.toHaveBeenCalled();
   });
 
-  it('keeps startup warning notifications unchanged when the usage helper returns null', async () => {
+  it('preserves the existing startup status when the usage helper fails open', async () => {
     const { handlers, pi } = createMockPi();
     const ctx = createMockContext();
     const { initializeSessionState, installOpenRouterHooks } = await loadHooksModule();
 
-    mocks.loadOpenRouterStatusBar.mockResolvedValue(null);
+    mocks.loadOpenRouterStatusBar.mockResolvedValue({ kind: 'failed' });
 
     initializeSessionState();
     installOpenRouterHooks(pi as any, {
@@ -234,13 +242,14 @@ describe('openrouter hooks', () => {
 
     await handlers.get('session_start')({ reason: 'startup' }, ctx);
 
-    await vi.waitFor(() => {
-      expect(ctx.ui.setStatus).toHaveBeenCalledWith('openrouter', undefined);
-    });
+    expect(mocks.loadOpenRouterStatusBar).toHaveBeenCalledTimes(1);
     expect(ctx.ui.notify).toHaveBeenCalledWith(
       'OpenRouter: cached models found but failed to register: mapper failed',
       'warning',
     );
+    await Promise.resolve();
+    expect(ctx.ui.setStatus).not.toHaveBeenCalled();
+    expect(ctx.ui.theme.fg).not.toHaveBeenCalled();
   });
 
   it('keeps before_provider_request session tagging behavior unchanged through the installed hook', async () => {
@@ -282,7 +291,10 @@ describe('openrouter hooks', () => {
     const writeLocalUsageDeferred = createDeferredPromise<void>();
 
     mocks.writeLocalUsage.mockReturnValue(writeLocalUsageDeferred.promise);
-    mocks.loadOpenRouterStatusBar.mockResolvedValue('OR $1.25 today · 30.0x 30d avg');
+    mocks.loadOpenRouterStatusBar.mockResolvedValue({
+      kind: 'ready',
+      text: 'OR $1.25 today · 30.0x 30d avg',
+    });
 
     initializeSessionState();
     installOpenRouterHooks(pi as any, {});
@@ -348,7 +360,10 @@ describe('openrouter hooks', () => {
     const { initializeSessionState, installOpenRouterHooks } = await loadHooksModule();
 
     mocks.isOpenRouterRequest.mockReturnValue(false);
-    mocks.loadOpenRouterStatusBar.mockResolvedValue('OR $9.99 today · 9.9x 30d avg');
+    mocks.loadOpenRouterStatusBar.mockResolvedValue({
+      kind: 'ready',
+      text: 'OR $9.99 today · 9.9x 30d avg',
+    });
 
     initializeSessionState();
     installOpenRouterHooks(pi as any, {});
@@ -374,12 +389,12 @@ describe('openrouter hooks', () => {
     expect(ctx.ui.setStatus).not.toHaveBeenCalled();
   });
 
-  it('clears stale status after a turn when the usage helper returns null', async () => {
+  it('clears stale status after a turn when the usage helper reports empty local spend', async () => {
     const { handlers, pi } = createMockPi();
     const ctx = createMockContext();
     const { initializeSessionState, installOpenRouterHooks } = await loadHooksModule();
 
-    mocks.loadOpenRouterStatusBar.mockResolvedValue(null);
+    mocks.loadOpenRouterStatusBar.mockResolvedValue({ kind: 'empty' });
 
     initializeSessionState();
     installOpenRouterHooks(pi as any, {});
@@ -405,15 +420,110 @@ describe('openrouter hooks', () => {
     });
   });
 
-  it('stops background refresh on session shutdown', async () => {
+  it('preserves the existing status after a turn when the usage helper fails open', async () => {
     const { handlers, pi } = createMockPi();
+    const ctx = createMockContext();
     const { initializeSessionState, installOpenRouterHooks } = await loadHooksModule();
+
+    mocks.loadOpenRouterStatusBar.mockResolvedValue({ kind: 'failed' });
 
     initializeSessionState();
     installOpenRouterHooks(pi as any, {});
 
+    await handlers.get('turn_end')(
+      {
+        url: 'https://openrouter.ai/api/v1/chat/completions',
+        message: {
+          model: 'openrouter/anthropic/claude-sonnet-4',
+          responseId: 'resp-4',
+          usage: {
+            input: 1,
+            output: 1,
+            cost: { total: 0.01 },
+          },
+        },
+      },
+      ctx,
+    );
+
+    await Promise.resolve();
+    expect(ctx.ui.setStatus).not.toHaveBeenCalled();
+    expect(ctx.ui.theme.fg).not.toHaveBeenCalled();
+  });
+
+  it('refreshes the status at UTC midnight and reschedules while the session stays active', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-22T23:59:50.000Z'));
+
+    const { handlers, pi } = createMockPi();
+    const ctx = createMockContext();
+    const { initializeSessionState, installOpenRouterHooks } = await loadHooksModule();
+
+    mocks.loadOpenRouterStatusBar
+      .mockResolvedValueOnce({ kind: 'ready', text: 'OR $4.50 today · 2.0x 30d avg' })
+      .mockResolvedValueOnce({ kind: 'ready', text: 'OR $0.25 today · 0.2x 30d avg' })
+      .mockResolvedValueOnce({ kind: 'ready', text: 'OR $0.30 today · 0.2x 30d avg' });
+
+    initializeSessionState();
+    installOpenRouterHooks(pi as any, {});
+
+    await handlers.get('session_start')({ reason: 'startup' }, ctx);
+
+    await vi.waitFor(() => {
+      expect(ctx.ui.setStatus).toHaveBeenCalledWith(
+        'openrouter',
+        'dim:OR $4.50 today · 2.0x 30d avg',
+      );
+    });
+    expect(mocks.loadOpenRouterStatusBar).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await vi.waitFor(() => {
+      expect(mocks.loadOpenRouterStatusBar).toHaveBeenCalledTimes(2);
+    });
+    expect(ctx.ui.setStatus).toHaveBeenLastCalledWith(
+      'openrouter',
+      'dim:OR $0.25 today · 0.2x 30d avg',
+    );
+
+    await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
+
+    await vi.waitFor(() => {
+      expect(mocks.loadOpenRouterStatusBar).toHaveBeenCalledTimes(3);
+    });
+    expect(ctx.ui.setStatus).toHaveBeenLastCalledWith(
+      'openrouter',
+      'dim:OR $0.30 today · 0.2x 30d avg',
+    );
+  });
+
+  it('clears the UTC-midnight rollover timer on session shutdown', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-22T23:59:50.000Z'));
+
+    const { handlers, pi } = createMockPi();
+    const ctx = createMockContext();
+    const { initializeSessionState, installOpenRouterHooks } = await loadHooksModule();
+
+    mocks.loadOpenRouterStatusBar.mockResolvedValue({
+      kind: 'ready',
+      text: 'OR $1.00 today · 1.0x 30d avg',
+    });
+
+    initializeSessionState();
+    installOpenRouterHooks(pi as any, {});
+
+    await handlers.get('session_start')({ reason: 'startup' }, ctx);
+    await vi.waitFor(() => {
+      expect(mocks.loadOpenRouterStatusBar).toHaveBeenCalledTimes(1);
+    });
+
     handlers.get('session_shutdown')();
 
+    await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
+
+    expect(mocks.loadOpenRouterStatusBar).toHaveBeenCalledTimes(1);
     expect(mocks.stopBackgroundRefresh).toHaveBeenCalledTimes(1);
   });
 });
