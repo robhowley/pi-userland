@@ -15,7 +15,7 @@ type ExpectedExecCall = {
 };
 
 const GH_PR_VIEW_JSON_FIELDS =
-  'number,title,url,state,isDraft,mergeable,mergeStateStatus,headRefName,baseRefName,statusCheckRollup,reviews,reviewRequests,author';
+  'number,title,url,state,isDraft,mergeable,mergeStateStatus,headRefName,baseRefName,statusCheckRollup,reviews,reviewDecision,reviewRequests,author';
 
 function createFakeExec(expectedCalls: ExpectedExecCall[]): {
   exec: MergeReadyExec;
@@ -88,6 +88,7 @@ function buildPullRequestPayload(overrides: Record<string, unknown> = {}) {
         submittedAt: '2026-05-26T18:00:00Z',
       },
     ],
+    reviewDecision: 'APPROVED',
     reviewRequests: [],
     author: {
       login: 'robhowley',
@@ -158,6 +159,7 @@ describe('merge-ready GitHub primitives', () => {
             },
           ],
         },
+        reviewDecision: 'approved',
         reviewRequests: {
           kind: 'known',
           count: 0,
@@ -209,6 +211,7 @@ describe('merge-ready GitHub primitives', () => {
             buildPullRequestPayload({
               isDraft: true,
               mergeStateStatus: 'DRAFT',
+              reviewDecision: 'REVIEW_REQUIRED',
               reviewRequests: [{ __typename: 'User', login: 'babakks' }],
               reviews: [],
             }),
@@ -229,6 +232,7 @@ describe('merge-ready GitHub primitives', () => {
     expect(facts.pullRequest.draft).toBe('yes');
     expect(facts.pullRequest.mergeability).toBe('blocked');
     expect(facts.pullRequest.reviews.state).toBe('pending');
+    expect(facts.pullRequest.reviewDecision).toBe('review_required');
     expect(facts.pullRequest.reviewRequests).toEqual({
       kind: 'known',
       count: 1,
@@ -303,6 +307,50 @@ describe('merge-ready GitHub primitives', () => {
     expect(facts.pullRequest.checks.state).toBe(expectedState);
     expect(facts.pullRequest.checks.names.failing).toEqual(expectedNames.failing);
     expect(facts.pullRequest.checks.names.running).toEqual(expectedNames.running);
+  });
+
+  it.each([
+    {
+      name: 'approved',
+      reviewDecision: 'APPROVED',
+      expected: 'approved',
+    },
+    {
+      name: 'changes requested',
+      reviewDecision: 'CHANGES_REQUESTED',
+      expected: 'changes_requested',
+    },
+    {
+      name: 'review required',
+      reviewDecision: 'REVIEW_REQUIRED',
+      expected: 'review_required',
+    },
+    {
+      name: 'not required',
+      reviewDecision: '',
+      expected: 'not_required',
+    },
+  ])('normalizes review decision when $name', async ({ reviewDecision, expected }) => {
+    const { exec, assertDone } = createFakeExec([
+      {
+        command: 'gh',
+        args: ['pr', 'view', '--json', GH_PR_VIEW_JSON_FIELDS],
+        result: {
+          stdout: JSON.stringify(buildPullRequestPayload({ reviewDecision, reviews: [] })),
+        },
+      },
+    ]);
+
+    const facts = await fetchMergeReadyGitHubPullRequestFacts({ exec });
+
+    assertDone();
+
+    expect(facts.kind).toBe('found');
+    if (facts.kind !== 'found') {
+      return;
+    }
+
+    expect(facts.pullRequest.reviewDecision).toBe(expected);
   });
 
   it('uses the latest review per author so changes requested beat stale approvals', async () => {

@@ -42,6 +42,13 @@ export type MergeReadyGitHubReviewSummary = {
   latestByAuthor: MergeReadyGitHubReviewByAuthor[];
 };
 
+export type MergeReadyGitHubReviewDecisionSignal =
+  | 'approved'
+  | 'changes_requested'
+  | 'review_required'
+  | 'not_required'
+  | 'unknown';
+
 export type MergeReadyGitHubReviewRequest = {
   type: 'user' | 'team' | 'unknown';
   name: string;
@@ -70,6 +77,7 @@ export type MergeReadyGitHubPullRequest = {
   mergeability: MergeReadyGitHubMergeability;
   checks: MergeReadyGitHubCheckSummary;
   reviews: MergeReadyGitHubReviewSummary;
+  reviewDecision: MergeReadyGitHubReviewDecisionSignal;
   reviewRequests: MergeReadyGitHubReviewRequests;
   author: MergeReadyGitHubAuthor | null;
 };
@@ -170,6 +178,7 @@ const GH_PR_VIEW_JSON_FIELDS = [
   'baseRefName',
   'statusCheckRollup',
   'reviews',
+  'reviewDecision',
   'reviewRequests',
   'author',
 ] as const;
@@ -392,6 +401,7 @@ function normalizePullRequest(
     ),
     checks: normalizeChecks(value['statusCheckRollup'], issueContext, issues),
     reviews: normalizeReviews(value['reviews'], issueContext, issues),
+    reviewDecision: normalizeReviewDecision(value['reviewDecision'], issueContext, issues),
     reviewRequests: normalizeReviewRequests(value['reviewRequests'], issueContext, issues),
     author: normalizeAuthor(value['author'], issueContext, issues),
   };
@@ -802,6 +812,49 @@ function normalizeReviewState(
       'partial_shape',
       'gh pr view JSON payload included a review with an unknown state',
       `reviews[${index}].state`,
+    ),
+  );
+  return 'unknown';
+}
+
+function normalizeReviewDecision(
+  value: unknown,
+  issueContext: IssueContext,
+  issues: MergeReadyGitHubIssue[],
+): MergeReadyGitHubReviewDecisionSignal {
+  if (value === '') {
+    return 'not_required';
+  }
+
+  const reviewDecision = readOptionalString(value)?.toUpperCase();
+  if (!reviewDecision) {
+    issues.push(
+      createIssue(
+        issueContext,
+        'partial_shape',
+        'gh pr view JSON payload had an invalid review decision',
+        'reviewDecision',
+      ),
+    );
+    return 'unknown';
+  }
+
+  if (reviewDecision === 'APPROVED') {
+    return 'approved';
+  }
+  if (reviewDecision === 'CHANGES_REQUESTED') {
+    return 'changes_requested';
+  }
+  if (reviewDecision === 'REVIEW_REQUIRED') {
+    return 'review_required';
+  }
+
+  issues.push(
+    createIssue(
+      issueContext,
+      'partial_shape',
+      'gh pr view JSON payload had an unknown review decision',
+      'reviewDecision',
     ),
   );
   return 'unknown';

@@ -25,7 +25,7 @@ type RegisteredTool = ReturnType<ReturnType<typeof createMockAPI>['getTool']>;
 
 const GENERATED_AT = '2026-05-26T22:00:00.000Z';
 const GH_PR_VIEW_JSON_FIELDS =
-  'number,title,url,state,isDraft,mergeable,mergeStateStatus,headRefName,baseRefName,statusCheckRollup,reviews,reviewRequests,author';
+  'number,title,url,state,isDraft,mergeable,mergeStateStatus,headRefName,baseRefName,statusCheckRollup,reviews,reviewDecision,reviewRequests,author';
 const GH_GRAPHQL_REVIEW_THREADS_QUERY = [
   'query MergeReadyReviewThreads($owner: String!, $name: String!, $number: Int!) {',
   'repository(owner: $owner, name: $name) {',
@@ -224,6 +224,7 @@ function buildPullRequestPayload(overrides: Record<string, unknown> = {}) {
         submittedAt: '2026-05-26T20:00:00Z',
       },
     ],
+    reviewDecision: 'APPROVED',
     reviewRequests: [],
     author: {
       login: 'robhowley',

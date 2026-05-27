@@ -6,11 +6,13 @@ import { discoverMergeReadyGitFacts, type MergeReadyExec } from './git.js';
 import {
   fetchMergeReadyGitHubPullRequestFacts,
   type MergeReadyGitHubPullRequest,
+  type MergeReadyGitHubReviewDecisionSignal,
 } from './github.js';
 import { createMergeReadyStatus } from './status.js';
 import type {
   MergeReadyBooleanSignal,
   MergeReadyPullRequest,
+  MergeReadyReviewSignal,
   MergeReadySignalsInput,
   MergeReadyStatus,
 } from './types.js';
@@ -68,7 +70,7 @@ export async function getMergeReadyStatus(
   const signals: MergeReadySignalsInput = {
     draft: toBoolean(pullRequestFacts.pullRequest.draft),
     checks: pullRequestFacts.pullRequest.checks.state,
-    review: pullRequestFacts.pullRequest.reviews.state,
+    review: normalizeReviewSignal(pullRequestFacts.pullRequest),
     unresolvedConversations: normalizeConversationSignal(conversations),
   };
 
@@ -100,6 +102,27 @@ function normalizeConversationSignal(conversations: MergeReadyPullRequestConvers
     return conversations.unresolvedCount > 0;
   }
   return false;
+}
+
+function normalizeReviewSignal(pullRequest: MergeReadyGitHubPullRequest): MergeReadyReviewSignal {
+  return normalizeReviewDecisionSignal(pullRequest.reviewDecision, pullRequest.reviews.state);
+}
+
+function normalizeReviewDecisionSignal(
+  reviewDecision: MergeReadyGitHubReviewDecisionSignal,
+  fallbackReviewState: MergeReadyReviewSignal,
+): MergeReadyReviewSignal {
+  if (reviewDecision === 'approved' || reviewDecision === 'not_required') {
+    return 'approved';
+  }
+  if (reviewDecision === 'changes_requested') {
+    return 'changes_requested';
+  }
+  if (reviewDecision === 'review_required') {
+    return 'pending';
+  }
+
+  return fallbackReviewState;
 }
 
 function toBoolean(signal: MergeReadyBooleanSignal): boolean {
