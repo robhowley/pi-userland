@@ -250,6 +250,163 @@ function openItemIds(
 
 const blockerFixtures: BlockerFixture[] = [
   {
+    name: 'merge conflicts',
+    prOverrides: {
+      mergeable: 'CONFLICTING',
+      mergeStateStatus: 'DIRTY',
+    },
+    expectedBadge: 'merge_conflicts',
+    expectedState: 'blocked',
+    expectedSummary: 'Merge conflicts detected',
+    expectedOpenItemIds: ['merge_conflicts'],
+    expectedSignals: {
+      draft: false,
+      mergeability: 'conflicting',
+      checks: 'passing',
+      review: 'approved',
+      unresolvedConversations: false,
+    },
+  },
+  {
+    name: 'branch out of date',
+    prOverrides: {
+      mergeStateStatus: 'BEHIND',
+    },
+    expectedBadge: 'branch_out_of_date',
+    expectedState: 'blocked',
+    expectedSummary: 'Branch is out of date with base',
+    expectedOpenItemIds: ['branch_out_of_date'],
+    expectedSignals: {
+      draft: false,
+      mergeability: 'behind',
+      checks: 'passing',
+      review: 'approved',
+      unresolvedConversations: false,
+    },
+  },
+  {
+    name: 'generic merge blocked from BLOCKED',
+    prOverrides: {
+      mergeStateStatus: 'BLOCKED',
+    },
+    expectedBadge: 'merge_blocked',
+    expectedState: 'blocked',
+    expectedSummary: 'GitHub reports merge is blocked',
+    expectedOpenItemIds: ['merge_blocked'],
+    expectedSignals: {
+      draft: false,
+      mergeability: 'blocked',
+      checks: 'passing',
+      review: 'approved',
+      unresolvedConversations: false,
+    },
+  },
+  {
+    name: 'generic merge blocked from UNSTABLE',
+    prOverrides: {
+      mergeStateStatus: 'UNSTABLE',
+    },
+    expectedBadge: 'merge_blocked',
+    expectedState: 'blocked',
+    expectedSummary: 'GitHub reports merge is blocked',
+    expectedOpenItemIds: ['merge_blocked'],
+    expectedSignals: {
+      draft: false,
+      mergeability: 'blocked',
+      checks: 'passing',
+      review: 'approved',
+      unresolvedConversations: false,
+    },
+  },
+  {
+    name: 'generic merge blocked from HAS_HOOKS',
+    prOverrides: {
+      mergeStateStatus: 'HAS_HOOKS',
+    },
+    expectedBadge: 'merge_blocked',
+    expectedState: 'blocked',
+    expectedSummary: 'GitHub reports merge is blocked',
+    expectedOpenItemIds: ['merge_blocked'],
+    expectedSignals: {
+      draft: false,
+      mergeability: 'blocked',
+      checks: 'passing',
+      review: 'approved',
+      unresolvedConversations: false,
+    },
+  },
+  {
+    name: 'ambiguous mergeability from mergeable UNKNOWN',
+    prOverrides: {
+      mergeable: 'UNKNOWN',
+      mergeStateStatus: 'CLEAN',
+    },
+    expectedBadge: 'unknown',
+    expectedState: 'unknown',
+    expectedSummary: 'Merge readiness is ambiguous',
+    expectedOpenItemIds: ['status_ambiguous'],
+    expectedSignals: {
+      draft: false,
+      mergeability: 'unknown',
+      checks: 'passing',
+      review: 'approved',
+      unresolvedConversations: false,
+    },
+  },
+  {
+    name: 'ambiguous mergeability from merge state UNKNOWN',
+    prOverrides: {
+      mergeable: 'MERGEABLE',
+      mergeStateStatus: 'UNKNOWN',
+    },
+    expectedBadge: 'unknown',
+    expectedState: 'unknown',
+    expectedSummary: 'Merge readiness is ambiguous',
+    expectedOpenItemIds: ['status_ambiguous'],
+    expectedSignals: {
+      draft: false,
+      mergeability: 'unknown',
+      checks: 'passing',
+      review: 'approved',
+      unresolvedConversations: false,
+    },
+  },
+  {
+    name: 'ambiguous mergeability from missing fields',
+    prOverrides: {
+      mergeable: null,
+    },
+    expectedBadge: 'unknown',
+    expectedState: 'unknown',
+    expectedSummary: 'Merge readiness is ambiguous',
+    expectedOpenItemIds: ['status_ambiguous'],
+    expectedSignals: {
+      draft: false,
+      mergeability: 'unknown',
+      checks: 'passing',
+      review: 'approved',
+      unresolvedConversations: false,
+    },
+  },
+  {
+    name: 'future mergeability values stay blocked',
+    prOverrides: {
+      mergeable: 'MERGEABLE',
+      mergeStateStatus: 'REBASEABLE',
+    },
+    expectedBadge: 'merge_blocked',
+    expectedState: 'blocked',
+    expectedSummary: 'GitHub reports merge is blocked',
+    expectedOpenItemIds: ['merge_blocked'],
+    expectedSignals: {
+      draft: false,
+      mergeability: 'blocked',
+      checks: 'passing',
+      review: 'approved',
+      unresolvedConversations: false,
+    },
+  },
+  {
     name: 'draft',
     prOverrides: {
       isDraft: true,
@@ -261,6 +418,7 @@ const blockerFixtures: BlockerFixture[] = [
     expectedOpenItemIds: ['draft'],
     expectedSignals: {
       draft: true,
+      mergeability: 'blocked',
       checks: 'passing',
       review: 'approved',
       unresolvedConversations: false,
@@ -285,6 +443,7 @@ const blockerFixtures: BlockerFixture[] = [
     expectedOpenItemIds: ['ci_failing'],
     expectedSignals: {
       draft: false,
+      mergeability: 'mergeable',
       checks: 'failing',
       review: 'approved',
       unresolvedConversations: false,
@@ -308,6 +467,7 @@ const blockerFixtures: BlockerFixture[] = [
     expectedOpenItemIds: ['ci_running'],
     expectedSignals: {
       draft: false,
+      mergeability: 'mergeable',
       checks: 'running',
       review: 'approved',
       unresolvedConversations: false,
@@ -331,6 +491,7 @@ const blockerFixtures: BlockerFixture[] = [
     expectedOpenItemIds: ['changes_requested'],
     expectedSignals: {
       draft: false,
+      mergeability: 'mergeable',
       checks: 'passing',
       review: 'changes_requested',
       unresolvedConversations: false,
@@ -348,6 +509,7 @@ const blockerFixtures: BlockerFixture[] = [
     expectedOpenItemIds: ['review_pending'],
     expectedSignals: {
       draft: false,
+      mergeability: 'mergeable',
       checks: 'passing',
       review: 'pending',
       unresolvedConversations: false,
@@ -397,6 +559,7 @@ describe('getMergeReadyStatus', () => {
       openItems: [],
       signals: {
         draft: false,
+        mergeability: 'mergeable',
         checks: 'passing',
         review: 'approved',
         unresolvedConversations: false,

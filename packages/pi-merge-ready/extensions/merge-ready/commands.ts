@@ -45,6 +45,9 @@ const BADGE_PRESENTATION: Record<
   }
 > = {
   draft: { icon: '📝', level: 'warning' },
+  merge_conflicts: { icon: '⚠️', level: 'error' },
+  branch_out_of_date: { icon: '🔄', level: 'warning' },
+  merge_blocked: { icon: '⛔', level: 'error' },
   ci_failing: { icon: '❌', level: 'error' },
   changes_requested: { icon: '🔁', level: 'error' },
   unresolved_conversations: { icon: '💬', level: 'error' },

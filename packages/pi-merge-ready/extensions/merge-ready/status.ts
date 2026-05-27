@@ -13,17 +13,23 @@ import type {
 const OPEN_ITEM_PRIORITY = {
   no_pull_request: 0,
   status_ambiguous: 1,
-  draft: 2,
-  ci_failing: 3,
-  changes_requested: 4,
-  unresolved_conversations: 5,
-  ci_running: 6,
-  review_pending: 7,
+  merge_conflicts: 2,
+  branch_out_of_date: 3,
+  merge_blocked: 4,
+  draft: 5,
+  ci_failing: 6,
+  changes_requested: 7,
+  unresolved_conversations: 8,
+  ci_running: 9,
+  review_pending: 10,
 } as const satisfies Record<MergeReadyOpenItemId, number>;
 
 const OPEN_ITEM_STATE = {
   no_pull_request: 'unknown',
   status_ambiguous: 'unknown',
+  merge_conflicts: 'blocked',
+  branch_out_of_date: 'blocked',
+  merge_blocked: 'blocked',
   draft: 'blocked',
   ci_failing: 'blocked',
   changes_requested: 'blocked',
@@ -35,6 +41,9 @@ const OPEN_ITEM_STATE = {
 const OPEN_ITEM_BADGE = {
   no_pull_request: 'unknown',
   status_ambiguous: 'unknown',
+  merge_conflicts: 'merge_conflicts',
+  branch_out_of_date: 'branch_out_of_date',
+  merge_blocked: 'merge_blocked',
   draft: 'draft',
   ci_failing: 'ci_failing',
   changes_requested: 'changes_requested',
@@ -46,6 +55,9 @@ const OPEN_ITEM_BADGE = {
 const OPEN_ITEM_SUMMARY = {
   no_pull_request: 'No pull request found',
   status_ambiguous: 'Merge readiness is ambiguous',
+  merge_conflicts: 'Merge conflicts detected',
+  branch_out_of_date: 'Branch is out of date with base',
+  merge_blocked: 'GitHub reports merge is blocked',
   draft: 'Pull request is still a draft',
   ci_failing: 'Required checks are failing',
   changes_requested: 'Changes requested by reviewers',
@@ -59,6 +71,7 @@ export function normalizeMergeReadySignals(
   hasPr: boolean = false,
 ): MergeReadySignals {
   const draft = input.draft ?? false;
+  const mergeability = input.mergeability ?? 'unknown';
   const checks = input.checks ?? 'unknown';
   const review = input.review ?? 'unknown';
   const unresolvedConversations = input.unresolvedConversations ?? false;
@@ -66,6 +79,7 @@ export function normalizeMergeReadySignals(
   if (!hasPr) {
     return {
       draft: false,
+      mergeability: 'unknown',
       checks: 'unknown',
       review: 'unknown',
       unresolvedConversations: false,
@@ -74,6 +88,7 @@ export function normalizeMergeReadySignals(
 
   return {
     draft,
+    mergeability,
     checks,
     review,
     unresolvedConversations,
@@ -89,6 +104,22 @@ export function deriveMergeReadyOpenItems(
   if (!hasPr) {
     openItems.push(createOpenItem('no_pull_request'));
     return openItems;
+  }
+
+  if (signals.mergeability === 'unknown') {
+    openItems.push(createOpenItem('status_ambiguous'));
+  }
+
+  if (signals.mergeability === 'conflicting') {
+    openItems.push(createOpenItem('merge_conflicts'));
+  }
+
+  if (signals.mergeability === 'behind') {
+    openItems.push(createOpenItem('branch_out_of_date'));
+  }
+
+  if (signals.mergeability === 'blocked' && !signals.draft) {
+    openItems.push(createOpenItem('merge_blocked'));
   }
 
   if (signals.draft) {

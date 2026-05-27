@@ -69,6 +69,7 @@ export async function getMergeReadyStatus(
 
   const signals: MergeReadySignalsInput = {
     draft: toBoolean(pullRequestFacts.pullRequest.draft),
+    mergeability: pullRequestFacts.pullRequest.mergeability,
     checks: pullRequestFacts.pullRequest.checks.state,
     review: normalizeReviewSignal(pullRequestFacts.pullRequest),
     unresolvedConversations: normalizeConversationSignal(conversations),

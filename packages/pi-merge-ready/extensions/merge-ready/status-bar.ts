@@ -55,6 +55,9 @@ const STATUS_BAR_PREFIX = '';
 const UNKNOWN_STATUS_BAR_TEXT = '❔ Unknown';
 const BADGE_PRESENTATION: Record<MergeReadyBadgeId, { icon: string; text: string }> = {
   draft: { icon: '📝', text: 'Draft' },
+  merge_conflicts: { icon: '⚠️', text: 'Conflicts' },
+  branch_out_of_date: { icon: '🔄', text: 'Out of date' },
+  merge_blocked: { icon: '⛔', text: 'Merge blocked' },
   ci_failing: { icon: '❌', text: 'Checks failing' },
   changes_requested: { icon: '🔁', text: 'Changes requested' },
   unresolved_conversations: { icon: '💬', text: 'Conversations open' },
@@ -67,6 +70,9 @@ const BADGE_PRESENTATION: Record<MergeReadyBadgeId, { icon: string; text: string
 };
 const SUMMARY_TEXT: Record<string, string> = {
   'Ready to merge': 'Ready',
+  'Merge conflicts detected': 'Conflicts',
+  'Branch is out of date with base': 'Out of date',
+  'GitHub reports merge is blocked': 'Merge blocked',
   'Pull request is still a draft': 'Draft',
   'Required checks are failing': 'Checks failing',
   'Changes requested by reviewers': 'Changes requested',

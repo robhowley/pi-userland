@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import mergeReadyExtension, {
   MERGE_READY_COMMAND_NAME,
   MERGE_READY_COMMAND_TIMEOUT_MS,
+  createMergeReadyStatus,
+  renderMergeReadyStatus,
   type MergeReadyCommandAPI,
   type MergeReadyCommandContext,
 } from '../../extensions/merge-ready/index.js';
@@ -246,6 +248,95 @@ describe('merge-ready command', () => {
     vi.setSystemTime(new Date(GENERATED_AT));
   });
 
+  it.each([
+    {
+      name: 'merge conflicts',
+      status: createMergeReadyStatus({
+        generatedAt: GENERATED_AT,
+        pr: {
+          number: 42,
+          title: 'Compose merge-ready status boundary',
+          url: 'https://github.com/robhowley/pi-userland/pull/42',
+        },
+        signals: {
+          draft: false,
+          mergeability: 'conflicting',
+          checks: 'passing',
+          review: 'approved',
+          unresolvedConversations: false,
+        },
+      }),
+      expected: {
+        level: 'error',
+        message: [
+          '⚠️ Merge conflicts detected',
+          'PR: #42 — Compose merge-ready status boundary',
+          'State: blocked',
+          'Open items:',
+          '- Merge conflicts detected',
+        ].join('\n'),
+      },
+    },
+    {
+      name: 'branch out of date',
+      status: createMergeReadyStatus({
+        generatedAt: GENERATED_AT,
+        pr: {
+          number: 42,
+          title: 'Compose merge-ready status boundary',
+          url: 'https://github.com/robhowley/pi-userland/pull/42',
+        },
+        signals: {
+          draft: false,
+          mergeability: 'behind',
+          checks: 'passing',
+          review: 'approved',
+          unresolvedConversations: false,
+        },
+      }),
+      expected: {
+        level: 'warning',
+        message: [
+          '🔄 Branch is out of date with base',
+          'PR: #42 — Compose merge-ready status boundary',
+          'State: blocked',
+          'Open items:',
+          '- Branch is out of date with base',
+        ].join('\n'),
+      },
+    },
+    {
+      name: 'generic merge blocked',
+      status: createMergeReadyStatus({
+        generatedAt: GENERATED_AT,
+        pr: {
+          number: 42,
+          title: 'Compose merge-ready status boundary',
+          url: 'https://github.com/robhowley/pi-userland/pull/42',
+        },
+        signals: {
+          draft: false,
+          mergeability: 'blocked',
+          checks: 'passing',
+          review: 'approved',
+          unresolvedConversations: false,
+        },
+      }),
+      expected: {
+        level: 'error',
+        message: [
+          '⛔ GitHub reports merge is blocked',
+          'PR: #42 — Compose merge-ready status boundary',
+          'State: blocked',
+          'Open items:',
+          '- GitHub reports merge is blocked',
+        ].join('\n'),
+      },
+    },
+  ])('renders $name via mergeability-aware badges', ({ status, expected }) => {
+    expect(renderMergeReadyStatus(status)).toEqual(expected);
+  });
+
   afterEach(() => {
     vi.useRealTimers();
   });
@@ -430,6 +521,7 @@ describe('merge-ready command', () => {
       openItems: [],
       signals: {
         draft: false,
+        mergeability: 'mergeable',
         checks: 'passing',
         review: 'approved',
         unresolvedConversations: false,

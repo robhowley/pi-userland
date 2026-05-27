@@ -6,7 +6,12 @@ import type {
 } from './types.js';
 import type { MergeReadyExec, MergeReadyExecOptions, MergeReadyExecResult } from './git.js';
 
-export type MergeReadyGitHubMergeability = 'mergeable' | 'conflicting' | 'blocked' | 'unknown';
+export type MergeReadyGitHubMergeability =
+  | 'mergeable'
+  | 'conflicting'
+  | 'behind'
+  | 'blocked'
+  | 'unknown';
 
 export type MergeReadyGitHubAuthor = {
   login?: string;
@@ -205,12 +210,17 @@ const FAILING_CHECK_CONCLUSIONS = new Set([
   'STARTUP_FAILURE',
   'TIMED_OUT',
 ]);
-const BLOCKED_MERGE_STATE_STATUSES = new Set([
-  'BEHIND',
+const KNOWN_BLOCKED_MERGE_STATE_STATUSES = new Set(['BLOCKED', 'DRAFT', 'HAS_HOOKS', 'UNSTABLE']);
+const KNOWN_MERGEABLE_STATES = new Set(['MERGEABLE', 'CONFLICTING', 'UNKNOWN']);
+const KNOWN_MERGE_STATE_STATUSES = new Set([
+  'CLEAN',
+  'DIRTY',
+  'UNKNOWN',
   'BLOCKED',
-  'DRAFT',
-  'HAS_HOOKS',
+  'BEHIND',
   'UNSTABLE',
+  'HAS_HOOKS',
+  'DRAFT',
 ]);
 
 export async function fetchMergeReadyGitHubPullRequestFacts(
@@ -437,6 +447,10 @@ function normalizeMergeability(
   const mergeable = readOptionalString(mergeableValue)?.toUpperCase();
   const mergeStateStatus = readOptionalString(mergeStateStatusValue)?.toUpperCase();
 
+  if (mergeable === 'CONFLICTING' || mergeStateStatus === 'DIRTY') {
+    return 'conflicting';
+  }
+
   if (!mergeable || !mergeStateStatus) {
     issues.push(
       createIssue(
@@ -449,10 +463,6 @@ function normalizeMergeability(
     return 'unknown';
   }
 
-  if (mergeable === 'CONFLICTING' || mergeStateStatus === 'DIRTY') {
-    return 'conflicting';
-  }
-
   if (mergeable === 'UNKNOWN' || mergeStateStatus === 'UNKNOWN') {
     return 'unknown';
   }
@@ -461,7 +471,27 @@ function normalizeMergeability(
     return 'mergeable';
   }
 
-  if (mergeable === 'MERGEABLE' && BLOCKED_MERGE_STATE_STATUSES.has(mergeStateStatus)) {
+  if (mergeable === 'MERGEABLE' && mergeStateStatus === 'BEHIND') {
+    return 'behind';
+  }
+
+  if (mergeable === 'MERGEABLE' && KNOWN_BLOCKED_MERGE_STATE_STATUSES.has(mergeStateStatus)) {
+    return 'blocked';
+  }
+
+  if (
+    mergeable !== 'MERGEABLE' ||
+    !KNOWN_MERGEABLE_STATES.has(mergeable) ||
+    !KNOWN_MERGE_STATE_STATUSES.has(mergeStateStatus)
+  ) {
+    issues.push(
+      createIssue(
+        issueContext,
+        'partial_shape',
+        'gh pr view JSON payload had an unrecognized mergeability combination',
+        'mergeable',
+      ),
+    );
     return 'blocked';
   }
 
@@ -469,11 +499,11 @@ function normalizeMergeability(
     createIssue(
       issueContext,
       'partial_shape',
-      'gh pr view JSON payload had an unrecognized mergeability combination',
+      'gh pr view JSON payload had a non-clear mergeability combination',
       'mergeable',
     ),
   );
-  return 'unknown';
+  return 'blocked';
 }
 
 function normalizeChecks(

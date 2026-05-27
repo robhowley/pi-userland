@@ -319,6 +319,7 @@ describe('merge_ready_status tool', () => {
       openItems: [],
       signals: {
         draft: false,
+        mergeability: 'mergeable',
         checks: 'passing',
         review: 'approved',
         unresolvedConversations: false,
@@ -410,6 +411,7 @@ describe('merge_ready_status tool', () => {
       ],
       signals: {
         draft: false,
+        mergeability: 'unknown',
         checks: 'unknown',
         review: 'unknown',
         unresolvedConversations: false,
@@ -482,6 +484,7 @@ describe('merge_ready_status tool', () => {
               ],
               signals: {
                 draft: false,
+                mergeability: 'unknown',
                 checks: 'unknown',
                 review: 'unknown',
                 unresolvedConversations: false,
@@ -505,6 +508,7 @@ describe('merge_ready_status tool', () => {
         ],
         signals: {
           draft: false,
+          mergeability: 'unknown',
           checks: 'unknown',
           review: 'unknown',
           unresolvedConversations: false,

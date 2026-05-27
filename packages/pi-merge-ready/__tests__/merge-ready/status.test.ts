@@ -21,6 +21,7 @@ const OPEN_PR: MergeReadyPullRequest = {
 
 const READY_SIGNALS: MergeReadySignalsInput = {
   draft: false,
+  mergeability: 'mergeable',
   checks: 'passing',
   review: 'approved',
   unresolvedConversations: false,
@@ -55,6 +56,66 @@ type BadgeFixture = {
 
 const badgeFixtures: BadgeFixture[] = [
   {
+    name: 'status_ambiguous',
+    status: buildStatus({ signals: { mergeability: 'unknown' } }),
+    badge: 'unknown',
+    state: 'unknown',
+    summary: 'Merge readiness is ambiguous',
+    openItemIds: ['status_ambiguous'],
+    signals: {
+      draft: false,
+      mergeability: 'unknown',
+      checks: 'passing',
+      review: 'approved',
+      unresolvedConversations: false,
+    },
+  },
+  {
+    name: 'merge_conflicts',
+    status: buildStatus({ signals: { mergeability: 'conflicting' } }),
+    badge: 'merge_conflicts',
+    state: 'blocked',
+    summary: 'Merge conflicts detected',
+    openItemIds: ['merge_conflicts'],
+    signals: {
+      draft: false,
+      mergeability: 'conflicting',
+      checks: 'passing',
+      review: 'approved',
+      unresolvedConversations: false,
+    },
+  },
+  {
+    name: 'branch_out_of_date',
+    status: buildStatus({ signals: { mergeability: 'behind' } }),
+    badge: 'branch_out_of_date',
+    state: 'blocked',
+    summary: 'Branch is out of date with base',
+    openItemIds: ['branch_out_of_date'],
+    signals: {
+      draft: false,
+      mergeability: 'behind',
+      checks: 'passing',
+      review: 'approved',
+      unresolvedConversations: false,
+    },
+  },
+  {
+    name: 'merge_blocked',
+    status: buildStatus({ signals: { mergeability: 'blocked' } }),
+    badge: 'merge_blocked',
+    state: 'blocked',
+    summary: 'GitHub reports merge is blocked',
+    openItemIds: ['merge_blocked'],
+    signals: {
+      draft: false,
+      mergeability: 'blocked',
+      checks: 'passing',
+      review: 'approved',
+      unresolvedConversations: false,
+    },
+  },
+  {
     name: 'draft',
     status: buildStatus({ signals: { draft: true } }),
     badge: 'draft',
@@ -63,6 +124,7 @@ const badgeFixtures: BadgeFixture[] = [
     openItemIds: ['draft'],
     signals: {
       draft: true,
+      mergeability: 'mergeable',
       checks: 'passing',
       review: 'approved',
       unresolvedConversations: false,
@@ -77,6 +139,7 @@ const badgeFixtures: BadgeFixture[] = [
     openItemIds: ['ci_failing'],
     signals: {
       draft: false,
+      mergeability: 'mergeable',
       checks: 'failing',
       review: 'approved',
       unresolvedConversations: false,
@@ -91,6 +154,7 @@ const badgeFixtures: BadgeFixture[] = [
     openItemIds: ['changes_requested'],
     signals: {
       draft: false,
+      mergeability: 'mergeable',
       checks: 'passing',
       review: 'changes_requested',
       unresolvedConversations: false,
@@ -105,6 +169,7 @@ const badgeFixtures: BadgeFixture[] = [
     openItemIds: ['unresolved_conversations'],
     signals: {
       draft: false,
+      mergeability: 'mergeable',
       checks: 'passing',
       review: 'approved',
       unresolvedConversations: true,
@@ -119,6 +184,7 @@ const badgeFixtures: BadgeFixture[] = [
     openItemIds: ['ci_running'],
     signals: {
       draft: false,
+      mergeability: 'mergeable',
       checks: 'running',
       review: 'approved',
       unresolvedConversations: false,
@@ -133,6 +199,7 @@ const badgeFixtures: BadgeFixture[] = [
     openItemIds: ['review_pending'],
     signals: {
       draft: false,
+      mergeability: 'mergeable',
       checks: 'passing',
       review: 'pending',
       unresolvedConversations: false,
@@ -147,6 +214,7 @@ const badgeFixtures: BadgeFixture[] = [
     openItemIds: [],
     signals: {
       draft: false,
+      mergeability: 'mergeable',
       checks: 'passing',
       review: 'approved',
       unresolvedConversations: false,
@@ -161,6 +229,7 @@ const badgeFixtures: BadgeFixture[] = [
     openItemIds: ['no_pull_request'],
     signals: {
       draft: false,
+      mergeability: 'unknown',
       checks: 'unknown',
       review: 'unknown',
       unresolvedConversations: false,
@@ -182,6 +251,22 @@ describe('merge-ready status', () => {
   it.each(badgeFixtures)('selects $name badge "$badge"', (fixture) => {
     expect(selectMergeReadyBadgeId(fixture.status)).toBe(fixture.badge);
   });
+
+  it('includes merge blockers even when other blockers are present', () => {
+    const status = buildStatus({
+      signals: {
+        mergeability: 'conflicting',
+        checks: 'failing',
+        unresolvedConversations: true,
+      },
+    });
+
+    expect(openItemIds(status)).toEqual([
+      'merge_conflicts',
+      'ci_failing',
+      'unresolved_conversations',
+    ]);
+  });
 });
 
 describe('normalizeMergeReadySignals', () => {
@@ -189,6 +274,7 @@ describe('normalizeMergeReadySignals', () => {
     const signals = normalizeMergeReadySignals({}, false);
     expect(signals).toEqual({
       draft: false,
+      mergeability: 'unknown',
       checks: 'unknown',
       review: 'unknown',
       unresolvedConversations: false,
@@ -199,6 +285,7 @@ describe('normalizeMergeReadySignals', () => {
     const signals = normalizeMergeReadySignals(
       {
         draft: true,
+        mergeability: 'behind',
         checks: 'failing',
         review: 'changes_requested',
         unresolvedConversations: true,
@@ -207,6 +294,7 @@ describe('normalizeMergeReadySignals', () => {
     );
     expect(signals).toEqual({
       draft: true,
+      mergeability: 'behind',
       checks: 'failing',
       review: 'changes_requested',
       unresolvedConversations: true,
@@ -217,6 +305,7 @@ describe('normalizeMergeReadySignals', () => {
     const signals = normalizeMergeReadySignals({}, true);
     expect(signals).toEqual({
       draft: false,
+      mergeability: 'unknown',
       checks: 'unknown',
       review: 'unknown',
       unresolvedConversations: false,

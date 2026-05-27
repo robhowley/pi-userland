@@ -3,8 +3,10 @@ import {
   MERGE_READY_STATUS_BAR_KEY,
   MERGE_READY_STATUS_BAR_TIMEOUT_MS,
   MERGE_READY_STATUS_BAR_TTL_MS,
+  createMergeReadyStatus,
   refreshMergeReadyStatusBar,
   registerMergeReadyStatusBar,
+  renderMergeReadyStatusBar,
   resetMergeReadyStatusBarCache,
   type MergeReadyStatusBarAPI,
   type MergeReadyStatusBarContext,
@@ -298,6 +300,68 @@ describe('merge-ready status bar', () => {
 
     assertDone();
     expect(ctx.ui?.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ Ready');
+  });
+
+  it.each([
+    {
+      name: 'merge conflicts',
+      status: createMergeReadyStatus({
+        generatedAt: '2026-05-27T00:00:00.000Z',
+        pr: {
+          number: 42,
+          title: 'Compose merge-ready status boundary',
+          url: 'https://github.com/robhowley/pi-userland/pull/42',
+        },
+        signals: {
+          draft: false,
+          mergeability: 'conflicting',
+          checks: 'passing',
+          review: 'approved',
+          unresolvedConversations: false,
+        },
+      }),
+      expected: '⚠️ Conflicts',
+    },
+    {
+      name: 'branch out of date',
+      status: createMergeReadyStatus({
+        generatedAt: '2026-05-27T00:00:00.000Z',
+        pr: {
+          number: 42,
+          title: 'Compose merge-ready status boundary',
+          url: 'https://github.com/robhowley/pi-userland/pull/42',
+        },
+        signals: {
+          draft: false,
+          mergeability: 'behind',
+          checks: 'passing',
+          review: 'approved',
+          unresolvedConversations: false,
+        },
+      }),
+      expected: '🔄 Out of date',
+    },
+    {
+      name: 'generic merge blocked',
+      status: createMergeReadyStatus({
+        generatedAt: '2026-05-27T00:00:00.000Z',
+        pr: {
+          number: 42,
+          title: 'Compose merge-ready status boundary',
+          url: 'https://github.com/robhowley/pi-userland/pull/42',
+        },
+        signals: {
+          draft: false,
+          mergeability: 'blocked',
+          checks: 'passing',
+          review: 'approved',
+          unresolvedConversations: false,
+        },
+      }),
+      expected: '⛔ Merge blocked',
+    },
+  ])('renders $name with mergeability-aware status text', ({ status, expected }) => {
+    expect(renderMergeReadyStatusBar(status)).toBe(expected);
   });
 
   it('renders a terse blocked status from the top-priority badge', async () => {

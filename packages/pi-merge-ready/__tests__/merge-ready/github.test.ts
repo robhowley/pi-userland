@@ -242,6 +242,110 @@ describe('merge-ready GitHub primitives', () => {
 
   it.each([
     {
+      name: 'MERGEABLE + CLEAN',
+      overrides: { mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' },
+      expected: 'mergeable',
+    },
+    {
+      name: 'MERGEABLE + DIRTY',
+      overrides: { mergeable: 'MERGEABLE', mergeStateStatus: 'DIRTY' },
+      expected: 'conflicting',
+    },
+    {
+      name: 'MERGEABLE + UNKNOWN',
+      overrides: { mergeable: 'MERGEABLE', mergeStateStatus: 'UNKNOWN' },
+      expected: 'unknown',
+    },
+    {
+      name: 'MERGEABLE + BLOCKED',
+      overrides: { mergeable: 'MERGEABLE', mergeStateStatus: 'BLOCKED' },
+      expected: 'blocked',
+    },
+    {
+      name: 'MERGEABLE + BEHIND',
+      overrides: { mergeable: 'MERGEABLE', mergeStateStatus: 'BEHIND' },
+      expected: 'behind',
+    },
+    {
+      name: 'MERGEABLE + UNSTABLE',
+      overrides: { mergeable: 'MERGEABLE', mergeStateStatus: 'UNSTABLE' },
+      expected: 'blocked',
+    },
+    {
+      name: 'MERGEABLE + HAS_HOOKS',
+      overrides: { mergeable: 'MERGEABLE', mergeStateStatus: 'HAS_HOOKS' },
+      expected: 'blocked',
+    },
+    {
+      name: 'MERGEABLE + DRAFT',
+      overrides: { mergeable: 'MERGEABLE', mergeStateStatus: 'DRAFT' },
+      expected: 'blocked',
+    },
+    {
+      name: 'CONFLICTING + CLEAN',
+      overrides: { mergeable: 'CONFLICTING', mergeStateStatus: 'CLEAN' },
+      expected: 'conflicting',
+    },
+    {
+      name: 'CONFLICTING + BEHIND still conflicts',
+      overrides: { mergeable: 'CONFLICTING', mergeStateStatus: 'BEHIND' },
+      expected: 'conflicting',
+    },
+    {
+      name: 'UNKNOWN + CLEAN',
+      overrides: { mergeable: 'UNKNOWN', mergeStateStatus: 'CLEAN' },
+      expected: 'unknown',
+    },
+    {
+      name: 'UNKNOWN + DIRTY still conflicts',
+      overrides: { mergeable: 'UNKNOWN', mergeStateStatus: 'DIRTY' },
+      expected: 'conflicting',
+    },
+    {
+      name: 'missing mergeable field',
+      overrides: { mergeable: null },
+      expected: 'unknown',
+    },
+    {
+      name: 'missing mergeStateStatus field',
+      overrides: { mergeStateStatus: null },
+      expected: 'unknown',
+    },
+    {
+      name: 'future mergeable enum',
+      overrides: { mergeable: 'REBASEABLE', mergeStateStatus: 'CLEAN' },
+      expected: 'blocked',
+    },
+    {
+      name: 'future mergeStateStatus enum',
+      overrides: { mergeable: 'MERGEABLE', mergeStateStatus: 'REBASEABLE' },
+      expected: 'blocked',
+    },
+  ])('normalizes mergeability for $name', async ({ overrides, expected }) => {
+    const { exec, assertDone } = createFakeExec([
+      {
+        command: 'gh',
+        args: ['pr', 'view', '--json', GH_PR_VIEW_JSON_FIELDS],
+        result: {
+          stdout: JSON.stringify(buildPullRequestPayload(overrides)),
+        },
+      },
+    ]);
+
+    const facts = await fetchMergeReadyGitHubPullRequestFacts({ exec });
+
+    assertDone();
+
+    expect(facts.kind).toBe('found');
+    if (facts.kind !== 'found') {
+      return;
+    }
+
+    expect(facts.pullRequest.mergeability).toBe(expected);
+  });
+
+  it.each([
+    {
       name: 'failing checks',
       statusCheckRollup: [
         {
