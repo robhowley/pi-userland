@@ -37,6 +37,13 @@ const GH_GRAPHQL_REVIEW_THREADS_QUERY = [
   'nodes { isResolved }',
   'pageInfo { hasNextPage }',
   '}',
+  'baseRef {',
+  'branchProtectionRule { requiresConversationResolution }',
+  'rules(first: 100) {',
+  'nodes { type }',
+  'pageInfo { hasNextPage }',
+  '}',
+  '}',
   '}',
   '}',
   '}',
@@ -252,6 +259,31 @@ function buildPullRequestPayload(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function buildConversationsPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    data: {
+      repository: {
+        pullRequest: {
+          reviewThreads: {
+            nodes: [],
+            pageInfo: { hasNextPage: false },
+          },
+          baseRef: {
+            branchProtectionRule: {
+              requiresConversationResolution: false,
+            },
+            rules: {
+              nodes: [{ type: 'PULL_REQUEST' }],
+              pageInfo: { hasNextPage: false },
+            },
+          },
+          ...overrides,
+        },
+      },
+    },
+  };
+}
+
 describe('merge-ready status bar', () => {
   beforeEach(() => {
     resetMergeReadyStatusBarCache();
@@ -277,18 +309,12 @@ describe('merge-ready status bar', () => {
         MERGE_READY_STATUS_BAR_TIMEOUT_MS,
       ),
       createConversationsSuccessCall(
-        {
-          data: {
-            repository: {
-              pullRequest: {
-                reviewThreads: {
-                  nodes: [{ isResolved: true }],
-                  pageInfo: { hasNextPage: false },
-                },
-              },
-            },
+        buildConversationsPayload({
+          reviewThreads: {
+            nodes: [{ isResolved: true }],
+            pageInfo: { hasNextPage: false },
           },
-        },
+        }),
         MERGE_READY_STATUS_BAR_TIMEOUT_MS,
       ),
     ]);
@@ -318,6 +344,7 @@ describe('merge-ready status bar', () => {
           checks: 'passing',
           review: 'approved',
           unresolvedConversations: false,
+          unresolvedConversationRequirement: 'optional',
         },
       }),
       expected: '⚠️ Conflicts',
@@ -337,6 +364,7 @@ describe('merge-ready status bar', () => {
           checks: 'passing',
           review: 'approved',
           unresolvedConversations: false,
+          unresolvedConversationRequirement: 'optional',
         },
       }),
       expected: '🔄 Out of date',
@@ -356,6 +384,7 @@ describe('merge-ready status bar', () => {
           checks: 'passing',
           review: 'approved',
           unresolvedConversations: false,
+          unresolvedConversationRequirement: 'optional',
         },
       }),
       expected: '⛔ Merge blocked',
@@ -364,7 +393,7 @@ describe('merge-ready status bar', () => {
     expect(renderMergeReadyStatusBar(status)).toBe(expected);
   });
 
-  it('renders a known unresolved conversation count', () => {
+  it('renders required unresolved conversations as the top blocker', () => {
     const status = createMergeReadyStatus({
       generatedAt: '2026-05-27T00:00:00.000Z',
       pr: {
@@ -379,13 +408,36 @@ describe('merge-ready status bar', () => {
         review: 'approved',
         unresolvedConversations: true,
         unresolvedConversationCount: 2,
+        unresolvedConversationRequirement: 'required',
       },
     });
 
-    expect(renderMergeReadyStatusBar(status)).toBe('💬 2 unresolved');
+    expect(renderMergeReadyStatusBar(status)).toBe('❌ 💬 2 unresolved');
   });
 
-  it('renders unresolved conversation count from GitHub conversations', async () => {
+  it('renders optional unresolved comments on an otherwise ready PR', () => {
+    const status = createMergeReadyStatus({
+      generatedAt: '2026-05-27T00:00:00.000Z',
+      pr: {
+        number: 42,
+        title: 'Compose merge-ready status boundary',
+        url: 'https://github.com/robhowley/pi-userland/pull/42',
+      },
+      signals: {
+        draft: false,
+        mergeability: 'mergeable',
+        checks: 'passing',
+        review: 'approved',
+        unresolvedConversations: true,
+        unresolvedConversationCount: 2,
+        unresolvedConversationRequirement: 'optional',
+      },
+    });
+
+    expect(renderMergeReadyStatusBar(status)).toBe('✅ Mergeable · 💬 2 comments');
+  });
+
+  it('renders required unresolved conversation count from GitHub conversations', async () => {
     const { api, assertDone, getHandler } = createMockAPI([
       ...createGitDiscoveryCalls(MERGE_READY_STATUS_BAR_TIMEOUT_MS),
       createPullRequestViewSuccessCall(
@@ -393,18 +445,21 @@ describe('merge-ready status bar', () => {
         MERGE_READY_STATUS_BAR_TIMEOUT_MS,
       ),
       createConversationsSuccessCall(
-        {
-          data: {
-            repository: {
-              pullRequest: {
-                reviewThreads: {
-                  nodes: [{ isResolved: false }, { isResolved: false }],
-                  pageInfo: { hasNextPage: false },
-                },
-              },
+        buildConversationsPayload({
+          reviewThreads: {
+            nodes: [{ isResolved: false }, { isResolved: false }],
+            pageInfo: { hasNextPage: false },
+          },
+          baseRef: {
+            branchProtectionRule: {
+              requiresConversationResolution: true,
+            },
+            rules: {
+              nodes: [],
+              pageInfo: { hasNextPage: false },
             },
           },
-        },
+        }),
         MERGE_READY_STATUS_BAR_TIMEOUT_MS,
       ),
     ]);
@@ -415,10 +470,13 @@ describe('merge-ready status bar', () => {
     await getHandler('turn_end')?.({}, ctx);
 
     assertDone();
-    expect(ctx.ui?.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '💬 2 unresolved');
+    expect(ctx.ui?.setStatus).toHaveBeenCalledWith(
+      MERGE_READY_STATUS_BAR_KEY,
+      '❌ 💬 2 unresolved',
+    );
   });
 
-  it('renders a terse blocked status from the top-priority badge', async () => {
+  it('renders optional unresolved comments without outranking real blockers', async () => {
     const { api, assertDone, getHandler } = createMockAPI([
       ...createGitDiscoveryCalls(MERGE_READY_STATUS_BAR_TIMEOUT_MS),
       createPullRequestViewSuccessCall(
@@ -436,18 +494,12 @@ describe('merge-ready status bar', () => {
         MERGE_READY_STATUS_BAR_TIMEOUT_MS,
       ),
       createConversationsSuccessCall(
-        {
-          data: {
-            repository: {
-              pullRequest: {
-                reviewThreads: {
-                  nodes: [{ isResolved: false }, { isResolved: true }],
-                  pageInfo: { hasNextPage: false },
-                },
-              },
-            },
+        buildConversationsPayload({
+          reviewThreads: {
+            nodes: [{ isResolved: false }, { isResolved: true }],
+            pageInfo: { hasNextPage: false },
           },
-        },
+        }),
         MERGE_READY_STATUS_BAR_TIMEOUT_MS,
       ),
     ]);
@@ -493,18 +545,12 @@ describe('merge-ready status bar', () => {
         MERGE_READY_STATUS_BAR_TIMEOUT_MS,
       ),
       createConversationsSuccessCall(
-        {
-          data: {
-            repository: {
-              pullRequest: {
-                reviewThreads: {
-                  nodes: [{ isResolved: true }],
-                  pageInfo: { hasNextPage: false },
-                },
-              },
-            },
+        buildConversationsPayload({
+          reviewThreads: {
+            nodes: [{ isResolved: true }],
+            pageInfo: { hasNextPage: false },
           },
-        },
+        }),
         MERGE_READY_STATUS_BAR_TIMEOUT_MS,
       ),
     ]);
@@ -535,18 +581,12 @@ describe('merge-ready status bar', () => {
         MERGE_READY_STATUS_BAR_TIMEOUT_MS,
       ),
       createConversationsSuccessCall(
-        {
-          data: {
-            repository: {
-              pullRequest: {
-                reviewThreads: {
-                  nodes: [{ isResolved: true }],
-                  pageInfo: { hasNextPage: false },
-                },
-              },
-            },
+        buildConversationsPayload({
+          reviewThreads: {
+            nodes: [{ isResolved: true }],
+            pageInfo: { hasNextPage: false },
           },
-        },
+        }),
         MERGE_READY_STATUS_BAR_TIMEOUT_MS,
       ),
       ...createGitDiscoveryCalls(MERGE_READY_STATUS_BAR_TIMEOUT_MS),
@@ -555,18 +595,12 @@ describe('merge-ready status bar', () => {
         MERGE_READY_STATUS_BAR_TIMEOUT_MS,
       ),
       createConversationsSuccessCall(
-        {
-          data: {
-            repository: {
-              pullRequest: {
-                reviewThreads: {
-                  nodes: [{ isResolved: true }],
-                  pageInfo: { hasNextPage: false },
-                },
-              },
-            },
+        buildConversationsPayload({
+          reviewThreads: {
+            nodes: [{ isResolved: true }],
+            pageInfo: { hasNextPage: false },
           },
-        },
+        }),
         MERGE_READY_STATUS_BAR_TIMEOUT_MS,
       ),
     ];

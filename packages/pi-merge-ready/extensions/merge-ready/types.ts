@@ -33,6 +33,8 @@ export type MergeReadyChecksSignal = 'passing' | 'failing' | 'running' | 'unknow
 
 export type MergeReadyReviewSignal = 'approved' | 'changes_requested' | 'pending' | 'unknown';
 
+export type MergeReadyConversationRequirementSignal = 'required' | 'optional' | 'unknown';
+
 export type MergeReadyMergeabilitySignal =
   | 'mergeable'
   | 'conflicting'
@@ -47,6 +49,7 @@ export type MergeReadySignals = {
   review: MergeReadyReviewSignal;
   unresolvedConversations: boolean;
   unresolvedConversationCount?: number;
+  unresolvedConversationRequirement: MergeReadyConversationRequirementSignal;
 };
 
 export type MergeReadySignalsInput = {
@@ -56,6 +59,7 @@ export type MergeReadySignalsInput = {
   review?: MergeReadyReviewSignal;
   unresolvedConversations?: boolean;
   unresolvedConversationCount?: number;
+  unresolvedConversationRequirement?: MergeReadyConversationRequirementSignal;
 };
 
 export type MergeReadyOpenItemId =

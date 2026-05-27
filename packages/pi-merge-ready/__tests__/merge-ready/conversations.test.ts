@@ -22,6 +22,13 @@ const GH_GRAPHQL_REVIEW_THREADS_QUERY = [
   'nodes { isResolved }',
   'pageInfo { hasNextPage }',
   '}',
+  'baseRef {',
+  'branchProtectionRule { requiresConversationResolution }',
+  'rules(first: 100) {',
+  'nodes { type }',
+  'pageInfo { hasNextPage }',
+  '}',
+  '}',
   '}',
   '}',
   '}',
@@ -66,7 +73,7 @@ function createFakeExec(expectedCalls: ExpectedExecCall[]): {
   };
 }
 
-function createConversationPayload(overrides: Record<string, unknown> = {}) {
+function createConversationPayload(pullRequestOverrides: Record<string, unknown> = {}) {
   return {
     data: {
       repository: {
@@ -77,10 +84,19 @@ function createConversationPayload(overrides: Record<string, unknown> = {}) {
               hasNextPage: false,
             },
           },
+          baseRef: {
+            branchProtectionRule: null,
+            rules: {
+              nodes: [],
+              pageInfo: {
+                hasNextPage: false,
+              },
+            },
+          },
+          ...pullRequestOverrides,
         },
       },
     },
-    ...overrides,
   };
 }
 
@@ -106,15 +122,9 @@ describe('merge-ready review conversation primitives', () => {
         result: {
           stdout: `${JSON.stringify(
             createConversationPayload({
-              data: {
-                repository: {
-                  pullRequest: {
-                    reviewThreads: {
-                      nodes: [{ isResolved: true }, { isResolved: true }],
-                      pageInfo: { hasNextPage: false },
-                    },
-                  },
-                },
+              reviewThreads: {
+                nodes: [{ isResolved: true }, { isResolved: true }],
+                pageInfo: { hasNextPage: false },
               },
             }),
           )}\n`,
@@ -136,6 +146,7 @@ describe('merge-ready review conversation primitives', () => {
     expect(conversations).toEqual({
       kind: 'known',
       unresolvedCount: 0,
+      requirement: 'optional',
       issues: [],
     });
   });
@@ -159,15 +170,9 @@ describe('merge-ready review conversation primitives', () => {
         result: {
           stdout: JSON.stringify(
             createConversationPayload({
-              data: {
-                repository: {
-                  pullRequest: {
-                    reviewThreads: {
-                      nodes: [{ isResolved: true }, { isResolved: false }, { isResolved: false }],
-                      pageInfo: { hasNextPage: false },
-                    },
-                  },
-                },
+              reviewThreads: {
+                nodes: [{ isResolved: true }, { isResolved: false }, { isResolved: false }],
+                pageInfo: { hasNextPage: false },
               },
             }),
           ),
@@ -187,8 +192,230 @@ describe('merge-ready review conversation primitives', () => {
     expect(conversations).toEqual({
       kind: 'known',
       unresolvedCount: 2,
+      requirement: 'optional',
       issues: [],
     });
+  });
+
+  it('marks unresolved conversations as required when classic branch protection requires resolution', async () => {
+    const { exec, assertDone } = createFakeExec([
+      {
+        command: 'gh',
+        args: [
+          'api',
+          'graphql',
+          '-f',
+          `query=${GH_GRAPHQL_REVIEW_THREADS_QUERY}`,
+          '-F',
+          'owner=robhowley',
+          '-F',
+          'name=pi-userland',
+          '-F',
+          'number=42',
+        ],
+        result: {
+          stdout: JSON.stringify(
+            createConversationPayload({
+              reviewThreads: {
+                nodes: [{ isResolved: false }],
+                pageInfo: { hasNextPage: false },
+              },
+              baseRef: {
+                branchProtectionRule: {
+                  requiresConversationResolution: true,
+                },
+                rules: {
+                  nodes: [],
+                  pageInfo: { hasNextPage: false },
+                },
+              },
+            }),
+          ),
+        },
+      },
+    ]);
+
+    const conversations = await fetchMergeReadyPullRequestConversations({
+      exec,
+      repositoryOwner: 'robhowley',
+      repositoryName: 'pi-userland',
+      pullRequestNumber: 42,
+    });
+
+    assertDone();
+
+    expect(conversations).toEqual({
+      kind: 'known',
+      unresolvedCount: 1,
+      requirement: 'required',
+      issues: [],
+    });
+  });
+
+  it('marks unresolved conversations as required when base-ref rules require thread resolution', async () => {
+    const { exec, assertDone } = createFakeExec([
+      {
+        command: 'gh',
+        args: [
+          'api',
+          'graphql',
+          '-f',
+          `query=${GH_GRAPHQL_REVIEW_THREADS_QUERY}`,
+          '-F',
+          'owner=robhowley',
+          '-F',
+          'name=pi-userland',
+          '-F',
+          'number=42',
+        ],
+        result: {
+          stdout: JSON.stringify(
+            createConversationPayload({
+              reviewThreads: {
+                nodes: [{ isResolved: false }],
+                pageInfo: { hasNextPage: false },
+              },
+              baseRef: {
+                branchProtectionRule: null,
+                rules: {
+                  nodes: [{ type: 'PULL_REQUEST' }, { type: 'REQUIRED_REVIEW_THREAD_RESOLUTION' }],
+                  pageInfo: { hasNextPage: false },
+                },
+              },
+            }),
+          ),
+        },
+      },
+    ]);
+
+    const conversations = await fetchMergeReadyPullRequestConversations({
+      exec,
+      repositoryOwner: 'robhowley',
+      repositoryName: 'pi-userland',
+      pullRequestNumber: 42,
+    });
+
+    assertDone();
+
+    expect(conversations).toEqual({
+      kind: 'known',
+      unresolvedCount: 1,
+      requirement: 'required',
+      issues: [],
+    });
+  });
+
+  it('marks unresolved conversations as optional only when policy discovery is clean and non-required', async () => {
+    const { exec, assertDone } = createFakeExec([
+      {
+        command: 'gh',
+        args: [
+          'api',
+          'graphql',
+          '-f',
+          `query=${GH_GRAPHQL_REVIEW_THREADS_QUERY}`,
+          '-F',
+          'owner=robhowley',
+          '-F',
+          'name=pi-userland',
+          '-F',
+          'number=42',
+        ],
+        result: {
+          stdout: JSON.stringify(
+            createConversationPayload({
+              reviewThreads: {
+                nodes: [{ isResolved: false }],
+                pageInfo: { hasNextPage: false },
+              },
+              baseRef: {
+                branchProtectionRule: {
+                  requiresConversationResolution: false,
+                },
+                rules: {
+                  nodes: [{ type: 'PULL_REQUEST' }],
+                  pageInfo: { hasNextPage: false },
+                },
+              },
+            }),
+          ),
+        },
+      },
+    ]);
+
+    const conversations = await fetchMergeReadyPullRequestConversations({
+      exec,
+      repositoryOwner: 'robhowley',
+      repositoryName: 'pi-userland',
+      pullRequestNumber: 42,
+    });
+
+    assertDone();
+
+    expect(conversations).toEqual({
+      kind: 'known',
+      unresolvedCount: 1,
+      requirement: 'optional',
+      issues: [],
+    });
+  });
+
+  it('returns partial with unknown requirement when base-ref rule discovery is truncated', async () => {
+    const { exec, assertDone } = createFakeExec([
+      {
+        command: 'gh',
+        args: [
+          'api',
+          'graphql',
+          '-f',
+          `query=${GH_GRAPHQL_REVIEW_THREADS_QUERY}`,
+          '-F',
+          'owner=robhowley',
+          '-F',
+          'name=pi-userland',
+          '-F',
+          'number=42',
+        ],
+        result: {
+          stdout: JSON.stringify(
+            createConversationPayload({
+              reviewThreads: {
+                nodes: [{ isResolved: false }, { isResolved: false }],
+                pageInfo: { hasNextPage: false },
+              },
+              baseRef: {
+                branchProtectionRule: null,
+                rules: {
+                  nodes: [{ type: 'PULL_REQUEST' }],
+                  pageInfo: { hasNextPage: true },
+                },
+              },
+            }),
+          ),
+        },
+      },
+    ]);
+
+    const conversations = await fetchMergeReadyPullRequestConversations({
+      exec,
+      repositoryOwner: 'robhowley',
+      repositoryName: 'pi-userland',
+      pullRequestNumber: 42,
+    });
+
+    assertDone();
+
+    expect(conversations.kind).toBe('partial');
+    expect(conversations).toMatchObject({
+      unresolvedCount: 2,
+      requirement: 'unknown',
+    });
+    expect(conversations.issues).toEqual([
+      expect.objectContaining({
+        code: 'page_limit',
+        field: 'data.repository.pullRequest.baseRef.rules.pageInfo.hasNextPage',
+      }),
+    ]);
   });
 
   it('returns partial with a page-limit issue when more review thread pages exist', async () => {
@@ -210,15 +437,9 @@ describe('merge-ready review conversation primitives', () => {
         result: {
           stdout: JSON.stringify(
             createConversationPayload({
-              data: {
-                repository: {
-                  pullRequest: {
-                    reviewThreads: {
-                      nodes: [{ isResolved: true }, { isResolved: true }],
-                      pageInfo: { hasNextPage: true },
-                    },
-                  },
-                },
+              reviewThreads: {
+                nodes: [{ isResolved: true }, { isResolved: true }],
+                pageInfo: { hasNextPage: true },
               },
             }),
           ),
@@ -238,6 +459,7 @@ describe('merge-ready review conversation primitives', () => {
     expect(conversations.kind).toBe('partial');
     expect(conversations).toMatchObject({
       unresolvedCount: 0,
+      requirement: 'optional',
     });
     expect(conversations.issues).toEqual([
       expect.objectContaining({
@@ -301,15 +523,11 @@ describe('merge-ready review conversation primitives', () => {
           'number=42',
         ],
         result: {
-          stdout: JSON.stringify({
-            data: {
-              repository: {
-                pullRequest: {
-                  reviewThreads: {},
-                },
-              },
-            },
-          }),
+          stdout: JSON.stringify(
+            createConversationPayload({
+              reviewThreads: {},
+            }),
+          ),
         },
       },
     ]);

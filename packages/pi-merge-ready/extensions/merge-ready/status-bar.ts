@@ -154,6 +154,12 @@ export async function refreshMergeReadyStatusBar(
 }
 
 export function renderMergeReadyStatusBar(status: MergeReadyStatus): string {
+  const specialCase = renderStatusBarSpecialCase(status);
+  if (specialCase) {
+    const prefix = STATUS_BAR_PREFIX ? `${STATUS_BAR_PREFIX} ` : '';
+    return `${prefix}${specialCase}`;
+  }
+
   const badgeId = selectMergeReadyBadgeId(status);
   const badge = BADGE_PRESENTATION[badgeId];
   const text = renderStatusBarText(status, badgeId, badge.text);
@@ -162,20 +168,54 @@ export function renderMergeReadyStatusBar(status: MergeReadyStatus): string {
   return `${prefix}${badge.icon} ${text}`;
 }
 
+function renderStatusBarSpecialCase(status: MergeReadyStatus): string | null {
+  const badgeId = selectMergeReadyBadgeId(status);
+
+  if (badgeId === 'unresolved_conversations') {
+    return `❌ 💬 ${formatRequiredUnresolvedConversationText(status)}`;
+  }
+
+  if (
+    badgeId === 'ready' &&
+    status.signals.unresolvedConversations &&
+    status.signals.unresolvedConversationRequirement === 'optional'
+  ) {
+    return `✅ Mergeable · 💬 ${formatOptionalUnresolvedConversationText(status)}`;
+  }
+
+  return null;
+}
+
 function renderStatusBarText(
   status: MergeReadyStatus,
   badgeId: MergeReadyBadgeId,
   fallbackText: string,
 ): string {
-  if (
-    badgeId === 'unresolved_conversations' &&
-    status.signals.unresolvedConversationCount !== undefined &&
-    status.signals.unresolvedConversationCount > 0
-  ) {
-    return `${String(status.signals.unresolvedConversationCount)} unresolved`;
+  if (badgeId === 'unresolved_conversations') {
+    return formatRequiredUnresolvedConversationText(status);
   }
 
   return SUMMARY_TEXT[status.summary] ?? fallbackText;
+}
+
+function formatRequiredUnresolvedConversationText(status: MergeReadyStatus): string {
+  const count = status.signals.unresolvedConversationCount;
+
+  if (count !== undefined && count > 0) {
+    return `${String(count)} unresolved`;
+  }
+
+  return 'Unresolved';
+}
+
+function formatOptionalUnresolvedConversationText(status: MergeReadyStatus): string {
+  const count = status.signals.unresolvedConversationCount;
+
+  if (count !== undefined && count > 0) {
+    return `${String(count)} ${count === 1 ? 'comment' : 'comments'}`;
+  }
+
+  return 'Comments';
 }
 
 export function resetMergeReadyStatusBarCache(): void {

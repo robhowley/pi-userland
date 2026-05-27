@@ -33,6 +33,13 @@ const GH_GRAPHQL_REVIEW_THREADS_QUERY = [
   'nodes { isResolved }',
   'pageInfo { hasNextPage }',
   '}',
+  'baseRef {',
+  'branchProtectionRule { requiresConversationResolution }',
+  'rules(first: 100) {',
+  'nodes { type }',
+  'pageInfo { hasNextPage }',
+  '}',
+  '}',
   '}',
   '}',
   '}',
@@ -242,6 +249,31 @@ function buildPullRequestPayload(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function buildConversationsPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    data: {
+      repository: {
+        pullRequest: {
+          reviewThreads: {
+            nodes: [],
+            pageInfo: { hasNextPage: false },
+          },
+          baseRef: {
+            branchProtectionRule: {
+              requiresConversationResolution: false,
+            },
+            rules: {
+              nodes: [{ type: 'PULL_REQUEST' }],
+              pageInfo: { hasNextPage: false },
+            },
+          },
+          ...overrides,
+        },
+      },
+    },
+  };
+}
+
 describe('merge-ready command', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -264,6 +296,7 @@ describe('merge-ready command', () => {
           checks: 'passing',
           review: 'approved',
           unresolvedConversations: false,
+          unresolvedConversationRequirement: 'optional',
         },
       }),
       expected: {
@@ -292,6 +325,7 @@ describe('merge-ready command', () => {
           checks: 'passing',
           review: 'approved',
           unresolvedConversations: false,
+          unresolvedConversationRequirement: 'optional',
         },
       }),
       expected: {
@@ -320,6 +354,7 @@ describe('merge-ready command', () => {
           checks: 'passing',
           review: 'approved',
           unresolvedConversations: false,
+          unresolvedConversationRequirement: 'optional',
         },
       }),
       expected: {
@@ -371,18 +406,14 @@ describe('merge-ready command', () => {
     const { api, assertDone, getCommand } = createMockAPI([
       ...createGitDiscoveryCalls(),
       createPullRequestViewSuccessCall(buildPullRequestPayload()),
-      createConversationsSuccessCall({
-        data: {
-          repository: {
-            pullRequest: {
-              reviewThreads: {
-                nodes: [{ isResolved: true }],
-                pageInfo: { hasNextPage: false },
-              },
-            },
+      createConversationsSuccessCall(
+        buildConversationsPayload({
+          reviewThreads: {
+            nodes: [{ isResolved: true }],
+            pageInfo: { hasNextPage: false },
           },
-        },
-      }),
+        }),
+      ),
     ]);
 
     mergeReadyExtension(api);
@@ -403,7 +434,7 @@ describe('merge-ready command', () => {
     );
   });
 
-  it('renders blocked output with open items', async () => {
+  it('keeps optional unresolved comments out of human blocker output', async () => {
     const { api, assertDone, getCommand } = createMockAPI([
       ...createGitDiscoveryCalls(),
       createPullRequestViewSuccessCall(
@@ -419,18 +450,14 @@ describe('merge-ready command', () => {
           ],
         }),
       ),
-      createConversationsSuccessCall({
-        data: {
-          repository: {
-            pullRequest: {
-              reviewThreads: {
-                nodes: [{ isResolved: false }, { isResolved: true }],
-                pageInfo: { hasNextPage: false },
-              },
-            },
+      createConversationsSuccessCall(
+        buildConversationsPayload({
+          reviewThreads: {
+            nodes: [{ isResolved: false }, { isResolved: true }],
+            pageInfo: { hasNextPage: false },
           },
-        },
-      }),
+        }),
+      ),
     ]);
 
     mergeReadyExtension(api);
@@ -447,7 +474,6 @@ describe('merge-ready command', () => {
         'State: blocked',
         'Open items:',
         '- Required checks are failing',
-        '- 1 unresolved review conversation remains',
       ].join('\n'),
       'error',
     );
@@ -487,18 +513,14 @@ describe('merge-ready command', () => {
     const { api, assertDone, getCommand } = createMockAPI([
       ...createGitDiscoveryCalls(),
       createPullRequestViewSuccessCall(buildPullRequestPayload()),
-      createConversationsSuccessCall({
-        data: {
-          repository: {
-            pullRequest: {
-              reviewThreads: {
-                nodes: [{ isResolved: true }],
-                pageInfo: { hasNextPage: false },
-              },
-            },
+      createConversationsSuccessCall(
+        buildConversationsPayload({
+          reviewThreads: {
+            nodes: [{ isResolved: false }, { isResolved: true }],
+            pageInfo: { hasNextPage: false },
           },
-        },
-      }),
+        }),
+      ),
     ]);
 
     mergeReadyExtension(api);
@@ -524,7 +546,9 @@ describe('merge-ready command', () => {
         mergeability: 'mergeable',
         checks: 'passing',
         review: 'approved',
-        unresolvedConversations: false,
+        unresolvedConversations: true,
+        unresolvedConversationCount: 1,
+        unresolvedConversationRequirement: 'optional',
       },
       generatedAt: GENERATED_AT,
     });

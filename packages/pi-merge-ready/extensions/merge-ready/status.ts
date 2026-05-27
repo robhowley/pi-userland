@@ -74,13 +74,14 @@ export function normalizeMergeReadySignals(
   const mergeability = input.mergeability ?? 'unknown';
   const checks = input.checks ?? 'unknown';
   const review = input.review ?? 'unknown';
+  const unresolvedConversationRequirement = input.unresolvedConversationRequirement ?? 'unknown';
   const unresolvedConversationCount = normalizeUnresolvedConversationCount(
     input.unresolvedConversationCount,
   );
   const unresolvedConversations =
     unresolvedConversationCount !== undefined
       ? unresolvedConversationCount > 0
-      : input.unresolvedConversations ?? false;
+      : (input.unresolvedConversations ?? false);
 
   if (!hasPr) {
     return {
@@ -89,6 +90,7 @@ export function normalizeMergeReadySignals(
       checks: 'unknown',
       review: 'unknown',
       unresolvedConversations: false,
+      unresolvedConversationRequirement: 'unknown',
     };
   }
 
@@ -98,6 +100,7 @@ export function normalizeMergeReadySignals(
     checks,
     review,
     unresolvedConversations,
+    unresolvedConversationRequirement,
     ...(unresolvedConversationCount !== undefined && unresolvedConversationCount > 0
       ? { unresolvedConversationCount }
       : {}),
@@ -127,7 +130,12 @@ export function deriveMergeReadyOpenItems(
     openItems.push(createOpenItem('branch_out_of_date'));
   }
 
-  if (signals.mergeability === 'blocked' && !signals.draft) {
+  // Suppress generic merge_blocked when required unresolved conversations explain the block.
+  // GitHub often reports 'blocked' mergeability when conversation resolution is required.
+  const hasRequiredUnresolvedConversations =
+    signals.unresolvedConversations && signals.unresolvedConversationRequirement === 'required';
+
+  if (signals.mergeability === 'blocked' && !signals.draft && !hasRequiredUnresolvedConversations) {
     openItems.push(createOpenItem('merge_blocked'));
   }
 
@@ -143,8 +151,21 @@ export function deriveMergeReadyOpenItems(
     openItems.push(createOpenItem('changes_requested'));
   }
 
+  // unresolved conversations:
+  // - required + count > 0 => blocker
+  // - optional + count > 0 => not a blocker (just informational in signals)
+  // - unknown + count > 0 => ambiguous (emit status_ambiguous, avoid false-ready)
   if (signals.unresolvedConversations) {
-    openItems.push(createOpenItem('unresolved_conversations', signals));
+    if (signals.unresolvedConversationRequirement === 'required') {
+      openItems.push(createOpenItem('unresolved_conversations', signals));
+    } else if (signals.unresolvedConversationRequirement === 'unknown') {
+      // Avoid false-ready: surface ambiguity when we can't determine if resolution is required.
+      // Only add status_ambiguous if not already present from mergeability unknown.
+      if (!openItems.some((item) => item.id === 'status_ambiguous')) {
+        openItems.push(createOpenItem('status_ambiguous'));
+      }
+    }
+    // requirement === 'optional' with count > 0 => no blocker emitted
   }
 
   if (signals.checks === 'running') {
@@ -211,10 +232,7 @@ function normalizeGeneratedAt(value: string | Date): string {
   return typeof value === 'string' ? value : value.toISOString();
 }
 
-function createOpenItem(
-  id: MergeReadyOpenItemId,
-  signals?: MergeReadySignals,
-): MergeReadyOpenItem {
+function createOpenItem(id: MergeReadyOpenItemId, signals?: MergeReadySignals): MergeReadyOpenItem {
   return {
     id,
     summary: createOpenItemSummary(id, signals),

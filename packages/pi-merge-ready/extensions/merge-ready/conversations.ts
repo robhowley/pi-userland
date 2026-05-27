@@ -1,5 +1,20 @@
 import type { MergeReadyExec, MergeReadyExecOptions, MergeReadyExecResult } from './git.js';
 
+type MergeReadyConversationRequirement = 'required' | 'optional' | 'unknown';
+
+type ReadConversationPayloadResult = {
+  reviewThreads: {
+    nodes: unknown[];
+    pageInfo: unknown;
+  };
+  baseRef: unknown;
+};
+
+type ConversationRequirementOutcome = {
+  requirement: MergeReadyConversationRequirement;
+  isPartial: boolean;
+};
+
 export type MergeReadyConversationIssue = {
   code:
     | 'non_zero_exit'
@@ -23,11 +38,13 @@ export type MergeReadyPullRequestConversations =
   | {
       kind: 'known';
       unresolvedCount: number;
+      requirement: 'required' | 'optional' | 'unknown';
       issues: MergeReadyConversationIssue[];
     }
   | {
       kind: 'partial';
       unresolvedCount: number;
+      requirement: 'required' | 'optional' | 'unknown';
       issues: MergeReadyConversationIssue[];
     }
   | {
@@ -80,6 +97,8 @@ type IssueContext = {
 };
 
 const REVIEW_THREADS_PAGE_SIZE = 100;
+const BASE_REF_RULES_PAGE_SIZE = 100;
+const REQUIRED_REVIEW_THREAD_RESOLUTION_RULE = 'REQUIRED_REVIEW_THREAD_RESOLUTION';
 const GH_GRAPHQL_REVIEW_THREADS_QUERY = [
   'query MergeReadyReviewThreads($owner: String!, $name: String!, $number: Int!) {',
   'repository(owner: $owner, name: $name) {',
@@ -87,6 +106,13 @@ const GH_GRAPHQL_REVIEW_THREADS_QUERY = [
   `reviewThreads(first: ${String(REVIEW_THREADS_PAGE_SIZE)}) {`,
   'nodes { isResolved }',
   'pageInfo { hasNextPage }',
+  '}',
+  'baseRef {',
+  'branchProtectionRule { requiresConversationResolution }',
+  `rules(first: ${String(BASE_REF_RULES_PAGE_SIZE)}) {`,
+  'nodes { type }',
+  'pageInfo { hasNextPage }',
+  '}',
   '}',
   '}',
   '}',
@@ -191,15 +217,15 @@ function normalizeConversationOutcome(
   issueContext: IssueContext,
 ): MergeReadyPullRequestConversations {
   const issues: MergeReadyConversationIssue[] = [];
-  const reviewThreads = readReviewThreads(value, issueContext, issues);
-  if (!reviewThreads) {
+  const payload = readConversationPayload(value, issueContext, issues);
+  if (!payload) {
     return { kind: 'invalid_shape', issues };
   }
 
   let unresolvedCount = 0;
   let isPartial = false;
 
-  for (const [index, node] of reviewThreads.nodes.entries()) {
+  for (const [index, node] of payload.reviewThreads.nodes.entries()) {
     if (!isRecord(node)) {
       issues.push(
         createIssue(
@@ -232,7 +258,7 @@ function normalizeConversationOutcome(
     }
   }
 
-  if (!isRecord(reviewThreads.pageInfo)) {
+  if (!isRecord(payload.reviewThreads.pageInfo)) {
     issues.push(
       createIssue(
         issueContext,
@@ -243,7 +269,7 @@ function normalizeConversationOutcome(
     );
     isPartial = true;
   } else {
-    const hasNextPage = parseOptionalBoolean(reviewThreads.pageInfo['hasNextPage']);
+    const hasNextPage = parseOptionalBoolean(payload.reviewThreads.pageInfo['hasNextPage']);
     if (hasNextPage === null) {
       issues.push(
         createIssue(
@@ -267,10 +293,20 @@ function normalizeConversationOutcome(
     }
   }
 
+  const requirementOutcome = normalizeConversationRequirement(
+    payload.baseRef,
+    issueContext,
+    issues,
+  );
+  if (requirementOutcome.isPartial) {
+    isPartial = true;
+  }
+
   if (isPartial) {
     return {
       kind: 'partial',
       unresolvedCount,
+      requirement: requirementOutcome.requirement,
       issues,
     };
   }
@@ -278,15 +314,16 @@ function normalizeConversationOutcome(
   return {
     kind: 'known',
     unresolvedCount,
+    requirement: requirementOutcome.requirement,
     issues: [],
   };
 }
 
-function readReviewThreads(
+function readConversationPayload(
   value: unknown,
   issueContext: IssueContext,
   issues: MergeReadyConversationIssue[],
-): { nodes: unknown[]; pageInfo: unknown } | null {
+): ReadConversationPayloadResult | null {
   if (!isRecord(value)) {
     issues.push(
       createIssue(issueContext, 'invalid_shape', 'gh api graphql JSON payload was not an object'),
@@ -360,8 +397,204 @@ function readReviewThreads(
   }
 
   return {
-    nodes,
-    pageInfo: reviewThreads['pageInfo'],
+    reviewThreads: {
+      nodes,
+      pageInfo: reviewThreads['pageInfo'],
+    },
+    baseRef: pullRequest['baseRef'],
+  };
+}
+
+function normalizeConversationRequirement(
+  baseRefValue: unknown,
+  issueContext: IssueContext,
+  issues: MergeReadyConversationIssue[],
+): ConversationRequirementOutcome {
+  if (!isRecord(baseRefValue)) {
+    issues.push(
+      createIssue(
+        issueContext,
+        'partial_shape',
+        'gh api graphql returned pull request base ref in an invalid shape',
+        'data.repository.pullRequest.baseRef',
+      ),
+    );
+    return {
+      requirement: 'unknown',
+      isPartial: true,
+    };
+  }
+
+  let isPartial = false;
+  let classicPolicyKnown = false;
+  let classicRequiresConversationResolution = false;
+
+  const branchProtectionRule = baseRefValue['branchProtectionRule'];
+  if (branchProtectionRule === null) {
+    classicPolicyKnown = true;
+  } else if (branchProtectionRule === undefined) {
+    issues.push(
+      createIssue(
+        issueContext,
+        'partial_shape',
+        'gh api graphql returned base ref branch protection in an invalid shape',
+        'data.repository.pullRequest.baseRef.branchProtectionRule',
+      ),
+    );
+    isPartial = true;
+  } else if (!isRecord(branchProtectionRule)) {
+    issues.push(
+      createIssue(
+        issueContext,
+        'partial_shape',
+        'gh api graphql returned base ref branch protection in an invalid shape',
+        'data.repository.pullRequest.baseRef.branchProtectionRule',
+      ),
+    );
+    isPartial = true;
+  } else {
+    const requiresConversationResolution = parseOptionalBoolean(
+      branchProtectionRule['requiresConversationResolution'],
+    );
+    if (requiresConversationResolution === null) {
+      issues.push(
+        createIssue(
+          issueContext,
+          'partial_shape',
+          'gh api graphql returned base ref branch protection without a valid requiresConversationResolution flag',
+          'data.repository.pullRequest.baseRef.branchProtectionRule.requiresConversationResolution',
+        ),
+      );
+      isPartial = true;
+    } else {
+      classicPolicyKnown = true;
+      classicRequiresConversationResolution = requiresConversationResolution;
+    }
+  }
+
+  let rulesPolicyKnownComplete = false;
+  let hasRequiredReviewThreadResolutionRule = false;
+
+  const rules = baseRefValue['rules'];
+  if (!isRecord(rules)) {
+    issues.push(
+      createIssue(
+        issueContext,
+        'partial_shape',
+        'gh api graphql returned base ref rules in an invalid shape',
+        'data.repository.pullRequest.baseRef.rules',
+      ),
+    );
+    isPartial = true;
+  } else {
+    const nodes = rules['nodes'];
+    let nodesValid = false;
+
+    if (!Array.isArray(nodes)) {
+      issues.push(
+        createIssue(
+          issueContext,
+          'partial_shape',
+          'gh api graphql returned base ref rules with an invalid nodes array',
+          'data.repository.pullRequest.baseRef.rules.nodes',
+        ),
+      );
+      isPartial = true;
+    } else {
+      nodesValid = true;
+
+      for (const [index, node] of nodes.entries()) {
+        if (!isRecord(node)) {
+          issues.push(
+            createIssue(
+              issueContext,
+              'partial_shape',
+              'gh api graphql returned a non-object base ref rule node',
+              `data.repository.pullRequest.baseRef.rules.nodes[${String(index)}]`,
+            ),
+          );
+          isPartial = true;
+          nodesValid = false;
+          continue;
+        }
+
+        const type = readOptionalString(node['type']);
+        if (type === null) {
+          issues.push(
+            createIssue(
+              issueContext,
+              'partial_shape',
+              'gh api graphql returned a base ref rule without a valid type',
+              `data.repository.pullRequest.baseRef.rules.nodes[${String(index)}].type`,
+            ),
+          );
+          isPartial = true;
+          nodesValid = false;
+          continue;
+        }
+
+        if (type === REQUIRED_REVIEW_THREAD_RESOLUTION_RULE) {
+          hasRequiredReviewThreadResolutionRule = true;
+        }
+      }
+    }
+
+    const pageInfo = rules['pageInfo'];
+    if (!isRecord(pageInfo)) {
+      issues.push(
+        createIssue(
+          issueContext,
+          'partial_shape',
+          'gh api graphql returned base ref rules pageInfo in an invalid shape',
+          'data.repository.pullRequest.baseRef.rules.pageInfo',
+        ),
+      );
+      isPartial = true;
+    } else {
+      const hasNextPage = parseOptionalBoolean(pageInfo['hasNextPage']);
+      if (hasNextPage === null) {
+        issues.push(
+          createIssue(
+            issueContext,
+            'partial_shape',
+            'gh api graphql returned base ref rules pageInfo without a valid hasNextPage flag',
+            'data.repository.pullRequest.baseRef.rules.pageInfo.hasNextPage',
+          ),
+        );
+        isPartial = true;
+      } else if (hasNextPage) {
+        issues.push(
+          createIssue(
+            issueContext,
+            'page_limit',
+            `Only the first ${String(BASE_REF_RULES_PAGE_SIZE)} base ref rules were inspected`,
+            'data.repository.pullRequest.baseRef.rules.pageInfo.hasNextPage',
+          ),
+        );
+        isPartial = true;
+      } else if (nodesValid) {
+        rulesPolicyKnownComplete = true;
+      }
+    }
+  }
+
+  if (classicRequiresConversationResolution || hasRequiredReviewThreadResolutionRule) {
+    return {
+      requirement: 'required',
+      isPartial,
+    };
+  }
+
+  if (classicPolicyKnown && rulesPolicyKnownComplete) {
+    return {
+      requirement: 'optional',
+      isPartial,
+    };
+  }
+
+  return {
+    requirement: 'unknown',
+    isPartial: true,
   };
 }
 

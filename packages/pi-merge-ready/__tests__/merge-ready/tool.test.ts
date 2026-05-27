@@ -34,6 +34,13 @@ const GH_GRAPHQL_REVIEW_THREADS_QUERY = [
   'nodes { isResolved }',
   'pageInfo { hasNextPage }',
   '}',
+  'baseRef {',
+  'branchProtectionRule { requiresConversationResolution }',
+  'rules(first: 100) {',
+  'nodes { type }',
+  'pageInfo { hasNextPage }',
+  '}',
+  '}',
   '}',
   '}',
   '}',
@@ -235,6 +242,31 @@ function buildPullRequestPayload(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function buildConversationsPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    data: {
+      repository: {
+        pullRequest: {
+          reviewThreads: {
+            nodes: [],
+            pageInfo: { hasNextPage: false },
+          },
+          baseRef: {
+            branchProtectionRule: {
+              requiresConversationResolution: false,
+            },
+            rules: {
+              nodes: [{ type: 'PULL_REQUEST' }],
+              pageInfo: { hasNextPage: false },
+            },
+          },
+          ...overrides,
+        },
+      },
+    },
+  };
+}
+
 function createRegisteredTool(tool: RegisteredTool): NonNullable<RegisteredTool> {
   expect(tool).toBeDefined();
   return tool as NonNullable<RegisteredTool>;
@@ -288,18 +320,14 @@ describe('merge_ready_status tool', () => {
     const { api, assertDone, getTool } = createMockAPI([
       ...createGitDiscoveryCalls(),
       createPullRequestViewSuccessCall(buildPullRequestPayload()),
-      createConversationsSuccessCall({
-        data: {
-          repository: {
-            pullRequest: {
-              reviewThreads: {
-                nodes: [{ isResolved: true }],
-                pageInfo: { hasNextPage: false },
-              },
-            },
+      createConversationsSuccessCall(
+        buildConversationsPayload({
+          reviewThreads: {
+            nodes: [{ isResolved: true }],
+            pageInfo: { hasNextPage: false },
           },
-        },
-      }),
+        }),
+      ),
     ]);
 
     registerMergeReadyStatusTool(api);
@@ -323,11 +351,51 @@ describe('merge_ready_status tool', () => {
         checks: 'passing',
         review: 'approved',
         unresolvedConversations: false,
+        unresolvedConversationRequirement: 'optional',
       },
       generatedAt: GENERATED_AT,
     });
     expect(result.details.pr).not.toHaveProperty('headRefName');
     expect(result.details).not.toHaveProperty('issues');
+    expect(JSON.parse(result.content[0]?.text ?? '')).toEqual(result.details);
+  });
+
+  it('keeps optional unresolved comments in signals while leaving openItems blocker-only', async () => {
+    const { api, assertDone, getTool } = createMockAPI([
+      ...createGitDiscoveryCalls(),
+      createPullRequestViewSuccessCall(buildPullRequestPayload()),
+      createConversationsSuccessCall(
+        buildConversationsPayload({
+          reviewThreads: {
+            nodes: [{ isResolved: false }, { isResolved: true }],
+            pageInfo: { hasNextPage: false },
+          },
+        }),
+      ),
+    ]);
+
+    registerMergeReadyStatusTool(api);
+    const tool = createRegisteredTool(getTool(MERGE_READY_STATUS_TOOL_NAME));
+
+    const result = await tool.execute(
+      'tool-call-optional',
+      {},
+      undefined,
+      undefined,
+      createToolContext(),
+    );
+
+    assertDone();
+    expect(result.details).toMatchObject({
+      state: 'ready',
+      summary: 'Ready to merge',
+      openItems: [],
+      signals: {
+        unresolvedConversations: true,
+        unresolvedConversationCount: 1,
+        unresolvedConversationRequirement: 'optional',
+      },
+    });
     expect(JSON.parse(result.content[0]?.text ?? '')).toEqual(result.details);
   });
 
@@ -347,18 +415,14 @@ describe('merge_ready_status tool', () => {
           ],
         }),
       ),
-      createConversationsSuccessCall({
-        data: {
-          repository: {
-            pullRequest: {
-              reviewThreads: {
-                nodes: [{ isResolved: true }],
-                pageInfo: { hasNextPage: false },
-              },
-            },
+      createConversationsSuccessCall(
+        buildConversationsPayload({
+          reviewThreads: {
+            nodes: [{ isResolved: true }],
+            pageInfo: { hasNextPage: false },
           },
-        },
-      }),
+        }),
+      ),
     ]);
 
     registerMergeReadyStatusTool(api);
@@ -415,6 +479,7 @@ describe('merge_ready_status tool', () => {
         checks: 'unknown',
         review: 'unknown',
         unresolvedConversations: false,
+        unresolvedConversationRequirement: 'unknown',
       },
       generatedAt: GENERATED_AT,
     });
@@ -427,18 +492,12 @@ describe('merge_ready_status tool', () => {
       ...createGitDiscoveryCalls(cwd),
       createPullRequestViewSuccessCall(buildPullRequestPayload(), cwd),
       createConversationsSuccessCall(
-        {
-          data: {
-            repository: {
-              pullRequest: {
-                reviewThreads: {
-                  nodes: [{ isResolved: true }],
-                  pageInfo: { hasNextPage: false },
-                },
-              },
-            },
+        buildConversationsPayload({
+          reviewThreads: {
+            nodes: [{ isResolved: true }],
+            pageInfo: { hasNextPage: false },
           },
-        },
+        }),
         cwd,
       ),
     ]);
@@ -488,6 +547,7 @@ describe('merge_ready_status tool', () => {
                 checks: 'unknown',
                 review: 'unknown',
                 unresolvedConversations: false,
+                unresolvedConversationRequirement: 'unknown',
               },
               generatedAt: GENERATED_AT,
             },
@@ -512,6 +572,7 @@ describe('merge_ready_status tool', () => {
           checks: 'unknown',
           review: 'unknown',
           unresolvedConversations: false,
+          unresolvedConversationRequirement: 'unknown',
         },
         generatedAt: GENERATED_AT,
       },

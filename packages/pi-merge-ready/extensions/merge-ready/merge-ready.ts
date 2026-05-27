@@ -101,17 +101,24 @@ function toMergeReadyPullRequest(pullRequest: MergeReadyGitHubPullRequest): Merg
 
 function normalizeConversationSignals(
   conversations: MergeReadyPullRequestConversations,
-): Pick<MergeReadySignalsInput, 'unresolvedConversations' | 'unresolvedConversationCount'> {
+): Pick<
+  MergeReadySignalsInput,
+  'unresolvedConversations' | 'unresolvedConversationCount' | 'unresolvedConversationRequirement'
+> {
   if (conversations.kind === 'known' || conversations.kind === 'partial') {
     return {
       unresolvedConversations: conversations.unresolvedCount > 0,
+      unresolvedConversationRequirement: conversations.requirement,
       ...(conversations.unresolvedCount > 0
         ? { unresolvedConversationCount: conversations.unresolvedCount }
         : {}),
     };
   }
 
-  return { unresolvedConversations: false };
+  return {
+    unresolvedConversations: false,
+    unresolvedConversationRequirement: 'unknown',
+  };
 }
 
 function normalizeReviewSignal(pullRequest: MergeReadyGitHubPullRequest): MergeReadyReviewSignal {

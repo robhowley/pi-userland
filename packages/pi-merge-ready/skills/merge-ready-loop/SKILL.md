@@ -31,16 +31,20 @@ Current response shape:
     "checks": "passing | failing | running | unknown",
     "review": "approved | changes_requested | pending | unknown",
     "unresolvedConversations": true,
-    "unresolvedConversationCount": 2
+    "unresolvedConversationCount": 2,
+    "unresolvedConversationRequirement": "required | optional | unknown"
   },
   "generatedAt": "2026-05-27T00:00:00.000Z"
 }
 ```
 
 Important:
+
+- `openItems` is blocker-only. Optional unresolved comments may still appear in `signals`, but not as blocker items.
 - Only `signals.mergeability = mergeable` with a merge-clear PR yields no mergeability blocker. Treat every other mergeability value as not ready.
 - `review_pending` is requirement-aware. Do **not** infer pending review from raw review history or a lack of approvals.
 - If `review_pending` is absent, do not invent a review blocker.
+- If unresolved conversations exist with `unresolvedConversationRequirement = unknown`, expect `status_ambiguous` rather than guessing.
 
 ## When to use
 
@@ -83,19 +87,19 @@ Important:
 
 Use `id` plus the user's request. An item can be **addressed locally** before it is **cleared remotely**; only treat it as cleared once `merge_ready_status` or another authoritative remote signal drops it.
 
-| id | Meaning | Default agent behavior |
-| --- | --- | --- |
-| `no_pull_request` | No PR found for this branch/repo | Report it; do not invent local fixes |
-| `status_ambiguous` | Discovery/data was ambiguous | Report ambiguity, rerun if helpful, do not guess |
-| `merge_conflicts` | GitHub reports conflicts or dirty merge state | Usually actionable locally: merge/rebase, resolve conflicts, verify, then wait for GitHub to recalculate |
-| `branch_out_of_date` | Head branch is behind base | Usually actionable locally: rebase/merge base, verify, then wait for GitHub to clear it |
-| `merge_blocked` | GitHub reports a non-clear mergeability blocker | Treat as not ready; inspect whether it is explained by checks/draft/policies, otherwise report GitHub-side blockage |
-| `draft` | PR is still draft | Report that GitHub/user action is needed |
-| `ci_failing` | Required checks are failing | Usually actionable locally: reproduce, fix, run local validation, then hand off to remote CI |
-| `changes_requested` | Reviewers requested changes | Fix only if the requested changes are actually available; otherwise ask for review context |
-| `unresolved_conversations` | Review threads remain unresolved; `signals.unresolvedConversationCount` may include the known count | Agent may address code if context exists, but only GitHub/user can resolve the conversations |
-| `ci_running` | Checks are still running | Wait; do not claim ready |
-| `review_pending` | Required review is still pending | Wait for review; optional local preflight only if user asks |
+| id                         | Meaning                                                                                                      | Default agent behavior                                                                                              |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| `no_pull_request`          | No PR found for this branch/repo                                                                             | Report it; do not invent local fixes                                                                                |
+| `status_ambiguous`         | Discovery/data was ambiguous                                                                                 | Report ambiguity, rerun if helpful, do not guess                                                                    |
+| `merge_conflicts`          | GitHub reports conflicts or dirty merge state                                                                | Usually actionable locally: merge/rebase, resolve conflicts, verify, then wait for GitHub to recalculate            |
+| `branch_out_of_date`       | Head branch is behind base                                                                                   | Usually actionable locally: rebase/merge base, verify, then wait for GitHub to clear it                             |
+| `merge_blocked`            | GitHub reports a non-clear mergeability blocker                                                              | Treat as not ready; inspect whether it is explained by checks/draft/policies, otherwise report GitHub-side blockage |
+| `draft`                    | PR is still draft                                                                                            | Report that GitHub/user action is needed                                                                            |
+| `ci_failing`               | Required checks are failing                                                                                  | Usually actionable locally: reproduce, fix, run local validation, then hand off to remote CI                        |
+| `changes_requested`        | Reviewers requested changes                                                                                  | Fix only if the requested changes are actually available; otherwise ask for review context                          |
+| `unresolved_conversations` | Required review threads remain unresolved; `signals.unresolvedConversationCount` may include the known count | Agent may address code if context exists, but only GitHub/user can resolve the conversations                        |
+| `ci_running`               | Checks are still running                                                                                     | Wait; do not claim ready                                                                                            |
+| `review_pending`           | Required review is still pending                                                                             | Wait for review; optional local preflight only if user asks                                                         |
 
 ## Examples
 
@@ -127,6 +131,7 @@ Response: "PR is ready to merge. No blockers found."
 ```
 
 Action:
+
 1. Reproduce the failure
 2. Make the smallest fix
 3. Re-run focused local validation

@@ -25,6 +25,7 @@ const READY_SIGNALS: MergeReadySignalsInput = {
   checks: 'passing',
   review: 'approved',
   unresolvedConversations: false,
+  unresolvedConversationRequirement: 'optional',
 };
 
 function buildStatus(
@@ -68,6 +69,7 @@ const badgeFixtures: BadgeFixture[] = [
       checks: 'passing',
       review: 'approved',
       unresolvedConversations: false,
+      unresolvedConversationRequirement: 'optional',
     },
   },
   {
@@ -83,6 +85,7 @@ const badgeFixtures: BadgeFixture[] = [
       checks: 'passing',
       review: 'approved',
       unresolvedConversations: false,
+      unresolvedConversationRequirement: 'optional',
     },
   },
   {
@@ -98,6 +101,7 @@ const badgeFixtures: BadgeFixture[] = [
       checks: 'passing',
       review: 'approved',
       unresolvedConversations: false,
+      unresolvedConversationRequirement: 'optional',
     },
   },
   {
@@ -113,6 +117,7 @@ const badgeFixtures: BadgeFixture[] = [
       checks: 'passing',
       review: 'approved',
       unresolvedConversations: false,
+      unresolvedConversationRequirement: 'optional',
     },
   },
   {
@@ -128,6 +133,7 @@ const badgeFixtures: BadgeFixture[] = [
       checks: 'passing',
       review: 'approved',
       unresolvedConversations: false,
+      unresolvedConversationRequirement: 'optional',
     },
   },
   {
@@ -143,6 +149,7 @@ const badgeFixtures: BadgeFixture[] = [
       checks: 'failing',
       review: 'approved',
       unresolvedConversations: false,
+      unresolvedConversationRequirement: 'optional',
     },
   },
   {
@@ -158,11 +165,14 @@ const badgeFixtures: BadgeFixture[] = [
       checks: 'passing',
       review: 'changes_requested',
       unresolvedConversations: false,
+      unresolvedConversationRequirement: 'optional',
     },
   },
   {
-    name: 'unresolved_conversations',
-    status: buildStatus({ signals: { unresolvedConversations: true } }),
+    name: 'unresolved_conversations (required)',
+    status: buildStatus({
+      signals: { unresolvedConversations: true, unresolvedConversationRequirement: 'required' },
+    }),
     badge: 'unresolved_conversations',
     state: 'blocked',
     summary: 'Unresolved review conversations remain',
@@ -173,6 +183,7 @@ const badgeFixtures: BadgeFixture[] = [
       checks: 'passing',
       review: 'approved',
       unresolvedConversations: true,
+      unresolvedConversationRequirement: 'required',
     },
   },
   {
@@ -188,6 +199,7 @@ const badgeFixtures: BadgeFixture[] = [
       checks: 'running',
       review: 'approved',
       unresolvedConversations: false,
+      unresolvedConversationRequirement: 'optional',
     },
   },
   {
@@ -203,6 +215,7 @@ const badgeFixtures: BadgeFixture[] = [
       checks: 'passing',
       review: 'pending',
       unresolvedConversations: false,
+      unresolvedConversationRequirement: 'optional',
     },
   },
   {
@@ -218,6 +231,7 @@ const badgeFixtures: BadgeFixture[] = [
       checks: 'passing',
       review: 'approved',
       unresolvedConversations: false,
+      unresolvedConversationRequirement: 'optional',
     },
   },
   {
@@ -233,6 +247,7 @@ const badgeFixtures: BadgeFixture[] = [
       checks: 'unknown',
       review: 'unknown',
       unresolvedConversations: false,
+      unresolvedConversationRequirement: 'unknown',
     },
   },
 ];
@@ -258,6 +273,7 @@ describe('merge-ready status', () => {
         mergeability: 'conflicting',
         checks: 'failing',
         unresolvedConversations: true,
+        unresolvedConversationRequirement: 'required',
       },
     });
 
@@ -268,10 +284,11 @@ describe('merge-ready status', () => {
     ]);
   });
 
-  it('includes unresolved conversation count when it is known', () => {
+  it('includes unresolved conversation count when it is known and required', () => {
     const status = buildStatus({
       signals: {
         unresolvedConversationCount: 2,
+        unresolvedConversationRequirement: 'required',
       },
     });
 
@@ -286,6 +303,89 @@ describe('merge-ready status', () => {
     expect(status.signals.unresolvedConversations).toBe(true);
     expect(status.signals.unresolvedConversationCount).toBe(2);
   });
+
+  it('does not block when unresolved conversations are optional', () => {
+    const status = buildStatus({
+      signals: {
+        unresolvedConversations: true,
+        unresolvedConversationCount: 3,
+        unresolvedConversationRequirement: 'optional',
+      },
+    });
+
+    expect(status.state).toBe('ready');
+    expect(status.summary).toBe('Ready to merge');
+    expect(openItemIds(status)).toEqual([]);
+    // Signals still reflect the unresolved count for informational purposes
+    expect(status.signals.unresolvedConversations).toBe(true);
+    expect(status.signals.unresolvedConversationCount).toBe(3);
+    expect(status.signals.unresolvedConversationRequirement).toBe('optional');
+  });
+
+  it('emits status_ambiguous when unresolved conversations requirement is unknown', () => {
+    const status = buildStatus({
+      signals: {
+        unresolvedConversations: true,
+        unresolvedConversationCount: 1,
+        unresolvedConversationRequirement: 'unknown',
+      },
+    });
+
+    expect(status.state).toBe('unknown');
+    expect(status.summary).toBe('Merge readiness is ambiguous');
+    expect(openItemIds(status)).toEqual(['status_ambiguous']);
+    // Signals still reflect the unresolved count
+    expect(status.signals.unresolvedConversations).toBe(true);
+    expect(status.signals.unresolvedConversationCount).toBe(1);
+    expect(status.signals.unresolvedConversationRequirement).toBe('unknown');
+  });
+
+  it('suppresses generic merge_blocked when required unresolved conversations explain the block', () => {
+    const status = buildStatus({
+      signals: {
+        mergeability: 'blocked',
+        unresolvedConversations: true,
+        unresolvedConversationCount: 2,
+        unresolvedConversationRequirement: 'required',
+      },
+    });
+
+    // Should show specific unresolved_conversations blocker, not generic merge_blocked
+    expect(openItemIds(status)).toEqual(['unresolved_conversations']);
+    expect(status.state).toBe('blocked');
+    expect(status.summary).toBe('2 unresolved review conversations remain');
+  });
+
+  it('shows merge_blocked when unresolved conversations are optional', () => {
+    const status = buildStatus({
+      signals: {
+        mergeability: 'blocked',
+        unresolvedConversations: true,
+        unresolvedConversationCount: 2,
+        unresolvedConversationRequirement: 'optional',
+      },
+    });
+
+    // merge_blocked should show when conversations are optional (not causing the block)
+    expect(openItemIds(status)).toEqual(['merge_blocked']);
+    expect(status.state).toBe('blocked');
+    expect(status.summary).toBe('GitHub reports merge is blocked');
+  });
+
+  it('does not duplicate status_ambiguous when mergeability is unknown and conversations requirement is unknown', () => {
+    const status = buildStatus({
+      signals: {
+        mergeability: 'unknown',
+        unresolvedConversations: true,
+        unresolvedConversationCount: 1,
+        unresolvedConversationRequirement: 'unknown',
+      },
+    });
+
+    // Should have exactly one status_ambiguous, not two
+    expect(openItemIds(status)).toEqual(['status_ambiguous']);
+    expect(status.state).toBe('unknown');
+  });
 });
 
 describe('normalizeMergeReadySignals', () => {
@@ -297,6 +397,7 @@ describe('normalizeMergeReadySignals', () => {
       checks: 'unknown',
       review: 'unknown',
       unresolvedConversations: false,
+      unresolvedConversationRequirement: 'unknown',
     });
   });
 
@@ -309,6 +410,7 @@ describe('normalizeMergeReadySignals', () => {
         review: 'changes_requested',
         unresolvedConversations: true,
         unresolvedConversationCount: 2,
+        unresolvedConversationRequirement: 'required',
       },
       true,
     );
@@ -319,6 +421,7 @@ describe('normalizeMergeReadySignals', () => {
       review: 'changes_requested',
       unresolvedConversations: true,
       unresolvedConversationCount: 2,
+      unresolvedConversationRequirement: 'required',
     });
   });
 
@@ -330,6 +433,7 @@ describe('normalizeMergeReadySignals', () => {
       checks: 'unknown',
       review: 'unknown',
       unresolvedConversations: false,
+      unresolvedConversationRequirement: 'unknown',
     });
   });
 });

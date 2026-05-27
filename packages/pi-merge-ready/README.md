@@ -10,7 +10,7 @@ pi install npm:@robhowley/pi-merge-ready
 
 ## `merge_ready_status` contract
 
-The public status shape includes a restrained mergeability signal plus an authoritative blocker list:
+The public status shape includes a restrained mergeability signal plus an authoritative blocker list. `openItems` is blocker-only; optional unresolved comments stay in `signals`:
 
 ```json
 {
@@ -26,13 +26,15 @@ The public status shape includes a restrained mergeability signal plus an author
     "checks": "passing | failing | running | unknown",
     "review": "approved | changes_requested | pending | unknown",
     "unresolvedConversations": true,
-    "unresolvedConversationCount": 2
+    "unresolvedConversationCount": 2,
+    "unresolvedConversationRequirement": "required | optional | unknown"
   },
   "generatedAt": "2026-05-27T00:00:00.000Z"
 }
 ```
 
 Open-item ids currently include:
+
 - `no_pull_request`
 - `status_ambiguous`
 - `merge_conflicts`
@@ -46,3 +48,9 @@ Open-item ids currently include:
 - `review_pending`
 
 Only `MERGEABLE + CLEAN` is merge-clear. Every other mergeability outcome must remain non-ready.
+
+Unresolved review threads behave as follows:
+
+- `count > 0` + `required` → blocker `unresolved_conversations`
+- `count > 0` + `optional` → no blocker item; status bar may still show comment follow-up
+- `count > 0` + `unknown` → `status_ambiguous`

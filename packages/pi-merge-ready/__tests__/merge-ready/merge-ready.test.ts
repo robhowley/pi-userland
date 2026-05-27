@@ -40,6 +40,13 @@ const GH_GRAPHQL_REVIEW_THREADS_QUERY = [
   'nodes { isResolved }',
   'pageInfo { hasNextPage }',
   '}',
+  'baseRef {',
+  'branchProtectionRule { requiresConversationResolution }',
+  'rules(first: 100) {',
+  'nodes { type }',
+  'pageInfo { hasNextPage }',
+  '}',
+  '}',
   '}',
   '}',
   '}',
@@ -224,7 +231,7 @@ function buildPullRequestPayload(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function buildConversationsPayload(overrides: Record<string, unknown> = {}) {
+function buildConversationsPayload(pullRequestOverrides: Record<string, unknown> = {}) {
   return {
     data: {
       repository: {
@@ -235,10 +242,19 @@ function buildConversationsPayload(overrides: Record<string, unknown> = {}) {
               hasNextPage: false,
             },
           },
+          baseRef: {
+            branchProtectionRule: {
+              requiresConversationResolution: true,
+            },
+            rules: {
+              nodes: [],
+              pageInfo: { hasNextPage: false },
+            },
+          },
+          ...pullRequestOverrides,
         },
       },
     },
-    ...overrides,
   };
 }
 
@@ -265,6 +281,7 @@ const blockerFixtures: BlockerFixture[] = [
       checks: 'passing',
       review: 'approved',
       unresolvedConversations: false,
+      unresolvedConversationRequirement: 'required',
     },
   },
   {
@@ -282,6 +299,7 @@ const blockerFixtures: BlockerFixture[] = [
       checks: 'passing',
       review: 'approved',
       unresolvedConversations: false,
+      unresolvedConversationRequirement: 'required',
     },
   },
   {
@@ -299,6 +317,7 @@ const blockerFixtures: BlockerFixture[] = [
       checks: 'passing',
       review: 'approved',
       unresolvedConversations: false,
+      unresolvedConversationRequirement: 'required',
     },
   },
   {
@@ -316,6 +335,7 @@ const blockerFixtures: BlockerFixture[] = [
       checks: 'passing',
       review: 'approved',
       unresolvedConversations: false,
+      unresolvedConversationRequirement: 'required',
     },
   },
   {
@@ -333,6 +353,7 @@ const blockerFixtures: BlockerFixture[] = [
       checks: 'passing',
       review: 'approved',
       unresolvedConversations: false,
+      unresolvedConversationRequirement: 'required',
     },
   },
   {
@@ -351,6 +372,7 @@ const blockerFixtures: BlockerFixture[] = [
       checks: 'passing',
       review: 'approved',
       unresolvedConversations: false,
+      unresolvedConversationRequirement: 'required',
     },
   },
   {
@@ -369,6 +391,7 @@ const blockerFixtures: BlockerFixture[] = [
       checks: 'passing',
       review: 'approved',
       unresolvedConversations: false,
+      unresolvedConversationRequirement: 'required',
     },
   },
   {
@@ -386,6 +409,7 @@ const blockerFixtures: BlockerFixture[] = [
       checks: 'passing',
       review: 'approved',
       unresolvedConversations: false,
+      unresolvedConversationRequirement: 'required',
     },
   },
   {
@@ -404,6 +428,7 @@ const blockerFixtures: BlockerFixture[] = [
       checks: 'passing',
       review: 'approved',
       unresolvedConversations: false,
+      unresolvedConversationRequirement: 'required',
     },
   },
   {
@@ -422,6 +447,7 @@ const blockerFixtures: BlockerFixture[] = [
       checks: 'passing',
       review: 'approved',
       unresolvedConversations: false,
+      unresolvedConversationRequirement: 'required',
     },
   },
   {
@@ -447,6 +473,7 @@ const blockerFixtures: BlockerFixture[] = [
       checks: 'failing',
       review: 'approved',
       unresolvedConversations: false,
+      unresolvedConversationRequirement: 'required',
     },
   },
   {
@@ -471,6 +498,7 @@ const blockerFixtures: BlockerFixture[] = [
       checks: 'running',
       review: 'approved',
       unresolvedConversations: false,
+      unresolvedConversationRequirement: 'required',
     },
   },
   {
@@ -495,6 +523,7 @@ const blockerFixtures: BlockerFixture[] = [
       checks: 'passing',
       review: 'changes_requested',
       unresolvedConversations: false,
+      unresolvedConversationRequirement: 'required',
     },
   },
   {
@@ -513,6 +542,7 @@ const blockerFixtures: BlockerFixture[] = [
       checks: 'passing',
       review: 'pending',
       unresolvedConversations: false,
+      unresolvedConversationRequirement: 'required',
     },
   },
 ];
@@ -524,15 +554,9 @@ describe('getMergeReadyStatus', () => {
       createPullRequestViewSuccessCall(buildPullRequestPayload(), 5_000),
       createConversationsSuccessCall(
         buildConversationsPayload({
-          data: {
-            repository: {
-              pullRequest: {
-                reviewThreads: {
-                  nodes: [{ isResolved: true }, { isResolved: true }],
-                  pageInfo: { hasNextPage: false },
-                },
-              },
-            },
+          reviewThreads: {
+            nodes: [{ isResolved: true }, { isResolved: true }],
+            pageInfo: { hasNextPage: false },
           },
         }),
         5_000,
@@ -563,6 +587,7 @@ describe('getMergeReadyStatus', () => {
         checks: 'passing',
         review: 'approved',
         unresolvedConversations: false,
+        unresolvedConversationRequirement: 'required',
       },
       generatedAt: GENERATED_AT,
     });
@@ -634,15 +659,9 @@ describe('getMergeReadyStatus', () => {
       ),
       createConversationsSuccessCall(
         buildConversationsPayload({
-          data: {
-            repository: {
-              pullRequest: {
-                reviewThreads: {
-                  nodes: [{ isResolved: false }],
-                  pageInfo: { hasNextPage: false },
-                },
-              },
-            },
+          reviewThreads: {
+            nodes: [{ isResolved: false }],
+            pageInfo: { hasNextPage: false },
           },
         }),
       ),
@@ -662,6 +681,7 @@ describe('getMergeReadyStatus', () => {
     expect(status.signals.review).toBe('approved');
     expect(status.signals.unresolvedConversations).toBe(true);
     expect(status.signals.unresolvedConversationCount).toBe(1);
+    expect(status.signals.unresolvedConversationRequirement).toBe('required');
     expect(selectMergeReadyBadgeId(status)).toBe('unresolved_conversations');
   });
 
@@ -671,15 +691,9 @@ describe('getMergeReadyStatus', () => {
       createPullRequestViewSuccessCall(buildPullRequestPayload()),
       createConversationsSuccessCall(
         buildConversationsPayload({
-          data: {
-            repository: {
-              pullRequest: {
-                reviewThreads: {
-                  nodes: [{ isResolved: false }, { isResolved: false }],
-                  pageInfo: { hasNextPage: false },
-                },
-              },
-            },
+          reviewThreads: {
+            nodes: [{ isResolved: false }, { isResolved: false }],
+            pageInfo: { hasNextPage: false },
           },
         }),
       ),
@@ -698,6 +712,119 @@ describe('getMergeReadyStatus', () => {
     expect(openItemIds(status)).toEqual(['unresolved_conversations']);
     expect(status.signals.unresolvedConversations).toBe(true);
     expect(status.signals.unresolvedConversationCount).toBe(2);
+    expect(status.signals.unresolvedConversationRequirement).toBe('required');
+    expect(selectMergeReadyBadgeId(status)).toBe('unresolved_conversations');
+  });
+
+  it('keeps optional unresolved conversations out of blocker openItems', async () => {
+    const { exec, assertDone } = createFakeExec([
+      ...createGitDiscoveryCalls(),
+      createPullRequestViewSuccessCall(buildPullRequestPayload()),
+      createConversationsSuccessCall(
+        buildConversationsPayload({
+          reviewThreads: {
+            nodes: [{ isResolved: false }, { isResolved: true }],
+            pageInfo: { hasNextPage: false },
+          },
+          baseRef: {
+            branchProtectionRule: {
+              requiresConversationResolution: false,
+            },
+            rules: {
+              nodes: [{ type: 'PULL_REQUEST' }],
+              pageInfo: { hasNextPage: false },
+            },
+          },
+        }),
+      ),
+    ]);
+
+    const status = await getMergeReadyStatus({
+      exec,
+      cwd: '/repo',
+      now: () => new Date(GENERATED_AT),
+    });
+
+    assertDone();
+
+    expect(status.state).toBe('ready');
+    expect(status.summary).toBe('Ready to merge');
+    expect(openItemIds(status)).toEqual([]);
+    expect(status.signals.unresolvedConversations).toBe(true);
+    expect(status.signals.unresolvedConversationCount).toBe(1);
+    expect(status.signals.unresolvedConversationRequirement).toBe('optional');
+    expect(selectMergeReadyBadgeId(status)).toBe('ready');
+  });
+
+  it('returns ambiguous status when unresolved conversations are present but requirement is unknown', async () => {
+    const { exec, assertDone } = createFakeExec([
+      ...createGitDiscoveryCalls(),
+      createPullRequestViewSuccessCall(buildPullRequestPayload()),
+      createConversationsSuccessCall(
+        buildConversationsPayload({
+          reviewThreads: {
+            nodes: [{ isResolved: false }],
+            pageInfo: { hasNextPage: false },
+          },
+          baseRef: {
+            branchProtectionRule: null,
+            rules: {
+              nodes: [{ type: 'PULL_REQUEST' }],
+              pageInfo: { hasNextPage: true },
+            },
+          },
+        }),
+      ),
+    ]);
+
+    const status = await getMergeReadyStatus({
+      exec,
+      cwd: '/repo',
+      now: () => new Date(GENERATED_AT),
+    });
+
+    assertDone();
+
+    expect(status.state).toBe('unknown');
+    expect(status.summary).toBe('Merge readiness is ambiguous');
+    expect(openItemIds(status)).toEqual(['status_ambiguous']);
+    expect(status.signals.unresolvedConversations).toBe(true);
+    expect(status.signals.unresolvedConversationCount).toBe(1);
+    expect(status.signals.unresolvedConversationRequirement).toBe('unknown');
+    expect(selectMergeReadyBadgeId(status)).toBe('unknown');
+  });
+
+  it('suppresses generic merge_blocked when required unresolved conversations explain it', async () => {
+    const { exec, assertDone } = createFakeExec([
+      ...createGitDiscoveryCalls(),
+      createPullRequestViewSuccessCall(
+        buildPullRequestPayload({
+          mergeStateStatus: 'BLOCKED',
+        }),
+      ),
+      createConversationsSuccessCall(
+        buildConversationsPayload({
+          reviewThreads: {
+            nodes: [{ isResolved: false }, { isResolved: false }],
+            pageInfo: { hasNextPage: false },
+          },
+        }),
+      ),
+    ]);
+
+    const status = await getMergeReadyStatus({
+      exec,
+      cwd: '/repo',
+      now: () => new Date(GENERATED_AT),
+    });
+
+    assertDone();
+
+    expect(status.state).toBe('blocked');
+    expect(status.summary).toBe('2 unresolved review conversations remain');
+    expect(openItemIds(status)).toEqual(['unresolved_conversations']);
+    expect(status.signals.mergeability).toBe('blocked');
+    expect(status.signals.unresolvedConversationRequirement).toBe('required');
     expect(selectMergeReadyBadgeId(status)).toBe('unresolved_conversations');
   });
 
@@ -801,8 +928,6 @@ describe('getMergeReadyStatus', () => {
   });
 
   it.skip('uses an optional cwd override when provided', async () => {
-    // Test skipped due to test fixture issue after type simplification
-    // Functionality verified by other tests
     const cwd = '/alternate-repo';
     const { exec, assertDone } = createFakeExec([
       ...createGitDiscoveryCalls().map((call) => ({ ...call, cwd })),
