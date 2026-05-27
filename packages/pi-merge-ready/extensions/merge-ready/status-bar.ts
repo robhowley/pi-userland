@@ -45,6 +45,22 @@ export type MergeReadyStatusBarRefreshResult = {
   cached: boolean;
 };
 
+export type MergeReadyStatusBarSyncContext = {
+  cwd: string;
+  ui?: {
+    setStatus?: (key: string, status?: string) => void;
+    theme?: {
+      fg: (color: string, text: string) => string;
+    };
+  };
+};
+
+export type MergeReadyStatusBarSyncOptions = {
+  ctx: MergeReadyStatusBarSyncContext;
+  status: MergeReadyStatus;
+  now?: number | Date;
+};
+
 type MergeReadyStatusBarCacheEntry = {
   cwd: string;
   text: string;
@@ -136,16 +152,28 @@ export async function refreshMergeReadyStatusBar(
     timeout: options.timeout ?? MERGE_READY_STATUS_BAR_TIMEOUT_MS,
   });
 
-  statusBarCache = {
-    cwd: options.ctx.cwd,
+  applyMergeReadyStatusBarText({
+    ctx: options.ctx,
     text,
-    refreshedAtMs: nowMs,
-  };
+    now: nowMs,
+  });
 
-  options.ctx.ui?.setStatus(
-    MERGE_READY_STATUS_BAR_KEY,
-    options.ctx.ui?.theme?.fg('dim', text) ?? text,
-  );
+  return {
+    text,
+    cached: false,
+  };
+}
+
+export function syncMergeReadyStatusBar(
+  options: MergeReadyStatusBarSyncOptions,
+): MergeReadyStatusBarRefreshResult {
+  const text = renderMergeReadyStatusBar(options.status);
+
+  applyMergeReadyStatusBarText({
+    ctx: options.ctx,
+    text,
+    now: options.now,
+  });
 
   return {
     text,
@@ -220,6 +248,23 @@ function formatOptionalUnresolvedConversationText(status: MergeReadyStatus): str
 
 export function resetMergeReadyStatusBarCache(): void {
   statusBarCache = null;
+}
+
+function applyMergeReadyStatusBarText(options: {
+  ctx: MergeReadyStatusBarSyncContext;
+  text: string;
+  now?: number | Date | undefined;
+}): void {
+  statusBarCache = {
+    cwd: options.ctx.cwd,
+    text: options.text,
+    refreshedAtMs: resolveNowMs(options.now),
+  };
+
+  options.ctx.ui?.setStatus?.(
+    MERGE_READY_STATUS_BAR_KEY,
+    options.ctx.ui?.theme?.fg('dim', options.text) ?? options.text,
+  );
 }
 
 async function loadMergeReadyStatusBarText(options: {

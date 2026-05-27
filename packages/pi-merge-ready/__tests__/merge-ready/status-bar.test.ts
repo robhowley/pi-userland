@@ -8,6 +8,7 @@ import {
   registerMergeReadyStatusBar,
   renderMergeReadyStatusBar,
   resetMergeReadyStatusBarCache,
+  syncMergeReadyStatusBar,
   type MergeReadyStatusBarAPI,
   type MergeReadyStatusBarContext,
 } from '../../extensions/merge-ready/index.js';
@@ -435,6 +436,41 @@ describe('merge-ready status bar', () => {
     });
 
     expect(renderMergeReadyStatusBar(status)).toBe('✅ Mergeable · 💬 2 comments');
+  });
+
+  it('syncs a provided status into the footer and TTL cache', async () => {
+    const status = createMergeReadyStatus({
+      generatedAt: '2026-05-27T00:00:00.000Z',
+      pr: {
+        number: 42,
+        title: 'Compose merge-ready status boundary',
+        url: 'https://github.com/robhowley/pi-userland/pull/42',
+      },
+      signals: {
+        draft: false,
+        mergeability: 'mergeable',
+        checks: 'passing',
+        review: 'approved',
+        unresolvedConversations: false,
+        unresolvedConversationRequirement: 'optional',
+      },
+    });
+    const ctx = createStatusContext();
+
+    const synced = syncMergeReadyStatusBar({
+      ctx,
+      status,
+      now: 1_000,
+    });
+    const refreshed = await refreshMergeReadyStatusBar({
+      exec: vi.fn(),
+      ctx,
+      now: 1_000 + MERGE_READY_STATUS_BAR_TTL_MS - 1,
+    });
+
+    expect(synced).toEqual({ text: '✅ Ready', cached: false });
+    expect(refreshed).toEqual({ text: '✅ Ready', cached: true });
+    expect(ctx.ui?.setStatus).toHaveBeenCalledTimes(2);
   });
 
   it('renders required unresolved conversation count from GitHub conversations', async () => {

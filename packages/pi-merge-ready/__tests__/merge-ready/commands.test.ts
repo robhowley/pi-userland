@@ -2,8 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import mergeReadyExtension, {
   MERGE_READY_COMMAND_NAME,
   MERGE_READY_COMMAND_TIMEOUT_MS,
+  MERGE_READY_STATUS_BAR_KEY,
+  MERGE_READY_STATUS_BAR_TTL_MS,
   createMergeReadyStatus,
+  refreshMergeReadyStatusBar,
   renderMergeReadyStatus,
+  resetMergeReadyStatusBarCache,
   type MergeReadyCommandAPI,
   type MergeReadyCommandContext,
 } from '../../extensions/merge-ready/index.js';
@@ -111,6 +115,7 @@ function createCommandContext(): MergeReadyCommandContext {
     cwd: '/repo',
     ui: {
       notify: vi.fn(),
+      setStatus: vi.fn(),
     },
   };
 }
@@ -276,6 +281,7 @@ function buildConversationsPayload(overrides: Record<string, unknown> = {}) {
 
 describe('merge-ready command', () => {
   beforeEach(() => {
+    resetMergeReadyStatusBarCache();
     vi.useFakeTimers();
     vi.setSystemTime(new Date(GENERATED_AT));
   });
@@ -373,6 +379,7 @@ describe('merge-ready command', () => {
   });
 
   afterEach(() => {
+    resetMergeReadyStatusBarCache();
     vi.useRealTimers();
   });
 
@@ -423,6 +430,7 @@ describe('merge-ready command', () => {
     await handler?.('', ctx);
 
     assertDone();
+    expect(ctx.ui.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ Ready');
     expect(ctx.ui.notify).toHaveBeenCalledWith(
       [
         '✅ Ready to merge',
@@ -432,6 +440,44 @@ describe('merge-ready command', () => {
       ].join('\n'),
       'info',
     );
+  });
+
+  it('syncs the status bar cache from the command status without an extra fetch', async () => {
+    const { api, assertDone, getCommand } = createMockAPI([
+      ...createGitDiscoveryCalls(),
+      createPullRequestViewSuccessCall(buildPullRequestPayload()),
+      createConversationsSuccessCall(
+        buildConversationsPayload({
+          reviewThreads: {
+            nodes: [{ isResolved: true }],
+            pageInfo: { hasNextPage: false },
+          },
+        }),
+      ),
+    ]);
+
+    mergeReadyExtension(api);
+    const handler = getCommand(MERGE_READY_COMMAND_NAME);
+    const ctx = createCommandContext();
+
+    await handler?.('', ctx);
+
+    const refreshCtx = {
+      cwd: ctx.cwd,
+      hasUI: true,
+      ui: {
+        setStatus: vi.fn(),
+      },
+    };
+    const refreshed = await refreshMergeReadyStatusBar({
+      exec: api.exec,
+      ctx: refreshCtx,
+      now: new Date(GENERATED_AT).getTime() + MERGE_READY_STATUS_BAR_TTL_MS - 1,
+    });
+
+    assertDone();
+    expect(refreshed).toEqual({ text: '✅ Ready', cached: true });
+    expect(refreshCtx.ui.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ Ready');
   });
 
   it('keeps optional unresolved comments out of human blocker output', async () => {

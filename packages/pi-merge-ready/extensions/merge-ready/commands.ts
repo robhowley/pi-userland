@@ -1,4 +1,5 @@
 import { getMergeReadyStatus } from './merge-ready.js';
+import { syncMergeReadyStatusBar } from './status-bar.js';
 import { selectMergeReadyBadgeId } from './status.js';
 import type { MergeReadyExec, MergeReadyExecOptions, MergeReadyExecResult } from './git.js';
 import type { MergeReadyBadgeId, MergeReadyPullRequest, MergeReadyStatus } from './types.js';
@@ -12,6 +13,10 @@ export type MergeReadyCommandContext = {
   cwd: string;
   ui: {
     notify: (message: string, type?: MergeReadyCommandNotificationLevel) => void;
+    setStatus?: (key: string, status?: string) => void;
+    theme?: {
+      fg: (color: string, text: string) => string;
+    };
   };
 };
 
@@ -74,6 +79,14 @@ export function registerMergeReadyCommand(pi: MergeReadyCommandAPI): void {
         exec: createCommandExec(pi, ctx),
         cwd: ctx.cwd,
         timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+      });
+
+      syncMergeReadyStatusBar({
+        ctx: {
+          cwd: ctx.cwd,
+          ui: ctx.ui,
+        },
+        status,
       });
 
       if (parsedArgs.json) {
