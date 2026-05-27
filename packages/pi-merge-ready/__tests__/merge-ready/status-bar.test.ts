@@ -296,7 +296,7 @@ describe('merge-ready status bar', () => {
     await getHandler('session_start')?.({ reason: 'startup' }, ctx);
 
     assertDone();
-    expect(ctx.ui?.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, 'MR ✅ Ready');
+    expect(ctx.ui?.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ Ready');
   });
 
   it('renders a terse blocked status from the top-priority badge', async () => {
@@ -339,10 +339,7 @@ describe('merge-ready status bar', () => {
     await getHandler('turn_end')?.({}, ctx);
 
     assertDone();
-    expect(ctx.ui?.setStatus).toHaveBeenCalledWith(
-      MERGE_READY_STATUS_BAR_KEY,
-      'MR ❌ Checks failing',
-    );
+    expect(ctx.ui?.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '❌ Checks failing');
   });
 
   it('renders an unknown-looking status when no pull request is found', async () => {
@@ -366,7 +363,7 @@ describe('merge-ready status bar', () => {
     await getHandler('session_start')?.({ reason: 'startup' }, ctx);
 
     assertDone();
-    expect(ctx.ui?.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, 'MR ❔ No PR');
+    expect(ctx.ui?.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '❔ No PR');
   });
 
   it('skips boundary refresh within the TTL and reuses cached text', async () => {
@@ -406,8 +403,8 @@ describe('merge-ready status bar', () => {
     });
 
     assertDone();
-    expect(first).toEqual({ text: 'MR ✅ Ready', cached: false });
-    expect(second).toEqual({ text: 'MR ✅ Ready', cached: true });
+    expect(first).toEqual({ text: '✅ Ready', cached: false });
+    expect(second).toEqual({ text: '✅ Ready', cached: true });
     expect(ctx.ui?.setStatus).toHaveBeenCalledTimes(2);
   });
 
@@ -470,8 +467,8 @@ describe('merge-ready status bar', () => {
     });
 
     assertDone();
-    expect(first).toEqual({ text: 'MR ✅ Ready', cached: false });
-    expect(second).toEqual({ text: 'MR ✅ Ready', cached: false });
+    expect(first).toEqual({ text: '✅ Ready', cached: false });
+    expect(second).toEqual({ text: '✅ Ready', cached: false });
   });
 
   it('degrades exec failures to an unknown-looking status instead of throwing through the hook', async () => {
@@ -493,6 +490,6 @@ describe('merge-ready status bar', () => {
     ).resolves.toBeUndefined();
 
     assertDone();
-    expect(ctx.ui?.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, 'MR ❔ Unknown');
+    expect(ctx.ui?.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '❔ Unknown');
   });
 });

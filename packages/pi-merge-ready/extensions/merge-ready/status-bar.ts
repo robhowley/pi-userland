@@ -51,8 +51,8 @@ type MergeReadyStatusBarCacheEntry = {
   refreshedAtMs: number;
 };
 
-const STATUS_BAR_PREFIX = 'MR';
-const UNKNOWN_STATUS_BAR_TEXT = `${STATUS_BAR_PREFIX} ❔ Unknown`;
+const STATUS_BAR_PREFIX = '';
+const UNKNOWN_STATUS_BAR_TEXT = '❔ Unknown';
 const BADGE_PRESENTATION: Record<MergeReadyBadgeId, { icon: string; text: string }> = {
   draft: { icon: '📝', text: 'Draft' },
   ci_failing: { icon: '❌', text: 'Checks failing' },
@@ -114,7 +114,10 @@ export async function refreshMergeReadyStatusBar(
     cachedEntry.cwd === options.ctx.cwd &&
     nowMs - cachedEntry.refreshedAtMs < MERGE_READY_STATUS_BAR_TTL_MS
   ) {
-    options.ctx.ui?.setStatus(MERGE_READY_STATUS_BAR_KEY, options.ctx.ui?.theme?.fg('dim', cachedEntry.text) ?? cachedEntry.text);
+    options.ctx.ui?.setStatus(
+      MERGE_READY_STATUS_BAR_KEY,
+      options.ctx.ui?.theme?.fg('dim', cachedEntry.text) ?? cachedEntry.text,
+    );
     return {
       text: cachedEntry.text,
       cached: true,
@@ -133,7 +136,10 @@ export async function refreshMergeReadyStatusBar(
     refreshedAtMs: nowMs,
   };
 
-  options.ctx.ui?.setStatus(MERGE_READY_STATUS_BAR_KEY, options.ctx.ui?.theme?.fg('dim', text) ?? text);
+  options.ctx.ui?.setStatus(
+    MERGE_READY_STATUS_BAR_KEY,
+    options.ctx.ui?.theme?.fg('dim', text) ?? text,
+  );
 
   return {
     text,
@@ -146,7 +152,8 @@ export function renderMergeReadyStatusBar(status: MergeReadyStatus): string {
   const badge = BADGE_PRESENTATION[badgeId];
   const text = SUMMARY_TEXT[status.summary] ?? badge.text;
 
-  return `${STATUS_BAR_PREFIX} ${badge.icon} ${text}`;
+  const prefix = STATUS_BAR_PREFIX ? `${STATUS_BAR_PREFIX} ` : '';
+  return `${prefix}${badge.icon} ${text}`;
 }
 
 export function resetMergeReadyStatusBarCache(): void {
