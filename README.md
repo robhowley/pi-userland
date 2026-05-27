@@ -7,12 +7,13 @@ Small, focused packages to augment your Pi environment without adding unnecessar
 ## Packages
 
 | Package                                                           | Description                                                                                                                                 |
-|-------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------|
-| [`pi-openrouter`](packages/pi-openrouter/README.md)               | OpenRouter usage/account overlays, model sync, and session tagging for Pi.               |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`pi-merge-ready`](packages/pi-merge-ready/README.md)             | PR merge-readiness for Pi: status bar signal, blocker context, and agent repair loops.                                                      |
+| [`pi-openrouter`](packages/pi-openrouter/README.md)               | OpenRouter usage/account overlays, model sync, and session tagging for Pi.                                                                  |
 | [`pi-session-hygiene`](packages/pi-session-hygiene/README.md)     | Status bar indicator for session cost, context, and cache rate to track session health                                                      |
 | [`pi-spinner-verbs`](packages/pi-spinner-verbs/README.md)         | Customizes thinking text with themed verbs (e.g., "Paying the iron price...", "With fire and blood...") for sessions with more personality. |
 | [`pi-structured-return`](packages/pi-structured-return/README.md) | Save money by turning noisy CLI output into compact structured results (fewer tokens), full logs preserved.                                 |
-| [`pi-yolo-seatbelt`](packages/pi-yolo-seatbelt/README.md)     | Configurable guardrails for destructive commands. Keep the YOLO workflow but avoid bash catastrophe.                                        |
+| [`pi-yolo-seatbelt`](packages/pi-yolo-seatbelt/README.md)         | Configurable guardrails for destructive commands. Keep the YOLO workflow but avoid bash catastrophe.                                        |
 
 ## Install
 
@@ -51,9 +52,10 @@ packages/<name>/
 ```
 
 Requirements:
-- independently publishable  
-- narrow scope  
-- minimal cross-package dependencies  
+
+- independently publishable
+- narrow scope
+- minimal cross-package dependencies
 
 ## Releasing
 
