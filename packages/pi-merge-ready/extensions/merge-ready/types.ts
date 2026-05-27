@@ -15,10 +15,9 @@ export type MergeReadyBadgeId =
   | 'unknown';
 
 export type MergeReadyPullRequest = {
-  lifecycle: PullRequestLifecycle;
-  number?: number;
-  title?: string;
-  url?: string;
+  number: number;
+  title: string;
+  url: string;
 };
 
 export type MergeReadyDiscoveryState = 'complete' | 'ambiguous';
@@ -32,21 +31,17 @@ export type MergeReadyChecksSignal = 'passing' | 'failing' | 'running' | 'unknow
 export type MergeReadyReviewSignal = 'approved' | 'changes_requested' | 'pending' | 'unknown';
 
 export type MergeReadySignals = {
-  discovery: MergeReadyDiscoveryState;
-  pullRequest: MergeReadyPresence;
-  draft: MergeReadyBooleanSignal;
+  draft: boolean;
   checks: MergeReadyChecksSignal;
   review: MergeReadyReviewSignal;
-  unresolvedConversations: MergeReadyBooleanSignal;
+  unresolvedConversations: boolean;
 };
 
 export type MergeReadySignalsInput = {
-  discovery?: MergeReadyDiscoveryState;
-  pullRequest?: boolean | MergeReadyPresence;
-  draft?: boolean | MergeReadyBooleanSignal;
+  draft?: boolean;
   checks?: MergeReadyChecksSignal;
   review?: MergeReadyReviewSignal;
-  unresolvedConversations?: boolean | MergeReadyBooleanSignal;
+  unresolvedConversations?: boolean;
 };
 
 export type MergeReadyOpenItemId =
@@ -65,8 +60,6 @@ export type MergeReadyOpenItemActionability = 'actionable' | 'waiting';
 
 export type MergeReadyOpenItem = {
   id: MergeReadyOpenItemId;
-  owner: MergeReadyOpenItemOwner;
-  actionability: MergeReadyOpenItemActionability;
   summary: string;
 };
 

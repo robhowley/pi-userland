@@ -490,6 +490,6 @@ describe('merge-ready status bar', () => {
     ).resolves.toBeUndefined();
 
     assertDone();
-    expect(ctx.ui?.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '❔ Unknown');
+    expect(ctx.ui?.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '❔ No PR');
   });
 });

@@ -47,10 +47,7 @@ export async function getMergeReadyStatus(
   });
 
   if (pullRequestFacts.kind === 'no_pr') {
-    return createMergeReadyStatus({
-      generatedAt,
-      signals: { pullRequest: false },
-    });
+    return createMergeReadyStatus({ generatedAt });
   }
 
   if (pullRequestFacts.kind !== 'found') {
@@ -58,31 +55,26 @@ export async function getMergeReadyStatus(
   }
 
   const pr = toMergeReadyPullRequest(pullRequestFacts.pullRequest);
-  if (pr.lifecycle !== 'open') {
-    return createMergeReadyStatus({ generatedAt, pr });
-  }
+
+  const conversations = await fetchMergeReadyPullRequestConversations({
+    exec: options.exec,
+    repositoryOwner: gitFacts.remote.owner,
+    repositoryName: gitFacts.remote.repo,
+    pullRequestNumber: pullRequestFacts.pullRequest.number,
+    cwd: commandCwd,
+    ...withOptionalTimeout(options.timeout),
+  });
 
   const signals: MergeReadySignalsInput = {
-    draft: pullRequestFacts.pullRequest.draft,
+    draft: toBoolean(pullRequestFacts.pullRequest.draft),
     checks: pullRequestFacts.pullRequest.checks.state,
     review: pullRequestFacts.pullRequest.reviews.state,
-    unresolvedConversations: normalizeConversationSignal(
-      await fetchMergeReadyPullRequestConversations({
-        exec: options.exec,
-        repositoryOwner: gitFacts.remote.owner,
-        repositoryName: gitFacts.remote.repo,
-        pullRequestNumber: pullRequestFacts.pullRequest.number,
-        cwd: commandCwd,
-        ...withOptionalTimeout(options.timeout),
-      }),
-    ),
+    unresolvedConversations: normalizeConversationSignal(conversations),
   };
 
   return createMergeReadyStatus({
     generatedAt,
     pr,
-    // Preserve the phase-1 rule that any unknown open-PR signal degrades the
-    // composed status to ambiguous rather than reporting a false negative.
     signals,
   });
 }
@@ -97,25 +89,21 @@ function resolveGeneratedAt(options: GetMergeReadyStatusOptions): string | Date 
 
 function toMergeReadyPullRequest(pullRequest: MergeReadyGitHubPullRequest): MergeReadyPullRequest {
   return {
-    lifecycle: pullRequest.lifecycle,
     number: pullRequest.number,
     title: pullRequest.title,
     url: pullRequest.url,
   };
 }
 
-function normalizeConversationSignal(
-  conversations: MergeReadyPullRequestConversations,
-): MergeReadyBooleanSignal {
-  if (conversations.kind === 'known') {
-    return conversations.unresolvedCount > 0 ? 'yes' : 'no';
+function normalizeConversationSignal(conversations: MergeReadyPullRequestConversations): boolean {
+  if (conversations.kind === 'known' || conversations.kind === 'partial') {
+    return conversations.unresolvedCount > 0;
   }
+  return false;
+}
 
-  if (conversations.kind === 'partial') {
-    return conversations.unresolvedCount > 0 ? 'yes' : 'unknown';
-  }
-
-  return 'unknown';
+function toBoolean(signal: MergeReadyBooleanSignal): boolean {
+  return signal === 'yes';
 }
 
 function withOptionalCwd(cwd: string | undefined): { cwd?: string } {

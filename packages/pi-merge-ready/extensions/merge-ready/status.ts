@@ -2,13 +2,8 @@ import type {
   CreateMergeReadyStatusOptions,
   MergeReadyBadgeContext,
   MergeReadyBadgeId,
-  MergeReadyBooleanSignal,
   MergeReadyOpenItem,
-  MergeReadyOpenItemActionability,
   MergeReadyOpenItemId,
-  MergeReadyOpenItemOwner,
-  MergeReadyPresence,
-  MergeReadyPullRequest,
   MergeReadySignals,
   MergeReadySignalsInput,
   MergeReadyState,
@@ -48,28 +43,6 @@ const OPEN_ITEM_BADGE = {
   review_pending: 'review_pending',
 } as const satisfies Record<MergeReadyOpenItemId, MergeReadyBadgeId>;
 
-const OPEN_ITEM_OWNER = {
-  no_pull_request: 'user',
-  status_ambiguous: 'github',
-  draft: 'user',
-  ci_failing: 'agent',
-  changes_requested: 'agent',
-  unresolved_conversations: 'agent',
-  ci_running: 'ci',
-  review_pending: 'reviewer',
-} as const satisfies Record<MergeReadyOpenItemId, MergeReadyOpenItemOwner>;
-
-const OPEN_ITEM_ACTIONABILITY = {
-  no_pull_request: 'actionable',
-  status_ambiguous: 'actionable',
-  draft: 'actionable',
-  ci_failing: 'actionable',
-  changes_requested: 'actionable',
-  unresolved_conversations: 'actionable',
-  ci_running: 'waiting',
-  review_pending: 'waiting',
-} as const satisfies Record<MergeReadyOpenItemId, MergeReadyOpenItemActionability>;
-
 const OPEN_ITEM_SUMMARY = {
   no_pull_request: 'No pull request found',
   status_ambiguous: 'Merge readiness is ambiguous',
@@ -83,66 +56,23 @@ const OPEN_ITEM_SUMMARY = {
 
 export function normalizeMergeReadySignals(
   input: MergeReadySignalsInput = {},
-  pr: MergeReadyPullRequest | null = null,
+  hasPr: boolean = false,
 ): MergeReadySignals {
-  const pullRequest = pr ? 'present' : normalizePresence(input.pullRequest);
-  const draft = normalizeBooleanSignal(input.draft);
+  const draft = input.draft ?? false;
   const checks = input.checks ?? 'unknown';
   const review = input.review ?? 'unknown';
-  const unresolvedConversations = normalizeBooleanSignal(input.unresolvedConversations);
+  const unresolvedConversations = input.unresolvedConversations ?? false;
 
-  if (pr?.lifecycle === 'merged' || pr?.lifecycle === 'closed') {
+  if (!hasPr) {
     return {
-      discovery: 'complete',
-      pullRequest: 'present',
-      draft: 'no',
-      checks: 'passing',
-      review: 'approved',
-      unresolvedConversations: 'no',
-    };
-  }
-
-  if (pullRequest === 'missing') {
-    return {
-      discovery: 'complete',
-      pullRequest: 'missing',
-      draft: 'unknown',
+      draft: false,
       checks: 'unknown',
       review: 'unknown',
-      unresolvedConversations: 'unknown',
-    };
-  }
-
-  if (input.discovery === 'ambiguous' || pullRequest !== 'present') {
-    return {
-      discovery: 'ambiguous',
-      pullRequest,
-      draft: 'unknown',
-      checks: 'unknown',
-      review: 'unknown',
-      unresolvedConversations: 'unknown',
-    };
-  }
-
-  if (
-    draft === 'unknown' ||
-    checks === 'unknown' ||
-    review === 'unknown' ||
-    unresolvedConversations === 'unknown'
-  ) {
-    return {
-      discovery: 'ambiguous',
-      pullRequest: 'present',
-      draft: 'unknown',
-      checks: 'unknown',
-      review: 'unknown',
-      unresolvedConversations: 'unknown',
+      unresolvedConversations: false,
     };
   }
 
   return {
-    discovery: 'complete',
-    pullRequest: 'present',
     draft,
     checks,
     review,
@@ -150,18 +80,18 @@ export function normalizeMergeReadySignals(
   };
 }
 
-export function deriveMergeReadyOpenItems(signals: MergeReadySignals): MergeReadyOpenItem[] {
+export function deriveMergeReadyOpenItems(
+  signals: MergeReadySignals,
+  hasPr: boolean,
+): MergeReadyOpenItem[] {
   const openItems: MergeReadyOpenItem[] = [];
 
-  if (signals.pullRequest === 'missing') {
+  if (!hasPr) {
     openItems.push(createOpenItem('no_pull_request'));
+    return openItems;
   }
 
-  if (signals.discovery === 'ambiguous' || signals.pullRequest === 'unknown') {
-    openItems.push(createOpenItem('status_ambiguous'));
-  }
-
-  if (signals.draft === 'yes') {
+  if (signals.draft) {
     openItems.push(createOpenItem('draft'));
   }
 
@@ -173,7 +103,7 @@ export function deriveMergeReadyOpenItems(signals: MergeReadySignals): MergeRead
     openItems.push(createOpenItem('changes_requested'));
   }
 
-  if (signals.unresolvedConversations === 'yes') {
+  if (signals.unresolvedConversations) {
     openItems.push(createOpenItem('unresolved_conversations'));
   }
 
@@ -196,41 +126,25 @@ export function deriveMergeReadyState(openItems: MergeReadyOpenItem[]): MergeRea
 }
 
 export function deriveMergeReadySummary(context: MergeReadyBadgeContext): string {
-  if (context.pr?.lifecycle === 'merged') {
-    return 'Pull request merged';
-  }
-
-  if (context.pr?.lifecycle === 'closed') {
-    return 'Pull request closed';
-  }
-
   const topOpenItem = selectTopOpenItem(context.openItems);
   if (topOpenItem) {
     return topOpenItem.summary;
   }
 
-  if (context.pr?.lifecycle === 'open') {
+  if (context.pr) {
     return 'Ready to merge';
   }
 
-  return 'Merge readiness is ambiguous';
+  return 'No pull request';
 }
 
 export function selectMergeReadyBadgeId(context: MergeReadyBadgeContext): MergeReadyBadgeId {
-  if (context.pr?.lifecycle === 'merged') {
-    return 'merged';
-  }
-
-  if (context.pr?.lifecycle === 'closed') {
-    return 'closed';
-  }
-
   const topOpenItem = selectTopOpenItem(context.openItems);
   if (topOpenItem) {
     return OPEN_ITEM_BADGE[topOpenItem.id];
   }
 
-  if (context.pr?.lifecycle === 'open') {
+  if (context.pr) {
     return 'ready';
   }
 
@@ -239,8 +153,9 @@ export function selectMergeReadyBadgeId(context: MergeReadyBadgeContext): MergeR
 
 export function createMergeReadyStatus(options: CreateMergeReadyStatusOptions): MergeReadyStatus {
   const pr = options.pr ?? null;
-  const signals = normalizeMergeReadySignals(options.signals, pr);
-  const openItems = deriveMergeReadyOpenItems(signals);
+  const hasPr = pr !== null;
+  const signals = normalizeMergeReadySignals(options.signals, hasPr);
+  const openItems = deriveMergeReadyOpenItems(signals, hasPr);
 
   return {
     state: deriveMergeReadyState(openItems),
@@ -256,37 +171,9 @@ function normalizeGeneratedAt(value: string | Date): string {
   return typeof value === 'string' ? value : value.toISOString();
 }
 
-function normalizePresence(value: boolean | MergeReadyPresence | undefined): MergeReadyPresence {
-  if (value === true) {
-    return 'present';
-  }
-
-  if (value === false) {
-    return 'missing';
-  }
-
-  return value ?? 'unknown';
-}
-
-function normalizeBooleanSignal(
-  value: boolean | MergeReadyBooleanSignal | undefined,
-): MergeReadyBooleanSignal {
-  if (value === true) {
-    return 'yes';
-  }
-
-  if (value === false) {
-    return 'no';
-  }
-
-  return value ?? 'unknown';
-}
-
 function createOpenItem(id: MergeReadyOpenItemId): MergeReadyOpenItem {
   return {
     id,
-    owner: OPEN_ITEM_OWNER[id],
-    actionability: OPEN_ITEM_ACTIONABILITY[id],
     summary: OPEN_ITEM_SUMMARY[id],
   };
 }

@@ -272,9 +272,9 @@ describe('merge_ready_status tool', () => {
     expect(tool).toMatchObject({
       name: MERGE_READY_STATUS_TOOL_NAME,
       label: 'Merge Ready Status',
-      description: expect.stringContaining('MergeReadyStatus'),
+      description: expect.stringContaining('merge-readiness status'),
       promptGuidelines: expect.arrayContaining([
-        expect.stringContaining("owner === 'agent'"),
+        expect.stringContaining('openItems'),
         expect.stringContaining('Do not infer work from raw GitHub states'),
       ]),
     });
@@ -310,7 +310,6 @@ describe('merge_ready_status tool', () => {
     expect(result.details).toEqual({
       state: 'ready',
       pr: {
-        lifecycle: 'open',
         number: 42,
         title: 'Compose merge-ready status boundary',
         url: 'https://github.com/robhowley/pi-userland/pull/42',
@@ -318,12 +317,10 @@ describe('merge_ready_status tool', () => {
       summary: 'Ready to merge',
       openItems: [],
       signals: {
-        discovery: 'complete',
-        pullRequest: 'present',
-        draft: 'no',
+        draft: false,
         checks: 'passing',
         review: 'approved',
-        unresolvedConversations: 'no',
+        unresolvedConversations: false,
       },
       generatedAt: GENERATED_AT,
     });
@@ -373,8 +370,6 @@ describe('merge_ready_status tool', () => {
     expect(result.details.openItems).toEqual([
       {
         id: 'ci_failing',
-        owner: 'agent',
-        actionability: 'actionable',
         summary: 'Required checks are failing',
       },
     ]);
@@ -409,18 +404,14 @@ describe('merge_ready_status tool', () => {
       openItems: [
         {
           id: 'no_pull_request',
-          owner: 'user',
-          actionability: 'actionable',
           summary: 'No pull request found',
         },
       ],
       signals: {
-        discovery: 'complete',
-        pullRequest: 'missing',
-        draft: 'unknown',
+        draft: false,
         checks: 'unknown',
         review: 'unknown',
-        unresolvedConversations: 'unknown',
+        unresolvedConversations: false,
       },
       generatedAt: GENERATED_AT,
     });
@@ -457,7 +448,7 @@ describe('merge_ready_status tool', () => {
     assertDone();
   });
 
-  it('degrades thrown exec failures to an ambiguous MergeReadyStatus instead of throwing', async () => {
+  it('degrades thrown exec failures to an unknown MergeReadyStatus instead of throwing', async () => {
     const { api, assertDone, getTool } = createMockAPI([
       {
         command: 'git',
@@ -481,22 +472,18 @@ describe('merge_ready_status tool', () => {
             {
               state: 'unknown',
               pr: null,
-              summary: 'Merge readiness is ambiguous',
+              summary: 'No pull request found',
               openItems: [
                 {
-                  id: 'status_ambiguous',
-                  owner: 'github',
-                  actionability: 'actionable',
-                  summary: 'Merge readiness is ambiguous',
+                  id: 'no_pull_request',
+                  summary: 'No pull request found',
                 },
               ],
               signals: {
-                discovery: 'ambiguous',
-                pullRequest: 'unknown',
-                draft: 'unknown',
+                draft: false,
                 checks: 'unknown',
                 review: 'unknown',
-                unresolvedConversations: 'unknown',
+                unresolvedConversations: false,
               },
               generatedAt: GENERATED_AT,
             },
@@ -508,22 +495,18 @@ describe('merge_ready_status tool', () => {
       details: {
         state: 'unknown',
         pr: null,
-        summary: 'Merge readiness is ambiguous',
+        summary: 'No pull request found',
         openItems: [
           {
-            id: 'status_ambiguous',
-            owner: 'github',
-            actionability: 'actionable',
-            summary: 'Merge readiness is ambiguous',
+            id: 'no_pull_request',
+            summary: 'No pull request found',
           },
         ],
         signals: {
-          discovery: 'ambiguous',
-          pullRequest: 'unknown',
-          draft: 'unknown',
+          draft: false,
           checks: 'unknown',
           review: 'unknown',
-          unresolvedConversations: 'unknown',
+          unresolvedConversations: false,
         },
         generatedAt: GENERATED_AT,
       },

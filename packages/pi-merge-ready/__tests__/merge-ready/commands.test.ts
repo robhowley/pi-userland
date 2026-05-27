@@ -421,7 +421,6 @@ describe('merge-ready command', () => {
     expect(JSON.parse(message as string)).toEqual({
       state: 'ready',
       pr: {
-        lifecycle: 'open',
         number: 42,
         title: 'Compose merge-ready status boundary',
         url: 'https://github.com/robhowley/pi-userland/pull/42',
@@ -429,12 +428,10 @@ describe('merge-ready command', () => {
       summary: 'Ready to merge',
       openItems: [],
       signals: {
-        discovery: 'complete',
-        pullRequest: 'present',
-        draft: 'no',
+        draft: false,
         checks: 'passing',
         review: 'approved',
-        unresolvedConversations: 'no',
+        unresolvedConversations: false,
       },
       generatedAt: GENERATED_AT,
     });

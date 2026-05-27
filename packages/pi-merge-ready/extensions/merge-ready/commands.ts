@@ -175,7 +175,7 @@ function formatPullRequestIdentity(pr: MergeReadyPullRequest): string {
   }
 
   if (identityParts.length === 0) {
-    return `PR: ${pr.lifecycle}`;
+    return 'PR: unknown';
   }
 
   return `PR: ${identityParts.join(' — ')}`;

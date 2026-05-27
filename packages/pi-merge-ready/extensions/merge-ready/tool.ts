@@ -49,9 +49,9 @@ export function registerMergeReadyStatusTool(pi: MergeReadyStatusToolAPI): void 
     name: MERGE_READY_STATUS_TOOL_NAME,
     label: 'Merge Ready Status',
     description:
-      'Return the restrained MergeReadyStatus schema for the current repository or pull request.',
+      'Returns the merge-readiness status for the current pull request. Use this before deciding whether a PR is ready to merge or before attempting to resolve merge blockers. The returned `openItems` array is the only authoritative list of merge-readiness items to work from.',
     promptGuidelines: [
-      "Use openItems as the actionable list and prioritize items where owner === 'agent' for repair work you can do directly.",
+      'Use openItems as the actionable list and do not invent additional blockers beyond what is returned.',
       'Do not infer work from raw GitHub states or assume hidden blockers beyond the returned MergeReadyStatus.',
     ],
     parameters: MERGE_READY_STATUS_TOOL_PARAMETERS,
