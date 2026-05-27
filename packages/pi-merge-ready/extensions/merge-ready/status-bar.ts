@@ -19,6 +19,9 @@ export type MergeReadyStatusBarContext = {
   hasUI?: boolean;
   ui?: {
     setStatus: (key: string, status?: string) => void;
+    theme?: {
+      fg: (color: string, text: string) => string;
+    };
   };
 };
 
@@ -111,7 +114,7 @@ export async function refreshMergeReadyStatusBar(
     cachedEntry.cwd === options.ctx.cwd &&
     nowMs - cachedEntry.refreshedAtMs < MERGE_READY_STATUS_BAR_TTL_MS
   ) {
-    options.ctx.ui?.setStatus(MERGE_READY_STATUS_BAR_KEY, cachedEntry.text);
+    options.ctx.ui?.setStatus(MERGE_READY_STATUS_BAR_KEY, options.ctx.ui?.theme?.fg('dim', cachedEntry.text) ?? cachedEntry.text);
     return {
       text: cachedEntry.text,
       cached: true,
@@ -130,7 +133,7 @@ export async function refreshMergeReadyStatusBar(
     refreshedAtMs: nowMs,
   };
 
-  options.ctx.ui?.setStatus(MERGE_READY_STATUS_BAR_KEY, text);
+  options.ctx.ui?.setStatus(MERGE_READY_STATUS_BAR_KEY, options.ctx.ui?.theme?.fg('dim', text) ?? text);
 
   return {
     text,
