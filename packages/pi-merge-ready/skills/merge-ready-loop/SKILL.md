@@ -36,8 +36,6 @@ Current response shape:
 ```
 
 Important:
-- `openItems` contains only `{ id, summary }`.
-- There is no `owner`, `actionability`, or PR `lifecycle` in the public status.
 - `review_pending` is requirement-aware. Do **not** infer pending review from raw review history or a lack of approvals.
 - If `review_pending` is absent, do not invent a review blocker.
 
@@ -55,22 +53,27 @@ Important:
 3. **Do not invent review work**: only treat review as pending when `openItems` contains `review_pending`.
 4. **Match request to items**: if the user's requested work does not match an `openItem`, say so and stop.
 5. **Small fixes**: fix one small item or tightly related set at a time.
-6. **Verify**: run relevant verification before claiming progress.
-7. **Re-check**: call `merge_ready_status` again after changes.
-8. **Stop conditions**: stop if the next step requires a reviewer, GitHub-only action, external credentials, or ambiguous product judgment.
+6. **Verify locally**: run the strongest relevant local checks you can reasonably run before claiming an item was addressed.
+7. **Separate addressed from cleared**:
+   - Addressed: you made the narrow fix, ran reasonable local validation, and pushed or prepared the patch.
+   - Cleared: `merge_ready_status` or another authoritative remote signal no longer reports the item.
+8. **Stop conditions**:
+   - Successful local completion: the agent-actionable work is addressed, even if remote CI/review/GitHub has not caught up yet. Summarize the work performed and the acceptance criteria used to determine completion.
+   - Blocked or external handoff: the next step requires remote CI, a reviewer, GitHub-only action, external credentials, or ambiguous product judgment.
 
 ## The loop
 
 ```text
 1. Call merge_ready_status
 2. Read state, summary, and openItems
-3. Pick the smallest item the agent can legitimately advance
+3. Pick the smallest item the agent can legitimately advance. If an item is not worth addressing, say so and skip.
 4. Explain the plan briefly
 5. Make a narrow patch if code/config changes are warranted
-6. Run relevant checks (tests, typecheck, lint, git status)
-7. Refresh with merge_ready_status
-8. Report before/after status
-9. If actionable items remain, continue
+6. Run relevant local checks (tests, typecheck, lint, git status)
+7. Push or prepare the patch when the fix needs remote CI/review to validate it
+8. Optionally call `merge_ready_status` once as a fresh snapshot, but do not wait indefinitely for remote CI/review/GitHub state to clear
+9. Report each item as addressed, cleared, skipped, or waiting on external confirmation
+10. If locally actionable items remain, continue
 ```
 
 ## How to interpret openItems
@@ -82,7 +85,7 @@ Use `id` plus the user's request.
 | `no_pull_request` | No PR found for this branch/repo | Report it; do not invent local fixes |
 | `status_ambiguous` | Discovery/data was ambiguous | Report ambiguity, rerun if helpful, do not guess |
 | `draft` | PR is still draft | Report that GitHub/user action is needed |
-| `ci_failing` | Required checks are failing | Usually actionable locally: reproduce, fix, rerun |
+| `ci_failing` | Required checks are failing | Usually actionable locally: reproduce, fix, run local validation, then hand off to remote CI |
 | `changes_requested` | Reviewers requested changes | Fix only if the requested changes are actually available; otherwise ask for review context |
 | `unresolved_conversations` | Review threads remain unresolved | Agent may address code if context exists, but only GitHub/user can resolve the conversations |
 | `ci_running` | Checks are still running | Wait; do not claim ready |
@@ -120,8 +123,9 @@ Response: "PR is ready to merge. No blockers found."
 Action:
 1. Reproduce the failure
 2. Make the smallest fix
-3. Re-run focused validation
-4. Refresh `merge_ready_status`
+3. Re-run focused local validation
+4. Push or prepare the patch
+5. If remote CI is still running or stale, report “addressed locally; waiting on CI” rather than waiting indefinitely
 
 ### Required review pending
 
@@ -178,16 +182,16 @@ Response: "Reviewers requested changes. If you want, I can inspect the review fe
 
 Pick the narrowest useful checks for the item:
 
-- code changes: `pnpm test`, `pnpm typecheck`, `pnpm lint`, targeted package commands
+- code changes: targeted package commands, e.g. unit tests, linting, typechecking
 - merge/rebase work: `git status`
 - config/tooling changes: the relevant schema or package validation
 
-Always verify before claiming an item is cleared.
+Always verify before claiming an item is addressed. Claim an item is cleared only when `merge_ready_status` or another authoritative remote signal confirms it. Otherwise, report it as pending external confirmation.
 
 ## Communication style
 
 - Start with the current status summary
 - Stay tightly scoped to returned `openItems`
-- Show before/after states when you make changes
+- Distinguish “addressed locally” from “cleared by remote status”
 - Be explicit when an item needs reviewer or GitHub action
 - Stop gracefully when the remaining work is not truly agent-actionable
