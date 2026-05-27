@@ -46,6 +46,7 @@ export type MergeReadySignals = {
   checks: MergeReadyChecksSignal;
   review: MergeReadyReviewSignal;
   unresolvedConversations: boolean;
+  unresolvedConversationCount?: number;
 };
 
 export type MergeReadySignalsInput = {
@@ -54,6 +55,7 @@ export type MergeReadySignalsInput = {
   checks?: MergeReadyChecksSignal;
   review?: MergeReadyReviewSignal;
   unresolvedConversations?: boolean;
+  unresolvedConversationCount?: number;
 };
 
 export type MergeReadyOpenItemId =

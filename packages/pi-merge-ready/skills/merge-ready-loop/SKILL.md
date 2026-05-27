@@ -30,7 +30,8 @@ Current response shape:
     "mergeability": "mergeable | conflicting | behind | blocked | unknown",
     "checks": "passing | failing | running | unknown",
     "review": "approved | changes_requested | pending | unknown",
-    "unresolvedConversations": false
+    "unresolvedConversations": true,
+    "unresolvedConversationCount": 2
   },
   "generatedAt": "2026-05-27T00:00:00.000Z"
 }
@@ -92,7 +93,7 @@ Use `id` plus the user's request. An item can be **addressed locally** before it
 | `draft` | PR is still draft | Report that GitHub/user action is needed |
 | `ci_failing` | Required checks are failing | Usually actionable locally: reproduce, fix, run local validation, then hand off to remote CI |
 | `changes_requested` | Reviewers requested changes | Fix only if the requested changes are actually available; otherwise ask for review context |
-| `unresolved_conversations` | Review threads remain unresolved | Agent may address code if context exists, but only GitHub/user can resolve the conversations |
+| `unresolved_conversations` | Review threads remain unresolved; `signals.unresolvedConversationCount` may include the known count | Agent may address code if context exists, but only GitHub/user can resolve the conversations |
 | `ci_running` | Checks are still running | Wait; do not claim ready |
 | `review_pending` | Required review is still pending | Wait for review; optional local preflight only if user asks |
 

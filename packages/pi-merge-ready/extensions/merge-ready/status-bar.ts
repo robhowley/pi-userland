@@ -156,10 +156,26 @@ export async function refreshMergeReadyStatusBar(
 export function renderMergeReadyStatusBar(status: MergeReadyStatus): string {
   const badgeId = selectMergeReadyBadgeId(status);
   const badge = BADGE_PRESENTATION[badgeId];
-  const text = SUMMARY_TEXT[status.summary] ?? badge.text;
+  const text = renderStatusBarText(status, badgeId, badge.text);
 
   const prefix = STATUS_BAR_PREFIX ? `${STATUS_BAR_PREFIX} ` : '';
   return `${prefix}${badge.icon} ${text}`;
+}
+
+function renderStatusBarText(
+  status: MergeReadyStatus,
+  badgeId: MergeReadyBadgeId,
+  fallbackText: string,
+): string {
+  if (
+    badgeId === 'unresolved_conversations' &&
+    status.signals.unresolvedConversationCount !== undefined &&
+    status.signals.unresolvedConversationCount > 0
+  ) {
+    return `${String(status.signals.unresolvedConversationCount)} unresolved`;
+  }
+
+  return SUMMARY_TEXT[status.summary] ?? fallbackText;
 }
 
 export function resetMergeReadyStatusBarCache(): void {

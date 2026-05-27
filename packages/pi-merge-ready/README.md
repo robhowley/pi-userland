@@ -25,7 +25,8 @@ The public status shape includes a restrained mergeability signal plus an author
     "mergeability": "mergeable | conflicting | behind | blocked | unknown",
     "checks": "passing | failing | running | unknown",
     "review": "approved | changes_requested | pending | unknown",
-    "unresolvedConversations": false
+    "unresolvedConversations": true,
+    "unresolvedConversationCount": 2
   },
   "generatedAt": "2026-05-27T00:00:00.000Z"
 }

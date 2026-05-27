@@ -267,6 +267,25 @@ describe('merge-ready status', () => {
       'unresolved_conversations',
     ]);
   });
+
+  it('includes unresolved conversation count when it is known', () => {
+    const status = buildStatus({
+      signals: {
+        unresolvedConversationCount: 2,
+      },
+    });
+
+    expect(status.state).toBe('blocked');
+    expect(status.summary).toBe('2 unresolved review conversations remain');
+    expect(status.openItems).toEqual([
+      {
+        id: 'unresolved_conversations',
+        summary: '2 unresolved review conversations remain',
+      },
+    ]);
+    expect(status.signals.unresolvedConversations).toBe(true);
+    expect(status.signals.unresolvedConversationCount).toBe(2);
+  });
 });
 
 describe('normalizeMergeReadySignals', () => {
@@ -289,6 +308,7 @@ describe('normalizeMergeReadySignals', () => {
         checks: 'failing',
         review: 'changes_requested',
         unresolvedConversations: true,
+        unresolvedConversationCount: 2,
       },
       true,
     );
@@ -298,6 +318,7 @@ describe('normalizeMergeReadySignals', () => {
       checks: 'failing',
       review: 'changes_requested',
       unresolvedConversations: true,
+      unresolvedConversationCount: 2,
     });
   });
 

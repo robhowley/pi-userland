@@ -74,7 +74,13 @@ export function normalizeMergeReadySignals(
   const mergeability = input.mergeability ?? 'unknown';
   const checks = input.checks ?? 'unknown';
   const review = input.review ?? 'unknown';
-  const unresolvedConversations = input.unresolvedConversations ?? false;
+  const unresolvedConversationCount = normalizeUnresolvedConversationCount(
+    input.unresolvedConversationCount,
+  );
+  const unresolvedConversations =
+    unresolvedConversationCount !== undefined
+      ? unresolvedConversationCount > 0
+      : input.unresolvedConversations ?? false;
 
   if (!hasPr) {
     return {
@@ -92,6 +98,9 @@ export function normalizeMergeReadySignals(
     checks,
     review,
     unresolvedConversations,
+    ...(unresolvedConversationCount !== undefined && unresolvedConversationCount > 0
+      ? { unresolvedConversationCount }
+      : {}),
   };
 }
 
@@ -135,7 +144,7 @@ export function deriveMergeReadyOpenItems(
   }
 
   if (signals.unresolvedConversations) {
-    openItems.push(createOpenItem('unresolved_conversations'));
+    openItems.push(createOpenItem('unresolved_conversations', signals));
   }
 
   if (signals.checks === 'running') {
@@ -202,11 +211,36 @@ function normalizeGeneratedAt(value: string | Date): string {
   return typeof value === 'string' ? value : value.toISOString();
 }
 
-function createOpenItem(id: MergeReadyOpenItemId): MergeReadyOpenItem {
+function createOpenItem(
+  id: MergeReadyOpenItemId,
+  signals?: MergeReadySignals,
+): MergeReadyOpenItem {
   return {
     id,
-    summary: OPEN_ITEM_SUMMARY[id],
+    summary: createOpenItemSummary(id, signals),
   };
+}
+
+function createOpenItemSummary(
+  id: MergeReadyOpenItemId,
+  signals: MergeReadySignals | undefined,
+): string {
+  if (id === 'unresolved_conversations' && signals?.unresolvedConversationCount !== undefined) {
+    const count = signals.unresolvedConversationCount;
+    const noun = count === 1 ? 'conversation' : 'conversations';
+    const verb = count === 1 ? 'remains' : 'remain';
+    return `${String(count)} unresolved review ${noun} ${verb}`;
+  }
+
+  return OPEN_ITEM_SUMMARY[id];
+}
+
+function normalizeUnresolvedConversationCount(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+
+  return Math.floor(value);
 }
 
 function selectTopOpenItem(openItems: MergeReadyOpenItem[]): MergeReadyOpenItem | null {

@@ -364,6 +364,60 @@ describe('merge-ready status bar', () => {
     expect(renderMergeReadyStatusBar(status)).toBe(expected);
   });
 
+  it('renders a known unresolved conversation count', () => {
+    const status = createMergeReadyStatus({
+      generatedAt: '2026-05-27T00:00:00.000Z',
+      pr: {
+        number: 42,
+        title: 'Compose merge-ready status boundary',
+        url: 'https://github.com/robhowley/pi-userland/pull/42',
+      },
+      signals: {
+        draft: false,
+        mergeability: 'mergeable',
+        checks: 'passing',
+        review: 'approved',
+        unresolvedConversations: true,
+        unresolvedConversationCount: 2,
+      },
+    });
+
+    expect(renderMergeReadyStatusBar(status)).toBe('💬 2 unresolved');
+  });
+
+  it('renders unresolved conversation count from GitHub conversations', async () => {
+    const { api, assertDone, getHandler } = createMockAPI([
+      ...createGitDiscoveryCalls(MERGE_READY_STATUS_BAR_TIMEOUT_MS),
+      createPullRequestViewSuccessCall(
+        buildPullRequestPayload(),
+        MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+      ),
+      createConversationsSuccessCall(
+        {
+          data: {
+            repository: {
+              pullRequest: {
+                reviewThreads: {
+                  nodes: [{ isResolved: false }, { isResolved: false }],
+                  pageInfo: { hasNextPage: false },
+                },
+              },
+            },
+          },
+        },
+        MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+      ),
+    ]);
+    const ctx = createStatusContext();
+
+    registerMergeReadyStatusBar(api);
+
+    await getHandler('turn_end')?.({}, ctx);
+
+    assertDone();
+    expect(ctx.ui?.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '💬 2 unresolved');
+  });
+
   it('renders a terse blocked status from the top-priority badge', async () => {
     const { api, assertDone, getHandler } = createMockAPI([
       ...createGitDiscoveryCalls(MERGE_READY_STATUS_BAR_TIMEOUT_MS),

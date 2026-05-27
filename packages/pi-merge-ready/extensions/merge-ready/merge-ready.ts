@@ -67,12 +67,13 @@ export async function getMergeReadyStatus(
     ...withOptionalTimeout(options.timeout),
   });
 
+  const conversationSignals = normalizeConversationSignals(conversations);
   const signals: MergeReadySignalsInput = {
     draft: toBoolean(pullRequestFacts.pullRequest.draft),
     mergeability: pullRequestFacts.pullRequest.mergeability,
     checks: pullRequestFacts.pullRequest.checks.state,
     review: normalizeReviewSignal(pullRequestFacts.pullRequest),
-    unresolvedConversations: normalizeConversationSignal(conversations),
+    ...conversationSignals,
   };
 
   return createMergeReadyStatus({
@@ -98,11 +99,19 @@ function toMergeReadyPullRequest(pullRequest: MergeReadyGitHubPullRequest): Merg
   };
 }
 
-function normalizeConversationSignal(conversations: MergeReadyPullRequestConversations): boolean {
+function normalizeConversationSignals(
+  conversations: MergeReadyPullRequestConversations,
+): Pick<MergeReadySignalsInput, 'unresolvedConversations' | 'unresolvedConversationCount'> {
   if (conversations.kind === 'known' || conversations.kind === 'partial') {
-    return conversations.unresolvedCount > 0;
+    return {
+      unresolvedConversations: conversations.unresolvedCount > 0,
+      ...(conversations.unresolvedCount > 0
+        ? { unresolvedConversationCount: conversations.unresolvedCount }
+        : {}),
+    };
   }
-  return false;
+
+  return { unresolvedConversations: false };
 }
 
 function normalizeReviewSignal(pullRequest: MergeReadyGitHubPullRequest): MergeReadyReviewSignal {

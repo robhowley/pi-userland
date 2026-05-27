@@ -447,7 +447,7 @@ describe('merge-ready command', () => {
         'State: blocked',
         'Open items:',
         '- Required checks are failing',
-        '- Unresolved review conversations remain',
+        '- 1 unresolved review conversation remains',
       ].join('\n'),
       'error',
     );

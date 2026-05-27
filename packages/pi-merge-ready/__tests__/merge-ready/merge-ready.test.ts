@@ -657,10 +657,11 @@ describe('getMergeReadyStatus', () => {
     assertDone();
 
     expect(status.state).toBe('blocked');
-    expect(status.summary).toBe('Unresolved review conversations remain');
+    expect(status.summary).toBe('1 unresolved review conversation remains');
     expect(openItemIds(status)).toEqual(['unresolved_conversations']);
     expect(status.signals.review).toBe('approved');
     expect(status.signals.unresolvedConversations).toBe(true);
+    expect(status.signals.unresolvedConversationCount).toBe(1);
     expect(selectMergeReadyBadgeId(status)).toBe('unresolved_conversations');
   });
 
@@ -674,7 +675,7 @@ describe('getMergeReadyStatus', () => {
             repository: {
               pullRequest: {
                 reviewThreads: {
-                  nodes: [{ isResolved: false }, { isResolved: true }],
+                  nodes: [{ isResolved: false }, { isResolved: false }],
                   pageInfo: { hasNextPage: false },
                 },
               },
@@ -693,9 +694,10 @@ describe('getMergeReadyStatus', () => {
     assertDone();
 
     expect(status.state).toBe('blocked');
-    expect(status.summary).toBe('Unresolved review conversations remain');
+    expect(status.summary).toBe('2 unresolved review conversations remain');
     expect(openItemIds(status)).toEqual(['unresolved_conversations']);
     expect(status.signals.unresolvedConversations).toBe(true);
+    expect(status.signals.unresolvedConversationCount).toBe(2);
     expect(selectMergeReadyBadgeId(status)).toBe('unresolved_conversations');
   });
 
