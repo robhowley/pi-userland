@@ -1,7 +1,7 @@
 {
   "name": "@robhowley/pi-merge-ready",
   "version": "0.1.0",
-  "description": "PR merge-readiness for Pi: status bar signal, blocker context, and agent repair loops.",
+  "description": "PR merge-readiness for Pi: status bar signal, merge blocker context, and structured agent loops for what remains.",
   "type": "module",
   "files": [
     "extensions",
@@ -25,16 +25,13 @@
     "url": "https://github.com/robhowley/pi-userland.git",
     "directory": "packages/pi-merge-ready"
   },
-  "homepage": "https://github.com/robhowley/pi-userland/tree/main/packages/pi-merge-ready",
+  "homepage": "https://pi-userland.dev",
   "scripts": {
-    "lint": "eslint extensions/ __tests__/",
-    "format:check": "prettier --check extensions/ __tests__/",
-    "format:write": "prettier --write extensions/ __tests__/",
+    "lint": "eslint extensions/",
+    "format:check": "prettier --check extensions/",
+    "format:write": "prettier --write extensions/",
     "typecheck": "tsc --noEmit",
     "test": "vitest run __tests__"
-  },
-  "dependencies": {
-    "@sinclair/typebox": "^0.34.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

@@ -1,4 +1,3 @@
-import { Type } from '@sinclair/typebox';
 import type { MergeReadyCommandAPI } from './commands.js';
 import type { MergeReadyExec, MergeReadyExecOptions, MergeReadyExecResult } from './git.js';
 import { getMergeReadyStatus } from './merge-ready.js';
@@ -37,12 +36,13 @@ export type MergeReadyStatusToolAPI = Pick<MergeReadyCommandAPI, 'exec'> & {
   registerTool: (tool: MergeReadyStatusToolRegistration) => void;
 };
 
-const MERGE_READY_STATUS_TOOL_PARAMETERS = Type.Object(
-  {
-    cwd: Type.Optional(Type.String()),
+const MERGE_READY_STATUS_TOOL_PARAMETERS = {
+  type: 'object',
+  properties: {
+    cwd: { type: 'string' },
   },
-  { additionalProperties: false },
-);
+  additionalProperties: false,
+};
 
 export function registerMergeReadyStatusTool(pi: MergeReadyStatusToolAPI): void {
   pi.registerTool({
