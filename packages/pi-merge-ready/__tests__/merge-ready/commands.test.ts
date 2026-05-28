@@ -11,43 +11,17 @@ import mergeReadyExtension, {
   type MergeReadyCommandAPI,
   type MergeReadyCommandContext,
 } from '../../extensions/merge-ready/index.js';
-
-type ExpectedExecCall = {
-  command: string;
-  args: string[];
-  cwd?: string | undefined;
-  timeout?: number | undefined;
-  result?: {
-    stdout?: string;
-    stderr?: string;
-    code?: number;
-    killed?: boolean;
-  };
-  error?: unknown;
-};
+import {
+  GH_PR_VIEW_JSON_FIELDS,
+  buildConversationsPayload,
+  buildPullRequestPayload,
+  createConversationsSuccessCall,
+  createGitDiscoveryCalls,
+  createPullRequestViewSuccessCall,
+  type ExpectedExecCall,
+} from './test-fixtures.js';
 
 const GENERATED_AT = '2026-05-26T22:00:00.000Z';
-const GH_PR_VIEW_JSON_FIELDS =
-  'number,title,url,state,isDraft,mergeable,mergeStateStatus,headRefName,baseRefName,statusCheckRollup,reviews,reviewDecision,reviewRequests,author';
-const GH_GRAPHQL_REVIEW_THREADS_QUERY = [
-  'query MergeReadyReviewThreads($owner: String!, $name: String!, $number: Int!) {',
-  'repository(owner: $owner, name: $name) {',
-  'pullRequest(number: $number) {',
-  'reviewThreads(first: 100) {',
-  'nodes { isResolved }',
-  'pageInfo { hasNextPage }',
-  '}',
-  'baseRef {',
-  'branchProtectionRule { requiresConversationResolution }',
-  'rules(first: 100) {',
-  'nodes { type }',
-  'pageInfo { hasNextPage }',
-  '}',
-  '}',
-  '}',
-  '}',
-  '}',
-].join(' ');
 
 function createMockAPI(expectedCalls: ExpectedExecCall[] = []): {
   api: MergeReadyCommandAPI & {
@@ -116,165 +90,6 @@ function createCommandContext(): MergeReadyCommandContext {
     ui: {
       notify: vi.fn(),
       setStatus: vi.fn(),
-    },
-  };
-}
-
-function createGitDiscoveryCalls(): ExpectedExecCall[] {
-  return [
-    {
-      command: 'git',
-      args: ['rev-parse', '--show-toplevel'],
-      cwd: '/repo',
-      timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
-      result: { stdout: '/repo\n' },
-    },
-    {
-      command: 'git',
-      args: ['branch', '--show-current'],
-      cwd: '/repo',
-      timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
-      result: { stdout: 'feat/merge-ready\n' },
-    },
-    {
-      command: 'git',
-      args: ['remote'],
-      cwd: '/repo',
-      timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
-      result: { stdout: 'origin\n' },
-    },
-    {
-      command: 'git',
-      args: ['remote', 'get-url', 'origin'],
-      cwd: '/repo',
-      timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
-      result: { stdout: 'git@github.com:robhowley/pi-userland.git\n' },
-    },
-    {
-      command: 'git',
-      args: ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'],
-      cwd: '/repo',
-      timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
-      result: { stdout: 'origin/main\n' },
-    },
-    {
-      command: 'git',
-      args: ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'],
-      cwd: '/repo',
-      timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
-      result: { stdout: 'origin/main\n' },
-    },
-    {
-      command: 'git',
-      args: ['rev-list', '--left-right', '--count', 'origin/main...HEAD'],
-      cwd: '/repo',
-      timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
-      result: { stdout: '0 0\n' },
-    },
-    {
-      command: 'git',
-      args: ['status', '--porcelain', '--untracked-files=normal'],
-      cwd: '/repo',
-      timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
-      result: { stdout: '' },
-    },
-  ];
-}
-
-function createPullRequestViewSuccessCall(payload: Record<string, unknown>): ExpectedExecCall {
-  return {
-    command: 'gh',
-    args: ['pr', 'view', '--json', GH_PR_VIEW_JSON_FIELDS],
-    cwd: '/repo',
-    timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
-    result: {
-      stdout: `${JSON.stringify(payload)}\n`,
-    },
-  };
-}
-
-function createConversationsSuccessCall(payload: Record<string, unknown>): ExpectedExecCall {
-  return {
-    command: 'gh',
-    args: [
-      'api',
-      'graphql',
-      '-f',
-      `query=${GH_GRAPHQL_REVIEW_THREADS_QUERY}`,
-      '-F',
-      'owner=robhowley',
-      '-F',
-      'name=pi-userland',
-      '-F',
-      'number=42',
-    ],
-    cwd: '/repo',
-    timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
-    result: {
-      stdout: `${JSON.stringify(payload)}\n`,
-    },
-  };
-}
-
-function buildPullRequestPayload(overrides: Record<string, unknown> = {}) {
-  return {
-    number: 42,
-    title: 'Compose merge-ready status boundary',
-    url: 'https://github.com/robhowley/pi-userland/pull/42',
-    state: 'OPEN',
-    isDraft: false,
-    mergeable: 'MERGEABLE',
-    mergeStateStatus: 'CLEAN',
-    headRefName: 'feat/merge-ready',
-    baseRefName: 'main',
-    statusCheckRollup: [
-      {
-        __typename: 'CheckRun',
-        workflowName: 'ci',
-        name: 'unit',
-        status: 'COMPLETED',
-        conclusion: 'SUCCESS',
-      },
-    ],
-    reviews: [
-      {
-        author: { login: 'reviewer1' },
-        state: 'APPROVED',
-        submittedAt: '2026-05-26T20:00:00Z',
-      },
-    ],
-    reviewDecision: 'APPROVED',
-    reviewRequests: [],
-    author: {
-      login: 'robhowley',
-      name: 'Robert Howley',
-      is_bot: false,
-    },
-    ...overrides,
-  };
-}
-
-function buildConversationsPayload(overrides: Record<string, unknown> = {}) {
-  return {
-    data: {
-      repository: {
-        pullRequest: {
-          reviewThreads: {
-            nodes: [],
-            pageInfo: { hasNextPage: false },
-          },
-          baseRef: {
-            branchProtectionRule: {
-              requiresConversationResolution: false,
-            },
-            rules: {
-              nodes: [{ type: 'PULL_REQUEST' }],
-              pageInfo: { hasNextPage: false },
-            },
-          },
-          ...overrides,
-        },
-      },
     },
   };
 }
@@ -411,8 +226,10 @@ describe('merge-ready command', () => {
 
   it('renders concise ready output by default', async () => {
     const { api, assertDone, getCommand } = createMockAPI([
-      ...createGitDiscoveryCalls(),
-      createPullRequestViewSuccessCall(buildPullRequestPayload()),
+      ...createGitDiscoveryCalls({ timeout: MERGE_READY_COMMAND_TIMEOUT_MS }),
+      createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+        timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+      }),
       createConversationsSuccessCall(
         buildConversationsPayload({
           reviewThreads: {
@@ -420,6 +237,7 @@ describe('merge-ready command', () => {
             pageInfo: { hasNextPage: false },
           },
         }),
+        { timeout: MERGE_READY_COMMAND_TIMEOUT_MS },
       ),
     ]);
 
@@ -444,8 +262,10 @@ describe('merge-ready command', () => {
 
   it('syncs the status bar cache from the command status without an extra fetch', async () => {
     const { api, assertDone, getCommand } = createMockAPI([
-      ...createGitDiscoveryCalls(),
-      createPullRequestViewSuccessCall(buildPullRequestPayload()),
+      ...createGitDiscoveryCalls({ timeout: MERGE_READY_COMMAND_TIMEOUT_MS }),
+      createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+        timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+      }),
       createConversationsSuccessCall(
         buildConversationsPayload({
           reviewThreads: {
@@ -453,6 +273,7 @@ describe('merge-ready command', () => {
             pageInfo: { hasNextPage: false },
           },
         }),
+        { timeout: MERGE_READY_COMMAND_TIMEOUT_MS },
       ),
     ]);
 
@@ -482,7 +303,7 @@ describe('merge-ready command', () => {
 
   it('keeps optional unresolved comments out of human blocker output', async () => {
     const { api, assertDone, getCommand } = createMockAPI([
-      ...createGitDiscoveryCalls(),
+      ...createGitDiscoveryCalls({ timeout: MERGE_READY_COMMAND_TIMEOUT_MS }),
       createPullRequestViewSuccessCall(
         buildPullRequestPayload({
           statusCheckRollup: [
@@ -495,6 +316,7 @@ describe('merge-ready command', () => {
             },
           ],
         }),
+        { timeout: MERGE_READY_COMMAND_TIMEOUT_MS },
       ),
       createConversationsSuccessCall(
         buildConversationsPayload({
@@ -503,6 +325,7 @@ describe('merge-ready command', () => {
             pageInfo: { hasNextPage: false },
           },
         }),
+        { timeout: MERGE_READY_COMMAND_TIMEOUT_MS },
       ),
     ]);
 
@@ -527,7 +350,7 @@ describe('merge-ready command', () => {
 
   it('renders no-PR unknown output', async () => {
     const { api, assertDone, getCommand } = createMockAPI([
-      ...createGitDiscoveryCalls(),
+      ...createGitDiscoveryCalls({ timeout: MERGE_READY_COMMAND_TIMEOUT_MS }),
       {
         command: 'gh',
         args: ['pr', 'view', '--json', GH_PR_VIEW_JSON_FIELDS],
@@ -557,8 +380,10 @@ describe('merge-ready command', () => {
 
   it('renders restrained MergeReadyStatus JSON with --json', async () => {
     const { api, assertDone, getCommand } = createMockAPI([
-      ...createGitDiscoveryCalls(),
-      createPullRequestViewSuccessCall(buildPullRequestPayload()),
+      ...createGitDiscoveryCalls({ timeout: MERGE_READY_COMMAND_TIMEOUT_MS }),
+      createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+        timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+      }),
       createConversationsSuccessCall(
         buildConversationsPayload({
           reviewThreads: {
@@ -566,6 +391,7 @@ describe('merge-ready command', () => {
             pageInfo: { hasNextPage: false },
           },
         }),
+        { timeout: MERGE_READY_COMMAND_TIMEOUT_MS },
       ),
     ]);
 

@@ -53,7 +53,11 @@ export async function getMergeReadyStatus(
   }
 
   if (pullRequestFacts.kind !== 'found') {
-    return createMergeReadyStatus({ generatedAt });
+    return createMergeReadyStatus({
+      generatedAt,
+      hasPr: true,
+      forceStatusAmbiguous: true,
+    });
   }
 
   const pr = toMergeReadyPullRequest(pullRequestFacts.pullRequest);
@@ -80,6 +84,7 @@ export async function getMergeReadyStatus(
     generatedAt,
     pr,
     signals,
+    forceStatusAmbiguous: conversations.kind !== 'known',
   });
 }
 

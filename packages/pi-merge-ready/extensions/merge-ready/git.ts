@@ -1,3 +1,5 @@
+import { runNormalizedExecCommand } from './internal.js';
+
 export type MergeReadyExecOptions = {
   cwd?: string;
   timeout?: number;
@@ -84,22 +86,6 @@ export type GetMergeReadyGitFactsOptions = {
   cwd?: string;
   timeout?: number;
 };
-
-type SuccessfulCommand = {
-  ok: true;
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-};
-
-type FailedCommand = {
-  ok: false;
-  stdout: string;
-  stderr: string;
-  exitCode: number | null;
-};
-
-type CommandResult = SuccessfulCommand | FailedCommand;
 
 type ParsedGitHubRemote = {
   owner: string;
@@ -492,51 +478,29 @@ async function runCommand(
   cwd: string | undefined,
   timeout: number | undefined,
   issues: MergeReadyGitCommandIssue[],
-): Promise<CommandResult> {
-  try {
-    const execOptions = createExecOptions(cwd, timeout);
-    const rawResult = await exec(command, args, execOptions);
-    const result = normalizeExecResult(rawResult);
-
-    if (result.exitCode === 0) {
-      return { ok: true, ...result };
-    }
-
-    issues.push(
-      createIssue({
-        command,
-        args,
-        cwd,
-        exitCode: result.exitCode,
-        stdout: result.stdout,
-        stderr: result.stderr,
-        reason: 'non_zero_exit',
-        message: `${command} ${args.join(' ')} exited with code ${result.exitCode}`,
-      }),
-    );
-
-    return { ok: false, ...result };
-  } catch (error) {
-    const stdout = getErrorStringProperty(error, 'stdout');
-    const stderr = getErrorStringProperty(error, 'stderr') || getErrorMessage(error);
-    const exitCode =
-      getErrorNumberProperty(error, 'exitCode') ?? getErrorNumberProperty(error, 'code');
-
-    issues.push(
-      createIssue({
-        command,
-        args,
-        cwd,
-        exitCode,
-        stdout,
-        stderr,
-        reason: 'threw',
-        message: `${command} ${args.join(' ')} threw: ${getErrorMessage(error)}`,
-      }),
-    );
-
-    return { ok: false, stdout, stderr, exitCode };
+) {
+  const result = await runNormalizedExecCommand(exec, command, args, cwd, timeout);
+  if (result.ok) {
+    return result;
   }
+
+  issues.push(
+    createIssue({
+      command,
+      args,
+      cwd,
+      exitCode: result.exitCode,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      reason: result.reason,
+      message:
+        result.reason === 'threw'
+          ? `${command} ${args.join(' ')} threw: ${result.thrownMessage ?? result.stderr}`
+          : `${command} ${args.join(' ')} exited with code ${result.exitCode}`,
+    }),
+  );
+
+  return result;
 }
 
 function createUnavailableGitFacts(reason: 'not_git_repo' | 'command_failed') {
@@ -547,33 +511,6 @@ function createUnavailableGitFacts(reason: 'not_git_repo' | 'command_failed') {
     upstream: { kind: 'unknown', reason } as const,
     aheadBehind: { kind: 'unknown', reason } as const,
     dirty: { kind: 'unknown', reason } as const,
-  };
-}
-
-function createExecOptions(cwd: string | undefined, timeout: number | undefined) {
-  if (cwd === undefined && timeout === undefined) {
-    return undefined;
-  }
-
-  const options: MergeReadyExecOptions = {};
-  if (cwd !== undefined) {
-    options.cwd = cwd;
-  }
-  if (timeout !== undefined) {
-    options.timeout = timeout;
-  }
-  return options;
-}
-
-function normalizeExecResult(result: MergeReadyExecResult): {
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-} {
-  return {
-    stdout: result.stdout ?? '',
-    stderr: result.stderr ?? '',
-    exitCode: result.exitCode ?? result.code ?? 0,
   };
 }
 
@@ -665,30 +602,4 @@ function looksLikeMissingUpstream(stderr: string): boolean {
 
 function looksLikeMissingRemoteHead(stderr: string): boolean {
   return MISSING_REMOTE_HEAD_RE.test(stderr);
-}
-
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  return typeof error === 'string' ? error : String(error);
-}
-
-function getErrorStringProperty(error: unknown, key: 'stdout' | 'stderr'): string {
-  if (!error || typeof error !== 'object') {
-    return '';
-  }
-
-  const value = (error as Record<string, unknown>)[key];
-  return typeof value === 'string' ? value : '';
-}
-
-function getErrorNumberProperty(error: unknown, key: 'exitCode' | 'code'): number | null {
-  if (!error || typeof error !== 'object') {
-    return null;
-  }
-
-  const value = (error as Record<string, unknown>)[key];
-  return typeof value === 'number' ? value : null;
 }

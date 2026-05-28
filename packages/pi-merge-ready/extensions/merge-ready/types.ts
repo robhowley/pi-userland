@@ -23,10 +23,6 @@ export type MergeReadyPullRequest = {
   url: string;
 };
 
-export type MergeReadyDiscoveryState = 'complete' | 'ambiguous';
-
-export type MergeReadyPresence = 'present' | 'missing' | 'unknown';
-
 export type MergeReadyBooleanSignal = 'yes' | 'no' | 'unknown';
 
 export type MergeReadyChecksSignal = 'passing' | 'failing' | 'running' | 'unknown';
@@ -75,10 +71,6 @@ export type MergeReadyOpenItemId =
   | 'ci_running'
   | 'review_pending';
 
-export type MergeReadyOpenItemOwner = 'agent' | 'user' | 'reviewer' | 'ci' | 'github' | 'wait';
-
-export type MergeReadyOpenItemActionability = 'actionable' | 'waiting';
-
 export type MergeReadyOpenItem = {
   id: MergeReadyOpenItemId;
   summary: string;
@@ -96,6 +88,8 @@ export type MergeReadyStatus = {
 export type CreateMergeReadyStatusOptions = {
   generatedAt: string | Date;
   pr?: MergeReadyPullRequest | null;
+  hasPr?: boolean;
+  forceStatusAmbiguous?: boolean;
   signals?: MergeReadySignalsInput;
 };
 

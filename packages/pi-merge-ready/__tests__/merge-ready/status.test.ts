@@ -31,12 +31,18 @@ const READY_SIGNALS: MergeReadySignalsInput = {
 function buildStatus(
   options: {
     pr?: MergeReadyPullRequest | null;
+    hasPr?: boolean;
+    forceStatusAmbiguous?: boolean;
     signals?: MergeReadySignalsInput;
   } = {},
 ) {
   return createMergeReadyStatus({
     generatedAt: GENERATED_AT,
     pr: options.pr === undefined ? OPEN_PR : options.pr,
+    ...(options.hasPr === undefined ? {} : { hasPr: options.hasPr }),
+    ...(options.forceStatusAmbiguous === undefined
+      ? {}
+      : { forceStatusAmbiguous: options.forceStatusAmbiguous }),
     signals: { ...READY_SIGNALS, ...options.signals },
   });
 }
@@ -385,6 +391,44 @@ describe('merge-ready status', () => {
     // Should have exactly one status_ambiguous, not two
     expect(openItemIds(status)).toEqual(['status_ambiguous']);
     expect(status.state).toBe('unknown');
+  });
+
+  it('can force status_ambiguous for partial discovery without mutating known signals', () => {
+    const status = buildStatus({ forceStatusAmbiguous: true });
+
+    expect(status.state).toBe('unknown');
+    expect(status.summary).toBe('Merge readiness is ambiguous');
+    expect(openItemIds(status)).toEqual(['status_ambiguous']);
+    expect(status.signals).toEqual({
+      draft: false,
+      mergeability: 'mergeable',
+      checks: 'passing',
+      review: 'approved',
+      unresolvedConversations: false,
+      unresolvedConversationRequirement: 'optional',
+    });
+  });
+
+  it('can represent ambiguous PR discovery without degrading to no_pull_request', () => {
+    const status = createMergeReadyStatus({
+      generatedAt: GENERATED_AT,
+      pr: null,
+      hasPr: true,
+      forceStatusAmbiguous: true,
+    });
+
+    expect(status.state).toBe('unknown');
+    expect(status.pr).toBeNull();
+    expect(status.summary).toBe('Merge readiness is ambiguous');
+    expect(openItemIds(status)).toEqual(['status_ambiguous']);
+    expect(status.signals).toEqual({
+      draft: false,
+      mergeability: 'unknown',
+      checks: 'unknown',
+      review: 'unknown',
+      unresolvedConversations: false,
+      unresolvedConversationRequirement: 'unknown',
+    });
   });
 });
 

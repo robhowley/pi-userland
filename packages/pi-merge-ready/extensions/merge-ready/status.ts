@@ -214,9 +214,19 @@ export function selectMergeReadyBadgeId(context: MergeReadyBadgeContext): MergeR
 
 export function createMergeReadyStatus(options: CreateMergeReadyStatusOptions): MergeReadyStatus {
   const pr = options.pr ?? null;
-  const hasPr = pr !== null;
+  const hasPr = options.hasPr ?? pr !== null;
   const signals = normalizeMergeReadySignals(options.signals, hasPr);
-  const openItems = deriveMergeReadyOpenItems(signals, hasPr);
+  let openItems = deriveMergeReadyOpenItems(signals, hasPr);
+
+  if (
+    options.forceStatusAmbiguous &&
+    hasPr &&
+    !openItems.some((openItem) => openItem.id === 'status_ambiguous')
+  ) {
+    openItems = [...openItems, createOpenItem('status_ambiguous')].sort(
+      (left, right) => OPEN_ITEM_PRIORITY[left.id] - OPEN_ITEM_PRIORITY[right.id],
+    );
+  }
 
   return {
     state: deriveMergeReadyState(openItems),

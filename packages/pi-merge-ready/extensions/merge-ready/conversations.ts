@@ -1,4 +1,9 @@
-import type { MergeReadyExec, MergeReadyExecOptions, MergeReadyExecResult } from './git.js';
+import type { MergeReadyExec } from './git.js';
+import {
+  classifyGitHubCliFailureReason,
+  getErrorMessage,
+  runNormalizedExecCommand,
+} from './internal.js';
 
 type MergeReadyConversationRequirement = 'required' | 'optional' | 'unknown';
 
@@ -70,23 +75,6 @@ export type FetchMergeReadyPullRequestConversationsOptions = {
   timeout?: number;
 };
 
-type SuccessfulCommand = {
-  ok: true;
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-};
-
-type FailedCommand = {
-  ok: false;
-  stdout: string;
-  stderr: string;
-  exitCode: number | null;
-  reason: 'non_zero_exit' | 'threw';
-};
-
-type CommandResult = SuccessfulCommand | FailedCommand;
-
 type IssueContext = {
   command: string;
   args: string[];
@@ -118,11 +106,6 @@ const GH_GRAPHQL_REVIEW_THREADS_QUERY = [
   '}',
   '}',
 ].join(' ');
-const AUTH_FAILURE_RE =
-  /gh auth login|authentication required|not logged (?:into|in) any hosts|HTTP 401|requires authentication|token .* invalid|resource not accessible by integration/i;
-const API_FAILURE_RE =
-  /GraphQL:|API rate limit exceeded|HTTP [45]\d\d|failed to connect|dial tcp|i\/o timeout|timed out|context deadline exceeded|EOF|could not resolve to/i;
-
 export async function fetchMergeReadyPullRequestConversations(
   options: FetchMergeReadyPullRequestConversationsOptions,
 ): Promise<MergeReadyPullRequestConversations> {
@@ -158,7 +141,7 @@ export async function fetchMergeReadyPullRequestConversations(
 
     return {
       kind: 'failure',
-      reason: classifyFailureReason(commandResult.stderr, commandResult.stdout),
+      reason: classifyGitHubCliFailureReason(commandResult.stderr, commandResult.stdout),
       issues: [issue],
     };
   }
@@ -191,25 +174,8 @@ async function runCommand(
   args: string[],
   cwd: string | undefined,
   timeout: number | undefined,
-): Promise<CommandResult> {
-  try {
-    const rawResult = await exec(command, args, createExecOptions(cwd, timeout));
-    const result = normalizeExecResult(rawResult);
-
-    if (result.exitCode === 0) {
-      return { ok: true, ...result };
-    }
-
-    return { ok: false, ...result, reason: 'non_zero_exit' };
-  } catch (error) {
-    return {
-      ok: false,
-      stdout: getErrorStringProperty(error, 'stdout'),
-      stderr: getErrorStringProperty(error, 'stderr') || getErrorMessage(error),
-      exitCode: getErrorNumberProperty(error, 'exitCode') ?? getErrorNumberProperty(error, 'code'),
-      reason: 'threw',
-    };
-  }
+) {
+  return runNormalizedExecCommand(exec, command, args, cwd, timeout);
 }
 
 function normalizeConversationOutcome(
@@ -616,7 +582,7 @@ function parseGraphQLErrorOutcome(
 
   return {
     kind: 'failure',
-    reason: classifyFailureReason(combinedMessage, issueContext.stdout),
+    reason: classifyGitHubCliFailureReason(combinedMessage, issueContext.stdout),
     issues: [
       createIssue(
         issueContext,
@@ -653,45 +619,6 @@ function parseJson(
       ),
     };
   }
-}
-
-function classifyFailureReason(stderr: string, stdout: string): 'auth' | 'api' | 'command' {
-  const combinedOutput = `${stderr}\n${stdout}`;
-
-  if (AUTH_FAILURE_RE.test(combinedOutput)) {
-    return 'auth';
-  }
-  if (API_FAILURE_RE.test(combinedOutput)) {
-    return 'api';
-  }
-  return 'command';
-}
-
-function createExecOptions(cwd: string | undefined, timeout: number | undefined) {
-  if (cwd === undefined && timeout === undefined) {
-    return undefined;
-  }
-
-  const options: MergeReadyExecOptions = {};
-  if (cwd !== undefined) {
-    options.cwd = cwd;
-  }
-  if (timeout !== undefined) {
-    options.timeout = timeout;
-  }
-  return options;
-}
-
-function normalizeExecResult(result: MergeReadyExecResult): {
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-} {
-  return {
-    stdout: result.stdout ?? '',
-    stderr: result.stderr ?? '',
-    exitCode: result.exitCode ?? result.code ?? 0,
-  };
 }
 
 function createIssue(
@@ -743,30 +670,4 @@ function parseOptionalBoolean(value: unknown): boolean | null {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
-}
-
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  return typeof error === 'string' ? error : String(error);
-}
-
-function getErrorStringProperty(error: unknown, key: 'stdout' | 'stderr'): string {
-  if (!error || typeof error !== 'object') {
-    return '';
-  }
-
-  const value = (error as Record<string, unknown>)[key];
-  return typeof value === 'string' ? value : '';
-}
-
-function getErrorNumberProperty(error: unknown, key: 'exitCode' | 'code'): number | null {
-  if (!error || typeof error !== 'object') {
-    return null;
-  }
-
-  const value = (error as Record<string, unknown>)[key];
-  return typeof value === 'number' ? value : null;
 }

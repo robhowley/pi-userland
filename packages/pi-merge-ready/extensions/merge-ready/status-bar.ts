@@ -6,7 +6,7 @@ import {
 } from './git.js';
 import { getMergeReadyStatus } from './merge-ready.js';
 import { selectMergeReadyBadgeId } from './status.js';
-import type { MergeReadyBadgeId, MergeReadyStatus } from './types.js';
+import type { MergeReadyBadgeId, MergeReadyOpenItemId, MergeReadyStatus } from './types.js';
 
 export const MERGE_READY_STATUS_BAR_KEY = 'merge-ready';
 export const MERGE_READY_STATUS_BAR_TIMEOUT_MS = 8_000;
@@ -67,7 +67,6 @@ type MergeReadyStatusBarCacheEntry = {
   refreshedAtMs: number;
 };
 
-const STATUS_BAR_PREFIX = '';
 const UNKNOWN_STATUS_BAR_TEXT = '❔ Unknown';
 const BADGE_PRESENTATION: Record<MergeReadyBadgeId, { icon: string; text: string }> = {
   draft: { icon: '📝', text: 'Draft' },
@@ -84,21 +83,8 @@ const BADGE_PRESENTATION: Record<MergeReadyBadgeId, { icon: string; text: string
   closed: { icon: '⛔', text: 'Closed' },
   unknown: { icon: '❔', text: 'Unknown' },
 };
-const SUMMARY_TEXT: Record<string, string> = {
-  'Ready to merge': 'Ready',
-  'Merge conflicts detected': 'Conflicts',
-  'Branch is out of date with base': 'Out of date',
-  'GitHub reports merge is blocked': 'Merge blocked',
-  'Pull request is still a draft': 'Draft',
-  'Required checks are failing': 'Checks failing',
-  'Changes requested by reviewers': 'Changes requested',
-  'Unresolved review conversations remain': 'Conversations open',
-  'Checks are still running': 'Checks running',
-  'Waiting for review': 'Review pending',
-  'Pull request merged': 'Merged',
-  'Pull request closed': 'Closed',
-  'No pull request found': 'No PR',
-  'Merge readiness is ambiguous': 'Unknown',
+const STATUS_BAR_TEXT_OVERRIDE_BY_OPEN_ITEM_ID: Partial<Record<MergeReadyOpenItemId, string>> = {
+  no_pull_request: 'No PR',
 };
 
 let statusBarCache: MergeReadyStatusBarCacheEntry | null = null;
@@ -184,16 +170,12 @@ export function syncMergeReadyStatusBar(
 export function renderMergeReadyStatusBar(status: MergeReadyStatus): string {
   const specialCase = renderStatusBarSpecialCase(status);
   if (specialCase) {
-    const prefix = STATUS_BAR_PREFIX ? `${STATUS_BAR_PREFIX} ` : '';
-    return `${prefix}${specialCase}`;
+    return specialCase;
   }
 
   const badgeId = selectMergeReadyBadgeId(status);
   const badge = BADGE_PRESENTATION[badgeId];
-  const text = renderStatusBarText(status, badgeId, badge.text);
-
-  const prefix = STATUS_BAR_PREFIX ? `${STATUS_BAR_PREFIX} ` : '';
-  return `${prefix}${badge.icon} ${text}`;
+  return `${badge.icon} ${renderStatusBarText(status, badgeId)}`;
 }
 
 function renderStatusBarSpecialCase(status: MergeReadyStatus): string | null {
@@ -214,16 +196,15 @@ function renderStatusBarSpecialCase(status: MergeReadyStatus): string | null {
   return null;
 }
 
-function renderStatusBarText(
-  status: MergeReadyStatus,
-  badgeId: MergeReadyBadgeId,
-  fallbackText: string,
-): string {
-  if (badgeId === 'unresolved_conversations') {
-    return formatRequiredUnresolvedConversationText(status);
+function renderStatusBarText(status: MergeReadyStatus, badgeId: MergeReadyBadgeId): string {
+  const topOpenItemId = status.openItems[0]?.id;
+  if (topOpenItemId) {
+    return (
+      STATUS_BAR_TEXT_OVERRIDE_BY_OPEN_ITEM_ID[topOpenItemId] ?? BADGE_PRESENTATION[badgeId].text
+    );
   }
 
-  return SUMMARY_TEXT[status.summary] ?? fallbackText;
+  return BADGE_PRESENTATION[badgeId].text;
 }
 
 function formatRequiredUnresolvedConversationText(status: MergeReadyStatus): string {

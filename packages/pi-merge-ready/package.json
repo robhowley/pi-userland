@@ -5,6 +5,7 @@
   "type": "module",
   "files": [
     "extensions",
+    "skills",
     "README.md",
     "../LICENSE"
   ],
@@ -31,6 +32,9 @@
     "format:write": "prettier --write extensions/ __tests__/",
     "typecheck": "tsc --noEmit",
     "test": "vitest run __tests__"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
