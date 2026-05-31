@@ -6,15 +6,23 @@ const tuiMocks = vi.hoisted(() => ({
   matchesKey: vi.fn(),
 }));
 
+const accountClientMocks = vi.hoisted(() => ({
+  getAllKeys: vi.fn(),
+  getCurrentKey: vi.fn(),
+  getAccountCredits: vi.fn(),
+  setApiKeyDisabled: vi.fn(),
+}));
+
 vi.mock('@mariozechner/pi-tui', () => ({
   matchesKey: tuiMocks.matchesKey,
   truncateToWidth: (text: string) => text,
 }));
 
 vi.mock('../account-client.js', () => ({
-  getAllKeys: vi.fn(),
-  getCurrentKey: vi.fn(),
-  getAccountCredits: vi.fn(),
+  getAllKeys: accountClientMocks.getAllKeys,
+  getCurrentKey: accountClientMocks.getCurrentKey,
+  getAccountCredits: accountClientMocks.getAccountCredits,
+  setApiKeyDisabled: accountClientMocks.setApiKeyDisabled,
 }));
 
 import { AccountOverlayComponent } from '../account-overlay.js';
@@ -44,8 +52,17 @@ function createKey(overrides: Partial<KeyInfo> = {}): KeyInfo {
   };
 }
 
-function selectedKeyLines(lines: string[]): string[] {
-  return lines.map((line) => line.trim()).filter((line) => line.includes('hash      '));
+function renderText(component: AccountOverlayComponent): string {
+  return component.render(120).join('\n');
+}
+
+function installSimpleKeyMatcher(): void {
+  tuiMocks.matchesKey.mockImplementation((data: string, key: string) => {
+    if ((key === 'enter' || key === 'return') && data === 'enter') {
+      return true;
+    }
+    return data === key;
+  });
 }
 
 describe('AccountOverlayComponent', () => {
@@ -53,7 +70,8 @@ describe('AccountOverlayComponent', () => {
   const rollupStatus: RollupStatus = { status: 'healthy', message: '🔴 0  🟡 0  🟢 2' };
 
   beforeEach(() => {
-    tuiMocks.matchesKey.mockReturnValue(false);
+    vi.clearAllMocks();
+    installSimpleKeyMatcher();
   });
 
   afterEach(() => {
@@ -63,7 +81,7 @@ describe('AccountOverlayComponent', () => {
     components.length = 0;
   });
 
-  it('shows the selected key hash and keeps long hashes visible after selection changes', () => {
+  it('does not render internal hashes and advertises toggle in the footer', () => {
     const longHash = '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
     const component = new AccountOverlayComponent(
       [
@@ -79,16 +97,110 @@ describe('AccountOverlayComponent', () => {
     );
     components.push(component);
 
-    expect(selectedKeyLines(component.render(120))).toEqual([
-      expect.stringContaining('hash      hash-primary'),
-    ]);
+    const output = renderText(component);
 
-    tuiMocks.matchesKey.mockImplementation(
-      (data: string, key: string) => data === 'down' && key === 'down',
+    expect(output).not.toContain('hash      ');
+    expect(output).not.toContain('hash-primary');
+    expect(output).not.toContain(longHash);
+    expect(output).toContain('t to toggle');
+  });
+
+  it('uses the selected key hash internally for t+enter and keeps that key selected after re-sort', async () => {
+    accountClientMocks.setApiKeyDisabled.mockResolvedValue(
+      createKey({
+        name: 'Primary',
+        hash: 'hash-primary',
+        status: 'disabled',
+        disabled: true,
+        spend: 20,
+      }),
     );
-    component.handleInput('down');
 
-    const hashLine = selectedKeyLines(component.render(120)).find((line) => line.includes('hash'));
-    expect(hashLine).toContain(longHash);
+    const component = new AccountOverlayComponent(
+      [
+        createKey({ name: 'Primary', hash: 'hash-primary', spend: 20 }),
+        createKey({ name: 'Automation', hash: 'hash-automation', spend: 5, label: 'sk-or-v1-999' }),
+      ],
+      25,
+      rollupStatus,
+      null,
+      createIdentityTheme(),
+      () => {},
+      () => {},
+    );
+    components.push(component);
+
+    component.handleInput('t');
+    expect(renderText(component)).toContain('Press Enter to disable Primary');
+
+    component.handleInput('enter');
+
+    await vi.waitFor(() => {
+      expect(accountClientMocks.setApiKeyDisabled).toHaveBeenCalledWith('hash-primary', true);
+    });
+
+    await vi.waitFor(() => {
+      const output = renderText(component);
+      expect(output).toContain('name      Primary');
+      expect(output).toContain('status    disabled');
+      expect(output).toContain('status    Primary disabled.');
+      expect(output).not.toContain('hash-primary');
+      expect(output).not.toContain('hash-automation');
+    });
+  });
+
+  it('renders read-only when management key capabilities are unavailable', () => {
+    const component = new AccountOverlayComponent(
+      [createKey({ name: 'Primary', hash: 'hash-primary', spend: 20 })],
+      25,
+      rollupStatus,
+      null,
+      createIdentityTheme(),
+      () => {},
+      () => {},
+      undefined,
+      false,
+    );
+    components.push(component);
+
+    expect(renderText(component)).toContain('readonly  Set OPENROUTER_MANAGEMENT_KEY');
+    expect(renderText(component)).not.toContain('t to toggle');
+
+    component.handleInput('t');
+
+    expect(accountClientMocks.setApiKeyDisabled).not.toHaveBeenCalled();
+    expect(renderText(component)).toContain('Set OPENROUTER_MANAGEMENT_KEY');
+    expect(renderText(component)).not.toContain('hash-primary');
+  });
+
+  it('sanitizes failed toggle errors instead of rendering internal hashes', async () => {
+    accountClientMocks.setApiKeyDisabled.mockRejectedValue(
+      new Error('OpenRouter rejected hash-primary as invalid'),
+    );
+
+    const component = new AccountOverlayComponent(
+      [createKey({ name: 'Primary', hash: 'hash-primary', spend: 20 })],
+      25,
+      rollupStatus,
+      null,
+      createIdentityTheme(),
+      () => {},
+      () => {},
+    );
+    components.push(component);
+
+    component.handleInput('t');
+    component.handleInput('enter');
+
+    await vi.waitFor(() => {
+      expect(accountClientMocks.setApiKeyDisabled).toHaveBeenCalledWith('hash-primary', true);
+    });
+
+    await vi.waitFor(() => {
+      const output = renderText(component);
+      expect(output).toContain('Failed to disable Primary');
+      expect(output).not.toContain('hash-primary');
+      expect(output).not.toContain('rejected hash-primary');
+    });
   });
 });

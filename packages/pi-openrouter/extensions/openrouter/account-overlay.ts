@@ -1,5 +1,5 @@
 import { matchesKey, truncateToWidth } from '@mariozechner/pi-tui';
-import type { Theme, ThemeColor } from '@mariozechner/pi-coding-agent';
+import type { ExtensionContext, Theme, ThemeColor } from '@mariozechner/pi-coding-agent';
 import type { KeyInfo, KeyStatus, RollupStatus } from './account-types.js';
 import {
   computeRollupStatus,
@@ -7,8 +7,12 @@ import {
   formatRemaining,
   sortKeys,
 } from './account-format.js';
-import { getAllKeys, getCurrentKey, getAccountCredits } from './account-client.js';
-import type { ExtensionContext } from '@mariozechner/pi-coding-agent';
+import {
+  getAccountCredits,
+  getAllKeys,
+  getCurrentKey,
+  setApiKeyDisabled,
+} from './account-client.js';
 
 // =============================================================================
 // Constants
@@ -34,6 +38,11 @@ export class AccountOverlayComponent {
   private requestRender: () => void;
   private isDisposed = false;
   private ctx: ExtensionContext | null = null;
+  private confirmationHash: string | null = null;
+  private pendingToggleHash: string | null = null;
+  private inlineMessage: string | null = null;
+  private inlineMessageTone: ThemeColor = 'dim';
+  private canManageKeys: boolean;
 
   constructor(
     keyInfo: KeyInfo[] | null,
@@ -44,6 +53,7 @@ export class AccountOverlayComponent {
     onClose: () => void,
     requestRender: () => void,
     ctx?: ExtensionContext,
+    canManageKeys = true,
   ) {
     this.theme = theme;
     this.onClose = onClose;
@@ -54,6 +64,7 @@ export class AccountOverlayComponent {
     this.error = error;
     this.selectedIndex = 0;
     this.ctx = ctx || null;
+    this.canManageKeys = canManageKeys;
     this.width = this.calculateWidth();
     this.lines = this.buildLines();
 
@@ -72,25 +83,54 @@ export class AccountOverlayComponent {
   }
 
   handleInput(data: string): void {
-    // Close on q, escape, or ctrl+c
-    if (matchesKey(data, 'escape') || matchesKey(data, 'ctrl+c') || data === 'q') {
+    if (matchesKey(data, 'ctrl+c') || data === 'q') {
       this.onClose();
       return;
     }
 
-    // Refresh on r
-    if (matchesKey(data, 'r')) {
-      this.refresh();
+    if (matchesKey(data, 'escape')) {
+      if (this.confirmationHash) {
+        this.confirmationHash = null;
+        this.invalidate();
+        return;
+      }
+      this.onClose();
       return;
     }
 
-    // Key selection with arrow keys
+    if (this.pendingToggleHash) {
+      return;
+    }
+
+    if (matchesKey(data, 'enter') || matchesKey(data, 'return')) {
+      if (this.confirmationHash) {
+        void this.confirmToggle();
+      }
+      return;
+    }
+
+    if (this.confirmationHash) {
+      return;
+    }
+
+    if (matchesKey(data, 'r')) {
+      void this.refresh();
+      return;
+    }
+
+    if (matchesKey(data, 't')) {
+      this.openToggleConfirmation();
+      return;
+    }
+
     if (this.keyInfo && this.keyInfo.length > 0) {
       if (matchesKey(data, 'up')) {
         this.selectedIndex = Math.max(0, this.selectedIndex - 1);
+        this.inlineMessage = null;
         this.invalidate();
       } else if (matchesKey(data, 'down')) {
         this.selectedIndex = Math.min(this.keyInfo.length - 1, this.selectedIndex + 1);
+        this.inlineMessage = null;
         this.invalidate();
       }
     }
@@ -99,7 +139,6 @@ export class AccountOverlayComponent {
   wantsKeyRelease = false;
 
   render(width: number): string[] {
-    // Center the overlay if terminal is wider
     const padding = Math.max(0, Math.floor((width - this.width) / 2));
     const pad = ' '.repeat(padding);
 
@@ -108,12 +147,8 @@ export class AccountOverlayComponent {
 
   invalidate(): void {
     if (this.isDisposed) return;
-    // Rebuild lines to update "last refreshed" time
     this.lines = this.buildLines();
-    // Clamp selected index if key list shrunk after re-sort
-    if (this.keyInfo && this.selectedIndex >= this.keyInfo.length) {
-      this.selectedIndex = this.keyInfo.length - 1;
-    }
+    this.clampSelectedIndex();
     if (!this.isDisposed) {
       this.requestRender();
     }
@@ -121,6 +156,8 @@ export class AccountOverlayComponent {
 
   async refresh(): Promise<void> {
     if (this.isDisposed || !this.ctx) return;
+
+    const selectedHash = this.getSelectedKeyHash();
 
     try {
       const allKeys = await getAllKeys();
@@ -134,6 +171,8 @@ export class AccountOverlayComponent {
       let error: string | null = null;
       let keyInfo: KeyInfo[] | null = null;
 
+      this.canManageKeys = allKeys !== null;
+
       if (allKeys && allKeys.length > 0) {
         keyInfo = allKeys;
       } else {
@@ -142,6 +181,7 @@ export class AccountOverlayComponent {
           const currentKey = await getCurrentKey();
           if (currentKey) {
             keyInfo = [currentKey];
+            error = null;
           }
         } catch {
           // Ignore secondary errors
@@ -152,15 +192,14 @@ export class AccountOverlayComponent {
         ? computeRollupStatus(keyInfo)
         : { status: 'unavailable' as const };
 
-      // Update state
       this.keyInfo = keyInfo;
       this.credits = credits;
       this.rollupStatus = rollupStatus;
       this.error = error;
-
-      // Reset selection and rebuild
-      this.selectedIndex = 0;
+      this.confirmationHash = null;
+      this.pendingToggleHash = null;
       this.width = this.calculateWidth();
+      this.restoreSelectedIndexByHash(selectedHash);
       this.lines = this.buildLines();
 
       this.requestRender();
@@ -170,13 +209,7 @@ export class AccountOverlayComponent {
   }
 
   private calculateWidth(): number {
-    if (!this.keyInfo || this.keyInfo.length === 0) {
-      return Math.max(MIN_WIDTH, 50);
-    }
-
-    const longestHashLength = this.keyInfo.reduce((max, key) => Math.max(max, key.hash.length), 0);
-
-    return Math.max(MIN_WIDTH, 55, 16 + longestHashLength);
+    return MIN_WIDTH;
   }
 
   /** Get the header row for the account overlay */
@@ -205,38 +238,42 @@ export class AccountOverlayComponent {
     lines.push(this.getAccountHeaderRow());
     lines.push(emptyRow(this.width));
 
-    // Total spend line (sum of all key spends)
     if (this.keyInfo && this.keyInfo.length > 0) {
       const totalSpend = this.keyInfo.reduce((sum, k) => sum + k.spend, 0);
       lines.push(row(` usage      ${formatCurrency(totalSpend)}`, this.width));
     }
 
-    // Credits line
     if (this.credits !== null) {
       lines.push(row(` credits    ${formatCurrency(this.credits)}`, this.width));
     } else {
       lines.push(row(th.fg('dim', ' credits          unavailable'), this.width));
     }
 
-    // Status by key line
-    lines.push(row(` status     ${this.rollupStatus.message}`, this.width));
+    const rollupMessage =
+      this.rollupStatus.status === 'unavailable' ? 'unavailable' : this.rollupStatus.message;
+    lines.push(row(` status     ${rollupMessage}`, this.width));
     lines.push(emptyRow(this.width));
 
     if (this.keyInfo && this.keyInfo.length > 0) {
-      // Sort keys - active first, then spend desc, then usage % desc
       const sortedKeys = sortKeys(this.keyInfo);
+      this.clampSelectedIndex(sortedKeys);
+      const currentKey = sortedKeys[this.selectedIndex] ?? sortedKeys[0] ?? null;
 
-      // Current key section - show for selected key
-      // Defensive: ensure index is within bounds before accessing
-      const index = Math.max(0, Math.min(this.selectedIndex, sortedKeys.length - 1));
-      const currentKey = sortedKeys[index];
       if (currentKey) {
         lines.push(row(` ${th.fg('accent', 'Selected key')}`, this.width));
         lines.push(...this.buildKeyDetails(currentKey, th));
+        if (!this.canManageKeys) {
+          lines.push(
+            row(
+              th.fg('dim', '  readonly  Set OPENROUTER_MANAGEMENT_KEY to toggle keys.'),
+              this.width,
+            ),
+          );
+        }
+        lines.push(...this.buildInlineStateLines(th));
         lines.push(emptyRow(this.width));
       }
 
-      // All keys section - show all keys in compact format (including current key)
       lines.push(row(` ${th.fg('accent', 'All keys')}`, this.width));
       lines.push(row(`   Workspace    Key name           Active   Spend    Used   `, this.width));
       for (let i = 0; i < sortedKeys.length; i++) {
@@ -244,33 +281,27 @@ export class AccountOverlayComponent {
       }
       lines.push(emptyRow(this.width));
     } else {
-      // No keys available
       lines.push(row(th.fg('dim', ' No keys available'), this.width));
     }
+
     lines.push(boxBottom(this.width));
-    lines.push(
-      plainRow(th.fg('dim', 'Esc to close  ·  r to refresh  ·  ↑/↓ to select'), this.width),
-    );
+    const footer =
+      this.canManageKeys && this.keyInfo && this.keyInfo.length > 0
+        ? 'Esc to close  ·  r to refresh  ·  ↑/↓ to select  ·  t to toggle'
+        : 'Esc to close  ·  r to refresh  ·  ↑/↓ to select';
+    lines.push(plainRow(th.fg('dim', footer), this.width));
     return lines;
   }
 
   private buildKeyDetails(key: KeyInfo, theme: Theme): string[] {
     const lines: string[] = [];
-
-    // Format status with color
     const statusColor = this.getStatusColor(key.status);
-    const statusText = key.status;
-    const formattedStatus = theme.fg(statusColor as ThemeColor, statusText);
-
-    // Format used/limit
+    const formattedStatus = theme.fg(statusColor, key.status);
     const usedLimitText = formatRemaining(key.used, key.limit);
-
-    // Format reset cadence
     const resetText = key.resetCadence || 'never';
 
     lines.push(row(`  name      ${truncate(key.name, 30)}`, this.width));
     lines.push(row(`  key       ${truncate(key.label, 30)}`, this.width));
-    lines.push(row(`  hash      ${key.hash}`, this.width));
     lines.push(row(`  status    ${formattedStatus}`, this.width));
     lines.push(row(`  used      ${usedLimitText}`, this.width));
     lines.push(row(`  reset     ${resetText}`, this.width));
@@ -279,12 +310,170 @@ export class AccountOverlayComponent {
     return lines;
   }
 
+  private buildInlineStateLines(theme: Theme): string[] {
+    const lines: string[] = [];
+    const targetHash = this.pendingToggleHash ?? this.confirmationHash;
+    const targetKey = targetHash ? this.findKeyByHash(targetHash) : null;
+
+    if (this.confirmationHash && targetKey) {
+      const action = targetKey.disabled ? 'enable' : 'disable';
+      lines.push(
+        row(
+          theme.fg(
+            'warning',
+            `  toggle    Press Enter to ${action} ${truncate(targetKey.name, 20)}`,
+          ),
+          this.width,
+        ),
+      );
+      lines.push(row(theme.fg('dim', '            Esc to cancel'), this.width));
+    }
+
+    if (this.pendingToggleHash && targetKey) {
+      const action = targetKey.disabled ? 'Enabling' : 'Disabling';
+      lines.push(
+        row(
+          theme.fg('dim', `  status    ${action} ${truncate(targetKey.name, 20)}...`),
+          this.width,
+        ),
+      );
+    }
+
+    if (this.inlineMessage) {
+      const label = this.inlineMessageTone === 'error' ? 'error' : 'status';
+      lines.push(
+        row(theme.fg(this.inlineMessageTone, `  ${label}    ${this.inlineMessage}`), this.width),
+      );
+    }
+
+    return lines;
+  }
+
+  private openToggleConfirmation(): void {
+    if (!this.canManageKeys) {
+      this.setInlineMessage('Set OPENROUTER_MANAGEMENT_KEY to enable or disable keys.', 'warning');
+      this.invalidate();
+      return;
+    }
+
+    const selectedKey = this.getSelectedKey();
+    if (!selectedKey) {
+      return;
+    }
+
+    this.confirmationHash = selectedKey.hash;
+    this.inlineMessage = null;
+    this.invalidate();
+  }
+
+  private async confirmToggle(): Promise<void> {
+    if (!this.confirmationHash || this.pendingToggleHash || !this.keyInfo) {
+      return;
+    }
+
+    const targetHash = this.confirmationHash;
+    const currentKey = this.findKeyByHash(targetHash);
+    if (!currentKey) {
+      this.confirmationHash = null;
+      this.setInlineMessage('Selected key is no longer available.', 'error');
+      this.invalidate();
+      return;
+    }
+
+    this.confirmationHash = null;
+    this.pendingToggleHash = targetHash;
+    this.inlineMessage = null;
+    this.invalidate();
+
+    try {
+      const updated = await setApiKeyDisabled(targetHash, !currentKey.disabled);
+      if (this.isDisposed) return;
+
+      const updatedKey: KeyInfo = {
+        ...currentKey,
+        ...updated,
+        hash: currentKey.hash,
+        workspaceName: currentKey.workspaceName,
+      };
+
+      this.keyInfo = this.keyInfo.map((key) => (key.hash === targetHash ? updatedKey : key));
+      this.rollupStatus = computeRollupStatus(this.keyInfo);
+      this.pendingToggleHash = null;
+      this.setInlineMessage(
+        `${updatedKey.name} ${updatedKey.disabled ? 'disabled' : 'enabled'}.`,
+        'success',
+      );
+      this.restoreSelectedIndexByHash(targetHash);
+      this.invalidate();
+    } catch (error_) {
+      if (this.isDisposed) return;
+      this.pendingToggleHash = null;
+      const action = currentKey.disabled ? 'enable' : 'disable';
+      this.setInlineMessage(
+        `Failed to ${action} ${currentKey.name}: ${getSafeToggleErrorMessage(error_)}`,
+        'error',
+      );
+      this.restoreSelectedIndexByHash(targetHash);
+      this.invalidate();
+    }
+  }
+
+  private setInlineMessage(message: string, tone: ThemeColor): void {
+    this.inlineMessage = message;
+    this.inlineMessageTone = tone;
+  }
+
+  private getSelectedKey(sortedKeys?: KeyInfo[]): KeyInfo | null {
+    const keys = sortedKeys ?? this.getSortedKeys();
+    if (keys.length === 0) return null;
+    const index = Math.max(0, Math.min(this.selectedIndex, keys.length - 1));
+    return keys[index] ?? null;
+  }
+
+  private getSelectedKeyHash(): string | null {
+    return this.getSelectedKey()?.hash ?? null;
+  }
+
+  private findKeyByHash(hash: string): KeyInfo | null {
+    if (!this.keyInfo) return null;
+    return this.keyInfo.find((key) => key.hash === hash) ?? null;
+  }
+
+  private getSortedKeys(): KeyInfo[] {
+    return this.keyInfo ? sortKeys(this.keyInfo) : [];
+  }
+
+  private restoreSelectedIndexByHash(hash: string | null): void {
+    const sortedKeys = this.getSortedKeys();
+    if (!hash || sortedKeys.length === 0) {
+      this.selectedIndex = 0;
+      return;
+    }
+
+    const index = sortedKeys.findIndex((key) => key.hash === hash);
+    this.selectedIndex = index >= 0 ? index : 0;
+  }
+
+  private clampSelectedIndex(sortedKeys?: KeyInfo[]): void {
+    const keys = sortedKeys ?? this.getSortedKeys();
+    if (keys.length === 0) {
+      this.selectedIndex = 0;
+      return;
+    }
+
+    if (this.selectedIndex >= keys.length) {
+      this.selectedIndex = keys.length - 1;
+    }
+    if (this.selectedIndex < 0) {
+      this.selectedIndex = 0;
+    }
+  }
+
   private simplifiedWorkspaceName(workspaceName: string): string {
     return workspaceName.replace(/Workspace$/, '').trim();
   }
 
   private buildCompactKeyRow(key: KeyInfo, theme: Theme, isSelected: boolean): string {
-    // Format spend
     let spendText: string;
     if (key.disabled) {
       spendText = '-';
@@ -292,7 +481,6 @@ export class AccountOverlayComponent {
       spendText = formatCurrency(key.spend);
     }
 
-    // Color spend based on value
     let spendColor: ThemeColor = 'success';
     if (key.disabled) {
       spendColor = 'dim';
@@ -302,10 +490,8 @@ export class AccountOverlayComponent {
       spendColor = 'warning';
     }
 
-    // Pad spend to 8 chars for alignment based on visible width
-    const paddedSpend = padToWidth(theme.fg(spendColor as ThemeColor, spendText), 8);
+    const paddedSpend = padToWidth(theme.fg(spendColor, spendText), 8);
 
-    // Calculate usage percentage
     let usageText: string;
     if (key.disabled) {
       usageText = '-';
@@ -320,7 +506,6 @@ export class AccountOverlayComponent {
       usageText = '-';
     }
 
-    // Color usage based on percentage
     let usageColor: ThemeColor = 'success';
     if (key.disabled) {
       usageColor = 'dim';
@@ -337,18 +522,14 @@ export class AccountOverlayComponent {
       }
     }
 
-    // Pad usage to 6 chars for alignment based on visible width
-    const paddedUsage = padToWidth(theme.fg(usageColor as ThemeColor, usageText), 5);
+    const paddedUsage = padToWidth(theme.fg(usageColor, usageText), 5);
 
     const enabledIcon = key.disabled
-      ? this.theme.fg('error' as ThemeColor, '\u2717')
-      : this.theme.fg('success' as ThemeColor, '\u2713');
+      ? this.theme.fg('error', '\u2717')
+      : this.theme.fg('success', '\u2713');
 
-    // Truncate name and workspace for compact display
     const name = truncate(key.name, 28);
     const workspace = truncate(this.simplifiedWorkspaceName(key.workspaceName), 20);
-
-    // Selection indicator
     const selectionIndicator = isSelected ? '●' : '○';
 
     return row(
@@ -378,6 +559,14 @@ export class AccountOverlayComponent {
 // =============================================================================
 // Helper Functions
 // =============================================================================
+
+function getSafeToggleErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/OPENROUTER_MANAGEMENT_KEY/i.test(message)) {
+    return message;
+  }
+  return 'OpenRouter could not update the selected key. Check management-key permissions and refresh.';
+}
 
 function boxTop(width: number): string {
   return `┌─${'─'.repeat(width - 4)}─┐`;

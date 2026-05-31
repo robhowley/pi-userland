@@ -43,8 +43,6 @@ export const OPENROUTER_SUBCOMMANDS = [
   'model-override-clear',
   'model-override-list',
   'api-key-create',
-  'api-key-disable',
-  'api-key-enable',
 ] as const;
 
 export function registerOpenRouterCommands(pi: Pick<ExtensionAPI, 'registerCommand'>): void {
@@ -131,6 +129,7 @@ async function handleOpenRouterCommand(args: string, ctx: ExtensionContext): Pro
       await handleApiKeyCreateCommand(subcommandArgs, ctx);
       break;
     }
+    // Back-compat only: hidden from public help/completions in favor of /openrouter account toggle UX.
     case 'api-key-disable': {
       await handleApiKeyDisableCommand(subcommandArgs, ctx);
       break;
@@ -424,9 +423,11 @@ async function showAccountOverlay(ctx: ExtensionContext) {
   let error: string | null = null;
   let keyInfo: KeyInfo[] | null = null;
   let credits: number | null = null;
+  let canManageKeys = false;
 
   try {
     const allKeys = await getAllKeys();
+    canManageKeys = allKeys !== null;
 
     if (allKeys && allKeys.length > 0) {
       keyInfo = allKeys;
@@ -467,7 +468,7 @@ async function showAccountOverlay(ctx: ExtensionContext) {
       keyInfo = sortKeys(keyInfo);
     }
 
-    await showAccountOverlayComponent(ctx, keyInfo, credits, rollupStatus, error);
+    await showAccountOverlayComponent(ctx, keyInfo, credits, rollupStatus, error, canManageKeys);
   } catch (error_) {
     const err = error_ as Error;
     error =
@@ -488,7 +489,7 @@ async function showAccountOverlay(ctx: ExtensionContext) {
       ? computeRollupStatus(keyInfo)
       : { status: 'unavailable' as const };
 
-    await showAccountOverlayComponent(ctx, keyInfo, credits, rollupStatus, error);
+    await showAccountOverlayComponent(ctx, keyInfo, credits, rollupStatus, error, false);
   }
 }
 
@@ -498,6 +499,7 @@ async function showAccountOverlayComponent(
   credits: number | null,
   rollupStatus: RollupStatus,
   error: string | null,
+  canManageKeys: boolean,
 ) {
   await ctx.ui.custom<void>(
     (_tui, theme, _keybindings, done) => {
@@ -510,6 +512,7 @@ async function showAccountOverlayComponent(
         done,
         () => _tui.requestRender(),
         ctx,
+        canManageKeys,
       );
 
       return {

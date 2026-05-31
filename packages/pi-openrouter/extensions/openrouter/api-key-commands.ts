@@ -213,8 +213,8 @@ export async function handleApiKeyCreate(args: string): Promise<HandlerResult> {
       message: [
         'OpenRouter API key created',
         `Name: ${created.keyInfo.name}`,
-        `Hash: ${created.keyInfo.hash}`,
         `Status: ${status}`,
+        'Use /openrouter account to inspect or toggle the key.',
         'Secret shown in secure overlay; store it now.',
         'Warning: This secret cannot be recovered and was not written or cached locally.',
       ].join('\n'),
@@ -262,7 +262,6 @@ async function handleApiKeyToggle(args: string, disabled: boolean): Promise<Hand
       message: [
         `OpenRouter API key ${disabled ? 'disabled' : 'enabled'}`,
         `Name: ${keyInfo.name}`,
-        `Hash: ${keyInfo.hash}`,
         `Status: ${keyInfo.disabled ? 'disabled' : 'enabled'}`,
         'Run /openrouter account to verify.',
       ].join('\n'),
@@ -270,9 +269,17 @@ async function handleApiKeyToggle(args: string, disabled: boolean): Promise<Hand
   } catch (error) {
     return {
       success: false,
-      message: getErrorMessage(error),
+      message: getToggleErrorMessage(error, disabled),
     };
   }
+}
+
+function getToggleErrorMessage(error: unknown, disabled: boolean): string {
+  const message = getErrorMessage(error);
+  if (/OPENROUTER_MANAGEMENT_KEY/i.test(message)) {
+    return message;
+  }
+  return `Failed to ${disabled ? 'disable' : 'enable'} OpenRouter API key. Check the key identifier and management-key permissions.`;
 }
 
 function getErrorMessage(error: unknown): string {

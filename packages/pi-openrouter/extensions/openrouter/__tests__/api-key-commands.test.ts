@@ -144,9 +144,11 @@ describe('api-key-commands', () => {
       });
       expect(result.success).toBe(true);
       expect(result.message).toContain('OpenRouter API key created');
+      expect(result.message).toContain('Use /openrouter account to inspect or toggle the key.');
       expect(result.message).toContain('Secret shown in secure overlay; store it now.');
       expect(result.message).toContain('Warning: This secret cannot be recovered');
       expect(result.message).not.toContain('sk-or-v1-secret');
+      expect(result.message).not.toContain('hash-123');
       expect(result.secret).toBe('sk-or-v1-secret');
     });
 
@@ -175,26 +177,40 @@ describe('api-key-commands', () => {
   });
 
   describe('handleApiKeyDisable / handleApiKeyEnable', () => {
-    it('disables a key by hash and formats the success message', async () => {
+    it('disables a key by hash without echoing the hash in the success message', async () => {
       const result = await handleApiKeyDisable('hash-disable');
 
       expect(mocks.setApiKeyDisabled).toHaveBeenCalledWith('hash-disable', true);
       expect(result).toEqual({
         success: true,
         message:
-          'OpenRouter API key disabled\nName: Disabled Key\nHash: hash-disable\nStatus: disabled\nRun /openrouter account to verify.',
+          'OpenRouter API key disabled\nName: Disabled Key\nStatus: disabled\nRun /openrouter account to verify.',
       });
     });
 
-    it('enables a key by hash and formats the success message', async () => {
+    it('enables a key by hash without echoing the hash in the success message', async () => {
       const result = await handleApiKeyEnable('hash-enable');
 
       expect(mocks.setApiKeyDisabled).toHaveBeenCalledWith('hash-enable', false);
       expect(result).toEqual({
         success: true,
         message:
-          'OpenRouter API key enabled\nName: Enabled Key\nHash: hash-enable\nStatus: enabled\nRun /openrouter account to verify.',
+          'OpenRouter API key enabled\nName: Enabled Key\nStatus: enabled\nRun /openrouter account to verify.',
       });
+    });
+
+    it('sanitizes helper errors that might include hashes', async () => {
+      mocks.setApiKeyDisabled.mockRejectedValue(new Error('OpenRouter rejected hash-disable'));
+
+      const result = await handleApiKeyDisable('hash-disable');
+
+      expect(result).toEqual({
+        success: false,
+        message:
+          'Failed to disable OpenRouter API key. Check the key identifier and management-key permissions.',
+      });
+      expect(result.message).not.toContain('hash-disable');
+      expect(result.message).not.toContain('rejected');
     });
 
     it('requires exactly one hash argument', async () => {

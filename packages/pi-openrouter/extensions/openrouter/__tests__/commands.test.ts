@@ -258,7 +258,7 @@ describe('registerOpenRouterCommands', () => {
     );
   });
 
-  it('keeps /openrouter subcommand completions unchanged', () => {
+  it('hides hash toggle subcommands from public /openrouter completions', () => {
     const { commands, pi } = createMockPi();
 
     registerOpenRouterCommands(pi as any);
@@ -271,8 +271,6 @@ describe('registerOpenRouterCommands', () => {
     ]);
     expect(command.getArgumentCompletions('api-key-')).toEqual([
       { value: 'api-key-create', label: 'api-key-create' },
-      { value: 'api-key-disable', label: 'api-key-disable' },
-      { value: 'api-key-enable', label: 'api-key-enable' },
     ]);
     expect(command.getArgumentCompletions('zzz')).toBeNull();
     expect(OPENROUTER_SUBCOMMANDS).toEqual([
@@ -285,8 +283,6 @@ describe('registerOpenRouterCommands', () => {
       'model-override-clear',
       'model-override-list',
       'api-key-create',
-      'api-key-disable',
-      'api-key-enable',
     ]);
   });
 
@@ -475,7 +471,7 @@ describe('registerOpenRouterCommands', () => {
     expect(rendered.split('sk-or-v1-created-secret')).toHaveLength(2);
   });
 
-  it('routes api-key-disable failures through the error notifier', async () => {
+  it('keeps hidden api-key-disable routing through the error notifier', async () => {
     const { commands, pi } = createMockPi();
     const ctx = createMockContext();
 
@@ -488,7 +484,7 @@ describe('registerOpenRouterCommands', () => {
     expect(ctx.ui.notify).toHaveBeenCalledWith('disable failed', 'error');
   });
 
-  it('routes api-key-enable successes through the info notifier', async () => {
+  it('keeps hidden api-key-enable routing through the info notifier', async () => {
     const { commands, pi } = createMockPi();
     const ctx = createMockContext();
 
