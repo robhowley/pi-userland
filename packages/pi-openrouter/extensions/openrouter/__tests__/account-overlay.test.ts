@@ -81,7 +81,7 @@ describe('AccountOverlayComponent', () => {
     components.length = 0;
   });
 
-  it('does not render internal hashes and advertises toggle in the footer', () => {
+  it('does not render internal hashes and advertises enable/disable in the footer', () => {
     const longHash = '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
     const component = new AccountOverlayComponent(
       [
@@ -102,7 +102,7 @@ describe('AccountOverlayComponent', () => {
     expect(output).not.toContain('hash      ');
     expect(output).not.toContain('hash-primary');
     expect(output).not.toContain(longHash);
-    expect(output).toContain('t to toggle');
+    expect(output).toContain('t enable/disable');
   });
 
   it('uses the selected key hash internally for t+enter and keeps that key selected after re-sort', async () => {
@@ -164,7 +164,7 @@ describe('AccountOverlayComponent', () => {
     components.push(component);
 
     expect(renderText(component)).toContain('readonly  Set OPENROUTER_MANAGEMENT_KEY');
-    expect(renderText(component)).not.toContain('t to toggle');
+    expect(renderText(component)).not.toContain('t enable/disable');
 
     component.handleInput('t');
 

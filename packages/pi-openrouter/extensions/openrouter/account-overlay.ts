@@ -287,8 +287,8 @@ export class AccountOverlayComponent {
     lines.push(boxBottom(this.width));
     const footer =
       this.canManageKeys && this.keyInfo && this.keyInfo.length > 0
-        ? 'Esc to close  ·  r to refresh  ·  ↑/↓ to select  ·  t to toggle'
-        : 'Esc to close  ·  r to refresh  ·  ↑/↓ to select';
+        ? 'Esc close  ·  r refresh  ·  ↑/↓ select  ·  t enable/disable'
+        : 'Esc close  ·  r refresh  ·  ↑/↓ select';
     lines.push(plainRow(th.fg('dim', footer), this.width));
     return lines;
   }
