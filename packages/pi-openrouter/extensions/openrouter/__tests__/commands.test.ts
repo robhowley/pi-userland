@@ -52,6 +52,9 @@ const { mocks, overlayConstructorCalls, MockUsageOverlayComponent } = vi.hoisted
       handleModelOverrideSet: vi.fn(),
       handleModelOverrideClear: vi.fn(),
       handleModelOverrideList: vi.fn(),
+      handleApiKeyCreate: vi.fn(),
+      handleApiKeyDisable: vi.fn(),
+      handleApiKeyEnable: vi.fn(),
     },
   };
 });
@@ -113,6 +116,12 @@ vi.mock('../models/override-commands.js', () => ({
   handleModelOverrideSet: mocks.handleModelOverrideSet,
   handleModelOverrideClear: mocks.handleModelOverrideClear,
   handleModelOverrideList: mocks.handleModelOverrideList,
+}));
+
+vi.mock('../api-key-commands.js', () => ({
+  handleApiKeyCreate: mocks.handleApiKeyCreate,
+  handleApiKeyDisable: mocks.handleApiKeyDisable,
+  handleApiKeyEnable: mocks.handleApiKeyEnable,
 }));
 
 vi.mock('../overlay.js', () => ({
@@ -215,6 +224,13 @@ describe('registerOpenRouterCommands', () => {
       message: 'override cleared',
     });
     mocks.handleModelOverrideList.mockResolvedValue('override list');
+    mocks.handleApiKeyCreate.mockResolvedValue({
+      success: true,
+      message: 'api key created\nSecret shown in secure overlay; store it now.',
+      secret: 'sk-or-v1-created-secret',
+    });
+    mocks.handleApiKeyDisable.mockResolvedValue({ success: true, message: 'api key disabled' });
+    mocks.handleApiKeyEnable.mockResolvedValue({ success: true, message: 'api key enabled' });
   });
 
   it('registers the expected command names and descriptions', () => {
@@ -238,7 +254,7 @@ describe('registerOpenRouterCommands', () => {
       'Show OpenRouter account and key health',
     );
     expect(commands.get('openrouter')?.description).toBe(
-      'OpenRouter commands: usage, account, session, models-sync, models-status',
+      `OpenRouter commands: ${OPENROUTER_SUBCOMMANDS.join(', ')}`,
     );
   });
 
@@ -253,6 +269,11 @@ describe('registerOpenRouterCommands', () => {
       { value: 'model-override-clear', label: 'model-override-clear' },
       { value: 'model-override-list', label: 'model-override-list' },
     ]);
+    expect(command.getArgumentCompletions('api-key-')).toEqual([
+      { value: 'api-key-create', label: 'api-key-create' },
+      { value: 'api-key-disable', label: 'api-key-disable' },
+      { value: 'api-key-enable', label: 'api-key-enable' },
+    ]);
     expect(command.getArgumentCompletions('zzz')).toBeNull();
     expect(OPENROUTER_SUBCOMMANDS).toEqual([
       'usage',
@@ -263,6 +284,9 @@ describe('registerOpenRouterCommands', () => {
       'model-override-set',
       'model-override-clear',
       'model-override-list',
+      'api-key-create',
+      'api-key-disable',
+      'api-key-enable',
     ]);
   });
 
@@ -418,6 +442,61 @@ describe('registerOpenRouterCommands', () => {
 
     expect(mocks.handleModelOverrideList).toHaveBeenCalledWith('anthropic/');
     expect(ctx.ui.notify).toHaveBeenCalledWith('override list', 'info');
+  });
+
+  it('routes api-key-create through the dedicated handler, secure overlay, and redacted notifier', async () => {
+    const { commands, pi } = createMockPi();
+    const ctx = createMockContext();
+
+    registerOpenRouterCommands(pi as any);
+    await commands
+      .get('openrouter')
+      .handler('api-key-create team limit=25 reset=monthly byok=incl', ctx);
+
+    expect(mocks.handleApiKeyCreate).toHaveBeenCalledWith('team limit=25 reset=monthly byok=incl');
+    expect(ctx.ui.custom).toHaveBeenCalledTimes(1);
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      'api key created\nSecret shown in secure overlay; store it now.',
+      'info',
+    );
+    expect(ctx.ui.notify).not.toHaveBeenCalledWith(
+      expect.stringContaining('sk-or-v1-created-secret'),
+      expect.anything(),
+    );
+
+    const overlayFactory = ctx.ui.custom.mock.calls[0]![0];
+    const overlay = overlayFactory(
+      { requestRender: vi.fn() },
+      { bold: (text: string) => text, fg: (_style: string, text: string) => text },
+      {},
+      vi.fn(),
+    );
+    const rendered = overlay.render(160).join('\n');
+    expect(rendered.split('sk-or-v1-created-secret')).toHaveLength(2);
+  });
+
+  it('routes api-key-disable failures through the error notifier', async () => {
+    const { commands, pi } = createMockPi();
+    const ctx = createMockContext();
+
+    mocks.handleApiKeyDisable.mockResolvedValue({ success: false, message: 'disable failed' });
+
+    registerOpenRouterCommands(pi as any);
+    await commands.get('openrouter').handler('api-key-disable hash-123', ctx);
+
+    expect(mocks.handleApiKeyDisable).toHaveBeenCalledWith('hash-123');
+    expect(ctx.ui.notify).toHaveBeenCalledWith('disable failed', 'error');
+  });
+
+  it('routes api-key-enable successes through the info notifier', async () => {
+    const { commands, pi } = createMockPi();
+    const ctx = createMockContext();
+
+    registerOpenRouterCommands(pi as any);
+    await commands.get('openrouter').handler('api-key-enable hash-123', ctx);
+
+    expect(mocks.handleApiKeyEnable).toHaveBeenCalledWith('hash-123');
+    expect(ctx.ui.notify).toHaveBeenCalledWith('api key enabled', 'info');
   });
 
   it('keeps unknown-subcommand messaging unchanged', async () => {

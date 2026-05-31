@@ -30,6 +30,8 @@ import {
   handleModelOverrideClear,
   handleModelOverrideList,
 } from './models/override-commands.js';
+import type { HandlerResult } from './api-key-commands.js';
+import { handleApiKeyCreate, handleApiKeyDisable, handleApiKeyEnable } from './api-key-commands.js';
 
 export const OPENROUTER_SUBCOMMANDS = [
   'usage',
@@ -40,6 +42,9 @@ export const OPENROUTER_SUBCOMMANDS = [
   'model-override-set',
   'model-override-clear',
   'model-override-list',
+  'api-key-create',
+  'api-key-disable',
+  'api-key-enable',
 ] as const;
 
 export function registerOpenRouterCommands(pi: Pick<ExtensionAPI, 'registerCommand'>): void {
@@ -70,7 +75,7 @@ export function registerOpenRouterCommands(pi: Pick<ExtensionAPI, 'registerComma
   });
 
   pi.registerCommand('openrouter', {
-    description: 'OpenRouter commands: usage, account, session, models-sync, models-status',
+    description: `OpenRouter commands: ${OPENROUTER_SUBCOMMANDS.join(', ')}`,
     getArgumentCompletions: getOpenRouterSubcommandCompletions,
     handler: async (args, ctx) => {
       await handleOpenRouterCommand(args, ctx);
@@ -120,6 +125,18 @@ async function handleOpenRouterCommand(args: string, ctx: ExtensionContext): Pro
     }
     case 'model-override-list': {
       await handleModelOverrideListCommand(subcommandArgs, ctx);
+      break;
+    }
+    case 'api-key-create': {
+      await handleApiKeyCreateCommand(subcommandArgs, ctx);
+      break;
+    }
+    case 'api-key-disable': {
+      await handleApiKeyDisableCommand(subcommandArgs, ctx);
+      break;
+    }
+    case 'api-key-enable': {
+      await handleApiKeyEnableCommand(subcommandArgs, ctx);
       break;
     }
     default: {
@@ -292,6 +309,77 @@ async function handleModelOverrideListCommand(
   } catch (error) {
     ctx.ui.notify(`Failed to load model overrides: ${getErrorMessage(error)}`, 'error');
   }
+}
+
+async function handleApiKeyCreateCommand(
+  subcommandArgs: string,
+  ctx: ExtensionContext,
+): Promise<void> {
+  const result = await handleApiKeyCreate(subcommandArgs);
+  if (!result.success) {
+    ctx.ui.notify(result.message, 'error');
+    return;
+  }
+
+  if (result.secret) {
+    await showApiKeySecretOverlay(ctx, result);
+  }
+  ctx.ui.notify(result.message, 'info');
+}
+
+async function handleApiKeyDisableCommand(
+  subcommandArgs: string,
+  ctx: ExtensionContext,
+): Promise<void> {
+  const result = await handleApiKeyDisable(subcommandArgs);
+  ctx.ui.notify(result.message, result.success ? 'info' : 'error');
+}
+
+async function handleApiKeyEnableCommand(
+  subcommandArgs: string,
+  ctx: ExtensionContext,
+): Promise<void> {
+  const result = await handleApiKeyEnable(subcommandArgs);
+  ctx.ui.notify(result.message, result.success ? 'info' : 'error');
+}
+
+async function showApiKeySecretOverlay(
+  ctx: ExtensionContext,
+  result: HandlerResult,
+): Promise<void> {
+  if (!result.secret) return;
+
+  const lines = [
+    'OpenRouter API key created',
+    '',
+    ...result.message
+      .split('\n')
+      .filter((line) => line !== 'OpenRouter API key created' && !line.startsWith('Secret shown')),
+    '',
+    'Secret (store now; shown once):',
+    result.secret,
+    '',
+    'Press any key to close.',
+  ];
+
+  await ctx.ui.custom<void>(
+    (_tui, theme, _keybindings, done) => ({
+      handleInput: () => {
+        done();
+      },
+      render: (_width: number) =>
+        lines.map((line, index) => (index === 0 ? theme.bold(line) : line)),
+      invalidate: () => {},
+      dispose: () => {},
+      wantsKeyRelease: false,
+    }),
+    {
+      overlay: true,
+      overlayOptions: {
+        width: 120,
+      },
+    },
+  );
 }
 
 function notifyUnknownSubcommand(ctx: ExtensionContext): void {

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { Model as SDKModel } from '@openrouter/sdk/models/index.js';
-import type { GetCurrentKeyData, ListData } from '@openrouter/sdk/models/operations/index.js';
+import type {
+  CreateKeysData,
+  GetCurrentKeyData,
+  ListData,
+  UpdateKeysData,
+} from '@openrouter/sdk/models/operations/index.js';
 import {
   normalizeOpenRouterModel,
   normalizeSdkKeyMetadata,
@@ -85,6 +90,58 @@ function createListKeyData(overrides: Partial<ListData> = {}): ListData {
     usageMonthly: 0,
     usageWeekly: 0,
     workspaceId: 'ws-1',
+    ...overrides,
+  };
+}
+
+function createCreateKeysData(overrides: Partial<CreateKeysData> = {}): CreateKeysData {
+  return {
+    byokUsage: 0,
+    byokUsageDaily: 0,
+    byokUsageMonthly: 0,
+    byokUsageWeekly: 0,
+    createdAt: '2026-05-22T00:00:00.000Z',
+    creatorUserId: null,
+    disabled: false,
+    hash: 'hash-create',
+    includeByokInLimit: true,
+    label: 'sk-or-v1-create',
+    limit: 100,
+    limitRemaining: 40,
+    limitReset: 'weekly',
+    name: 'Created Key',
+    updatedAt: null,
+    usage: 60,
+    usageDaily: 0,
+    usageMonthly: 0,
+    usageWeekly: 0,
+    workspaceId: 'ws-create',
+    ...overrides,
+  };
+}
+
+function createUpdateKeysData(overrides: Partial<UpdateKeysData> = {}): UpdateKeysData {
+  return {
+    byokUsage: 0,
+    byokUsageDaily: 0,
+    byokUsageMonthly: 0,
+    byokUsageWeekly: 0,
+    createdAt: '2026-05-22T00:00:00.000Z',
+    creatorUserId: null,
+    disabled: false,
+    hash: 'hash-update',
+    includeByokInLimit: false,
+    label: 'sk-or-v1-update',
+    limit: 100,
+    limitRemaining: 40,
+    limitReset: null,
+    name: 'Updated Key',
+    updatedAt: null,
+    usage: 60,
+    usageDaily: 0,
+    usageMonthly: 0,
+    usageWeekly: 0,
+    workspaceId: 'ws-update',
     ...overrides,
   };
 }
@@ -283,6 +340,32 @@ describe('normalizeSdkKeyMetadata', () => {
       disabled: true,
       limit: 100,
       remaining: 40,
+    });
+  });
+
+  it('normalizes create responses with weekly resets', () => {
+    const normalized = normalizeSdkKeyMetadata(createCreateKeysData());
+
+    expect(normalized).toMatchObject({
+      name: 'Created Key',
+      label: 'sk-or-v1-create',
+      byok: 'incl',
+      resetCadence: 'weekly',
+      hash: 'hash-create',
+      disabled: false,
+    });
+  });
+
+  it('treats null limitReset in update responses as never', () => {
+    const normalized = normalizeSdkKeyMetadata(createUpdateKeysData());
+
+    expect(normalized).toMatchObject({
+      name: 'Updated Key',
+      label: 'sk-or-v1-update',
+      byok: 'excl',
+      resetCadence: 'never',
+      hash: 'hash-update',
+      disabled: false,
     });
   });
 });

@@ -170,7 +170,13 @@ export class AccountOverlayComponent {
   }
 
   private calculateWidth(): number {
-    return Math.max(MIN_WIDTH, this.keyInfo && this.keyInfo.length > 0 ? 55 : 50);
+    if (!this.keyInfo || this.keyInfo.length === 0) {
+      return Math.max(MIN_WIDTH, 50);
+    }
+
+    const longestHashLength = this.keyInfo.reduce((max, key) => Math.max(max, key.hash.length), 0);
+
+    return Math.max(MIN_WIDTH, 55, 16 + longestHashLength);
   }
 
   /** Get the header row for the account overlay */
@@ -264,6 +270,7 @@ export class AccountOverlayComponent {
 
     lines.push(row(`  name      ${truncate(key.name, 30)}`, this.width));
     lines.push(row(`  key       ${truncate(key.label, 30)}`, this.width));
+    lines.push(row(`  hash      ${key.hash}`, this.width));
     lines.push(row(`  status    ${formattedStatus}`, this.width));
     lines.push(row(`  used      ${usedLimitText}`, this.width));
     lines.push(row(`  reset     ${resetText}`, this.width));

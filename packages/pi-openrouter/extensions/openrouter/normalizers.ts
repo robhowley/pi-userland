@@ -1,5 +1,11 @@
 import type { Model as SDKModel } from '@openrouter/sdk/models/index.js';
-import type { GetCurrentKeyData, ListData } from '@openrouter/sdk/models/operations/index.js';
+import type {
+  CreateKeysData,
+  GetCurrentKeyData,
+  GetKeyData,
+  ListData,
+  UpdateKeysData,
+} from '@openrouter/sdk/models/operations/index.js';
 import type { BYOKStatus, ResetCadence } from './account-types.js';
 import type { OpenRouterModel } from './models/types.js';
 
@@ -83,7 +89,9 @@ export function normalizeOpenRouterModel(model: OpenRouterModel | SDKModel): Ope
  * Normalize SDK key metadata into the package's canonical internal shape.
  * Converts SDK null/variant fields once so account code can stay domain-focused.
  */
-export function normalizeSdkKeyMetadata(raw: GetCurrentKeyData | ListData): NormalizedKeyMetadata {
+export function normalizeSdkKeyMetadata(
+  raw: GetCurrentKeyData | ListData | GetKeyData | CreateKeysData | UpdateKeysData,
+): NormalizedKeyMetadata {
   const used = raw.usage ?? raw.usageMonthly ?? 0;
   const limit = raw.limit ?? undefined;
   const remaining = raw.limitRemaining ?? undefined;
@@ -96,10 +104,14 @@ export function normalizeSdkKeyMetadata(raw: GetCurrentKeyData | ListData): Norm
   }
 
   let resetCadence: ResetCadence = 'partial';
-  if (raw.limitReset) {
+  if (raw.limitReset === null) {
+    resetCadence = 'never';
+  } else if (raw.limitReset) {
     const reset = raw.limitReset.toLowerCase();
     if (reset === 'monthly') {
       resetCadence = 'monthly';
+    } else if (reset === 'weekly') {
+      resetCadence = 'weekly';
     } else if (reset === 'daily') {
       resetCadence = 'daily';
     } else if (reset === 'never') {
