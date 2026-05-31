@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" xmlns="http://www.w3.org/1999/html">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -26,7 +26,7 @@
     <div class="eyebrow mono">&gt; Pi userland</div>
     <h1>Pi extensions for sharper agent sessions.</h1>
     <p class="hero-copy">
-      Usage overlays, environment sync, structured command returns, session health lights, bash guardrails, and a little terminal personality for long-running Pi work.
+      Usage overlays, merge-readiness gates, environment sync, structured command returns, session health lights, bash guardrails, and a little terminal personality for long-running Pi work.
     </p>
     <div class="hero-actions">
       <a class="button primary" href="#packages">Browse packages</a>
@@ -38,6 +38,7 @@
     <div class="hero-aside-label mono">current packages</div>
     <div class="hero-package-list mono">
       <a href="#pi-openrouter">pi-openrouter</a>
+      <a href="#pi-merge-ready">pi-merge-ready</a>
       <a href="#pi-structured-return">pi-structured-return</a>
       <a href="#session-hygiene">session-hygiene</a>
       <a href="#pi-yolo-seatbelt">pi-yolo-seatbelt</a>
@@ -117,6 +118,7 @@ E       ZeroDivisionError: division by zero</pre>
           <span>/openrouter session</span>
           <span>/openrouter models-sync</span>
           <span>/openrouter models-status</span>
+          <span>/openrouter model-override-*</span>
         </div>
       </div>
 
@@ -183,6 +185,31 @@ Today ~$1.11 · 281 reqs
     </section>
 
     <section id="packages" class="section packages" aria-label="Packages">
+      <article id="pi-merge-ready" class="package surface">
+        <h3 class="mono">pi-merge-ready</h3>
+        <a class="readme-link" href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-merge-ready">
+          README
+        </a>
+        <p>PR merge-readiness for Pi. Can you merge? Why not? Give an agent the context it needs to resolve all open items.</p>
+        <div class="terminal" aria-label="merge ready preview">
+          <div class="terminal-head mono">
+            <span>merge_ready_status</span>
+            <span class="terminal-dots" aria-hidden="true"><span></span><span></span><span></span></span>
+          </div>
+          <div class="terminal-body">
+            <pre><span class="accent">&gt;</span> /merge-ready
+<span class="red">❌ Checks failing</span>
+<span class="muted">🔄 Out of date · ❔ No PR · ✅ Ready</span>
+
+<span class="accent">&gt;</span> merge_ready_status
+openItems:
+ - Required checks are failing.
+ - Changes requested.
+</pre>
+          </div>
+        </div>
+      </article>
+
       <article id="pi-structured-return" class="package surface">
         <h3 class="mono">pi-structured-return</h3>
         <a class="readme-link" href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-structured-return">
@@ -295,6 +322,7 @@ Today ~$1.11 · 281 reqs
 
       <div class="install-grid">
         <div class="cmd"><span class="prompt mono">&gt;</span><code>pi install npm:@robhowley/pi-openrouter</code></div>
+        <div class="cmd"><span class="prompt mono">&gt;</span><code>pi install npm:@robhowley/pi-merge-ready</code></div>
         <div class="cmd"><span class="prompt mono">&gt;</span><code>pi install npm:@robhowley/pi-structured-return</code></div>
         <div class="cmd"><span class="prompt mono">&gt;</span><code>pi install npm:@robhowley/session-hygiene</code></div>
         <div class="cmd"><span class="prompt mono">&gt;</span><code>pi install npm:@robhowley/pi-yolo-seatbelt</code></div>
@@ -302,7 +330,7 @@ Today ~$1.11 · 281 reqs
       </div>
 
       <div class="footer-note">
-        Built for Pi power users who want more visibility, less noise, and a few guardrails.
+        Built for Pi power users who want more visibility, clearer merge gates, less noise, and a few guardrails.
       </div>
     </section>
   </main>
