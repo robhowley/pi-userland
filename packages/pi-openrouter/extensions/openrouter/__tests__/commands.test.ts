@@ -39,6 +39,12 @@ const { mocks, overlayConstructorCalls, MockUsageOverlayComponent } = vi.hoisted
       getCurrentKey: vi.fn(),
       getAccountCredits: vi.fn(),
       computeRollupStatus: vi.fn(),
+      formatCurrency: vi.fn((amount: number) => `$${amount.toFixed(2)}`),
+      formatRemaining: vi.fn((used: number, limit?: number) =>
+        limit === undefined
+          ? `$${used.toFixed(2)} / unlimited`
+          : `$${used.toFixed(2)} / $${limit.toFixed(2)}`,
+      ),
       sortKeys: vi.fn(),
       syncModels: vi.fn(),
       getSyncState: vi.fn(),
@@ -91,6 +97,8 @@ vi.mock('../account-client.js', () => ({
 
 vi.mock('../account-format.js', () => ({
   computeRollupStatus: mocks.computeRollupStatus,
+  formatCurrency: mocks.formatCurrency,
+  formatRemaining: mocks.formatRemaining,
   sortKeys: mocks.sortKeys,
 }));
 
@@ -189,6 +197,17 @@ const keyInfo = {
   spend: 10,
 } as const;
 
+function createKeyInventory(
+  keys: any[] = [keyInfo],
+  options: { canManageKeys?: boolean; degradedReason?: string } = {},
+) {
+  return {
+    keys,
+    canManageKeys: options.canManageKeys ?? true,
+    ...(options.degradedReason ? { degradedReason: options.degradedReason } : {}),
+  };
+}
+
 describe('registerOpenRouterCommands', () => {
   beforeEach(() => {
     vi.resetAllMocks();
@@ -204,7 +223,7 @@ describe('registerOpenRouterCommands', () => {
         message.includes('429') || message.includes('rate limit') || message.includes('rate-limit')
       );
     });
-    mocks.getAllKeys.mockResolvedValue([keyInfo]);
+    mocks.getAllKeys.mockResolvedValue(createKeyInventory());
     mocks.getCurrentKey.mockResolvedValue(keyInfo);
     mocks.getAccountCredits.mockResolvedValue(25);
     mocks.computeRollupStatus.mockReturnValue({ status: 'healthy', message: 'healthy' });
@@ -310,6 +329,53 @@ describe('registerOpenRouterCommands', () => {
     expect(mocks.getAllKeys).toHaveBeenCalledTimes(1);
     expect(mocks.getAccountCredits).toHaveBeenCalledTimes(1);
     expect(ctx.ui.custom).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps empty key inventory distinct from management-capability fallback in the command flow', async () => {
+    const { commands, pi } = createMockPi();
+    const ctx = createMockContext();
+
+    mocks.getAllKeys.mockResolvedValue(createKeyInventory([], { canManageKeys: true }));
+
+    registerOpenRouterCommands(pi as any);
+    await commands.get('openrouter').handler('account', ctx);
+
+    expect(mocks.getCurrentKey).not.toHaveBeenCalled();
+    expect(mocks.getAccountCredits).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes /openrouter account through the readonly fallback when management inventory is unavailable', async () => {
+    const { commands, pi } = createMockPi();
+    const ctx = createMockContext();
+
+    mocks.getAllKeys.mockResolvedValue(
+      createKeyInventory([], {
+        canManageKeys: false,
+        degradedReason: 'management-unavailable',
+      }),
+    );
+    mocks.getCurrentKey.mockResolvedValue({ ...keyInfo, hash: undefined } as any);
+
+    registerOpenRouterCommands(pi as any);
+    await commands.get('openrouter').handler('account', ctx);
+
+    expect(mocks.getCurrentKey).toHaveBeenCalled();
+    expect(ctx.ui.custom).toHaveBeenCalledTimes(1);
+
+    const overlayFactory = ctx.ui.custom.mock.calls[0]![0];
+    const overlay = overlayFactory(
+      { requestRender: vi.fn() },
+      { bold: (text: string) => text, fg: (_style: string, text: string) => text },
+      {},
+      vi.fn(),
+    );
+
+    expect(overlay.render(120).join('\n')).toContain(
+      'readonly  Set OPENROUTER_MANAGEMENT_KEY to toggle keys.',
+    );
+    expect(overlay.render(120).join('\n')).not.toContain('·  t ');
+
+    overlay.dispose();
   });
 
   it('routes /openrouter session to the current session notifier', async () => {

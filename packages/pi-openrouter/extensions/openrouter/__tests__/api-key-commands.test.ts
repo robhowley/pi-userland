@@ -23,7 +23,7 @@ describe('api-key-commands', () => {
     vi.resetAllMocks();
     mocks.createApiKey.mockResolvedValue({
       key: 'sk-or-v1-secret',
-      keyInfo: {
+      keyState: {
         name: 'Team Key',
         hash: 'hash-123',
         disabled: false,

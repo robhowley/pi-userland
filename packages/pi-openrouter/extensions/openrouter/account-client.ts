@@ -69,9 +69,23 @@ export async function getAccountCredits(): Promise<number | null> {
 // Workspace ID for the default workspace (empty string) - used when workspaceId is not specified
 const DEFAULT_WORKSPACE_ID = '';
 
-export async function getAllKeys(): Promise<KeyInfo[] | null> {
+export type KeyInventoryDegradedReason = 'management-unavailable' | 'missing-api-key';
+
+export interface KeyInventoryResult {
+  keys: KeyInfo[];
+  canManageKeys: boolean;
+  degradedReason?: KeyInventoryDegradedReason;
+}
+
+export async function getAllKeys(): Promise<KeyInventoryResult> {
   const client = getClient();
-  if (!client) return null;
+  if (!client) {
+    return {
+      keys: [],
+      canManageKeys: false,
+      degradedReason: 'missing-api-key',
+    };
+  }
 
   try {
     // First, get all workspaces
@@ -98,12 +112,19 @@ export async function getAllKeys(): Promise<KeyInfo[] | null> {
       allKeys.push(...keys);
     }
 
-    return allKeys;
+    return {
+      keys: allKeys,
+      canManageKeys: true,
+    };
   } catch (err) {
-    // If management key fails (403), fall back to current key only
+    // If management inventory is unavailable (403), fall back to current key only.
     const sdkErr = err as { status?: number; statusCode?: number };
     if ((sdkErr.status ?? sdkErr.statusCode) === 403) {
-      return null;
+      return {
+        keys: [],
+        canManageKeys: false,
+        degradedReason: 'management-unavailable',
+      };
     }
     throw mapSdkError(err);
   }
@@ -129,9 +150,11 @@ export interface CreateApiKeyInput {
   expiresAt?: Date;
 }
 
+export type ApiKeyMutationInfo = Omit<KeyInfo, 'workspaceName'>;
+
 export interface CreatedApiKeyResult {
   key: string;
-  keyInfo: KeyInfo;
+  keyState: ApiKeyMutationInfo;
 }
 
 export async function createApiKey(input: CreateApiKeyInput): Promise<CreatedApiKeyResult> {
@@ -161,17 +184,17 @@ export async function createApiKey(input: CreateApiKeyInput): Promise<CreatedApi
     const response = await client.apiKeys.create({ requestBody });
     return {
       key: response.key,
-      keyInfo: keyMetadataToKeyInfo(
-        normalizeSdkKeyMetadata(response.data),
-        response.data.workspaceId || 'Default Workspace',
-      ),
+      keyState: keyMetadataToMutationInfo(normalizeSdkKeyMetadata(response.data)),
     };
   } catch (err) {
     throw mapManagementSdkError(err, 'create API keys');
   }
 }
 
-export async function setApiKeyDisabled(hash: string, disabled: boolean): Promise<KeyInfo> {
+export async function setApiKeyDisabled(
+  hash: string,
+  disabled: boolean,
+): Promise<ApiKeyMutationInfo> {
   const client = getManagementClient();
 
   try {
@@ -182,10 +205,7 @@ export async function setApiKeyDisabled(hash: string, disabled: boolean): Promis
       },
     });
 
-    return keyMetadataToKeyInfo(
-      normalizeSdkKeyMetadata(response.data),
-      response.data.workspaceId || 'Default Workspace',
-    );
+    return keyMetadataToMutationInfo(normalizeSdkKeyMetadata(response.data));
   } catch (err) {
     throw mapManagementSdkError(err, `${disabled ? 'disable' : 'enable'} API keys`);
   }
@@ -195,10 +215,9 @@ export async function setApiKeyDisabled(hash: string, disabled: boolean): Promis
 // Helper Functions
 // =============================================================================
 
-function keyMetadataToKeyInfo(
+function keyMetadataToMutationInfo(
   metadata: ReturnType<typeof normalizeSdkKeyMetadata>,
-  workspaceName: string,
-): KeyInfo {
+): ApiKeyMutationInfo {
   const { name, label, used, limit, remaining, resetCadence, byok, hash, disabled } = metadata;
 
   // Calculate status based on usage percentage
@@ -222,7 +241,7 @@ function keyMetadataToKeyInfo(
     }
   }
 
-  const keyInfo: KeyInfo = {
+  const keyState: ApiKeyMutationInfo = {
     name,
     label,
     status,
@@ -230,19 +249,30 @@ function keyMetadataToKeyInfo(
     spend: used, // spend is the same as usage (in USD)
     resetCadence,
     byok,
-    hash,
     disabled,
-    workspaceName,
   };
 
+  if (hash !== undefined) {
+    keyState.hash = hash;
+  }
   if (limit !== undefined) {
-    keyInfo.limit = limit;
+    keyState.limit = limit;
   }
   if (remaining !== undefined) {
-    keyInfo.remaining = remaining;
+    keyState.remaining = remaining;
   }
 
-  return keyInfo;
+  return keyState;
+}
+
+function keyMetadataToKeyInfo(
+  metadata: ReturnType<typeof normalizeSdkKeyMetadata>,
+  workspaceName: string,
+): KeyInfo {
+  return {
+    ...keyMetadataToMutationInfo(metadata),
+    workspaceName,
+  };
 }
 
 function mapSdkError(err: unknown): Error {
@@ -300,10 +330,4 @@ function mapManagementSdkError(err: unknown, action: string): Error {
   }
 
   return mapSdkError(err);
-}
-
-export function getCurrentKeyHash(): string | undefined {
-  // For v1, we don't hash the current API key for comparison
-  // This is a follow-up item from the planning docs
-  return undefined;
 }

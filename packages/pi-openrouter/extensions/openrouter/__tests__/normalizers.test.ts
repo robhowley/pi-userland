@@ -294,9 +294,9 @@ describe('normalizeSdkKeyMetadata', () => {
       remaining: 0,
       byok: 'excl',
       resetCadence: 'daily',
-      hash: 'unknown',
       disabled: false,
     });
+    expect(normalized).not.toHaveProperty('hash');
     expect('limit' in normalized).toBe(true);
     expect('remaining' in normalized).toBe(true);
   });
@@ -315,9 +315,9 @@ describe('normalizeSdkKeyMetadata', () => {
       name: 'sk-or-v1-current',
       byok: '?',
       resetCadence: 'partial',
-      hash: 'unknown',
       disabled: false,
     });
+    expect(normalized).not.toHaveProperty('hash');
     expect(normalized).not.toHaveProperty('limit');
     expect(normalized).not.toHaveProperty('remaining');
   });

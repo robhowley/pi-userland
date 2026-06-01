@@ -20,6 +20,10 @@ import {
 
 const MIN_WIDTH = 65;
 
+type ToggleGuard =
+  | { canToggle: true; action: 'enable' | 'disable'; hash: string }
+  | { canToggle: false; reason: string; tone: ThemeColor };
+
 // =============================================================================
 // Account Overlay Component
 // =============================================================================
@@ -43,6 +47,7 @@ export class AccountOverlayComponent {
   private inlineMessage: string | null = null;
   private inlineMessageTone: ThemeColor = 'dim';
   private canManageKeys: boolean;
+  private currentManagementKeyHash: string | undefined;
 
   constructor(
     keyInfo: KeyInfo[] | null,
@@ -54,6 +59,7 @@ export class AccountOverlayComponent {
     requestRender: () => void,
     ctx?: ExtensionContext,
     canManageKeys = true,
+    currentManagementKeyHash?: string,
   ) {
     this.theme = theme;
     this.onClose = onClose;
@@ -65,6 +71,7 @@ export class AccountOverlayComponent {
     this.selectedIndex = 0;
     this.ctx = ctx || null;
     this.canManageKeys = canManageKeys;
+    this.currentManagementKeyHash = currentManagementKeyHash;
     this.width = this.calculateWidth();
     this.lines = this.buildLines();
 
@@ -83,6 +90,10 @@ export class AccountOverlayComponent {
   }
 
   handleInput(data: string): void {
+    if (this.pendingToggleHash) {
+      return;
+    }
+
     if (matchesKey(data, 'ctrl+c') || data === 'q') {
       this.onClose();
       return;
@@ -95,10 +106,6 @@ export class AccountOverlayComponent {
         return;
       }
       this.onClose();
-      return;
-    }
-
-    if (this.pendingToggleHash) {
       return;
     }
 
@@ -146,7 +153,6 @@ export class AccountOverlayComponent {
   }
 
   invalidate(): void {
-    if (this.isDisposed) return;
     this.lines = this.buildLines();
     this.clampSelectedIndex();
     if (!this.isDisposed) {
@@ -160,7 +166,7 @@ export class AccountOverlayComponent {
     const selectedHash = this.getSelectedKeyHash();
 
     try {
-      const allKeys = await getAllKeys();
+      const keyInventory = await getAllKeys();
       let credits: number | null = null;
       try {
         credits = await getAccountCredits();
@@ -170,12 +176,18 @@ export class AccountOverlayComponent {
 
       let error: string | null = null;
       let keyInfo: KeyInfo[] | null = null;
+      let currentManagementKeyHash: string | undefined;
 
-      this.canManageKeys = allKeys !== null;
+      this.canManageKeys = keyInventory.canManageKeys;
 
-      if (allKeys && allKeys.length > 0) {
-        keyInfo = allKeys;
-      } else {
+      if (keyInventory.keys.length > 0) {
+        keyInfo = keyInventory.keys;
+        try {
+          currentManagementKeyHash = (await getCurrentKey())?.hash;
+        } catch {
+          // Safe gating: disabling stays blocked until current-key identity is available.
+        }
+      } else if (keyInventory.degradedReason === 'management-unavailable') {
         error = 'Key list unavailable - set OPENROUTER_MANAGEMENT_KEY for full key inventory.';
         try {
           const currentKey = await getCurrentKey();
@@ -186,6 +198,9 @@ export class AccountOverlayComponent {
         } catch {
           // Ignore secondary errors
         }
+      } else if (keyInventory.degradedReason === 'missing-api-key') {
+        error =
+          'OpenRouter API key not found. Set OPENROUTER_MANAGEMENT_KEY (preferred) or OPENROUTER_API_KEY to use /openrouter-account.';
       }
 
       const rollupStatus = keyInfo
@@ -196,6 +211,7 @@ export class AccountOverlayComponent {
       this.credits = credits;
       this.rollupStatus = rollupStatus;
       this.error = error;
+      this.currentManagementKeyHash = currentManagementKeyHash;
       this.confirmationHash = null;
       this.pendingToggleHash = null;
       this.width = this.calculateWidth();
@@ -254,21 +270,23 @@ export class AccountOverlayComponent {
     lines.push(row(` status     ${rollupMessage}`, this.width));
     lines.push(emptyRow(this.width));
 
+    let selectedToggleAction: 'enable' | 'disable' | null = null;
+
     if (this.keyInfo && this.keyInfo.length > 0) {
       const sortedKeys = sortKeys(this.keyInfo);
       this.clampSelectedIndex(sortedKeys);
       const currentKey = sortedKeys[this.selectedIndex] ?? sortedKeys[0] ?? null;
 
       if (currentKey) {
+        const toggleGuard = this.getToggleGuard(currentKey);
+        if (toggleGuard.canToggle) {
+          selectedToggleAction = toggleGuard.action;
+        }
+
         lines.push(row(` ${th.fg('accent', 'Selected key')}`, this.width));
         lines.push(...this.buildKeyDetails(currentKey, th));
-        if (!this.canManageKeys) {
-          lines.push(
-            row(
-              th.fg('dim', '  readonly  Set OPENROUTER_MANAGEMENT_KEY to toggle keys.'),
-              this.width,
-            ),
-          );
+        if (!toggleGuard.canToggle) {
+          lines.push(row(th.fg('dim', `  readonly  ${toggleGuard.reason}`), this.width));
         }
         lines.push(...this.buildInlineStateLines(th));
         lines.push(emptyRow(this.width));
@@ -285,10 +303,9 @@ export class AccountOverlayComponent {
     }
 
     lines.push(boxBottom(this.width));
-    const footer =
-      this.canManageKeys && this.keyInfo && this.keyInfo.length > 0
-        ? 'Esc close  ·  r refresh  ·  ↑/↓ select  ·  t enable/disable'
-        : 'Esc close  ·  r refresh  ·  ↑/↓ select';
+    const footer = selectedToggleAction
+      ? `Esc close  ·  r refresh  ·  ↑/↓ select  ·  t ${selectedToggleAction}`
+      : 'Esc close  ·  r refresh  ·  ↑/↓ select';
     lines.push(plainRow(th.fg('dim', footer), this.width));
     return lines;
   }
@@ -350,18 +367,19 @@ export class AccountOverlayComponent {
   }
 
   private openToggleConfirmation(): void {
-    if (!this.canManageKeys) {
-      this.setInlineMessage('Set OPENROUTER_MANAGEMENT_KEY to enable or disable keys.', 'warning');
-      this.invalidate();
-      return;
-    }
-
     const selectedKey = this.getSelectedKey();
     if (!selectedKey) {
       return;
     }
 
-    this.confirmationHash = selectedKey.hash;
+    const toggleGuard = this.getToggleGuard(selectedKey);
+    if (!toggleGuard.canToggle) {
+      this.setInlineMessage(toggleGuard.reason, toggleGuard.tone);
+      this.invalidate();
+      return;
+    }
+
+    this.confirmationHash = toggleGuard.hash;
     this.inlineMessage = null;
     this.invalidate();
   }
@@ -371,8 +389,7 @@ export class AccountOverlayComponent {
       return;
     }
 
-    const targetHash = this.confirmationHash;
-    const currentKey = this.findKeyByHash(targetHash);
+    const currentKey = this.findKeyByHash(this.confirmationHash);
     if (!currentKey) {
       this.confirmationHash = null;
       this.setInlineMessage('Selected key is no longer available.', 'error');
@@ -380,19 +397,27 @@ export class AccountOverlayComponent {
       return;
     }
 
+    const toggleGuard = this.getToggleGuard(currentKey);
+    if (!toggleGuard.canToggle) {
+      this.confirmationHash = null;
+      this.setInlineMessage(toggleGuard.reason, toggleGuard.tone);
+      this.invalidate();
+      return;
+    }
+
+    const targetHash = toggleGuard.hash;
     this.confirmationHash = null;
     this.pendingToggleHash = targetHash;
     this.inlineMessage = null;
     this.invalidate();
 
     try {
-      const updated = await setApiKeyDisabled(targetHash, !currentKey.disabled);
-      if (this.isDisposed) return;
+      const updatedState = await setApiKeyDisabled(targetHash, !currentKey.disabled);
 
       const updatedKey: KeyInfo = {
         ...currentKey,
-        ...updated,
-        hash: currentKey.hash,
+        ...updatedState,
+        hash: targetHash,
         workspaceName: currentKey.workspaceName,
       };
 
@@ -406,7 +431,6 @@ export class AccountOverlayComponent {
       this.restoreSelectedIndexByHash(targetHash);
       this.invalidate();
     } catch (error_) {
-      if (this.isDisposed) return;
       this.pendingToggleHash = null;
       const action = currentKey.disabled ? 'enable' : 'disable';
       this.setInlineMessage(
@@ -421,6 +445,47 @@ export class AccountOverlayComponent {
   private setInlineMessage(message: string, tone: ThemeColor): void {
     this.inlineMessage = message;
     this.inlineMessageTone = tone;
+  }
+
+  private getToggleGuard(key: KeyInfo): ToggleGuard {
+    if (!this.canManageKeys) {
+      return {
+        canToggle: false,
+        reason: 'Set OPENROUTER_MANAGEMENT_KEY to toggle keys.',
+        tone: 'warning',
+      };
+    }
+
+    if (!this.hasTrustedHash(key)) {
+      return {
+        canToggle: false,
+        reason: 'This row is not backed by key inventory metadata.',
+        tone: 'warning',
+      };
+    }
+
+    const action = key.disabled ? 'enable' : 'disable';
+    if (action === 'disable' && !this.currentManagementKeyHash) {
+      return {
+        canToggle: false,
+        reason: 'Current key identity unavailable; cannot disable.',
+        tone: 'warning',
+      };
+    }
+
+    if (action === 'disable' && key.hash === this.currentManagementKeyHash) {
+      return {
+        canToggle: false,
+        reason: 'Cannot disable the active management key.',
+        tone: 'warning',
+      };
+    }
+
+    return { canToggle: true, action, hash: key.hash };
+  }
+
+  private hasTrustedHash(key: KeyInfo): key is KeyInfo & { hash: string } {
+    return typeof key.hash === 'string' && key.hash.trim() !== '';
   }
 
   private getSelectedKey(sortedKeys?: KeyInfo[]): KeyInfo | null {
@@ -560,12 +625,92 @@ export class AccountOverlayComponent {
 // Helper Functions
 // =============================================================================
 
+type ToggleErrorKind =
+  | 'management-key-required'
+  | 'management-key-permissions'
+  | 'selected-key-invalid'
+  | 'service-unavailable'
+  | 'unknown';
+
 function getSafeToggleErrorMessage(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  if (/OPENROUTER_MANAGEMENT_KEY/i.test(message)) {
-    return message;
+  switch (getToggleErrorKind(error)) {
+    case 'management-key-required':
+      return 'Set OPENROUTER_MANAGEMENT_KEY to a valid management key, then refresh and try again.';
+    case 'management-key-permissions':
+      return 'OPENROUTER_MANAGEMENT_KEY does not have permission to update keys. Set it to a valid management key and refresh.';
+    case 'selected-key-invalid':
+      return 'OpenRouter could not match the selected key. Refresh the account view and try again.';
+    case 'service-unavailable':
+      return 'OpenRouter could not update the selected key right now. Retry in a moment and refresh.';
+    default:
+      return 'OpenRouter could not update the selected key. Refresh and try again.';
   }
-  return 'OpenRouter could not update the selected key. Check management-key permissions and refresh.';
+}
+
+function getToggleErrorKind(error: unknown): ToggleErrorKind {
+  const statusCode = getErrorStatusCode(error);
+  const message = getErrorMessage(error);
+  const errorName = getErrorName(error);
+
+  if (
+    statusCode === 401 ||
+    errorName === 'AuthError' ||
+    /OPENROUTER_MANAGEMENT_KEY is required/i.test(message)
+  ) {
+    return 'management-key-required';
+  }
+
+  if (statusCode === 403 || /does not have permission/i.test(message)) {
+    return 'management-key-permissions';
+  }
+
+  if (statusCode === 400 || statusCode === 404) {
+    return 'selected-key-invalid';
+  }
+
+  if (statusCode === 429 || (statusCode !== undefined && statusCode >= 500)) {
+    return 'service-unavailable';
+  }
+
+  return 'unknown';
+}
+
+function getErrorStatusCode(error: unknown): number | undefined {
+  if (typeof error !== 'object' || error === null) {
+    return undefined;
+  }
+
+  const rawStatus =
+    (error as { statusCode?: number | string; status?: number | string }).statusCode ??
+    (error as { statusCode?: number | string; status?: number | string }).status;
+
+  if (typeof rawStatus === 'number' && Number.isFinite(rawStatus)) {
+    return rawStatus;
+  }
+
+  if (typeof rawStatus === 'string') {
+    const parsed = Number(rawStatus);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+
+  return undefined;
+}
+
+function getErrorName(error: unknown): string | undefined {
+  if (error instanceof Error) {
+    return error.name;
+  }
+
+  if (typeof error !== 'object' || error === null) {
+    return undefined;
+  }
+
+  const name = (error as { name?: unknown }).name;
+  return typeof name === 'string' ? name : undefined;
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function boxTop(width: number): string {

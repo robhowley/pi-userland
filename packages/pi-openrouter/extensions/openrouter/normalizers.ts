@@ -15,7 +15,7 @@ export interface NormalizedKeyMetadata {
   used: number;
   resetCadence: ResetCadence;
   byok: BYOKStatus;
-  hash: string;
+  hash?: string;
   disabled: boolean;
   limit?: number;
   remaining?: number;
@@ -119,16 +119,21 @@ export function normalizeSdkKeyMetadata(
     }
   }
 
+  const hash =
+    'hash' in raw && typeof raw.hash === 'string' && raw.hash.trim() !== '' ? raw.hash : undefined;
+
   const normalized: NormalizedKeyMetadata = {
     name: 'name' in raw ? (raw as ListData).name : raw.label,
     label: raw.label,
     used,
     resetCadence,
     byok,
-    hash: 'hash' in raw ? (raw as ListData).hash : 'unknown',
     disabled: 'disabled' in raw ? (raw as ListData).disabled : false,
   };
 
+  if (hash !== undefined) {
+    normalized.hash = hash;
+  }
   if (limit !== undefined) {
     normalized.limit = limit;
   }

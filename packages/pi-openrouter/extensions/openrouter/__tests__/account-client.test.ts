@@ -63,7 +63,56 @@ describe('account-client api key management', () => {
     setKeys(undefined, undefined);
   });
 
-  it('createApiKey sends the expected request body and returns the secret with normalized key info', async () => {
+  it('returns a missing-api-key inventory result when no OpenRouter key is configured', async () => {
+    const { getAllKeys } = await import('../account-client.js');
+
+    await expect(getAllKeys()).resolves.toEqual({
+      keys: [],
+      canManageKeys: false,
+      degradedReason: 'missing-api-key',
+    });
+  });
+
+  it('returns an empty but manageable inventory when key listing succeeds without keys', async () => {
+    setKeys(undefined, 'mgmt-key');
+
+    const mockClient = createMockSDKClient();
+    mockClient.workspaces.list.mockResolvedValue({
+      async *[Symbol.asyncIterator]() {
+        yield { result: { data: [] } };
+      },
+    });
+
+    const { OpenRouter } = await import('@openrouter/sdk/sdk/sdk.js');
+    vi.mocked(OpenRouter).mockImplementation(() => mockClient as any);
+
+    const { getAllKeys } = await import('../account-client.js');
+
+    await expect(getAllKeys()).resolves.toEqual({
+      keys: [],
+      canManageKeys: true,
+    });
+  });
+
+  it('returns an explicit degraded inventory when key management is unavailable', async () => {
+    setKeys('plain-api-key', undefined);
+
+    const mockClient = createMockSDKClient();
+    mockClient.workspaces.list.mockRejectedValue({ status: 403, message: 'Forbidden' });
+
+    const { OpenRouter } = await import('@openrouter/sdk/sdk/sdk.js');
+    vi.mocked(OpenRouter).mockImplementation(() => mockClient as any);
+
+    const { getAllKeys } = await import('../account-client.js');
+
+    await expect(getAllKeys()).resolves.toEqual({
+      keys: [],
+      canManageKeys: false,
+      degradedReason: 'management-unavailable',
+    });
+  });
+
+  it('createApiKey sends the expected request body and returns the secret with normalized mutation state', async () => {
     setKeys(undefined, 'mgmt-key');
 
     const expiresAt = new Date('2026-06-01T00:00:00Z');
@@ -121,18 +170,18 @@ describe('account-client api key management', () => {
     });
     expect(result).toMatchObject({
       key: 'sk-or-v1-created-secret',
-      keyInfo: {
+      keyState: {
         name: 'Team Key',
         hash: 'hash-create',
         byok: 'excl',
         resetCadence: 'never',
-        workspaceName: 'ws-1',
         status: 'unbounded',
       },
     });
+    expect(result.keyState).not.toHaveProperty('workspaceName');
   });
 
-  it('setApiKeyDisabled patches disabled status and returns normalized key info', async () => {
+  it('setApiKeyDisabled patches disabled status and returns normalized mutation state', async () => {
     setKeys(undefined, 'mgmt-key');
 
     const mockClient = createMockSDKClient({
@@ -178,9 +227,9 @@ describe('account-client api key management', () => {
       disabled: true,
       byok: 'incl',
       resetCadence: 'weekly',
-      workspaceName: 'ws-2',
       status: 'disabled',
     });
+    expect(result).not.toHaveProperty('workspaceName');
   });
 
   it('requires OPENROUTER_MANAGEMENT_KEY for create operations', async () => {
@@ -226,6 +275,53 @@ describe('account-client api key management', () => {
     await expect(createApiKey({ name: 'Team Key' })).rejects.toMatchObject({
       message:
         'OPENROUTER_MANAGEMENT_KEY does not have permission to create API keys. Set it to a valid management key.',
+      statusCode: 403,
+    });
+  });
+
+  it('requires OPENROUTER_MANAGEMENT_KEY for toggle operations', async () => {
+    setKeys('plain-api-key', undefined);
+
+    const { setApiKeyDisabled } = await import('../account-client.js');
+
+    await expect(setApiKeyDisabled('hash-disable', true)).rejects.toMatchObject({
+      message: 'OPENROUTER_MANAGEMENT_KEY is required for API key management.',
+    });
+  });
+
+  it('maps unauthorized disable errors to a management-key-required message', async () => {
+    setKeys(undefined, 'bad-mgmt-key');
+
+    const mockClient = createMockSDKClient({
+      update: vi.fn().mockRejectedValue({ status: 401, message: 'Unauthorized' }),
+    });
+
+    const { OpenRouter } = await import('@openrouter/sdk/sdk/sdk.js');
+    vi.mocked(OpenRouter).mockImplementation(() => mockClient as any);
+
+    const { setApiKeyDisabled } = await import('../account-client.js');
+
+    await expect(setApiKeyDisabled('hash-disable', true)).rejects.toMatchObject({
+      message:
+        'OPENROUTER_MANAGEMENT_KEY is required to disable API keys. Set it to a valid management key.',
+    });
+  });
+
+  it('maps forbidden enable errors to a management-key permissions message', async () => {
+    setKeys(undefined, 'mgmt-key');
+
+    const mockClient = createMockSDKClient({
+      update: vi.fn().mockRejectedValue({ status: 403, message: 'Forbidden' }),
+    });
+
+    const { OpenRouter } = await import('@openrouter/sdk/sdk/sdk.js');
+    vi.mocked(OpenRouter).mockImplementation(() => mockClient as any);
+
+    const { setApiKeyDisabled } = await import('../account-client.js');
+
+    await expect(setApiKeyDisabled('hash-enable', false)).rejects.toMatchObject({
+      message:
+        'OPENROUTER_MANAGEMENT_KEY does not have permission to enable API keys. Set it to a valid management key.',
       statusCode: 403,
     });
   });

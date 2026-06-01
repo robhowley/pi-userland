@@ -424,14 +424,20 @@ async function showAccountOverlay(ctx: ExtensionContext) {
   let keyInfo: KeyInfo[] | null = null;
   let credits: number | null = null;
   let canManageKeys = false;
+  let currentManagementKeyHash: string | undefined;
 
   try {
-    const allKeys = await getAllKeys();
-    canManageKeys = allKeys !== null;
+    const keyInventory = await getAllKeys();
+    canManageKeys = keyInventory.canManageKeys;
 
-    if (allKeys && allKeys.length > 0) {
-      keyInfo = allKeys;
-    } else {
+    if (keyInventory.keys.length > 0) {
+      keyInfo = keyInventory.keys;
+      try {
+        currentManagementKeyHash = (await getCurrentKey())?.hash;
+      } catch {
+        // Safe gating: disabling stays blocked until current-key identity is available.
+      }
+    } else if (keyInventory.degradedReason === 'management-unavailable') {
       error = 'Key list unavailable - set OPENROUTER_MANAGEMENT_KEY for full key inventory.';
 
       try {
@@ -449,12 +455,12 @@ async function showAccountOverlay(ctx: ExtensionContext) {
 
     credits = await getAccountCredits();
 
-    if (!keyInfo && !credits) {
+    if (!keyInfo && !credits && keyInventory.degradedReason === 'missing-api-key') {
       error =
         'OpenRouter API key not found. Set OPENROUTER_MANAGEMENT_KEY (preferred) or OPENROUTER_API_KEY to use /openrouter-account.';
     }
 
-    if (!keyInfo && credits !== null) {
+    if (!keyInfo && credits !== null && keyInventory.degradedReason === 'management-unavailable') {
       error =
         error ||
         'Key information unavailable. Set OPENROUTER_MANAGEMENT_KEY for full key inventory.';
@@ -468,7 +474,15 @@ async function showAccountOverlay(ctx: ExtensionContext) {
       keyInfo = sortKeys(keyInfo);
     }
 
-    await showAccountOverlayComponent(ctx, keyInfo, credits, rollupStatus, error, canManageKeys);
+    await showAccountOverlayComponent(
+      ctx,
+      keyInfo,
+      credits,
+      rollupStatus,
+      error,
+      canManageKeys,
+      currentManagementKeyHash,
+    );
   } catch (error_) {
     const err = error_ as Error;
     error =
@@ -500,6 +514,7 @@ async function showAccountOverlayComponent(
   rollupStatus: RollupStatus,
   error: string | null,
   canManageKeys: boolean,
+  currentManagementKeyHash?: string,
 ) {
   await ctx.ui.custom<void>(
     (_tui, theme, _keybindings, done) => {
@@ -513,6 +528,7 @@ async function showAccountOverlayComponent(
         () => _tui.requestRender(),
         ctx,
         canManageKeys,
+        currentManagementKeyHash,
       );
 
       return {

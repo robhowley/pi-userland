@@ -206,13 +206,13 @@ export async function handleApiKeyCreate(args: string): Promise<HandlerResult> {
 
   try {
     const created = await createApiKey(parsed.value);
-    const status = created.keyInfo.disabled ? 'disabled' : 'enabled';
+    const status = created.keyState.disabled ? 'disabled' : 'enabled';
 
     return {
       success: true,
       message: [
         'OpenRouter API key created',
-        `Name: ${created.keyInfo.name}`,
+        `Name: ${created.keyState.name}`,
         `Status: ${status}`,
         'Use /openrouter account to inspect or toggle the key.',
         'Secret shown in secure overlay; store it now.',

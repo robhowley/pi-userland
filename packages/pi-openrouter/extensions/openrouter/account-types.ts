@@ -25,7 +25,7 @@ export interface KeyInfo {
   remaining?: number; // limit - used
   resetCadence: ResetCadence; // monthly, weekly, daily, never, or partial
   byok: BYOKStatus; // incl (true), excl (false), ? (unavailable)
-  hash: string; // Key hash for identification
+  hash?: string; // Trusted key hash for identification/mutation when available
   disabled: boolean; // Whether key is disabled
   workspaceName: string; // Name of the workspace this key belongs to
   spend: number; // Spend associated with this key (in USD)
