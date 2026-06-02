@@ -12,8 +12,13 @@ import { UsageOverlayComponent } from './overlay.js';
 import { getCurrentSessionId } from './hooks.js';
 import { AccountOverlayComponent } from './account-overlay.js';
 import { computeRollupStatus, sortKeys } from './account-format.js';
-import { getAllKeys, getCurrentKey, getAccountCredits } from './account-client.js';
-import type { KeyInfo, RollupStatus } from './account-types.js';
+import {
+  getAllKeys,
+  getCurrentKey,
+  resolveCurrentKeyRelation,
+  getAccountCredits,
+} from './account-client.js';
+import type { CurrentKeyRelation, KeyInfo, RollupStatus } from './account-types.js';
 import {
   syncModels,
   getSyncState,
@@ -30,6 +35,8 @@ import {
   handleModelOverrideClear,
   handleModelOverrideList,
 } from './models/override-commands.js';
+import type { HandlerResult } from './api-key-commands.js';
+import { handleApiKeyCreate, handleApiKeyDisable, handleApiKeyEnable } from './api-key-commands.js';
 
 export const OPENROUTER_SUBCOMMANDS = [
   'usage',
@@ -40,6 +47,7 @@ export const OPENROUTER_SUBCOMMANDS = [
   'model-override-set',
   'model-override-clear',
   'model-override-list',
+  'api-key-create',
 ] as const;
 
 export function registerOpenRouterCommands(pi: Pick<ExtensionAPI, 'registerCommand'>): void {
@@ -70,7 +78,7 @@ export function registerOpenRouterCommands(pi: Pick<ExtensionAPI, 'registerComma
   });
 
   pi.registerCommand('openrouter', {
-    description: 'OpenRouter commands: usage, account, session, models-sync, models-status',
+    description: `OpenRouter commands: ${OPENROUTER_SUBCOMMANDS.join(', ')}`,
     getArgumentCompletions: getOpenRouterSubcommandCompletions,
     handler: async (args, ctx) => {
       await handleOpenRouterCommand(args, ctx);
@@ -120,6 +128,19 @@ async function handleOpenRouterCommand(args: string, ctx: ExtensionContext): Pro
     }
     case 'model-override-list': {
       await handleModelOverrideListCommand(subcommandArgs, ctx);
+      break;
+    }
+    case 'api-key-create': {
+      await handleApiKeyCreateCommand(subcommandArgs, ctx);
+      break;
+    }
+    // Back-compat only: hidden from public help/completions in favor of /openrouter account toggle UX.
+    case 'api-key-disable': {
+      await handleApiKeyDisableCommand(subcommandArgs, ctx);
+      break;
+    }
+    case 'api-key-enable': {
+      await handleApiKeyEnableCommand(subcommandArgs, ctx);
       break;
     }
     default: {
@@ -294,6 +315,77 @@ async function handleModelOverrideListCommand(
   }
 }
 
+async function handleApiKeyCreateCommand(
+  subcommandArgs: string,
+  ctx: ExtensionContext,
+): Promise<void> {
+  const result = await handleApiKeyCreate(subcommandArgs);
+  if (!result.success) {
+    ctx.ui.notify(result.message, 'error');
+    return;
+  }
+
+  if (result.secret) {
+    await showApiKeySecretOverlay(ctx, result);
+  }
+  ctx.ui.notify(result.message, 'info');
+}
+
+async function handleApiKeyDisableCommand(
+  subcommandArgs: string,
+  ctx: ExtensionContext,
+): Promise<void> {
+  const result = await handleApiKeyDisable(subcommandArgs);
+  ctx.ui.notify(result.message, result.success ? 'info' : 'error');
+}
+
+async function handleApiKeyEnableCommand(
+  subcommandArgs: string,
+  ctx: ExtensionContext,
+): Promise<void> {
+  const result = await handleApiKeyEnable(subcommandArgs);
+  ctx.ui.notify(result.message, result.success ? 'info' : 'error');
+}
+
+async function showApiKeySecretOverlay(
+  ctx: ExtensionContext,
+  result: HandlerResult,
+): Promise<void> {
+  if (!result.secret) return;
+
+  const lines = [
+    'OpenRouter API key created',
+    '',
+    ...result.message
+      .split('\n')
+      .filter((line) => line !== 'OpenRouter API key created' && !line.startsWith('Secret shown')),
+    '',
+    'Secret (store now; shown once):',
+    result.secret,
+    '',
+    'Press any key to close.',
+  ];
+
+  await ctx.ui.custom<void>(
+    (_tui, theme, _keybindings, done) => ({
+      handleInput: () => {
+        done();
+      },
+      render: (_width: number) =>
+        lines.map((line, index) => (index === 0 ? theme.bold(line) : line)),
+      invalidate: () => {},
+      dispose: () => {},
+      wantsKeyRelease: false,
+    }),
+    {
+      overlay: true,
+      overlayOptions: {
+        width: 120,
+      },
+    },
+  );
+}
+
 function notifyUnknownSubcommand(ctx: ExtensionContext): void {
   const message = `Available subcommands: ${OPENROUTER_SUBCOMMANDS.join(', ')}`;
   ctx.ui.notify(`OpenRouter subcommands\n${message}`, 'error');
@@ -336,13 +428,21 @@ async function showAccountOverlay(ctx: ExtensionContext) {
   let error: string | null = null;
   let keyInfo: KeyInfo[] | null = null;
   let credits: number | null = null;
+  let canManageKeys = false;
+  let currentKeyRelation: CurrentKeyRelation | undefined;
 
   try {
-    const allKeys = await getAllKeys();
+    const keyInventory = await getAllKeys();
+    canManageKeys = keyInventory.canManageKeys;
 
-    if (allKeys && allKeys.length > 0) {
-      keyInfo = allKeys;
-    } else {
+    if (keyInventory.keys.length > 0) {
+      keyInfo = keyInventory.keys;
+      try {
+        currentKeyRelation = await resolveCurrentKeyRelation(keyInfo);
+      } catch {
+        // Safe gating: disabling stays blocked until current-key identity is available.
+      }
+    } else if (keyInventory.degradedReason === 'management-unavailable') {
       error = 'Key list unavailable - set OPENROUTER_MANAGEMENT_KEY for full key inventory.';
 
       try {
@@ -360,12 +460,12 @@ async function showAccountOverlay(ctx: ExtensionContext) {
 
     credits = await getAccountCredits();
 
-    if (!keyInfo && !credits) {
+    if (!keyInfo && !credits && keyInventory.degradedReason === 'missing-api-key') {
       error =
         'OpenRouter API key not found. Set OPENROUTER_MANAGEMENT_KEY (preferred) or OPENROUTER_API_KEY to use /openrouter-account.';
     }
 
-    if (!keyInfo && credits !== null) {
+    if (!keyInfo && credits !== null && keyInventory.degradedReason === 'management-unavailable') {
       error =
         error ||
         'Key information unavailable. Set OPENROUTER_MANAGEMENT_KEY for full key inventory.';
@@ -379,7 +479,15 @@ async function showAccountOverlay(ctx: ExtensionContext) {
       keyInfo = sortKeys(keyInfo);
     }
 
-    await showAccountOverlayComponent(ctx, keyInfo, credits, rollupStatus, error);
+    await showAccountOverlayComponent(
+      ctx,
+      keyInfo,
+      credits,
+      rollupStatus,
+      error,
+      canManageKeys,
+      currentKeyRelation,
+    );
   } catch (error_) {
     const err = error_ as Error;
     error =
@@ -400,7 +508,7 @@ async function showAccountOverlay(ctx: ExtensionContext) {
       ? computeRollupStatus(keyInfo)
       : { status: 'unavailable' as const };
 
-    await showAccountOverlayComponent(ctx, keyInfo, credits, rollupStatus, error);
+    await showAccountOverlayComponent(ctx, keyInfo, credits, rollupStatus, error, false);
   }
 }
 
@@ -410,6 +518,8 @@ async function showAccountOverlayComponent(
   credits: number | null,
   rollupStatus: RollupStatus,
   error: string | null,
+  canManageKeys: boolean,
+  currentKeyRelation?: CurrentKeyRelation,
 ) {
   await ctx.ui.custom<void>(
     (_tui, theme, _keybindings, done) => {
@@ -422,6 +532,8 @@ async function showAccountOverlayComponent(
         done,
         () => _tui.requestRender(),
         ctx,
+        canManageKeys,
+        currentKeyRelation,
       );
 
       return {

@@ -1,6 +1,6 @@
 # pi-openrouter
 
-A [Pi](https://pi.dev/) extension for live OpenRouter visibility and environment sync: usage/account TUI overlays, automatic `session_id` tagging, user-scoped model catalog sync, and local model field overrides.
+A [Pi](https://pi.dev/) extension for live OpenRouter visibility and environment sync: usage/account TUI overlays, automatic `session_id` tagging, user-scoped model catalog sync, api key management, and local model field overrides.
 
 ## Installation
 
@@ -28,8 +28,9 @@ export OPENROUTER_MANAGEMENT_KEY=sk-or-...
 
 ```bash
 /openrouter usage                    # usage/spend overlay
-/openrouter account                  # credits, key limits, account health
+/openrouter account                  # credits, key limits, account health, key toggle UI
 /openrouter session                  # current OpenRouter session_id
+/openrouter api-key-create           # create an API key (management key required)
 /openrouter models-sync              # sync user-scoped OpenRouter models into Pi
 /openrouter models-status            # show model sync/cache status
 /openrouter models-status --skipped  # show skipped model reasons
@@ -103,9 +104,23 @@ The overlay shows:
 - **BYOK limit behavior**
 - **All visible keys**, when a management key is configured
 
-Select a key from the list to inspect its limit, usage, reset cadence, and BYOK behavior.
+Use `/openrouter account`, select a key with the arrow keys, press `t` to toggle enabled/disabled, and press Enter to confirm. You can still inspect the selected key's limit, usage, reset cadence, and BYOK behavior from the same overlay.
 
 <img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-openrouter/img/openrouter-account-tui.png" alt="OpenRouter Account Overlay" width="600">
+
+## API key management
+
+API key management requires `OPENROUTER_MANAGEMENT_KEY`. `OPENROUTER_API_KEY` alone is not enough for key creation or account-level toggles.
+
+```bash
+/openrouter api-key-create <name> [limit=<usd|none>] [reset=<daily|weekly|monthly|none>] [byok=<incl|excl>] [workspace=<id>] [expires=<UTC ISO>]
+```
+
+Wrap `<name>` in quotes when it contains spaces, for example `/openrouter api-key-create "Team Key" limit=25`.
+
+To enable or disable a key, use `/openrouter account`, select the key with the arrow keys, press `t` to toggle it, and press Enter to confirm.
+
+When you create a key, Pi shows the returned secret once in an ephemeral overlay. Copy/store it immediately, do not expect Pi or OpenRouter to reveal it again, and avoid logging it or writing it to local files/debug output.
 
 ## Session tracking
 

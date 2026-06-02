@@ -37,8 +37,15 @@ const { mocks, overlayConstructorCalls, MockUsageOverlayComponent } = vi.hoisted
       getCurrentSessionId: vi.fn(),
       getAllKeys: vi.fn(),
       getCurrentKey: vi.fn(),
+      resolveCurrentKeyRelation: vi.fn(),
       getAccountCredits: vi.fn(),
       computeRollupStatus: vi.fn(),
+      formatCurrency: vi.fn((amount: number) => `$${amount.toFixed(2)}`),
+      formatRemaining: vi.fn((used: number, limit?: number) =>
+        limit === undefined
+          ? `$${used.toFixed(2)} / unlimited`
+          : `$${used.toFixed(2)} / $${limit.toFixed(2)}`,
+      ),
       sortKeys: vi.fn(),
       syncModels: vi.fn(),
       getSyncState: vi.fn(),
@@ -52,6 +59,9 @@ const { mocks, overlayConstructorCalls, MockUsageOverlayComponent } = vi.hoisted
       handleModelOverrideSet: vi.fn(),
       handleModelOverrideClear: vi.fn(),
       handleModelOverrideList: vi.fn(),
+      handleApiKeyCreate: vi.fn(),
+      handleApiKeyDisable: vi.fn(),
+      handleApiKeyEnable: vi.fn(),
     },
   };
 });
@@ -83,11 +93,14 @@ vi.mock('../hooks.js', () => ({
 vi.mock('../account-client.js', () => ({
   getAllKeys: mocks.getAllKeys,
   getCurrentKey: mocks.getCurrentKey,
+  resolveCurrentKeyRelation: mocks.resolveCurrentKeyRelation,
   getAccountCredits: mocks.getAccountCredits,
 }));
 
 vi.mock('../account-format.js', () => ({
   computeRollupStatus: mocks.computeRollupStatus,
+  formatCurrency: mocks.formatCurrency,
+  formatRemaining: mocks.formatRemaining,
   sortKeys: mocks.sortKeys,
 }));
 
@@ -113,6 +126,12 @@ vi.mock('../models/override-commands.js', () => ({
   handleModelOverrideSet: mocks.handleModelOverrideSet,
   handleModelOverrideClear: mocks.handleModelOverrideClear,
   handleModelOverrideList: mocks.handleModelOverrideList,
+}));
+
+vi.mock('../api-key-commands.js', () => ({
+  handleApiKeyCreate: mocks.handleApiKeyCreate,
+  handleApiKeyDisable: mocks.handleApiKeyDisable,
+  handleApiKeyEnable: mocks.handleApiKeyEnable,
 }));
 
 vi.mock('../overlay.js', () => ({
@@ -180,6 +199,17 @@ const keyInfo = {
   spend: 10,
 } as const;
 
+function createKeyInventory(
+  keys: any[] = [keyInfo],
+  options: { canManageKeys?: boolean; degradedReason?: string } = {},
+) {
+  return {
+    keys,
+    canManageKeys: options.canManageKeys ?? true,
+    ...(options.degradedReason ? { degradedReason: options.degradedReason } : {}),
+  };
+}
+
 describe('registerOpenRouterCommands', () => {
   beforeEach(() => {
     vi.resetAllMocks();
@@ -195,8 +225,13 @@ describe('registerOpenRouterCommands', () => {
         message.includes('429') || message.includes('rate limit') || message.includes('rate-limit')
       );
     });
-    mocks.getAllKeys.mockResolvedValue([keyInfo]);
+    mocks.getAllKeys.mockResolvedValue(createKeyInventory());
     mocks.getCurrentKey.mockResolvedValue(keyInfo);
+    mocks.resolveCurrentKeyRelation.mockResolvedValue({
+      kind: 'inventory-match',
+      hash: keyInfo.hash,
+      label: keyInfo.label,
+    });
     mocks.getAccountCredits.mockResolvedValue(25);
     mocks.computeRollupStatus.mockReturnValue({ status: 'healthy', message: 'healthy' });
     mocks.sortKeys.mockImplementation((keys) => keys);
@@ -215,6 +250,13 @@ describe('registerOpenRouterCommands', () => {
       message: 'override cleared',
     });
     mocks.handleModelOverrideList.mockResolvedValue('override list');
+    mocks.handleApiKeyCreate.mockResolvedValue({
+      success: true,
+      message: 'api key created\nSecret shown in secure overlay; store it now.',
+      secret: 'sk-or-v1-created-secret',
+    });
+    mocks.handleApiKeyDisable.mockResolvedValue({ success: true, message: 'api key disabled' });
+    mocks.handleApiKeyEnable.mockResolvedValue({ success: true, message: 'api key enabled' });
   });
 
   it('registers the expected command names and descriptions', () => {
@@ -238,11 +280,11 @@ describe('registerOpenRouterCommands', () => {
       'Show OpenRouter account and key health',
     );
     expect(commands.get('openrouter')?.description).toBe(
-      'OpenRouter commands: usage, account, session, models-sync, models-status',
+      `OpenRouter commands: ${OPENROUTER_SUBCOMMANDS.join(', ')}`,
     );
   });
 
-  it('keeps /openrouter subcommand completions unchanged', () => {
+  it('hides hash toggle subcommands from public /openrouter completions', () => {
     const { commands, pi } = createMockPi();
 
     registerOpenRouterCommands(pi as any);
@@ -252,6 +294,9 @@ describe('registerOpenRouterCommands', () => {
       { value: 'model-override-set', label: 'model-override-set' },
       { value: 'model-override-clear', label: 'model-override-clear' },
       { value: 'model-override-list', label: 'model-override-list' },
+    ]);
+    expect(command.getArgumentCompletions('api-key-')).toEqual([
+      { value: 'api-key-create', label: 'api-key-create' },
     ]);
     expect(command.getArgumentCompletions('zzz')).toBeNull();
     expect(OPENROUTER_SUBCOMMANDS).toEqual([
@@ -263,6 +308,7 @@ describe('registerOpenRouterCommands', () => {
       'model-override-set',
       'model-override-clear',
       'model-override-list',
+      'api-key-create',
     ]);
   });
 
@@ -288,8 +334,129 @@ describe('registerOpenRouterCommands', () => {
     await commands.get('openrouter').handler('account', ctx);
 
     expect(mocks.getAllKeys).toHaveBeenCalledTimes(1);
+    expect(mocks.resolveCurrentKeyRelation).toHaveBeenCalledWith([keyInfo]);
+    expect(mocks.getCurrentKey).not.toHaveBeenCalled();
     expect(mocks.getAccountCredits).toHaveBeenCalledTimes(1);
     expect(ctx.ui.custom).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes an inventory-match relation into the overlay disable guard', async () => {
+    const { commands, pi } = createMockPi();
+    const ctx = createMockContext();
+
+    const activeKey = {
+      ...keyInfo,
+      name: 'default-space-key',
+      label: 'sk-or-v1-8ef...062',
+      hash: 'hash-default-space',
+      workspaceName: 'Default',
+    };
+    mocks.getAllKeys.mockResolvedValue(createKeyInventory([activeKey]));
+    mocks.resolveCurrentKeyRelation.mockResolvedValue({
+      kind: 'inventory-match',
+      hash: 'hash-default-space',
+      label: 'sk-or-v1-8ef...062',
+    });
+
+    registerOpenRouterCommands(pi as any);
+    await commands.get('openrouter').handler('account', ctx);
+
+    const overlayFactory = ctx.ui.custom.mock.calls[0]![0];
+    const overlay = overlayFactory(
+      { requestRender: vi.fn() },
+      { bold: (text: string) => text, fg: (_style: string, text: string) => text },
+      {},
+      vi.fn(),
+    );
+
+    expect(overlay.render(120).join('\n')).toContain(
+      'readonly  Cannot disable the active management key.',
+    );
+
+    overlay.dispose();
+  });
+
+  it('allows disabling inventory rows when current auth is an external provisioning key', async () => {
+    const { commands, pi } = createMockPi();
+    const ctx = createMockContext();
+
+    const inventoryKey = {
+      ...keyInfo,
+      name: 'default-space-key',
+      label: 'sk-or-v1-8ef...062',
+      hash: 'hash-default-space',
+      workspaceName: 'Default',
+    };
+    mocks.getAllKeys.mockResolvedValue(createKeyInventory([inventoryKey]));
+    mocks.resolveCurrentKeyRelation.mockResolvedValue({
+      kind: 'external-provisioning',
+      label: 'sk-or-v1-4a0...459',
+    });
+
+    registerOpenRouterCommands(pi as any);
+    await commands.get('openrouter').handler('account', ctx);
+
+    const overlayFactory = ctx.ui.custom.mock.calls[0]![0];
+    const overlay = overlayFactory(
+      { requestRender: vi.fn() },
+      { bold: (text: string) => text, fg: (_style: string, text: string) => text },
+      {},
+      vi.fn(),
+    );
+
+    expect(overlay.render(120).join('\n')).toContain('t disable');
+    expect(overlay.render(120).join('\n')).not.toContain(
+      'readonly  Cannot verify current key matches this row.',
+    );
+
+    overlay.dispose();
+  });
+
+  it('keeps empty key inventory distinct from management-capability fallback in the command flow', async () => {
+    const { commands, pi } = createMockPi();
+    const ctx = createMockContext();
+
+    mocks.getAllKeys.mockResolvedValue(createKeyInventory([], { canManageKeys: true }));
+
+    registerOpenRouterCommands(pi as any);
+    await commands.get('openrouter').handler('account', ctx);
+
+    expect(mocks.getCurrentKey).not.toHaveBeenCalled();
+    expect(mocks.getAccountCredits).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes /openrouter account through the readonly fallback when management inventory is unavailable', async () => {
+    const { commands, pi } = createMockPi();
+    const ctx = createMockContext();
+
+    mocks.getAllKeys.mockResolvedValue(
+      createKeyInventory([], {
+        canManageKeys: false,
+        degradedReason: 'management-unavailable',
+      }),
+    );
+    mocks.getCurrentKey.mockResolvedValue({ ...keyInfo, hash: undefined } as any);
+
+    registerOpenRouterCommands(pi as any);
+    await commands.get('openrouter').handler('account', ctx);
+
+    expect(mocks.getCurrentKey).toHaveBeenCalled();
+    expect(ctx.ui.custom).toHaveBeenCalledTimes(1);
+
+    const overlayFactory = ctx.ui.custom.mock.calls[0]![0];
+    const overlay = overlayFactory(
+      { requestRender: vi.fn() },
+      { bold: (text: string) => text, fg: (_style: string, text: string) => text },
+      {},
+      vi.fn(),
+    );
+
+    expect(overlay.render(120).join('\n')).toContain(
+      'readonly  Set OPENROUTER_MANAGEMENT_KEY to toggle keys.',
+    );
+    expect(overlay.render(120).join('\n')).not.toContain('·  t ');
+
+    overlay.dispose();
   });
 
   it('routes /openrouter session to the current session notifier', async () => {
@@ -418,6 +585,61 @@ describe('registerOpenRouterCommands', () => {
 
     expect(mocks.handleModelOverrideList).toHaveBeenCalledWith('anthropic/');
     expect(ctx.ui.notify).toHaveBeenCalledWith('override list', 'info');
+  });
+
+  it('routes api-key-create through the dedicated handler, secure overlay, and redacted notifier', async () => {
+    const { commands, pi } = createMockPi();
+    const ctx = createMockContext();
+
+    registerOpenRouterCommands(pi as any);
+    await commands
+      .get('openrouter')
+      .handler('api-key-create team limit=25 reset=monthly byok=incl', ctx);
+
+    expect(mocks.handleApiKeyCreate).toHaveBeenCalledWith('team limit=25 reset=monthly byok=incl');
+    expect(ctx.ui.custom).toHaveBeenCalledTimes(1);
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      'api key created\nSecret shown in secure overlay; store it now.',
+      'info',
+    );
+    expect(ctx.ui.notify).not.toHaveBeenCalledWith(
+      expect.stringContaining('sk-or-v1-created-secret'),
+      expect.anything(),
+    );
+
+    const overlayFactory = ctx.ui.custom.mock.calls[0]![0];
+    const overlay = overlayFactory(
+      { requestRender: vi.fn() },
+      { bold: (text: string) => text, fg: (_style: string, text: string) => text },
+      {},
+      vi.fn(),
+    );
+    const rendered = overlay.render(160).join('\n');
+    expect(rendered.split('sk-or-v1-created-secret')).toHaveLength(2);
+  });
+
+  it('keeps hidden api-key-disable routing through the error notifier', async () => {
+    const { commands, pi } = createMockPi();
+    const ctx = createMockContext();
+
+    mocks.handleApiKeyDisable.mockResolvedValue({ success: false, message: 'disable failed' });
+
+    registerOpenRouterCommands(pi as any);
+    await commands.get('openrouter').handler('api-key-disable hash-123', ctx);
+
+    expect(mocks.handleApiKeyDisable).toHaveBeenCalledWith('hash-123');
+    expect(ctx.ui.notify).toHaveBeenCalledWith('disable failed', 'error');
+  });
+
+  it('keeps hidden api-key-enable routing through the info notifier', async () => {
+    const { commands, pi } = createMockPi();
+    const ctx = createMockContext();
+
+    registerOpenRouterCommands(pi as any);
+    await commands.get('openrouter').handler('api-key-enable hash-123', ctx);
+
+    expect(mocks.handleApiKeyEnable).toHaveBeenCalledWith('hash-123');
+    expect(ctx.ui.notify).toHaveBeenCalledWith('api key enabled', 'info');
   });
 
   it('keeps unknown-subcommand messaging unchanged', async () => {

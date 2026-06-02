@@ -13,7 +13,7 @@ export type KeyStatus =
 export type BYOKStatus = 'incl' | 'excl' | '?';
 
 /** Reset cadence for key limits */
-export type ResetCadence = 'monthly' | 'daily' | 'never' | 'partial';
+export type ResetCadence = 'monthly' | 'weekly' | 'daily' | 'never' | 'partial';
 
 /** Information about a single OpenRouter key */
 export interface KeyInfo {
@@ -23,13 +23,20 @@ export interface KeyInfo {
   used: number; // Current usage (currency)
   limit?: number; // Key cap (optional)
   remaining?: number; // limit - used
-  resetCadence: ResetCadence; // monthly, daily, never, or partial
+  resetCadence: ResetCadence; // monthly, weekly, daily, never, or partial
   byok: BYOKStatus; // incl (true), excl (false), ? (unavailable)
-  hash: string; // Key hash for identification
+  hash?: string; // Trusted key hash for identification/mutation when available
   disabled: boolean; // Whether key is disabled
   workspaceName: string; // Name of the workspace this key belongs to
   spend: number; // Spend associated with this key (in USD)
 }
+
+/** How the currently authenticated key relates to listed inventory rows. */
+export type CurrentKeyRelation =
+  | { kind: 'inventory-match'; hash: string; label: string }
+  | { kind: 'external-provisioning'; label: string }
+  | { kind: 'ambiguous-label'; label: string; matchingHashes: string[] }
+  | { kind: 'unresolved'; reason: string; label?: string };
 
 /** Rollup status for the entire account */
 export type RollupStatus =
