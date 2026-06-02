@@ -75,7 +75,7 @@ export function normalizeMergeReadySignals(
   const draft = input.draft ?? false;
   const mergeability = input.mergeability ?? 'unknown';
   const checks = input.checks ?? 'unknown';
-  const checkDetails = normalizeCheckDetails(input.checkDetails);
+  const checkDetails = normalizeCheckDetails(input.checkDetails, checks);
   const review = input.review ?? 'unknown';
   const unresolvedConversationRequirement = input.unresolvedConversationRequirement ?? 'unknown';
   const unresolvedConversationCount = normalizeUnresolvedConversationCount(
@@ -134,24 +134,6 @@ export function deriveMergeReadyOpenItems(
     openItems.push(createOpenItem('branch_out_of_date'));
   }
 
-  // Suppress generic merge_blocked when a concrete open item explains the block.
-  // GitHub's aggregate blocked state is often a symptom of draft state, checks,
-  // reviews, or required conversation resolution. Keep merge_blocked only for
-  // hook/ruleset/server-side blockers that no specific signal explains.
-  const hasRequiredUnresolvedConversations =
-    signals.unresolvedConversations && signals.unresolvedConversationRequirement === 'required';
-  const hasConcreteMergeBlocker =
-    signals.draft ||
-    signals.checks === 'failing' ||
-    signals.checks === 'running' ||
-    signals.review === 'changes_requested' ||
-    signals.review === 'pending' ||
-    hasRequiredUnresolvedConversations;
-
-  if (signals.mergeability === 'blocked' && !hasConcreteMergeBlocker) {
-    openItems.push(createOpenItem('merge_blocked', signals));
-  }
-
   if (signals.draft) {
     openItems.push(createOpenItem('draft'));
   }
@@ -191,6 +173,14 @@ export function deriveMergeReadyOpenItems(
 
   if (signals.review === 'pending') {
     openItems.push(createOpenItem('review_pending'));
+  }
+
+  // Suppress generic merge_blocked when a concrete open item explains the block.
+  // GitHub's aggregate blocked state is often a symptom of draft state, checks,
+  // reviews, or required conversation resolution. Keep merge_blocked only for
+  // hook/ruleset/server-side blockers that no specific open item explains.
+  if (signals.mergeability === 'blocked' && !openItems.some(openItemExplainsBlockedMergeability)) {
+    openItems.push(createOpenItem('merge_blocked', signals));
   }
 
   return openItems.sort(
@@ -260,16 +250,26 @@ function normalizeGeneratedAt(value: string | Date): string {
 }
 
 function normalizeCheckDetails(
-  value: MergeReadyCheckDetails | undefined,
+  value: unknown,
+  checks: MergeReadySignals['checks'],
 ): MergeReadyCheckDetails | undefined {
-  if (!value) {
+  if (checks === 'passing') {
     return undefined;
   }
 
   const checkDetails: MergeReadyCheckDetails = {
-    failing: normalizeCheckDetailList(value.failing, 'failing'),
-    running: normalizeCheckDetailList(value.running, 'running'),
-    unknown: normalizeCheckDetailList(value.unknown, 'unknown'),
+    failing:
+      checks === 'failing'
+        ? normalizeCheckDetailList(readCheckDetailBucket(value, 'failing'), 'failing')
+        : [],
+    running:
+      checks === 'running'
+        ? normalizeCheckDetailList(readCheckDetailBucket(value, 'running'), 'running')
+        : [],
+    unknown:
+      checks === 'unknown'
+        ? normalizeCheckDetailList(readCheckDetailBucket(value, 'unknown'), 'unknown')
+        : [],
   };
 
   if (
@@ -283,24 +283,48 @@ function normalizeCheckDetails(
   return checkDetails;
 }
 
+function readCheckDetailBucket(value: unknown, bucket: MergeReadyCheckDetail['status']): unknown {
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+
+  return (value as Partial<Record<MergeReadyCheckDetail['status'], unknown>>)[bucket];
+}
+
 function normalizeCheckDetailList(
-  details: MergeReadyCheckDetail[],
+  details: unknown,
   status: MergeReadyCheckDetail['status'],
 ): MergeReadyCheckDetail[] {
-  return details.flatMap((detail) => {
-    const label = detail.label.trim();
-    if (!label) {
-      return [];
-    }
+  if (!Array.isArray(details)) {
+    return [];
+  }
 
-    return [
-      {
-        label,
-        status,
-        ...(detail.url && detail.url.trim() ? { url: detail.url.trim() } : {}),
-      },
-    ];
-  });
+  return details.flatMap((detail) => normalizeCheckDetail(detail, status));
+}
+
+function normalizeCheckDetail(
+  detail: unknown,
+  status: MergeReadyCheckDetail['status'],
+): MergeReadyCheckDetail[] {
+  if (!detail || typeof detail !== 'object') {
+    return [];
+  }
+
+  const candidate = detail as Partial<Record<'label' | 'url', unknown>>;
+  const label = typeof candidate.label === 'string' ? candidate.label.trim() : '';
+  if (!label) {
+    return [];
+  }
+
+  const url = typeof candidate.url === 'string' ? candidate.url.trim() : '';
+
+  return [
+    {
+      label,
+      status,
+      ...(url ? { url } : {}),
+    },
+  ];
 }
 
 function createOpenItem(id: MergeReadyOpenItemId, signals?: MergeReadySignals): MergeReadyOpenItem {
@@ -356,6 +380,17 @@ function normalizeUnresolvedConversationCount(value: number | undefined): number
   }
 
   return Math.floor(value);
+}
+
+function openItemExplainsBlockedMergeability(openItem: MergeReadyOpenItem): boolean {
+  return (
+    openItem.id === 'draft' ||
+    openItem.id === 'ci_failing' ||
+    openItem.id === 'changes_requested' ||
+    openItem.id === 'unresolved_conversations' ||
+    openItem.id === 'ci_running' ||
+    openItem.id === 'review_pending'
+  );
 }
 
 function selectTopOpenItem(openItems: MergeReadyOpenItem[]): MergeReadyOpenItem | null {
