@@ -1,6 +1,6 @@
 # pi-openrouter
 
-A [Pi](https://pi.dev/) extension for live OpenRouter visibility and environment sync: usage/account TUI overlays, automatic `session_id` tagging, user-scoped model catalog sync, and local model field overrides.
+A [Pi](https://pi.dev/) extension for live OpenRouter visibility and environment sync: usage/account TUI overlays, automatic `session_id` tagging, user-scoped model catalog sync, api key management, and local model field overrides.
 
 ## Installation
 
