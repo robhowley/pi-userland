@@ -193,6 +193,46 @@ describe('merge-ready command', () => {
     expect(renderMergeReadyStatus(status)).toEqual(expected);
   });
 
+  it('renders check detail rows under check open items', () => {
+    const status = createMergeReadyStatus({
+      generatedAt: GENERATED_AT,
+      pr: {
+        number: 42,
+        title: 'Compose merge-ready status boundary',
+        url: 'https://github.com/robhowley/pi-userland/pull/42',
+      },
+      signals: {
+        draft: false,
+        mergeability: 'mergeable',
+        checks: 'failing',
+        checkDetails: {
+          failing: [
+            { label: 'linting', status: 'failing' },
+            { label: 'PR Title Check', status: 'failing' },
+          ],
+          running: [],
+          unknown: [],
+        },
+        review: 'approved',
+        unresolvedConversations: false,
+        unresolvedConversationRequirement: 'optional',
+      },
+    });
+
+    expect(renderMergeReadyStatus(status)).toEqual({
+      level: 'error',
+      message: [
+        '❌ Required checks are failing',
+        'PR: #42 — Compose merge-ready status boundary',
+        'State: blocked',
+        'Open items:',
+        '- Required checks are failing',
+        '  - linting ❌',
+        '  - PR Title Check ❌',
+      ].join('\n'),
+    });
+  });
+
   afterEach(() => {
     resetMergeReadyStatusBarCache();
     vi.useRealTimers();
@@ -343,6 +383,7 @@ describe('merge-ready command', () => {
         'State: blocked',
         'Open items:',
         '- Required checks are failing',
+        '  - ci / unit ❌',
       ].join('\n'),
       'error',
     );

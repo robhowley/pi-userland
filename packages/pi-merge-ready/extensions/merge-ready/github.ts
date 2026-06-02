@@ -1,5 +1,7 @@
 import type {
   MergeReadyBooleanSignal,
+  MergeReadyCheckDetail,
+  MergeReadyCheckDetails,
   MergeReadyChecksSignal,
   MergeReadyReviewSignal,
   PullRequestLifecycle,
@@ -37,6 +39,7 @@ export type MergeReadyGitHubCheckSummary = {
     running: string[];
     unknown: string[];
   };
+  details: MergeReadyCheckDetails;
 };
 
 export type MergeReadyGitHubReviewByAuthor = {
@@ -149,6 +152,7 @@ type CheckCategory = MergeReadyChecksSignal;
 type NormalizedCheckEntry = {
   category: CheckCategory;
   name?: string | undefined;
+  url?: string | undefined;
 };
 
 type ReviewCandidate = {
@@ -491,6 +495,11 @@ function normalizeChecks(
       running: [],
       unknown: [],
     },
+    details: {
+      failing: [],
+      running: [],
+      unknown: [],
+    },
   };
 
   if (!Array.isArray(value)) {
@@ -511,6 +520,7 @@ function normalizeChecks(
 
     if (normalizedCheck.name) {
       summary.names[normalizedCheck.category].push(normalizedCheck.name);
+      appendCheckDetail(summary.details, normalizedCheck);
     }
 
     if (normalizedCheck.category === 'passing') {
@@ -563,8 +573,9 @@ function normalizeCheckEntry(
   const checkRunStatus = readOptionalString(value['status'])?.toUpperCase();
   if (checkRunStatus) {
     const name = formatCheckRunName(value);
+    const url = readCheckUrl(value);
     if (RUNNING_CHECK_STATUSES.has(checkRunStatus)) {
-      return createNormalizedCheckEntry('running', name);
+      return createNormalizedCheckEntry('running', name, url);
     }
 
     if (checkRunStatus === 'COMPLETED') {
@@ -578,14 +589,14 @@ function normalizeCheckEntry(
             `statusCheckRollup[${index}].conclusion`,
           ),
         );
-        return createNormalizedCheckEntry('unknown', name);
+        return createNormalizedCheckEntry('unknown', name, url);
       }
 
       if (PASSING_CHECK_CONCLUSIONS.has(conclusion)) {
-        return createNormalizedCheckEntry('passing', name);
+        return createNormalizedCheckEntry('passing', name, url);
       }
       if (FAILING_CHECK_CONCLUSIONS.has(conclusion)) {
-        return createNormalizedCheckEntry('failing', name);
+        return createNormalizedCheckEntry('failing', name, url);
       }
 
       issues.push(
@@ -596,7 +607,7 @@ function normalizeCheckEntry(
           `statusCheckRollup[${index}].conclusion`,
         ),
       );
-      return createNormalizedCheckEntry('unknown', name);
+      return createNormalizedCheckEntry('unknown', name, url);
     }
 
     issues.push(
@@ -607,20 +618,21 @@ function normalizeCheckEntry(
         `statusCheckRollup[${index}].status`,
       ),
     );
-    return createNormalizedCheckEntry('unknown', name);
+    return createNormalizedCheckEntry('unknown', name, url);
   }
 
   const statusContextState = readOptionalString(value['state'])?.toUpperCase();
   if (statusContextState) {
     const name = readOptionalString(value['context']) ?? undefined;
+    const url = readCheckUrl(value);
     if (statusContextState === 'SUCCESS') {
-      return createNormalizedCheckEntry('passing', name);
+      return createNormalizedCheckEntry('passing', name, url);
     }
     if (statusContextState === 'FAILURE' || statusContextState === 'ERROR') {
-      return createNormalizedCheckEntry('failing', name);
+      return createNormalizedCheckEntry('failing', name, url);
     }
     if (statusContextState === 'EXPECTED' || statusContextState === 'PENDING') {
-      return createNormalizedCheckEntry('running', name);
+      return createNormalizedCheckEntry('running', name, url);
     }
 
     issues.push(
@@ -631,7 +643,7 @@ function normalizeCheckEntry(
         `statusCheckRollup[${index}].state`,
       ),
     );
-    return createNormalizedCheckEntry('unknown', name);
+    return createNormalizedCheckEntry('unknown', name, url);
   }
 
   issues.push(
@@ -642,7 +654,11 @@ function normalizeCheckEntry(
       `statusCheckRollup[${index}]`,
     ),
   );
-  return createNormalizedCheckEntry('unknown', readOptionalString(value['name']) ?? undefined);
+  return createNormalizedCheckEntry(
+    'unknown',
+    readOptionalString(value['name']) ?? undefined,
+    readCheckUrl(value),
+  );
 }
 
 function normalizeReviews(
@@ -1062,8 +1078,30 @@ function parseOptionalBoolean(value: unknown): boolean | null {
 function createNormalizedCheckEntry(
   category: CheckCategory,
   name?: string | undefined,
+  url?: string | undefined,
 ): NormalizedCheckEntry {
-  return name === undefined ? { category } : { category, name };
+  return {
+    category,
+    ...(name === undefined ? {} : { name }),
+    ...(url === undefined ? {} : { url }),
+  };
+}
+
+function appendCheckDetail(details: MergeReadyCheckDetails, check: NormalizedCheckEntry): void {
+  if (!check.name || check.category === 'passing') {
+    return;
+  }
+
+  const detail: MergeReadyCheckDetail = {
+    label: check.name,
+    status: check.category,
+  };
+
+  if (check.url) {
+    detail.url = check.url;
+  }
+
+  details[check.category].push(detail);
 }
 
 function formatCheckRunName(value: Record<string, unknown>): string | undefined {
@@ -1075,6 +1113,16 @@ function formatCheckRunName(value: Record<string, unknown>): string | undefined 
   }
 
   return workflowName ?? name ?? undefined;
+}
+
+function readCheckUrl(value: Record<string, unknown>): string | undefined {
+  return (
+    readOptionalString(value['detailsUrl']) ??
+    readOptionalString(value['targetUrl']) ??
+    readOptionalString(value['url']) ??
+    readOptionalString(value['link']) ??
+    undefined
+  );
 }
 
 function isLaterReview(existingReview: ReviewCandidate, nextReview: ReviewCandidate): boolean {

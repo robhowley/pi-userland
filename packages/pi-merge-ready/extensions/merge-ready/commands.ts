@@ -2,7 +2,12 @@ import { getMergeReadyStatus } from './merge-ready.js';
 import { syncMergeReadyStatusBar } from './status-bar.js';
 import { selectMergeReadyBadgeId } from './status.js';
 import type { MergeReadyExec, MergeReadyExecOptions, MergeReadyExecResult } from './git.js';
-import type { MergeReadyBadgeId, MergeReadyPullRequest, MergeReadyStatus } from './types.js';
+import type {
+  MergeReadyBadgeId,
+  MergeReadyOpenItemDetail,
+  MergeReadyPullRequest,
+  MergeReadyStatus,
+} from './types.js';
 
 export const MERGE_READY_COMMAND_NAME = 'merge-ready';
 export const MERGE_READY_COMMAND_TIMEOUT_MS = 20_000;
@@ -120,6 +125,9 @@ export function renderMergeReadyStatus(status: MergeReadyStatus): {
     lines.push('Open items:');
     for (const openItem of status.openItems) {
       lines.push(`- ${openItem.summary}`);
+      for (const detail of openItem.details ?? []) {
+        lines.push(`  - ${formatOpenItemDetail(detail)}`);
+      }
     }
   }
 
@@ -173,6 +181,22 @@ function createCommandExec(
 
     return pi.exec(command, args, execOptions);
   };
+}
+
+function formatOpenItemDetail(detail: MergeReadyOpenItemDetail): string {
+  return `${detail.label} ${formatOpenItemDetailStatus(detail.status)}`;
+}
+
+function formatOpenItemDetailStatus(status: MergeReadyOpenItemDetail['status']): string {
+  if (status === 'failing') {
+    return '❌';
+  }
+
+  if (status === 'running') {
+    return '⏳';
+  }
+
+  return '❔';
 }
 
 function formatPullRequestIdentity(pr: MergeReadyPullRequest): string {

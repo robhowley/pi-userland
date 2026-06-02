@@ -27,6 +27,22 @@ export type MergeReadyBooleanSignal = 'yes' | 'no' | 'unknown';
 
 export type MergeReadyChecksSignal = 'passing' | 'failing' | 'running' | 'unknown';
 
+export type MergeReadyCheckDetailStatus = Exclude<MergeReadyChecksSignal, 'passing'>;
+
+export type MergeReadyOpenItemDetail = {
+  label: string;
+  status: MergeReadyCheckDetailStatus;
+  url?: string;
+};
+
+export type MergeReadyCheckDetail = MergeReadyOpenItemDetail;
+
+export type MergeReadyCheckDetails = {
+  failing: MergeReadyCheckDetail[];
+  running: MergeReadyCheckDetail[];
+  unknown: MergeReadyCheckDetail[];
+};
+
 export type MergeReadyReviewSignal = 'approved' | 'changes_requested' | 'pending' | 'unknown';
 
 export type MergeReadyConversationRequirementSignal = 'required' | 'optional' | 'unknown';
@@ -42,6 +58,7 @@ export type MergeReadySignals = {
   draft: boolean;
   mergeability: MergeReadyMergeabilitySignal;
   checks: MergeReadyChecksSignal;
+  checkDetails?: MergeReadyCheckDetails;
   review: MergeReadyReviewSignal;
   unresolvedConversations: boolean;
   unresolvedConversationCount?: number;
@@ -52,6 +69,7 @@ export type MergeReadySignalsInput = {
   draft?: boolean;
   mergeability?: MergeReadyMergeabilitySignal;
   checks?: MergeReadyChecksSignal;
+  checkDetails?: MergeReadyCheckDetails;
   review?: MergeReadyReviewSignal;
   unresolvedConversations?: boolean;
   unresolvedConversationCount?: number;
@@ -74,6 +92,7 @@ export type MergeReadyOpenItemId =
 export type MergeReadyOpenItem = {
   id: MergeReadyOpenItemId;
   summary: string;
+  details?: MergeReadyOpenItemDetail[];
 };
 
 export type MergeReadyStatus = {

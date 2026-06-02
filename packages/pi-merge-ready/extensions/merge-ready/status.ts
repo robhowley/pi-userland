@@ -2,6 +2,8 @@ import type {
   CreateMergeReadyStatusOptions,
   MergeReadyBadgeContext,
   MergeReadyBadgeId,
+  MergeReadyCheckDetail,
+  MergeReadyCheckDetails,
   MergeReadyOpenItem,
   MergeReadyOpenItemId,
   MergeReadySignals,
@@ -73,6 +75,7 @@ export function normalizeMergeReadySignals(
   const draft = input.draft ?? false;
   const mergeability = input.mergeability ?? 'unknown';
   const checks = input.checks ?? 'unknown';
+  const checkDetails = normalizeCheckDetails(input.checkDetails);
   const review = input.review ?? 'unknown';
   const unresolvedConversationRequirement = input.unresolvedConversationRequirement ?? 'unknown';
   const unresolvedConversationCount = normalizeUnresolvedConversationCount(
@@ -98,6 +101,7 @@ export function normalizeMergeReadySignals(
     draft,
     mergeability,
     checks,
+    ...(checkDetails ? { checkDetails } : {}),
     review,
     unresolvedConversations,
     unresolvedConversationRequirement,
@@ -119,7 +123,7 @@ export function deriveMergeReadyOpenItems(
   }
 
   if (signals.mergeability === 'unknown') {
-    openItems.push(createOpenItem('status_ambiguous'));
+    openItems.push(createOpenItem('status_ambiguous', signals));
   }
 
   if (signals.mergeability === 'conflicting') {
@@ -130,13 +134,22 @@ export function deriveMergeReadyOpenItems(
     openItems.push(createOpenItem('branch_out_of_date'));
   }
 
-  // Suppress generic merge_blocked when required unresolved conversations explain the block.
-  // GitHub often reports 'blocked' mergeability when conversation resolution is required.
+  // Suppress generic merge_blocked when a concrete open item explains the block.
+  // GitHub's aggregate blocked state is often a symptom of draft state, checks,
+  // reviews, or required conversation resolution. Keep merge_blocked only for
+  // hook/ruleset/server-side blockers that no specific signal explains.
   const hasRequiredUnresolvedConversations =
     signals.unresolvedConversations && signals.unresolvedConversationRequirement === 'required';
+  const hasConcreteMergeBlocker =
+    signals.draft ||
+    signals.checks === 'failing' ||
+    signals.checks === 'running' ||
+    signals.review === 'changes_requested' ||
+    signals.review === 'pending' ||
+    hasRequiredUnresolvedConversations;
 
-  if (signals.mergeability === 'blocked' && !signals.draft && !hasRequiredUnresolvedConversations) {
-    openItems.push(createOpenItem('merge_blocked'));
+  if (signals.mergeability === 'blocked' && !hasConcreteMergeBlocker) {
+    openItems.push(createOpenItem('merge_blocked', signals));
   }
 
   if (signals.draft) {
@@ -144,7 +157,7 @@ export function deriveMergeReadyOpenItems(
   }
 
   if (signals.checks === 'failing') {
-    openItems.push(createOpenItem('ci_failing'));
+    openItems.push(createOpenItem('ci_failing', signals));
   }
 
   if (signals.review === 'changes_requested') {
@@ -162,14 +175,18 @@ export function deriveMergeReadyOpenItems(
       // Avoid false-ready: surface ambiguity when we can't determine if resolution is required.
       // Only add status_ambiguous if not already present from mergeability unknown.
       if (!openItems.some((item) => item.id === 'status_ambiguous')) {
-        openItems.push(createOpenItem('status_ambiguous'));
+        openItems.push(createOpenItem('status_ambiguous', signals));
       }
     }
     // requirement === 'optional' with count > 0 => no blocker emitted
   }
 
   if (signals.checks === 'running') {
-    openItems.push(createOpenItem('ci_running'));
+    openItems.push(createOpenItem('ci_running', signals));
+  }
+
+  if (signals.checks === 'unknown' && !openItems.some((item) => item.id === 'status_ambiguous')) {
+    openItems.push(createOpenItem('status_ambiguous', signals));
   }
 
   if (signals.review === 'pending') {
@@ -223,7 +240,7 @@ export function createMergeReadyStatus(options: CreateMergeReadyStatusOptions): 
     hasPr &&
     !openItems.some((openItem) => openItem.id === 'status_ambiguous')
   ) {
-    openItems = [...openItems, createOpenItem('status_ambiguous')].sort(
+    openItems = [...openItems, createOpenItem('status_ambiguous', signals)].sort(
       (left, right) => OPEN_ITEM_PRIORITY[left.id] - OPEN_ITEM_PRIORITY[right.id],
     );
   }
@@ -242,11 +259,81 @@ function normalizeGeneratedAt(value: string | Date): string {
   return typeof value === 'string' ? value : value.toISOString();
 }
 
+function normalizeCheckDetails(
+  value: MergeReadyCheckDetails | undefined,
+): MergeReadyCheckDetails | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const checkDetails: MergeReadyCheckDetails = {
+    failing: normalizeCheckDetailList(value.failing, 'failing'),
+    running: normalizeCheckDetailList(value.running, 'running'),
+    unknown: normalizeCheckDetailList(value.unknown, 'unknown'),
+  };
+
+  if (
+    checkDetails.failing.length === 0 &&
+    checkDetails.running.length === 0 &&
+    checkDetails.unknown.length === 0
+  ) {
+    return undefined;
+  }
+
+  return checkDetails;
+}
+
+function normalizeCheckDetailList(
+  details: MergeReadyCheckDetail[],
+  status: MergeReadyCheckDetail['status'],
+): MergeReadyCheckDetail[] {
+  return details.flatMap((detail) => {
+    const label = detail.label.trim();
+    if (!label) {
+      return [];
+    }
+
+    return [
+      {
+        label,
+        status,
+        ...(detail.url && detail.url.trim() ? { url: detail.url.trim() } : {}),
+      },
+    ];
+  });
+}
+
 function createOpenItem(id: MergeReadyOpenItemId, signals?: MergeReadySignals): MergeReadyOpenItem {
+  const details = getOpenItemDetails(id, signals);
+
   return {
     id,
     summary: createOpenItemSummary(id, signals),
+    ...(details.length > 0 ? { details } : {}),
   };
+}
+
+function getOpenItemDetails(
+  id: MergeReadyOpenItemId,
+  signals: MergeReadySignals | undefined,
+): MergeReadyCheckDetail[] {
+  if (!signals?.checkDetails) {
+    return [];
+  }
+
+  if (id === 'ci_failing') {
+    return signals.checkDetails.failing;
+  }
+
+  if (id === 'ci_running') {
+    return signals.checkDetails.running;
+  }
+
+  if (id === 'status_ambiguous') {
+    return signals.checkDetails.unknown;
+  }
+
+  return [];
 }
 
 function createOpenItemSummary(

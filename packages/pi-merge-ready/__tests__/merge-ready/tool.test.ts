@@ -254,6 +254,7 @@ describe('merge_ready_status tool', () => {
       {
         id: 'ci_failing',
         summary: 'Required checks are failing',
+        details: [{ label: 'ci / unit', status: 'failing' }],
       },
     ]);
     expect(JSON.parse(result.content[0]?.text ?? '')).toEqual(result.details);

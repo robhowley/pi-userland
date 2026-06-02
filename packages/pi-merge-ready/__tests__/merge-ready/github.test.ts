@@ -146,6 +146,11 @@ describe('merge-ready GitHub primitives', () => {
             running: [],
             unknown: [],
           },
+          details: {
+            failing: [],
+            running: [],
+            unknown: [],
+          },
         },
         reviews: {
           state: 'approved',
@@ -354,17 +359,36 @@ describe('merge-ready GitHub primitives', () => {
           name: 'unit',
           status: 'COMPLETED',
           conclusion: 'FAILURE',
+          detailsUrl: 'https://github.example/checks/unit',
         },
         {
           __typename: 'StatusContext',
           context: 'lint',
           state: 'PENDING',
+          targetUrl: 'https://github.example/status/lint',
         },
       ],
       expectedState: 'failing',
       expectedNames: {
         failing: ['ci / unit'],
         running: ['lint'],
+      },
+      expectedDetails: {
+        failing: [
+          {
+            label: 'ci / unit',
+            status: 'failing',
+            url: 'https://github.example/checks/unit',
+          },
+        ],
+        running: [
+          {
+            label: 'lint',
+            status: 'running',
+            url: 'https://github.example/status/lint',
+          },
+        ],
+        unknown: [],
       },
     },
     {
@@ -375,6 +399,7 @@ describe('merge-ready GitHub primitives', () => {
           workflowName: 'ci',
           name: 'unit',
           status: 'IN_PROGRESS',
+          detailsUrl: 'https://github.example/checks/unit',
         },
         {
           __typename: 'StatusContext',
@@ -387,31 +412,46 @@ describe('merge-ready GitHub primitives', () => {
         failing: [],
         running: ['ci / unit'],
       },
-    },
-  ])('normalizes $name', async ({ statusCheckRollup, expectedState, expectedNames }) => {
-    const { exec, assertDone } = createFakeExec([
-      {
-        command: 'gh',
-        args: ['pr', 'view', '--json', GH_PR_VIEW_JSON_FIELDS],
-        result: {
-          stdout: JSON.stringify(buildPullRequestPayload({ statusCheckRollup })),
-        },
+      expectedDetails: {
+        failing: [],
+        running: [
+          {
+            label: 'ci / unit',
+            status: 'running',
+            url: 'https://github.example/checks/unit',
+          },
+        ],
+        unknown: [],
       },
-    ]);
+    },
+  ])(
+    'normalizes $name',
+    async ({ statusCheckRollup, expectedState, expectedNames, expectedDetails }) => {
+      const { exec, assertDone } = createFakeExec([
+        {
+          command: 'gh',
+          args: ['pr', 'view', '--json', GH_PR_VIEW_JSON_FIELDS],
+          result: {
+            stdout: JSON.stringify(buildPullRequestPayload({ statusCheckRollup })),
+          },
+        },
+      ]);
 
-    const facts = await fetchMergeReadyGitHubPullRequestFacts({ exec });
+      const facts = await fetchMergeReadyGitHubPullRequestFacts({ exec });
 
-    assertDone();
+      assertDone();
 
-    expect(facts.kind).toBe('found');
-    if (facts.kind !== 'found') {
-      return;
-    }
+      expect(facts.kind).toBe('found');
+      if (facts.kind !== 'found') {
+        return;
+      }
 
-    expect(facts.pullRequest.checks.state).toBe(expectedState);
-    expect(facts.pullRequest.checks.names.failing).toEqual(expectedNames.failing);
-    expect(facts.pullRequest.checks.names.running).toEqual(expectedNames.running);
-  });
+      expect(facts.pullRequest.checks.state).toBe(expectedState);
+      expect(facts.pullRequest.checks.names.failing).toEqual(expectedNames.failing);
+      expect(facts.pullRequest.checks.names.running).toEqual(expectedNames.running);
+      expect(facts.pullRequest.checks.details).toEqual(expectedDetails);
+    },
+  );
 
   it.each([
     {
