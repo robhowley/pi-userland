@@ -1,6 +1,6 @@
 import type { CreateKeysRequestBody } from '@openrouter/sdk/models/operations/index.js';
 import { OpenRouter } from '@openrouter/sdk/sdk/sdk.js';
-import type { KeyInfo, KeyStatus } from './account-types.js';
+import type { CurrentKeyRelation, KeyInfo, KeyStatus } from './account-types.js';
 
 // Re-export error types from client.ts
 import { AuthError, ApiError } from './client.js';
@@ -141,6 +141,81 @@ export async function getCurrentKey(): Promise<KeyInfo | null> {
   }
 }
 
+/**
+ * Resolve how the current authenticated key relates to the listed inventory rows.
+ *
+ * OpenRouter current-key metadata does not reliably expose the stable inventory
+ * hash, so we fall back to label matching and distinguish external provisioning
+ * keys from genuinely unresolved identity.
+ */
+export async function resolveCurrentKeyRelation(keys: KeyInfo[]): Promise<CurrentKeyRelation> {
+  if (keys.length === 0) {
+    return { kind: 'unresolved', reason: 'no-inventory-keys' };
+  }
+
+  const client = getClient();
+  if (!client) {
+    return { kind: 'unresolved', reason: 'missing-api-key' };
+  }
+
+  try {
+    const response = await client.apiKeys.getCurrentKeyMetadata();
+    const raw = response.data;
+    const currentKey = normalizeSdkKeyMetadata(raw);
+
+    if (hasTrustedHash(currentKey.hash)) {
+      const matchedByHash = keys.find((key) => key.hash === currentKey.hash);
+      if (matchedByHash) {
+        return {
+          kind: 'inventory-match',
+          hash: currentKey.hash,
+          label: matchedByHash.label,
+        };
+      }
+
+      if (raw.isProvisioningKey === true) {
+        return { kind: 'external-provisioning', label: currentKey.label };
+      }
+
+      return {
+        kind: 'unresolved',
+        reason: 'current-hash-not-in-inventory',
+        label: currentKey.label,
+      };
+    }
+
+    const currentLabel = currentKey.label.trim();
+    if (currentLabel === '') {
+      return { kind: 'unresolved', reason: 'missing-current-label' };
+    }
+
+    const matchingHashes = Array.from(
+      new Set(
+        keys
+          .filter((key) => key.label.trim() === currentLabel)
+          .map((key) => (hasTrustedHash(key.hash) ? key.hash : undefined))
+          .filter((hash): hash is string => hash !== undefined),
+      ),
+    );
+
+    if (matchingHashes.length === 1) {
+      return { kind: 'inventory-match', hash: matchingHashes[0]!, label: currentLabel };
+    }
+
+    if (matchingHashes.length > 1) {
+      return { kind: 'ambiguous-label', label: currentLabel, matchingHashes };
+    }
+
+    if (raw.isProvisioningKey === true) {
+      return { kind: 'external-provisioning', label: currentLabel };
+    }
+
+    return { kind: 'unresolved', reason: 'no-inventory-match', label: currentLabel };
+  } catch (err) {
+    throw mapSdkError(err);
+  }
+}
+
 export interface CreateApiKeyInput {
   name: string;
   limit?: number | null;
@@ -214,6 +289,10 @@ export async function setApiKeyDisabled(
 // =============================================================================
 // Helper Functions
 // =============================================================================
+
+function hasTrustedHash(hash?: string): hash is string {
+  return typeof hash === 'string' && hash.trim() !== '';
+}
 
 function keyMetadataToMutationInfo(
   metadata: ReturnType<typeof normalizeSdkKeyMetadata>,

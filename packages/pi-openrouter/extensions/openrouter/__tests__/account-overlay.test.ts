@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Theme } from '@mariozechner/pi-coding-agent';
-import type { KeyInfo, RollupStatus } from '../account-types.js';
+import type { CurrentKeyRelation, KeyInfo, RollupStatus } from '../account-types.js';
 
 const tuiMocks = vi.hoisted(() => ({
   matchesKey: vi.fn(),
@@ -9,6 +9,7 @@ const tuiMocks = vi.hoisted(() => ({
 const accountClientMocks = vi.hoisted(() => ({
   getAllKeys: vi.fn(),
   getCurrentKey: vi.fn(),
+  resolveCurrentKeyRelation: vi.fn(),
   getAccountCredits: vi.fn(),
   setApiKeyDisabled: vi.fn(),
 }));
@@ -21,6 +22,7 @@ vi.mock('@mariozechner/pi-tui', () => ({
 vi.mock('../account-client.js', () => ({
   getAllKeys: accountClientMocks.getAllKeys,
   getCurrentKey: accountClientMocks.getCurrentKey,
+  resolveCurrentKeyRelation: accountClientMocks.resolveCurrentKeyRelation,
   getAccountCredits: accountClientMocks.getAccountCredits,
   setApiKeyDisabled: accountClientMocks.setApiKeyDisabled,
 }));
@@ -50,6 +52,17 @@ function createKey(overrides: Partial<KeyInfo> = {}): KeyInfo {
     spend: 10,
     ...overrides,
   };
+}
+
+function createInventoryMatchRelation(
+  hash = 'hash-management',
+  label = 'sk-or-v1-management',
+): CurrentKeyRelation {
+  return { kind: 'inventory-match', hash, label };
+}
+
+function createExternalProvisioningRelation(label = 'sk-or-v1-provisioning'): CurrentKeyRelation {
+  return { kind: 'external-provisioning', label };
 }
 
 function createKeyInventory(
@@ -101,6 +114,10 @@ describe('AccountOverlayComponent', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     installSimpleKeyMatcher();
+    accountClientMocks.resolveCurrentKeyRelation.mockResolvedValue({
+      kind: 'unresolved',
+      reason: 'missing-current-key-match',
+    });
   });
 
   afterEach(() => {
@@ -125,7 +142,7 @@ describe('AccountOverlayComponent', () => {
       () => {},
       undefined,
       true,
-      'hash-management',
+      createInventoryMatchRelation('hash-management'),
     );
     components.push(component);
 
@@ -174,7 +191,7 @@ describe('AccountOverlayComponent', () => {
       () => {},
       undefined,
       true,
-      'hash-management',
+      createInventoryMatchRelation('hash-management'),
     );
     components.push(component);
 
@@ -236,7 +253,7 @@ describe('AccountOverlayComponent', () => {
       () => {},
       undefined,
       true,
-      'hash-management',
+      createInventoryMatchRelation('hash-management'),
     );
     components.push(component);
 
@@ -264,14 +281,83 @@ describe('AccountOverlayComponent', () => {
     components.push(component);
 
     expect(renderText(component)).toContain(
-      'readonly  Current key identity unavailable; cannot disable.',
+      'readonly  Cannot verify current key matches this row.',
     );
     expect(renderText(component)).not.toContain('·  t ');
 
     component.handleInput('t');
 
     expect(accountClientMocks.setApiKeyDisabled).not.toHaveBeenCalled();
-    expect(renderText(component)).toContain('Current key identity unavailable; cannot disable.');
+    expect(renderText(component)).toContain('Cannot verify current key matches this row.');
+  });
+
+  it('allows disabling inventory rows when current auth is an external provisioning key', async () => {
+    accountClientMocks.setApiKeyDisabled.mockResolvedValue(
+      createKey({
+        name: 'default-space-key',
+        hash: 'hash-default-space',
+        status: 'disabled',
+        disabled: true,
+        spend: 0,
+        label: 'sk-or-v1-8ef...062',
+      }),
+    );
+
+    const component = new AccountOverlayComponent(
+      [
+        createKey({
+          name: 'default-space-key',
+          hash: 'hash-default-space',
+          label: 'sk-or-v1-8ef...062',
+          spend: 20,
+        }),
+      ],
+      25,
+      rollupStatus,
+      null,
+      createIdentityTheme(),
+      () => {},
+      () => {},
+      undefined,
+      true,
+      createExternalProvisioningRelation('sk-or-v1-4a0...459'),
+    );
+    components.push(component);
+
+    expect(renderText(component)).toContain('t disable');
+    expect(renderText(component)).not.toContain(
+      'readonly  Cannot verify current key matches this row.',
+    );
+
+    component.handleInput('t');
+    component.handleInput('enter');
+
+    await vi.waitFor(() => {
+      expect(accountClientMocks.setApiKeyDisabled).toHaveBeenCalledWith('hash-default-space', true);
+    });
+  });
+
+  it('blocks disabling rows when multiple inventory keys match the current key label', () => {
+    const component = new AccountOverlayComponent(
+      [createKey({ name: 'Primary', hash: 'hash-primary', spend: 20 })],
+      25,
+      rollupStatus,
+      null,
+      createIdentityTheme(),
+      () => {},
+      () => {},
+      undefined,
+      true,
+      {
+        kind: 'ambiguous-label',
+        label: 'sk-or-v1-123',
+        matchingHashes: ['hash-primary', 'hash-secondary'],
+      },
+    );
+    components.push(component);
+
+    expect(renderText(component)).toContain('readonly  Multiple keys match the current key label.');
+    expect(renderText(component)).not.toContain('·  t ');
   });
 
   it('allows enabling disabled keys even when current management key identity is unavailable', async () => {
@@ -331,7 +417,7 @@ describe('AccountOverlayComponent', () => {
       () => {},
       undefined,
       true,
-      'hash-primary',
+      createInventoryMatchRelation('hash-primary', 'sk-or-v1-123'),
     );
     components.push(component);
 
@@ -359,7 +445,7 @@ describe('AccountOverlayComponent', () => {
       () => {},
       undefined,
       true,
-      'hash-management',
+      createInventoryMatchRelation('hash-management'),
     );
     components.push(component);
 
@@ -408,7 +494,7 @@ describe('AccountOverlayComponent', () => {
       () => {},
       undefined,
       true,
-      'hash-management',
+      createInventoryMatchRelation('hash-management'),
     );
     components.push(component);
 
@@ -460,6 +546,7 @@ describe('AccountOverlayComponent', () => {
 
     await component.refresh();
 
+    expect(accountClientMocks.resolveCurrentKeyRelation).not.toHaveBeenCalled();
     expect(accountClientMocks.getCurrentKey).not.toHaveBeenCalled();
     expect(renderText(component)).toContain('No keys available');
     expect(renderText(component)).not.toContain('readonly  Set OPENROUTER_MANAGEMENT_KEY');
@@ -516,7 +603,7 @@ describe('AccountOverlayComponent', () => {
         () => {},
         undefined,
         true,
-        'hash-management',
+        createInventoryMatchRelation('hash-management'),
       );
       components.push(component);
 
@@ -576,7 +663,7 @@ describe('AccountOverlayComponent', () => {
       () => {},
       undefined,
       true,
-      'hash-management',
+      createInventoryMatchRelation('hash-management'),
     );
     components.push(component);
 

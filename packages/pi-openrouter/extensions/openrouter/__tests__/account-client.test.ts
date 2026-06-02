@@ -56,6 +56,47 @@ function createMockSDKClient(
   };
 }
 
+function createInventoryKey(overrides: Record<string, unknown> = {}) {
+  return {
+    name: 'Primary',
+    label: 'sk-or-v1-123',
+    status: 'healthy',
+    used: 10,
+    remaining: 90,
+    limit: 100,
+    resetCadence: 'monthly',
+    byok: 'incl',
+    hash: 'hash-1',
+    disabled: false,
+    workspaceName: 'Main Workspace',
+    spend: 10,
+    ...overrides,
+  };
+}
+
+function createCurrentKeyMetadata(overrides: Record<string, unknown> = {}) {
+  return {
+    byokUsage: 0,
+    byokUsageDaily: 0,
+    byokUsageMonthly: 0,
+    byokUsageWeekly: 0,
+    creatorUserId: null,
+    includeByokInLimit: true,
+    isFreeTier: false,
+    isManagementKey: true,
+    isProvisioningKey: false,
+    label: 'sk-or-v1-123',
+    limit: 100,
+    limitRemaining: 90,
+    limitReset: 'monthly',
+    usage: 10,
+    usageDaily: 0,
+    usageMonthly: 0,
+    usageWeekly: 0,
+    ...overrides,
+  };
+}
+
 describe('account-client api key management', () => {
   beforeEach(() => {
     vi.resetAllMocks();
@@ -109,6 +150,107 @@ describe('account-client api key management', () => {
       keys: [],
       canManageKeys: false,
       degradedReason: 'management-unavailable',
+    });
+  });
+
+  it('resolves an inventory-match relation from a unique inventory label match', async () => {
+    setKeys(undefined, 'mgmt-key');
+
+    const mockClient = createMockSDKClient();
+    mockClient.apiKeys.getCurrentKeyMetadata.mockResolvedValue({
+      data: createCurrentKeyMetadata({ label: 'sk-or-v1-active' }),
+    });
+
+    const { OpenRouter } = await import('@openrouter/sdk/sdk/sdk.js');
+    vi.mocked(OpenRouter).mockImplementation(() => mockClient as any);
+
+    const { resolveCurrentKeyRelation } = await import('../account-client.js');
+
+    await expect(
+      resolveCurrentKeyRelation([
+        createInventoryKey({
+          name: 'default-space-key',
+          label: 'sk-or-v1-active',
+          hash: 'hash-active',
+          workspaceName: 'Default',
+        }),
+        createInventoryKey({
+          name: 'other-key',
+          label: 'sk-or-v1-other',
+          hash: 'hash-other',
+          workspaceName: 'Dev',
+        }),
+      ] as any),
+    ).resolves.toEqual({
+      kind: 'inventory-match',
+      hash: 'hash-active',
+      label: 'sk-or-v1-active',
+    });
+  });
+
+  it('resolves an external-provisioning relation when the current provisioning key is outside inventory', async () => {
+    setKeys(undefined, 'mgmt-key');
+
+    const mockClient = createMockSDKClient();
+    mockClient.apiKeys.getCurrentKeyMetadata.mockResolvedValue({
+      data: createCurrentKeyMetadata({
+        label: 'sk-or-v1-provisioning',
+        isProvisioningKey: true,
+      }),
+    });
+
+    const { OpenRouter } = await import('@openrouter/sdk/sdk/sdk.js');
+    vi.mocked(OpenRouter).mockImplementation(() => mockClient as any);
+
+    const { resolveCurrentKeyRelation } = await import('../account-client.js');
+
+    await expect(
+      resolveCurrentKeyRelation([
+        createInventoryKey({
+          name: 'default-space-key',
+          label: 'sk-or-v1-active',
+          hash: 'hash-active',
+          workspaceName: 'Default',
+        }),
+      ] as any),
+    ).resolves.toEqual({
+      kind: 'external-provisioning',
+      label: 'sk-or-v1-provisioning',
+    });
+  });
+
+  it('returns an ambiguous-label relation when multiple inventory rows share the current label', async () => {
+    setKeys(undefined, 'mgmt-key');
+
+    const mockClient = createMockSDKClient();
+    mockClient.apiKeys.getCurrentKeyMetadata.mockResolvedValue({
+      data: createCurrentKeyMetadata({ label: 'sk-or-v1-active' }),
+    });
+
+    const { OpenRouter } = await import('@openrouter/sdk/sdk/sdk.js');
+    vi.mocked(OpenRouter).mockImplementation(() => mockClient as any);
+
+    const { resolveCurrentKeyRelation } = await import('../account-client.js');
+
+    await expect(
+      resolveCurrentKeyRelation([
+        createInventoryKey({
+          name: 'default-space-key',
+          label: 'sk-or-v1-active',
+          hash: 'hash-active-1',
+          workspaceName: 'Default',
+        }),
+        createInventoryKey({
+          name: 'duplicate-label-key',
+          label: 'sk-or-v1-active',
+          hash: 'hash-active-2',
+          workspaceName: 'Dev',
+        }),
+      ] as any),
+    ).resolves.toEqual({
+      kind: 'ambiguous-label',
+      label: 'sk-or-v1-active',
+      matchingHashes: ['hash-active-1', 'hash-active-2'],
     });
   });
 

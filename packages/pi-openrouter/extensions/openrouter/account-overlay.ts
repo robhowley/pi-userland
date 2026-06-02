@@ -1,6 +1,6 @@
 import { matchesKey, truncateToWidth } from '@mariozechner/pi-tui';
 import type { ExtensionContext, Theme, ThemeColor } from '@mariozechner/pi-coding-agent';
-import type { KeyInfo, KeyStatus, RollupStatus } from './account-types.js';
+import type { CurrentKeyRelation, KeyInfo, KeyStatus, RollupStatus } from './account-types.js';
 import {
   computeRollupStatus,
   formatCurrency,
@@ -11,6 +11,7 @@ import {
   getAccountCredits,
   getAllKeys,
   getCurrentKey,
+  resolveCurrentKeyRelation,
   setApiKeyDisabled,
 } from './account-client.js';
 
@@ -47,7 +48,7 @@ export class AccountOverlayComponent {
   private inlineMessage: string | null = null;
   private inlineMessageTone: ThemeColor = 'dim';
   private canManageKeys: boolean;
-  private currentManagementKeyHash: string | undefined;
+  private currentKeyRelation: CurrentKeyRelation | undefined;
 
   constructor(
     keyInfo: KeyInfo[] | null,
@@ -59,7 +60,7 @@ export class AccountOverlayComponent {
     requestRender: () => void,
     ctx?: ExtensionContext,
     canManageKeys = true,
-    currentManagementKeyHash?: string,
+    currentKeyRelation?: CurrentKeyRelation,
   ) {
     this.theme = theme;
     this.onClose = onClose;
@@ -71,7 +72,7 @@ export class AccountOverlayComponent {
     this.selectedIndex = 0;
     this.ctx = ctx || null;
     this.canManageKeys = canManageKeys;
-    this.currentManagementKeyHash = currentManagementKeyHash;
+    this.currentKeyRelation = currentKeyRelation;
     this.width = this.calculateWidth();
     this.lines = this.buildLines();
 
@@ -176,14 +177,14 @@ export class AccountOverlayComponent {
 
       let error: string | null = null;
       let keyInfo: KeyInfo[] | null = null;
-      let currentManagementKeyHash: string | undefined;
+      let currentKeyRelation: CurrentKeyRelation | undefined;
 
       this.canManageKeys = keyInventory.canManageKeys;
 
       if (keyInventory.keys.length > 0) {
         keyInfo = keyInventory.keys;
         try {
-          currentManagementKeyHash = (await getCurrentKey())?.hash;
+          currentKeyRelation = await resolveCurrentKeyRelation(keyInfo);
         } catch {
           // Safe gating: disabling stays blocked until current-key identity is available.
         }
@@ -211,7 +212,7 @@ export class AccountOverlayComponent {
       this.credits = credits;
       this.rollupStatus = rollupStatus;
       this.error = error;
-      this.currentManagementKeyHash = currentManagementKeyHash;
+      this.currentKeyRelation = currentKeyRelation;
       this.confirmationHash = null;
       this.pendingToggleHash = null;
       this.width = this.calculateWidth();
@@ -465,23 +466,38 @@ export class AccountOverlayComponent {
     }
 
     const action = key.disabled ? 'enable' : 'disable';
-    if (action === 'disable' && !this.currentManagementKeyHash) {
-      return {
-        canToggle: false,
-        reason: 'Current key identity unavailable; cannot disable.',
-        tone: 'warning',
-      };
+    if (action === 'enable') {
+      return { canToggle: true, action, hash: key.hash };
     }
 
-    if (action === 'disable' && key.hash === this.currentManagementKeyHash) {
-      return {
-        canToggle: false,
-        reason: 'Cannot disable the active management key.',
-        tone: 'warning',
-      };
+    switch (this.currentKeyRelation?.kind) {
+      case 'inventory-match':
+        if (key.hash === this.currentKeyRelation.hash) {
+          return {
+            canToggle: false,
+            reason: 'Cannot disable the active management key.',
+            tone: 'warning',
+          };
+        }
+        return { canToggle: true, action, hash: key.hash };
+      case 'external-provisioning':
+        return { canToggle: true, action, hash: key.hash };
+      case 'ambiguous-label':
+        if (this.currentKeyRelation.matchingHashes.includes(key.hash)) {
+          return {
+            canToggle: false,
+            reason: 'Multiple keys match the current key label.',
+            tone: 'warning',
+          };
+        }
+        return { canToggle: true, action, hash: key.hash };
+      default:
+        return {
+          canToggle: false,
+          reason: 'Cannot verify current key matches this row.',
+          tone: 'warning',
+        };
     }
-
-    return { canToggle: true, action, hash: key.hash };
   }
 
   private hasTrustedHash(key: KeyInfo): key is KeyInfo & { hash: string } {

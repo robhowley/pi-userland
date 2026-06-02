@@ -31,6 +31,13 @@ export interface KeyInfo {
   spend: number; // Spend associated with this key (in USD)
 }
 
+/** How the currently authenticated key relates to listed inventory rows. */
+export type CurrentKeyRelation =
+  | { kind: 'inventory-match'; hash: string; label: string }
+  | { kind: 'external-provisioning'; label: string }
+  | { kind: 'ambiguous-label'; label: string; matchingHashes: string[] }
+  | { kind: 'unresolved'; reason: string; label?: string };
+
 /** Rollup status for the entire account */
 export type RollupStatus =
   | { status: 'unavailable'; message?: never }

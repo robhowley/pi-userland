@@ -37,6 +37,7 @@ const { mocks, overlayConstructorCalls, MockUsageOverlayComponent } = vi.hoisted
       getCurrentSessionId: vi.fn(),
       getAllKeys: vi.fn(),
       getCurrentKey: vi.fn(),
+      resolveCurrentKeyRelation: vi.fn(),
       getAccountCredits: vi.fn(),
       computeRollupStatus: vi.fn(),
       formatCurrency: vi.fn((amount: number) => `$${amount.toFixed(2)}`),
@@ -92,6 +93,7 @@ vi.mock('../hooks.js', () => ({
 vi.mock('../account-client.js', () => ({
   getAllKeys: mocks.getAllKeys,
   getCurrentKey: mocks.getCurrentKey,
+  resolveCurrentKeyRelation: mocks.resolveCurrentKeyRelation,
   getAccountCredits: mocks.getAccountCredits,
 }));
 
@@ -225,6 +227,11 @@ describe('registerOpenRouterCommands', () => {
     });
     mocks.getAllKeys.mockResolvedValue(createKeyInventory());
     mocks.getCurrentKey.mockResolvedValue(keyInfo);
+    mocks.resolveCurrentKeyRelation.mockResolvedValue({
+      kind: 'inventory-match',
+      hash: keyInfo.hash,
+      label: keyInfo.label,
+    });
     mocks.getAccountCredits.mockResolvedValue(25);
     mocks.computeRollupStatus.mockReturnValue({ status: 'healthy', message: 'healthy' });
     mocks.sortKeys.mockImplementation((keys) => keys);
@@ -327,8 +334,82 @@ describe('registerOpenRouterCommands', () => {
     await commands.get('openrouter').handler('account', ctx);
 
     expect(mocks.getAllKeys).toHaveBeenCalledTimes(1);
+    expect(mocks.resolveCurrentKeyRelation).toHaveBeenCalledWith([keyInfo]);
+    expect(mocks.getCurrentKey).not.toHaveBeenCalled();
     expect(mocks.getAccountCredits).toHaveBeenCalledTimes(1);
     expect(ctx.ui.custom).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes an inventory-match relation into the overlay disable guard', async () => {
+    const { commands, pi } = createMockPi();
+    const ctx = createMockContext();
+
+    const activeKey = {
+      ...keyInfo,
+      name: 'default-space-key',
+      label: 'sk-or-v1-8ef...062',
+      hash: 'hash-default-space',
+      workspaceName: 'Default',
+    };
+    mocks.getAllKeys.mockResolvedValue(createKeyInventory([activeKey]));
+    mocks.resolveCurrentKeyRelation.mockResolvedValue({
+      kind: 'inventory-match',
+      hash: 'hash-default-space',
+      label: 'sk-or-v1-8ef...062',
+    });
+
+    registerOpenRouterCommands(pi as any);
+    await commands.get('openrouter').handler('account', ctx);
+
+    const overlayFactory = ctx.ui.custom.mock.calls[0]![0];
+    const overlay = overlayFactory(
+      { requestRender: vi.fn() },
+      { bold: (text: string) => text, fg: (_style: string, text: string) => text },
+      {},
+      vi.fn(),
+    );
+
+    expect(overlay.render(120).join('\n')).toContain(
+      'readonly  Cannot disable the active management key.',
+    );
+
+    overlay.dispose();
+  });
+
+  it('allows disabling inventory rows when current auth is an external provisioning key', async () => {
+    const { commands, pi } = createMockPi();
+    const ctx = createMockContext();
+
+    const inventoryKey = {
+      ...keyInfo,
+      name: 'default-space-key',
+      label: 'sk-or-v1-8ef...062',
+      hash: 'hash-default-space',
+      workspaceName: 'Default',
+    };
+    mocks.getAllKeys.mockResolvedValue(createKeyInventory([inventoryKey]));
+    mocks.resolveCurrentKeyRelation.mockResolvedValue({
+      kind: 'external-provisioning',
+      label: 'sk-or-v1-4a0...459',
+    });
+
+    registerOpenRouterCommands(pi as any);
+    await commands.get('openrouter').handler('account', ctx);
+
+    const overlayFactory = ctx.ui.custom.mock.calls[0]![0];
+    const overlay = overlayFactory(
+      { requestRender: vi.fn() },
+      { bold: (text: string) => text, fg: (_style: string, text: string) => text },
+      {},
+      vi.fn(),
+    );
+
+    expect(overlay.render(120).join('\n')).toContain('t disable');
+    expect(overlay.render(120).join('\n')).not.toContain(
+      'readonly  Cannot verify current key matches this row.',
+    );
+
+    overlay.dispose();
   });
 
   it('keeps empty key inventory distinct from management-capability fallback in the command flow', async () => {

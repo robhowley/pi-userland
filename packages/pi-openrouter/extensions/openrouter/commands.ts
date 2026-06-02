@@ -12,8 +12,13 @@ import { UsageOverlayComponent } from './overlay.js';
 import { getCurrentSessionId } from './hooks.js';
 import { AccountOverlayComponent } from './account-overlay.js';
 import { computeRollupStatus, sortKeys } from './account-format.js';
-import { getAllKeys, getCurrentKey, getAccountCredits } from './account-client.js';
-import type { KeyInfo, RollupStatus } from './account-types.js';
+import {
+  getAllKeys,
+  getCurrentKey,
+  resolveCurrentKeyRelation,
+  getAccountCredits,
+} from './account-client.js';
+import type { CurrentKeyRelation, KeyInfo, RollupStatus } from './account-types.js';
 import {
   syncModels,
   getSyncState,
@@ -424,7 +429,7 @@ async function showAccountOverlay(ctx: ExtensionContext) {
   let keyInfo: KeyInfo[] | null = null;
   let credits: number | null = null;
   let canManageKeys = false;
-  let currentManagementKeyHash: string | undefined;
+  let currentKeyRelation: CurrentKeyRelation | undefined;
 
   try {
     const keyInventory = await getAllKeys();
@@ -433,7 +438,7 @@ async function showAccountOverlay(ctx: ExtensionContext) {
     if (keyInventory.keys.length > 0) {
       keyInfo = keyInventory.keys;
       try {
-        currentManagementKeyHash = (await getCurrentKey())?.hash;
+        currentKeyRelation = await resolveCurrentKeyRelation(keyInfo);
       } catch {
         // Safe gating: disabling stays blocked until current-key identity is available.
       }
@@ -481,7 +486,7 @@ async function showAccountOverlay(ctx: ExtensionContext) {
       rollupStatus,
       error,
       canManageKeys,
-      currentManagementKeyHash,
+      currentKeyRelation,
     );
   } catch (error_) {
     const err = error_ as Error;
@@ -514,7 +519,7 @@ async function showAccountOverlayComponent(
   rollupStatus: RollupStatus,
   error: string | null,
   canManageKeys: boolean,
-  currentManagementKeyHash?: string,
+  currentKeyRelation?: CurrentKeyRelation,
 ) {
   await ctx.ui.custom<void>(
     (_tui, theme, _keybindings, done) => {
@@ -528,7 +533,7 @@ async function showAccountOverlayComponent(
         () => _tui.requestRender(),
         ctx,
         canManageKeys,
-        currentManagementKeyHash,
+        currentKeyRelation,
       );
 
       return {
