@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.10.0...pi-openrouter-v0.11.0) (2026-06-02)
+
+
+### Features
+
+* **pi-openrouter:** add API key management commands ([#67](https://github.com/robhowley/pi-userland/issues/67)) ([8e3af22](https://github.com/robhowley/pi-userland/commit/8e3af22aeb75f08dc632a5ea11baeb180d32953e))
+
 ## [0.10.0](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.9.1...pi-openrouter-v0.10.0) (2026-05-26)
 
 
