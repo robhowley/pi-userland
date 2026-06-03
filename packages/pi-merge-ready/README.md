@@ -115,9 +115,20 @@ Check-related `openItems` may include `details` rows for the non-green checks on
 
 Agents should fix or report only the items returned in `openItems`; they should not invent blockers from raw GitHub fields.
 
+When `target.mode` is `"url"`, `pr.headRepository` is also returned so callers can verify whether the editable head repo matches the targeted PR repo before changing code:
+
+```json
+{
+  "headRepository": {
+    "owner": "fork-owner",
+    "repo": "fork-repo"
+  }
+}
+```
+
 ### Merge-ready loop skill
 
-The package includes a `merge-ready-loop` skill for requests like "make this PR ready to merge". The skill starts with `merge_ready_status`, chooses the smallest actionable returned item, verifies the change locally, and distinguishes "fixed locally" from "confirmed cleared by GitHub". For non-ambient targets, the skill should resolve to an exact PR URL first and verify the local checkout matches before editing.
+The package includes a `merge-ready-loop` skill for requests like "make this PR ready to merge". The skill starts with `merge_ready_status`, chooses the smallest actionable returned item, verifies the change locally, and distinguishes "fixed locally" from "confirmed cleared by GitHub". For URL-targeted PRs, it should verify the local checkout against `pr.headRepository` plus `pr.headRefName`; if `pr.headRepository` differs from `target.owner/repo`, treat it as a fork/cross-repo case and stop unless the user authorizes the checkout change.
 
 ## Status states
 

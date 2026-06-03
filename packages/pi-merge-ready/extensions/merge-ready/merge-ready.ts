@@ -131,6 +131,17 @@ async function getMergeReadyUrlStatus(
     });
   }
 
+  if (!pullRequestFacts.pullRequest.headRepository) {
+    const summary = createUrlTargetMissingHeadRepositorySummary(target);
+    return createMergeReadyStatus({
+      generatedAt,
+      target,
+      hasPr: true,
+      openItems: [createOpenItem('status_ambiguous', summary)],
+      summary,
+    });
+  }
+
   return createMergeReadyStatusFromPullRequest({
     exec: options.exec,
     generatedAt,
@@ -157,7 +168,7 @@ type CreateMergeReadyStatusFromPullRequestOptions = {
 async function createMergeReadyStatusFromPullRequest(
   options: CreateMergeReadyStatusFromPullRequestOptions,
 ): Promise<MergeReadyStatus> {
-  const pr = toMergeReadyPullRequest(options.pullRequest);
+  const pr = toMergeReadyPullRequest(options.pullRequest, options.target);
   const baseSignals = createBaseSignals(options.pullRequest);
 
   if (options.pullRequest.lifecycle !== 'open') {
@@ -202,7 +213,10 @@ function resolveGeneratedAt(options: GetMergeReadyStatusOptions): string | Date 
   return options.now?.() ?? new Date();
 }
 
-function toMergeReadyPullRequest(pullRequest: MergeReadyGitHubPullRequest): MergeReadyPullRequest {
+function toMergeReadyPullRequest(
+  pullRequest: MergeReadyGitHubPullRequest,
+  target: MergeReadyTarget,
+): MergeReadyPullRequest {
   return {
     lifecycle: pullRequest.lifecycle,
     number: pullRequest.number,
@@ -210,6 +224,9 @@ function toMergeReadyPullRequest(pullRequest: MergeReadyGitHubPullRequest): Merg
     url: pullRequest.url,
     headRefName: pullRequest.headRefName,
     baseRefName: pullRequest.baseRefName,
+    ...(target.mode === 'url' && pullRequest.headRepository
+      ? { headRepository: pullRequest.headRepository }
+      : {}),
   };
 }
 
@@ -288,6 +305,10 @@ function toCurrentBranchTarget(
       : {}),
     ...(gitFacts.branch.kind === 'known' ? { branch: gitFacts.branch.name } : {}),
   };
+}
+
+function createUrlTargetMissingHeadRepositorySummary(target: MergeReadyUrlTarget): string {
+  return `Unable to determine readiness for ${formatMergeReadyUrlTarget(target)}: GitHub CLI did not report head repository identity`;
 }
 
 function createUrlTargetAmbiguousSummary(

@@ -15,7 +15,7 @@ type ExpectedExecCall = {
 };
 
 const GH_PR_VIEW_JSON_FIELDS =
-  'number,title,url,state,isDraft,mergeable,mergeStateStatus,headRefName,baseRefName,statusCheckRollup,reviews,reviewDecision,reviewRequests,author';
+  'number,title,url,state,isDraft,mergeable,mergeStateStatus,headRefName,headRepository,headRepositoryOwner,baseRefName,statusCheckRollup,reviews,reviewDecision,reviewRequests,author';
 
 function createFakeExec(expectedCalls: ExpectedExecCall[]): {
   exec: MergeReadyExec;
@@ -66,6 +66,12 @@ function buildPullRequestPayload(overrides: Record<string, unknown> = {}) {
     mergeable: 'MERGEABLE',
     mergeStateStatus: 'CLEAN',
     headRefName: 'feat/merge-ready',
+    headRepository: {
+      name: 'pi-userland',
+    },
+    headRepositoryOwner: {
+      login: 'robhowley',
+    },
     baseRefName: 'main',
     statusCheckRollup: [
       {
@@ -131,6 +137,10 @@ describe('merge-ready GitHub primitives', () => {
         url: 'https://github.com/robhowley/pi-userland/pull/42',
         headRefName: 'feat/merge-ready',
         baseRefName: 'main',
+        headRepository: {
+          owner: 'robhowley',
+          repo: 'pi-userland',
+        },
         draft: 'no',
         mergeability: 'mergeable',
         checks: {
@@ -206,7 +216,7 @@ describe('merge-ready GitHub primitives', () => {
     });
   });
 
-  it('uses explicit gh pr view targeting when a PR URL target is provided', async () => {
+  it('uses explicit gh pr view targeting and normalizes fork head-repository identity', async () => {
     const { exec, assertDone } = createFakeExec([
       {
         command: 'gh',
@@ -219,6 +229,12 @@ describe('merge-ready GitHub primitives', () => {
               number: 64,
               title: 'Support explicit PR URL targets',
               url: 'https://github.com/shopify/pi/pull/64',
+              headRepository: {
+                name: 'pi-fork',
+              },
+              headRepositoryOwner: {
+                login: 'contributor',
+              },
             }),
           )}\n`,
         },
@@ -245,6 +261,10 @@ describe('merge-ready GitHub primitives', () => {
       pullRequest: {
         number: 64,
         url: 'https://github.com/shopify/pi/pull/64',
+        headRepository: {
+          owner: 'contributor',
+          repo: 'pi-fork',
+        },
       },
     });
   });
@@ -700,6 +720,7 @@ describe('merge-ready GitHub primitives', () => {
 
     expect(facts.kind).toBe('invalid_shape');
     expect(facts.issues.map((issue) => issue.field)).toEqual([
+      'headRepositoryOwner',
       'number',
       'title',
       'url',

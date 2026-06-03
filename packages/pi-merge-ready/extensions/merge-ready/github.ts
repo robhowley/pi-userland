@@ -3,6 +3,7 @@ import type {
   MergeReadyCheckDetail,
   MergeReadyCheckDetails,
   MergeReadyChecksSignal,
+  MergeReadyRepositoryIdentity,
   MergeReadyReviewSignal,
   MergeReadyUrlTarget,
   PullRequestLifecycle,
@@ -87,6 +88,7 @@ export type MergeReadyGitHubPullRequest = {
   url: string;
   headRefName: string;
   baseRefName: string;
+  headRepository: MergeReadyRepositoryIdentity | null;
   draft: MergeReadyBooleanSignal;
   mergeability: MergeReadyGitHubMergeability;
   checks: MergeReadyGitHubCheckSummary;
@@ -180,6 +182,8 @@ const GH_PR_VIEW_JSON_FIELDS = [
   'mergeable',
   'mergeStateStatus',
   'headRefName',
+  'headRepository',
+  'headRepositoryOwner',
   'baseRefName',
   'statusCheckRollup',
   'reviews',
@@ -354,6 +358,12 @@ function normalizePullRequest(
   const url = readRequiredString(value['url']);
   const headRefName = readRequiredString(value['headRefName']);
   const baseRefName = readRequiredString(value['baseRefName']);
+  const headRepository = normalizeHeadRepository(
+    value['headRepository'],
+    value['headRepositoryOwner'],
+    issueContext,
+    issues,
+  );
 
   if (!lifecycle) {
     issues.push(
@@ -427,6 +437,7 @@ function normalizePullRequest(
     url,
     headRefName,
     baseRefName,
+    headRepository,
     draft: normalizeDraft(value['isDraft'], issueContext, issues),
     mergeability: normalizeMergeability(
       value['mergeable'],
@@ -440,6 +451,35 @@ function normalizePullRequest(
     reviewRequests: normalizeReviewRequests(value['reviewRequests'], issueContext, issues),
     author: normalizeAuthor(value['author'], issueContext, issues),
   };
+}
+
+function normalizeHeadRepository(
+  headRepositoryValue: unknown,
+  headRepositoryOwnerValue: unknown,
+  issueContext: IssueContext,
+  issues: MergeReadyGitHubIssue[],
+): MergeReadyRepositoryIdentity | null {
+  const fallbackIdentity = readRepositoryIdentity(headRepositoryValue);
+  const owner =
+    readRepositoryOwner(headRepositoryOwnerValue) ??
+    (isRecord(headRepositoryValue) ? readRepositoryOwner(headRepositoryValue['owner']) : null) ??
+    fallbackIdentity?.owner ??
+    null;
+  const repo = readRepositoryName(headRepositoryValue) ?? fallbackIdentity?.repo ?? null;
+
+  if (!owner || !repo) {
+    issues.push(
+      createIssue(
+        issueContext,
+        'partial_shape',
+        'gh pr view JSON payload had an invalid head repository identity',
+        !owner ? 'headRepositoryOwner' : 'headRepository',
+      ),
+    );
+    return null;
+  }
+
+  return { owner, repo };
 }
 
 function normalizeDraft(
@@ -1127,6 +1167,44 @@ function parseOptionalBoolean(value: unknown): boolean | null {
     return false;
   }
   return null;
+}
+
+function readRepositoryOwner(value: unknown): string | null {
+  if (typeof value === 'string') {
+    return readOptionalString(value);
+  }
+
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  return readOptionalString(value['login']) ?? readOptionalString(value['name']);
+}
+
+function readRepositoryName(value: unknown): string | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  return readOptionalString(value['name']) ?? readRepositoryIdentity(value)?.repo ?? null;
+}
+
+function readRepositoryIdentity(value: unknown): MergeReadyRepositoryIdentity | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const nameWithOwner = readOptionalString(value['nameWithOwner']);
+  if (!nameWithOwner) {
+    return null;
+  }
+
+  const [owner, repo, ...rest] = nameWithOwner.split('/');
+  if (!owner || !repo || rest.length > 0) {
+    return null;
+  }
+
+  return { owner, repo };
 }
 
 function createNormalizedCheckEntry(

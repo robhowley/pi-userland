@@ -53,6 +53,7 @@ Important:
 - `openItems` is blocker-only. Optional unresolved comments may still appear in `signals`, but not as blocker items.
 - `target` tells you whether the status came from the ambient current branch or an explicit PR URL.
 - Closed or merged PR URLs are valid targets. Treat `pr.lifecycle !== open` as not ready, even if there are no blocker open items.
+- When `target.mode = url`, expect `pr.headRepository = { owner, repo }` for checkout verification. Compare that head repo to `target.owner/repo` to distinguish same-repo vs fork/cross-repo PRs.
 - Check-related open items may include `details` rows for non-green checks only; do not invent additional check rows.
 - Only `signals.mergeability = mergeable` with a merge-clear PR yields no mergeability blocker. Treat every other mergeability value as not ready.
 - `review_pending` is requirement-aware. Do **not** infer pending review from raw review history or a lack of approvals.
@@ -75,7 +76,10 @@ Important:
 2. **Only real blockers**: treat `openItems` as the only allowed blocker list.
 3. **Do not invent review work**: only treat review as pending when `openItems` contains `review_pending`.
 4. **Match request to items**: if the user's requested work does not match an `openItem`, say so and stop.
-5. **Verify the edit target before changing code**: if status came from `target.mode = url`, compare the local checkout against `status.target` and `status.pr.headRefName` before editing. If the checkout does not clearly match the target PR repo/branch, stop and ask the user how to proceed.
+5. **Verify the edit target before changing code**: if status came from `target.mode = url`, compare the local checkout against `status.pr.headRepository` and `status.pr.headRefName` before editing.
+   - If `status.pr.headRepository.owner/repo !== status.target.owner/repo`, this is a fork/cross-repo PR. Do **not** assume the URL target repo is the editable checkout; stop and ask whether to fetch/switch to the head repo/branch.
+   - Only proceed automatically when the local checkout clearly matches `status.pr.headRepository.owner`, `status.pr.headRepository.repo`, and `status.pr.headRefName`.
+   - If repo or branch identity is unclear, stop and ask the user how to proceed.
 6. **Small fixes**: fix one small item or tightly related set at a time.
 7. **Verify locally**: run the strongest relevant local checks you can reasonably run before claiming an item was addressed.
 8. **Separate addressed from cleared**:

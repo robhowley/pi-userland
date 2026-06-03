@@ -34,6 +34,11 @@ export type MergeReadyBadgeId =
   | 'closed'
   | 'unknown';
 
+export type MergeReadyRepositoryIdentity = {
+  owner: string;
+  repo: string;
+};
+
 export type MergeReadyPullRequest = {
   lifecycle: PullRequestLifecycle;
   number: number;
@@ -41,6 +46,7 @@ export type MergeReadyPullRequest = {
   url: string;
   headRefName: string;
   baseRefName: string;
+  headRepository?: MergeReadyRepositoryIdentity;
 };
 
 export type MergeReadyBooleanSignal = 'yes' | 'no' | 'unknown';
