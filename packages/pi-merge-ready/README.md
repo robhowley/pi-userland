@@ -21,7 +21,7 @@ The package is fail-closed: if GitHub data is missing, truncated, or ambiguous, 
 
 ### Status bar
 
-The Pi status bar shows the current PR's top merge-readiness state.
+The Pi status bar shows the current branch PR's top merge-readiness state.
 
 Examples:
 
@@ -41,30 +41,51 @@ Optional unresolved conversations are not blockers, but they can still appear as
 
 ### Slash command
 
-Use `/merge-ready` for a human-readable status summary:
+Use `/merge-ready` for a human-readable status summary of the current branch PR:
 
 ```text
 ✅ Ready to merge
+Target: current branch feat/my-branch (owner/repo)
 PR: #64 — Add PR merge-readiness extension
 Open items: none
 ```
 
-Use JSON output when you want the exact status object:
+You can also target an exact GitHub pull request URL:
 
 ```bash
-/merge-ready --json
+/merge-ready --url https://github.com/OWNER/REPO/pull/64
+/merge-ready --url https://github.com/OWNER/REPO/pull/64 --json
 ```
+
+Only full HTTPS GitHub PR URLs are accepted. Branch names, PR numbers, shorthands, issue URLs, repo URLs, non-GitHub hosts, query strings, fragments, and subpaths are rejected. A trailing slash on `/pull/NUMBER/` is normalized.
 
 ### Agent tool
 
 Agents get a `merge_ready_status` tool. The contract is simple: `openItems` is the authoritative list of merge-readiness work.
+
+- `merge_ready_status({})` = current branch PR
+- `merge_ready_status({ url })` = that exact GitHub PR URL
+- Do not pass branch names, PR numbers, repo names, or inferred targets
 
 Example response:
 
 ```json
 {
   "state": "ready | blocked | pending | unknown",
-  "pr": { "number": 64, "title": "...", "url": "..." },
+  "target": {
+    "mode": "current_branch",
+    "owner": "owner",
+    "repo": "repo",
+    "branch": "feat/my-branch"
+  },
+  "pr": {
+    "lifecycle": "open",
+    "number": 64,
+    "title": "...",
+    "url": "...",
+    "headRefName": "feat/my-branch",
+    "baseRefName": "main"
+  },
   "summary": "Ready to merge",
   "openItems": [],
   "signals": {
@@ -96,7 +117,7 @@ Agents should fix or report only the items returned in `openItems`; they should 
 
 ### Merge-ready loop skill
 
-The package includes a `merge-ready-loop` skill for requests like "make this PR ready to merge". The skill starts with `merge_ready_status`, chooses the smallest actionable returned item, verifies the change locally, and distinguishes "fixed locally" from "confirmed cleared by GitHub".
+The package includes a `merge-ready-loop` skill for requests like "make this PR ready to merge". The skill starts with `merge_ready_status`, chooses the smallest actionable returned item, verifies the change locally, and distinguishes "fixed locally" from "confirmed cleared by GitHub". For non-ambient targets, the skill should resolve to an exact PR URL first and verify the local checkout matches before editing.
 
 ## Status states
 
@@ -129,6 +150,8 @@ Unresolved conversations are requirement-aware:
 - Optional unresolved conversations remain in `signals`, but not in `openItems`.
 - Unknown conversation requirements produce `status_ambiguous`.
 - Generic `merge_blocked` is suppressed when a concrete blocker such as failing checks, draft state, required review, or required conversations already explains GitHub's blocked state.
+- Closed or merged PRs remain valid targets. They report `pr.lifecycle` plus lifecycle-aware summaries like `PR is closed` or `PR is already merged`.
+- URL-targeted command results do not update the ambient status bar cache; the status bar remains current-branch only.
 
 ## License
 

@@ -9,6 +9,7 @@ import {
   type MergeReadyState,
 } from '../../extensions/merge-ready/index.js';
 import {
+  CURRENT_BRANCH_TARGET,
   GH_GRAPHQL_REVIEW_THREADS_QUERY,
   GH_PR_VIEW_JSON_FIELDS,
   buildConversationsPayload as buildOptionalConversationsPayload,
@@ -16,6 +17,7 @@ import {
   createConversationsSuccessCall,
   createFakeExec,
   createGitDiscoveryCalls,
+  createPullRequestViewFailureCall,
   createPullRequestViewSuccessCall,
 } from './test-fixtures.js';
 
@@ -372,10 +374,14 @@ describe('getMergeReadyStatus', () => {
 
     expect(status).toEqual({
       state: 'ready',
+      target: CURRENT_BRANCH_TARGET,
       pr: {
+        lifecycle: 'open',
         number: 42,
         title: 'Compose merge-ready status boundary',
         url: 'https://github.com/robhowley/pi-userland/pull/42',
+        headRefName: 'feat/merge-ready',
+        baseRefName: 'main',
       },
       summary: 'Ready to merge',
       openItems: [],
@@ -389,9 +395,130 @@ describe('getMergeReadyStatus', () => {
       },
       generatedAt: GENERATED_AT,
     });
-    expect(status.pr).not.toHaveProperty('headRefName');
-    expect(status.pr).not.toHaveProperty('baseRefName');
     expect(selectMergeReadyBadgeId(status)).toBe('ready');
+  });
+
+  it('supports URL mode without git discovery and uses explicit gh targeting', async () => {
+    const url = 'https://github.com/shopify/pi/pull/64';
+    const { exec, assertDone } = createFakeExec([
+      createPullRequestViewSuccessCall(
+        buildPullRequestPayload({
+          number: 64,
+          title: 'Support explicit PR URL targets',
+          url,
+          headRefName: 'feat/explicit-pr-url',
+          baseRefName: 'main',
+        }),
+        {
+          cwd: '/repo',
+          timeout: 5_000,
+          target: {
+            mode: 'url',
+            url,
+            owner: 'shopify',
+            repo: 'pi',
+            prNumber: 64,
+          },
+        },
+      ),
+      createConversationsSuccessCall(buildConversationsPayload(), {
+        cwd: '/repo',
+        timeout: 5_000,
+        repositoryOwner: 'shopify',
+        repositoryName: 'pi',
+        pullRequestNumber: 64,
+      }),
+    ]);
+
+    const status = await getMergeReadyStatus({
+      exec,
+      cwd: '/repo',
+      url,
+      timeout: 5_000,
+      now: () => new Date(GENERATED_AT),
+    });
+
+    assertDone();
+
+    expect(status).toMatchObject({
+      state: 'ready',
+      target: {
+        mode: 'url',
+        url,
+        owner: 'shopify',
+        repo: 'pi',
+        prNumber: 64,
+      },
+      pr: {
+        lifecycle: 'open',
+        number: 64,
+        title: 'Support explicit PR URL targets',
+        url,
+        headRefName: 'feat/explicit-pr-url',
+        baseRefName: 'main',
+      },
+      summary: 'Ready to merge',
+      openItems: [],
+    });
+  });
+
+  it('returns a structured not-found status for a valid targeted PR URL that does not exist', async () => {
+    const url = 'https://github.com/shopify/pi/pull/64';
+    const { exec, assertDone } = createFakeExec([
+      createPullRequestViewFailureCall(
+        {
+          exitCode: 1,
+          stderr: 'pull request not found\n',
+        },
+        {
+          cwd: '/repo',
+          target: {
+            mode: 'url',
+            url,
+            owner: 'shopify',
+            repo: 'pi',
+            prNumber: 64,
+          },
+        },
+      ),
+    ]);
+
+    const status = await getMergeReadyStatus({
+      exec,
+      cwd: '/repo',
+      url,
+      now: () => new Date(GENERATED_AT),
+    });
+
+    assertDone();
+
+    expect(status).toEqual({
+      state: 'unknown',
+      target: {
+        mode: 'url',
+        url,
+        owner: 'shopify',
+        repo: 'pi',
+        prNumber: 64,
+      },
+      pr: null,
+      summary: 'Pull request not found: shopify/pi#64',
+      openItems: [
+        {
+          id: 'no_pull_request',
+          summary: 'Pull request not found: shopify/pi#64',
+        },
+      ],
+      signals: {
+        draft: false,
+        mergeability: 'unknown',
+        checks: 'unknown',
+        review: 'unknown',
+        unresolvedConversations: false,
+        unresolvedConversationRequirement: 'unknown',
+      },
+      generatedAt: GENERATED_AT,
+    });
   });
 
   it.each([
@@ -808,6 +935,19 @@ describe('getMergeReadyStatus', () => {
     expect(status.signals.mergeability).toBe('blocked');
     expect(status.signals.unresolvedConversationRequirement).toBe('required');
     expect(selectMergeReadyBadgeId(status)).toBe('unresolved_conversations');
+  });
+
+  it('rejects invalid explicit URL targets instead of degrading to unknown status', async () => {
+    const { exec } = createFakeExec([]);
+
+    await expect(
+      getMergeReadyStatus({
+        exec,
+        cwd: '/repo',
+        url: '64',
+        now: () => new Date(GENERATED_AT),
+      }),
+    ).rejects.toThrow('Pull request numbers are not accepted');
   });
 
   it('returns unknown status when not in a git repository', async () => {

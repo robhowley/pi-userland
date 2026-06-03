@@ -206,6 +206,112 @@ describe('merge-ready GitHub primitives', () => {
     });
   });
 
+  it('uses explicit gh pr view targeting when a PR URL target is provided', async () => {
+    const { exec, assertDone } = createFakeExec([
+      {
+        command: 'gh',
+        args: ['pr', 'view', '64', '--repo', 'shopify/pi', '--json', GH_PR_VIEW_JSON_FIELDS],
+        cwd: '/repo',
+        timeout: 5_000,
+        result: {
+          stdout: `${JSON.stringify(
+            buildPullRequestPayload({
+              number: 64,
+              title: 'Support explicit PR URL targets',
+              url: 'https://github.com/shopify/pi/pull/64',
+            }),
+          )}\n`,
+        },
+      },
+    ]);
+
+    const facts = await fetchMergeReadyGitHubPullRequestFacts({
+      exec,
+      cwd: '/repo',
+      timeout: 5_000,
+      target: {
+        mode: 'url',
+        url: 'https://github.com/shopify/pi/pull/64',
+        owner: 'shopify',
+        repo: 'pi',
+        prNumber: 64,
+      },
+    });
+
+    assertDone();
+
+    expect(facts).toMatchObject({
+      kind: 'found',
+      pullRequest: {
+        number: 64,
+        url: 'https://github.com/shopify/pi/pull/64',
+      },
+    });
+  });
+
+  it('returns a typed not_found outcome for a valid targeted PR URL that does not exist', async () => {
+    const { exec, assertDone } = createFakeExec([
+      {
+        command: 'gh',
+        args: ['pr', 'view', '64', '--repo', 'shopify/pi', '--json', GH_PR_VIEW_JSON_FIELDS],
+        cwd: '/repo',
+        result: {
+          exitCode: 1,
+          stderr: 'pull request not found\n',
+        },
+      },
+    ]);
+
+    const facts = await fetchMergeReadyGitHubPullRequestFacts({
+      exec,
+      cwd: '/repo',
+      target: {
+        mode: 'url',
+        url: 'https://github.com/shopify/pi/pull/64',
+        owner: 'shopify',
+        repo: 'pi',
+        prNumber: 64,
+      },
+    });
+
+    assertDone();
+
+    expect(facts.kind).toBe('not_found');
+  });
+
+  it('classifies targeted repository access failures separately from generic command failures', async () => {
+    const { exec, assertDone } = createFakeExec([
+      {
+        command: 'gh',
+        args: ['pr', 'view', '64', '--repo', 'shopify/pi', '--json', GH_PR_VIEW_JSON_FIELDS],
+        cwd: '/repo',
+        result: {
+          exitCode: 1,
+          stderr: 'could not resolve to a repository with the name "shopify/pi"\n',
+        },
+      },
+    ]);
+
+    const facts = await fetchMergeReadyGitHubPullRequestFacts({
+      exec,
+      cwd: '/repo',
+      target: {
+        mode: 'url',
+        url: 'https://github.com/shopify/pi/pull/64',
+        owner: 'shopify',
+        repo: 'pi',
+        prNumber: 64,
+      },
+    });
+
+    assertDone();
+
+    expect(facts).toMatchObject({
+      kind: 'failure',
+      reason: 'access',
+    });
+  });
+
   it('normalizes draft pull requests without exposing GitHub enums', async () => {
     const { exec, assertDone } = createFakeExec([
       {

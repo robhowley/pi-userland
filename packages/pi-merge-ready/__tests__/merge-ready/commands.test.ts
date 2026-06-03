@@ -12,6 +12,7 @@ import mergeReadyExtension, {
   type MergeReadyCommandContext,
 } from '../../extensions/merge-ready/index.js';
 import {
+  CURRENT_BRANCH_TARGET,
   GH_PR_VIEW_JSON_FIELDS,
   buildConversationsPayload,
   buildPullRequestPayload,
@@ -94,6 +95,17 @@ function createCommandContext(): MergeReadyCommandContext {
   };
 }
 
+function buildOpenPr() {
+  return {
+    lifecycle: 'open' as const,
+    number: 42,
+    title: 'Compose merge-ready status boundary',
+    url: 'https://github.com/robhowley/pi-userland/pull/42',
+    headRefName: 'feat/merge-ready',
+    baseRefName: 'main',
+  };
+}
+
 describe('merge-ready command', () => {
   beforeEach(() => {
     resetMergeReadyStatusBarCache();
@@ -101,16 +113,18 @@ describe('merge-ready command', () => {
     vi.setSystemTime(new Date(GENERATED_AT));
   });
 
+  afterEach(() => {
+    resetMergeReadyStatusBarCache();
+    vi.useRealTimers();
+  });
+
   it.each([
     {
       name: 'merge conflicts',
       status: createMergeReadyStatus({
         generatedAt: GENERATED_AT,
-        pr: {
-          number: 42,
-          title: 'Compose merge-ready status boundary',
-          url: 'https://github.com/robhowley/pi-userland/pull/42',
-        },
+        target: CURRENT_BRANCH_TARGET,
+        pr: buildOpenPr(),
         signals: {
           draft: false,
           mergeability: 'conflicting',
@@ -124,6 +138,7 @@ describe('merge-ready command', () => {
         level: 'error',
         message: [
           '⚠️ Merge conflicts detected',
+          'Target: current branch feat/merge-ready (robhowley/pi-userland)',
           'PR: #42 — Compose merge-ready status boundary',
           'State: blocked',
           'Open items:',
@@ -135,11 +150,8 @@ describe('merge-ready command', () => {
       name: 'branch out of date',
       status: createMergeReadyStatus({
         generatedAt: GENERATED_AT,
-        pr: {
-          number: 42,
-          title: 'Compose merge-ready status boundary',
-          url: 'https://github.com/robhowley/pi-userland/pull/42',
-        },
+        target: CURRENT_BRANCH_TARGET,
+        pr: buildOpenPr(),
         signals: {
           draft: false,
           mergeability: 'behind',
@@ -153,6 +165,7 @@ describe('merge-ready command', () => {
         level: 'warning',
         message: [
           '🔄 Branch is out of date with base',
+          'Target: current branch feat/merge-ready (robhowley/pi-userland)',
           'PR: #42 — Compose merge-ready status boundary',
           'State: blocked',
           'Open items:',
@@ -161,17 +174,27 @@ describe('merge-ready command', () => {
       },
     },
     {
-      name: 'generic merge blocked',
+      name: 'explicit URL target',
       status: createMergeReadyStatus({
         generatedAt: GENERATED_AT,
+        target: {
+          mode: 'url',
+          url: 'https://github.com/shopify/pi/pull/64',
+          owner: 'shopify',
+          repo: 'pi',
+          prNumber: 64,
+        },
         pr: {
-          number: 42,
-          title: 'Compose merge-ready status boundary',
-          url: 'https://github.com/robhowley/pi-userland/pull/42',
+          lifecycle: 'open',
+          number: 64,
+          title: 'Support explicit PR URL targets',
+          url: 'https://github.com/shopify/pi/pull/64',
+          headRefName: 'feat/explicit-pr-url',
+          baseRefName: 'main',
         },
         signals: {
           draft: false,
-          mergeability: 'blocked',
+          mergeability: 'mergeable',
           checks: 'passing',
           review: 'approved',
           unresolvedConversations: false,
@@ -179,13 +202,13 @@ describe('merge-ready command', () => {
         },
       }),
       expected: {
-        level: 'error',
+        level: 'info',
         message: [
-          '⛔ GitHub reports merge is blocked',
-          'PR: #42 — Compose merge-ready status boundary',
-          'State: blocked',
-          'Open items:',
-          '- GitHub reports merge is blocked',
+          '✅ Ready to merge',
+          'Target: https://github.com/shopify/pi/pull/64',
+          'PR: #64 — Support explicit PR URL targets',
+          'State: ready',
+          'Open items: none',
         ].join('\n'),
       },
     },
@@ -196,11 +219,8 @@ describe('merge-ready command', () => {
   it('renders check detail rows under check open items', () => {
     const status = createMergeReadyStatus({
       generatedAt: GENERATED_AT,
-      pr: {
-        number: 42,
-        title: 'Compose merge-ready status boundary',
-        url: 'https://github.com/robhowley/pi-userland/pull/42',
-      },
+      target: CURRENT_BRANCH_TARGET,
+      pr: buildOpenPr(),
       signals: {
         draft: false,
         mergeability: 'mergeable',
@@ -223,6 +243,7 @@ describe('merge-ready command', () => {
       level: 'error',
       message: [
         '❌ Required checks are failing',
+        'Target: current branch feat/merge-ready (robhowley/pi-userland)',
         'PR: #42 — Compose merge-ready status boundary',
         'State: blocked',
         'Open items:',
@@ -231,11 +252,6 @@ describe('merge-ready command', () => {
         '  - PR Title Check ❌',
       ].join('\n'),
     });
-  });
-
-  afterEach(() => {
-    resetMergeReadyStatusBarCache();
-    vi.useRealTimers();
   });
 
   it('registers the /merge-ready command, status-bar hooks, and merge_ready_status tool from the default export', () => {
@@ -250,7 +266,8 @@ describe('merge-ready command', () => {
     expect(api.registerCommand).toHaveBeenCalledWith(
       MERGE_READY_COMMAND_NAME,
       expect.objectContaining({
-        description: 'Show merge readiness for the current pull request',
+        description:
+          'Show merge readiness for the current pull request or an explicit GitHub PR URL',
         handler: expect.any(Function),
       }),
     );
@@ -292,6 +309,7 @@ describe('merge-ready command', () => {
     expect(ctx.ui.notify).toHaveBeenCalledWith(
       [
         '✅ Ready to merge',
+        'Target: current branch feat/merge-ready (robhowley/pi-userland)',
         'PR: #42 — Compose merge-ready status boundary',
         'State: ready',
         'Open items: none',
@@ -300,7 +318,7 @@ describe('merge-ready command', () => {
     );
   });
 
-  it('syncs the status bar cache from the command status without an extra fetch', async () => {
+  it('syncs the ambient status bar cache from the command status without an extra fetch', async () => {
     const { api, assertDone, getCommand } = createMockAPI([
       ...createGitDiscoveryCalls({ timeout: MERGE_READY_COMMAND_TIMEOUT_MS }),
       createPullRequestViewSuccessCall(buildPullRequestPayload(), {
@@ -341,6 +359,60 @@ describe('merge-ready command', () => {
     expect(refreshCtx.ui.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ Ready');
   });
 
+  it('does not sync URL-targeted command results into the ambient status bar cache', async () => {
+    const url = 'https://github.com/shopify/pi/pull/64';
+    const { api, assertDone, getCommand } = createMockAPI([
+      {
+        command: 'gh',
+        args: ['pr', 'view', '64', '--repo', 'shopify/pi', '--json', GH_PR_VIEW_JSON_FIELDS],
+        cwd: '/repo',
+        timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+        result: {
+          stdout: `${JSON.stringify(
+            buildPullRequestPayload({
+              number: 64,
+              title: 'Support explicit PR URL targets',
+              url,
+              headRefName: 'feat/explicit-pr-url',
+              baseRefName: 'main',
+            }),
+          )}\n`,
+        },
+      },
+      createConversationsSuccessCall(buildConversationsPayload(), {
+        cwd: '/repo',
+        timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+        repositoryOwner: 'shopify',
+        repositoryName: 'pi',
+        pullRequestNumber: 64,
+      }),
+    ]);
+
+    mergeReadyExtension(api);
+    const handler = getCommand(MERGE_READY_COMMAND_NAME);
+    const ctx = createCommandContext();
+
+    await handler?.(`--url ${url}`, ctx);
+
+    const refreshed = await refreshMergeReadyStatusBar({
+      exec: api.exec,
+      ctx: {
+        cwd: ctx.cwd,
+        hasUI: true,
+        ui: { setStatus: vi.fn() },
+      },
+      force: false,
+      now: new Date(GENERATED_AT).getTime(),
+    });
+
+    assertDone();
+    expect(ctx.ui.setStatus).not.toHaveBeenCalledWith(
+      MERGE_READY_STATUS_BAR_KEY,
+      expect.anything(),
+    );
+    expect(refreshed?.cached).toBe(false);
+  });
+
   it('keeps optional unresolved comments out of human blocker output', async () => {
     const { api, assertDone, getCommand } = createMockAPI([
       ...createGitDiscoveryCalls({ timeout: MERGE_READY_COMMAND_TIMEOUT_MS }),
@@ -379,6 +451,7 @@ describe('merge-ready command', () => {
     expect(ctx.ui.notify).toHaveBeenCalledWith(
       [
         '❌ Required checks are failing',
+        'Target: current branch feat/merge-ready (robhowley/pi-userland)',
         'PR: #42 — Compose merge-ready status boundary',
         'State: blocked',
         'Open items:',
@@ -412,9 +485,13 @@ describe('merge-ready command', () => {
 
     assertDone();
     expect(ctx.ui.notify).toHaveBeenCalledWith(
-      ['❔ No pull request found', 'State: unknown', 'Open items:', '- No pull request found'].join(
-        '\n',
-      ),
+      [
+        '❔ No pull request found',
+        'Target: current branch feat/merge-ready (robhowley/pi-userland)',
+        'State: unknown',
+        'Open items:',
+        '- No pull request found',
+      ].join('\n'),
       'warning',
     );
   });
@@ -447,10 +524,14 @@ describe('merge-ready command', () => {
     expect(level).toBe('info');
     expect(JSON.parse(message as string)).toEqual({
       state: 'ready',
+      target: CURRENT_BRANCH_TARGET,
       pr: {
+        lifecycle: 'open',
         number: 42,
         title: 'Compose merge-ready status boundary',
         url: 'https://github.com/robhowley/pi-userland/pull/42',
+        headRefName: 'feat/merge-ready',
+        baseRefName: 'main',
       },
       summary: 'Ready to merge',
       openItems: [],
@@ -465,5 +546,103 @@ describe('merge-ready command', () => {
       },
       generatedAt: GENERATED_AT,
     });
+  });
+
+  it('accepts --json and --url in either order', async () => {
+    const url = 'https://github.com/shopify/pi/pull/64';
+    const expectedCalls = [
+      {
+        command: 'gh',
+        args: ['pr', 'view', '64', '--repo', 'shopify/pi', '--json', GH_PR_VIEW_JSON_FIELDS],
+        cwd: '/repo',
+        timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+        result: {
+          stdout: `${JSON.stringify(
+            buildPullRequestPayload({
+              number: 64,
+              title: 'Support explicit PR URL targets',
+              url,
+              headRefName: 'feat/explicit-pr-url',
+              baseRefName: 'main',
+            }),
+          )}\n`,
+        },
+      },
+      createConversationsSuccessCall(buildConversationsPayload(), {
+        cwd: '/repo',
+        timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+        repositoryOwner: 'shopify',
+        repositoryName: 'pi',
+        pullRequestNumber: 64,
+      }),
+    ];
+
+    for (const args of [`--json --url ${url}`, `--url ${url} --json`]) {
+      const { api, assertDone, getCommand } = createMockAPI(expectedCalls);
+      mergeReadyExtension(api);
+      const handler = getCommand(MERGE_READY_COMMAND_NAME);
+      const ctx = createCommandContext();
+
+      await handler?.(args, ctx);
+
+      assertDone();
+      const [message] = vi.mocked(ctx.ui.notify).mock.calls[0] ?? [];
+      expect(JSON.parse(message as string)).toMatchObject({
+        target: {
+          mode: 'url',
+          url,
+        },
+      });
+    }
+  });
+
+  it('reports missing and duplicate --url errors clearly', async () => {
+    const { api, getCommand } = createMockAPI();
+    mergeReadyExtension(api);
+    const handler = getCommand(MERGE_READY_COMMAND_NAME);
+    const ctx = createCommandContext();
+
+    await handler?.('--url', ctx);
+    await handler?.(
+      '--url https://github.com/owner/repo/pull/1 --url https://github.com/owner/repo/pull/2',
+      ctx,
+    );
+
+    expect(vi.mocked(ctx.ui.notify).mock.calls).toEqual([
+      [
+        'Missing value for --url. Usage: /merge-ready [--url <https://github.com/OWNER/REPO/pull/NUMBER>] [--json]',
+        'error',
+      ],
+      [
+        'Duplicate --url. Usage: /merge-ready [--url <https://github.com/OWNER/REPO/pull/NUMBER>] [--json]',
+        'error',
+      ],
+    ]);
+  });
+
+  it('rejects invalid explicit targets instead of guessing', async () => {
+    const { api, getCommand } = createMockAPI();
+    mergeReadyExtension(api);
+    const handler = getCommand(MERGE_READY_COMMAND_NAME);
+    const ctx = createCommandContext();
+
+    await handler?.('--url 64', ctx);
+    await handler?.('--url branch-name', ctx);
+    await handler?.('--url https://github.com/owner/repo/issues/64', ctx);
+
+    expect(vi.mocked(ctx.ui.notify).mock.calls).toEqual([
+      [
+        'Invalid --url: Pull request numbers are not accepted. Pass a full GitHub pull request URL like https://github.com/OWNER/REPO/pull/NUMBER.',
+        'error',
+      ],
+      [
+        'Invalid --url: Branch names, repo names, and PR shorthands are not accepted. Pass a full GitHub pull request URL like https://github.com/OWNER/REPO/pull/NUMBER.',
+        'error',
+      ],
+      [
+        'Invalid --url: Issue URLs are not supported. Pass a pull request URL like https://github.com/OWNER/REPO/pull/NUMBER.',
+        'error',
+      ],
+    ]);
   });
 });

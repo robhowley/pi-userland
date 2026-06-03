@@ -1,12 +1,14 @@
 import { getMergeReadyStatus } from './merge-ready.js';
 import { syncMergeReadyStatusBar } from './status-bar.js';
 import { selectMergeReadyBadgeId } from './status.js';
+import { MERGE_READY_PULL_REQUEST_URL_EXAMPLE, validateGitHubPullRequestUrl } from './target.js';
 import type { MergeReadyExec, MergeReadyExecOptions, MergeReadyExecResult } from './git.js';
 import type {
   MergeReadyBadgeId,
   MergeReadyOpenItemDetail,
   MergeReadyPullRequest,
   MergeReadyStatus,
+  MergeReadyTarget,
 } from './types.js';
 
 export const MERGE_READY_COMMAND_NAME = 'merge-ready';
@@ -46,6 +48,8 @@ export type MergeReadyCommandAPI = {
 };
 
 const JSON_FLAG = '--json';
+const URL_FLAG = '--url';
+const COMMAND_USAGE = `Usage: /${MERGE_READY_COMMAND_NAME} [${URL_FLAG} <${MERGE_READY_PULL_REQUEST_URL_EXAMPLE}>] [${JSON_FLAG}]`;
 
 const BADGE_PRESENTATION: Record<
   MergeReadyBadgeId,
@@ -71,28 +75,42 @@ const BADGE_PRESENTATION: Record<
 
 export function registerMergeReadyCommand(pi: MergeReadyCommandAPI): void {
   pi.registerCommand(MERGE_READY_COMMAND_NAME, {
-    description: 'Show merge readiness for the current pull request',
+    description: 'Show merge readiness for the current pull request or an explicit GitHub PR URL',
     getArgumentCompletions: getMergeReadyCommandArgumentCompletions,
     handler: async (args, ctx) => {
       const parsedArgs = parseMergeReadyCommandArgs(args);
-      if (parsedArgs.unsupported.length > 0) {
-        ctx.ui.notify(`Usage: /${MERGE_READY_COMMAND_NAME} [${JSON_FLAG}]`, 'error');
+      if (!parsedArgs.ok) {
+        ctx.ui.notify(parsedArgs.message, 'error');
         return;
+      }
+
+      let url: string | undefined;
+      if (parsedArgs.url !== undefined) {
+        const validation = validateGitHubPullRequestUrl(parsedArgs.url);
+        if (!validation.ok) {
+          ctx.ui.notify(`Invalid ${URL_FLAG}: ${validation.message}`, 'error');
+          return;
+        }
+
+        url = validation.target.url;
       }
 
       const status = await getMergeReadyStatus({
         exec: createCommandExec(pi, ctx),
         cwd: ctx.cwd,
+        ...(url === undefined ? {} : { url }),
         timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
       });
 
-      syncMergeReadyStatusBar({
-        ctx: {
-          cwd: ctx.cwd,
-          ui: ctx.ui,
-        },
-        status,
-      });
+      if (status.target.mode !== 'url') {
+        syncMergeReadyStatusBar({
+          ctx: {
+            cwd: ctx.cwd,
+            ui: ctx.ui,
+          },
+          status,
+        });
+      }
 
       if (parsedArgs.json) {
         ctx.ui.notify(JSON.stringify(status, null, 2), 'info');
@@ -111,7 +129,7 @@ export function renderMergeReadyStatus(status: MergeReadyStatus): {
 } {
   const badgeId = selectMergeReadyBadgeId(status);
   const badge = BADGE_PRESENTATION[badgeId];
-  const lines = [`${badge.icon} ${status.summary}`];
+  const lines = [`${badge.icon} ${status.summary}`, `Target: ${formatTarget(status.target)}`];
 
   if (status.pr) {
     lines.push(formatPullRequestIdentity(status.pr));
@@ -138,28 +156,73 @@ export function renderMergeReadyStatus(status: MergeReadyStatus): {
 }
 
 function getMergeReadyCommandArgumentCompletions(prefix: string) {
-  return JSON_FLAG.startsWith(prefix) ? [{ value: JSON_FLAG, label: JSON_FLAG }] : null;
+  return [URL_FLAG, JSON_FLAG]
+    .filter((flag) => flag.startsWith(prefix))
+    .map((flag) => ({ value: flag, label: flag }));
 }
 
-function parseMergeReadyCommandArgs(args: string): { json: boolean; unsupported: string[] } {
+type MergeReadyParsedCommandArgs =
+  | {
+      ok: true;
+      json: boolean;
+      url?: string;
+    }
+  | {
+      ok: false;
+      message: string;
+    };
+
+function parseMergeReadyCommandArgs(args: string): MergeReadyParsedCommandArgs {
   const tokens = args
     .trim()
     .split(/\s+/)
     .filter((token) => token.length > 0);
 
   let json = false;
+  let url: string | undefined;
   const unsupported: string[] = [];
 
-  for (const token of tokens) {
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token === undefined) {
+      continue;
+    }
+
     if (token === JSON_FLAG) {
+      if (json) {
+        return { ok: false, message: `Duplicate ${JSON_FLAG}. ${COMMAND_USAGE}` };
+      }
+
       json = true;
+      continue;
+    }
+
+    if (token === URL_FLAG) {
+      if (url !== undefined) {
+        return { ok: false, message: `Duplicate ${URL_FLAG}. ${COMMAND_USAGE}` };
+      }
+
+      const value = tokens[index + 1];
+      if (!value || value.startsWith('--')) {
+        return { ok: false, message: `Missing value for ${URL_FLAG}. ${COMMAND_USAGE}` };
+      }
+
+      url = value;
+      index += 1;
       continue;
     }
 
     unsupported.push(token);
   }
 
-  return { json, unsupported };
+  if (unsupported.length > 0) {
+    return {
+      ok: false,
+      message: `Unsupported arguments: ${unsupported.join(' ')}. ${COMMAND_USAGE}`,
+    };
+  }
+
+  return { ok: true, json, ...(url === undefined ? {} : { url }) };
 }
 
 function createCommandExec(
@@ -199,12 +262,23 @@ function formatOpenItemDetailStatus(status: MergeReadyOpenItemDetail['status']):
   return '❔';
 }
 
+function formatTarget(target: MergeReadyTarget): string {
+  if (target.mode === 'url') {
+    return target.url;
+  }
+
+  const branch = target.branch ? `current branch ${target.branch}` : 'current branch';
+  if (target.owner && target.repo) {
+    return `${branch} (${target.owner}/${target.repo})`;
+  }
+
+  return branch;
+}
+
 function formatPullRequestIdentity(pr: MergeReadyPullRequest): string {
   const identityParts: string[] = [];
 
-  if (pr.number !== undefined) {
-    identityParts.push(`#${String(pr.number)}`);
-  }
+  identityParts.push(`#${String(pr.number)}`);
 
   if (pr.title) {
     identityParts.push(pr.title);
@@ -212,10 +286,6 @@ function formatPullRequestIdentity(pr: MergeReadyPullRequest): string {
 
   if (identityParts.length === 0 && pr.url) {
     identityParts.push(pr.url);
-  }
-
-  if (identityParts.length === 0) {
-    return 'PR: unknown';
   }
 
   return `PR: ${identityParts.join(' — ')}`;

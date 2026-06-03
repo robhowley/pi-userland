@@ -1,5 +1,9 @@
 import { expect } from 'vitest';
-import type { MergeReadyExec, MergeReadyExecResult } from '../../extensions/merge-ready/index.js';
+import type {
+  MergeReadyExec,
+  MergeReadyExecResult,
+  MergeReadyUrlTarget,
+} from '../../extensions/merge-ready/index.js';
 
 export type ExpectedExecCall = {
   command: string;
@@ -32,6 +36,13 @@ export const GH_GRAPHQL_REVIEW_THREADS_QUERY = [
   '}',
   '}',
 ].join(' ');
+
+export const CURRENT_BRANCH_TARGET = {
+  mode: 'current_branch',
+  owner: 'robhowley',
+  repo: 'pi-userland',
+  branch: 'feat/merge-ready',
+} as const;
 
 export function createFakeExec(expectedCalls: ExpectedExecCall[]): {
   exec: MergeReadyExec;
@@ -142,21 +153,48 @@ export function createGitDiscoveryCalls(
   ];
 }
 
+type PullRequestViewCallOptions = {
+  cwd?: string;
+  timeout?: number;
+  target?: MergeReadyUrlTarget;
+};
+
+export function createPullRequestViewArgs(target?: MergeReadyUrlTarget): string[] {
+  const args = ['pr', 'view'];
+
+  if (target) {
+    args.push(String(target.prNumber), '--repo', `${target.owner}/${target.repo}`);
+  }
+
+  args.push('--json', GH_PR_VIEW_JSON_FIELDS);
+  return args;
+}
+
 export function createPullRequestViewSuccessCall(
   payload: Record<string, unknown>,
-  options: {
-    cwd?: string;
-    timeout?: number;
-  } = {},
+  options: PullRequestViewCallOptions = {},
 ): ExpectedExecCall {
   return {
     command: 'gh',
-    args: ['pr', 'view', '--json', GH_PR_VIEW_JSON_FIELDS],
+    args: createPullRequestViewArgs(options.target),
     cwd: options.cwd ?? '/repo',
     timeout: options.timeout,
     result: {
       stdout: `${JSON.stringify(payload)}\n`,
     },
+  };
+}
+
+export function createPullRequestViewFailureCall(
+  result: ExpectedExecCall['result'],
+  options: PullRequestViewCallOptions = {},
+): ExpectedExecCall {
+  return {
+    command: 'gh',
+    args: createPullRequestViewArgs(options.target),
+    cwd: options.cwd ?? '/repo',
+    timeout: options.timeout,
+    result,
   };
 }
 

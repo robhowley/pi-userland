@@ -7,6 +7,7 @@ import mergeReadyExtension, {
   type MergeReadyStatusToolContext,
 } from '../../extensions/merge-ready/index.js';
 import {
+  CURRENT_BRANCH_TARGET,
   GH_PR_VIEW_JSON_FIELDS,
   buildConversationsPayload,
   buildPullRequestPayload,
@@ -107,6 +108,7 @@ describe('merge_ready_status tool', () => {
     const tool = createRegisteredTool(getTool(MERGE_READY_STATUS_TOOL_NAME));
     const parameters = tool.parameters as {
       type?: string;
+      properties?: Record<string, unknown>;
       required?: string[];
       additionalProperties?: boolean;
     };
@@ -114,13 +116,17 @@ describe('merge_ready_status tool', () => {
     expect(tool).toMatchObject({
       name: MERGE_READY_STATUS_TOOL_NAME,
       label: 'Merge Ready Status',
-      description: expect.stringContaining('merge-readiness status'),
+      description: expect.stringContaining('current branch pull request by default'),
       promptGuidelines: expect.arrayContaining([
         expect.stringContaining('openItems'),
         expect.stringContaining('Do not infer work from raw GitHub states'),
+        expect.stringContaining('full GitHub pull request URL'),
       ]),
     });
     expect(parameters.type).toBe('object');
+    expect(parameters.properties).toEqual({
+      url: { type: 'string' },
+    });
     expect(parameters.additionalProperties).toBe(false);
     expect(parameters.required ?? []).toEqual([]);
   });
@@ -150,10 +156,14 @@ describe('merge_ready_status tool', () => {
     assertDone();
     expect(result.details).toEqual({
       state: 'ready',
+      target: CURRENT_BRANCH_TARGET,
       pr: {
+        lifecycle: 'open',
         number: 42,
         title: 'Compose merge-ready status boundary',
         url: 'https://github.com/robhowley/pi-userland/pull/42',
+        headRefName: 'feat/merge-ready',
+        baseRefName: 'main',
       },
       summary: 'Ready to merge',
       openItems: [],
@@ -167,9 +177,65 @@ describe('merge_ready_status tool', () => {
       },
       generatedAt: GENERATED_AT,
     });
-    expect(result.details.pr).not.toHaveProperty('headRefName');
     expect(result.details).not.toHaveProperty('issues');
     expect(JSON.parse(result.content[0]?.text ?? '')).toEqual(result.details);
+  });
+
+  it('targets an explicit GitHub PR URL without public cwd input', async () => {
+    const url = 'https://github.com/shopify/pi/pull/64';
+    const { api, assertDone, getTool } = createMockAPI([
+      {
+        command: 'gh',
+        args: ['pr', 'view', '64', '--repo', 'shopify/pi', '--json', GH_PR_VIEW_JSON_FIELDS],
+        cwd: '/repo',
+        timeout: MERGE_READY_STATUS_TOOL_TIMEOUT_MS,
+        result: {
+          stdout: `${JSON.stringify(
+            buildPullRequestPayload({
+              number: 64,
+              title: 'Support explicit PR URL targets',
+              url,
+              headRefName: 'feat/explicit-pr-url',
+              baseRefName: 'main',
+            }),
+          )}\n`,
+        },
+      },
+      createConversationsSuccessCall(buildConversationsPayload(), {
+        cwd: '/repo',
+        timeout: MERGE_READY_STATUS_TOOL_TIMEOUT_MS,
+        repositoryOwner: 'shopify',
+        repositoryName: 'pi',
+        pullRequestNumber: 64,
+      }),
+    ]);
+
+    registerMergeReadyStatusTool(api);
+    const tool = createRegisteredTool(getTool(MERGE_READY_STATUS_TOOL_NAME));
+
+    const result = await tool.execute(
+      'tool-call-url',
+      { url },
+      undefined,
+      undefined,
+      createToolContext(),
+    );
+
+    assertDone();
+    expect(result.details).toMatchObject({
+      target: {
+        mode: 'url',
+        url,
+        owner: 'shopify',
+        repo: 'pi',
+        prNumber: 64,
+      },
+      pr: {
+        number: 64,
+        title: 'Support explicit PR URL targets',
+        url,
+      },
+    });
   });
 
   it('keeps optional unresolved comments in signals while leaving openItems blocker-only', async () => {
@@ -283,6 +349,7 @@ describe('merge_ready_status tool', () => {
     assertDone();
     expect(result.details).toEqual({
       state: 'unknown',
+      target: CURRENT_BRANCH_TARGET,
       pr: null,
       summary: 'No pull request found',
       openItems: [
@@ -304,35 +371,17 @@ describe('merge_ready_status tool', () => {
     expect(JSON.parse(result.content[0]?.text ?? '')).toEqual(result.details);
   });
 
-  it('uses an optional cwd override when provided', async () => {
-    const cwd = '/alternate-repo';
-    const { api, assertDone, getTool } = createMockAPI([
-      ...createGitDiscoveryCalls({
-        cwd,
-        repositoryRoot: cwd,
-        timeout: MERGE_READY_STATUS_TOOL_TIMEOUT_MS,
-      }),
-      createPullRequestViewSuccessCall(buildPullRequestPayload(), {
-        cwd,
-        timeout: MERGE_READY_STATUS_TOOL_TIMEOUT_MS,
-      }),
-      createConversationsSuccessCall(
-        buildConversationsPayload({
-          reviewThreads: {
-            nodes: [{ isResolved: true }],
-            pageInfo: { hasNextPage: false },
-          },
-        }),
-        { cwd, timeout: MERGE_READY_STATUS_TOOL_TIMEOUT_MS },
-      ),
-    ]);
+  it('rejects invalid explicit URL targets instead of guessing', async () => {
+    const { api, getTool } = createMockAPI();
 
     registerMergeReadyStatusTool(api);
     const tool = createRegisteredTool(getTool(MERGE_READY_STATUS_TOOL_NAME));
 
-    await tool.execute('tool-call-4', { cwd }, undefined, undefined, createToolContext('/repo'));
-
-    assertDone();
+    await expect(
+      tool.execute('tool-call-bad-url', { url: '64' }, undefined, undefined, createToolContext()),
+    ).rejects.toThrow(
+      'Invalid url: Pull request numbers are not accepted. Pass a full GitHub pull request URL like https://github.com/OWNER/REPO/pull/NUMBER.',
+    );
   });
 
   it('degrades thrown exec failures to an unknown MergeReadyStatus instead of throwing', async () => {
@@ -358,6 +407,7 @@ describe('merge_ready_status tool', () => {
           text: JSON.stringify(
             {
               state: 'unknown',
+              target: { mode: 'current_branch' },
               pr: null,
               summary: 'No pull request found',
               openItems: [
@@ -383,6 +433,7 @@ describe('merge_ready_status tool', () => {
       ],
       details: {
         state: 'unknown',
+        target: { mode: 'current_branch' },
         pr: null,
         summary: 'No pull request found',
         openItems: [

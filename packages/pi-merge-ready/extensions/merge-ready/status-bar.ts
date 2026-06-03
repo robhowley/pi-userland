@@ -155,6 +155,13 @@ export function syncMergeReadyStatusBar(
 ): MergeReadyStatusBarRefreshResult {
   const text = renderMergeReadyStatusBar(options.status);
 
+  if (options.status.target.mode === 'url') {
+    return {
+      text,
+      cached: false,
+    };
+  }
+
   applyMergeReadyStatusBarText({
     ctx: options.ctx,
     text,

@@ -10,6 +10,7 @@ import type {
   MergeReadySignalsInput,
   MergeReadyState,
   MergeReadyStatus,
+  MergeReadyTarget,
 } from './types.js';
 
 const OPEN_ITEM_PRIORITY = {
@@ -68,6 +69,8 @@ const OPEN_ITEM_SUMMARY = {
   review_pending: 'Waiting for review',
 } as const satisfies Record<MergeReadyOpenItemId, string>;
 
+const DEFAULT_TARGET: MergeReadyTarget = { mode: 'current_branch' };
+
 export function normalizeMergeReadySignals(
   input: MergeReadySignalsInput = {},
   hasPr: boolean = false,
@@ -114,11 +117,16 @@ export function normalizeMergeReadySignals(
 export function deriveMergeReadyOpenItems(
   signals: MergeReadySignals,
   hasPr: boolean,
+  pr: MergeReadyBadgeContext['pr'],
 ): MergeReadyOpenItem[] {
   const openItems: MergeReadyOpenItem[] = [];
 
   if (!hasPr) {
     openItems.push(createOpenItem('no_pull_request'));
+    return openItems;
+  }
+
+  if (isTerminalPullRequest(pr)) {
     return openItems;
   }
 
@@ -146,21 +154,14 @@ export function deriveMergeReadyOpenItems(
     openItems.push(createOpenItem('changes_requested'));
   }
 
-  // unresolved conversations:
-  // - required + count > 0 => blocker
-  // - optional + count > 0 => not a blocker (just informational in signals)
-  // - unknown + count > 0 => ambiguous (emit status_ambiguous, avoid false-ready)
   if (signals.unresolvedConversations) {
     if (signals.unresolvedConversationRequirement === 'required') {
       openItems.push(createOpenItem('unresolved_conversations', signals));
     } else if (signals.unresolvedConversationRequirement === 'unknown') {
-      // Avoid false-ready: surface ambiguity when we can't determine if resolution is required.
-      // Only add status_ambiguous if not already present from mergeability unknown.
       if (!openItems.some((item) => item.id === 'status_ambiguous')) {
         openItems.push(createOpenItem('status_ambiguous', signals));
       }
     }
-    // requirement === 'optional' with count > 0 => no blocker emitted
   }
 
   if (signals.checks === 'running') {
@@ -175,22 +176,27 @@ export function deriveMergeReadyOpenItems(
     openItems.push(createOpenItem('review_pending'));
   }
 
-  // Suppress generic merge_blocked when a concrete open item explains the block.
-  // GitHub's aggregate blocked state is often a symptom of draft state, checks,
-  // reviews, or required conversation resolution. Keep merge_blocked only for
-  // hook/ruleset/server-side blockers that no specific open item explains.
   if (signals.mergeability === 'blocked' && !openItems.some(openItemExplainsBlockedMergeability)) {
     openItems.push(createOpenItem('merge_blocked', signals));
   }
 
-  return openItems.sort(
-    (left, right) => OPEN_ITEM_PRIORITY[left.id] - OPEN_ITEM_PRIORITY[right.id],
-  );
+  return sortOpenItems(openItems);
 }
 
-export function deriveMergeReadyState(openItems: MergeReadyOpenItem[]): MergeReadyState {
+export function deriveMergeReadyState(
+  openItems: MergeReadyOpenItem[],
+  pr: MergeReadyBadgeContext['pr'],
+): MergeReadyState {
   const topOpenItem = selectTopOpenItem(openItems);
-  return topOpenItem ? OPEN_ITEM_STATE[topOpenItem.id] : 'ready';
+  if (topOpenItem) {
+    return OPEN_ITEM_STATE[topOpenItem.id];
+  }
+
+  if (isTerminalPullRequest(pr)) {
+    return 'unknown';
+  }
+
+  return pr ? 'ready' : 'unknown';
 }
 
 export function deriveMergeReadySummary(context: MergeReadyBadgeContext): string {
@@ -199,17 +205,33 @@ export function deriveMergeReadySummary(context: MergeReadyBadgeContext): string
     return topOpenItem.summary;
   }
 
+  if (context.pr?.lifecycle === 'merged') {
+    return 'PR is already merged';
+  }
+
+  if (context.pr?.lifecycle === 'closed') {
+    return 'PR is closed';
+  }
+
   if (context.pr) {
     return 'Ready to merge';
   }
 
-  return 'No pull request';
+  return 'No pull request found';
 }
 
 export function selectMergeReadyBadgeId(context: MergeReadyBadgeContext): MergeReadyBadgeId {
   const topOpenItem = selectTopOpenItem(context.openItems);
   if (topOpenItem) {
     return OPEN_ITEM_BADGE[topOpenItem.id];
+  }
+
+  if (context.pr?.lifecycle === 'merged') {
+    return 'merged';
+  }
+
+  if (context.pr?.lifecycle === 'closed') {
+    return 'closed';
   }
 
   if (context.pr) {
@@ -220,25 +242,30 @@ export function selectMergeReadyBadgeId(context: MergeReadyBadgeContext): MergeR
 }
 
 export function createMergeReadyStatus(options: CreateMergeReadyStatusOptions): MergeReadyStatus {
+  const target = options.target ?? DEFAULT_TARGET;
   const pr = options.pr ?? null;
   const hasPr = options.hasPr ?? pr !== null;
   const signals = normalizeMergeReadySignals(options.signals, hasPr);
-  let openItems = deriveMergeReadyOpenItems(signals, hasPr);
+  let openItems =
+    options.openItems === undefined
+      ? deriveMergeReadyOpenItems(signals, hasPr, pr)
+      : sortOpenItems(options.openItems);
 
   if (
+    options.openItems === undefined &&
     options.forceStatusAmbiguous &&
     hasPr &&
+    !isTerminalPullRequest(pr) &&
     !openItems.some((openItem) => openItem.id === 'status_ambiguous')
   ) {
-    openItems = [...openItems, createOpenItem('status_ambiguous', signals)].sort(
-      (left, right) => OPEN_ITEM_PRIORITY[left.id] - OPEN_ITEM_PRIORITY[right.id],
-    );
+    openItems = sortOpenItems([...openItems, createOpenItem('status_ambiguous', signals)]);
   }
 
   return {
-    state: deriveMergeReadyState(openItems),
+    state: deriveMergeReadyState(openItems, pr),
+    target,
     pr,
-    summary: deriveMergeReadySummary({ pr, openItems }),
+    summary: options.summary ?? deriveMergeReadySummary({ pr, openItems }),
     openItems,
     signals,
     generatedAt: normalizeGeneratedAt(options.generatedAt),
@@ -393,6 +420,12 @@ function openItemExplainsBlockedMergeability(openItem: MergeReadyOpenItem): bool
   );
 }
 
+function sortOpenItems(openItems: MergeReadyOpenItem[]): MergeReadyOpenItem[] {
+  return [...openItems].sort(
+    (left, right) => OPEN_ITEM_PRIORITY[left.id] - OPEN_ITEM_PRIORITY[right.id],
+  );
+}
+
 function selectTopOpenItem(openItems: MergeReadyOpenItem[]): MergeReadyOpenItem | null {
   let topOpenItem: MergeReadyOpenItem | null = null;
 
@@ -403,4 +436,8 @@ function selectTopOpenItem(openItems: MergeReadyOpenItem[]): MergeReadyOpenItem 
   }
 
   return topOpenItem;
+}
+
+function isTerminalPullRequest(pr: MergeReadyBadgeContext['pr']): boolean {
+  return pr?.lifecycle === 'merged' || pr?.lifecycle === 'closed';
 }
