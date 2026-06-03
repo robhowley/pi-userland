@@ -1,6 +1,6 @@
 {
   "name": "@robhowley/pi-merge-ready",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "PR merge-readiness for Pi: status bar signal, merge blocker context, and structured agent loops for what remains.",
   "type": "module",
   "files": [
