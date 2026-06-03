@@ -259,6 +259,11 @@ const blockerFixtures: BlockerFixture[] = [
       draft: false,
       mergeability: 'mergeable',
       checks: 'failing',
+      checkDetails: {
+        failing: [{ label: 'ci / unit', status: 'failing' }],
+        running: [],
+        unknown: [],
+      },
       review: 'approved',
       unresolvedConversations: false,
       unresolvedConversationRequirement: 'required',
@@ -284,6 +289,11 @@ const blockerFixtures: BlockerFixture[] = [
       draft: false,
       mergeability: 'mergeable',
       checks: 'running',
+      checkDetails: {
+        failing: [],
+        running: [{ label: 'ci / unit', status: 'running' }],
+        unknown: [],
+      },
       review: 'approved',
       unresolvedConversations: false,
       unresolvedConversationRequirement: 'required',

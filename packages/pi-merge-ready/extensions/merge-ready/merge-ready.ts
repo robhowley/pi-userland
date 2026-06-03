@@ -76,6 +76,7 @@ export async function getMergeReadyStatus(
     draft: toBoolean(pullRequestFacts.pullRequest.draft),
     mergeability: pullRequestFacts.pullRequest.mergeability,
     checks: pullRequestFacts.pullRequest.checks.state,
+    checkDetails: pullRequestFacts.pullRequest.checks.details,
     review: normalizeReviewSignal(pullRequestFacts.pullRequest),
     ...conversationSignals,
   };

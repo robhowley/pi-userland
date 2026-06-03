@@ -378,6 +378,145 @@ describe('merge-ready status', () => {
     expect(status.summary).toBe('GitHub reports merge is blocked');
   });
 
+  it.each<{
+    name: string;
+    signals: MergeReadySignalsInput;
+    expectedOpenItemIds: MergeReadyOpenItemId[];
+  }>([
+    {
+      name: 'draft state',
+      signals: { mergeability: 'blocked', draft: true },
+      expectedOpenItemIds: ['draft'],
+    },
+    {
+      name: 'changes requested',
+      signals: { mergeability: 'blocked', review: 'changes_requested' },
+      expectedOpenItemIds: ['changes_requested'],
+    },
+    {
+      name: 'running checks',
+      signals: { mergeability: 'blocked', checks: 'running' },
+      expectedOpenItemIds: ['ci_running'],
+    },
+    {
+      name: 'pending review',
+      signals: { mergeability: 'blocked', review: 'pending' },
+      expectedOpenItemIds: ['review_pending'],
+    },
+  ])('suppresses generic merge_blocked when $name explain the block', (fixture) => {
+    const status = buildStatus({ signals: fixture.signals });
+
+    expect(openItemIds(status)).toEqual(fixture.expectedOpenItemIds);
+    expect(status.openItems.some((openItem) => openItem.id === 'merge_blocked')).toBe(false);
+  });
+
+  it('suppresses generic merge_blocked when failing checks explain the block', () => {
+    const status = buildStatus({
+      signals: {
+        mergeability: 'blocked',
+        checks: 'failing',
+        checkDetails: {
+          failing: [{ label: 'linting', status: 'failing' }],
+          running: [],
+          unknown: [],
+        },
+      },
+    });
+
+    expect(openItemIds(status)).toEqual(['ci_failing']);
+    expect(status.state).toBe('blocked');
+    expect(status.summary).toBe('Required checks are failing');
+    expect(status.openItems).toEqual([
+      {
+        id: 'ci_failing',
+        summary: 'Required checks are failing',
+        details: [{ label: 'linting', status: 'failing' }],
+      },
+    ]);
+  });
+
+  it('keeps merge_blocked when no specific blocker explains GitHub blocked state', () => {
+    const status = buildStatus({ signals: { mergeability: 'blocked' } });
+
+    expect(openItemIds(status)).toEqual(['merge_blocked']);
+    expect(status.state).toBe('blocked');
+    expect(status.summary).toBe('GitHub reports merge is blocked');
+  });
+
+  it('treats passing checks as authoritative over non-green detail rows', () => {
+    const status = buildStatus({
+      signals: {
+        mergeability: 'blocked',
+        checks: 'passing',
+        checkDetails: {
+          failing: [{ label: 'linting', status: 'failing' }],
+          running: [{ label: 'tests', status: 'running' }],
+          unknown: [{ label: 'mystery', status: 'unknown' }],
+        },
+      },
+    });
+
+    expect(status.signals.checkDetails).toBeUndefined();
+    expect(openItemIds(status)).toEqual(['merge_blocked']);
+  });
+
+  it('attaches running check details without promoting green rows', () => {
+    const status = buildStatus({
+      signals: {
+        checks: 'running',
+        checkDetails: {
+          failing: [],
+          running: [
+            {
+              label: 'tests',
+              status: 'running',
+              url: 'https://github.example/checks/tests',
+            },
+          ],
+          unknown: [],
+        },
+      },
+    });
+
+    expect(openItemIds(status)).toEqual(['ci_running']);
+    expect(status.openItems).toEqual([
+      {
+        id: 'ci_running',
+        summary: 'Checks are still running',
+        details: [
+          {
+            label: 'tests',
+            status: 'running',
+            url: 'https://github.example/checks/tests',
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('surfaces unknown check rows through status_ambiguous details', () => {
+    const status = buildStatus({
+      signals: {
+        checks: 'unknown',
+        checkDetails: {
+          failing: [],
+          running: [],
+          unknown: [{ label: 'mystery check', status: 'unknown' }],
+        },
+      },
+    });
+
+    expect(openItemIds(status)).toEqual(['status_ambiguous']);
+    expect(status.state).toBe('unknown');
+    expect(status.openItems).toEqual([
+      {
+        id: 'status_ambiguous',
+        summary: 'Merge readiness is ambiguous',
+        details: [{ label: 'mystery check', status: 'unknown' }],
+      },
+    ]);
+  });
+
   it('does not duplicate status_ambiguous when mergeability is unknown and conversations requirement is unknown', () => {
     const status = buildStatus({
       signals: {
@@ -451,6 +590,13 @@ describe('normalizeMergeReadySignals', () => {
         draft: true,
         mergeability: 'behind',
         checks: 'failing',
+        checkDetails: {
+          failing: [
+            { label: ' linting ', status: 'failing', url: ' https://github.example/lint ' },
+          ],
+          running: [],
+          unknown: [],
+        },
         review: 'changes_requested',
         unresolvedConversations: true,
         unresolvedConversationCount: 2,
@@ -462,10 +608,83 @@ describe('normalizeMergeReadySignals', () => {
       draft: true,
       mergeability: 'behind',
       checks: 'failing',
+      checkDetails: {
+        failing: [{ label: 'linting', status: 'failing', url: 'https://github.example/lint' }],
+        running: [],
+        unknown: [],
+      },
       review: 'changes_requested',
       unresolvedConversations: true,
       unresolvedConversationCount: 2,
       unresolvedConversationRequirement: 'required',
+    });
+  });
+
+  it('keeps only the detail bucket implied by checks', () => {
+    const signals = normalizeMergeReadySignals(
+      {
+        checks: 'running',
+        checkDetails: {
+          failing: [{ label: 'linting', status: 'failing' }],
+          running: [{ label: ' tests ', status: 'running' }],
+          unknown: [{ label: 'mystery', status: 'unknown' }],
+        },
+      },
+      true,
+    );
+
+    expect(signals.checkDetails).toEqual({
+      failing: [],
+      running: [{ label: 'tests', status: 'running' }],
+      unknown: [],
+    });
+  });
+
+  it('drops all check details when checks are passing', () => {
+    const signals = normalizeMergeReadySignals(
+      {
+        checks: 'passing',
+        checkDetails: {
+          failing: [{ label: 'linting', status: 'failing' }],
+          running: [{ label: 'tests', status: 'running' }],
+          unknown: [{ label: 'mystery', status: 'unknown' }],
+        },
+      },
+      true,
+    );
+
+    expect(signals.checkDetails).toBeUndefined();
+  });
+
+  it('tolerates partial and malformed runtime checkDetails', () => {
+    const signals = normalizeMergeReadySignals(
+      {
+        checks: 'failing',
+        checkDetails: {
+          failing: [
+            null,
+            { label: '   ' },
+            { label: ' linting ' },
+            { label: 'tests', url: ' https://github.example/checks/tests ' },
+            { label: 'mystery', url: 42 },
+          ],
+        },
+      } as unknown as MergeReadySignalsInput,
+      true,
+    );
+
+    expect(signals.checkDetails).toEqual({
+      failing: [
+        { label: 'linting', status: 'failing' },
+        {
+          label: 'tests',
+          status: 'failing',
+          url: 'https://github.example/checks/tests',
+        },
+        { label: 'mystery', status: 'failing' },
+      ],
+      running: [],
+      unknown: [],
     });
   });
 

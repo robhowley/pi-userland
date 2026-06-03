@@ -2,6 +2,8 @@ import type {
   CreateMergeReadyStatusOptions,
   MergeReadyBadgeContext,
   MergeReadyBadgeId,
+  MergeReadyCheckDetail,
+  MergeReadyCheckDetails,
   MergeReadyOpenItem,
   MergeReadyOpenItemId,
   MergeReadySignals,
@@ -73,6 +75,7 @@ export function normalizeMergeReadySignals(
   const draft = input.draft ?? false;
   const mergeability = input.mergeability ?? 'unknown';
   const checks = input.checks ?? 'unknown';
+  const checkDetails = normalizeCheckDetails(input.checkDetails, checks);
   const review = input.review ?? 'unknown';
   const unresolvedConversationRequirement = input.unresolvedConversationRequirement ?? 'unknown';
   const unresolvedConversationCount = normalizeUnresolvedConversationCount(
@@ -98,6 +101,7 @@ export function normalizeMergeReadySignals(
     draft,
     mergeability,
     checks,
+    ...(checkDetails ? { checkDetails } : {}),
     review,
     unresolvedConversations,
     unresolvedConversationRequirement,
@@ -119,7 +123,7 @@ export function deriveMergeReadyOpenItems(
   }
 
   if (signals.mergeability === 'unknown') {
-    openItems.push(createOpenItem('status_ambiguous'));
+    openItems.push(createOpenItem('status_ambiguous', signals));
   }
 
   if (signals.mergeability === 'conflicting') {
@@ -130,21 +134,12 @@ export function deriveMergeReadyOpenItems(
     openItems.push(createOpenItem('branch_out_of_date'));
   }
 
-  // Suppress generic merge_blocked when required unresolved conversations explain the block.
-  // GitHub often reports 'blocked' mergeability when conversation resolution is required.
-  const hasRequiredUnresolvedConversations =
-    signals.unresolvedConversations && signals.unresolvedConversationRequirement === 'required';
-
-  if (signals.mergeability === 'blocked' && !signals.draft && !hasRequiredUnresolvedConversations) {
-    openItems.push(createOpenItem('merge_blocked'));
-  }
-
   if (signals.draft) {
     openItems.push(createOpenItem('draft'));
   }
 
   if (signals.checks === 'failing') {
-    openItems.push(createOpenItem('ci_failing'));
+    openItems.push(createOpenItem('ci_failing', signals));
   }
 
   if (signals.review === 'changes_requested') {
@@ -162,18 +157,30 @@ export function deriveMergeReadyOpenItems(
       // Avoid false-ready: surface ambiguity when we can't determine if resolution is required.
       // Only add status_ambiguous if not already present from mergeability unknown.
       if (!openItems.some((item) => item.id === 'status_ambiguous')) {
-        openItems.push(createOpenItem('status_ambiguous'));
+        openItems.push(createOpenItem('status_ambiguous', signals));
       }
     }
     // requirement === 'optional' with count > 0 => no blocker emitted
   }
 
   if (signals.checks === 'running') {
-    openItems.push(createOpenItem('ci_running'));
+    openItems.push(createOpenItem('ci_running', signals));
+  }
+
+  if (signals.checks === 'unknown' && !openItems.some((item) => item.id === 'status_ambiguous')) {
+    openItems.push(createOpenItem('status_ambiguous', signals));
   }
 
   if (signals.review === 'pending') {
     openItems.push(createOpenItem('review_pending'));
+  }
+
+  // Suppress generic merge_blocked when a concrete open item explains the block.
+  // GitHub's aggregate blocked state is often a symptom of draft state, checks,
+  // reviews, or required conversation resolution. Keep merge_blocked only for
+  // hook/ruleset/server-side blockers that no specific open item explains.
+  if (signals.mergeability === 'blocked' && !openItems.some(openItemExplainsBlockedMergeability)) {
+    openItems.push(createOpenItem('merge_blocked', signals));
   }
 
   return openItems.sort(
@@ -223,7 +230,7 @@ export function createMergeReadyStatus(options: CreateMergeReadyStatusOptions): 
     hasPr &&
     !openItems.some((openItem) => openItem.id === 'status_ambiguous')
   ) {
-    openItems = [...openItems, createOpenItem('status_ambiguous')].sort(
+    openItems = [...openItems, createOpenItem('status_ambiguous', signals)].sort(
       (left, right) => OPEN_ITEM_PRIORITY[left.id] - OPEN_ITEM_PRIORITY[right.id],
     );
   }
@@ -242,11 +249,115 @@ function normalizeGeneratedAt(value: string | Date): string {
   return typeof value === 'string' ? value : value.toISOString();
 }
 
+function normalizeCheckDetails(
+  value: unknown,
+  checks: MergeReadySignals['checks'],
+): MergeReadyCheckDetails | undefined {
+  if (checks === 'passing') {
+    return undefined;
+  }
+
+  const checkDetails: MergeReadyCheckDetails = {
+    failing:
+      checks === 'failing'
+        ? normalizeCheckDetailList(readCheckDetailBucket(value, 'failing'), 'failing')
+        : [],
+    running:
+      checks === 'running'
+        ? normalizeCheckDetailList(readCheckDetailBucket(value, 'running'), 'running')
+        : [],
+    unknown:
+      checks === 'unknown'
+        ? normalizeCheckDetailList(readCheckDetailBucket(value, 'unknown'), 'unknown')
+        : [],
+  };
+
+  if (
+    checkDetails.failing.length === 0 &&
+    checkDetails.running.length === 0 &&
+    checkDetails.unknown.length === 0
+  ) {
+    return undefined;
+  }
+
+  return checkDetails;
+}
+
+function readCheckDetailBucket(value: unknown, bucket: MergeReadyCheckDetail['status']): unknown {
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+
+  return (value as Partial<Record<MergeReadyCheckDetail['status'], unknown>>)[bucket];
+}
+
+function normalizeCheckDetailList(
+  details: unknown,
+  status: MergeReadyCheckDetail['status'],
+): MergeReadyCheckDetail[] {
+  if (!Array.isArray(details)) {
+    return [];
+  }
+
+  return details.flatMap((detail) => normalizeCheckDetail(detail, status));
+}
+
+function normalizeCheckDetail(
+  detail: unknown,
+  status: MergeReadyCheckDetail['status'],
+): MergeReadyCheckDetail[] {
+  if (!detail || typeof detail !== 'object') {
+    return [];
+  }
+
+  const candidate = detail as Partial<Record<'label' | 'url', unknown>>;
+  const label = typeof candidate.label === 'string' ? candidate.label.trim() : '';
+  if (!label) {
+    return [];
+  }
+
+  const url = typeof candidate.url === 'string' ? candidate.url.trim() : '';
+
+  return [
+    {
+      label,
+      status,
+      ...(url ? { url } : {}),
+    },
+  ];
+}
+
 function createOpenItem(id: MergeReadyOpenItemId, signals?: MergeReadySignals): MergeReadyOpenItem {
+  const details = getOpenItemDetails(id, signals);
+
   return {
     id,
     summary: createOpenItemSummary(id, signals),
+    ...(details.length > 0 ? { details } : {}),
   };
+}
+
+function getOpenItemDetails(
+  id: MergeReadyOpenItemId,
+  signals: MergeReadySignals | undefined,
+): MergeReadyCheckDetail[] {
+  if (!signals?.checkDetails) {
+    return [];
+  }
+
+  if (id === 'ci_failing') {
+    return signals.checkDetails.failing;
+  }
+
+  if (id === 'ci_running') {
+    return signals.checkDetails.running;
+  }
+
+  if (id === 'status_ambiguous') {
+    return signals.checkDetails.unknown;
+  }
+
+  return [];
 }
 
 function createOpenItemSummary(
@@ -269,6 +380,17 @@ function normalizeUnresolvedConversationCount(value: number | undefined): number
   }
 
   return Math.floor(value);
+}
+
+function openItemExplainsBlockedMergeability(openItem: MergeReadyOpenItem): boolean {
+  return (
+    openItem.id === 'draft' ||
+    openItem.id === 'ci_failing' ||
+    openItem.id === 'changes_requested' ||
+    openItem.id === 'unresolved_conversations' ||
+    openItem.id === 'ci_running' ||
+    openItem.id === 'review_pending'
+  );
 }
 
 function selectTopOpenItem(openItems: MergeReadyOpenItem[]): MergeReadyOpenItem | null {

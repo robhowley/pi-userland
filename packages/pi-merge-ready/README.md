@@ -79,6 +79,19 @@ Example response:
 }
 ```
 
+Check-related `openItems` may include `details` rows for the non-green checks only:
+
+```json
+{
+  "id": "ci_failing",
+  "summary": "Required checks are failing",
+  "details": [
+    { "label": "linting", "status": "failing" },
+    { "label": "PR Title Check", "status": "failing" }
+  ]
+}
+```
+
 Agents should fix or report only the items returned in `openItems`; they should not invent blockers from raw GitHub fields.
 
 ### Merge-ready loop skill
@@ -115,6 +128,7 @@ Unresolved conversations are requirement-aware:
 - Required unresolved conversations block merge readiness.
 - Optional unresolved conversations remain in `signals`, but not in `openItems`.
 - Unknown conversation requirements produce `status_ambiguous`.
+- Generic `merge_blocked` is suppressed when a concrete blocker such as failing checks, draft state, required review, or required conversations already explains GitHub's blocked state.
 
 ## License
 
