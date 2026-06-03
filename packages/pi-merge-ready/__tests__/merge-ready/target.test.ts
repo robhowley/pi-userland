@@ -37,6 +37,13 @@ describe('merge-ready target parsing', () => {
     'https://github.com/owner/repo/pull/64?foo=bar',
     'https://github.com/owner/repo/pull/64#discussion',
     'https://github.com/owner/repo/pull/64/files',
+    'https://github.com//owner/repo/pull/64',
+    'https://github.com/owner//repo/pull/64',
+    'https://github.com/owner/repo/pull/64//',
+    'https://user@github.com/owner/repo/pull/64',
+    'https://github.com:8443/owner/repo/pull/64',
+    'https://github.com/owner/repo/pull/0',
+    'https://github.com/owner/repo/pull/9007199254740993',
   ])('rejects invalid explicit target %s', (input) => {
     const validation = validateGitHubPullRequestUrl(input);
     expect(validation.ok).toBe(false);

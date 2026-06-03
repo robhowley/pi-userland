@@ -630,19 +630,12 @@ describe('merge-ready command', () => {
     await handler?.('--url branch-name', ctx);
     await handler?.('--url https://github.com/owner/repo/issues/64', ctx);
 
+    const invalidMessage =
+      'Invalid --url: Pass a full HTTPS GitHub pull request URL like https://github.com/OWNER/REPO/pull/NUMBER with no query string, fragment, or extra path.';
     expect(vi.mocked(ctx.ui.notify).mock.calls).toEqual([
-      [
-        'Invalid --url: Pull request numbers are not accepted. Pass a full GitHub pull request URL like https://github.com/OWNER/REPO/pull/NUMBER.',
-        'error',
-      ],
-      [
-        'Invalid --url: Branch names, repo names, and PR shorthands are not accepted. Pass a full GitHub pull request URL like https://github.com/OWNER/REPO/pull/NUMBER.',
-        'error',
-      ],
-      [
-        'Invalid --url: Issue URLs are not supported. Pass a pull request URL like https://github.com/OWNER/REPO/pull/NUMBER.',
-        'error',
-      ],
+      [invalidMessage, 'error'],
+      [invalidMessage, 'error'],
+      [invalidMessage, 'error'],
     ]);
   });
 });

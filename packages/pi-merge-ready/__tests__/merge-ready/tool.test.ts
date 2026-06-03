@@ -380,7 +380,7 @@ describe('merge_ready_status tool', () => {
     await expect(
       tool.execute('tool-call-bad-url', { url: '64' }, undefined, undefined, createToolContext()),
     ).rejects.toThrow(
-      'Invalid url: Pull request numbers are not accepted. Pass a full GitHub pull request URL like https://github.com/OWNER/REPO/pull/NUMBER.',
+      'Invalid url: Pass a full HTTPS GitHub pull request URL like https://github.com/OWNER/REPO/pull/NUMBER with no query string, fragment, or extra path.',
     );
   });
 

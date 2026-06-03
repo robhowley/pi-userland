@@ -1177,7 +1177,7 @@ describe('getMergeReadyStatus', () => {
         url: '64',
         now: () => new Date(GENERATED_AT),
       }),
-    ).rejects.toThrow('Pull request numbers are not accepted');
+    ).rejects.toThrow('Pass a full HTTPS GitHub pull request URL');
   });
 
   it('returns unknown status when not in a git repository', async () => {
