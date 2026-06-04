@@ -3,7 +3,9 @@ import type {
   MergeReadyCheckDetail,
   MergeReadyCheckDetails,
   MergeReadyChecksSignal,
+  MergeReadyRepositoryIdentity,
   MergeReadyReviewSignal,
+  MergeReadyUrlTarget,
   PullRequestLifecycle,
 } from './types.js';
 import type { MergeReadyExec } from './git.js';
@@ -86,6 +88,7 @@ export type MergeReadyGitHubPullRequest = {
   url: string;
   headRefName: string;
   baseRefName: string;
+  headRepository: MergeReadyRepositoryIdentity | null;
   draft: MergeReadyBooleanSignal;
   mergeability: MergeReadyGitHubMergeability;
   checks: MergeReadyGitHubCheckSummary;
@@ -107,6 +110,8 @@ export type MergeReadyGitHubIssue = {
   field?: string | undefined;
 };
 
+export type MergeReadyGitHubFailureReason = 'auth' | 'access' | 'api' | 'command';
+
 export type MergeReadyGitHubPullRequestFacts =
   | {
       kind: 'found';
@@ -119,8 +124,12 @@ export type MergeReadyGitHubPullRequestFacts =
       issues: MergeReadyGitHubIssue[];
     }
   | {
+      kind: 'not_found';
+      issues: MergeReadyGitHubIssue[];
+    }
+  | {
       kind: 'failure';
-      reason: 'auth' | 'api' | 'command';
+      reason: MergeReadyGitHubFailureReason;
       issues: MergeReadyGitHubIssue[];
     }
   | {
@@ -136,6 +145,7 @@ export type GetMergeReadyGitHubPullRequestFactsOptions = {
   exec: MergeReadyExec;
   cwd?: string;
   timeout?: number;
+  target?: MergeReadyUrlTarget;
 };
 
 type IssueContext = {
@@ -172,6 +182,8 @@ const GH_PR_VIEW_JSON_FIELDS = [
   'mergeable',
   'mergeStateStatus',
   'headRefName',
+  'headRepository',
+  'headRepositoryOwner',
   'baseRefName',
   'statusCheckRollup',
   'reviews',
@@ -182,6 +194,10 @@ const GH_PR_VIEW_JSON_FIELDS = [
 
 const NO_PULL_REQUEST_RE =
   /no pull requests? found|no open pull requests? found|no pull requests? match/i;
+const TARGETED_PULL_REQUEST_NOT_FOUND_RE =
+  /pull request not found|could not resolve to a pullrequest with the number of|no pull requests? found|no pull requests? match/i;
+const TARGETED_PULL_REQUEST_ACCESS_RE =
+  /resource not accessible by integration|forbidden|permission denied|insufficient permissions?|must have .* permission|not authorized|viewer cannot|could not resolve to a repository with the name/i;
 const RUNNING_CHECK_STATUSES = new Set([
   'IN_PROGRESS',
   'QUEUED',
@@ -214,7 +230,7 @@ const KNOWN_MERGE_STATE_STATUSES = new Set([
 export async function fetchMergeReadyGitHubPullRequestFacts(
   options: GetMergeReadyGitHubPullRequestFactsOptions,
 ): Promise<MergeReadyGitHubPullRequestFacts> {
-  const args = ['pr', 'view', '--json', GH_PR_VIEW_JSON_FIELDS.join(',')];
+  const args = createPullRequestViewArgs(options.target);
   const commandResult = await runCommand(options.exec, 'gh', args, options.cwd, options.timeout);
 
   if (!commandResult.ok) {
@@ -232,6 +248,20 @@ export async function fetchMergeReadyGitHubPullRequestFacts(
         ? 'gh pr view threw while fetching pull request facts'
         : `gh pr view exited with code ${commandResult.exitCode}`,
     );
+
+    if (options.target) {
+      const reason = classifyTargetedPullRequestFailure(commandResult.stderr, commandResult.stdout);
+
+      if (reason === 'not_found') {
+        return { kind: 'not_found', issues: [issue] };
+      }
+
+      return {
+        kind: 'failure',
+        reason,
+        issues: [issue],
+      };
+    }
 
     if (looksLikeNoPullRequest(commandResult.stderr, commandResult.stdout)) {
       return { kind: 'no_pr', issues: [issue] };
@@ -282,6 +312,34 @@ async function runCommand(
   return runNormalizedExecCommand(exec, command, args, cwd, timeout);
 }
 
+function createPullRequestViewArgs(target: MergeReadyUrlTarget | undefined): string[] {
+  const args = ['pr', 'view'];
+
+  if (target) {
+    args.push(String(target.prNumber), '--repo', `${target.owner}/${target.repo}`);
+  }
+
+  args.push('--json', GH_PR_VIEW_JSON_FIELDS.join(','));
+  return args;
+}
+
+function classifyTargetedPullRequestFailure(
+  stderr: string,
+  stdout: string,
+): 'not_found' | MergeReadyGitHubFailureReason {
+  const combinedOutput = `${stderr}\n${stdout}`;
+
+  if (TARGETED_PULL_REQUEST_NOT_FOUND_RE.test(combinedOutput)) {
+    return 'not_found';
+  }
+
+  if (TARGETED_PULL_REQUEST_ACCESS_RE.test(combinedOutput)) {
+    return 'access';
+  }
+
+  return classifyGitHubCliFailureReason(stderr, stdout);
+}
+
 function normalizePullRequest(
   value: unknown,
   issueContext: IssueContext,
@@ -300,6 +358,12 @@ function normalizePullRequest(
   const url = readRequiredString(value['url']);
   const headRefName = readRequiredString(value['headRefName']);
   const baseRefName = readRequiredString(value['baseRefName']);
+  const headRepository = normalizeHeadRepository(
+    value['headRepository'],
+    value['headRepositoryOwner'],
+    issueContext,
+    issues,
+  );
 
   if (!lifecycle) {
     issues.push(
@@ -373,6 +437,7 @@ function normalizePullRequest(
     url,
     headRefName,
     baseRefName,
+    headRepository,
     draft: normalizeDraft(value['isDraft'], issueContext, issues),
     mergeability: normalizeMergeability(
       value['mergeable'],
@@ -386,6 +451,35 @@ function normalizePullRequest(
     reviewRequests: normalizeReviewRequests(value['reviewRequests'], issueContext, issues),
     author: normalizeAuthor(value['author'], issueContext, issues),
   };
+}
+
+function normalizeHeadRepository(
+  headRepositoryValue: unknown,
+  headRepositoryOwnerValue: unknown,
+  issueContext: IssueContext,
+  issues: MergeReadyGitHubIssue[],
+): MergeReadyRepositoryIdentity | null {
+  const fallbackIdentity = readRepositoryIdentity(headRepositoryValue);
+  const owner =
+    readRepositoryOwner(headRepositoryOwnerValue) ??
+    (isRecord(headRepositoryValue) ? readRepositoryOwner(headRepositoryValue['owner']) : null) ??
+    fallbackIdentity?.owner ??
+    null;
+  const repo = readRepositoryName(headRepositoryValue) ?? fallbackIdentity?.repo ?? null;
+
+  if (!owner || !repo) {
+    issues.push(
+      createIssue(
+        issueContext,
+        'partial_shape',
+        'gh pr view JSON payload had an invalid head repository identity',
+        !owner ? 'headRepositoryOwner' : 'headRepository',
+      ),
+    );
+    return null;
+  }
+
+  return { owner, repo };
 }
 
 function normalizeDraft(
@@ -1073,6 +1167,44 @@ function parseOptionalBoolean(value: unknown): boolean | null {
     return false;
   }
   return null;
+}
+
+function readRepositoryOwner(value: unknown): string | null {
+  if (typeof value === 'string') {
+    return readOptionalString(value);
+  }
+
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  return readOptionalString(value['login']) ?? readOptionalString(value['name']);
+}
+
+function readRepositoryName(value: unknown): string | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  return readOptionalString(value['name']) ?? readRepositoryIdentity(value)?.repo ?? null;
+}
+
+function readRepositoryIdentity(value: unknown): MergeReadyRepositoryIdentity | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const nameWithOwner = readOptionalString(value['nameWithOwner']);
+  if (!nameWithOwner) {
+    return null;
+  }
+
+  const [owner, repo, ...rest] = nameWithOwner.split('/');
+  if (!owner || !repo || rest.length > 0) {
+    return null;
+  }
+
+  return { owner, repo };
 }
 
 function createNormalizedCheckEntry(

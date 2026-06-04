@@ -2,6 +2,23 @@ export type MergeReadyState = 'ready' | 'blocked' | 'pending' | 'unknown';
 
 export type PullRequestLifecycle = 'open' | 'merged' | 'closed';
 
+export type MergeReadyCurrentBranchTarget = {
+  mode: 'current_branch';
+  owner?: string;
+  repo?: string;
+  branch?: string;
+};
+
+export type MergeReadyUrlTarget = {
+  mode: 'url';
+  url: string;
+  owner: string;
+  repo: string;
+  prNumber: number;
+};
+
+export type MergeReadyTarget = MergeReadyCurrentBranchTarget | MergeReadyUrlTarget;
+
 export type MergeReadyBadgeId =
   | 'draft'
   | 'merge_conflicts'
@@ -17,10 +34,19 @@ export type MergeReadyBadgeId =
   | 'closed'
   | 'unknown';
 
+export type MergeReadyRepositoryIdentity = {
+  owner: string;
+  repo: string;
+};
+
 export type MergeReadyPullRequest = {
+  lifecycle: PullRequestLifecycle;
   number: number;
   title: string;
   url: string;
+  headRefName: string;
+  baseRefName: string;
+  headRepository?: MergeReadyRepositoryIdentity;
 };
 
 export type MergeReadyBooleanSignal = 'yes' | 'no' | 'unknown';
@@ -97,6 +123,7 @@ export type MergeReadyOpenItem = {
 
 export type MergeReadyStatus = {
   state: MergeReadyState;
+  target: MergeReadyTarget;
   pr: MergeReadyPullRequest | null;
   summary: string;
   openItems: MergeReadyOpenItem[];
@@ -106,10 +133,13 @@ export type MergeReadyStatus = {
 
 export type CreateMergeReadyStatusOptions = {
   generatedAt: string | Date;
+  target?: MergeReadyTarget;
   pr?: MergeReadyPullRequest | null;
   hasPr?: boolean;
   forceStatusAmbiguous?: boolean;
   signals?: MergeReadySignalsInput;
+  openItems?: MergeReadyOpenItem[];
+  summary?: string;
 };
 
 export type MergeReadyBadgeContext = Pick<MergeReadyStatus, 'pr' | 'openItems'>;

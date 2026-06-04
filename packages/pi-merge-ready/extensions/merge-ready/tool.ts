@@ -1,13 +1,14 @@
 import type { MergeReadyCommandAPI } from './commands.js';
 import type { MergeReadyExec, MergeReadyExecOptions, MergeReadyExecResult } from './git.js';
 import { getMergeReadyStatus } from './merge-ready.js';
+import { MERGE_READY_PULL_REQUEST_URL_EXAMPLE, validateGitHubPullRequestUrl } from './target.js';
 import type { MergeReadyStatus } from './types.js';
 
 export const MERGE_READY_STATUS_TOOL_NAME = 'merge_ready_status';
 export const MERGE_READY_STATUS_TOOL_TIMEOUT_MS = 20_000;
 
 export type MergeReadyStatusToolParams = {
-  cwd?: string;
+  url?: string;
 };
 
 export type MergeReadyStatusToolContext = {
@@ -39,7 +40,7 @@ export type MergeReadyStatusToolAPI = Pick<MergeReadyCommandAPI, 'exec'> & {
 const MERGE_READY_STATUS_TOOL_PARAMETERS = {
   type: 'object',
   properties: {
-    cwd: { type: 'string' },
+    url: { type: 'string' },
   },
   additionalProperties: false,
 };
@@ -49,16 +50,30 @@ export function registerMergeReadyStatusTool(pi: MergeReadyStatusToolAPI): void 
     name: MERGE_READY_STATUS_TOOL_NAME,
     label: 'Merge Ready Status',
     description:
-      'Returns the merge-readiness status for the current pull request. Use this before deciding whether a PR is ready to merge or before attempting to resolve merge blockers. The returned `openItems` array is the only authoritative list of merge-readiness items to work from.',
+      'Returns the merge-readiness status for the current branch pull request by default, or for an exact GitHub pull request URL when `url` is provided. Use this before deciding whether a PR is ready to merge or before attempting to resolve merge blockers. The returned `openItems` array is the only authoritative list of merge-readiness items to work from.',
     promptGuidelines: [
       'Use openItems as the actionable list and do not invent additional blockers beyond what is returned.',
       'Do not infer work from raw GitHub states or assume hidden blockers beyond the returned MergeReadyStatus.',
+      `When targeting a PR explicitly, pass only a full GitHub pull request URL like ${MERGE_READY_PULL_REQUEST_URL_EXAMPLE}.`,
+      'Do not pass branch names, PR numbers, repo names, or other inferred targets.',
     ],
     parameters: MERGE_READY_STATUS_TOOL_PARAMETERS,
     async execute(_toolCallId, params = {}, _signal, _onUpdate, ctx) {
+      let url: string | undefined;
+
+      if (params.url !== undefined) {
+        const validation = validateGitHubPullRequestUrl(params.url);
+        if (!validation.ok) {
+          throw new Error(`Invalid url: ${validation.message}`);
+        }
+
+        url = validation.target.url;
+      }
+
       const status = await getMergeReadyStatus({
         exec: createToolExec(pi, ctx),
-        ...withOptionalCwd(params.cwd ?? ctx.cwd),
+        ...withOptionalCwd(ctx.cwd),
+        ...(url === undefined ? {} : { url }),
         timeout: MERGE_READY_STATUS_TOOL_TIMEOUT_MS,
       });
 

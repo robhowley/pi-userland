@@ -1,26 +1,45 @@
 ---
 name: merge-ready-loop
 description: |
-  Use this skill when the user asks to make the current PR merge-ready, clear merge blockers,
-  fix PR status, or resolve items returned by merge_ready_status. Call this skill for requests
-  like "make this PR ready to merge", "fix the merge blockers", "clear PR issues",
+  Use this skill when the user asks to make the current PR or an exact GitHub PR URL merge-ready,
+  clear merge blockers, fix PR status, or resolve items returned by merge_ready_status. Call this
+  skill for requests like "make this PR ready to merge", "fix the merge blockers", "clear PR issues",
   "resolve merge status problems", or any mention of getting a PR to a mergeable state.
 ---
 
 # merge-ready-loop
 
-This skill drives a tight loop to clear real merge blockers for the current PR.
+This skill drives a tight loop to clear real merge blockers for the current PR by default, or for an exact GitHub PR URL when the user provides one.
 
 ## Current contract
 
 Always treat `merge_ready_status` as the source of truth.
 
-Current response shape:
+Tool params:
+
+- `merge_ready_status({})` targets the current local branch PR.
+- `merge_ready_status({ url: "https://github.com/OWNER/REPO/pull/NUMBER" })` targets that exact PR.
+- No other public params exist. Do not pass `cwd`, branch names, PR numbers, repo names, or inferred targets.
+
+Response fields the loop needs:
 
 ```json
 {
   "state": "ready | blocked | pending | unknown",
-  "pr": { "number": 64, "title": "...", "url": "..." } | null,
+  "target": {
+    "mode": "current_branch",
+    "owner": "owner",
+    "repo": "repo",
+    "branch": "feat/my-branch"
+  },
+  "pr": {
+    "lifecycle": "open | merged | closed",
+    "number": 64,
+    "title": "...",
+    "url": "...",
+    "headRefName": "feat/my-branch",
+    "baseRefName": "main"
+  } | null,
   "summary": "Ready to merge",
   "openItems": [
     { "id": "merge_conflicts", "summary": "Merge conflicts detected" }
@@ -38,9 +57,14 @@ Current response shape:
 }
 ```
 
+For URL targets, `target` is `{ "mode": "url", "url": "https://github.com/OWNER/REPO/pull/64", "owner": "OWNER", "repo": "REPO", "prNumber": 64 }`. When the URL resolves to a PR, `pr.headRepository = { "owner": "head-owner", "repo": "head-repo" }` is returned for checkout verification.
+
 Important:
 
 - `openItems` is blocker-only. Optional unresolved comments may still appear in `signals`, but not as blocker items.
+- `target` tells you whether the status came from the ambient current branch or an explicit PR URL.
+- Closed or merged PRs are valid statuses. Treat `pr.lifecycle !== "open"` as not ready, even if there are no blocker open items.
+- When `target.mode = "url"`, expect `pr.headRepository = { owner, repo }` for checkout verification. Compare that head repo to `target.owner/repo` to distinguish same-repo vs fork/cross-repo PRs.
 - Check-related open items may include `details` rows for non-green checks only; do not invent additional check rows.
 - Only `signals.mergeability = mergeable` with a merge-clear PR yields no mergeability blocker. Treat every other mergeability value as not ready.
 - `review_pending` is requirement-aware. Do **not** infer pending review from raw review history or a lack of approvals.
@@ -50,30 +74,43 @@ Important:
 ## When to use
 
 - User asks to "make this PR merge-ready"
+- User asks to make a pasted GitHub PR URL merge-ready
 - User asks to "fix merge blockers" or "clear PR issues"
 - User mentions resolving items from `merge_ready_status`
 - User wants to "get this PR ready to merge"
 
 ## Rules
 
-1. **Always start with status**: call `merge_ready_status` first.
+1. **Resolve the target before status**:
+   - For "this PR", "current PR", or no explicit target, call `merge_ready_status({})`.
+   - For a pasted full GitHub PR URL, call `merge_ready_status({ url })`.
+   - For PR numbers, branch names, repo shorthands, or vague targets, first resolve an exact GitHub PR URL outside the tool or ask the user. Do not call ambient status for a different named target.
+   - If a provided URL is rejected, ask for a full GitHub PR URL; do not fall back to ambient status.
+   - Do **not** pass `cwd`, branch names, PR numbers, repo names, or guessed targets to `merge_ready_status`.
 2. **Only real blockers**: treat `openItems` as the only allowed blocker list.
 3. **Do not invent review work**: only treat review as pending when `openItems` contains `review_pending`.
 4. **Match request to items**: if the user's requested work does not match an `openItem`, say so and stop.
-5. **Small fixes**: fix one small item or tightly related set at a time.
-6. **Verify locally**: run the strongest relevant local checks you can reasonably run before claiming an item was addressed.
-7. **Separate addressed from cleared**:
+5. **Verify the edit target before changing code**:
+   - If `status.pr` is null or `status.pr.lifecycle !== "open"`, do not edit code to chase merge readiness.
+   - If `status.target.mode` is `"url"`, compare the local checkout against `status.pr.headRepository` and `status.pr.headRefName` before editing.
+   - If `status.pr.headRepository` is missing, stop; the target is ambiguous.
+   - If `status.pr.headRepository.owner/repo !== status.target.owner/repo`, this is a fork/cross-repo PR. Do **not** assume the URL target repo is the editable checkout; stop and ask whether to fetch/switch to the head repo/branch.
+   - Only proceed automatically when the local checkout clearly matches `status.pr.headRepository.owner`, `status.pr.headRepository.repo`, and `status.pr.headRefName`.
+   - If repo or branch identity is unclear, stop and ask the user how to proceed.
+6. **Small fixes**: fix one small item or tightly related set at a time.
+7. **Verify locally**: run the strongest relevant local checks you can reasonably run before claiming an item was addressed.
+8. **Separate addressed from cleared**:
    - Addressed: you made the narrow fix, ran reasonable local validation, and pushed or prepared the patch.
    - Cleared: `merge_ready_status` or another authoritative remote signal no longer reports the item.
-8. **Stop conditions**:
+9. **Stop conditions**:
    - Successful local completion: the agent-actionable work is addressed, even if remote CI/review/GitHub has not caught up yet. Summarize the work performed and the acceptance criteria used to determine completion.
    - Blocked or external handoff: the next step requires remote CI, a reviewer, GitHub-only action, external credentials, or ambiguous product judgment.
 
 ## The loop
 
 ```text
-1. Call merge_ready_status
-2. Read state, summary, and openItems
+1. Resolve the target and call `merge_ready_status({})` or `merge_ready_status({ url })`
+2. Read target, state, summary, lifecycle, and openItems
 3. Pick the smallest item the agent can legitimately advance. If an item is not worth addressing, say so and skip.
 4. Explain the plan briefly
 5. Make a narrow patch if code/config changes are warranted
@@ -90,7 +127,7 @@ Use `id` plus the user's request. An item can be **addressed locally** before it
 
 | id                         | Meaning                                                                                                      | Default agent behavior                                                                                                |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
-| `no_pull_request`          | No PR found for this branch/repo                                                                             | Report it; do not invent local fixes                                                                                  |
+| `no_pull_request`          | No PR found for this branch/repo or exact targeted URL                                                       | Report it; do not invent local fixes                                                                                  |
 | `status_ambiguous`         | Discovery/data was ambiguous                                                                                 | Report ambiguity, rerun if helpful, do not guess                                                                      |
 | `merge_conflicts`          | GitHub reports conflicts or dirty merge state                                                                | Usually actionable locally: merge/rebase, resolve conflicts, verify, then wait for GitHub to recalculate              |
 | `branch_out_of_date`       | Head branch is behind base                                                                                   | Usually actionable locally: rebase/merge base, verify, then wait for GitHub to clear it                               |

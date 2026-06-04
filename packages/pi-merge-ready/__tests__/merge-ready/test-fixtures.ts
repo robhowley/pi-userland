@@ -1,5 +1,9 @@
 import { expect } from 'vitest';
-import type { MergeReadyExec, MergeReadyExecResult } from '../../extensions/merge-ready/index.js';
+import type {
+  MergeReadyExec,
+  MergeReadyExecResult,
+  MergeReadyUrlTarget,
+} from '../../extensions/merge-ready/index.js';
 
 export type ExpectedExecCall = {
   command: string;
@@ -11,7 +15,7 @@ export type ExpectedExecCall = {
 };
 
 export const GH_PR_VIEW_JSON_FIELDS =
-  'number,title,url,state,isDraft,mergeable,mergeStateStatus,headRefName,baseRefName,statusCheckRollup,reviews,reviewDecision,reviewRequests,author';
+  'number,title,url,state,isDraft,mergeable,mergeStateStatus,headRefName,headRepository,headRepositoryOwner,baseRefName,statusCheckRollup,reviews,reviewDecision,reviewRequests,author';
 
 export const GH_GRAPHQL_REVIEW_THREADS_QUERY = [
   'query MergeReadyReviewThreads($owner: String!, $name: String!, $number: Int!) {',
@@ -33,24 +37,35 @@ export const GH_GRAPHQL_REVIEW_THREADS_QUERY = [
   '}',
 ].join(' ');
 
+export const CURRENT_BRANCH_TARGET = {
+  mode: 'current_branch',
+  owner: 'robhowley',
+  repo: 'pi-userland',
+  branch: 'feat/merge-ready',
+} as const;
+
 export function createFakeExec(expectedCalls: ExpectedExecCall[]): {
   exec: MergeReadyExec;
   assertDone: () => void;
+  getCalls: () => ObservedExecCall[];
 } {
   let index = 0;
+  const calls: ObservedExecCall[] = [];
 
   const exec: MergeReadyExec = async (command, args, options) => {
+    const observedCall = {
+      command,
+      args: [...args],
+      cwd: options?.cwd,
+      timeout: options?.timeout,
+    };
     const expectedCall = expectedCalls[index];
     expect(expectedCall, `Unexpected exec call ${command} ${args.join(' ')}`).toBeDefined();
 
+    calls.push(observedCall);
     index += 1;
 
-    expect({
-      command,
-      args,
-      cwd: options?.cwd,
-      timeout: options?.timeout,
-    }).toEqual({
+    expect(observedCall).toEqual({
       command: expectedCall?.command,
       args: expectedCall?.args,
       cwd: expectedCall?.cwd,
@@ -69,6 +84,7 @@ export function createFakeExec(expectedCalls: ExpectedExecCall[]): {
     assertDone: () => {
       expect(index).toBe(expectedCalls.length);
     },
+    getCalls: () => [...calls],
   };
 }
 
@@ -142,21 +158,55 @@ export function createGitDiscoveryCalls(
   ];
 }
 
+type ObservedExecCall = {
+  command: string;
+  args: string[];
+  cwd?: string | undefined;
+  timeout?: number | undefined;
+};
+
+type PullRequestViewCallOptions = {
+  cwd?: string;
+  timeout?: number;
+  target?: MergeReadyUrlTarget;
+};
+
+export function createPullRequestViewArgs(target?: MergeReadyUrlTarget): string[] {
+  const args = ['pr', 'view'];
+
+  if (target) {
+    args.push(String(target.prNumber), '--repo', `${target.owner}/${target.repo}`);
+  }
+
+  args.push('--json', GH_PR_VIEW_JSON_FIELDS);
+  return args;
+}
+
 export function createPullRequestViewSuccessCall(
   payload: Record<string, unknown>,
-  options: {
-    cwd?: string;
-    timeout?: number;
-  } = {},
+  options: PullRequestViewCallOptions = {},
 ): ExpectedExecCall {
   return {
     command: 'gh',
-    args: ['pr', 'view', '--json', GH_PR_VIEW_JSON_FIELDS],
+    args: createPullRequestViewArgs(options.target),
     cwd: options.cwd ?? '/repo',
     timeout: options.timeout,
     result: {
       stdout: `${JSON.stringify(payload)}\n`,
     },
+  };
+}
+
+export function createPullRequestViewFailureCall(
+  result: ExpectedExecCall['result'],
+  options: PullRequestViewCallOptions = {},
+): ExpectedExecCall {
+  return {
+    command: 'gh',
+    args: createPullRequestViewArgs(options.target),
+    cwd: options.cwd ?? '/repo',
+    timeout: options.timeout,
+    result,
   };
 }
 
@@ -202,6 +252,12 @@ export function buildPullRequestPayload(overrides: Record<string, unknown> = {})
     mergeable: 'MERGEABLE',
     mergeStateStatus: 'CLEAN',
     headRefName: 'feat/merge-ready',
+    headRepository: {
+      name: 'pi-userland',
+    },
+    headRepositoryOwner: {
+      login: 'robhowley',
+    },
     baseRefName: 'main',
     statusCheckRollup: [
       {

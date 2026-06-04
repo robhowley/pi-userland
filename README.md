@@ -8,7 +8,7 @@ Small, focused packages to augment your Pi environment without adding unnecessar
 
 | Package                                                           | Description                                                                                                                                 |
 | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`pi-merge-ready`](packages/pi-merge-ready/README.md)             | PR merge-readiness for Pi: status bar signal, blocker context, and agent repair loops.                                                      |
+| [`pi-merge-ready`](packages/pi-merge-ready/README.md)             | PR merge-readiness for Pi: status bar and slash-command status, exact PR URL targeting, blocker context, and agent repair loops.             |
 | [`pi-openrouter`](packages/pi-openrouter/README.md)               | OpenRouter usage/account overlays, model sync, api key management, and session tagging for Pi.                                                                  |
 | [`pi-session-hygiene`](packages/pi-session-hygiene/README.md)     | Status bar indicator for session cost, context, and cache rate to track session health                                                      |
 | [`pi-spinner-verbs`](packages/pi-spinner-verbs/README.md)         | Customizes thinking text with themed verbs (e.g., "Paying the iron price...", "With fire and blood...") for sessions with more personality. |

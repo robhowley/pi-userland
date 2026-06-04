@@ -3,6 +3,7 @@ import { registerMergeReadyStatusBar, type MergeReadyStatusBarAPI } from './stat
 import { registerMergeReadyStatusTool, type MergeReadyStatusToolAPI } from './tool.js';
 
 export * from './types.js';
+export * from './target.js';
 export * from './status.js';
 export * from './git.js';
 export * from './github.js';

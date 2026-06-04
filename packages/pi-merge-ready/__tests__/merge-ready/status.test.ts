@@ -14,9 +14,12 @@ import {
 const GENERATED_AT = '2026-05-26T12:00:00.000Z';
 
 const OPEN_PR: MergeReadyPullRequest = {
+  lifecycle: 'open',
   number: 42,
   title: 'Normalize merge-ready status',
   url: 'https://example.com/pull/42',
+  headRefName: 'feat/merge-ready',
+  baseRefName: 'main',
 };
 
 const READY_SIGNALS: MergeReadySignalsInput = {
@@ -230,6 +233,38 @@ const badgeFixtures: BadgeFixture[] = [
     badge: 'ready',
     state: 'ready',
     summary: 'Ready to merge',
+    openItemIds: [],
+    signals: {
+      draft: false,
+      mergeability: 'mergeable',
+      checks: 'passing',
+      review: 'approved',
+      unresolvedConversations: false,
+      unresolvedConversationRequirement: 'optional',
+    },
+  },
+  {
+    name: 'merged',
+    status: buildStatus({ pr: { ...OPEN_PR, lifecycle: 'merged' } }),
+    badge: 'merged',
+    state: 'unknown',
+    summary: 'PR is already merged',
+    openItemIds: [],
+    signals: {
+      draft: false,
+      mergeability: 'mergeable',
+      checks: 'passing',
+      review: 'approved',
+      unresolvedConversations: false,
+      unresolvedConversationRequirement: 'optional',
+    },
+  },
+  {
+    name: 'closed',
+    status: buildStatus({ pr: { ...OPEN_PR, lifecycle: 'closed' } }),
+    badge: 'closed',
+    state: 'unknown',
+    summary: 'PR is closed',
     openItemIds: [],
     signals: {
       draft: false,
@@ -557,6 +592,7 @@ describe('merge-ready status', () => {
     });
 
     expect(status.state).toBe('unknown');
+    expect(status.target).toEqual({ mode: 'current_branch' });
     expect(status.pr).toBeNull();
     expect(status.summary).toBe('Merge readiness is ambiguous');
     expect(openItemIds(status)).toEqual(['status_ambiguous']);

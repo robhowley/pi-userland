@@ -9,6 +9,7 @@ import {
   type MergeReadyState,
 } from '../../extensions/merge-ready/index.js';
 import {
+  CURRENT_BRANCH_TARGET,
   GH_GRAPHQL_REVIEW_THREADS_QUERY,
   GH_PR_VIEW_JSON_FIELDS,
   buildConversationsPayload as buildOptionalConversationsPayload,
@@ -16,6 +17,7 @@ import {
   createConversationsSuccessCall,
   createFakeExec,
   createGitDiscoveryCalls,
+  createPullRequestViewFailureCall,
   createPullRequestViewSuccessCall,
 } from './test-fixtures.js';
 
@@ -30,6 +32,14 @@ type BlockerFixture = {
 };
 
 const GENERATED_AT = '2026-05-26T22:00:00.000Z';
+const TARGETED_URL = 'https://github.com/shopify/pi/pull/64';
+const TARGETED_URL_TARGET = {
+  mode: 'url',
+  url: TARGETED_URL,
+  owner: 'shopify',
+  repo: 'pi',
+  prNumber: 64,
+} as const;
 
 function buildConversationsPayload(pullRequestOverrides: Record<string, unknown> = {}) {
   return buildOptionalConversationsPayload({
@@ -50,6 +60,30 @@ function openItemIds(
   status: Awaited<ReturnType<typeof getMergeReadyStatus>>,
 ): MergeReadyOpenItemId[] {
   return status.openItems.map((openItem) => openItem.id);
+}
+
+function buildTargetedUrlAmbiguousStatus(summary: string) {
+  return {
+    state: 'unknown',
+    target: TARGETED_URL_TARGET,
+    pr: null,
+    summary,
+    openItems: [
+      {
+        id: 'status_ambiguous',
+        summary,
+      },
+    ],
+    signals: {
+      draft: false,
+      mergeability: 'unknown',
+      checks: 'unknown',
+      review: 'unknown',
+      unresolvedConversations: false,
+      unresolvedConversationRequirement: 'unknown',
+    },
+    generatedAt: GENERATED_AT,
+  };
 }
 
 const blockerFixtures: BlockerFixture[] = [
@@ -372,10 +406,14 @@ describe('getMergeReadyStatus', () => {
 
     expect(status).toEqual({
       state: 'ready',
+      target: CURRENT_BRANCH_TARGET,
       pr: {
+        lifecycle: 'open',
         number: 42,
         title: 'Compose merge-ready status boundary',
         url: 'https://github.com/robhowley/pi-userland/pull/42',
+        headRefName: 'feat/merge-ready',
+        baseRefName: 'main',
       },
       summary: 'Ready to merge',
       openItems: [],
@@ -389,10 +427,329 @@ describe('getMergeReadyStatus', () => {
       },
       generatedAt: GENERATED_AT,
     });
-    expect(status.pr).not.toHaveProperty('headRefName');
-    expect(status.pr).not.toHaveProperty('baseRefName');
     expect(selectMergeReadyBadgeId(status)).toBe('ready');
   });
+
+  it('supports URL mode without git discovery and carries fork head-repository identity through status', async () => {
+    const url = 'https://github.com/shopify/pi/pull/64';
+    const { exec, assertDone } = createFakeExec([
+      createPullRequestViewSuccessCall(
+        buildPullRequestPayload({
+          number: 64,
+          title: 'Support explicit PR URL targets',
+          url,
+          headRefName: 'feat/explicit-pr-url',
+          headRepository: {
+            name: 'pi-fork',
+          },
+          headRepositoryOwner: {
+            login: 'contributor',
+          },
+          baseRefName: 'main',
+        }),
+        {
+          cwd: '/repo',
+          timeout: 5_000,
+          target: {
+            mode: 'url',
+            url,
+            owner: 'shopify',
+            repo: 'pi',
+            prNumber: 64,
+          },
+        },
+      ),
+      createConversationsSuccessCall(buildConversationsPayload(), {
+        cwd: '/repo',
+        timeout: 5_000,
+        repositoryOwner: 'shopify',
+        repositoryName: 'pi',
+        pullRequestNumber: 64,
+      }),
+    ]);
+
+    const status = await getMergeReadyStatus({
+      exec,
+      cwd: '/repo',
+      url,
+      timeout: 5_000,
+      now: () => new Date(GENERATED_AT),
+    });
+
+    assertDone();
+
+    expect(status).toMatchObject({
+      state: 'ready',
+      target: {
+        mode: 'url',
+        url,
+        owner: 'shopify',
+        repo: 'pi',
+        prNumber: 64,
+      },
+      pr: {
+        lifecycle: 'open',
+        number: 64,
+        title: 'Support explicit PR URL targets',
+        url,
+        headRefName: 'feat/explicit-pr-url',
+        baseRefName: 'main',
+        headRepository: {
+          owner: 'contributor',
+          repo: 'pi-fork',
+        },
+      },
+      summary: 'Ready to merge',
+      openItems: [],
+    });
+  });
+
+  it('returns status_ambiguous for a targeted PR when GitHub omits head-repository identity', async () => {
+    const { exec, assertDone } = createFakeExec([
+      createPullRequestViewSuccessCall(
+        buildPullRequestPayload({
+          number: 64,
+          title: 'Support explicit PR URL targets',
+          url: TARGETED_URL,
+          headRepository: null,
+          headRepositoryOwner: null,
+        }),
+        {
+          cwd: '/repo',
+          target: TARGETED_URL_TARGET,
+        },
+      ),
+    ]);
+
+    const status = await getMergeReadyStatus({
+      exec,
+      cwd: '/repo',
+      url: TARGETED_URL,
+      now: () => new Date(GENERATED_AT),
+    });
+
+    assertDone();
+
+    expect(status).toEqual(
+      buildTargetedUrlAmbiguousStatus(
+        'Unable to determine readiness for shopify/pi#64: GitHub CLI did not report head repository identity',
+      ),
+    );
+  });
+
+  it.each([
+    {
+      name: 'merged',
+      lifecycle: 'merged' as const,
+      state: 'MERGED',
+      summary: 'PR is already merged',
+    },
+    {
+      name: 'closed',
+      lifecycle: 'closed' as const,
+      state: 'CLOSED',
+      summary: 'PR is closed',
+    },
+  ])(
+    'returns URL-targeted terminal $name PRs without fetching conversations',
+    async ({ lifecycle, state, summary }) => {
+      const { exec, assertDone, getCalls } = createFakeExec([
+        createPullRequestViewSuccessCall(
+          buildPullRequestPayload({
+            number: 64,
+            title: 'Support explicit PR URL targets',
+            url: TARGETED_URL,
+            state,
+            headRefName: 'feat/explicit-pr-url',
+            baseRefName: 'main',
+          }),
+          {
+            cwd: '/repo',
+            timeout: 5_000,
+            target: TARGETED_URL_TARGET,
+          },
+        ),
+      ]);
+
+      const status = await getMergeReadyStatus({
+        exec,
+        cwd: '/repo',
+        url: TARGETED_URL,
+        timeout: 5_000,
+        now: () => new Date(GENERATED_AT),
+      });
+
+      assertDone();
+
+      expect(status.target).toEqual(TARGETED_URL_TARGET);
+      expect(status.pr).toMatchObject({
+        lifecycle,
+        number: 64,
+        url: TARGETED_URL,
+        headRefName: 'feat/explicit-pr-url',
+        baseRefName: 'main',
+      });
+      expect(status.state).toBe('unknown');
+      expect(status.summary).toBe(summary);
+      expect(status.openItems).toEqual([]);
+      expect(
+        getCalls().some(
+          (call) => call.command === 'gh' && call.args[0] === 'api' && call.args[1] === 'graphql',
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it('returns a structured not-found status for a valid targeted PR URL that does not exist', async () => {
+    const url = 'https://github.com/shopify/pi/pull/64';
+    const { exec, assertDone } = createFakeExec([
+      createPullRequestViewFailureCall(
+        {
+          exitCode: 1,
+          stderr: 'pull request not found\n',
+        },
+        {
+          cwd: '/repo',
+          target: {
+            mode: 'url',
+            url,
+            owner: 'shopify',
+            repo: 'pi',
+            prNumber: 64,
+          },
+        },
+      ),
+    ]);
+
+    const status = await getMergeReadyStatus({
+      exec,
+      cwd: '/repo',
+      url,
+      now: () => new Date(GENERATED_AT),
+    });
+
+    assertDone();
+
+    expect(status).toEqual({
+      state: 'unknown',
+      target: {
+        mode: 'url',
+        url,
+        owner: 'shopify',
+        repo: 'pi',
+        prNumber: 64,
+      },
+      pr: null,
+      summary: 'Pull request not found: shopify/pi#64',
+      openItems: [
+        {
+          id: 'no_pull_request',
+          summary: 'Pull request not found: shopify/pi#64',
+        },
+      ],
+      signals: {
+        draft: false,
+        mergeability: 'unknown',
+        checks: 'unknown',
+        review: 'unknown',
+        unresolvedConversations: false,
+        unresolvedConversationRequirement: 'unknown',
+      },
+      generatedAt: GENERATED_AT,
+    });
+  });
+
+  it.each([
+    {
+      name: 'returns a repository access failure',
+      call: createPullRequestViewFailureCall(
+        {
+          exitCode: 1,
+          stderr: 'could not resolve to a repository with the name "shopify/pi"\n',
+        },
+        {
+          cwd: '/repo',
+          target: TARGETED_URL_TARGET,
+        },
+      ),
+      expectedSummary:
+        'Unable to determine readiness for shopify/pi#64: the repository or pull request is not accessible',
+    },
+    {
+      name: 'returns an authentication failure',
+      call: createPullRequestViewFailureCall(
+        {
+          exitCode: 1,
+          stderr: 'authentication required; run gh auth login\n',
+        },
+        {
+          cwd: '/repo',
+          target: TARGETED_URL_TARGET,
+        },
+      ),
+      expectedSummary:
+        'Unable to determine readiness for shopify/pi#64: GitHub CLI authentication failed',
+    },
+    {
+      name: 'returns an API failure',
+      call: createPullRequestViewFailureCall(
+        {
+          exitCode: 1,
+          stderr: 'GraphQL: Something went wrong\n',
+        },
+        {
+          cwd: '/repo',
+          target: TARGETED_URL_TARGET,
+        },
+      ),
+      expectedSummary:
+        'Unable to determine readiness for shopify/pi#64: the GitHub API request failed',
+    },
+    {
+      name: 'returns invalid JSON',
+      call: createPullRequestViewFailureCall(
+        {
+          stdout: '{ definitely not json',
+        },
+        {
+          cwd: '/repo',
+          target: TARGETED_URL_TARGET,
+        },
+      ),
+      expectedSummary:
+        'Unable to determine readiness for shopify/pi#64: GitHub CLI returned invalid JSON',
+    },
+    {
+      name: 'returns an invalid pull request shape',
+      call: createPullRequestViewSuccessCall(
+        {
+          state: 'OPEN',
+        },
+        {
+          cwd: '/repo',
+          target: TARGETED_URL_TARGET,
+        },
+      ),
+      expectedSummary:
+        'Unable to determine readiness for shopify/pi#64: GitHub CLI returned an unexpected pull request payload',
+    },
+  ])(
+    'surfaces status_ambiguous for a targeted URL when GitHub PR discovery $name',
+    async ({ call, expectedSummary }) => {
+      const { exec, assertDone } = createFakeExec([call]);
+
+      const status = await getMergeReadyStatus({
+        exec,
+        cwd: '/repo',
+        url: TARGETED_URL,
+        now: () => new Date(GENERATED_AT),
+      });
+
+      assertDone();
+
+      expect(status).toEqual(buildTargetedUrlAmbiguousStatus(expectedSummary));
+    },
+  );
 
   it.each([
     {
@@ -808,6 +1165,19 @@ describe('getMergeReadyStatus', () => {
     expect(status.signals.mergeability).toBe('blocked');
     expect(status.signals.unresolvedConversationRequirement).toBe('required');
     expect(selectMergeReadyBadgeId(status)).toBe('unresolved_conversations');
+  });
+
+  it('rejects invalid explicit URL targets instead of degrading to unknown status', async () => {
+    const { exec } = createFakeExec([]);
+
+    await expect(
+      getMergeReadyStatus({
+        exec,
+        cwd: '/repo',
+        url: '64',
+        now: () => new Date(GENERATED_AT),
+      }),
+    ).rejects.toThrow('Pass a full HTTPS GitHub pull request URL');
   });
 
   it('returns unknown status when not in a git repository', async () => {

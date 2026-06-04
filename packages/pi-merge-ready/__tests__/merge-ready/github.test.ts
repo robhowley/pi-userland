@@ -15,7 +15,7 @@ type ExpectedExecCall = {
 };
 
 const GH_PR_VIEW_JSON_FIELDS =
-  'number,title,url,state,isDraft,mergeable,mergeStateStatus,headRefName,baseRefName,statusCheckRollup,reviews,reviewDecision,reviewRequests,author';
+  'number,title,url,state,isDraft,mergeable,mergeStateStatus,headRefName,headRepository,headRepositoryOwner,baseRefName,statusCheckRollup,reviews,reviewDecision,reviewRequests,author';
 
 function createFakeExec(expectedCalls: ExpectedExecCall[]): {
   exec: MergeReadyExec;
@@ -66,6 +66,12 @@ function buildPullRequestPayload(overrides: Record<string, unknown> = {}) {
     mergeable: 'MERGEABLE',
     mergeStateStatus: 'CLEAN',
     headRefName: 'feat/merge-ready',
+    headRepository: {
+      name: 'pi-userland',
+    },
+    headRepositoryOwner: {
+      login: 'robhowley',
+    },
     baseRefName: 'main',
     statusCheckRollup: [
       {
@@ -131,6 +137,10 @@ describe('merge-ready GitHub primitives', () => {
         url: 'https://github.com/robhowley/pi-userland/pull/42',
         headRefName: 'feat/merge-ready',
         baseRefName: 'main',
+        headRepository: {
+          owner: 'robhowley',
+          repo: 'pi-userland',
+        },
         draft: 'no',
         mergeability: 'mergeable',
         checks: {
@@ -203,6 +213,122 @@ describe('merge-ready GitHub primitives', () => {
       code: 'non_zero_exit',
       cwd: '/repo',
       exitCode: 1,
+    });
+  });
+
+  it('uses explicit gh pr view targeting and normalizes fork head-repository identity', async () => {
+    const { exec, assertDone } = createFakeExec([
+      {
+        command: 'gh',
+        args: ['pr', 'view', '64', '--repo', 'shopify/pi', '--json', GH_PR_VIEW_JSON_FIELDS],
+        cwd: '/repo',
+        timeout: 5_000,
+        result: {
+          stdout: `${JSON.stringify(
+            buildPullRequestPayload({
+              number: 64,
+              title: 'Support explicit PR URL targets',
+              url: 'https://github.com/shopify/pi/pull/64',
+              headRepository: {
+                name: 'pi-fork',
+              },
+              headRepositoryOwner: {
+                login: 'contributor',
+              },
+            }),
+          )}\n`,
+        },
+      },
+    ]);
+
+    const facts = await fetchMergeReadyGitHubPullRequestFacts({
+      exec,
+      cwd: '/repo',
+      timeout: 5_000,
+      target: {
+        mode: 'url',
+        url: 'https://github.com/shopify/pi/pull/64',
+        owner: 'shopify',
+        repo: 'pi',
+        prNumber: 64,
+      },
+    });
+
+    assertDone();
+
+    expect(facts).toMatchObject({
+      kind: 'found',
+      pullRequest: {
+        number: 64,
+        url: 'https://github.com/shopify/pi/pull/64',
+        headRepository: {
+          owner: 'contributor',
+          repo: 'pi-fork',
+        },
+      },
+    });
+  });
+
+  it('returns a typed not_found outcome for a valid targeted PR URL that does not exist', async () => {
+    const { exec, assertDone } = createFakeExec([
+      {
+        command: 'gh',
+        args: ['pr', 'view', '64', '--repo', 'shopify/pi', '--json', GH_PR_VIEW_JSON_FIELDS],
+        cwd: '/repo',
+        result: {
+          exitCode: 1,
+          stderr: 'pull request not found\n',
+        },
+      },
+    ]);
+
+    const facts = await fetchMergeReadyGitHubPullRequestFacts({
+      exec,
+      cwd: '/repo',
+      target: {
+        mode: 'url',
+        url: 'https://github.com/shopify/pi/pull/64',
+        owner: 'shopify',
+        repo: 'pi',
+        prNumber: 64,
+      },
+    });
+
+    assertDone();
+
+    expect(facts.kind).toBe('not_found');
+  });
+
+  it('classifies targeted repository access failures separately from generic command failures', async () => {
+    const { exec, assertDone } = createFakeExec([
+      {
+        command: 'gh',
+        args: ['pr', 'view', '64', '--repo', 'shopify/pi', '--json', GH_PR_VIEW_JSON_FIELDS],
+        cwd: '/repo',
+        result: {
+          exitCode: 1,
+          stderr: 'could not resolve to a repository with the name "shopify/pi"\n',
+        },
+      },
+    ]);
+
+    const facts = await fetchMergeReadyGitHubPullRequestFacts({
+      exec,
+      cwd: '/repo',
+      target: {
+        mode: 'url',
+        url: 'https://github.com/shopify/pi/pull/64',
+        owner: 'shopify',
+        repo: 'pi',
+        prNumber: 64,
+      },
+    });
+
+    assertDone();
+
+    expect(facts).toMatchObject({
+      kind: 'failure',
+      reason: 'access',
     });
   });
 
@@ -594,6 +720,7 @@ describe('merge-ready GitHub primitives', () => {
 
     expect(facts.kind).toBe('invalid_shape');
     expect(facts.issues.map((issue) => issue.field)).toEqual([
+      'headRepositoryOwner',
       'number',
       'title',
       'url',

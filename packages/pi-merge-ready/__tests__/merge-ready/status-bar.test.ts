@@ -92,6 +92,17 @@ function createStatusContext(): MergeReadyStatusBarContext {
   };
 }
 
+function buildOpenPr() {
+  return {
+    lifecycle: 'open' as const,
+    number: 42,
+    title: 'Compose merge-ready status boundary',
+    url: 'https://github.com/robhowley/pi-userland/pull/42',
+    headRefName: 'feat/merge-ready',
+    baseRefName: 'main',
+  };
+}
+
 describe('merge-ready status bar', () => {
   beforeEach(() => {
     resetMergeReadyStatusBarCache();
@@ -140,11 +151,7 @@ describe('merge-ready status bar', () => {
       name: 'merge conflicts',
       status: createMergeReadyStatus({
         generatedAt: '2026-05-27T00:00:00.000Z',
-        pr: {
-          number: 42,
-          title: 'Compose merge-ready status boundary',
-          url: 'https://github.com/robhowley/pi-userland/pull/42',
-        },
+        pr: buildOpenPr(),
         signals: {
           draft: false,
           mergeability: 'conflicting',
@@ -160,11 +167,7 @@ describe('merge-ready status bar', () => {
       name: 'branch out of date',
       status: createMergeReadyStatus({
         generatedAt: '2026-05-27T00:00:00.000Z',
-        pr: {
-          number: 42,
-          title: 'Compose merge-ready status boundary',
-          url: 'https://github.com/robhowley/pi-userland/pull/42',
-        },
+        pr: buildOpenPr(),
         signals: {
           draft: false,
           mergeability: 'behind',
@@ -180,11 +183,7 @@ describe('merge-ready status bar', () => {
       name: 'generic merge blocked',
       status: createMergeReadyStatus({
         generatedAt: '2026-05-27T00:00:00.000Z',
-        pr: {
-          number: 42,
-          title: 'Compose merge-ready status boundary',
-          url: 'https://github.com/robhowley/pi-userland/pull/42',
-        },
+        pr: buildOpenPr(),
         signals: {
           draft: false,
           mergeability: 'blocked',
@@ -196,6 +195,22 @@ describe('merge-ready status bar', () => {
       }),
       expected: '⛔ Merge blocked',
     },
+    {
+      name: 'merged lifecycle',
+      status: createMergeReadyStatus({
+        generatedAt: '2026-05-27T00:00:00.000Z',
+        pr: { ...buildOpenPr(), lifecycle: 'merged' },
+        signals: {
+          draft: false,
+          mergeability: 'mergeable',
+          checks: 'passing',
+          review: 'approved',
+          unresolvedConversations: false,
+          unresolvedConversationRequirement: 'optional',
+        },
+      }),
+      expected: '✅ Merged',
+    },
   ])('renders $name with mergeability-aware status text', ({ status, expected }) => {
     expect(renderMergeReadyStatusBar(status)).toBe(expected);
   });
@@ -203,11 +218,7 @@ describe('merge-ready status bar', () => {
   it('renders required unresolved conversations as the top blocker', () => {
     const status = createMergeReadyStatus({
       generatedAt: '2026-05-27T00:00:00.000Z',
-      pr: {
-        number: 42,
-        title: 'Compose merge-ready status boundary',
-        url: 'https://github.com/robhowley/pi-userland/pull/42',
-      },
+      pr: buildOpenPr(),
       signals: {
         draft: false,
         mergeability: 'mergeable',
@@ -225,11 +236,7 @@ describe('merge-ready status bar', () => {
   it('renders optional unresolved comments on an otherwise ready PR', () => {
     const status = createMergeReadyStatus({
       generatedAt: '2026-05-27T00:00:00.000Z',
-      pr: {
-        number: 42,
-        title: 'Compose merge-ready status boundary',
-        url: 'https://github.com/robhowley/pi-userland/pull/42',
-      },
+      pr: buildOpenPr(),
       signals: {
         draft: false,
         mergeability: 'mergeable',
@@ -244,14 +251,10 @@ describe('merge-ready status bar', () => {
     expect(renderMergeReadyStatusBar(status)).toBe('✅ Mergeable · 💬 2 comments');
   });
 
-  it('syncs a provided status into the footer and TTL cache', async () => {
+  it('syncs a provided ambient status into the footer and TTL cache', async () => {
     const status = createMergeReadyStatus({
       generatedAt: '2026-05-27T00:00:00.000Z',
-      pr: {
-        number: 42,
-        title: 'Compose merge-ready status boundary',
-        url: 'https://github.com/robhowley/pi-userland/pull/42',
-      },
+      pr: buildOpenPr(),
       signals: {
         draft: false,
         mergeability: 'mergeable',
@@ -277,6 +280,66 @@ describe('merge-ready status bar', () => {
     expect(synced).toEqual({ text: '✅ Ready', cached: false });
     expect(refreshed).toEqual({ text: '✅ Ready', cached: true });
     expect(ctx.ui?.setStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not sync URL-targeted command results into the ambient cache', async () => {
+    const ambientCtx = createStatusContext();
+    const ambientStatus = createMergeReadyStatus({
+      generatedAt: '2026-05-27T00:00:00.000Z',
+      pr: buildOpenPr(),
+      signals: {
+        draft: false,
+        mergeability: 'mergeable',
+        checks: 'passing',
+        review: 'approved',
+        unresolvedConversations: false,
+        unresolvedConversationRequirement: 'optional',
+      },
+    });
+    const targetedStatus = createMergeReadyStatus({
+      generatedAt: '2026-05-27T00:00:00.000Z',
+      target: {
+        mode: 'url',
+        url: 'https://github.com/shopify/pi/pull/64',
+        owner: 'shopify',
+        repo: 'pi',
+        prNumber: 64,
+      },
+      pr: {
+        lifecycle: 'open',
+        number: 64,
+        title: 'Support explicit PR URL targets',
+        url: 'https://github.com/shopify/pi/pull/64',
+        headRefName: 'feat/explicit-pr-url',
+        baseRefName: 'main',
+      },
+      signals: {
+        draft: false,
+        mergeability: 'mergeable',
+        checks: 'passing',
+        review: 'approved',
+        unresolvedConversations: false,
+        unresolvedConversationRequirement: 'optional',
+      },
+    });
+
+    syncMergeReadyStatusBar({ ctx: ambientCtx, status: ambientStatus, now: 1_000 });
+    const targetedCtx = createStatusContext();
+
+    const targeted = syncMergeReadyStatusBar({
+      ctx: targetedCtx,
+      status: targetedStatus,
+      now: 2_000,
+    });
+    const refreshed = await refreshMergeReadyStatusBar({
+      exec: vi.fn(),
+      ctx: createStatusContext(),
+      now: 1_000 + MERGE_READY_STATUS_BAR_TTL_MS - 1,
+    });
+
+    expect(targeted).toEqual({ text: '✅ Ready', cached: false });
+    expect(targetedCtx.ui?.setStatus).not.toHaveBeenCalled();
+    expect(refreshed).toEqual({ text: '✅ Ready', cached: true });
   });
 
   it('renders required unresolved conversation count from GitHub conversations', async () => {
