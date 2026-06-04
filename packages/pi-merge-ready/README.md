@@ -1,8 +1,8 @@
 # pi-merge-ready
 
-A [Pi](https://pi.dev/) package that shows whether your current PR is ready to merge, why it is blocked, and gives agents the context to fix what remains.
+A [Pi](https://pi.dev/) package that shows whether your current-branch PR or an exact GitHub PR URL is ready to merge, why it is blocked, and gives agents the context to fix what remains.
 
-It adds a status bar signal, `/merge-ready`, a `merge_ready_status` agent tool, and a `merge-ready-loop` skill that lets agents work through reported blockers.
+It adds a current-branch status bar signal, `/merge-ready`, a `merge_ready_status({ url? })` agent tool, and a `merge-ready-loop` skill that lets agents work through reported blockers.
 
 ## Installation
 
@@ -47,6 +47,7 @@ Use `/merge-ready` for a human-readable status summary of the current branch PR:
 ✅ Ready to merge
 Target: current branch feat/my-branch (owner/repo)
 PR: #64 — Add PR merge-readiness extension
+State: ready
 Open items: none
 ```
 
@@ -61,7 +62,7 @@ Only full HTTPS GitHub PR URLs are accepted. Branch names, PR numbers, shorthand
 
 ### Agent tool
 
-Agents get a `merge_ready_status` tool. The contract is simple: `openItems` is the authoritative list of merge-readiness work.
+Agents get a `merge_ready_status` tool. The contract is simple: `state` plus `pr.lifecycle` tells you whether the PR is merge-ready, and `openItems` is the authoritative list of actionable merge-readiness work.
 
 - `merge_ready_status({})` = current branch PR
 - `merge_ready_status({ url })` = that exact GitHub PR URL
@@ -128,32 +129,32 @@ When `target.mode` is `"url"`, `pr.headRepository` is also returned so callers c
 
 ### Merge-ready loop skill
 
-The package includes a `merge-ready-loop` skill for requests like "make this PR ready to merge". The skill starts with `merge_ready_status`, chooses the smallest actionable returned item, verifies the change locally, and distinguishes "fixed locally" from "confirmed cleared by GitHub". For URL-targeted PRs, it should verify the local checkout against `pr.headRepository` plus `pr.headRefName`; if `pr.headRepository` differs from `target.owner/repo`, treat it as a fork/cross-repo case and stop unless the user authorizes the checkout change.
+The package includes a `merge-ready-loop` skill for requests like "make this PR ready to merge". The skill resolves the target, calls `merge_ready_status`, chooses the smallest actionable returned item, verifies the change locally, and distinguishes "fixed locally" from "confirmed cleared by GitHub". For URL-targeted PRs, it should verify the local checkout against `pr.headRepository` plus `pr.headRefName`; if `pr.headRepository` differs from `target.owner/repo`, treat it as a fork/cross-repo case and stop unless the user authorizes the checkout change.
 
 ## Status states
 
-| State     | Meaning                                    |
-| --------- | ------------------------------------------ |
-| `ready`   | No merge-readiness open items were found.  |
-| `blocked` | A blocker requires action before merge.    |
-| `pending` | Waiting on checks or required review.      |
-| `unknown` | No PR was found or readiness is ambiguous. |
+| State     | Meaning                                                           |
+| --------- | ----------------------------------------------------------------- |
+| `ready`   | An open PR exists and no merge-readiness open items were found.   |
+| `blocked` | A blocker requires action before merge.                           |
+| `pending` | Waiting on checks or required review.                             |
+| `unknown` | No PR was found, readiness is ambiguous, or the PR is terminal.   |
 
 ## Open item ids
 
-| id                         | Meaning                                    |
-| -------------------------- | ------------------------------------------ |
-| `no_pull_request`          | No pull request was found for the branch.  |
-| `status_ambiguous`         | Readiness could not be determined safely.  |
-| `merge_conflicts`          | GitHub reports merge conflicts.            |
-| `branch_out_of_date`       | The branch is behind the base branch.      |
-| `merge_blocked`            | GitHub reports a mergeability blocker.     |
-| `draft`                    | The pull request is still a draft.         |
-| `ci_failing`               | Required checks are failing.               |
-| `changes_requested`        | A reviewer requested changes.              |
-| `unresolved_conversations` | Required review conversations remain open. |
-| `ci_running`               | Required checks are still running.         |
-| `review_pending`           | Required review is still pending.          |
+| id                         | Meaning                                                        |
+| -------------------------- | -------------------------------------------------------------- |
+| `no_pull_request`          | No pull request was found for the branch or exact targeted URL. |
+| `status_ambiguous`         | Readiness could not be determined safely.                      |
+| `merge_conflicts`          | GitHub reports merge conflicts.                                |
+| `branch_out_of_date`       | The branch is behind the base branch.                          |
+| `merge_blocked`            | GitHub reports a mergeability blocker.                         |
+| `draft`                    | The pull request is still a draft.                             |
+| `ci_failing`               | Required checks are failing.                                   |
+| `changes_requested`        | A reviewer requested changes.                                  |
+| `unresolved_conversations` | Required review conversations remain open.                     |
+| `ci_running`               | Required checks are still running.                             |
+| `review_pending`           | Required review is still pending.                              |
 
 Unresolved conversations are requirement-aware:
 
