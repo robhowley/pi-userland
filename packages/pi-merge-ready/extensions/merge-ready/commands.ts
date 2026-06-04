@@ -247,10 +247,22 @@ function createCommandExec(
 }
 
 function formatOpenItemDetail(detail: MergeReadyOpenItemDetail): string {
-  return `${detail.label} ${formatOpenItemDetailStatus(detail.status)}`;
+  let formatted = detail.label;
+
+  if (detail.status) {
+    formatted = `${formatted} ${formatOpenItemDetailStatus(detail.status)}`;
+  }
+
+  if (detail.url) {
+    formatted = `${formatted} — ${detail.url}`;
+  }
+
+  return formatted;
 }
 
-function formatOpenItemDetailStatus(status: MergeReadyOpenItemDetail['status']): string {
+function formatOpenItemDetailStatus(
+  status: NonNullable<MergeReadyOpenItemDetail['status']>,
+): string {
   if (status === 'failing') {
     return '❌';
   }
@@ -276,17 +288,9 @@ function formatTarget(target: MergeReadyTarget): string {
 }
 
 function formatPullRequestIdentity(pr: MergeReadyPullRequest): string {
-  const identityParts: string[] = [];
-
-  identityParts.push(`#${String(pr.number)}`);
-
   if (pr.title) {
-    identityParts.push(pr.title);
+    return `PR: #${String(pr.number)} — ${pr.title}`;
   }
 
-  if (identityParts.length === 0 && pr.url) {
-    identityParts.push(pr.url);
-  }
-
-  return `PR: ${identityParts.join(' — ')}`;
+  return `PR: #${String(pr.number)}`;
 }

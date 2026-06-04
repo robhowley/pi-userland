@@ -960,6 +960,111 @@ describe('getMergeReadyStatus', () => {
     },
   );
 
+  it('attaches blocking review deep links to the changes_requested open item', async () => {
+    const { exec, assertDone } = createFakeExec([
+      ...createGitDiscoveryCalls(),
+      createPullRequestViewSuccessCall(
+        buildPullRequestPayload({
+          reviews: [
+            {
+              author: { login: 'reviewer1' },
+              state: 'CHANGES_REQUESTED',
+              submittedAt: '2026-05-26T20:00:00Z',
+            },
+          ],
+          reviewDecision: 'CHANGES_REQUESTED',
+        }),
+      ),
+      createConversationsSuccessCall(
+        buildConversationsPayload({
+          latestOpinionatedReviews: {
+            nodes: [
+              {
+                author: { login: 'reviewer1' },
+                state: 'CHANGES_REQUESTED',
+                submittedAt: '2026-05-26T20:00:00Z',
+                url: 'https://github.com/robhowley/pi-userland/pull/42#pullrequestreview-1',
+              },
+            ],
+            pageInfo: { hasNextPage: false },
+          },
+        }),
+      ),
+    ]);
+
+    const status = await getMergeReadyStatus({
+      exec,
+      cwd: '/repo',
+      now: () => new Date(GENERATED_AT),
+    });
+
+    assertDone();
+
+    expect(status.openItems).toEqual([
+      {
+        id: 'changes_requested',
+        summary: 'Changes requested by reviewers',
+        details: [
+          {
+            label: 'reviewer1 requested changes',
+            url: 'https://github.com/robhowley/pi-userland/pull/42#pullrequestreview-1',
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('attaches unresolved conversation deep links to the unresolved_conversations open item', async () => {
+    const { exec, assertDone } = createFakeExec([
+      ...createGitDiscoveryCalls(),
+      createPullRequestViewSuccessCall(buildPullRequestPayload()),
+      createConversationsSuccessCall(
+        buildConversationsPayload({
+          reviewThreads: {
+            nodes: [
+              {
+                isResolved: false,
+                path: 'src/feature.ts',
+                line: 12,
+                comments: {
+                  nodes: [
+                    {
+                      url: 'https://github.com/robhowley/pi-userland/pull/42#discussion_r1',
+                      path: 'src/feature.ts',
+                      line: 12,
+                    },
+                  ],
+                },
+              },
+            ],
+            pageInfo: { hasNextPage: false },
+          },
+        }),
+      ),
+    ]);
+
+    const status = await getMergeReadyStatus({
+      exec,
+      cwd: '/repo',
+      now: () => new Date(GENERATED_AT),
+    });
+
+    assertDone();
+
+    expect(status.openItems).toEqual([
+      {
+        id: 'unresolved_conversations',
+        summary: '1 unresolved review conversation remains',
+        details: [
+          {
+            label: 'src/feature.ts:12 unresolved conversation',
+            url: 'https://github.com/robhowley/pi-userland/pull/42#discussion_r1',
+          },
+        ],
+      },
+    ]);
+  });
+
   it('does not emit review_pending when review is not required', async () => {
     const { exec, assertDone } = createFakeExec([
       ...createGitDiscoveryCalls(),

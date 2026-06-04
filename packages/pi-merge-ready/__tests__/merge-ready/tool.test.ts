@@ -119,6 +119,7 @@ describe('merge_ready_status tool', () => {
       description: expect.stringContaining('current branch pull request by default'),
       promptGuidelines: expect.arrayContaining([
         expect.stringContaining('openItems'),
+        expect.stringContaining('provenance'),
         expect.stringContaining('Do not infer work from raw GitHub states'),
         expect.stringContaining('full GitHub pull request URL'),
       ]),
@@ -292,6 +293,7 @@ describe('merge_ready_status tool', () => {
               name: 'unit',
               status: 'COMPLETED',
               conclusion: 'FAILURE',
+              detailsUrl: 'https://github.com/robhowley/pi-userland/actions/runs/123/jobs/456',
             },
           ],
         }),
@@ -320,7 +322,13 @@ describe('merge_ready_status tool', () => {
       {
         id: 'ci_failing',
         summary: 'Required checks are failing',
-        details: [{ label: 'ci / unit', status: 'failing' }],
+        details: [
+          {
+            label: 'ci / unit',
+            status: 'failing',
+            url: 'https://github.com/robhowley/pi-userland/actions/runs/123/jobs/456',
+          },
+        ],
       },
     ]);
     expect(JSON.parse(result.content[0]?.text ?? '')).toEqual(result.details);

@@ -60,6 +60,8 @@ You can also target an exact GitHub pull request URL:
 
 Only full HTTPS GitHub PR URLs are accepted. Branch names, PR numbers, shorthands, issue URLs, repo URLs, non-GitHub hosts, query strings, fragments, and subpaths are rejected. A trailing slash on `/pull/NUMBER/` is normalized.
 
+Open-item details render uniformly in slash-command output: if a detail row has a status, the command shows the same icon used for check rows; if it has a URL, the URL is appended. Detail URLs are provenance-only supporting links, not extra action items.
+
 ### Agent tool
 
 Agents get a `merge_ready_status` tool. The contract is simple: `state` plus `pr.lifecycle` tells you whether the PR is merge-ready, and `openItems` is the authoritative list of actionable merge-readiness work.
@@ -101,20 +103,24 @@ Example response:
 }
 ```
 
-Check-related `openItems` may include `details` rows for the non-green checks only:
+`openItems[].details[]` rows are supporting provenance for an open item, not a second actionable list. Check rows keep their status, and detail rows may include a concrete GitHub URL when there is a useful source link:
 
 ```json
 {
   "id": "ci_failing",
   "summary": "Required checks are failing",
   "details": [
-    { "label": "linting", "status": "failing" },
+    {
+      "label": "linting",
+      "status": "failing",
+      "url": "https://github.com/OWNER/REPO/actions/runs/123/jobs/456"
+    },
     { "label": "PR Title Check", "status": "failing" }
   ]
 }
 ```
 
-Agents should fix or report only the items returned in `openItems`; they should not invent blockers from raw GitHub fields.
+The top-level `pr.url` is already the PR URL; do not treat it as a source link. Agents should fix or report only the items returned in `openItems`; `details` rows and detail URLs are supporting provenance only.
 
 When `target.mode` is `"url"`, `pr.headRepository` is also returned so callers can verify whether the editable head repo matches the targeted PR repo before changing code:
 
@@ -133,28 +139,28 @@ The package includes a `merge-ready-loop` skill for requests like "make this PR 
 
 ## Status states
 
-| State     | Meaning                                                           |
-| --------- | ----------------------------------------------------------------- |
-| `ready`   | An open PR exists and no merge-readiness open items were found.   |
-| `blocked` | A blocker requires action before merge.                           |
-| `pending` | Waiting on checks or required review.                             |
-| `unknown` | No PR was found, readiness is ambiguous, or the PR is terminal.   |
+| State     | Meaning                                                         |
+| --------- | --------------------------------------------------------------- |
+| `ready`   | An open PR exists and no merge-readiness open items were found. |
+| `blocked` | A blocker requires action before merge.                         |
+| `pending` | Waiting on checks or required review.                           |
+| `unknown` | No PR was found, readiness is ambiguous, or the PR is terminal. |
 
 ## Open item ids
 
-| id                         | Meaning                                                        |
-| -------------------------- | -------------------------------------------------------------- |
+| id                         | Meaning                                                         |
+| -------------------------- | --------------------------------------------------------------- |
 | `no_pull_request`          | No pull request was found for the branch or exact targeted URL. |
-| `status_ambiguous`         | Readiness could not be determined safely.                      |
-| `merge_conflicts`          | GitHub reports merge conflicts.                                |
-| `branch_out_of_date`       | The branch is behind the base branch.                          |
-| `merge_blocked`            | GitHub reports a mergeability blocker.                         |
-| `draft`                    | The pull request is still a draft.                             |
-| `ci_failing`               | Required checks are failing.                                   |
-| `changes_requested`        | A reviewer requested changes.                                  |
-| `unresolved_conversations` | Required review conversations remain open.                     |
-| `ci_running`               | Required checks are still running.                             |
-| `review_pending`           | Required review is still pending.                              |
+| `status_ambiguous`         | Readiness could not be determined safely.                       |
+| `merge_conflicts`          | GitHub reports merge conflicts.                                 |
+| `branch_out_of_date`       | The branch is behind the base branch.                           |
+| `merge_blocked`            | GitHub reports a mergeability blocker.                          |
+| `draft`                    | The pull request is still a draft.                              |
+| `ci_failing`               | Required checks are failing.                                    |
+| `changes_requested`        | A reviewer requested changes.                                   |
+| `unresolved_conversations` | Required review conversations remain open.                      |
+| `ci_running`               | Required checks are still running.                              |
+| `review_pending`           | Required review is still pending.                               |
 
 Unresolved conversations are requirement-aware:
 

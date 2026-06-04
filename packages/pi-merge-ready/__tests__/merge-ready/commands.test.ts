@@ -227,7 +227,11 @@ describe('merge-ready command', () => {
         checks: 'failing',
         checkDetails: {
           failing: [
-            { label: 'linting', status: 'failing' },
+            {
+              label: 'linting',
+              status: 'failing',
+              url: 'https://github.com/robhowley/pi-userland/actions/runs/123/jobs/456',
+            },
             { label: 'PR Title Check', status: 'failing' },
           ],
           running: [],
@@ -248,8 +252,41 @@ describe('merge-ready command', () => {
         'State: blocked',
         'Open items:',
         '- Required checks are failing',
-        '  - linting ❌',
+        '  - linting ❌ — https://github.com/robhowley/pi-userland/actions/runs/123/jobs/456',
         '  - PR Title Check ❌',
+      ].join('\n'),
+    });
+  });
+
+  it('renders URL-only open-item details uniformly', () => {
+    const status = createMergeReadyStatus({
+      generatedAt: GENERATED_AT,
+      target: CURRENT_BRANCH_TARGET,
+      pr: buildOpenPr(),
+      openItems: [
+        {
+          id: 'changes_requested',
+          summary: 'Changes requested by reviewers',
+          details: [
+            {
+              label: 'alice requested changes',
+              url: 'https://github.com/robhowley/pi-userland/pull/42#pullrequestreview-123456',
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(renderMergeReadyStatus(status)).toEqual({
+      level: 'error',
+      message: [
+        '🔁 Changes requested by reviewers',
+        'Target: current branch feat/merge-ready (robhowley/pi-userland)',
+        'PR: #42 — Compose merge-ready status boundary',
+        'State: blocked',
+        'Open items:',
+        '- Changes requested by reviewers',
+        '  - alice requested changes — https://github.com/robhowley/pi-userland/pull/42#pullrequestreview-123456',
       ].join('\n'),
     });
   });
@@ -425,6 +462,7 @@ describe('merge-ready command', () => {
               name: 'unit',
               status: 'COMPLETED',
               conclusion: 'FAILURE',
+              detailsUrl: 'https://github.com/robhowley/pi-userland/actions/runs/123/jobs/456',
             },
           ],
         }),
@@ -456,7 +494,7 @@ describe('merge-ready command', () => {
         'State: blocked',
         'Open items:',
         '- Required checks are failing',
-        '  - ci / unit ❌',
+        '  - ci / unit ❌ — https://github.com/robhowley/pi-userland/actions/runs/123/jobs/456',
       ].join('\n'),
       'error',
     );
