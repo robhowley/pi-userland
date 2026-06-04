@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/robhowley/pi-userland/compare/pi-merge-ready-v0.3.0...pi-merge-ready-v0.4.0) (2026-06-04)
+
+
+### Features
+
+* **pi-merge-ready:** add explicit PR URL targeting ([#71](https://github.com/robhowley/pi-userland/issues/71)) ([7724ac8](https://github.com/robhowley/pi-userland/commit/7724ac80df4d9abd91fbf8afd0913529843c40ac))
+
 ## [0.3.0](https://github.com/robhowley/pi-userland/compare/pi-merge-ready-v0.2.0...pi-merge-ready-v0.3.0) (2026-06-03)
 
 
