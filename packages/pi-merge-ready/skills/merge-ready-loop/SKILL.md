@@ -93,13 +93,10 @@ Important:
 4. **Match request to items**: if the user's requested work does not match an `openItem`, say so and stop.
 5. **Verify the edit target before changing code**:
    - If `status.pr` is null or `status.pr.lifecycle !== "open"`, do not edit code to chase merge readiness.
-   - If `status.target.mode` is `"url"`, compare the editable checkout against `status.pr.headRepository` and `status.pr.headRefName` before editing.
-   - If `status.pr.headRepository` or `status.pr.headRefName` is missing, stop; the target is ambiguous.
-   - If the current turn explicitly says it was triggered by `/merge-ready watch` for an exact PR URL and authorizes isolated-worktree repair, do **not** mutate the ambient checkout. If the current checkout does not already match the PR head repo/branch, create or switch to an isolated git worktree for `status.pr.headRepository.owner/status.pr.headRepository.repo` + `status.pr.headRefName` before editing.
-   - If that head repo/branch cannot be fetched or checked out, or permissions are insufficient, stop and report the blocker.
-   - Otherwise, if `status.pr.headRepository.owner/repo !== status.target.owner/repo`, this is a fork/cross-repo PR. Do **not** assume the URL target repo is the editable checkout; stop and ask whether to fetch/switch to the head repo/branch.
-   - Only proceed automatically when the ambient checkout or the authorized isolated worktree clearly matches `status.pr.headRepository.owner`, `status.pr.headRepository.repo`, and `status.pr.headRefName`.
-   - If repo or branch identity is unclear, stop and ask the user how to proceed.
+   - If `status.target.mode` is `"url"`, edit only a checkout/worktree that matches `status.pr.headRepository` and `status.pr.headRefName`.
+   - If that head repo/branch is missing or unclear, stop.
+   - If the current turn explicitly says it was triggered by `/merge-ready watch` for an exact PR URL and authorizes isolated-worktree repair, do **not** mutate the ambient checkout; create or switch to an isolated worktree for that head repo/branch instead.
+   - If you cannot fetch or check out that head, stop and report the blocker.
 6. **Small fixes**: fix one small item or tightly related set at a time.
 7. **Verify locally**: run the strongest relevant local checks you can reasonably run before claiming an item was addressed.
 8. **Separate addressed from cleared**:
