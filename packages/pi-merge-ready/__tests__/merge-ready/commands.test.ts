@@ -735,36 +735,56 @@ describe('merge-ready command', () => {
     expect(ctx.ui.setStatus).toHaveBeenCalledWith(MERGE_READY_WATCH_STATUS_KEY, undefined);
   });
 
-  it('keeps URL-targeted watch polls observe-only', async () => {
+  it('queues URL-targeted repair with isolated-worktree instructions and no ambient status-bar mutation', async () => {
     const url = 'https://github.com/shopify/pi/pull/64';
+    const target = {
+      mode: 'url' as const,
+      url,
+      owner: 'shopify',
+      repo: 'pi',
+      prNumber: 64,
+    };
+    const failingPullRequestPayload = buildPullRequestPayload({
+      number: 64,
+      title: 'Support explicit PR URL targets',
+      url,
+      headRefName: 'feat/explicit-pr-url',
+      headRepository: {
+        name: 'pi',
+      },
+      headRepositoryOwner: {
+        login: 'shopify',
+      },
+      baseRefName: 'main',
+      statusCheckRollup: [
+        {
+          __typename: 'CheckRun',
+          workflowName: 'ci',
+          name: 'unit',
+          status: 'COMPLETED',
+          conclusion: 'FAILURE',
+          detailsUrl: 'https://github.example/checks/unit',
+        },
+      ],
+    });
     const { api, assertDone, getCommand } = createMockAPI([
-      {
-        command: 'gh',
-        args: ['pr', 'view', '64', '--repo', 'shopify/pi', '--json', GH_PR_VIEW_JSON_FIELDS],
+      createPullRequestViewSuccessCall(failingPullRequestPayload, {
         cwd: '/repo',
         timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
-        result: {
-          stdout: `${JSON.stringify(
-            buildPullRequestPayload({
-              number: 64,
-              title: 'Support explicit PR URL targets',
-              url,
-              headRefName: 'feat/explicit-pr-url',
-              baseRefName: 'main',
-              statusCheckRollup: [
-                {
-                  __typename: 'CheckRun',
-                  workflowName: 'ci',
-                  name: 'unit',
-                  status: 'COMPLETED',
-                  conclusion: 'FAILURE',
-                  detailsUrl: 'https://github.example/checks/unit',
-                },
-              ],
-            }),
-          )}\n`,
-        },
-      },
+        target,
+      }),
+      createConversationsSuccessCall(buildConversationsPayload(), {
+        cwd: '/repo',
+        timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+        repositoryOwner: 'shopify',
+        repositoryName: 'pi',
+        pullRequestNumber: 64,
+      }),
+      createPullRequestViewSuccessCall(failingPullRequestPayload, {
+        cwd: '/repo',
+        timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+        target,
+      }),
       createConversationsSuccessCall(buildConversationsPayload(), {
         cwd: '/repo',
         timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
@@ -776,24 +796,29 @@ describe('merge-ready command', () => {
 
     mergeReadyExtension(api);
     const handler = getCommand(MERGE_READY_COMMAND_NAME);
-    const abortController = new AbortController();
-    const ctx = createCommandContext({ signal: abortController.signal });
+    const ctx = createCommandContext();
 
-    const run = handler?.(`watch --url ${url} --interval 15`, ctx) ?? Promise.resolve();
-    await vi.advanceTimersByTimeAsync(0);
-    abortController.abort();
-    await run;
+    await handler?.(`watch --url ${url} --interval 15`, ctx);
 
     assertDone();
-    expect(api.sendUserMessage).not.toHaveBeenCalled();
+    expect(api.sendUserMessage).toHaveBeenCalledTimes(1);
+    const prompt = vi.mocked(api.sendUserMessage).mock.calls[0]?.[0];
+    expect(prompt).toContain(`Use the merge-ready-loop skill for ${url}.`);
+    expect(prompt).toContain('Do this URL-targeted repair in an isolated git worktree');
+    expect(prompt).toContain('Do not mutate the ambient checkout.');
+    expect(prompt).toContain("Use the snapshot's pr.headRepository and pr.headRefName");
     expect(ctx.ui.setStatus).not.toHaveBeenCalledWith(
       MERGE_READY_STATUS_BAR_KEY,
       expect.anything(),
     );
     expect(ctx.ui.setStatus).toHaveBeenCalledWith(
       MERGE_READY_WATCH_STATUS_KEY,
-      expect.stringContaining('Watching #64 · Required checks are failing'),
+      expect.stringContaining('Repairing #64 · ci_failing'),
     );
+    expect(vi.mocked(ctx.ui.notify).mock.calls).toContainEqual([
+      `Stopping merge-ready watch for ${url}: the same actionable blocker is still present after one attempt.`,
+      'warning',
+    ]);
   });
 
   it('reports missing and duplicate --url errors clearly', async () => {

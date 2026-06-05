@@ -93,10 +93,12 @@ Important:
 4. **Match request to items**: if the user's requested work does not match an `openItem`, say so and stop.
 5. **Verify the edit target before changing code**:
    - If `status.pr` is null or `status.pr.lifecycle !== "open"`, do not edit code to chase merge readiness.
-   - If `status.target.mode` is `"url"`, compare the local checkout against `status.pr.headRepository` and `status.pr.headRefName` before editing.
-   - If `status.pr.headRepository` is missing, stop; the target is ambiguous.
-   - If `status.pr.headRepository.owner/repo !== status.target.owner/repo`, this is a fork/cross-repo PR. Do **not** assume the URL target repo is the editable checkout; stop and ask whether to fetch/switch to the head repo/branch.
-   - Only proceed automatically when the local checkout clearly matches `status.pr.headRepository.owner`, `status.pr.headRepository.repo`, and `status.pr.headRefName`.
+   - If `status.target.mode` is `"url"`, compare the editable checkout against `status.pr.headRepository` and `status.pr.headRefName` before editing.
+   - If `status.pr.headRepository` or `status.pr.headRefName` is missing, stop; the target is ambiguous.
+   - If the current turn explicitly says it was triggered by `/merge-ready watch` for an exact PR URL and authorizes isolated-worktree repair, do **not** mutate the ambient checkout. If the current checkout does not already match the PR head repo/branch, create or switch to an isolated git worktree for `status.pr.headRepository.owner/status.pr.headRepository.repo` + `status.pr.headRefName` before editing.
+   - If that head repo/branch cannot be fetched or checked out, or permissions are insufficient, stop and report the blocker.
+   - Otherwise, if `status.pr.headRepository.owner/repo !== status.target.owner/repo`, this is a fork/cross-repo PR. Do **not** assume the URL target repo is the editable checkout; stop and ask whether to fetch/switch to the head repo/branch.
+   - Only proceed automatically when the ambient checkout or the authorized isolated worktree clearly matches `status.pr.headRepository.owner`, `status.pr.headRepository.repo`, and `status.pr.headRefName`.
    - If repo or branch identity is unclear, stop and ask the user how to proceed.
 6. **Small fixes**: fix one small item or tightly related set at a time.
 7. **Verify locally**: run the strongest relevant local checks you can reasonably run before claiming an item was addressed.
@@ -109,12 +111,13 @@ Important:
 
 ## Watch-triggered turns
 
-Current-branch `/merge-ready watch` runs may invoke this skill with a status snapshot already provided. Explicit `/merge-ready watch --url ...` runs are observe-only and should not queue repair turns. Use any provided snapshot only when it is clearly fresh and the target is already confirmed.
+Current-branch `/merge-ready watch` runs may invoke this skill with a status snapshot already provided. URL-targeted `/merge-ready watch --url ...` runs may also invoke this skill with the exact PR URL plus explicit isolated-worktree instructions for the PR head repo/branch. Use any provided snapshot only when it is clearly fresh and the target is already confirmed.
 
 - If the snapshot is stale, incomplete, or the target still needs confirmation, call `merge_ready_status({})` or `merge_ready_status({ url })`.
+- For watch-triggered URL repair turns, use `status.pr.headRepository` + `status.pr.headRefName` to confirm or create/switch to the isolated worktree. Do not mutate the ambient checkout.
 - Work only from the provided or freshly returned `openItems`. `details` rows and detail URLs are provenance only.
 - Make one bounded repair attempt for the triggered blocker or a tightly related set. Do not start another watch loop from inside the turn.
-- Report which items were addressed locally, which were cleared by fresh remote status, and which are still waiting on CI, review, or GitHub recomputation.
+- Report the worktree path used for URL watch repairs, which items were addressed locally, which were cleared by fresh remote status, and which are still waiting on CI, review, or GitHub recomputation.
 - Do not wait indefinitely for CI, review, or GitHub state to change; hand back control once the bounded attempt is done or the remaining work is external.
 
 ## The loop

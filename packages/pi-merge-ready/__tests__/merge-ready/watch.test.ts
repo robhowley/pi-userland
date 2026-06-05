@@ -108,6 +108,20 @@ function buildRuntimeOpenPr(overrides: Partial<NonNullable<MergeReadyStatus['pr'
   };
 }
 
+function buildRuntimeUrlOpenPr(overrides: Partial<NonNullable<MergeReadyStatus['pr']>> = {}) {
+  return buildRuntimeOpenPr({
+    number: 64,
+    title: 'Support explicit PR URL targets',
+    url: RUNTIME_URL_TARGET.url,
+    headRefName: 'feat/explicit-pr-url',
+    headRepository: {
+      owner: 'shopify',
+      repo: 'pi',
+    },
+    ...overrides,
+  });
+}
+
 function createReadyStatus(overrides: Partial<MergeReadyStatus> = {}): MergeReadyStatus {
   return {
     ...createMergeReadyStatus({
@@ -176,12 +190,7 @@ function createUrlCiFailingStatus(): MergeReadyStatus {
   return createMergeReadyStatus({
     generatedAt: GENERATED_AT,
     target: RUNTIME_URL_TARGET,
-    pr: buildRuntimeOpenPr({
-      number: 64,
-      title: 'Support explicit PR URL targets',
-      url: RUNTIME_URL_TARGET.url,
-      headRefName: 'feat/explicit-pr-url',
-    }),
+    pr: buildRuntimeUrlOpenPr(),
     signals: {
       draft: false,
       mergeability: 'mergeable',
@@ -191,6 +200,43 @@ function createUrlCiFailingStatus(): MergeReadyStatus {
         running: [],
         unknown: [],
       },
+      review: 'approved',
+      unresolvedConversations: false,
+      unresolvedConversationRequirement: 'optional',
+    },
+  });
+}
+
+function createUrlCiRunningStatus(): MergeReadyStatus {
+  return createMergeReadyStatus({
+    generatedAt: GENERATED_AT,
+    target: RUNTIME_URL_TARGET,
+    pr: buildRuntimeUrlOpenPr(),
+    signals: {
+      draft: false,
+      mergeability: 'mergeable',
+      checks: 'running',
+      checkDetails: {
+        failing: [],
+        running: [{ label: 'ci / unit', status: 'running' }],
+        unknown: [],
+      },
+      review: 'approved',
+      unresolvedConversations: false,
+      unresolvedConversationRequirement: 'optional',
+    },
+  });
+}
+
+function createUrlReadyStatus(): MergeReadyStatus {
+  return createMergeReadyStatus({
+    generatedAt: GENERATED_AT,
+    target: RUNTIME_URL_TARGET,
+    pr: buildRuntimeUrlOpenPr(),
+    signals: {
+      draft: false,
+      mergeability: 'mergeable',
+      checks: 'passing',
       review: 'approved',
       unresolvedConversations: false,
       unresolvedConversationRequirement: 'optional',
@@ -576,7 +622,49 @@ describe('merge-ready watch helpers', () => {
       expect(prompt).toContain('Run the strongest relevant local validation you reasonably can.');
       expect(prompt).toContain('Do not wait indefinitely for remote CI/review/GitHub to clear.');
       expect(prompt).toContain('Do not start another watch loop.');
+      expect(prompt).not.toContain('isolated git worktree');
+      expect(prompt).not.toContain('Do this URL-targeted repair');
       expect(prompt).toContain(`"generatedAt": "${GENERATED_AT}"`);
+    });
+
+    it('builds an isolated-worktree prompt for URL-targeted repair', () => {
+      const status = buildStatus({
+        target: HELPER_URL_TARGET,
+        pr: {
+          ...OPEN_PR,
+          headRepository: {
+            owner: 'robhowley',
+            repo: 'pi-userland',
+          },
+        },
+        state: 'blocked',
+        summary: 'Required checks are failing',
+        openItems: [
+          buildOpenItem('ci_failing', {
+            summary: 'Required checks are failing',
+            details: [{ label: 'lint', status: 'failing', url: 'https://ci.example/lint' }],
+          }),
+        ],
+      });
+      const prompt = createMergeReadyWatchRepairPrompt(status, status.openItems);
+
+      expect(prompt).toContain(`Use the merge-ready-loop skill for ${HELPER_URL_TARGET.url}.`);
+      expect(prompt).toContain('This was triggered by /merge-ready watch.');
+      expect(prompt).toContain('Do this URL-targeted repair in an isolated git worktree');
+      expect(prompt).toContain('Do not mutate the ambient checkout.');
+      expect(prompt).toContain("Use the snapshot's pr.headRepository and pr.headRefName");
+      expect(prompt).toContain(
+        'If the head repository or branch is missing or cannot be fetched, stop and report the ambiguity.',
+      );
+      expect(prompt).toContain(
+        'Run the strongest relevant local validation you reasonably can in the worktree.',
+      );
+      expect(prompt).toContain(
+        'Report the worktree path used, whether the patch was pushed/prepared',
+      );
+      expect(prompt).toContain('Do not wait indefinitely for remote CI/review/GitHub to clear.');
+      expect(prompt).toContain('Do not start another watch loop.');
+      expect(prompt).toContain('"headRepository": {');
     });
   });
 
@@ -680,9 +768,8 @@ describe('merge-ready watch loop', () => {
     }
   });
 
-  it('does not require repair handoff support for observe-only URL watches', async () => {
+  it('requires repair handoff support for URL watches because they may auto-repair', () => {
     const ctx = createWatchContext();
-    const checkDirtyWorkingTree = vi.fn(async () => ({ ok: true as const, dirty: false }));
 
     const start = startMergeReadyWatch({
       api: {},
@@ -690,8 +777,34 @@ describe('merge-ready watch loop', () => {
       exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
       intervalSeconds: 30,
       url: RUNTIME_URL_TARGET.url,
+    });
+
+    expect(start).toEqual({
+      ok: false,
+      level: 'error',
+      message: 'Merge-ready watch requires Pi sendUserMessage support.',
+    });
+  });
+
+  it.each([
+    { name: 'wait-only', status: createUrlCiRunningStatus() },
+    { name: 'ready', status: createUrlReadyStatus() },
+  ])('keeps URL $name states polling without repair', async ({ status }) => {
+    const ctx = createWatchContext();
+    const sendUserMessage = vi.fn(
+      async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
+    );
+    const checkDirtyWorkingTree = vi.fn(async () => ({ ok: true as const, dirty: false }));
+
+    const result = await runMergeReadyWatchLoop({
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
+      api: { sendUserMessage },
+      ctx,
+      intervalSeconds: 30,
+      signal: new AbortController().signal,
+      url: RUNTIME_URL_TARGET.url,
       dependencies: {
-        getStatus: createStatusSequence([createUrlCiFailingStatus()]),
+        getStatus: createStatusSequence([status]),
         sleep: vi.fn(async () => undefined),
         syncStatusBar: vi.fn(),
         checkDirtyWorkingTree,
@@ -699,16 +812,12 @@ describe('merge-ready watch loop', () => {
       },
     });
 
-    expect(start).toMatchObject({ ok: true, level: 'info' });
-    if (!start.ok) {
-      return;
-    }
-
-    await expect(start.promise).resolves.toEqual({ kind: 'stopped', reason: 'max_iterations' });
+    expect(result).toEqual({ kind: 'stopped', reason: 'max_iterations' });
+    expect(sendUserMessage).not.toHaveBeenCalled();
     expect(checkDirtyWorkingTree).not.toHaveBeenCalled();
     expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(
       MERGE_READY_WATCH_STATUS_KEY,
-      expect.stringContaining('Watching #64 · Required checks are failing'),
+      expect.stringContaining(`Watching #64 · ${status.summary}`),
     );
   });
 
@@ -792,6 +901,7 @@ describe('merge-ready watch loop', () => {
       async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
     );
     const syncStatusBar = vi.fn();
+    const checkDirtyWorkingTree = vi.fn(async () => ({ ok: true as const, dirty: false }));
 
     const result = await runMergeReadyWatchLoop({
       exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
@@ -803,13 +913,17 @@ describe('merge-ready watch loop', () => {
         getStatus,
         sleep,
         syncStatusBar,
-        checkDirtyWorkingTree: async () => ({ ok: true, dirty: false }),
+        checkDirtyWorkingTree,
         maxIterations: 1,
       },
     });
 
     expect(result).toEqual({ kind: 'stopped', reason: 'max_iterations' });
+    expect(checkDirtyWorkingTree).toHaveBeenCalledTimes(1);
     expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(checkDirtyWorkingTree.mock.invocationCallOrder[0]).toBeLessThan(
+      sendUserMessage.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
     expect(vi.mocked(ctx.waitForIdle)).toHaveBeenCalledTimes(1);
     expect(sleep).toHaveBeenCalledWith(30_000, expect.any(AbortSignal));
     expect(syncStatusBar).toHaveBeenCalledTimes(2);
@@ -912,8 +1026,42 @@ describe('merge-ready watch loop', () => {
     ]);
   });
 
-  it('keeps URL-targeted repairable watches observe-only while still routing through the status-bar primitive', async () => {
+  it('stops on a repeated URL actionable signature after one repair attempt', async () => {
     const ctx = createWatchContext();
+    const sendUserMessage = vi.fn(
+      async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
+    );
+    const checkDirtyWorkingTree = vi.fn(async () => ({ ok: true as const, dirty: false }));
+    const status = createUrlCiFailingStatus();
+
+    const result = await runMergeReadyWatchLoop({
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
+      api: { sendUserMessage },
+      ctx,
+      intervalSeconds: 30,
+      signal: new AbortController().signal,
+      url: RUNTIME_URL_TARGET.url,
+      dependencies: {
+        getStatus: createStatusSequence([status, status]),
+        sleep: vi.fn(async () => undefined),
+        syncStatusBar: vi.fn(),
+        checkDirtyWorkingTree,
+        maxIterations: 1,
+      },
+    });
+
+    expect(result).toMatchObject({ kind: 'stopped', reason: 'repeated_actionable_signature' });
+    expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(checkDirtyWorkingTree).not.toHaveBeenCalled();
+    expect(vi.mocked(ctx.ui.notify).mock.calls).toContainEqual([
+      `Stopping merge-ready watch for ${RUNTIME_URL_TARGET.url}: the same actionable blocker is still present after one attempt.`,
+      'warning',
+    ]);
+  });
+
+  it('queues one URL-targeted repair without ambient dirty preflight and keeps status-bar routing intact', async () => {
+    const ctx = createWatchContext();
+    const sleep = vi.fn(async () => undefined);
     const sendUserMessage = vi.fn(
       async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
     );
@@ -930,8 +1078,8 @@ describe('merge-ready watch loop', () => {
       signal: new AbortController().signal,
       url: RUNTIME_URL_TARGET.url,
       dependencies: {
-        getStatus: createStatusSequence([createUrlCiFailingStatus()]),
-        sleep: vi.fn(async () => undefined),
+        getStatus: createStatusSequence([createUrlCiFailingStatus(), createUrlCiRunningStatus()]),
+        sleep,
         syncStatusBar,
         checkDirtyWorkingTree,
         maxIterations: 1,
@@ -939,16 +1087,30 @@ describe('merge-ready watch loop', () => {
     });
 
     expect(result).toEqual({ kind: 'stopped', reason: 'max_iterations' });
-    expect(syncStatusBar).toHaveBeenCalledTimes(1);
+    expect(syncStatusBar).toHaveBeenCalledTimes(2);
     expect(checkDirtyWorkingTree).not.toHaveBeenCalled();
-    expect(sendUserMessage).not.toHaveBeenCalled();
+    expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(sleep).toHaveBeenCalledWith(45_000, expect.any(AbortSignal));
     expect(vi.mocked(ctx.ui.setStatus)).not.toHaveBeenCalledWith(
       MERGE_READY_STATUS_BAR_KEY,
       expect.anything(),
     );
     expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(
       MERGE_READY_WATCH_STATUS_KEY,
-      expect.stringContaining('Watching #64 · Required checks are failing'),
+      expect.stringContaining('Repairing #64 · ci_failing'),
+    );
+    expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(
+      MERGE_READY_WATCH_STATUS_KEY,
+      expect.stringContaining('Watching #64 · Checks are still running'),
+    );
+
+    const prompt = vi.mocked(sendUserMessage).mock.calls[0]?.[0];
+    expect(prompt).toContain(`Use the merge-ready-loop skill for ${RUNTIME_URL_TARGET.url}.`);
+    expect(prompt).toContain('Do this URL-targeted repair in an isolated git worktree');
+    expect(prompt).toContain('Do not mutate the ambient checkout.');
+    expect(prompt).toContain("Use the snapshot's pr.headRepository and pr.headRefName");
+    expect(prompt).toContain(
+      'Report the worktree path used, whether the patch was pushed/prepared',
     );
   });
 

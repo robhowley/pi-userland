@@ -74,22 +74,22 @@ You can also run a foreground-visible watcher:
 /merge-ready watch --url https://github.com/OWNER/REPO/pull/64 --interval 30
 ```
 
-`watch` is a foreground command that polls merge readiness on the requested interval. Current-branch watches queue bounded repair turns for locally actionable blockers; explicit `--url` watches are observe-only and never auto-repair or run dirty-worktree preflight. Cancel the foreground command to stop it. It accepts only the same exact GitHub PR URL form as `--url` above.
+`watch` is a foreground command that polls merge readiness on the requested interval. Repairable blockers can queue one bounded repair turn for both current-branch and explicit `--url` watches. Current-branch repairs use the ambient checkout and run dirty-worktree preflight first; URL-targeted repairs instruct the agent to use an isolated worktree for the PR head repo/branch and skip ambient dirty-worktree preflight. Cancel the foreground command to stop it. It accepts only the same exact GitHub PR URL form as `--url` above.
 
 Watch actionability:
 
-| Status / lifecycle                                                                                                                           | Watch behavior                                                                                                                                |
-| -------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `branch_out_of_date`, `merge_conflicts`, `ci_failing`                                                                                        | Auto-attempt one bounded local repair turn for current-branch watches. Explicit `--url` watches stay observe-only and keep polling/reporting. |
-| `ci_running`, `review_pending`, open PR with no `openItems` (`ready`)                                                                        | Keep polling and wait for GitHub or review state to change.                                                                                   |
-| `changes_requested`, `unresolved_conversations`, `merge_blocked`, `draft`, `status_ambiguous`, `no_pull_request`, closed/merged PR lifecycle | Do not auto-repair; report the blocker or terminal state and stop.                                                                            |
+| Status / lifecycle                                                                                                                           | Watch behavior                                                                                                                                                                                                   |
+| -------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `branch_out_of_date`, `merge_conflicts`, `ci_failing`                                                                                        | Auto-attempt one bounded repair turn. Current-branch watches repair in the ambient checkout after dirty-worktree preflight; explicit `--url` watches repair in an isolated worktree for the PR head repo/branch. |
+| `ci_running`, `review_pending`, open PR with no `openItems` (`ready`)                                                                        | Keep polling and wait for GitHub or review state to change.                                                                                                                                                      |
+| `changes_requested`, `unresolved_conversations`, `merge_blocked`, `draft`, `status_ambiguous`, `no_pull_request`, closed/merged PR lifecycle | Do not auto-repair; report the blocker or terminal state and stop.                                                                                                                                               |
 
 Watch safety:
 
 - Only one foreground watcher is active at a time.
 - Repeated-blocker guard: after one repair attempt for a blocker, `watch` does not keep retrying it without a fresh status change or explicit restart.
-- Dirty-worktree preflight: `watch` refuses repair turns when local changes are already present.
-- Explicit `--url` watch targets are observe-only: they keep polling/reporting status, but do not auto-repair or inspect the local worktree.
+- Dirty-worktree preflight: current-branch `watch` repairs refuse to run when local changes are already present in the ambient checkout.
+- Explicit `--url` watch repairs must not mutate the ambient checkout: they are instructed to use an isolated worktree for the PR head repo/branch and skip ambient dirty-worktree preflight.
 - Exact PR URL only: `--url` must be a full HTTPS GitHub pull request URL.
 
 ### Agent tool
@@ -165,7 +165,7 @@ When `target.mode` is `"url"`, `pr.headRepository` is also returned so callers c
 
 ### Merge-ready loop skill
 
-The package includes a `merge-ready-loop` skill for requests like "make this PR ready to merge". The skill resolves the target, calls `merge_ready_status`, chooses the smallest actionable returned item, verifies the change locally, and distinguishes "fixed locally" from "confirmed cleared by GitHub". For URL-targeted PRs, it should verify the local checkout against `pr.headRepository` plus `pr.headRefName`; if `pr.headRepository` differs from `target.owner/repo`, treat it as a fork/cross-repo case and stop unless the user authorizes the checkout change.
+The package includes a `merge-ready-loop` skill for requests like "make this PR ready to merge". The skill resolves the target, calls `merge_ready_status`, chooses the smallest actionable returned item, verifies the change locally, and distinguishes "fixed locally" from "confirmed cleared by GitHub". For URL-targeted PRs, it should verify the editable head against `pr.headRepository` plus `pr.headRefName`; ordinary URL turns stop unless the user authorizes any checkout change, while watch-triggered URL repair turns may explicitly authorize an isolated worktree for that head repo/branch without mutating the ambient checkout.
 
 ## Status states
 

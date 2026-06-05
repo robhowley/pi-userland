@@ -379,7 +379,7 @@ export function startMergeReadyWatch(
     };
   }
 
-  if (options.url === undefined && typeof options.api.sendUserMessage !== 'function') {
+  if (typeof options.api.sendUserMessage !== 'function') {
     return {
       ok: false,
       level: 'error',
@@ -527,11 +527,7 @@ export async function runMergeReadyWatchLoop(
         return { kind: 'stopped', reason: stopOutcome.reason, status };
       }
 
-      if (
-        classification.actionability === 'wait' ||
-        (classification.actionability === 'repair' &&
-          isObserveOnlyMergeReadyWatchTarget(options.url, status.target))
-      ) {
+      if (classification.actionability === 'wait') {
         setMergeReadyWatchStatus(
           options.ctx,
           `Watching ${formatStatusSubject(status)} · ${status.summary} · next poll in ${String(options.intervalSeconds)}s`,
@@ -556,28 +552,30 @@ export async function runMergeReadyWatchLoop(
         };
       }
 
-      const dirtyState = await checkDirtyWorkingTree({
-        exec: options.exec,
-        cwd: options.ctx.cwd,
-        ...(options.timeout === undefined ? {} : { timeout: options.timeout }),
-      });
-      throwIfMergeReadyWatchAborted(options.signal);
-      if (!dirtyState.ok) {
-        setMergeReadyWatchStatus(options.ctx, 'Stopped · git working tree preflight failed');
-        options.ctx.ui.notify(
-          `Stopping merge-ready watch for ${formatStatusTargetLabel(status)}: ${dirtyState.message}`,
-          'warning',
-        );
-        return { kind: 'stopped', reason: 'dirty_check_failed', status };
-      }
+      if (status.target.mode === 'current_branch') {
+        const dirtyState = await checkDirtyWorkingTree({
+          exec: options.exec,
+          cwd: options.ctx.cwd,
+          ...(options.timeout === undefined ? {} : { timeout: options.timeout }),
+        });
+        throwIfMergeReadyWatchAborted(options.signal);
+        if (!dirtyState.ok) {
+          setMergeReadyWatchStatus(options.ctx, 'Stopped · git working tree preflight failed');
+          options.ctx.ui.notify(
+            `Stopping merge-ready watch for ${formatStatusTargetLabel(status)}: ${dirtyState.message}`,
+            'warning',
+          );
+          return { kind: 'stopped', reason: 'dirty_check_failed', status };
+        }
 
-      if (dirtyState.dirty) {
-        setMergeReadyWatchStatus(options.ctx, 'Stopped · dirty working tree');
-        options.ctx.ui.notify(
-          `Stopping merge-ready watch for ${formatStatusTargetLabel(status)}: local git changes are present, so auto-repair is disabled.`,
-          'warning',
-        );
-        return { kind: 'stopped', reason: 'dirty_worktree', status };
+        if (dirtyState.dirty) {
+          setMergeReadyWatchStatus(options.ctx, 'Stopped · dirty working tree');
+          options.ctx.ui.notify(
+            `Stopping merge-ready watch for ${formatStatusTargetLabel(status)}: local git changes are present, so auto-repair is disabled.`,
+            'warning',
+          );
+          return { kind: 'stopped', reason: 'dirty_worktree', status };
+        }
       }
 
       attemptedSignatures.add(signature);
@@ -628,16 +626,6 @@ export async function runMergeReadyWatchLoop(
 
       const refreshedClassification = classifyMergeReadyWatchStatus(refreshedStatus);
       if (refreshedClassification.actionability === 'repair') {
-        if (isObserveOnlyMergeReadyWatchTarget(options.url, refreshedStatus.target)) {
-          setMergeReadyWatchStatus(
-            options.ctx,
-            `Watching ${formatStatusSubject(refreshedStatus)} · ${refreshedStatus.summary} · next poll in ${String(options.intervalSeconds)}s`,
-          );
-          await sleep(options.intervalSeconds * 1_000, options.signal);
-          throwIfMergeReadyWatchAborted(options.signal);
-          continue;
-        }
-
         const refreshedSignature = createMergeReadyWatchBlockerSignature(
           refreshedStatus,
           refreshedClassification.repairItems,
@@ -720,6 +708,27 @@ export function createMergeReadyWatchRepairPrompt(
     null,
     2,
   );
+
+  if (status.target.mode === 'url') {
+    return [
+      `Use the merge-ready-loop skill for ${status.target.url}.`,
+      'This was triggered by /merge-ready watch.',
+      '',
+      'Do this URL-targeted repair in an isolated git worktree for the PR head repo/branch. Do not mutate the ambient checkout.',
+      "Use the snapshot's pr.headRepository and pr.headRefName to identify the editable head. If the head repository or branch is missing or cannot be fetched, stop and report the ambiguity.",
+      '',
+      'Work only from the openItems returned by merge_ready_status. Do not invent additional blockers. Treat openItems[].details[] as supporting provenance only.',
+      '',
+      'Current snapshot:',
+      snapshot,
+      '',
+      `Make one bounded repair attempt for the actionable item(s): ${actionableIds}.`,
+      'Run the strongest relevant local validation you reasonably can in the worktree.',
+      'Report the worktree path used, whether the patch was pushed/prepared, and whether each item is addressed locally, cleared remotely, skipped, or waiting on external confirmation.',
+      'Do not wait indefinitely for remote CI/review/GitHub to clear.',
+      'Do not start another watch loop.',
+    ].join('\n');
+  }
 
   return [
     `Use the merge-ready-loop skill for ${describeMergeReadyWatchRepairTarget(status)}.`,
@@ -986,13 +995,6 @@ function describeMergeReadyWatchRepairTarget(
   }
 
   return 'the current branch PR';
-}
-
-function isObserveOnlyMergeReadyWatchTarget(
-  requestedUrl: string | undefined,
-  target: MergeReadyTarget,
-): boolean {
-  return requestedUrl !== undefined || target.mode === 'url';
 }
 
 function setMergeReadyWatchStatus(ctx: MergeReadyWatchContext, text?: string): void {
