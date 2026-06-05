@@ -49,6 +49,7 @@ export type MergeReadyWatchClassificationReason =
   | 'repairable_open_items'
   | 'ready'
   | 'wait_only_open_items'
+  | 'unknown_open_items_present'
   | 'non_actionable_open_items';
 
 export type MergeReadyWatchClassification = {
@@ -57,6 +58,7 @@ export type MergeReadyWatchClassification = {
   repairItems: MergeReadyOpenItem[];
   waitItems: MergeReadyOpenItem[];
   stopItems: MergeReadyOpenItem[];
+  unknownItems?: MergeReadyOpenItem[];
 };
 
 export type ParseMergeReadyWatchIntervalSecondsResult =
@@ -302,6 +304,7 @@ export function classifyMergeReadyWatchStatus(
   const repairItems: MergeReadyOpenItem[] = [];
   const waitItems: MergeReadyOpenItem[] = [];
   const stopItems = [...stopItemsFromStatus];
+  const unknownItems: MergeReadyOpenItem[] = [];
 
   for (const openItem of status.openItems) {
     if (REPAIR_OPEN_ITEM_ID_SET.has(openItem.id)) {
@@ -314,9 +317,12 @@ export function classifyMergeReadyWatchStatus(
       continue;
     }
 
-    if (!STOP_OPEN_ITEM_ID_SET.has(openItem.id)) {
-      stopItems.push(openItem);
+    // Items in STOP_OPEN_ITEM_ID_SET are already in stopItemsFromStatus; skip unknown handling
+    if (STOP_OPEN_ITEM_ID_SET.has(openItem.id)) {
+      continue;
     }
+
+    unknownItems.push(openItem);
   }
 
   if (stopItems.length > 0) {
@@ -326,6 +332,17 @@ export function classifyMergeReadyWatchStatus(
       repairItems,
       waitItems,
       stopItems,
+    };
+  }
+
+  if (unknownItems.length > 0) {
+    return {
+      actionability: 'wait',
+      reason: 'unknown_open_items_present',
+      repairItems,
+      waitItems,
+      stopItems,
+      unknownItems,
     };
   }
 
@@ -528,6 +545,12 @@ export async function runMergeReadyWatchLoop(
       }
 
       if (classification.actionability === 'wait') {
+        if (classification.reason === 'unknown_open_items_present' && classification.unknownItems) {
+          options.ctx.ui.notify(
+            `Merge-ready watch: unrecognized items present (${classification.unknownItems.map((i) => i.id).join(', ')})`,
+            'warning',
+          );
+        }
         setMergeReadyWatchStatus(
           options.ctx,
           `Watching ${formatStatusSubject(status)} · ${status.summary} · next poll in ${String(options.intervalSeconds)}s`,
