@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/robhowley/pi-userland/compare/pi-merge-ready-v0.4.0...pi-merge-ready-v0.5.0) (2026-06-05)
+
+
+### Features
+
+* **pi-merge-ready:** add merge-ready source links ([#73](https://github.com/robhowley/pi-userland/issues/73)) ([3b2d15d](https://github.com/robhowley/pi-userland/commit/3b2d15d9e3d62691b278ff910a07aa8af8659488))
+
 ## [0.4.0](https://github.com/robhowley/pi-userland/compare/pi-merge-ready-v0.3.0...pi-merge-ready-v0.4.0) (2026-06-04)
 
 
