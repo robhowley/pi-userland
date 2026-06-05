@@ -29,6 +29,8 @@ import {
 
 const GENERATED_AT = '2026-05-26T22:00:00.000Z';
 
+type CommandEvent = 'session_start' | 'turn_end' | 'session_shutdown' | 'agent_end';
+
 function createMockAPI(expectedCalls: ExpectedExecCall[] = []): {
   api: MergeReadyCommandAPI & {
     on: ReturnType<typeof vi.fn>;
@@ -39,11 +41,15 @@ function createMockAPI(expectedCalls: ExpectedExecCall[] = []): {
   getCommand: (
     name: string,
   ) => ((args: string, ctx: MergeReadyCommandContext) => Promise<void>) | undefined;
+  getHandler: (event: CommandEvent) => ((event: unknown, ctx: unknown) => unknown) | undefined;
 } {
   let index = 0;
+  const handlers = new Map<CommandEvent, (event: unknown, ctx: unknown) => unknown>();
 
   const api = {
-    on: vi.fn(),
+    on: vi.fn((event: CommandEvent, handler: (event: unknown, ctx: unknown) => unknown) => {
+      handlers.set(event, handler);
+    }),
     registerCommand: vi.fn(),
     registerTool: vi.fn(),
     sendUserMessage: vi.fn(async () => undefined),
@@ -89,6 +95,7 @@ function createMockAPI(expectedCalls: ExpectedExecCall[] = []): {
       expect(index).toBe(expectedCalls.length);
     },
     getCommand,
+    getHandler: (event: CommandEvent) => handlers.get(event),
   };
 }
 
@@ -103,6 +110,12 @@ function createCommandContext(options: { signal?: AbortSignal } = {}): MergeRead
       setStatus: vi.fn(),
     },
   };
+}
+
+async function flushMicrotasks(count = 4) {
+  for (let index = 0; index < count; index += 1) {
+    await Promise.resolve();
+  }
 }
 
 function buildOpenPr() {
@@ -307,10 +320,11 @@ describe('merge-ready command', () => {
 
     mergeReadyExtension(api as Parameters<typeof mergeReadyExtension>[0]);
 
-    expect(api.on).toHaveBeenCalledTimes(3);
+    expect(api.on).toHaveBeenCalledTimes(4);
     expect(api.on).toHaveBeenCalledWith('session_start', expect.any(Function));
     expect(api.on).toHaveBeenCalledWith('turn_end', expect.any(Function));
     expect(api.on).toHaveBeenCalledWith('session_shutdown', expect.any(Function));
+    expect(api.on).toHaveBeenCalledWith('agent_end', expect.any(Function));
     expect(api.registerCommand).toHaveBeenCalledTimes(1);
     expect(api.registerCommand).toHaveBeenCalledWith(
       MERGE_READY_COMMAND_NAME,
@@ -735,7 +749,7 @@ describe('merge-ready command', () => {
     expect(ctx.ui.setStatus).toHaveBeenCalledWith(MERGE_READY_WATCH_STATUS_KEY, undefined);
   });
 
-  it('queues URL-targeted repair with isolated-worktree instructions and no ambient status-bar mutation', async () => {
+  it('queues URL-targeted repair with isolated-worktree instructions and waits for agent_end before refreshing', async () => {
     const url = 'https://github.com/shopify/pi/pull/64';
     const target = {
       mode: 'url' as const,
@@ -767,7 +781,7 @@ describe('merge-ready command', () => {
         },
       ],
     });
-    const { api, assertDone, getCommand } = createMockAPI([
+    const { api, assertDone, getCommand, getHandler } = createMockAPI([
       createPullRequestViewSuccessCall(failingPullRequestPayload, {
         cwd: '/repo',
         timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
@@ -798,10 +812,25 @@ describe('merge-ready command', () => {
     const handler = getCommand(MERGE_READY_COMMAND_NAME);
     const ctx = createCommandContext();
 
-    await handler?.(`watch --url ${url} --interval 15`, ctx);
+    const run = handler?.(`watch --url ${url} --interval 15`, ctx) ?? Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    await flushMicrotasks(12);
+
+    expect(getActiveMergeReadyWatch()).not.toBeNull();
+    expect(api.sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendUserMessage).toHaveBeenCalledWith(expect.any(String), {
+      deliverAs: 'followUp',
+    });
+    expect(ctx.waitForIdle).not.toHaveBeenCalled();
+    expect(vi.mocked(ctx.ui.notify).mock.calls).not.toContainEqual([
+      `Stopping merge-ready watch for ${url}: the same actionable blocker is still present after one attempt.`,
+      'warning',
+    ]);
+
+    await getHandler('agent_end')?.({}, ctx);
+    await run;
 
     assertDone();
-    expect(api.sendUserMessage).toHaveBeenCalledTimes(1);
     const prompt = vi.mocked(api.sendUserMessage).mock.calls[0]?.[0];
     expect(prompt).toContain(`Use the merge-ready-loop skill for ${url}.`);
     expect(prompt).toContain('Do this URL-targeted repair in an isolated git worktree');
@@ -813,7 +842,7 @@ describe('merge-ready command', () => {
     );
     expect(ctx.ui.setStatus).toHaveBeenCalledWith(
       MERGE_READY_WATCH_STATUS_KEY,
-      expect.stringContaining('Repairing #64 · ci_failing'),
+      expect.stringContaining('Repair queued #64 · ci_failing'),
     );
     expect(vi.mocked(ctx.ui.notify).mock.calls).toContainEqual([
       `Stopping merge-ready watch for ${url}: the same actionable blocker is still present after one attempt.`,

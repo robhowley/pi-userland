@@ -9,7 +9,9 @@ import {
   classifyMergeReadyWatchStatus,
   createMergeReadyWatchBlockerSignature,
   createMergeReadyWatchRepairPrompt,
+  getActiveMergeReadyWatch,
   parseMergeReadyWatchIntervalSeconds,
+  registerMergeReadyWatchLifecycle,
   resetMergeReadyWatchState,
   runMergeReadyWatchLoop,
   sleepWithAbort,
@@ -280,6 +282,29 @@ function createDeferred<T>() {
   });
 
   return { promise, resolve, reject };
+}
+
+type WatchLifecycleEvent = 'session_shutdown' | 'agent_end';
+
+function createWatchLifecycleAPI(sendUserMessage: ReturnType<typeof vi.fn>) {
+  const handlers = new Map<WatchLifecycleEvent, (event: unknown, ctx: unknown) => unknown>();
+  const api = {
+    sendUserMessage,
+    on: vi.fn((event: WatchLifecycleEvent, handler: (event: unknown, ctx: unknown) => unknown) => {
+      handlers.set(event, handler);
+    }),
+  };
+
+  return {
+    api,
+    getHandler: (event: WatchLifecycleEvent) => handlers.get(event),
+  };
+}
+
+async function flushMicrotasks(count = 4) {
+  for (let index = 0; index < count; index += 1) {
+    await Promise.resolve();
+  }
 }
 
 describe('merge-ready watch helpers', () => {
@@ -893,22 +918,24 @@ describe('merge-ready watch loop', () => {
     expect(vi.mocked(ctx.ui.setStatus)).not.toHaveBeenCalled();
   });
 
-  it('sends one repair for ci_failing, waits for ci_running, and syncs the ambient status bar', async () => {
+  it('queues one follow-up repair for ci_failing, waits for agent_end, then refreshes once into polling', async () => {
     const ctx = createWatchContext();
     const getStatus = createStatusSequence([createCiFailingStatus(), createCiRunningStatus()]);
-    const sleep = vi.fn(async () => undefined);
+    const pollDelay = createDeferred<void>();
+    const sleep = vi.fn((_ms: number, _signal?: AbortSignal) => pollDelay.promise);
     const sendUserMessage = vi.fn(
       async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
     );
     const syncStatusBar = vi.fn();
     const checkDirtyWorkingTree = vi.fn(async () => ({ ok: true as const, dirty: false }));
+    const { api, getHandler } = createWatchLifecycleAPI(sendUserMessage);
+    registerMergeReadyWatchLifecycle(api);
 
-    const result = await runMergeReadyWatchLoop({
-      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
-      api: { sendUserMessage },
+    const start = startMergeReadyWatch({
+      api,
       ctx,
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
       intervalSeconds: 30,
-      signal: new AbortController().signal,
       dependencies: {
         getStatus,
         sleep,
@@ -918,19 +945,43 @@ describe('merge-ready watch loop', () => {
       },
     });
 
-    expect(result).toEqual({ kind: 'stopped', reason: 'max_iterations' });
+    expect(start.ok).toBe(true);
+    if (!start.ok) {
+      return;
+    }
+
+    const onSettled = vi.fn();
+    start.promise.finally(onSettled);
+    await flushMicrotasks();
+
     expect(checkDirtyWorkingTree).toHaveBeenCalledTimes(1);
     expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(sendUserMessage).toHaveBeenCalledWith(expect.any(String), { deliverAs: 'followUp' });
     expect(checkDirtyWorkingTree.mock.invocationCallOrder[0]).toBeLessThan(
       sendUserMessage.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
-    expect(vi.mocked(ctx.waitForIdle)).toHaveBeenCalledTimes(1);
-    expect(sleep).toHaveBeenCalledWith(30_000, expect.any(AbortSignal));
+    expect(vi.mocked(ctx.waitForIdle)).not.toHaveBeenCalled();
+    expect(getStatus).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+    expect(syncStatusBar).toHaveBeenCalledTimes(1);
+    expect(getActiveMergeReadyWatch()?.phase).toBe('repair_queued');
+    expect(onSettled).not.toHaveBeenCalled();
+
+    await getHandler('agent_end')?.({}, ctx);
+    await flushMicrotasks();
+
+    expect(getStatus).toHaveBeenCalledTimes(2);
     expect(syncStatusBar).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledTimes(1);
+    expect(sleep).toHaveBeenCalledWith(30_000, expect.any(AbortSignal));
+    expect(onSettled).not.toHaveBeenCalled();
     expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(
       MERGE_READY_WATCH_STATUS_KEY,
-      expect.stringContaining('Repairing #42 · ci_failing'),
+      expect.stringContaining('Repair queued #42 · ci_failing'),
     );
+
+    pollDelay.resolve();
+    await expect(start.promise).resolves.toEqual({ kind: 'stopped', reason: 'max_iterations' });
 
     const prompt = vi.mocked(sendUserMessage).mock.calls[0]?.[0];
     expect(prompt).toContain('Use the merge-ready-loop skill');
@@ -996,21 +1047,23 @@ describe('merge-ready watch loop', () => {
     ]);
   });
 
-  it('stops when the same actionable signature remains after one repair attempt', async () => {
+  it('stops on a repeated actionable signature only after the post-agent_end refresh', async () => {
     const ctx = createWatchContext();
     const sendUserMessage = vi.fn(
       async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
     );
     const status = createCiFailingStatus();
+    const getStatus = createStatusSequence([status, status]);
+    const { api, getHandler } = createWatchLifecycleAPI(sendUserMessage);
+    registerMergeReadyWatchLifecycle(api);
 
-    const result = await runMergeReadyWatchLoop({
-      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
-      api: { sendUserMessage },
+    const start = startMergeReadyWatch({
+      api,
       ctx,
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
       intervalSeconds: 30,
-      signal: new AbortController().signal,
       dependencies: {
-        getStatus: createStatusSequence([status, status]),
+        getStatus,
         sleep: vi.fn(async () => undefined),
         syncStatusBar: vi.fn(),
         checkDirtyWorkingTree: async () => ({ ok: true, dirty: false }),
@@ -1018,7 +1071,31 @@ describe('merge-ready watch loop', () => {
       },
     });
 
-    expect(result).toMatchObject({ kind: 'stopped', reason: 'repeated_actionable_signature' });
+    expect(start.ok).toBe(true);
+    if (!start.ok) {
+      return;
+    }
+
+    const onSettled = vi.fn();
+    start.promise.finally(onSettled);
+    await flushMicrotasks();
+
+    expect(getStatus).toHaveBeenCalledTimes(1);
+    expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(ctx.waitForIdle)).not.toHaveBeenCalled();
+    expect(onSettled).not.toHaveBeenCalled();
+    expect(vi.mocked(ctx.ui.notify).mock.calls).not.toContainEqual([
+      'Stopping merge-ready watch for https://github.com/robhowley/pi-userland/pull/42: the same actionable blocker is still present after one attempt.',
+      'warning',
+    ]);
+
+    await getHandler('agent_end')?.({}, ctx);
+
+    await expect(start.promise).resolves.toMatchObject({
+      kind: 'stopped',
+      reason: 'repeated_actionable_signature',
+    });
+    expect(getStatus).toHaveBeenCalledTimes(2);
     expect(sendUserMessage).toHaveBeenCalledTimes(1);
     expect(vi.mocked(ctx.ui.notify).mock.calls).toContainEqual([
       'Stopping merge-ready watch for https://github.com/robhowley/pi-userland/pull/42: the same actionable blocker is still present after one attempt.',
@@ -1026,23 +1103,25 @@ describe('merge-ready watch loop', () => {
     ]);
   });
 
-  it('stops on a repeated URL actionable signature after one repair attempt', async () => {
+  it('stops on a repeated URL actionable signature only after the post-agent_end refresh', async () => {
     const ctx = createWatchContext();
     const sendUserMessage = vi.fn(
       async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
     );
     const checkDirtyWorkingTree = vi.fn(async () => ({ ok: true as const, dirty: false }));
     const status = createUrlCiFailingStatus();
+    const getStatus = createStatusSequence([status, status]);
+    const { api, getHandler } = createWatchLifecycleAPI(sendUserMessage);
+    registerMergeReadyWatchLifecycle(api);
 
-    const result = await runMergeReadyWatchLoop({
-      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
-      api: { sendUserMessage },
+    const start = startMergeReadyWatch({
+      api,
       ctx,
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
       intervalSeconds: 30,
-      signal: new AbortController().signal,
       url: RUNTIME_URL_TARGET.url,
       dependencies: {
-        getStatus: createStatusSequence([status, status]),
+        getStatus,
         sleep: vi.fn(async () => undefined),
         syncStatusBar: vi.fn(),
         checkDirtyWorkingTree,
@@ -1050,7 +1129,23 @@ describe('merge-ready watch loop', () => {
       },
     });
 
-    expect(result).toMatchObject({ kind: 'stopped', reason: 'repeated_actionable_signature' });
+    expect(start.ok).toBe(true);
+    if (!start.ok) {
+      return;
+    }
+
+    await flushMicrotasks();
+    expect(getStatus).toHaveBeenCalledTimes(1);
+    expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(checkDirtyWorkingTree).not.toHaveBeenCalled();
+
+    await getHandler('agent_end')?.({}, ctx);
+
+    await expect(start.promise).resolves.toMatchObject({
+      kind: 'stopped',
+      reason: 'repeated_actionable_signature',
+    });
+    expect(getStatus).toHaveBeenCalledTimes(2);
     expect(sendUserMessage).toHaveBeenCalledTimes(1);
     expect(checkDirtyWorkingTree).not.toHaveBeenCalled();
     expect(vi.mocked(ctx.ui.notify).mock.calls).toContainEqual([
@@ -1059,9 +1154,10 @@ describe('merge-ready watch loop', () => {
     ]);
   });
 
-  it('queues one URL-targeted repair without ambient dirty preflight and keeps status-bar routing intact', async () => {
+  it('queues one URL-targeted follow-up repair without ambient dirty preflight and refreshes only after agent_end', async () => {
     const ctx = createWatchContext();
-    const sleep = vi.fn(async () => undefined);
+    const pollDelay = createDeferred<void>();
+    const sleep = vi.fn((_ms: number, _signal?: AbortSignal) => pollDelay.promise);
     const sendUserMessage = vi.fn(
       async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
     );
@@ -1069,13 +1165,14 @@ describe('merge-ready watch loop', () => {
       syncMergeReadyStatusBar(options),
     );
     const checkDirtyWorkingTree = vi.fn(async () => ({ ok: true as const, dirty: false }));
+    const { api, getHandler } = createWatchLifecycleAPI(sendUserMessage);
+    registerMergeReadyWatchLifecycle(api);
 
-    const result = await runMergeReadyWatchLoop({
-      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
-      api: { sendUserMessage },
+    const start = startMergeReadyWatch({
+      api,
       ctx,
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
       intervalSeconds: 45,
-      signal: new AbortController().signal,
       url: RUNTIME_URL_TARGET.url,
       dependencies: {
         getStatus: createStatusSequence([createUrlCiFailingStatus(), createUrlCiRunningStatus()]),
@@ -1086,7 +1183,22 @@ describe('merge-ready watch loop', () => {
       },
     });
 
-    expect(result).toEqual({ kind: 'stopped', reason: 'max_iterations' });
+    expect(start.ok).toBe(true);
+    if (!start.ok) {
+      return;
+    }
+
+    await flushMicrotasks();
+
+    expect(syncStatusBar).toHaveBeenCalledTimes(1);
+    expect(checkDirtyWorkingTree).not.toHaveBeenCalled();
+    expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(sendUserMessage).toHaveBeenCalledWith(expect.any(String), { deliverAs: 'followUp' });
+    expect(sleep).not.toHaveBeenCalled();
+
+    await getHandler('agent_end')?.({}, ctx);
+    await flushMicrotasks();
+
     expect(syncStatusBar).toHaveBeenCalledTimes(2);
     expect(checkDirtyWorkingTree).not.toHaveBeenCalled();
     expect(sendUserMessage).toHaveBeenCalledTimes(1);
@@ -1097,12 +1209,15 @@ describe('merge-ready watch loop', () => {
     );
     expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(
       MERGE_READY_WATCH_STATUS_KEY,
-      expect.stringContaining('Repairing #64 · ci_failing'),
+      expect.stringContaining('Repair queued #64 · ci_failing'),
     );
     expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(
       MERGE_READY_WATCH_STATUS_KEY,
       expect.stringContaining('Watching #64 · Checks are still running'),
     );
+
+    pollDelay.resolve();
+    await expect(start.promise).resolves.toEqual({ kind: 'stopped', reason: 'max_iterations' });
 
     const prompt = vi.mocked(sendUserMessage).mock.calls[0]?.[0];
     expect(prompt).toContain(`Use the merge-ready-loop skill for ${RUNTIME_URL_TARGET.url}.`);

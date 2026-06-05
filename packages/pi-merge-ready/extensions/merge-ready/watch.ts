@@ -92,7 +92,7 @@ export type MergeReadyWatchAPI = {
     options?: { deliverAs?: 'steer' | 'followUp' },
   ) => Promise<void> | void;
   on?: (
-    event: 'session_shutdown',
+    event: 'session_shutdown' | 'agent_end',
     handler: (event: unknown, ctx: unknown) => void | Promise<void>,
   ) => void;
 };
@@ -143,6 +143,7 @@ export type MergeReadyWatchLoopDependencies = {
       }
   >;
   syncStatusBar?: typeof syncMergeReadyStatusBar;
+  waitForAgentEnd?: (signal: AbortSignal) => Promise<void>;
   maxIterations?: number;
 };
 
@@ -181,12 +182,22 @@ export type StartMergeReadyWatchResult =
       level: 'warning' | 'error';
     };
 
+export type MergeReadyWatchPhase = 'watching' | 'repair_queued' | 'stopped';
+
 export type ActiveMergeReadyWatcher = {
   id: number;
   abortController: AbortController;
   targetLabel: string;
   startedAtMs: number;
   promise: Promise<MergeReadyWatchResult>;
+  phase: MergeReadyWatchPhase;
+  pendingRepairTurn: MergeReadyWatchDeferred<void> | null;
+};
+
+type MergeReadyWatchDeferred<T> = {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
 };
 
 type MergeReadyResolvedStopOutcome = {
@@ -214,6 +225,9 @@ const pendingWatcherPromises = new Set<Promise<MergeReadyWatchResult>>();
 export function registerMergeReadyWatchLifecycle(api: MergeReadyWatchAPI): void {
   api.on?.('session_shutdown', () => {
     abortActiveMergeReadyWatch();
+  });
+  api.on?.('agent_end', () => {
+    resolveActiveMergeReadyWatchAgentEnd();
   });
 }
 
@@ -411,6 +425,8 @@ export function startMergeReadyWatch(
     targetLabel: formatRequestedTargetLabel(options.url),
     startedAtMs: Date.now(),
     promise: Promise.resolve({ kind: 'aborted', reason: 'aborted' }),
+    phase: 'watching',
+    pendingRepairTurn: null,
   };
   nextWatcherId += 1;
   activeWatcher = watcher;
@@ -448,6 +464,8 @@ export function startMergeReadyWatch(
     })
     .finally(() => {
       unlinkParentSignal();
+      watcher.phase = 'stopped';
+      watcher.pendingRepairTurn = null;
       pendingWatcherPromises.delete(watcher.promise);
       if (activeWatcher?.id === watcher.id) {
         activeWatcher = null;
@@ -469,11 +487,95 @@ export function startMergeReadyWatch(
 function abortActiveMergeReadyWatch(ctx?: MergeReadyWatchContext): void {
   const watcher = activeWatcher;
   activeWatcher = null;
+  if (watcher?.pendingRepairTurn) {
+    const pendingRepairTurn = watcher.pendingRepairTurn;
+    watcher.pendingRepairTurn = null;
+    pendingRepairTurn.reject(createAbortError('Aborted'));
+  }
   watcher?.abortController.abort();
 
   if (ctx) {
     setMergeReadyWatchStatus(ctx);
   }
+}
+
+function waitForActiveMergeReadyWatchAgentEnd(signal: AbortSignal): Promise<void> {
+  throwIfMergeReadyWatchAborted(signal);
+
+  const watcher = activeWatcher;
+  if (!watcher) {
+    return Promise.reject(
+      new Error('Merge-ready watch agent_end waiting requires an active watcher.'),
+    );
+  }
+
+  const pendingRepairTurn = createMergeReadyWatchDeferred<void>();
+  watcher.phase = 'repair_queued';
+  watcher.pendingRepairTurn = pendingRepairTurn;
+
+  return new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      cleanup();
+      reject(createAbortError(signal.reason));
+    };
+
+    const cleanup = () => {
+      signal.removeEventListener('abort', onAbort);
+      if (watcher.pendingRepairTurn === pendingRepairTurn) {
+        watcher.phase = 'watching';
+        watcher.pendingRepairTurn = null;
+      }
+    };
+
+    signal.addEventListener('abort', onAbort, { once: true });
+    pendingRepairTurn.promise.then(
+      () => {
+        cleanup();
+        resolve();
+      },
+      (error) => {
+        cleanup();
+        reject(error);
+      },
+    );
+  });
+}
+
+function resolveActiveMergeReadyWatchAgentEnd(): void {
+  const pendingRepairTurn = activeWatcher?.pendingRepairTurn;
+  if (!pendingRepairTurn) {
+    return;
+  }
+
+  if (activeWatcher) {
+    activeWatcher.phase = 'watching';
+    activeWatcher.pendingRepairTurn = null;
+  }
+  pendingRepairTurn.resolve();
+}
+
+function rejectActiveMergeReadyWatchAgentEnd(error: unknown): void {
+  const pendingRepairTurn = activeWatcher?.pendingRepairTurn;
+  if (!pendingRepairTurn) {
+    return;
+  }
+
+  if (activeWatcher) {
+    activeWatcher.phase = 'watching';
+    activeWatcher.pendingRepairTurn = null;
+  }
+  pendingRepairTurn.reject(error);
+}
+
+function createMergeReadyWatchDeferred<T>(): MergeReadyWatchDeferred<T> {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+
+  return { promise, resolve, reject };
 }
 
 function linkAbortSignal(source: AbortSignal | undefined, target: AbortController): () => void {
@@ -504,6 +606,8 @@ export async function runMergeReadyWatchLoop(
   const checkDirtyWorkingTree =
     options.dependencies?.checkDirtyWorkingTree ?? getMergeReadyWatchDirtyWorktreeState;
   const syncStatusBar = options.dependencies?.syncStatusBar ?? syncMergeReadyStatusBar;
+  const waitForAgentEnd =
+    options.dependencies?.waitForAgentEnd ?? waitForActiveMergeReadyWatchAgentEnd;
   const maxIterations = options.dependencies?.maxIterations;
   const attemptedSignatures = new Set<string>();
   let iterations = 0;
@@ -604,10 +708,10 @@ export async function runMergeReadyWatchLoop(
       attemptedSignatures.add(signature);
       setMergeReadyWatchStatus(
         options.ctx,
-        `Repairing ${formatStatusSubject(status)} · ${classification.repairItems.map((openItem) => openItem.id).join(', ')}`,
+        `Repair queued ${formatStatusSubject(status)} · ${classification.repairItems.map((openItem) => openItem.id).join(', ')}`,
       );
       options.ctx.ui.notify(
-        `Repairing ${formatStatusTargetLabel(status)} for ${classification.repairItems.map((openItem) => openItem.id).join(', ')}.`,
+        `Queued repair for ${formatStatusTargetLabel(status)} for ${classification.repairItems.map((openItem) => openItem.id).join(', ')}.`,
         'info',
       );
 
@@ -620,16 +724,32 @@ export async function runMergeReadyWatchLoop(
         return { kind: 'stopped', reason: 'error', status };
       }
 
-      await options.api.sendUserMessage(
-        createMergeReadyWatchRepairPrompt(status, classification.repairItems),
-        resolveSendUserMessageOptions(options.ctx),
-      );
-      throwIfMergeReadyWatchAborted(options.signal);
-
-      if (typeof options.ctx.waitForIdle === 'function') {
-        await options.ctx.waitForIdle();
-        throwIfMergeReadyWatchAborted(options.signal);
+      const agentEnd = waitForAgentEnd(options.signal);
+      let sendUserMessageResult: Promise<void> | void;
+      try {
+        sendUserMessageResult = options.api.sendUserMessage(
+          createMergeReadyWatchRepairPrompt(status, classification.repairItems),
+          resolveSendUserMessageOptions(),
+        );
+      } catch (error) {
+        if (options.dependencies?.waitForAgentEnd === undefined) {
+          rejectActiveMergeReadyWatchAgentEnd(error);
+        }
+        throw error;
       }
+
+      const repairDispatchFailure = Promise.resolve(sendUserMessageResult).then(
+        () => new Promise<never>(() => {}),
+        (error) => {
+          if (options.dependencies?.waitForAgentEnd === undefined) {
+            rejectActiveMergeReadyWatchAgentEnd(error);
+          }
+          throw error;
+        },
+      );
+
+      await Promise.race([agentEnd, repairDispatchFailure]);
+      throwIfMergeReadyWatchAborted(options.signal);
 
       const refreshedStatus = await getStatus({
         exec: options.exec,
@@ -683,6 +803,15 @@ export async function runMergeReadyWatchLoop(
         return { kind: 'stopped', reason: stopOutcome.reason, status: refreshedStatus };
       }
 
+      if (
+        refreshedClassification.reason === 'unknown_open_items_present' &&
+        refreshedClassification.unknownItems
+      ) {
+        options.ctx.ui.notify(
+          `Merge-ready watch: unrecognized items present (${refreshedClassification.unknownItems.map((i) => i.id).join(', ')})`,
+          'warning',
+        );
+      }
       setMergeReadyWatchStatus(
         options.ctx,
         `Watching ${formatStatusSubject(refreshedStatus)} · ${refreshedStatus.summary} · next poll in ${String(options.intervalSeconds)}s`,
@@ -904,14 +1033,8 @@ function createMergeReadyWatchStopOutcomeFromOpenItem(
   };
 }
 
-function resolveSendUserMessageOptions(
-  ctx: MergeReadyWatchContext,
-): { deliverAs?: 'followUp' } | undefined {
-  if (typeof ctx.isIdle === 'function' && !ctx.isIdle()) {
-    return { deliverAs: 'followUp' };
-  }
-
-  return undefined;
+function resolveSendUserMessageOptions(): { deliverAs: 'followUp' } {
+  return { deliverAs: 'followUp' };
 }
 
 function formatRequestedTargetLabel(url: string | undefined): string {

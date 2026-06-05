@@ -95,7 +95,7 @@ type MergeReadyCommandWatchRuntimeAPI = MergeReadyCommandAPI & {
     options?: { deliverAs?: 'steer' | 'followUp' },
   ) => Promise<void> | void;
   on?: (
-    event: 'session_shutdown',
+    event: 'session_shutdown' | 'agent_end',
     handler: (event: unknown, ctx: unknown) => void | Promise<void>,
   ) => void;
 };
