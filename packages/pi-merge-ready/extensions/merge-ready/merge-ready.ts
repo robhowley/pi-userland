@@ -193,7 +193,7 @@ async function createMergeReadyStatusFromPullRequest(
     ...withOptionalTimeout(options.timeout),
   });
 
-  return createMergeReadyStatus({
+  const status = createMergeReadyStatus({
     generatedAt: options.generatedAt,
     target: options.target,
     pr,
@@ -203,6 +203,8 @@ async function createMergeReadyStatusFromPullRequest(
     },
     forceStatusAmbiguous: conversations.kind !== 'known',
   });
+
+  return attachConversationOpenItemDetails(status, conversations);
 }
 
 function resolveGeneratedAt(options: GetMergeReadyStatusOptions): string | Date {
@@ -265,6 +267,52 @@ function normalizeConversationSignals(
     unresolvedConversations: false,
     unresolvedConversationRequirement: 'unknown',
   };
+}
+
+function attachConversationOpenItemDetails(
+  status: MergeReadyStatus,
+  conversations: MergeReadyPullRequestConversations,
+): MergeReadyStatus {
+  if (
+    (conversations.kind !== 'known' && conversations.kind !== 'partial') ||
+    !conversations.openItemDetails
+  ) {
+    return status;
+  }
+
+  let didChange = false;
+  const openItems = status.openItems.map((openItem) => {
+    const additionalDetails = getConversationOpenItemDetails(conversations, openItem.id);
+    if (!additionalDetails || additionalDetails.length === 0) {
+      return openItem;
+    }
+
+    didChange = true;
+    return {
+      ...openItem,
+      details:
+        openItem.details && openItem.details.length > 0
+          ? [...openItem.details, ...additionalDetails]
+          : additionalDetails,
+    };
+  });
+
+  return didChange ? { ...status, openItems } : status;
+}
+
+function getConversationOpenItemDetails(
+  conversations: Extract<MergeReadyPullRequestConversations, { kind: 'known' | 'partial' }>,
+  openItemId: MergeReadyOpenItem['id'],
+) {
+  if (openItemId === 'changes_requested') {
+    return conversations.openItemDetails?.changes_requested;
+  }
+
+  if (openItemId === 'unresolved_conversations') {
+    return conversations.openItemDetails?.unresolved_conversations;
+  }
+
+  return undefined;
 }
 
 function normalizeReviewSignal(pullRequest: MergeReadyGitHubPullRequest): MergeReadyReviewSignal {

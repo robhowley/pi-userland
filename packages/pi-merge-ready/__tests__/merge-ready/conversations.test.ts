@@ -18,8 +18,16 @@ const GH_GRAPHQL_REVIEW_THREADS_QUERY = [
   'query MergeReadyReviewThreads($owner: String!, $name: String!, $number: Int!) {',
   'repository(owner: $owner, name: $name) {',
   'pullRequest(number: $number) {',
+  'latestOpinionatedReviews(first: 100) {',
+  'nodes { author { login } state submittedAt url }',
+  '}',
   'reviewThreads(first: 100) {',
-  'nodes { isResolved }',
+  'nodes {',
+  'isResolved',
+  'path',
+  'line',
+  'comments(first: 1) { nodes { url path line } }',
+  '}',
   'pageInfo { hasNextPage }',
   '}',
   'baseRef {',
@@ -78,6 +86,9 @@ function createConversationPayload(pullRequestOverrides: Record<string, unknown>
     data: {
       repository: {
         pullRequest: {
+          latestOpinionatedReviews: {
+            nodes: [],
+          },
           reviewThreads: {
             nodes: [],
             pageInfo: {
@@ -195,6 +206,165 @@ describe('merge-ready review conversation primitives', () => {
       requirement: 'optional',
       issues: [],
     });
+  });
+
+  it('extracts best-effort source-link detail rows for blocking reviews and unresolved conversations', async () => {
+    const { exec, assertDone } = createFakeExec([
+      {
+        command: 'gh',
+        args: [
+          'api',
+          'graphql',
+          '-f',
+          `query=${GH_GRAPHQL_REVIEW_THREADS_QUERY}`,
+          '-F',
+          'owner=robhowley',
+          '-F',
+          'name=pi-userland',
+          '-F',
+          'number=42',
+        ],
+        result: {
+          stdout: JSON.stringify(
+            createConversationPayload({
+              latestOpinionatedReviews: {
+                nodes: [
+                  {
+                    author: { login: 'reviewer1' },
+                    state: 'CHANGES_REQUESTED',
+                    submittedAt: '2026-05-26T20:00:00Z',
+                    url: 'https://github.com/robhowley/pi-userland/pull/42#pullrequestreview-1',
+                  },
+                  {
+                    author: { login: 'reviewer2' },
+                    state: 'APPROVED',
+                    submittedAt: '2026-05-26T21:00:00Z',
+                    url: 'https://github.com/robhowley/pi-userland/pull/42#pullrequestreview-2',
+                  },
+                ],
+                pageInfo: { hasNextPage: false },
+              },
+              reviewThreads: {
+                nodes: [
+                  {
+                    isResolved: false,
+                    path: 'src/feature.ts',
+                    line: 12,
+                    comments: {
+                      nodes: [
+                        {
+                          url: 'https://github.com/robhowley/pi-userland/pull/42#discussion_r1',
+                          path: 'src/feature.ts',
+                          line: 12,
+                        },
+                      ],
+                    },
+                  },
+                ],
+                pageInfo: { hasNextPage: false },
+              },
+            }),
+          ),
+        },
+      },
+    ]);
+
+    const conversations = await fetchMergeReadyPullRequestConversations({
+      exec,
+      repositoryOwner: 'robhowley',
+      repositoryName: 'pi-userland',
+      pullRequestNumber: 42,
+    });
+
+    assertDone();
+
+    expect(conversations).toEqual({
+      kind: 'known',
+      unresolvedCount: 1,
+      requirement: 'optional',
+      issues: [],
+      openItemDetails: {
+        changes_requested: [
+          {
+            label: 'reviewer1 requested changes',
+            url: 'https://github.com/robhowley/pi-userland/pull/42#pullrequestreview-1',
+          },
+        ],
+        unresolved_conversations: [
+          {
+            label: 'src/feature.ts:12 unresolved conversation',
+            url: 'https://github.com/robhowley/pi-userland/pull/42#discussion_r1',
+          },
+        ],
+      },
+    });
+  });
+
+  it('ignores missing source-link metadata without degrading readiness inputs', async () => {
+    const { exec, assertDone } = createFakeExec([
+      {
+        command: 'gh',
+        args: [
+          'api',
+          'graphql',
+          '-f',
+          `query=${GH_GRAPHQL_REVIEW_THREADS_QUERY}`,
+          '-F',
+          'owner=robhowley',
+          '-F',
+          'name=pi-userland',
+          '-F',
+          'number=42',
+        ],
+        result: {
+          stdout: JSON.stringify(
+            createConversationPayload({
+              latestOpinionatedReviews: {
+                nodes: [
+                  {
+                    author: { login: 'reviewer1' },
+                    state: 'CHANGES_REQUESTED',
+                    submittedAt: '2026-05-26T20:00:00Z',
+                    url: null,
+                  },
+                ],
+                pageInfo: { hasNextPage: true },
+              },
+              reviewThreads: {
+                nodes: [
+                  {
+                    isResolved: false,
+                    path: 'src/feature.ts',
+                    line: 12,
+                    comments: {
+                      nodes: [{}],
+                    },
+                  },
+                ],
+                pageInfo: { hasNextPage: false },
+              },
+            }),
+          ),
+        },
+      },
+    ]);
+
+    const conversations = await fetchMergeReadyPullRequestConversations({
+      exec,
+      repositoryOwner: 'robhowley',
+      repositoryName: 'pi-userland',
+      pullRequestNumber: 42,
+    });
+
+    assertDone();
+
+    expect(conversations).toEqual({
+      kind: 'known',
+      unresolvedCount: 1,
+      requirement: 'optional',
+      issues: [],
+    });
+    expect(conversations).not.toHaveProperty('openItemDetails');
   });
 
   it('marks unresolved conversations as required when classic branch protection requires resolution', async () => {

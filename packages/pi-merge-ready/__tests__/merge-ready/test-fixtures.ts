@@ -21,8 +21,16 @@ export const GH_GRAPHQL_REVIEW_THREADS_QUERY = [
   'query MergeReadyReviewThreads($owner: String!, $name: String!, $number: Int!) {',
   'repository(owner: $owner, name: $name) {',
   'pullRequest(number: $number) {',
+  'latestOpinionatedReviews(first: 100) {',
+  'nodes { author { login } state submittedAt url }',
+  '}',
   'reviewThreads(first: 100) {',
-  'nodes { isResolved }',
+  'nodes {',
+  'isResolved',
+  'path',
+  'line',
+  'comments(first: 1) { nodes { url path line } }',
+  '}',
   'pageInfo { hasNextPage }',
   '}',
   'baseRef {',
@@ -291,6 +299,9 @@ export function buildConversationsPayload(pullRequestOverrides: Record<string, u
     data: {
       repository: {
         pullRequest: {
+          latestOpinionatedReviews: {
+            nodes: [],
+          },
           reviewThreads: {
             nodes: [],
             pageInfo: {

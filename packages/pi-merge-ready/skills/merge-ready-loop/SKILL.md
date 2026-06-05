@@ -65,7 +65,8 @@ Important:
 - `target` tells you whether the status came from the ambient current branch or an explicit PR URL.
 - Closed or merged PRs are valid statuses. Treat `pr.lifecycle !== "open"` as not ready, even if there are no blocker open items.
 - When `target.mode = "url"`, expect `pr.headRepository = { owner, repo }` for checkout verification. Compare that head repo to `target.owner/repo` to distinguish same-repo vs fork/cross-repo PRs.
-- Check-related open items may include `details` rows for non-green checks only; do not invent additional check rows.
+- `openItems[].details[]` are supporting provenance rows under an open item. If a detail has a URL, use it only to inspect why the blocker exists; do not treat detail rows or URLs as separate blockers, and do not use `pr.url` as a source link.
+- Check-related open items may include non-green check rows in `details`; do not invent additional check rows.
 - Only `signals.mergeability = mergeable` with a merge-clear PR yields no mergeability blocker. Treat every other mergeability value as not ready.
 - `review_pending` is requirement-aware. Do **not** infer pending review from raw review history or a lack of approvals.
 - If `review_pending` is absent, do not invent a review blocker.
@@ -87,7 +88,7 @@ Important:
    - For PR numbers, branch names, repo shorthands, or vague targets, first resolve an exact GitHub PR URL outside the tool or ask the user. Do not call ambient status for a different named target.
    - If a provided URL is rejected, ask for a full GitHub PR URL; do not fall back to ambient status.
    - Do **not** pass `cwd`, branch names, PR numbers, repo names, or guessed targets to `merge_ready_status`.
-2. **Only real blockers**: treat `openItems` as the only allowed blocker list.
+2. **Only real blockers**: treat `openItems` as the only allowed blocker list. `details` rows and detail URLs are supporting provenance only.
 3. **Do not invent review work**: only treat review as pending when `openItems` contains `review_pending`.
 4. **Match request to items**: if the user's requested work does not match an `openItem`, say so and stop.
 5. **Verify the edit target before changing code**:
@@ -124,6 +125,8 @@ Important:
 ## How to interpret openItems
 
 Use `id` plus the user's request. An item can be **addressed locally** before it is **cleared remotely**; only treat it as cleared once `merge_ready_status` or another authoritative remote signal drops it.
+
+Treat `details` as supporting evidence for an existing open item, not as a second work queue. When a detail includes a URL, it is provenance-only.
 
 | id                         | Meaning                                                                                                      | Default agent behavior                                                                                                |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
@@ -164,7 +167,11 @@ Response: "PR is ready to merge. No blockers found."
       "id": "ci_failing",
       "summary": "Required checks are failing",
       "details": [
-        { "label": "linting", "status": "failing" },
+        {
+          "label": "linting",
+          "status": "failing",
+          "url": "https://github.com/OWNER/REPO/actions/runs/123/jobs/456"
+        },
         { "label": "PR Title Check", "status": "failing" }
       ]
     }

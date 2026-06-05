@@ -99,7 +99,13 @@ export type MergeReadyGitHubPullRequest = {
 };
 
 export type MergeReadyGitHubIssue = {
-  code: 'non_zero_exit' | 'threw' | 'invalid_json' | 'invalid_shape' | 'partial_shape';
+  code:
+    | 'non_zero_exit'
+    | 'threw'
+    | 'invalid_json'
+    | 'invalid_shape'
+    | 'partial_shape'
+    | 'api_error';
   message: string;
   command: string;
   args: string[];
@@ -146,6 +152,8 @@ export type GetMergeReadyGitHubPullRequestFactsOptions = {
   cwd?: string;
   timeout?: number;
   target?: MergeReadyUrlTarget;
+  repositoryOwner?: string;
+  repositoryName?: string;
 };
 
 type IssueContext = {

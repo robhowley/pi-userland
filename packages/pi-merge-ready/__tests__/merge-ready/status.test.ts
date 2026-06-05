@@ -552,6 +552,41 @@ describe('merge-ready status', () => {
     ]);
   });
 
+  it('preserves supporting open-item details without a status', () => {
+    const status = createMergeReadyStatus({
+      generatedAt: GENERATED_AT,
+      pr: OPEN_PR,
+      signals: READY_SIGNALS,
+      openItems: [
+        {
+          id: 'merge_conflicts',
+          summary: 'Merge conflicts detected',
+          details: [
+            {
+              label: 'View conflict details',
+              url: 'https://example.com/pull/42/conflicts',
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(status.state).toBe('blocked');
+    expect(status.summary).toBe('Merge conflicts detected');
+    expect(status.openItems).toEqual([
+      {
+        id: 'merge_conflicts',
+        summary: 'Merge conflicts detected',
+        details: [
+          {
+            label: 'View conflict details',
+            url: 'https://example.com/pull/42/conflicts',
+          },
+        ],
+      },
+    ]);
+  });
+
   it('does not duplicate status_ambiguous when mergeability is unknown and conversations requirement is unknown', () => {
     const status = buildStatus({
       signals: {
@@ -672,6 +707,30 @@ describe('normalizeMergeReadySignals', () => {
     expect(signals.checkDetails).toEqual({
       failing: [],
       running: [{ label: 'tests', status: 'running' }],
+      unknown: [],
+    });
+  });
+
+  it('stamps bucket status onto runtime check details when status is omitted', () => {
+    const signals = normalizeMergeReadySignals(
+      {
+        checks: 'running',
+        checkDetails: {
+          running: [{ label: ' tests ', url: ' https://github.example/checks/tests ' }],
+        },
+      } as unknown as MergeReadySignalsInput,
+      true,
+    );
+
+    expect(signals.checkDetails).toEqual({
+      failing: [],
+      running: [
+        {
+          label: 'tests',
+          status: 'running',
+          url: 'https://github.example/checks/tests',
+        },
+      ],
       unknown: [],
     });
   });

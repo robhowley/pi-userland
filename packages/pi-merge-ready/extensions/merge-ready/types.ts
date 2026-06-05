@@ -57,11 +57,13 @@ export type MergeReadyCheckDetailStatus = Exclude<MergeReadyChecksSignal, 'passi
 
 export type MergeReadyOpenItemDetail = {
   label: string;
-  status: MergeReadyCheckDetailStatus;
+  status?: MergeReadyCheckDetailStatus;
   url?: string;
 };
 
-export type MergeReadyCheckDetail = MergeReadyOpenItemDetail;
+export type MergeReadyCheckDetail = MergeReadyOpenItemDetail & {
+  status: MergeReadyCheckDetailStatus;
+};
 
 export type MergeReadyCheckDetails = {
   failing: MergeReadyCheckDetail[];

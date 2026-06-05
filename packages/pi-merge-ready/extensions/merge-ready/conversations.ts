@@ -4,6 +4,7 @@ import {
   getErrorMessage,
   runNormalizedExecCommand,
 } from './internal.js';
+import type { MergeReadyOpenItemDetail } from './types.js';
 
 type MergeReadyConversationRequirement = 'required' | 'optional' | 'unknown';
 
@@ -12,6 +13,7 @@ type ReadConversationPayloadResult = {
     nodes: unknown[];
     pageInfo: unknown;
   };
+  latestOpinionatedReviews: unknown;
   baseRef: unknown;
 };
 
@@ -39,18 +41,24 @@ export type MergeReadyConversationIssue = {
   field?: string | undefined;
 };
 
+export type MergeReadyConversationOpenItemDetails = Partial<
+  Record<'changes_requested' | 'unresolved_conversations', MergeReadyOpenItemDetail[]>
+>;
+
 export type MergeReadyPullRequestConversations =
   | {
       kind: 'known';
       unresolvedCount: number;
       requirement: 'required' | 'optional' | 'unknown';
       issues: MergeReadyConversationIssue[];
+      openItemDetails?: MergeReadyConversationOpenItemDetails;
     }
   | {
       kind: 'partial';
       unresolvedCount: number;
       requirement: 'required' | 'optional' | 'unknown';
       issues: MergeReadyConversationIssue[];
+      openItemDetails?: MergeReadyConversationOpenItemDetails;
     }
   | {
       kind: 'failure';
@@ -91,8 +99,16 @@ const GH_GRAPHQL_REVIEW_THREADS_QUERY = [
   'query MergeReadyReviewThreads($owner: String!, $name: String!, $number: Int!) {',
   'repository(owner: $owner, name: $name) {',
   'pullRequest(number: $number) {',
+  `latestOpinionatedReviews(first: ${String(REVIEW_THREADS_PAGE_SIZE)}) {`,
+  'nodes { author { login } state submittedAt url }',
+  '}',
   `reviewThreads(first: ${String(REVIEW_THREADS_PAGE_SIZE)}) {`,
-  'nodes { isResolved }',
+  'nodes {',
+  'isResolved',
+  'path',
+  'line',
+  'comments(first: 1) { nodes { url path line } }',
+  '}',
   'pageInfo { hasNextPage }',
   '}',
   'baseRef {',
@@ -190,6 +206,7 @@ function normalizeConversationOutcome(
 
   let unresolvedCount = 0;
   let isPartial = false;
+  const unresolvedConversationDetails: MergeReadyOpenItemDetail[] = [];
 
   for (const [index, node] of payload.reviewThreads.nodes.entries()) {
     if (!isRecord(node)) {
@@ -221,6 +238,10 @@ function normalizeConversationOutcome(
 
     if (!isResolved) {
       unresolvedCount += 1;
+      const detail = normalizeUnresolvedConversationDetail(node);
+      if (detail) {
+        unresolvedConversationDetails.push(detail);
+      }
     }
   }
 
@@ -268,12 +289,18 @@ function normalizeConversationOutcome(
     isPartial = true;
   }
 
+  const openItemDetails = createConversationOpenItemDetails({
+    changesRequestedDetails: normalizeChangesRequestedDetails(payload.latestOpinionatedReviews),
+    unresolvedConversationDetails,
+  });
+
   if (isPartial) {
     return {
       kind: 'partial',
       unresolvedCount,
       requirement: requirementOutcome.requirement,
       issues,
+      ...(openItemDetails ? { openItemDetails } : {}),
     };
   }
 
@@ -282,6 +309,7 @@ function normalizeConversationOutcome(
     unresolvedCount,
     requirement: requirementOutcome.requirement,
     issues: [],
+    ...(openItemDetails ? { openItemDetails } : {}),
   };
 }
 
@@ -367,8 +395,135 @@ function readConversationPayload(
       nodes,
       pageInfo: reviewThreads['pageInfo'],
     },
+    latestOpinionatedReviews: pullRequest['latestOpinionatedReviews'],
     baseRef: pullRequest['baseRef'],
   };
+}
+
+function createConversationOpenItemDetails(input: {
+  changesRequestedDetails: MergeReadyOpenItemDetail[];
+  unresolvedConversationDetails: MergeReadyOpenItemDetail[];
+}): MergeReadyConversationOpenItemDetails | undefined {
+  const openItemDetails: MergeReadyConversationOpenItemDetails = {};
+
+  if (input.changesRequestedDetails.length > 0) {
+    openItemDetails.changes_requested = input.changesRequestedDetails;
+  }
+
+  if (input.unresolvedConversationDetails.length > 0) {
+    openItemDetails.unresolved_conversations = input.unresolvedConversationDetails;
+  }
+
+  return Object.keys(openItemDetails).length > 0 ? openItemDetails : undefined;
+}
+
+function normalizeChangesRequestedDetails(value: unknown): MergeReadyOpenItemDetail[] {
+  if (!isRecord(value) || !Array.isArray(value['nodes'])) {
+    return [];
+  }
+
+  return value['nodes'].flatMap((node) => {
+    const detail = normalizeChangesRequestedDetail(node);
+    return detail ? [detail] : [];
+  });
+}
+
+function normalizeChangesRequestedDetail(value: unknown): MergeReadyOpenItemDetail | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const state = readOptionalString(value['state'])?.toUpperCase();
+  const url = readOptionalString(value['url']);
+  if (state !== 'CHANGES_REQUESTED' || !url) {
+    return null;
+  }
+
+  const author = isRecord(value['author']) ? readOptionalString(value['author']['login']) : null;
+
+  return {
+    label: author ? `${author} requested changes` : 'Requested changes',
+    url,
+  };
+}
+
+function normalizeUnresolvedConversationDetail(
+  node: Record<string, unknown>,
+): MergeReadyOpenItemDetail | null {
+  const firstComment = readFirstReviewThreadComment(node);
+  if (!firstComment) {
+    return null;
+  }
+
+  const path = firstComment.path ?? readOptionalString(node['path']) ?? undefined;
+  const line = firstComment.line ?? parseOptionalPositiveInteger(node['line']) ?? undefined;
+
+  return {
+    label: formatUnresolvedConversationLabel(path, line),
+    url: firstComment.url,
+  };
+}
+
+function readFirstReviewThreadComment(
+  node: Record<string, unknown>,
+): { url: string; path?: string; line?: number } | null {
+  if (!isRecord(node['comments']) || !Array.isArray(node['comments']['nodes'])) {
+    return null;
+  }
+
+  for (const comment of node['comments']['nodes']) {
+    if (!isRecord(comment)) {
+      continue;
+    }
+
+    const url = readOptionalString(comment['url']);
+    if (!url) {
+      continue;
+    }
+
+    const path = readOptionalString(comment['path']) ?? undefined;
+    const line = parseOptionalPositiveInteger(comment['line']) ?? undefined;
+
+    return {
+      url,
+      ...(path ? { path } : {}),
+      ...(line === undefined ? {} : { line }),
+    };
+  }
+
+  return null;
+}
+
+function formatUnresolvedConversationLabel(
+  path: string | undefined,
+  line: number | undefined,
+): string {
+  if (path && line !== undefined) {
+    return `${path}:${String(line)} unresolved conversation`;
+  }
+
+  if (path) {
+    return `${path} unresolved conversation`;
+  }
+
+  if (line !== undefined) {
+    return `line ${String(line)} unresolved conversation`;
+  }
+
+  return 'Unresolved conversation';
+}
+
+function parseOptionalPositiveInteger(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isInteger(value) && value > 0) {
+    return value;
+  }
+
+  if (typeof value === 'string' && /^\d+$/u.test(value)) {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+  }
+
+  return null;
 }
 
 function normalizeConversationRequirement(

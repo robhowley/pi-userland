@@ -5,6 +5,7 @@ import type {
   MergeReadyCheckDetail,
   MergeReadyCheckDetails,
   MergeReadyOpenItem,
+  MergeReadyOpenItemDetail,
   MergeReadyOpenItemId,
   MergeReadySignals,
   MergeReadySignalsInput,
@@ -367,7 +368,7 @@ function createOpenItem(id: MergeReadyOpenItemId, signals?: MergeReadySignals): 
 function getOpenItemDetails(
   id: MergeReadyOpenItemId,
   signals: MergeReadySignals | undefined,
-): MergeReadyCheckDetail[] {
+): MergeReadyOpenItemDetail[] {
   if (!signals?.checkDetails) {
     return [];
   }

@@ -50,9 +50,10 @@ export function registerMergeReadyStatusTool(pi: MergeReadyStatusToolAPI): void 
     name: MERGE_READY_STATUS_TOOL_NAME,
     label: 'Merge Ready Status',
     description:
-      'Returns the merge-readiness status for the current branch pull request by default, or for an exact GitHub pull request URL when `url` is provided. Use this before deciding whether a PR is ready to merge or before attempting to resolve merge blockers. The returned `openItems` array is the only authoritative list of merge-readiness items to work from.',
+      'Returns the merge-readiness status for the current branch pull request by default, or for an exact GitHub pull request URL when `url` is provided. Use this before deciding whether a PR is ready to merge or before attempting to resolve merge blockers. The returned `openItems` array is the only authoritative list of merge-readiness items to work from, and any `openItems[].details[].url` values are provenance-only supporting links.',
     promptGuidelines: [
       'Use openItems as the actionable list and do not invent additional blockers beyond what is returned.',
+      'Treat openItems[].details[] as supporting provenance only; detail URLs help explain an open item but do not add new blockers, and pr.url is not a source link.',
       'Do not infer work from raw GitHub states or assume hidden blockers beyond the returned MergeReadyStatus.',
       `When targeting a PR explicitly, pass only a full GitHub pull request URL like ${MERGE_READY_PULL_REQUEST_URL_EXAMPLE}.`,
       'Do not pass branch names, PR numbers, repo names, or other inferred targets.',
