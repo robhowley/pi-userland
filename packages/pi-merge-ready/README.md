@@ -2,7 +2,7 @@
 
 A [Pi](https://pi.dev/) package that shows whether your current-branch PR or an exact GitHub PR URL is ready to merge, why it is blocked, and gives agents the context to fix what remains.
 
-It adds a current-branch status bar signal, `/merge-ready`, a `merge_ready_status({ url? })` agent tool, and a `merge-ready-loop` skill that lets agents work through reported blockers.
+It adds a current-branch status bar signal, `/merge-ready` status and watch commands, a `merge_ready_status({ url? })` agent tool, and a `merge-ready-loop` skill that lets agents work through reported blockers.
 
 ## Installation
 
@@ -61,6 +61,35 @@ You can also target an exact GitHub pull request URL:
 Only full HTTPS GitHub PR URLs are accepted. Branch names, PR numbers, shorthands, issue URLs, repo URLs, non-GitHub hosts, query strings, fragments, and subpaths are rejected. A trailing slash on `/pull/NUMBER/` is normalized.
 
 Open-item details render uniformly in slash-command output: if a detail row has a status, the command shows the same icon used for check rows; if it has a URL, the URL is appended. Detail URLs are provenance-only supporting links, not extra action items.
+
+You can also run a foreground-visible watcher:
+
+```text
+/merge-ready watch [--url <github-pr-url>] [--interval <seconds>]
+```
+
+```bash
+/merge-ready watch
+/merge-ready watch --url https://github.com/OWNER/REPO/pull/64
+/merge-ready watch --url https://github.com/OWNER/REPO/pull/64 --interval 30
+```
+
+`watch` is a foreground command that polls merge readiness on the requested interval and queues bounded repair turns for locally actionable blockers. Cancel the foreground command to stop it. It accepts only the same exact GitHub PR URL form as `--url` above.
+
+Watch actionability:
+
+| Status / lifecycle                                                                                                                           | Watch behavior                                                                                                      |
+| -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `branch_out_of_date`, `merge_conflicts`, `ci_failing`                                                                                        | Auto-attempt one bounded local repair turn, then report whether the item was addressed locally or cleared remotely. |
+| `ci_running`, `review_pending`, open PR with no `openItems` (`ready`)                                                                        | Keep polling and wait for GitHub or review state to change.                                                         |
+| `changes_requested`, `unresolved_conversations`, `merge_blocked`, `draft`, `status_ambiguous`, `no_pull_request`, closed/merged PR lifecycle | Do not auto-repair; report the blocker or terminal state and stop.                                                  |
+
+Watch safety:
+
+- Only one foreground watcher is active at a time.
+- Repeated-blocker guard: after one repair attempt for a blocker, `watch` does not keep retrying it without a fresh status change or explicit restart.
+- Dirty-worktree preflight: `watch` refuses repair turns when local changes are already present.
+- Exact PR URL only: `--url` must be a full HTTPS GitHub pull request URL.
 
 ### Agent tool
 

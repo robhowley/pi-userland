@@ -2,6 +2,13 @@ import { getMergeReadyStatus } from './merge-ready.js';
 import { syncMergeReadyStatusBar } from './status-bar.js';
 import { selectMergeReadyBadgeId } from './status.js';
 import { MERGE_READY_PULL_REQUEST_URL_EXAMPLE, validateGitHubPullRequestUrl } from './target.js';
+import {
+  MERGE_READY_WATCH_DEFAULT_INTERVAL_SECONDS,
+  MERGE_READY_WATCH_MAX_INTERVAL_SECONDS,
+  MERGE_READY_WATCH_MIN_INTERVAL_SECONDS,
+  registerMergeReadyWatchLifecycle,
+  startMergeReadyWatch,
+} from './watch.js';
 import type { MergeReadyExec, MergeReadyExecOptions, MergeReadyExecResult } from './git.js';
 import type {
   MergeReadyBadgeId,
@@ -18,6 +25,9 @@ export type MergeReadyCommandNotificationLevel = 'info' | 'warning' | 'error';
 
 export type MergeReadyCommandContext = {
   cwd: string;
+  isIdle?: () => boolean;
+  waitForIdle?: () => Promise<void>;
+  signal?: AbortSignal;
   ui: {
     notify: (message: string, type?: MergeReadyCommandNotificationLevel) => void;
     setStatus?: (key: string, status?: string) => void;
@@ -47,9 +57,14 @@ export type MergeReadyCommandAPI = {
   ) => Promise<{ stdout: string; stderr: string; code: number; killed: boolean }>;
 };
 
+const WATCH_SUBCOMMAND = 'watch';
 const JSON_FLAG = '--json';
 const URL_FLAG = '--url';
-const COMMAND_USAGE = `Usage: /${MERGE_READY_COMMAND_NAME} [${URL_FLAG} <${MERGE_READY_PULL_REQUEST_URL_EXAMPLE}>] [${JSON_FLAG}]`;
+const INTERVAL_FLAG = '--interval';
+
+export const MERGE_READY_COMMAND_STATUS_USAGE = `Usage: /${MERGE_READY_COMMAND_NAME} [${URL_FLAG} <${MERGE_READY_PULL_REQUEST_URL_EXAMPLE}>] [${JSON_FLAG}]`;
+export const MERGE_READY_COMMAND_WATCH_USAGE = `Usage: /${MERGE_READY_COMMAND_NAME} ${WATCH_SUBCOMMAND} [${URL_FLAG} <${MERGE_READY_PULL_REQUEST_URL_EXAMPLE}>] [${INTERVAL_FLAG} <seconds>]`;
+export const MERGE_READY_COMMAND_USAGE = `${MERGE_READY_COMMAND_STATUS_USAGE}\n${MERGE_READY_COMMAND_WATCH_USAGE}`;
 
 const BADGE_PRESENTATION: Record<
   MergeReadyBadgeId,
@@ -73,7 +88,21 @@ const BADGE_PRESENTATION: Record<
   unknown: { icon: '❔', level: 'warning' },
 };
 
+type MergeReadyCommandWatchRuntimeAPI = MergeReadyCommandAPI & {
+  sendUserMessage?: (
+    content: string,
+    options?: { deliverAs?: 'steer' | 'followUp' },
+  ) => Promise<void> | void;
+  on?: (
+    event: 'session_shutdown',
+    handler: (event: unknown, ctx: unknown) => void | Promise<void>,
+  ) => void;
+};
+
 export function registerMergeReadyCommand(pi: MergeReadyCommandAPI): void {
+  const watchPi = pi as MergeReadyCommandWatchRuntimeAPI;
+  registerMergeReadyWatchLifecycle(watchPi);
+
   pi.registerCommand(MERGE_READY_COMMAND_NAME, {
     description: 'Show merge readiness for the current pull request or an explicit GitHub PR URL',
     getArgumentCompletions: getMergeReadyCommandArgumentCompletions,
@@ -95,8 +124,27 @@ export function registerMergeReadyCommand(pi: MergeReadyCommandAPI): void {
         url = validation.target.url;
       }
 
+      const exec = createCommandExec(pi, ctx);
+
+      if (parsedArgs.mode === 'watch') {
+        const started = startMergeReadyWatch({
+          api: watchPi,
+          ctx,
+          exec,
+          intervalSeconds: parsedArgs.intervalSeconds,
+          ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
+          timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+          ...(url === undefined ? {} : { url }),
+        });
+        ctx.ui.notify(started.message, started.level);
+        if (started.ok) {
+          await started.promise;
+        }
+        return;
+      }
+
       const status = await getMergeReadyStatus({
-        exec: createCommandExec(pi, ctx),
+        exec,
         cwd: ctx.cwd,
         ...(url === undefined ? {} : { url }),
         timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
@@ -156,15 +204,22 @@ export function renderMergeReadyStatus(status: MergeReadyStatus): {
 }
 
 function getMergeReadyCommandArgumentCompletions(prefix: string) {
-  return [URL_FLAG, JSON_FLAG]
+  return [WATCH_SUBCOMMAND, URL_FLAG, JSON_FLAG, INTERVAL_FLAG]
     .filter((flag) => flag.startsWith(prefix))
     .map((flag) => ({ value: flag, label: flag }));
 }
 
-type MergeReadyParsedCommandArgs =
+export type MergeReadyParsedCommandArgs =
   | {
       ok: true;
+      mode: 'status';
       json: boolean;
+      url?: string;
+    }
+  | {
+      ok: true;
+      mode: 'watch';
+      intervalSeconds: number;
       url?: string;
     }
   | {
@@ -172,12 +227,20 @@ type MergeReadyParsedCommandArgs =
       message: string;
     };
 
-function parseMergeReadyCommandArgs(args: string): MergeReadyParsedCommandArgs {
+export function parseMergeReadyCommandArgs(args: string): MergeReadyParsedCommandArgs {
   const tokens = args
     .trim()
     .split(/\s+/)
     .filter((token) => token.length > 0);
 
+  if (tokens[0] === WATCH_SUBCOMMAND) {
+    return parseMergeReadyWatchCommandArgs(tokens.slice(1));
+  }
+
+  return parseMergeReadyStatusCommandArgs(tokens);
+}
+
+function parseMergeReadyStatusCommandArgs(tokens: string[]): MergeReadyParsedCommandArgs {
   let json = false;
   let url: string | undefined;
   const unsupported: string[] = [];
@@ -190,7 +253,7 @@ function parseMergeReadyCommandArgs(args: string): MergeReadyParsedCommandArgs {
 
     if (token === JSON_FLAG) {
       if (json) {
-        return { ok: false, message: `Duplicate ${JSON_FLAG}. ${COMMAND_USAGE}` };
+        return createCommandUsageError(`Duplicate ${JSON_FLAG}`);
       }
 
       json = true;
@@ -199,12 +262,12 @@ function parseMergeReadyCommandArgs(args: string): MergeReadyParsedCommandArgs {
 
     if (token === URL_FLAG) {
       if (url !== undefined) {
-        return { ok: false, message: `Duplicate ${URL_FLAG}. ${COMMAND_USAGE}` };
+        return createCommandUsageError(`Duplicate ${URL_FLAG}`);
       }
 
       const value = tokens[index + 1];
       if (!value || value.startsWith('--')) {
-        return { ok: false, message: `Missing value for ${URL_FLAG}. ${COMMAND_USAGE}` };
+        return createCommandUsageError(`Missing value for ${URL_FLAG}`);
       }
 
       url = value;
@@ -216,13 +279,98 @@ function parseMergeReadyCommandArgs(args: string): MergeReadyParsedCommandArgs {
   }
 
   if (unsupported.length > 0) {
-    return {
-      ok: false,
-      message: `Unsupported arguments: ${unsupported.join(' ')}. ${COMMAND_USAGE}`,
-    };
+    return createCommandUsageError(`Unsupported arguments: ${unsupported.join(' ')}`);
   }
 
-  return { ok: true, json, ...(url === undefined ? {} : { url }) };
+  return { ok: true, mode: 'status', json, ...(url === undefined ? {} : { url }) };
+}
+
+function parseMergeReadyWatchCommandArgs(tokens: string[]): MergeReadyParsedCommandArgs {
+  let intervalSeconds = MERGE_READY_WATCH_DEFAULT_INTERVAL_SECONDS;
+  let url: string | undefined;
+  let hasInterval = false;
+  const unsupported: string[] = [];
+
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token === undefined) {
+      continue;
+    }
+
+    if (token === JSON_FLAG) {
+      return createCommandUsageError(`The ${JSON_FLAG} flag is not supported in watch mode`);
+    }
+
+    if (token === URL_FLAG) {
+      if (url !== undefined) {
+        return createCommandUsageError(`Duplicate ${URL_FLAG}`);
+      }
+
+      const value = tokens[index + 1];
+      if (!value || value.startsWith('--')) {
+        return createCommandUsageError(`Missing value for ${URL_FLAG}`);
+      }
+
+      url = value;
+      index += 1;
+      continue;
+    }
+
+    if (token === INTERVAL_FLAG) {
+      if (hasInterval) {
+        return createCommandUsageError(`Duplicate ${INTERVAL_FLAG}`);
+      }
+
+      const value = tokens[index + 1];
+      if (!value || value.startsWith('--')) {
+        return createCommandUsageError(`Missing value for ${INTERVAL_FLAG}`);
+      }
+
+      if (!/^\d+$/u.test(value)) {
+        return createCommandUsageError(
+          `Invalid value for ${INTERVAL_FLAG}: ${JSON.stringify(value)}. Expected a positive integer number of seconds`,
+        );
+      }
+
+      const parsedIntervalSeconds = Number.parseInt(value, 10);
+      if (parsedIntervalSeconds < MERGE_READY_WATCH_MIN_INTERVAL_SECONDS) {
+        return createCommandUsageError(
+          `${INTERVAL_FLAG} must be at least ${String(MERGE_READY_WATCH_MIN_INTERVAL_SECONDS)} seconds`,
+        );
+      }
+
+      if (parsedIntervalSeconds > MERGE_READY_WATCH_MAX_INTERVAL_SECONDS) {
+        return createCommandUsageError(
+          `${INTERVAL_FLAG} must be at most ${String(MERGE_READY_WATCH_MAX_INTERVAL_SECONDS)} seconds`,
+        );
+      }
+
+      intervalSeconds = parsedIntervalSeconds;
+      hasInterval = true;
+      index += 1;
+      continue;
+    }
+
+    unsupported.push(token);
+  }
+
+  if (unsupported.length > 0) {
+    return createCommandUsageError(`Unsupported arguments: ${unsupported.join(' ')}`);
+  }
+
+  return {
+    ok: true,
+    mode: 'watch',
+    intervalSeconds,
+    ...(url === undefined ? {} : { url }),
+  };
+}
+
+function createCommandUsageError(message: string): MergeReadyParsedCommandArgs {
+  return {
+    ok: false,
+    message: `${message}. ${MERGE_READY_COMMAND_USAGE}`,
+  };
 }
 
 function createCommandExec(

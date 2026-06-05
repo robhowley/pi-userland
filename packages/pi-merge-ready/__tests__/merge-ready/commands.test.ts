@@ -1,13 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import mergeReadyExtension, {
+  getActiveMergeReadyWatch,
   MERGE_READY_COMMAND_NAME,
   MERGE_READY_COMMAND_TIMEOUT_MS,
+  MERGE_READY_COMMAND_USAGE,
   MERGE_READY_STATUS_BAR_KEY,
   MERGE_READY_STATUS_BAR_TTL_MS,
+  MERGE_READY_WATCH_STATUS_KEY,
   createMergeReadyStatus,
+  parseMergeReadyCommandArgs,
   refreshMergeReadyStatusBar,
   renderMergeReadyStatus,
   resetMergeReadyStatusBarCache,
+  resetMergeReadyWatchState,
   type MergeReadyCommandAPI,
   type MergeReadyCommandContext,
 } from '../../extensions/merge-ready/index.js';
@@ -28,6 +33,7 @@ function createMockAPI(expectedCalls: ExpectedExecCall[] = []): {
   api: MergeReadyCommandAPI & {
     on: ReturnType<typeof vi.fn>;
     registerTool: ReturnType<typeof vi.fn>;
+    sendUserMessage: ReturnType<typeof vi.fn>;
   };
   assertDone: () => void;
   getCommand: (
@@ -40,6 +46,7 @@ function createMockAPI(expectedCalls: ExpectedExecCall[] = []): {
     on: vi.fn(),
     registerCommand: vi.fn(),
     registerTool: vi.fn(),
+    sendUserMessage: vi.fn(async () => undefined),
     exec: vi.fn(
       async (command: string, args: string[], options?: { cwd?: string; timeout?: number }) => {
         const expectedCall = expectedCalls[index];
@@ -85,9 +92,12 @@ function createMockAPI(expectedCalls: ExpectedExecCall[] = []): {
   };
 }
 
-function createCommandContext(): MergeReadyCommandContext {
+function createCommandContext(options: { signal?: AbortSignal } = {}): MergeReadyCommandContext {
   return {
     cwd: '/repo',
+    isIdle: vi.fn(() => true),
+    waitForIdle: vi.fn(async () => undefined),
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
     ui: {
       notify: vi.fn(),
       setStatus: vi.fn(),
@@ -113,8 +123,9 @@ describe('merge-ready command', () => {
     vi.setSystemTime(new Date(GENERATED_AT));
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     resetMergeReadyStatusBarCache();
+    await resetMergeReadyWatchState();
     vi.useRealTimers();
   });
 
@@ -296,9 +307,10 @@ describe('merge-ready command', () => {
 
     mergeReadyExtension(api as Parameters<typeof mergeReadyExtension>[0]);
 
-    expect(api.on).toHaveBeenCalledTimes(2);
+    expect(api.on).toHaveBeenCalledTimes(3);
     expect(api.on).toHaveBeenCalledWith('session_start', expect.any(Function));
     expect(api.on).toHaveBeenCalledWith('turn_end', expect.any(Function));
+    expect(api.on).toHaveBeenCalledWith('session_shutdown', expect.any(Function));
     expect(api.registerCommand).toHaveBeenCalledTimes(1);
     expect(api.registerCommand).toHaveBeenCalledWith(
       MERGE_READY_COMMAND_NAME,
@@ -634,6 +646,145 @@ describe('merge-ready command', () => {
     }
   });
 
+  it('parses watch mode with default interval and accepts --url/--interval in either order', () => {
+    const url = 'https://github.com/shopify/pi/pull/64';
+
+    expect(parseMergeReadyCommandArgs('watch')).toEqual({
+      ok: true,
+      mode: 'watch',
+      intervalSeconds: 60,
+    });
+    expect(parseMergeReadyCommandArgs(`watch --url ${url} --interval 30`)).toEqual({
+      ok: true,
+      mode: 'watch',
+      url,
+      intervalSeconds: 30,
+    });
+    expect(parseMergeReadyCommandArgs(`watch --interval 30 --url ${url}`)).toEqual({
+      ok: true,
+      mode: 'watch',
+      url,
+      intervalSeconds: 30,
+    });
+  });
+
+  it('rejects invalid watch arguments with combined usage text', async () => {
+    const { api, getCommand } = createMockAPI();
+    mergeReadyExtension(api);
+    const handler = getCommand(MERGE_READY_COMMAND_NAME);
+    const ctx = createCommandContext();
+
+    await handler?.('watch --json', ctx);
+    await handler?.('watch --interval', ctx);
+    await handler?.('watch --interval nope', ctx);
+    await handler?.('watch --interval 14', ctx);
+    await handler?.('watch --interval 3601', ctx);
+    await handler?.('watch --url', ctx);
+    await handler?.(
+      'watch --url https://github.com/owner/repo/pull/1 --url https://github.com/owner/repo/pull/2',
+      ctx,
+    );
+    await handler?.('watch --interval 30 --interval 45', ctx);
+    await handler?.('watch --stop', ctx);
+
+    expect(vi.mocked(ctx.ui.notify).mock.calls).toEqual([
+      [`The --json flag is not supported in watch mode. ${MERGE_READY_COMMAND_USAGE}`, 'error'],
+      [`Missing value for --interval. ${MERGE_READY_COMMAND_USAGE}`, 'error'],
+      [
+        `Invalid value for --interval: "nope". Expected a positive integer number of seconds. ${MERGE_READY_COMMAND_USAGE}`,
+        'error',
+      ],
+      [`--interval must be at least 15 seconds. ${MERGE_READY_COMMAND_USAGE}`, 'error'],
+      [`--interval must be at most 3600 seconds. ${MERGE_READY_COMMAND_USAGE}`, 'error'],
+      [`Missing value for --url. ${MERGE_READY_COMMAND_USAGE}`, 'error'],
+      [`Duplicate --url. ${MERGE_READY_COMMAND_USAGE}`, 'error'],
+      [`Duplicate --interval. ${MERGE_READY_COMMAND_USAGE}`, 'error'],
+      [`Unsupported arguments: --stop. ${MERGE_READY_COMMAND_USAGE}`, 'error'],
+    ]);
+  });
+
+  it('keeps watch foreground until the command signal is aborted', async () => {
+    const { api, assertDone, getCommand } = createMockAPI([
+      ...createGitDiscoveryCalls({ timeout: MERGE_READY_COMMAND_TIMEOUT_MS }),
+      createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+        timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+      }),
+      createConversationsSuccessCall(buildConversationsPayload(), {
+        timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+      }),
+    ]);
+
+    mergeReadyExtension(api);
+    const handler = getCommand(MERGE_READY_COMMAND_NAME);
+    const abortController = new AbortController();
+    const ctx = createCommandContext({ signal: abortController.signal });
+
+    const run = handler?.('watch --interval 15', ctx) ?? Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getActiveMergeReadyWatch()).not.toBeNull();
+
+    abortController.abort();
+    await run;
+
+    assertDone();
+    expect(getActiveMergeReadyWatch()).toBeNull();
+    expect(vi.mocked(ctx.ui.notify)).toHaveBeenCalledWith(
+      'Watching merge readiness for current branch PR every 15s. Cancel the foreground command to stop.',
+      'info',
+    );
+    expect(ctx.ui.setStatus).toHaveBeenCalledWith(MERGE_READY_WATCH_STATUS_KEY, undefined);
+  });
+
+  it('does not sync the ambient status bar for URL-targeted watch polls', async () => {
+    const url = 'https://github.com/shopify/pi/pull/64';
+    const { api, assertDone, getCommand } = createMockAPI([
+      {
+        command: 'gh',
+        args: ['pr', 'view', '64', '--repo', 'shopify/pi', '--json', GH_PR_VIEW_JSON_FIELDS],
+        cwd: '/repo',
+        timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+        result: {
+          stdout: `${JSON.stringify(
+            buildPullRequestPayload({
+              number: 64,
+              title: 'Support explicit PR URL targets',
+              url,
+              headRefName: 'feat/explicit-pr-url',
+              baseRefName: 'main',
+            }),
+          )}\n`,
+        },
+      },
+      createConversationsSuccessCall(buildConversationsPayload(), {
+        cwd: '/repo',
+        timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+        repositoryOwner: 'shopify',
+        repositoryName: 'pi',
+        pullRequestNumber: 64,
+      }),
+    ]);
+
+    mergeReadyExtension(api);
+    const handler = getCommand(MERGE_READY_COMMAND_NAME);
+    const abortController = new AbortController();
+    const ctx = createCommandContext({ signal: abortController.signal });
+
+    const run = handler?.(`watch --url ${url} --interval 15`, ctx) ?? Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    abortController.abort();
+    await run;
+
+    assertDone();
+    expect(ctx.ui.setStatus).not.toHaveBeenCalledWith(
+      MERGE_READY_STATUS_BAR_KEY,
+      expect.anything(),
+    );
+    expect(ctx.ui.setStatus).toHaveBeenCalledWith(
+      MERGE_READY_WATCH_STATUS_KEY,
+      expect.stringContaining('Watching #64 · Ready to merge'),
+    );
+  });
+
   it('reports missing and duplicate --url errors clearly', async () => {
     const { api, getCommand } = createMockAPI();
     mergeReadyExtension(api);
@@ -647,14 +798,8 @@ describe('merge-ready command', () => {
     );
 
     expect(vi.mocked(ctx.ui.notify).mock.calls).toEqual([
-      [
-        'Missing value for --url. Usage: /merge-ready [--url <https://github.com/OWNER/REPO/pull/NUMBER>] [--json]',
-        'error',
-      ],
-      [
-        'Duplicate --url. Usage: /merge-ready [--url <https://github.com/OWNER/REPO/pull/NUMBER>] [--json]',
-        'error',
-      ],
+      [`Missing value for --url. ${MERGE_READY_COMMAND_USAGE}`, 'error'],
+      [`Duplicate --url. ${MERGE_READY_COMMAND_USAGE}`, 'error'],
     ]);
   });
 

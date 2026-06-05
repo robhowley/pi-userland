@@ -107,6 +107,16 @@ Important:
    - Successful local completion: the agent-actionable work is addressed, even if remote CI/review/GitHub has not caught up yet. Summarize the work performed and the acceptance criteria used to determine completion.
    - Blocked or external handoff: the next step requires remote CI, a reviewer, GitHub-only action, external credentials, or ambiguous product judgment.
 
+## Watch-triggered turns
+
+`/merge-ready watch` may invoke this skill with a status snapshot already provided. Use that snapshot only when it is clearly fresh and the target is already confirmed.
+
+- If the snapshot is stale, incomplete, or the target still needs confirmation, call `merge_ready_status({})` or `merge_ready_status({ url })`.
+- Work only from the provided or freshly returned `openItems`. `details` rows and detail URLs are provenance only.
+- Make one bounded repair attempt for the triggered blocker or a tightly related set. Do not start another watch loop from inside the turn.
+- Report which items were addressed locally, which were cleared by fresh remote status, and which are still waiting on CI, review, or GitHub recomputation.
+- Do not wait indefinitely for CI, review, or GitHub state to change; hand back control once the bounded attempt is done or the remaining work is external.
+
 ## The loop
 
 ```text
