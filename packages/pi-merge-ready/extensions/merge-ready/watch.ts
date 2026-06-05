@@ -146,7 +146,7 @@ export type MergeReadyWatchLoopDependencies = {
 
 export type RunMergeReadyWatchLoopOptions = {
   exec: MergeReadyExec;
-  api: Required<Pick<MergeReadyWatchAPI, 'sendUserMessage'>>;
+  api: Pick<MergeReadyWatchAPI, 'sendUserMessage'>;
   ctx: MergeReadyWatchContext;
   intervalSeconds: number;
   timeout?: number;
@@ -379,7 +379,7 @@ export function startMergeReadyWatch(
     };
   }
 
-  if (typeof options.api.sendUserMessage !== 'function') {
+  if (options.url === undefined && typeof options.api.sendUserMessage !== 'function') {
     return {
       ok: false,
       level: 'error',
@@ -404,10 +404,13 @@ export function startMergeReadyWatch(
 
   const promise = runMergeReadyWatchLoop({
     exec: options.exec,
-    api: {
-      sendUserMessage: (content, messageOptions) =>
-        sendUserMessage.call(options.api, content, messageOptions),
-    },
+    api:
+      typeof sendUserMessage === 'function'
+        ? {
+            sendUserMessage: (content, messageOptions) =>
+              sendUserMessage.call(options.api, content, messageOptions),
+          }
+        : {},
     ctx: options.ctx,
     intervalSeconds: options.intervalSeconds,
     signal: watcher.abortController.signal,
@@ -488,20 +491,23 @@ export async function runMergeReadyWatchLoop(
   const attemptedSignatures = new Set<string>();
   let iterations = 0;
 
-  while (!options.signal.aborted) {
-    if (maxIterations !== undefined && iterations >= maxIterations) {
-      return { kind: 'stopped', reason: 'max_iterations' };
-    }
-    iterations += 1;
+  try {
+    while (true) {
+      throwIfMergeReadyWatchAborted(options.signal);
 
-    const status = await getStatus({
-      exec: options.exec,
-      cwd: options.ctx.cwd,
-      ...(options.url === undefined ? {} : { url: options.url }),
-      ...(options.timeout === undefined ? {} : { timeout: options.timeout }),
-    });
+      if (maxIterations !== undefined && iterations >= maxIterations) {
+        return { kind: 'stopped', reason: 'max_iterations' };
+      }
+      iterations += 1;
 
-    if (status.target.mode !== 'url') {
+      const status = await getStatus({
+        exec: options.exec,
+        cwd: options.ctx.cwd,
+        ...(options.url === undefined ? {} : { url: options.url }),
+        ...(options.timeout === undefined ? {} : { timeout: options.timeout }),
+      });
+      throwIfMergeReadyWatchAborted(options.signal);
+
       syncStatusBar({
         ctx: {
           cwd: options.ctx.cwd,
@@ -509,93 +515,109 @@ export async function runMergeReadyWatchLoop(
         },
         status,
       });
-    }
 
-    const classification = classifyMergeReadyWatchStatus(status);
-    if (classification.actionability === 'stop') {
-      const stopOutcome = resolveMergeReadyWatchStopOutcome(status, classification);
-      setMergeReadyWatchStatus(options.ctx, `Stopped · ${stopOutcome.message}`);
-      options.ctx.ui.notify(
-        `Stopping merge-ready watch for ${formatStatusTargetLabel(status)}: ${stopOutcome.message}`,
-        stopOutcome.level,
-      );
-      return { kind: 'stopped', reason: stopOutcome.reason, status };
-    }
+      const classification = classifyMergeReadyWatchStatus(status);
+      if (classification.actionability === 'stop') {
+        const stopOutcome = resolveMergeReadyWatchStopOutcome(status, classification);
+        setMergeReadyWatchStatus(options.ctx, `Stopped · ${stopOutcome.message}`);
+        options.ctx.ui.notify(
+          `Stopping merge-ready watch for ${formatStatusTargetLabel(status)}: ${stopOutcome.message}`,
+          stopOutcome.level,
+        );
+        return { kind: 'stopped', reason: stopOutcome.reason, status };
+      }
 
-    if (classification.actionability === 'wait') {
+      if (
+        classification.actionability === 'wait' ||
+        (classification.actionability === 'repair' &&
+          isObserveOnlyMergeReadyWatchTarget(options.url, status.target))
+      ) {
+        setMergeReadyWatchStatus(
+          options.ctx,
+          `Watching ${formatStatusSubject(status)} · ${status.summary} · next poll in ${String(options.intervalSeconds)}s`,
+        );
+        await sleep(options.intervalSeconds * 1_000, options.signal);
+        throwIfMergeReadyWatchAborted(options.signal);
+        continue;
+      }
+
+      const signature = createMergeReadyWatchBlockerSignature(status, classification.repairItems);
+      if (attemptedSignatures.has(signature)) {
+        setMergeReadyWatchStatus(options.ctx, 'Stopped · repeated actionable blocker');
+        options.ctx.ui.notify(
+          `Stopping merge-ready watch for ${formatStatusTargetLabel(status)}: the same actionable blocker is still present after one attempt.`,
+          'warning',
+        );
+        return {
+          kind: 'stopped',
+          reason: 'repeated_actionable_signature',
+          status,
+          signature,
+        };
+      }
+
+      const dirtyState = await checkDirtyWorkingTree({
+        exec: options.exec,
+        cwd: options.ctx.cwd,
+        ...(options.timeout === undefined ? {} : { timeout: options.timeout }),
+      });
+      throwIfMergeReadyWatchAborted(options.signal);
+      if (!dirtyState.ok) {
+        setMergeReadyWatchStatus(options.ctx, 'Stopped · git working tree preflight failed');
+        options.ctx.ui.notify(
+          `Stopping merge-ready watch for ${formatStatusTargetLabel(status)}: ${dirtyState.message}`,
+          'warning',
+        );
+        return { kind: 'stopped', reason: 'dirty_check_failed', status };
+      }
+
+      if (dirtyState.dirty) {
+        setMergeReadyWatchStatus(options.ctx, 'Stopped · dirty working tree');
+        options.ctx.ui.notify(
+          `Stopping merge-ready watch for ${formatStatusTargetLabel(status)}: local git changes are present, so auto-repair is disabled.`,
+          'warning',
+        );
+        return { kind: 'stopped', reason: 'dirty_worktree', status };
+      }
+
+      attemptedSignatures.add(signature);
       setMergeReadyWatchStatus(
         options.ctx,
-        `Watching ${formatStatusSubject(status)} · ${status.summary} · next poll in ${String(options.intervalSeconds)}s`,
+        `Repairing ${formatStatusSubject(status)} · ${classification.repairItems.map((openItem) => openItem.id).join(', ')}`,
       );
-      await sleep(options.intervalSeconds * 1_000, options.signal);
-      continue;
-    }
-
-    const signature = createMergeReadyWatchBlockerSignature(status, classification.repairItems);
-    if (attemptedSignatures.has(signature)) {
-      setMergeReadyWatchStatus(options.ctx, 'Stopped · repeated actionable blocker');
       options.ctx.ui.notify(
-        `Stopping merge-ready watch for ${formatStatusTargetLabel(status)}: the same actionable blocker is still present after one attempt.`,
-        'warning',
+        `Repairing ${formatStatusTargetLabel(status)} for ${classification.repairItems.map((openItem) => openItem.id).join(', ')}.`,
+        'info',
       );
-      return {
-        kind: 'stopped',
-        reason: 'repeated_actionable_signature',
-        status,
-        signature,
-      };
-    }
 
-    const dirtyState = await checkDirtyWorkingTree({
-      exec: options.exec,
-      cwd: options.ctx.cwd,
-      ...(options.timeout === undefined ? {} : { timeout: options.timeout }),
-    });
-    if (!dirtyState.ok) {
-      setMergeReadyWatchStatus(options.ctx, 'Stopped · git working tree preflight failed');
-      options.ctx.ui.notify(
-        `Stopping merge-ready watch for ${formatStatusTargetLabel(status)}: ${dirtyState.message}`,
-        'warning',
+      if (typeof options.api.sendUserMessage !== 'function') {
+        setMergeReadyWatchStatus(options.ctx, 'Stopped · repair handoff unavailable');
+        options.ctx.ui.notify(
+          `Stopping merge-ready watch for ${formatStatusTargetLabel(status)}: Pi sendUserMessage support is required for auto-repair.`,
+          'error',
+        );
+        return { kind: 'stopped', reason: 'error', status };
+      }
+
+      await options.api.sendUserMessage(
+        createMergeReadyWatchRepairPrompt(status, classification.repairItems),
+        resolveSendUserMessageOptions(options.ctx),
       );
-      return { kind: 'stopped', reason: 'dirty_check_failed', status };
-    }
+      throwIfMergeReadyWatchAborted(options.signal);
 
-    if (dirtyState.dirty) {
-      setMergeReadyWatchStatus(options.ctx, 'Stopped · dirty working tree');
-      options.ctx.ui.notify(
-        `Stopping merge-ready watch for ${formatStatusTargetLabel(status)}: local git changes are present, so auto-repair is disabled.`,
-        'warning',
-      );
-      return { kind: 'stopped', reason: 'dirty_worktree', status };
-    }
+      if (typeof options.ctx.waitForIdle === 'function') {
+        await options.ctx.waitForIdle();
+        throwIfMergeReadyWatchAborted(options.signal);
+      }
 
-    attemptedSignatures.add(signature);
-    setMergeReadyWatchStatus(
-      options.ctx,
-      `Repairing ${formatStatusSubject(status)} · ${classification.repairItems.map((openItem) => openItem.id).join(', ')}`,
-    );
-    options.ctx.ui.notify(
-      `Repairing ${formatStatusTargetLabel(status)} for ${classification.repairItems.map((openItem) => openItem.id).join(', ')}.`,
-      'info',
-    );
+      const refreshedStatus = await getStatus({
+        exec: options.exec,
+        cwd: options.ctx.cwd,
+        ...(options.url === undefined ? {} : { url: options.url }),
+        ...(options.timeout === undefined ? {} : { timeout: options.timeout }),
+      });
+      throwIfMergeReadyWatchAborted(options.signal);
 
-    await options.api.sendUserMessage(
-      createMergeReadyWatchRepairPrompt(status, classification.repairItems),
-      resolveSendUserMessageOptions(options.ctx),
-    );
-
-    if (typeof options.ctx.waitForIdle === 'function') {
-      await options.ctx.waitForIdle();
-    }
-
-    const refreshedStatus = await getStatus({
-      exec: options.exec,
-      cwd: options.ctx.cwd,
-      ...(options.url === undefined ? {} : { url: options.url }),
-      ...(options.timeout === undefined ? {} : { timeout: options.timeout }),
-    });
-
-    if (refreshedStatus.target.mode !== 'url') {
       syncStatusBar({
         ctx: {
           cwd: options.ctx.cwd,
@@ -603,52 +625,67 @@ export async function runMergeReadyWatchLoop(
         },
         status: refreshedStatus,
       });
-    }
 
-    const refreshedClassification = classifyMergeReadyWatchStatus(refreshedStatus);
-    if (refreshedClassification.actionability === 'repair') {
-      const refreshedSignature = createMergeReadyWatchBlockerSignature(
-        refreshedStatus,
-        refreshedClassification.repairItems,
-      );
-      if (refreshedSignature === signature) {
-        setMergeReadyWatchStatus(options.ctx, 'Stopped · repeated actionable blocker');
-        options.ctx.ui.notify(
-          `Stopping merge-ready watch for ${formatStatusTargetLabel(refreshedStatus)}: the same actionable blocker is still present after one attempt.`,
-          'warning',
+      const refreshedClassification = classifyMergeReadyWatchStatus(refreshedStatus);
+      if (refreshedClassification.actionability === 'repair') {
+        if (isObserveOnlyMergeReadyWatchTarget(options.url, refreshedStatus.target)) {
+          setMergeReadyWatchStatus(
+            options.ctx,
+            `Watching ${formatStatusSubject(refreshedStatus)} · ${refreshedStatus.summary} · next poll in ${String(options.intervalSeconds)}s`,
+          );
+          await sleep(options.intervalSeconds * 1_000, options.signal);
+          throwIfMergeReadyWatchAborted(options.signal);
+          continue;
+        }
+
+        const refreshedSignature = createMergeReadyWatchBlockerSignature(
+          refreshedStatus,
+          refreshedClassification.repairItems,
         );
-        return {
-          kind: 'stopped',
-          reason: 'repeated_actionable_signature',
-          status: refreshedStatus,
-          signature: refreshedSignature,
-        };
+        if (refreshedSignature === signature) {
+          setMergeReadyWatchStatus(options.ctx, 'Stopped · repeated actionable blocker');
+          options.ctx.ui.notify(
+            `Stopping merge-ready watch for ${formatStatusTargetLabel(refreshedStatus)}: the same actionable blocker is still present after one attempt.`,
+            'warning',
+          );
+          return {
+            kind: 'stopped',
+            reason: 'repeated_actionable_signature',
+            status: refreshedStatus,
+            signature: refreshedSignature,
+          };
+        }
+
+        continue;
       }
 
-      continue;
+      if (refreshedClassification.actionability === 'stop') {
+        const stopOutcome = resolveMergeReadyWatchStopOutcome(
+          refreshedStatus,
+          refreshedClassification,
+        );
+        setMergeReadyWatchStatus(options.ctx, `Stopped · ${stopOutcome.message}`);
+        options.ctx.ui.notify(
+          `Stopping merge-ready watch for ${formatStatusTargetLabel(refreshedStatus)}: ${stopOutcome.message}`,
+          stopOutcome.level,
+        );
+        return { kind: 'stopped', reason: stopOutcome.reason, status: refreshedStatus };
+      }
+
+      setMergeReadyWatchStatus(
+        options.ctx,
+        `Watching ${formatStatusSubject(refreshedStatus)} · ${refreshedStatus.summary} · next poll in ${String(options.intervalSeconds)}s`,
+      );
+      await sleep(options.intervalSeconds * 1_000, options.signal);
+      throwIfMergeReadyWatchAborted(options.signal);
+    }
+  } catch (error) {
+    if (isAbortError(error)) {
+      return { kind: 'aborted', reason: 'aborted' };
     }
 
-    if (refreshedClassification.actionability === 'stop') {
-      const stopOutcome = resolveMergeReadyWatchStopOutcome(
-        refreshedStatus,
-        refreshedClassification,
-      );
-      setMergeReadyWatchStatus(options.ctx, `Stopped · ${stopOutcome.message}`);
-      options.ctx.ui.notify(
-        `Stopping merge-ready watch for ${formatStatusTargetLabel(refreshedStatus)}: ${stopOutcome.message}`,
-        stopOutcome.level,
-      );
-      return { kind: 'stopped', reason: stopOutcome.reason, status: refreshedStatus };
-    }
-
-    setMergeReadyWatchStatus(
-      options.ctx,
-      `Watching ${formatStatusSubject(refreshedStatus)} · ${refreshedStatus.summary} · next poll in ${String(options.intervalSeconds)}s`,
-    );
-    await sleep(options.intervalSeconds * 1_000, options.signal);
+    throw error;
   }
-
-  return { kind: 'aborted', reason: 'aborted' };
 }
 
 export function createMergeReadyWatchBlockerSignature(
@@ -951,11 +988,24 @@ function describeMergeReadyWatchRepairTarget(
   return 'the current branch PR';
 }
 
+function isObserveOnlyMergeReadyWatchTarget(
+  requestedUrl: string | undefined,
+  target: MergeReadyTarget,
+): boolean {
+  return requestedUrl !== undefined || target.mode === 'url';
+}
+
 function setMergeReadyWatchStatus(ctx: MergeReadyWatchContext, text?: string): void {
   ctx.ui.setStatus?.(
     MERGE_READY_WATCH_STATUS_KEY,
     text === undefined ? undefined : (ctx.ui.theme?.fg('dim', text) ?? text),
   );
+}
+
+function throwIfMergeReadyWatchAborted(signal: AbortSignal): void {
+  if (signal.aborted) {
+    throw createAbortError(signal.reason);
+  }
 }
 
 function createAbortError(reason: unknown): Error {

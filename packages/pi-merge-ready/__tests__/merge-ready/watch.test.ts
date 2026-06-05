@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createMergeReadyStatus,
+  MERGE_READY_STATUS_BAR_KEY,
   MERGE_READY_WATCH_DEFAULT_INTERVAL_SECONDS,
   MERGE_READY_WATCH_MAX_INTERVAL_SECONDS,
   MERGE_READY_WATCH_MIN_INTERVAL_SECONDS,
@@ -13,6 +14,7 @@ import {
   runMergeReadyWatchLoop,
   sleepWithAbort,
   startMergeReadyWatch,
+  syncMergeReadyStatusBar,
   type MergeReadyCommandContext,
   type MergeReadyOpenItem,
   type MergeReadyPullRequest,
@@ -170,17 +172,7 @@ function createCiRunningStatus(overrides: Partial<MergeReadyStatus> = {}): Merge
   };
 }
 
-function createStatusAmbiguousStatus(): MergeReadyStatus {
-  return createMergeReadyStatus({
-    generatedAt: GENERATED_AT,
-    target: CURRENT_BRANCH_TARGET,
-    pr: buildRuntimeOpenPr(),
-    openItems: [{ id: 'status_ambiguous', summary: 'Merge readiness is ambiguous' }],
-    summary: 'Merge readiness is ambiguous',
-  });
-}
-
-function createUrlReadyStatus(): MergeReadyStatus {
+function createUrlCiFailingStatus(): MergeReadyStatus {
   return createMergeReadyStatus({
     generatedAt: GENERATED_AT,
     target: RUNTIME_URL_TARGET,
@@ -193,11 +185,26 @@ function createUrlReadyStatus(): MergeReadyStatus {
     signals: {
       draft: false,
       mergeability: 'mergeable',
-      checks: 'passing',
+      checks: 'failing',
+      checkDetails: {
+        failing: [{ label: 'ci / unit', status: 'failing' }],
+        running: [],
+        unknown: [],
+      },
       review: 'approved',
       unresolvedConversations: false,
       unresolvedConversationRequirement: 'optional',
     },
+  });
+}
+
+function createStatusAmbiguousStatus(): MergeReadyStatus {
+  return createMergeReadyStatus({
+    generatedAt: GENERATED_AT,
+    target: CURRENT_BRANCH_TARGET,
+    pr: buildRuntimeOpenPr(),
+    openItems: [{ id: 'status_ambiguous', summary: 'Merge readiness is ambiguous' }],
+    summary: 'Merge readiness is ambiguous',
   });
 }
 
@@ -216,6 +223,17 @@ function createWatchContext(): MergeReadyCommandContext {
 function createStatusSequence(statuses: MergeReadyStatus[]) {
   let index = 0;
   return vi.fn(async (_options?: unknown) => statuses[Math.min(index++, statuses.length - 1)]!);
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+
+  return { promise, resolve, reject };
 }
 
 describe('merge-ready watch helpers', () => {
@@ -662,6 +680,110 @@ describe('merge-ready watch loop', () => {
     }
   });
 
+  it('does not require repair handoff support for observe-only URL watches', async () => {
+    const ctx = createWatchContext();
+    const checkDirtyWorkingTree = vi.fn(async () => ({ ok: true as const, dirty: false }));
+
+    const start = startMergeReadyWatch({
+      api: {},
+      ctx,
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
+      intervalSeconds: 30,
+      url: RUNTIME_URL_TARGET.url,
+      dependencies: {
+        getStatus: createStatusSequence([createUrlCiFailingStatus()]),
+        sleep: vi.fn(async () => undefined),
+        syncStatusBar: vi.fn(),
+        checkDirtyWorkingTree,
+        maxIterations: 1,
+      },
+    });
+
+    expect(start).toMatchObject({ ok: true, level: 'info' });
+    if (!start.ok) {
+      return;
+    }
+
+    await expect(start.promise).resolves.toEqual({ kind: 'stopped', reason: 'max_iterations' });
+    expect(checkDirtyWorkingTree).not.toHaveBeenCalled();
+    expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(
+      MERGE_READY_WATCH_STATUS_KEY,
+      expect.stringContaining('Watching #64 · Required checks are failing'),
+    );
+  });
+
+  it('aborts before sync or repair side effects when cancellation lands during the status poll', async () => {
+    const ctx = createWatchContext();
+    const abortController = new AbortController();
+    const statusPoll = createDeferred<MergeReadyStatus>();
+    const syncStatusBar = vi.fn();
+    const checkDirtyWorkingTree = vi.fn(async () => ({ ok: true as const, dirty: false }));
+    const sendUserMessage = vi.fn(
+      async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
+    );
+
+    const result = runMergeReadyWatchLoop({
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
+      api: { sendUserMessage },
+      ctx,
+      intervalSeconds: 30,
+      signal: abortController.signal,
+      dependencies: {
+        getStatus: vi.fn(() => statusPoll.promise),
+        sleep: vi.fn(async () => undefined),
+        syncStatusBar,
+        checkDirtyWorkingTree,
+      },
+    });
+
+    abortController.abort();
+    statusPoll.resolve(createCiFailingStatus());
+
+    await expect(result).resolves.toEqual({ kind: 'aborted', reason: 'aborted' });
+    expect(syncStatusBar).not.toHaveBeenCalled();
+    expect(checkDirtyWorkingTree).not.toHaveBeenCalled();
+    expect(sendUserMessage).not.toHaveBeenCalled();
+    expect(vi.mocked(ctx.ui.notify)).not.toHaveBeenCalled();
+    expect(vi.mocked(ctx.ui.setStatus)).not.toHaveBeenCalled();
+  });
+
+  it('aborts before repair side effects when cancellation lands during dirty-worktree preflight', async () => {
+    const ctx = createWatchContext();
+    const abortController = new AbortController();
+    const dirtyPreflight = createDeferred<{ ok: true; dirty: false }>();
+    const getStatus = vi.fn(async () => createCiFailingStatus());
+    const syncStatusBar = vi.fn();
+    const sendUserMessage = vi.fn(
+      async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
+    );
+
+    const result = runMergeReadyWatchLoop({
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
+      api: { sendUserMessage },
+      ctx,
+      intervalSeconds: 30,
+      signal: abortController.signal,
+      dependencies: {
+        getStatus,
+        sleep: vi.fn(async () => undefined),
+        syncStatusBar,
+        checkDirtyWorkingTree: vi.fn(() => dirtyPreflight.promise),
+      },
+    });
+
+    await Promise.resolve();
+    abortController.abort();
+    dirtyPreflight.resolve({ ok: true, dirty: false });
+
+    await expect(result).resolves.toEqual({ kind: 'aborted', reason: 'aborted' });
+    expect(getStatus).toHaveBeenCalledTimes(1);
+    expect(syncStatusBar).toHaveBeenCalledTimes(1);
+    expect(sendUserMessage).not.toHaveBeenCalled();
+    expect(vi.mocked(ctx.waitForIdle)).not.toHaveBeenCalled();
+    expect(vi.mocked(ctx.ui.notify)).not.toHaveBeenCalled();
+    expect(vi.mocked(ctx.ui.setStatus)).not.toHaveBeenCalled();
+  });
+
   it('sends one repair for ci_failing, waits for ci_running, and syncs the ambient status bar', async () => {
     const ctx = createWatchContext();
     const getStatus = createStatusSequence([createCiFailingStatus(), createCiRunningStatus()]);
@@ -790,35 +912,43 @@ describe('merge-ready watch loop', () => {
     ]);
   });
 
-  it('does not sync the ambient status bar for URL-targeted watches', async () => {
+  it('keeps URL-targeted repairable watches observe-only while still routing through the status-bar primitive', async () => {
     const ctx = createWatchContext();
-    const syncStatusBar = vi.fn();
+    const sendUserMessage = vi.fn(
+      async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
+    );
+    const syncStatusBar = vi.fn((options: Parameters<typeof syncMergeReadyStatusBar>[0]) =>
+      syncMergeReadyStatusBar(options),
+    );
+    const checkDirtyWorkingTree = vi.fn(async () => ({ ok: true as const, dirty: false }));
 
     const result = await runMergeReadyWatchLoop({
       exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
-      api: {
-        sendUserMessage: vi.fn(
-          async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
-        ),
-      },
+      api: { sendUserMessage },
       ctx,
       intervalSeconds: 45,
       signal: new AbortController().signal,
       url: RUNTIME_URL_TARGET.url,
       dependencies: {
-        getStatus: createStatusSequence([createUrlReadyStatus()]),
+        getStatus: createStatusSequence([createUrlCiFailingStatus()]),
         sleep: vi.fn(async () => undefined),
         syncStatusBar,
-        checkDirtyWorkingTree: async () => ({ ok: true, dirty: false }),
+        checkDirtyWorkingTree,
         maxIterations: 1,
       },
     });
 
     expect(result).toEqual({ kind: 'stopped', reason: 'max_iterations' });
-    expect(syncStatusBar).not.toHaveBeenCalled();
+    expect(syncStatusBar).toHaveBeenCalledTimes(1);
+    expect(checkDirtyWorkingTree).not.toHaveBeenCalled();
+    expect(sendUserMessage).not.toHaveBeenCalled();
+    expect(vi.mocked(ctx.ui.setStatus)).not.toHaveBeenCalledWith(
+      MERGE_READY_STATUS_BAR_KEY,
+      expect.anything(),
+    );
     expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(
       MERGE_READY_WATCH_STATUS_KEY,
-      expect.stringContaining('Watching #64 · Ready to merge'),
+      expect.stringContaining('Watching #64 · Required checks are failing'),
     );
   });
 

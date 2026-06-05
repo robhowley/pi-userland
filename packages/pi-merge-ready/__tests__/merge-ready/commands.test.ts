@@ -735,7 +735,7 @@ describe('merge-ready command', () => {
     expect(ctx.ui.setStatus).toHaveBeenCalledWith(MERGE_READY_WATCH_STATUS_KEY, undefined);
   });
 
-  it('does not sync the ambient status bar for URL-targeted watch polls', async () => {
+  it('keeps URL-targeted watch polls observe-only', async () => {
     const url = 'https://github.com/shopify/pi/pull/64';
     const { api, assertDone, getCommand } = createMockAPI([
       {
@@ -751,6 +751,16 @@ describe('merge-ready command', () => {
               url,
               headRefName: 'feat/explicit-pr-url',
               baseRefName: 'main',
+              statusCheckRollup: [
+                {
+                  __typename: 'CheckRun',
+                  workflowName: 'ci',
+                  name: 'unit',
+                  status: 'COMPLETED',
+                  conclusion: 'FAILURE',
+                  detailsUrl: 'https://github.example/checks/unit',
+                },
+              ],
             }),
           )}\n`,
         },
@@ -775,13 +785,14 @@ describe('merge-ready command', () => {
     await run;
 
     assertDone();
+    expect(api.sendUserMessage).not.toHaveBeenCalled();
     expect(ctx.ui.setStatus).not.toHaveBeenCalledWith(
       MERGE_READY_STATUS_BAR_KEY,
       expect.anything(),
     );
     expect(ctx.ui.setStatus).toHaveBeenCalledWith(
       MERGE_READY_WATCH_STATUS_KEY,
-      expect.stringContaining('Watching #64 · Ready to merge'),
+      expect.stringContaining('Watching #64 · Required checks are failing'),
     );
   });
 

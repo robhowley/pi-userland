@@ -109,7 +109,7 @@ Important:
 
 ## Watch-triggered turns
 
-`/merge-ready watch` may invoke this skill with a status snapshot already provided. Use that snapshot only when it is clearly fresh and the target is already confirmed.
+Current-branch `/merge-ready watch` runs may invoke this skill with a status snapshot already provided. Explicit `/merge-ready watch --url ...` runs are observe-only and should not queue repair turns. Use any provided snapshot only when it is clearly fresh and the target is already confirmed.
 
 - If the snapshot is stale, incomplete, or the target still needs confirmation, call `merge_ready_status({})` or `merge_ready_status({ url })`.
 - Work only from the provided or freshly returned `openItems`. `details` rows and detail URLs are provenance only.

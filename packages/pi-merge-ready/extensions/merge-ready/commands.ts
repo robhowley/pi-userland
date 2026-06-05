@@ -6,6 +6,7 @@ import {
   MERGE_READY_WATCH_DEFAULT_INTERVAL_SECONDS,
   MERGE_READY_WATCH_MAX_INTERVAL_SECONDS,
   MERGE_READY_WATCH_MIN_INTERVAL_SECONDS,
+  parseMergeReadyWatchIntervalSeconds,
   registerMergeReadyWatchLifecycle,
   startMergeReadyWatch,
 } from './watch.js';
@@ -150,15 +151,13 @@ export function registerMergeReadyCommand(pi: MergeReadyCommandAPI): void {
         timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
       });
 
-      if (status.target.mode !== 'url') {
-        syncMergeReadyStatusBar({
-          ctx: {
-            cwd: ctx.cwd,
-            ui: ctx.ui,
-          },
-          status,
-        });
-      }
+      syncMergeReadyStatusBar({
+        ctx: {
+          cwd: ctx.cwd,
+          ui: ctx.ui,
+        },
+        status,
+      });
 
       if (parsedArgs.json) {
         ctx.ui.notify(JSON.stringify(status, null, 2), 'info');
@@ -326,26 +325,36 @@ function parseMergeReadyWatchCommandArgs(tokens: string[]): MergeReadyParsedComm
         return createCommandUsageError(`Missing value for ${INTERVAL_FLAG}`);
       }
 
-      if (!/^\d+$/u.test(value)) {
-        return createCommandUsageError(
-          `Invalid value for ${INTERVAL_FLAG}: ${JSON.stringify(value)}. Expected a positive integer number of seconds`,
-        );
+      const parsedIntervalSeconds = parseMergeReadyWatchIntervalSeconds(value);
+      if (!parsedIntervalSeconds.ok) {
+        if (parsedIntervalSeconds.message === 'Watch interval must be a whole number of seconds.') {
+          return createCommandUsageError(
+            `Invalid value for ${INTERVAL_FLAG}: ${JSON.stringify(value)}. Expected a positive integer number of seconds`,
+          );
+        }
+
+        if (
+          parsedIntervalSeconds.message ===
+          `Watch interval must be at least ${String(MERGE_READY_WATCH_MIN_INTERVAL_SECONDS)} seconds.`
+        ) {
+          return createCommandUsageError(
+            `${INTERVAL_FLAG} must be at least ${String(MERGE_READY_WATCH_MIN_INTERVAL_SECONDS)} seconds`,
+          );
+        }
+
+        if (
+          parsedIntervalSeconds.message ===
+          `Watch interval must be at most ${String(MERGE_READY_WATCH_MAX_INTERVAL_SECONDS)} seconds.`
+        ) {
+          return createCommandUsageError(
+            `${INTERVAL_FLAG} must be at most ${String(MERGE_READY_WATCH_MAX_INTERVAL_SECONDS)} seconds`,
+          );
+        }
+
+        return createCommandUsageError(parsedIntervalSeconds.message);
       }
 
-      const parsedIntervalSeconds = Number.parseInt(value, 10);
-      if (parsedIntervalSeconds < MERGE_READY_WATCH_MIN_INTERVAL_SECONDS) {
-        return createCommandUsageError(
-          `${INTERVAL_FLAG} must be at least ${String(MERGE_READY_WATCH_MIN_INTERVAL_SECONDS)} seconds`,
-        );
-      }
-
-      if (parsedIntervalSeconds > MERGE_READY_WATCH_MAX_INTERVAL_SECONDS) {
-        return createCommandUsageError(
-          `${INTERVAL_FLAG} must be at most ${String(MERGE_READY_WATCH_MAX_INTERVAL_SECONDS)} seconds`,
-        );
-      }
-
-      intervalSeconds = parsedIntervalSeconds;
+      intervalSeconds = parsedIntervalSeconds.value;
       hasInterval = true;
       index += 1;
       continue;
