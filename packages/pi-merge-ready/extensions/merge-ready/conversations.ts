@@ -101,7 +101,6 @@ const GH_GRAPHQL_REVIEW_THREADS_QUERY = [
   'pullRequest(number: $number) {',
   `latestOpinionatedReviews(first: ${String(REVIEW_THREADS_PAGE_SIZE)}) {`,
   'nodes { author { login } state submittedAt url }',
-  'pageInfo { hasNextPage }',
   '}',
   `reviewThreads(first: ${String(REVIEW_THREADS_PAGE_SIZE)}) {`,
   'nodes {',

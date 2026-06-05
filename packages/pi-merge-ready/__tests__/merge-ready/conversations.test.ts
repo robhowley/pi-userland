@@ -20,7 +20,6 @@ const GH_GRAPHQL_REVIEW_THREADS_QUERY = [
   'pullRequest(number: $number) {',
   'latestOpinionatedReviews(first: 100) {',
   'nodes { author { login } state submittedAt url }',
-  'pageInfo { hasNextPage }',
   '}',
   'reviewThreads(first: 100) {',
   'nodes {',
@@ -89,9 +88,6 @@ function createConversationPayload(pullRequestOverrides: Record<string, unknown>
         pullRequest: {
           latestOpinionatedReviews: {
             nodes: [],
-            pageInfo: {
-              hasNextPage: false,
-            },
           },
           reviewThreads: {
             nodes: [],

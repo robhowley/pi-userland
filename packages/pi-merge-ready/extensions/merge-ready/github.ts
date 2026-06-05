@@ -3,7 +3,6 @@ import type {
   MergeReadyCheckDetail,
   MergeReadyCheckDetails,
   MergeReadyChecksSignal,
-  MergeReadyOpenItemDetail,
   MergeReadyRepositoryIdentity,
   MergeReadyReviewSignal,
   MergeReadyUrlTarget,
@@ -56,7 +55,6 @@ export type MergeReadyGitHubReviewSummary = {
   totalCount: number;
   latestByAuthorCount: number;
   latestByAuthor: MergeReadyGitHubReviewByAuthor[];
-  changesRequestedDetails?: MergeReadyOpenItemDetail[];
 };
 
 export type MergeReadyGitHubReviewDecisionSignal =
