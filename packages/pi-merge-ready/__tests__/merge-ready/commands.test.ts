@@ -7,6 +7,7 @@ import mergeReadyExtension, {
   MERGE_READY_STATUS_BAR_KEY,
   MERGE_READY_STATUS_BAR_TTL_MS,
   MERGE_READY_WATCH_STATUS_KEY,
+  MERGE_READY_WATCH_STOP_SHORTCUT,
   createMergeReadyStatus,
   parseMergeReadyCommandArgs,
   refreshMergeReadyStatusBar,
@@ -34,6 +35,7 @@ type CommandEvent = 'session_start' | 'turn_end' | 'session_shutdown' | 'agent_e
 function createMockAPI(expectedCalls: ExpectedExecCall[] = []): {
   api: MergeReadyCommandAPI & {
     on: ReturnType<typeof vi.fn>;
+    registerShortcut: ReturnType<typeof vi.fn>;
     registerTool: ReturnType<typeof vi.fn>;
     sendUserMessage: ReturnType<typeof vi.fn>;
   };
@@ -42,15 +44,47 @@ function createMockAPI(expectedCalls: ExpectedExecCall[] = []): {
     name: string,
   ) => ((args: string, ctx: MergeReadyCommandContext) => Promise<void>) | undefined;
   getHandler: (event: CommandEvent) => ((event: unknown, ctx: unknown) => unknown) | undefined;
+  getShortcutHandler: (
+    shortcut: string,
+  ) =>
+    | ((ctx: {
+        isIdle: () => boolean;
+        hasPendingMessages: () => boolean;
+        abort: () => void;
+      }) => Promise<void> | void)
+    | undefined;
 } {
   let index = 0;
   const handlers = new Map<CommandEvent, (event: unknown, ctx: unknown) => unknown>();
+  const shortcutHandlers = new Map<
+    string,
+    (ctx: {
+      isIdle: () => boolean;
+      hasPendingMessages: () => boolean;
+      abort: () => void;
+    }) => Promise<void> | void
+  >();
 
   const api = {
     on: vi.fn((event: CommandEvent, handler: (event: unknown, ctx: unknown) => unknown) => {
       handlers.set(event, handler);
     }),
     registerCommand: vi.fn(),
+    registerShortcut: vi.fn(
+      (
+        shortcut: string,
+        options: {
+          description?: string;
+          handler: (ctx: {
+            isIdle: () => boolean;
+            hasPendingMessages: () => boolean;
+            abort: () => void;
+          }) => Promise<void> | void;
+        },
+      ) => {
+        shortcutHandlers.set(shortcut, options.handler);
+      },
+    ),
     registerTool: vi.fn(),
     sendUserMessage: vi.fn(async () => undefined),
     exec: vi.fn(
@@ -96,12 +130,16 @@ function createMockAPI(expectedCalls: ExpectedExecCall[] = []): {
     },
     getCommand,
     getHandler: (event: CommandEvent) => handlers.get(event),
+    getShortcutHandler: (shortcut: string) => shortcutHandlers.get(shortcut),
   };
 }
 
-function createCommandContext(options: { signal?: AbortSignal } = {}): MergeReadyCommandContext {
+function createCommandContext(
+  options: { mode?: MergeReadyCommandContext['mode']; signal?: AbortSignal } = {},
+): MergeReadyCommandContext {
   return {
     cwd: '/repo',
+    mode: options.mode ?? 'tui',
     isIdle: vi.fn(() => true),
     waitForIdle: vi.fn(async () => undefined),
     ...(options.signal === undefined ? {} : { signal: options.signal }),
@@ -717,6 +755,37 @@ describe('merge-ready command', () => {
     ]);
   });
 
+  it('registers the Ctrl-Shift-S shortcut at extension load', () => {
+    const { api } = createMockAPI();
+
+    mergeReadyExtension(api);
+
+    expect(api.registerShortcut).toHaveBeenCalledWith(
+      MERGE_READY_WATCH_STOP_SHORTCUT,
+      expect.objectContaining({
+        description: 'Stop active merge-ready watch',
+        handler: expect.any(Function),
+      }),
+    );
+  });
+
+  it('rejects watch mode outside TUI because stop is shortcut-based', async () => {
+    const { api, getCommand } = createMockAPI();
+    mergeReadyExtension(api);
+    const handler = getCommand(MERGE_READY_COMMAND_NAME);
+    const ctx = createCommandContext({ mode: 'rpc' });
+
+    await handler?.('watch --interval 30', ctx);
+
+    expect(vi.mocked(ctx.ui.notify).mock.calls).toEqual([
+      [
+        'Merge-ready watch currently requires TUI mode because stop is provided via the Ctrl-Shift-S shortcut.',
+        'error',
+      ],
+    ]);
+    expect(getActiveMergeReadyWatch()).toBeNull();
+  });
+
   it('keeps watch foreground until the command signal is aborted', async () => {
     const { api, assertDone, getCommand } = createMockAPI([
       ...createGitDiscoveryCalls({ timeout: MERGE_READY_COMMAND_TIMEOUT_MS }),
@@ -743,7 +812,7 @@ describe('merge-ready command', () => {
     assertDone();
     expect(getActiveMergeReadyWatch()).toBeNull();
     expect(vi.mocked(ctx.ui.notify)).toHaveBeenCalledWith(
-      'Watching merge readiness for current branch PR every 15s. Cancel the foreground command to stop.',
+      'Watching merge readiness for current branch PR every 15s. Press Ctrl-Shift-S to stop.',
       'info',
     );
     expect(ctx.ui.setStatus).toHaveBeenCalledWith(MERGE_READY_WATCH_STATUS_KEY, undefined);

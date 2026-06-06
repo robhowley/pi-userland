@@ -8,6 +8,7 @@ import {
   MERGE_READY_WATCH_MAX_INTERVAL_SECONDS,
   MERGE_READY_WATCH_MIN_INTERVAL_SECONDS,
   MERGE_READY_WATCH_STATUS_KEY,
+  MERGE_READY_WATCH_STOP_SHORTCUT,
   classifyMergeReadyWatchStatus,
   createMergeReadyWatchBlockerSignature,
   createMergeReadyWatchRepairPrompt,
@@ -15,11 +16,13 @@ import {
   parseMergeReadyWatchIntervalSeconds,
   refreshMergeReadyStatusBar,
   registerMergeReadyWatchLifecycle,
+  registerMergeReadyWatchShortcut,
   resetMergeReadyStatusBarCache,
   resetMergeReadyWatchState,
   runMergeReadyWatchLoop,
   sleepWithAbort,
   startMergeReadyWatch,
+  stopActiveMergeReadyWatch,
   syncMergeReadyStatusBar,
   type MergeReadyCommandContext,
   type MergeReadyOpenItem,
@@ -27,6 +30,7 @@ import {
   type MergeReadySignals,
   type MergeReadyStatus,
   type MergeReadyTarget,
+  type MergeReadyWatchShortcutContext,
 } from '../../extensions/merge-ready/index.js';
 import { CURRENT_BRANCH_TARGET } from './test-fixtures.js';
 
@@ -273,12 +277,23 @@ function createStatusAmbiguousStatus(): MergeReadyStatus {
 function createWatchContext(): MergeReadyCommandContext {
   return {
     cwd: '/repo',
+    mode: 'tui',
     isIdle: vi.fn(() => true),
     waitForIdle: vi.fn(async () => undefined),
     ui: {
       notify: vi.fn(),
       setStatus: vi.fn(),
     },
+  };
+}
+
+function createShortcutContext(
+  options: { idle?: boolean; pendingMessages?: boolean } = {},
+): MergeReadyWatchShortcutContext & { abort: ReturnType<typeof vi.fn> } {
+  return {
+    isIdle: vi.fn(() => options.idle ?? true),
+    hasPendingMessages: vi.fn(() => options.pendingMessages ?? false),
+    abort: vi.fn(),
   };
 }
 
@@ -312,6 +327,28 @@ function createWatchLifecycleAPI(sendUserMessage: ReturnType<typeof vi.fn>) {
   return {
     api,
     getHandler: (event: WatchLifecycleEvent) => handlers.get(event),
+  };
+}
+
+function createWatchShortcutAPI() {
+  const handlers = new Map<string, (ctx: MergeReadyWatchShortcutContext) => Promise<void> | void>();
+  const api = {
+    registerShortcut: vi.fn(
+      (
+        shortcut: string,
+        options: {
+          description?: string;
+          handler: (ctx: MergeReadyWatchShortcutContext) => Promise<void> | void;
+        },
+      ) => {
+        handlers.set(shortcut, options.handler);
+      },
+    ),
+  };
+
+  return {
+    api,
+    getHandler: (shortcut: string) => handlers.get(shortcut),
   };
 }
 
@@ -747,6 +784,196 @@ describe('merge-ready watch helpers', () => {
   });
 });
 
+describe('merge-ready watch shortcut', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(async () => {
+    await resetMergeReadyWatchState();
+    vi.useRealTimers();
+  });
+
+  it('registers Ctrl-Shift-S as the stop shortcut', () => {
+    const { api, getHandler } = createWatchShortcutAPI();
+
+    registerMergeReadyWatchShortcut(api);
+
+    expect(api.registerShortcut).toHaveBeenCalledWith(
+      MERGE_READY_WATCH_STOP_SHORTCUT,
+      expect.objectContaining({
+        description: 'Stop active merge-ready watch',
+        handler: expect.any(Function),
+      }),
+    );
+    expect(getHandler(MERGE_READY_WATCH_STOP_SHORTCUT)).toEqual(expect.any(Function));
+  });
+
+  it('silently no-ops when the shortcut fires with no active watch', async () => {
+    const { api, getHandler } = createWatchShortcutAPI();
+    registerMergeReadyWatchShortcut(api);
+    const handler = getHandler(MERGE_READY_WATCH_STOP_SHORTCUT);
+    const shortcutCtx = createShortcutContext({ idle: false, pendingMessages: true });
+
+    await handler?.(shortcutCtx);
+
+    expect(getActiveMergeReadyWatch()).toBeNull();
+    expect(shortcutCtx.abort).not.toHaveBeenCalled();
+    expect(stopActiveMergeReadyWatch()).toEqual({ stopped: false });
+  });
+
+  it('stops an active watch without aborting an idle session', async () => {
+    const ctx = createWatchContext();
+    const { api, getHandler } = createWatchShortcutAPI();
+    registerMergeReadyWatchShortcut(api);
+    const handler = getHandler(MERGE_READY_WATCH_STOP_SHORTCUT);
+
+    const start = startMergeReadyWatch({
+      api: {
+        sendUserMessage: vi.fn(async () => undefined),
+      },
+      ctx,
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
+      intervalSeconds: 30,
+      dependencies: {
+        getStatus: createStatusSequence([createReadyStatus()]),
+        sleep: vi.fn((_ms: number, signal?: AbortSignal) => {
+          if (signal?.aborted) {
+            const error = new Error('Aborted');
+            error.name = 'AbortError';
+            return Promise.reject(error);
+          }
+
+          return new Promise<void>((_resolve, reject) => {
+            signal?.addEventListener(
+              'abort',
+              () => {
+                const error = new Error('Aborted');
+                error.name = 'AbortError';
+                reject(error);
+              },
+              { once: true },
+            );
+          });
+        }),
+        syncStatusBar: vi.fn(),
+        checkDirtyWorkingTree: async () => ({ ok: true, dirty: false }),
+      },
+    });
+
+    expect(start.ok).toBe(true);
+    if (!start.ok) {
+      return;
+    }
+
+    await flushMicrotasks();
+    expect(getActiveMergeReadyWatch()).not.toBeNull();
+
+    const shortcutCtx = createShortcutContext();
+    await handler?.(shortcutCtx);
+
+    expect(shortcutCtx.abort).not.toHaveBeenCalled();
+    expect(getActiveMergeReadyWatch()).toBeNull();
+    expect(stopActiveMergeReadyWatch()).toEqual({ stopped: false });
+    await expect(start.promise).resolves.toEqual({ kind: 'aborted', reason: 'aborted' });
+  });
+
+  it('aborts the session when the shortcut fires during non-idle active watch work', async () => {
+    const ctx = createWatchContext();
+    const { api, getHandler } = createWatchShortcutAPI();
+    registerMergeReadyWatchShortcut(api);
+    const handler = getHandler(MERGE_READY_WATCH_STOP_SHORTCUT);
+
+    const start = startMergeReadyWatch({
+      api: {
+        sendUserMessage: vi.fn(async () => undefined),
+      },
+      ctx,
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
+      intervalSeconds: 30,
+      dependencies: {
+        getStatus: createStatusSequence([createReadyStatus()]),
+        sleep: vi.fn((_ms: number, signal?: AbortSignal) => {
+          if (signal?.aborted) {
+            const error = new Error('Aborted');
+            error.name = 'AbortError';
+            return Promise.reject(error);
+          }
+
+          return new Promise<void>((_resolve, reject) => {
+            signal?.addEventListener(
+              'abort',
+              () => {
+                const error = new Error('Aborted');
+                error.name = 'AbortError';
+                reject(error);
+              },
+              { once: true },
+            );
+          });
+        }),
+        syncStatusBar: vi.fn(),
+        checkDirtyWorkingTree: async () => ({ ok: true, dirty: false }),
+      },
+    });
+
+    expect(start.ok).toBe(true);
+    if (!start.ok) {
+      return;
+    }
+
+    await flushMicrotasks();
+    expect(getActiveMergeReadyWatch()).not.toBeNull();
+
+    const shortcutCtx = createShortcutContext({ idle: false, pendingMessages: false });
+    await handler?.(shortcutCtx);
+
+    expect(shortcutCtx.abort).toHaveBeenCalledTimes(1);
+    expect(getActiveMergeReadyWatch()).toBeNull();
+    expect(stopActiveMergeReadyWatch()).toEqual({ stopped: false });
+    await expect(start.promise).resolves.toEqual({ kind: 'aborted', reason: 'aborted' });
+  });
+
+  it('stops a repair_queued watch and aborts pending repair work', async () => {
+    const ctx = createWatchContext();
+    const { api, getHandler } = createWatchShortcutAPI();
+    registerMergeReadyWatchShortcut(api);
+    const handler = getHandler(MERGE_READY_WATCH_STOP_SHORTCUT);
+    const sendUserMessage = vi.fn(
+      async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
+    );
+
+    const start = startMergeReadyWatch({
+      api: { sendUserMessage },
+      ctx,
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
+      intervalSeconds: 30,
+      dependencies: {
+        getStatus: createStatusSequence([createCiFailingStatus()]),
+        sleep: vi.fn(async () => undefined),
+        syncStatusBar: vi.fn(),
+        checkDirtyWorkingTree: async () => ({ ok: true, dirty: false }),
+      },
+    });
+
+    expect(start.ok).toBe(true);
+    if (!start.ok) {
+      return;
+    }
+
+    await flushMicrotasks();
+    expect(getActiveMergeReadyWatch()?.phase).toBe('repair_queued');
+
+    const shortcutCtx = createShortcutContext({ pendingMessages: true });
+    await handler?.(shortcutCtx);
+
+    expect(shortcutCtx.abort).toHaveBeenCalledTimes(1);
+    expect(getActiveMergeReadyWatch()).toBeNull();
+    expect(stopActiveMergeReadyWatch()).toEqual({ stopped: false });
+    await expect(start.promise).resolves.toEqual({ kind: 'aborted', reason: 'aborted' });
+  });
+});
+
 describe('merge-ready watch loop', () => {
   beforeEach(() => {
     resetMergeReadyStatusBarCache();
@@ -808,7 +1035,7 @@ describe('merge-ready watch loop', () => {
       ok: false,
       level: 'warning',
       message:
-        'Merge-ready watch is already active for current branch PR. Cancel the foreground watch before starting another.',
+        'Merge-ready watch is already active for current branch PR. Press Ctrl-Shift-S to stop it before starting another.',
     });
 
     await resetMergeReadyWatchState();

@@ -93,7 +93,9 @@ Start a watcher with:
 /merge-ready watch --url https://github.com/OWNER/REPO/pull/64 --interval 30
 ```
 
-`watch` is a long-lived foreground command that polls merge readiness on an interval.
+`watch` is a long-lived foreground TUI command that polls merge readiness on an interval.
+Press `Ctrl-Shift-S` in the TUI to stop it.
+Outside the TUI, `watch` is rejected because stop is shortcut-based.
 
 It can:
 
@@ -117,7 +119,7 @@ Watch actionability:
 
 Watch safety:
 
-- Only one foreground watcher is active at a time.
+- Only one foreground TUI watcher is active at a time; press `Ctrl-Shift-S` to stop it.
 - Repeated-blocker guard: after one repair attempt for a blocker, `watch` does not keep retrying it without a fresh status change or explicit restart.
 - Dirty-worktree preflight: current-branch `watch` repairs refuse to run when local changes are already present in the ambient checkout.
 - Explicit `--url` watch repairs must not mutate the ambient checkout: they are instructed to use an isolated worktree for the PR head repo/branch and skip ambient dirty-worktree preflight.

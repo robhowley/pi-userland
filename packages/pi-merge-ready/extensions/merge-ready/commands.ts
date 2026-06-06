@@ -6,8 +6,10 @@ import {
   MERGE_READY_WATCH_DEFAULT_INTERVAL_SECONDS,
   MERGE_READY_WATCH_MAX_INTERVAL_SECONDS,
   MERGE_READY_WATCH_MIN_INTERVAL_SECONDS,
+  MERGE_READY_WATCH_STOP_SHORTCUT_LABEL,
   parseMergeReadyWatchIntervalSeconds,
   registerMergeReadyWatchLifecycle,
+  registerMergeReadyWatchShortcut,
   startMergeReadyWatch,
 } from './watch.js';
 import type { MergeReadyExec, MergeReadyExecOptions, MergeReadyExecResult } from './git.js';
@@ -26,6 +28,7 @@ export type MergeReadyCommandNotificationLevel = 'info' | 'warning' | 'error';
 
 export type MergeReadyCommandContext = {
   cwd: string;
+  mode?: 'tui' | 'rpc' | 'json' | 'print';
   isIdle?: () => boolean;
   waitForIdle?: () => Promise<void>;
   signal?: AbortSignal;
@@ -98,11 +101,23 @@ type MergeReadyCommandWatchRuntimeAPI = MergeReadyCommandAPI & {
     event: 'session_shutdown' | 'agent_end',
     handler: (event: unknown, ctx: unknown) => void | Promise<void>,
   ) => void;
+  registerShortcut?: (
+    shortcut: string,
+    options: {
+      description?: string;
+      handler: (ctx: {
+        isIdle: () => boolean;
+        hasPendingMessages: () => boolean;
+        abort: () => void;
+      }) => Promise<void> | void;
+    },
+  ) => void;
 };
 
 export function registerMergeReadyCommand(pi: MergeReadyCommandAPI): void {
   const watchPi = pi as MergeReadyCommandWatchRuntimeAPI;
   registerMergeReadyWatchLifecycle(watchPi);
+  registerMergeReadyWatchShortcut(watchPi);
 
   pi.registerCommand(MERGE_READY_COMMAND_NAME, {
     description: 'Show merge readiness for the current pull request or an explicit GitHub PR URL',
@@ -128,6 +143,14 @@ export function registerMergeReadyCommand(pi: MergeReadyCommandAPI): void {
       const exec = createCommandExec(pi, ctx);
 
       if (parsedArgs.mode === 'watch') {
+        if (ctx.mode !== undefined && ctx.mode !== 'tui') {
+          ctx.ui.notify(
+            `Merge-ready watch currently requires TUI mode because stop is provided via the ${MERGE_READY_WATCH_STOP_SHORTCUT_LABEL} shortcut.`,
+            'error',
+          );
+          return;
+        }
+
         const started = startMergeReadyWatch({
           api: watchPi,
           ctx,

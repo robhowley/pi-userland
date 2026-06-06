@@ -15,6 +15,8 @@ export const MERGE_READY_WATCH_STATUS_KEY = 'merge-ready-watch';
 export const MERGE_READY_WATCH_DEFAULT_INTERVAL_SECONDS = 60;
 export const MERGE_READY_WATCH_MIN_INTERVAL_SECONDS = 15;
 export const MERGE_READY_WATCH_MAX_INTERVAL_SECONDS = 3_600;
+export const MERGE_READY_WATCH_STOP_SHORTCUT = 'ctrl+shift+s';
+export const MERGE_READY_WATCH_STOP_SHORTCUT_LABEL = 'Ctrl-Shift-S';
 
 export const MERGE_READY_WATCH_REPAIR_OPEN_ITEM_IDS = [
   'branch_out_of_date',
@@ -94,6 +96,22 @@ export type MergeReadyWatchAPI = {
   on?: (
     event: 'session_shutdown' | 'agent_end',
     handler: (event: unknown, ctx: unknown) => void | Promise<void>,
+  ) => void;
+};
+
+export type MergeReadyWatchShortcutContext = {
+  isIdle: () => boolean;
+  hasPendingMessages: () => boolean;
+  abort: () => void;
+};
+
+export type MergeReadyWatchShortcutAPI = {
+  registerShortcut?: (
+    shortcut: string,
+    options: {
+      description?: string;
+      handler: (ctx: MergeReadyWatchShortcutContext) => Promise<void> | void;
+    },
   ) => void;
 };
 
@@ -194,6 +212,16 @@ export type ActiveMergeReadyWatcher = {
   pendingRepairTurn: MergeReadyWatchDeferred<void> | null;
 };
 
+export type StopActiveMergeReadyWatchResult =
+  | {
+      stopped: true;
+      targetLabel: string;
+      phase: MergeReadyWatchPhase;
+    }
+  | {
+      stopped: false;
+    };
+
 type MergeReadyWatchDeferred<T> = {
   promise: Promise<T>;
   resolve: (value: T | PromiseLike<T>) => void;
@@ -224,10 +252,26 @@ const pendingWatcherPromises = new Set<Promise<MergeReadyWatchResult>>();
 
 export function registerMergeReadyWatchLifecycle(api: MergeReadyWatchAPI): void {
   api.on?.('session_shutdown', () => {
-    abortActiveMergeReadyWatch();
+    stopActiveMergeReadyWatch();
   });
   api.on?.('agent_end', () => {
     resolveActiveMergeReadyWatchAgentEnd();
+  });
+}
+
+export function registerMergeReadyWatchShortcut(api: MergeReadyWatchShortcutAPI): void {
+  api.registerShortcut?.(MERGE_READY_WATCH_STOP_SHORTCUT, {
+    description: 'Stop active merge-ready watch',
+    handler: (ctx) => {
+      const stop = stopActiveMergeReadyWatch();
+      if (!stop.stopped) {
+        return;
+      }
+
+      if (!ctx.isIdle() || ctx.hasPendingMessages()) {
+        ctx.abort();
+      }
+    },
   });
 }
 
@@ -236,7 +280,7 @@ export function getActiveMergeReadyWatch(): ActiveMergeReadyWatcher | null {
 }
 
 export async function resetMergeReadyWatchState(): Promise<void> {
-  abortActiveMergeReadyWatch();
+  stopActiveMergeReadyWatch();
   nextWatcherId = 1;
   await Promise.allSettled([...pendingWatcherPromises]);
 }
@@ -406,7 +450,7 @@ export function startMergeReadyWatch(
     return {
       ok: false,
       level: 'warning',
-      message: `Merge-ready watch is already active for ${activeWatcher.targetLabel}. Cancel the foreground watch before starting another.`,
+      message: `Merge-ready watch is already active for ${activeWatcher.targetLabel}. Press ${MERGE_READY_WATCH_STOP_SHORTCUT_LABEL} to stop it before starting another.`,
     };
   }
 
@@ -486,24 +530,31 @@ export function startMergeReadyWatch(
   return {
     ok: true,
     level: 'info',
-    message: `Watching merge readiness for ${watcher.targetLabel} every ${String(options.intervalSeconds)}s. Cancel the foreground command to stop.`,
+    message: `Watching merge readiness for ${watcher.targetLabel} every ${String(options.intervalSeconds)}s. Press ${MERGE_READY_WATCH_STOP_SHORTCUT_LABEL} to stop.`,
     promise,
   };
 }
 
-function abortActiveMergeReadyWatch(ctx?: MergeReadyWatchContext): void {
+export function stopActiveMergeReadyWatch(): StopActiveMergeReadyWatchResult {
   const watcher = activeWatcher;
+  if (!watcher) {
+    return { stopped: false };
+  }
+
   activeWatcher = null;
-  if (watcher?.pendingRepairTurn) {
+  const phase = watcher.phase;
+  if (watcher.pendingRepairTurn) {
     const pendingRepairTurn = watcher.pendingRepairTurn;
     watcher.pendingRepairTurn = null;
     pendingRepairTurn.reject(createAbortError('Aborted'));
   }
-  watcher?.abortController.abort();
+  watcher.abortController.abort();
 
-  if (ctx) {
-    setMergeReadyWatchStatus(ctx);
-  }
+  return {
+    stopped: true,
+    targetLabel: watcher.targetLabel,
+    phase,
+  };
 }
 
 function waitForActiveMergeReadyWatchAgentEnd(signal: AbortSignal): Promise<void> {
