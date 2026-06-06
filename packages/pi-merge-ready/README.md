@@ -1,8 +1,14 @@
 # pi-merge-ready
 
-A [Pi](https://pi.dev/) package that shows whether your current-branch PR or an exact GitHub PR URL is ready to merge, why it is blocked, and gives agents the context to fix what remains.
+A [Pi](https://pi.dev/) package for PR merge readiness: a current-branch status bar, `/merge-ready` status and watch commands, exact GitHub PR URL targeting, and bounded agent repair loops.
 
-It adds a current-branch status bar signal, `/merge-ready` status and watch commands, a `merge_ready_status({ url? })` agent tool, and a `merge-ready-loop` skill that lets agents work through reported blockers.
+It adds:
+
+- a current-branch status bar signal
+- `/merge-ready` for current-branch or exact-URL status
+- `/merge-ready watch` for polling plus bounded repair handoff
+- a `merge_ready_status({ url? })` agent tool
+- a `merge-ready-loop` skill for working the returned blockers
 
 ## Installation
 
@@ -41,7 +47,13 @@ Optional unresolved conversations are not blockers, but they can still appear as
 
 ### Slash command
 
-Use `/merge-ready` for a human-readable status summary of the current branch PR:
+Use `/merge-ready` to inspect the current branch PR:
+
+```bash
+/merge-ready
+```
+
+Example:
 
 ```text
 ✅ Ready to merge
@@ -58,15 +70,22 @@ You can also target an exact GitHub pull request URL:
 /merge-ready --url https://github.com/OWNER/REPO/pull/64 --json
 ```
 
+Example blocked/pending output:
+
+```text
+⏳ Checks are still running
+Target: current branch feat/my-branch (owner/repo)
+PR: #64 — Add PR merge-readiness extension
+State: pending
+Open items:
+- Checks are still running
+```
+
 Only full HTTPS GitHub PR URLs are accepted. Branch names, PR numbers, shorthands, issue URLs, repo URLs, non-GitHub hosts, query strings, fragments, and subpaths are rejected. A trailing slash on `/pull/NUMBER/` is normalized.
 
 Open-item details render uniformly in slash-command output: if a detail row has a status, the command shows the same icon used for check rows; if it has a URL, the URL is appended. Detail URLs are provenance-only supporting links, not extra action items.
 
-You can also run a foreground-visible watcher:
-
-```text
-/merge-ready watch [--url <github-pr-url>] [--interval <seconds>]
-```
+Start a watcher with:
 
 ```bash
 /merge-ready watch
@@ -74,7 +93,19 @@ You can also run a foreground-visible watcher:
 /merge-ready watch --url https://github.com/OWNER/REPO/pull/64 --interval 30
 ```
 
-`watch` is a foreground command that polls merge readiness on the requested interval. Repairable blockers can queue one bounded repair turn for both current-branch and explicit `--url` watches. Current-branch repairs use the ambient checkout and run dirty-worktree preflight first; URL-targeted repairs instruct the agent to use an isolated worktree for the PR head repo/branch and skip ambient dirty-worktree preflight. Cancel the foreground command to stop it. It accepts only the same exact GitHub PR URL form as `--url` above.
+`watch` is a long-lived foreground command that polls merge readiness on an interval.
+
+It can:
+
+- keep polling while checks or required review are still pending
+- attempt one bounded repair for `branch_out_of_date`, `merge_conflicts`, or `ci_failing`
+- stop on non-repairable blockers or terminal PR states
+
+Repair model:
+
+- current-branch watch repairs use the ambient checkout after dirty-worktree preflight
+- explicit `--url` watch repairs must not mutate the ambient checkout; they use an isolated worktree for the PR head repo/branch
+- `--url` accepts only the same exact GitHub PR URL form as `/merge-ready --url`
 
 Watch actionability:
 
@@ -94,17 +125,25 @@ Watch safety:
 
 ### Agent tool
 
-Agents get a `merge_ready_status` tool. The contract is simple: `state` plus `pr.lifecycle` tells you whether the PR is merge-ready, and `openItems` is the authoritative list of actionable merge-readiness work.
+Agents get a `merge_ready_status` tool:
 
-- `merge_ready_status({})` = current branch PR
-- `merge_ready_status({ url })` = that exact GitHub PR URL
-- Do not pass branch names, PR numbers, repo names, or inferred targets
+```ts
+merge_ready_status({});
+merge_ready_status({ url: 'https://github.com/OWNER/REPO/pull/64' });
+```
+
+Rules:
+
+- `state` plus `pr.lifecycle` tells you whether the PR is merge-ready
+- `openItems` is the authoritative blocker list
+- `openItems[].details[]` and detail URLs are provenance only
+- do not pass branch names, PR numbers, repo names, or inferred targets
 
 Example response:
 
 ```json
 {
-  "state": "ready | blocked | pending | unknown",
+  "state": "blocked",
   "target": {
     "mode": "current_branch",
     "owner": "owner",
@@ -119,21 +158,13 @@ Example response:
     "headRefName": "feat/my-branch",
     "baseRefName": "main"
   },
-  "summary": "Ready to merge",
-  "openItems": [],
-  "signals": {
-    "draft": false,
-    "mergeability": "mergeable",
-    "checks": "passing",
-    "review": "approved",
-    "unresolvedConversations": false,
-    "unresolvedConversationRequirement": "required"
-  },
+  "summary": "Required checks are failing",
+  "openItems": [{ "id": "ci_failing", "summary": "Required checks are failing" }],
   "generatedAt": "2026-05-27T00:00:00.000Z"
 }
 ```
 
-`openItems[].details[]` rows are supporting provenance for an open item, not a second actionable list. Check rows keep their status, and detail rows may include a concrete GitHub URL when there is a useful source link:
+`openItems[].details[]` rows are supporting provenance for an open item, not a second actionable list:
 
 ```json
 {
@@ -141,18 +172,18 @@ Example response:
   "summary": "Required checks are failing",
   "details": [
     {
-      "label": "linting",
+      "label": "lint",
       "status": "failing",
       "url": "https://github.com/OWNER/REPO/actions/runs/123/jobs/456"
-    },
-    { "label": "PR Title Check", "status": "failing" }
+    }
   ]
 }
 ```
 
-The top-level `pr.url` is already the PR URL; do not treat it as a source link. Agents should fix or report only the items returned in `openItems`; `details` rows and detail URLs are supporting provenance only.
+Advanced notes:
 
-When `target.mode` is `"url"`, `pr.headRepository` is also returned so callers can verify whether the editable head repo matches the targeted PR repo before changing code:
+- The top-level `pr.url` is already the PR URL; do not treat it as a source link.
+- When `target.mode` is `"url"`, `pr.headRepository` is also returned so callers can verify whether the editable head repo matches the targeted PR repo before changing code:
 
 ```json
 {
@@ -163,9 +194,20 @@ When `target.mode` is `"url"`, `pr.headRepository` is also returned so callers c
 }
 ```
 
+- URL-targeted command results do not update the ambient status bar cache; the status bar remains current-branch only.
+
 ### Merge-ready loop skill
 
-The package includes a `merge-ready-loop` skill for requests like "make this PR ready to merge". The skill resolves the target, calls `merge_ready_status`, chooses the smallest actionable returned item, verifies the change locally, and distinguishes "fixed locally" from "confirmed cleared by GitHub". For URL-targeted PRs, it should verify the editable head against `pr.headRepository` plus `pr.headRefName`; ordinary URL turns stop unless the user authorizes any checkout change, while watch-triggered URL repair turns may explicitly authorize an isolated worktree for that head repo/branch without mutating the ambient checkout.
+The package includes a `merge-ready-loop` skill for requests like "make this PR ready to merge".
+
+The skill:
+
+- resolves the current branch or exact PR URL target
+- calls `merge_ready_status`
+- works only from the returned `openItems`
+- makes one small verified fix at a time
+- distinguishes "addressed locally" from "confirmed cleared by GitHub"
+- for watch-triggered URL repairs, uses the PR head repo/branch in an isolated worktree without mutating the ambient checkout
 
 ## Status states
 
