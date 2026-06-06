@@ -111,6 +111,7 @@ Important:
 Current-branch `/merge-ready watch` runs may invoke this skill with a status snapshot already provided. URL-targeted `/merge-ready watch --url ...` runs may also invoke this skill with the exact PR URL plus explicit isolated-worktree instructions for the PR head repo/branch. Use any provided snapshot only when it is clearly fresh and the target is already confirmed.
 
 - If the snapshot is stale, incomplete, or the target still needs confirmation, call `merge_ready_status({})` or `merge_ready_status({ url })`.
+- If your environment supports isolated worker/session/agent contexts, prefer using one for the bounded repair attempt and return only a compact result to the coordinating watch turn. Do not assume any one subagent framework; use whatever isolated-context mechanism is available.
 - For watch-triggered URL repair turns, use `status.pr.headRepository` + `status.pr.headRefName` to confirm or create/switch to the isolated worktree. Do not mutate the ambient checkout.
 - Work only from the provided or freshly returned `openItems`. `details` rows and detail URLs are provenance only.
 - Make one bounded repair attempt for the triggered blocker or a tightly related set. Do not start another watch loop from inside the turn.

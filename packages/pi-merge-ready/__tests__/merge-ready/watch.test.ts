@@ -651,6 +651,10 @@ describe('merge-ready watch helpers', () => {
 
       expect(prompt).toContain('Use the merge-ready-loop skill for the current branch PR.');
       expect(prompt).toContain('This was triggered by /merge-ready watch.');
+      expect(prompt).toContain(
+        'If your environment supports isolated worker/session/agent contexts, prefer using one for this bounded repair',
+      );
+      expect(prompt).toContain('Do not assume any specific subagent framework.');
       expect(prompt).toContain('Work only from the openItems returned by merge_ready_status.');
       expect(prompt).toContain('Treat openItems[].details[] as supporting provenance only.');
       expect(prompt).toContain('Current snapshot:');
@@ -690,6 +694,10 @@ describe('merge-ready watch helpers', () => {
       expect(prompt).toContain(`Use the merge-ready-loop skill for ${HELPER_URL_TARGET.url}.`);
       expect(prompt).toContain('This was triggered by /merge-ready watch.');
       expect(prompt).toContain('Do this URL-targeted repair in an isolated git worktree');
+      expect(prompt).toContain(
+        'If your environment supports isolated worker/session/agent contexts, prefer using one for this bounded repair',
+      );
+      expect(prompt).toContain('Do not assume any specific subagent framework.');
       expect(prompt).toContain('Do not mutate the ambient checkout.');
       expect(prompt).toContain("Use the snapshot's pr.headRepository and pr.headRefName");
       expect(prompt).toContain(
@@ -1017,6 +1025,10 @@ describe('merge-ready watch loop', () => {
 
     const prompt = vi.mocked(sendUserMessage).mock.calls[0]?.[0];
     expect(prompt).toContain('Use the merge-ready-loop skill');
+    expect(prompt).toContain(
+      'If your environment supports isolated worker/session/agent contexts, prefer using one for this bounded repair',
+    );
+    expect(prompt).toContain('Do not assume any specific subagent framework.');
     expect(prompt).toContain('ci_failing');
     expect(prompt).toContain('Do not start another watch loop.');
   });
@@ -1260,6 +1272,10 @@ describe('merge-ready watch loop', () => {
     const prompt = vi.mocked(sendUserMessage).mock.calls[0]?.[0];
     expect(prompt).toContain(`Use the merge-ready-loop skill for ${RUNTIME_URL_TARGET.url}.`);
     expect(prompt).toContain('Do this URL-targeted repair in an isolated git worktree');
+    expect(prompt).toContain(
+      'If your environment supports isolated worker/session/agent contexts, prefer using one for this bounded repair',
+    );
+    expect(prompt).toContain('Do not assume any specific subagent framework.');
     expect(prompt).toContain('Do not mutate the ambient checkout.');
     expect(prompt).toContain("Use the snapshot's pr.headRepository and pr.headRefName");
     expect(prompt).toContain(

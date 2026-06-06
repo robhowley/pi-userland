@@ -834,6 +834,10 @@ describe('merge-ready command', () => {
     const prompt = vi.mocked(api.sendUserMessage).mock.calls[0]?.[0];
     expect(prompt).toContain(`Use the merge-ready-loop skill for ${url}.`);
     expect(prompt).toContain('Do this URL-targeted repair in an isolated git worktree');
+    expect(prompt).toContain(
+      'If your environment supports isolated worker/session/agent contexts, prefer using one for this bounded repair',
+    );
+    expect(prompt).toContain('Do not assume any specific subagent framework.');
     expect(prompt).toContain('Do not mutate the ambient checkout.');
     expect(prompt).toContain("Use the snapshot's pr.headRepository and pr.headRefName");
     expect(ctx.ui.setStatus).not.toHaveBeenCalledWith(

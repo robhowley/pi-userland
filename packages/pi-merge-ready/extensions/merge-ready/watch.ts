@@ -874,6 +874,7 @@ export function createMergeReadyWatchRepairPrompt(
       'This was triggered by /merge-ready watch.',
       '',
       'Do this URL-targeted repair in an isolated git worktree for the PR head repo/branch. Do not mutate the ambient checkout.',
+      'If your environment supports isolated worker/session/agent contexts, prefer using one for this bounded repair and return only a compact result to this coordinating watch turn. Do not assume any specific subagent framework.',
       "Use the snapshot's pr.headRepository and pr.headRefName to identify the editable head. If the head repository or branch is missing or cannot be fetched, stop and report the ambiguity.",
       '',
       'Work only from the openItems returned by merge_ready_status. Do not invent additional blockers. Treat openItems[].details[] as supporting provenance only.',
@@ -892,6 +893,8 @@ export function createMergeReadyWatchRepairPrompt(
   return [
     `Use the merge-ready-loop skill for ${describeMergeReadyWatchRepairTarget(status)}.`,
     'This was triggered by /merge-ready watch.',
+    '',
+    'If your environment supports isolated worker/session/agent contexts, prefer using one for this bounded repair and return only a compact result to this coordinating watch turn. Do not assume any specific subagent framework.',
     '',
     'Work only from the openItems returned by merge_ready_status. Do not invent additional blockers. Treat openItems[].details[] as supporting provenance only.',
     '',
