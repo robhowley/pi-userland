@@ -13,7 +13,13 @@
     "access": "public"
   },
   "keywords": [
-    "pi-package"
+    "pi-package",
+    "pull-request",
+    "status-bar",
+    "repair-loop",
+    "agent-loop",
+    "github-pr",
+    "code-review"
   ],
   "pi": {
     "extensions": [
