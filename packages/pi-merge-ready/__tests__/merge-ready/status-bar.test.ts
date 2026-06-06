@@ -4,10 +4,12 @@ import {
   MERGE_READY_STATUS_BAR_TIMEOUT_MS,
   MERGE_READY_STATUS_BAR_TTL_MS,
   createMergeReadyStatus,
+  isMergeReadyStatusBarSuspended,
   refreshMergeReadyStatusBar,
   registerMergeReadyStatusBar,
   renderMergeReadyStatusBar,
   resetMergeReadyStatusBarCache,
+  suspendMergeReadyStatusBar,
   syncMergeReadyStatusBar,
   type MergeReadyStatusBarAPI,
   type MergeReadyStatusBarContext,
@@ -340,6 +342,116 @@ describe('merge-ready status bar', () => {
     expect(targeted).toEqual({ text: '✅ Ready', cached: false });
     expect(targetedCtx.ui?.setStatus).not.toHaveBeenCalled();
     expect(refreshed).toEqual({ text: '✅ Ready', cached: true });
+  });
+
+  it('suppresses cached ambient refreshes while suspended until resumed', async () => {
+    const ctx = createStatusContext();
+    const setStatus = vi.mocked(ctx.ui!.setStatus);
+    const status = createMergeReadyStatus({
+      generatedAt: '2026-05-27T00:00:00.000Z',
+      pr: buildOpenPr(),
+      signals: {
+        draft: false,
+        mergeability: 'mergeable',
+        checks: 'passing',
+        review: 'approved',
+        unresolvedConversations: false,
+        unresolvedConversationRequirement: 'optional',
+      },
+    });
+
+    syncMergeReadyStatusBar({ ctx, status, now: 1_000 });
+    setStatus.mockClear();
+
+    const resume = suspendMergeReadyStatusBar(ctx);
+    expect(isMergeReadyStatusBarSuspended()).toBe(true);
+    expect(setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, undefined);
+
+    setStatus.mockClear();
+    const hiddenRefresh = await refreshMergeReadyStatusBar({
+      exec: vi.fn(),
+      ctx,
+      now: 1_000 + MERGE_READY_STATUS_BAR_TTL_MS - 1,
+    });
+
+    expect(hiddenRefresh).toEqual({ text: '✅ Ready', cached: true });
+    expect(setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, undefined);
+    expect(setStatus).not.toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ Ready');
+
+    setStatus.mockClear();
+    resume();
+    expect(isMergeReadyStatusBarSuspended()).toBe(false);
+
+    const visibleRefresh = await refreshMergeReadyStatusBar({
+      exec: vi.fn(),
+      ctx,
+      now: 1_000 + MERGE_READY_STATUS_BAR_TTL_MS - 1,
+    });
+
+    expect(visibleRefresh).toEqual({ text: '✅ Ready', cached: true });
+    expect(setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ Ready');
+  });
+
+  it('keeps fresh ambient refreshes hidden while suspended', async () => {
+    const { api, assertDone } = createMockAPI([
+      ...createGitDiscoveryCalls({ timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS }),
+      createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+        timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+      }),
+      createConversationsSuccessCall(
+        buildConversationsPayload({
+          reviewThreads: {
+            nodes: [{ isResolved: true }],
+            pageInfo: { hasNextPage: false },
+          },
+        }),
+        { timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS },
+      ),
+    ]);
+    const ctx = createStatusContext();
+    const setStatus = vi.mocked(ctx.ui!.setStatus);
+    const resume = suspendMergeReadyStatusBar(ctx);
+
+    setStatus.mockClear();
+    const hiddenRefresh = await refreshMergeReadyStatusBar({
+      exec: api.exec,
+      ctx,
+      force: true,
+      now: 2_000,
+    });
+
+    assertDone();
+    expect(hiddenRefresh).toEqual({ text: '✅ Ready', cached: false });
+    expect(setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, undefined);
+    expect(setStatus).not.toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ Ready');
+
+    setStatus.mockClear();
+    resume();
+    expect(isMergeReadyStatusBarSuspended()).toBe(false);
+
+    const visibleRefresh = await refreshMergeReadyStatusBar({
+      exec: vi.fn(),
+      ctx,
+      now: 2_000 + MERGE_READY_STATUS_BAR_TTL_MS - 1,
+    });
+
+    expect(visibleRefresh).toEqual({ text: '✅ Ready', cached: true });
+    expect(setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ Ready');
+  });
+
+  it('keeps ambient status suspended until the last cleanup runs', () => {
+    const ctx = createStatusContext();
+    const resumeFirst = suspendMergeReadyStatusBar(ctx);
+    const resumeSecond = suspendMergeReadyStatusBar(ctx);
+
+    expect(isMergeReadyStatusBarSuspended()).toBe(true);
+
+    resumeFirst();
+    expect(isMergeReadyStatusBarSuspended()).toBe(true);
+
+    resumeFirst();
+    resumeSecond();
+    expect(isMergeReadyStatusBarSuspended()).toBe(false);
   });
 
   it('renders required unresolved conversation count from GitHub conversations', async () => {

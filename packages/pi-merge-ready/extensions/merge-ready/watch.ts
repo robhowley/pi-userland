@@ -1,6 +1,6 @@
 import { getErrorMessage, runNormalizedExecCommand } from './internal.js';
 import { getMergeReadyStatus } from './merge-ready.js';
-import { syncMergeReadyStatusBar } from './status-bar.js';
+import { suspendMergeReadyStatusBar, syncMergeReadyStatusBar } from './status-bar.js';
 import type { MergeReadyExec } from './git.js';
 import type {
   MergeReadyOpenItem,
@@ -432,6 +432,7 @@ export function startMergeReadyWatch(
   activeWatcher = watcher;
 
   const unlinkParentSignal = linkAbortSignal(options.signal, watcher.abortController);
+  const resumeMergeReadyStatusBar = suspendMergeReadyStatusBar(options.ctx);
 
   setMergeReadyWatchStatus(options.ctx, `Watching ${watcher.targetLabel} · starting…`);
 
@@ -467,10 +468,16 @@ export function startMergeReadyWatch(
       watcher.phase = 'stopped';
       watcher.pendingRepairTurn = null;
       pendingWatcherPromises.delete(watcher.promise);
+
+      const shouldClearWatchStatus = activeWatcher === null || activeWatcher.id === watcher.id;
       if (activeWatcher?.id === watcher.id) {
         activeWatcher = null;
+      }
+      if (shouldClearWatchStatus) {
         setMergeReadyWatchStatus(options.ctx);
       }
+
+      resumeMergeReadyStatusBar();
     });
 
   watcher.promise = promise;
@@ -657,7 +664,7 @@ export async function runMergeReadyWatchLoop(
         }
         setMergeReadyWatchStatus(
           options.ctx,
-          `Watching ${formatStatusSubject(status)} · ${status.summary} · next poll in ${String(options.intervalSeconds)}s`,
+          `Watching ${formatStatusSubject(status)} · ${status.summary}`,
         );
         await sleep(options.intervalSeconds * 1_000, options.signal);
         throwIfMergeReadyWatchAborted(options.signal);
@@ -814,7 +821,7 @@ export async function runMergeReadyWatchLoop(
       }
       setMergeReadyWatchStatus(
         options.ctx,
-        `Watching ${formatStatusSubject(refreshedStatus)} · ${refreshedStatus.summary} · next poll in ${String(options.intervalSeconds)}s`,
+        `Watching ${formatStatusSubject(refreshedStatus)} · ${refreshedStatus.summary}`,
       );
       await sleep(options.intervalSeconds * 1_000, options.signal);
       throwIfMergeReadyWatchAborted(options.signal);
