@@ -1,12 +1,12 @@
 # pi-merge-ready
 
-A [Pi](https://pi.dev/) package for PR merge readiness: a current-branch status bar, `/merge-ready` status and watch commands, exact GitHub PR URL targeting, and bounded agent repair loops.
+A [Pi](https://pi.dev/) package for getting pull requests to green: merge-readiness signal, blocker context, and automated agent repair loops.
 
 It adds:
 
 - a current-branch status bar signal
 - `/merge-ready` for current-branch or exact-URL status
-- `/merge-ready watch` for polling plus bounded repair handoff
+- `/merge-ready watch` for polling PRs and handing actionable blockers off to the agent for automated repairs.
 - a `merge_ready_status({ url? })` agent tool
 - a `merge-ready-loop` skill for working the returned blockers
 
@@ -81,9 +81,11 @@ Open items:
 - Checks are still running
 ```
 
-Only full HTTPS GitHub PR URLs are accepted. Branch names, PR numbers, shorthands, issue URLs, repo URLs, non-GitHub hosts, query strings, fragments, and subpaths are rejected. A trailing slash on `/pull/NUMBER/` is normalized.
+Only full HTTPS GitHub PR URLs are accepted.
 
-Open-item details render uniformly in slash-command output: if a detail row has a status, the command shows the same icon used for check rows; if it has a URL, the URL is appended. Detail URLs are provenance-only supporting links, not extra action items.
+Detail URLs are supporting links for blocker context, not separate action items.
+
+### Watch mode
 
 Start a watcher with:
 
@@ -93,14 +95,13 @@ Start a watcher with:
 /merge-ready watch --url https://github.com/OWNER/REPO/pull/64 --interval 30
 ```
 
-`watch` is a long-lived foreground TUI command that polls merge readiness on an interval.
+`watch` is a long-lived foreground TUI command that polls merge readiness.
 Press `Ctrl-Shift-S` in the TUI to stop it.
-Outside the TUI, `watch` is rejected because stop is shortcut-based.
 
-It can:
+It will:
 
 - keep polling while checks or required review are still pending
-- attempt one bounded repair for `branch_out_of_date`, `merge_conflicts`, or `ci_failing`
+- attempt to repair PR blockers for `branch_out_of_date`, `merge_conflicts`, or `ci_failing`
 - stop on non-repairable blockers or terminal PR states
 
 Repair model:
@@ -119,11 +120,9 @@ Watch actionability:
 
 Watch safety:
 
-- Only one foreground TUI watcher is active at a time; press `Ctrl-Shift-S` to stop it.
 - Repeated-blocker guard: after one repair attempt for a blocker, `watch` does not keep retrying it without a fresh status change or explicit restart.
 - Dirty-worktree preflight: current-branch `watch` repairs refuse to run when local changes are already present in the ambient checkout.
-- Explicit `--url` watch repairs must not mutate the ambient checkout: they are instructed to use an isolated worktree for the PR head repo/branch and skip ambient dirty-worktree preflight.
-- Exact PR URL only: `--url` must be a full HTTPS GitHub pull request URL.
+- Explicit `--url` watch repairs are instructed to use an isolated worktree for the PR head repo/branch and skip ambient dirty-worktree preflight.
 
 ### Agent tool
 
@@ -166,7 +165,7 @@ Example response:
 }
 ```
 
-`openItems[].details[]` rows are supporting provenance for an open item, not a second actionable list:
+`openItems[].details[]` rows are supporting provenance for an open item.
 
 ```json
 {

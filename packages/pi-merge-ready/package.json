@@ -2,6 +2,7 @@
   "name": "@robhowley/pi-merge-ready",
   "version": "0.5.0",
   "description": "PR merge-readiness for Pi: status bar and slash-command status, exact PR URL targeting, blocker context, and agent repair loops.",
+  "license": "MIT",
   "type": "module",
   "files": [
     "extensions",
