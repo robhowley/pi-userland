@@ -97,7 +97,7 @@ describe('merge_ready_status tool', () => {
 
     mergeReadyExtension(api as Parameters<typeof mergeReadyExtension>[0]);
 
-    expect(api.on).toHaveBeenCalledTimes(2);
+    expect(api.on).toHaveBeenCalledTimes(4);
     expect(api.registerCommand).toHaveBeenCalledTimes(1);
     expect(api.registerCommand).toHaveBeenCalledWith(
       MERGE_READY_COMMAND_NAME,

@@ -12,6 +12,7 @@ export * from './merge-ready.js';
 export * from './commands.js';
 export * from './status-bar.js';
 export * from './tool.js';
+export * from './watch.js';
 
 export type MergeReadyExtensionAPI = MergeReadyCommandAPI &
   MergeReadyStatusBarAPI &

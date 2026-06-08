@@ -88,6 +88,7 @@ const STATUS_BAR_TEXT_OVERRIDE_BY_OPEN_ITEM_ID: Partial<Record<MergeReadyOpenIte
 };
 
 let statusBarCache: MergeReadyStatusBarCacheEntry | null = null;
+let statusBarSuspensionCount = 0;
 
 export function registerMergeReadyStatusBar(pi: MergeReadyStatusBarAPI): void {
   pi.on('session_start', async (_event, ctx) => {
@@ -122,10 +123,7 @@ export async function refreshMergeReadyStatusBar(
     cachedEntry.cwd === options.ctx.cwd &&
     nowMs - cachedEntry.refreshedAtMs < MERGE_READY_STATUS_BAR_TTL_MS
   ) {
-    options.ctx.ui?.setStatus(
-      MERGE_READY_STATUS_BAR_KEY,
-      options.ctx.ui?.theme?.fg('dim', cachedEntry.text) ?? cachedEntry.text,
-    );
+    renderMergeReadyStatusBarKey(options.ctx, cachedEntry.text);
     return {
       text: cachedEntry.text,
       cached: true,
@@ -234,8 +232,37 @@ function formatOptionalUnresolvedConversationText(status: MergeReadyStatus): str
   return 'Comments';
 }
 
+export function suspendMergeReadyStatusBar(ctx: MergeReadyStatusBarSyncContext): () => void {
+  statusBarSuspensionCount += 1;
+  renderMergeReadyStatusBarKey(ctx);
+
+  let resumed = false;
+  return () => {
+    if (resumed) {
+      return;
+    }
+
+    resumed = true;
+    statusBarSuspensionCount = Math.max(0, statusBarSuspensionCount - 1);
+
+    if (statusBarSuspensionCount > 0) {
+      return;
+    }
+
+    const cachedEntry = statusBarCache;
+    if (cachedEntry?.cwd === ctx.cwd) {
+      renderMergeReadyStatusBarKey(ctx, cachedEntry.text);
+    }
+  };
+}
+
+export function isMergeReadyStatusBarSuspended(): boolean {
+  return statusBarSuspensionCount > 0;
+}
+
 export function resetMergeReadyStatusBarCache(): void {
   statusBarCache = null;
+  statusBarSuspensionCount = 0;
 }
 
 function applyMergeReadyStatusBarText(options: {
@@ -249,9 +276,18 @@ function applyMergeReadyStatusBarText(options: {
     refreshedAtMs: resolveNowMs(options.now),
   };
 
-  options.ctx.ui?.setStatus?.(
+  renderMergeReadyStatusBarKey(options.ctx, options.text);
+}
+
+function renderMergeReadyStatusBarKey(ctx: MergeReadyStatusBarSyncContext, text?: string): void {
+  if (isMergeReadyStatusBarSuspended()) {
+    ctx.ui?.setStatus?.(MERGE_READY_STATUS_BAR_KEY, undefined);
+    return;
+  }
+
+  ctx.ui?.setStatus?.(
     MERGE_READY_STATUS_BAR_KEY,
-    options.ctx.ui?.theme?.fg('dim', options.text) ?? options.text,
+    text === undefined ? undefined : (ctx.ui?.theme?.fg('dim', text) ?? text),
   );
 }
 
