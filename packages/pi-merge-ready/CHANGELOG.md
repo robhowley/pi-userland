@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/robhowley/pi-userland/compare/pi-merge-ready-v0.5.0...pi-merge-ready-v0.6.0) (2026-06-08)
+
+
+### Features
+
+* **pi-merge-ready:** add merge-ready watch command ([#75](https://github.com/robhowley/pi-userland/issues/75)) ([4a41a5f](https://github.com/robhowley/pi-userland/commit/4a41a5fce63a44e4cc7e553ade1841083b4bf3ba))
+
 ## [0.5.0](https://github.com/robhowley/pi-userland/compare/pi-merge-ready-v0.4.0...pi-merge-ready-v0.5.0) (2026-06-05)
 
 
