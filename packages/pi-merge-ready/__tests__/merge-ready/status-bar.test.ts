@@ -381,7 +381,9 @@ describe('merge-ready status bar', () => {
     setStatus.mockClear();
     resume();
     expect(isMergeReadyStatusBarSuspended()).toBe(false);
+    expect(setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ Ready');
 
+    setStatus.mockClear();
     const visibleRefresh = await refreshMergeReadyStatusBar({
       exec: vi.fn(),
       ctx,
@@ -428,7 +430,9 @@ describe('merge-ready status bar', () => {
     setStatus.mockClear();
     resume();
     expect(isMergeReadyStatusBarSuspended()).toBe(false);
+    expect(setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ Ready');
 
+    setStatus.mockClear();
     const visibleRefresh = await refreshMergeReadyStatusBar({
       exec: vi.fn(),
       ctx,

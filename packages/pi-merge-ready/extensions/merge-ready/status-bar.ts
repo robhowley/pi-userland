@@ -244,6 +244,15 @@ export function suspendMergeReadyStatusBar(ctx: MergeReadyStatusBarSyncContext):
 
     resumed = true;
     statusBarSuspensionCount = Math.max(0, statusBarSuspensionCount - 1);
+
+    if (statusBarSuspensionCount > 0) {
+      return;
+    }
+
+    const cachedEntry = statusBarCache;
+    if (cachedEntry?.cwd === ctx.cwd) {
+      renderMergeReadyStatusBarKey(ctx, cachedEntry.text);
+    }
   };
 }
 

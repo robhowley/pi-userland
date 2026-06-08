@@ -1629,6 +1629,10 @@ describe('merge-ready watch loop', () => {
       MERGE_READY_WATCH_STATUS_KEY,
       undefined,
     );
+    expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(
+      MERGE_READY_STATUS_BAR_KEY,
+      '❔ No PR',
+    );
 
     vi.mocked(refreshCtx.ui.setStatus).mockClear();
     const visibleAfterStop = await refreshMergeReadyStatusBar({
