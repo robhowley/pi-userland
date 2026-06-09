@@ -14,6 +14,11 @@ export * from './config.js';
 export * from './status-bar.js';
 export * from './tool.js';
 export * from './watch.js';
+export * from './watch-status.js';
+export * from './watch-ui/launcher.js';
+export * from './watch-ui/supervisor-client.js';
+export * from './watch-ui/supervisor-state.js';
+export * from './watch-ui/transcript.js';
 
 export type MergeReadyExtensionAPI = MergeReadyCommandAPI &
   MergeReadyStatusBarAPI &

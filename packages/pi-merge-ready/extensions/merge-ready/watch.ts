@@ -2,6 +2,11 @@ import { getErrorMessage, runNormalizedExecCommand } from './internal.js';
 import { loadMergeReadyConfigAsync, type MergeReadyConfig } from './config.js';
 import { getMergeReadyStatus } from './merge-ready.js';
 import { suspendMergeReadyStatusBar, syncMergeReadyStatusBar } from './status-bar.js';
+import {
+  publishMergeReadyWatchStatus,
+  type MergeReadyWatchLifecycleState,
+  type MergeReadyWatchSessionRef,
+} from './watch-status.js';
 import type { MergeReadyExec } from './git.js';
 import type {
   MergeReadyOpenItem,
@@ -76,10 +81,18 @@ export type ParseMergeReadyWatchIntervalSecondsResult =
 
 export type MergeReadyWatchNotificationLevel = 'info' | 'warning' | 'error';
 
+export type MergeReadyWatchSessionManager = {
+  getSessionId?: () => string;
+  getSessionFile?: () => string | undefined;
+};
+
 export type MergeReadyWatchContext = {
   cwd: string;
+  mode?: 'tui' | 'rpc' | 'json' | 'print';
   isIdle?: () => boolean;
   waitForIdle?: () => Promise<void>;
+  session?: MergeReadyWatchSessionRef;
+  sessionManager?: MergeReadyWatchSessionManager;
   ui: {
     notify: (message: string, type?: MergeReadyWatchNotificationLevel) => void;
     setStatus?: (key: string, status?: string) => void;
@@ -96,6 +109,10 @@ export type MergeReadyWatchAPI = {
     content: string,
     options?: { deliverAs?: 'steer' | 'followUp' },
   ) => Promise<void> | void;
+  appendEntry?: (customType: string, data?: unknown) => void;
+  events?: {
+    emit: (channel: string, data: unknown) => void;
+  };
   on?: (
     event: 'session_shutdown' | 'agent_end',
     handler: (event: unknown, ctx: unknown) => void | Promise<void>,
@@ -165,6 +182,12 @@ export type MergeReadyWatchLoopDependencies = {
   >;
   syncStatusBar?: typeof syncMergeReadyStatusBar;
   waitForAgentEnd?: (signal: AbortSignal) => Promise<void>;
+  publishStatus?: (options: {
+    lifecycle: MergeReadyWatchLifecycleState;
+    status?: MergeReadyStatus | undefined;
+    summary?: string | undefined;
+    updatedAt?: string | undefined;
+  }) => void;
   maxIterations?: number;
 };
 
@@ -451,11 +474,15 @@ export function classifyMergeReadyWatchStatus(
 export function startMergeReadyWatch(
   options: StartMergeReadyWatchOptions,
 ): StartMergeReadyWatchResult {
+  const supportsStopShortcut = usesMergeReadyWatchStopShortcut(options.ctx);
+
   if (activeWatcher) {
     return {
       ok: false,
       level: 'warning',
-      message: `Merge-ready watch is already active for ${activeWatcher.targetLabel}. Press ${MERGE_READY_WATCH_STOP_SHORTCUT_LABEL} to stop it before starting another.`,
+      message: supportsStopShortcut
+        ? `Merge-ready watch is already active for ${activeWatcher.targetLabel}. Press ${MERGE_READY_WATCH_STOP_SHORTCUT_LABEL} to stop it before starting another.`
+        : `Merge-ready watch is already active for ${activeWatcher.targetLabel}.`,
     };
   }
 
@@ -480,10 +507,40 @@ export function startMergeReadyWatch(
   nextWatcherId += 1;
   activeWatcher = watcher;
 
+  let lastPublishedLifecycle: MergeReadyWatchLifecycleState | null = null;
+  let lastPublishedStatus: MergeReadyStatus | undefined;
+  const publishWatchStatus = createMergeReadyWatchStatusPublisher({
+    api: options.api,
+    ctx: options.ctx,
+    ...(options.url === undefined ? {} : { requestedUrl: options.url }),
+  });
+  const publishStatus = (payload: {
+    lifecycle: MergeReadyWatchLifecycleState;
+    status?: MergeReadyStatus | undefined;
+    summary?: string | undefined;
+    updatedAt?: string | undefined;
+  }) => {
+    options.dependencies?.publishStatus?.(payload);
+    if (payload.status) {
+      lastPublishedStatus = payload.status;
+    }
+    lastPublishedLifecycle = payload.lifecycle;
+    publishWatchStatus({
+      lifecycle: payload.lifecycle,
+      status: payload.status,
+      summary: payload.summary,
+      updatedAt: payload.updatedAt,
+    });
+  };
+
   const unlinkParentSignal = linkAbortSignal(options.signal, watcher.abortController);
   const resumeMergeReadyStatusBar = suspendMergeReadyStatusBar(options.ctx);
 
   setMergeReadyWatchStatus(options.ctx, `Watching ${watcher.targetLabel} · starting…`);
+  publishStatus({
+    lifecycle: 'starting',
+    summary: `Starting merge-ready watch for ${watcher.targetLabel}`,
+  });
 
   const promise = runMergeReadyWatchLoop({
     exec: options.exec,
@@ -499,20 +556,34 @@ export function startMergeReadyWatch(
     signal: watcher.abortController.signal,
     ...(options.timeout === undefined ? {} : { timeout: options.timeout }),
     ...(options.url === undefined ? {} : { url: options.url }),
-    ...(options.dependencies === undefined ? {} : { dependencies: options.dependencies }),
+    dependencies: {
+      ...(options.dependencies ?? {}),
+      publishStatus,
+    },
   })
     .catch((error) => {
       if (isAbortError(error)) {
         return { kind: 'aborted', reason: 'aborted' } satisfies MergeReadyWatchResult;
       }
 
-      options.ctx.ui.notify(
-        `Merge-ready watch failed for ${watcher.targetLabel}: ${getErrorMessage(error)}`,
-        'error',
-      );
+      const failureMessage = `Merge-ready watch failed: ${getErrorMessage(error)}`;
+      publishStatus({
+        lifecycle: 'error',
+        status: lastPublishedStatus,
+        summary: failureMessage,
+      });
+      options.ctx.ui.notify(`${failureMessage} for ${watcher.targetLabel}.`, 'error');
       return { kind: 'stopped', reason: 'error' } satisfies MergeReadyWatchResult;
     })
     .finally(() => {
+      if (lastPublishedLifecycle !== 'stopped' && lastPublishedLifecycle !== 'error') {
+        publishStatus({
+          lifecycle: 'stopped',
+          status: lastPublishedStatus,
+          summary: `Merge-ready watch stopped for ${watcher.targetLabel}`,
+        });
+      }
+
       unlinkParentSignal();
       watcher.phase = 'stopped';
       watcher.pendingRepairTurn = null;
@@ -535,7 +606,9 @@ export function startMergeReadyWatch(
   return {
     ok: true,
     level: 'info',
-    message: `Watching merge readiness for ${watcher.targetLabel} every ${String(options.intervalSeconds)}s. Press ${MERGE_READY_WATCH_STOP_SHORTCUT_LABEL} to stop.`,
+    message: supportsStopShortcut
+      ? `Watching merge readiness for ${watcher.targetLabel} every ${String(options.intervalSeconds)}s. Press ${MERGE_READY_WATCH_STOP_SHORTCUT_LABEL} to stop.`
+      : `Watching merge readiness for ${watcher.targetLabel} every ${String(options.intervalSeconds)}s.`,
     promise,
   };
 }
@@ -671,16 +744,27 @@ export async function runMergeReadyWatchLoop(
   const syncStatusBar = options.dependencies?.syncStatusBar ?? syncMergeReadyStatusBar;
   const waitForAgentEnd =
     options.dependencies?.waitForAgentEnd ?? waitForActiveMergeReadyWatchAgentEnd;
+  const publishStatus = options.dependencies?.publishStatus;
   const maxIterations = options.dependencies?.maxIterations;
   const attemptedSignatures = new Set<string>();
   let iterations = 0;
+  let lastStatus: MergeReadyStatus | undefined;
 
   try {
     while (true) {
       throwIfMergeReadyWatchAborted(options.signal);
 
       if (maxIterations !== undefined && iterations >= maxIterations) {
-        return { kind: 'stopped', reason: 'max_iterations' };
+        publishStatus?.({
+          lifecycle: 'stopped',
+          status: lastStatus,
+          summary: 'Merge-ready watch iteration limit reached',
+        });
+        return {
+          kind: 'stopped',
+          reason: 'max_iterations',
+          ...(lastStatus ? { status: lastStatus } : {}),
+        };
       }
       iterations += 1;
 
@@ -690,6 +774,7 @@ export async function runMergeReadyWatchLoop(
         ...(options.url === undefined ? {} : { url: options.url }),
         ...(options.timeout === undefined ? {} : { timeout: options.timeout }),
       });
+      lastStatus = status;
       throwIfMergeReadyWatchAborted(options.signal);
 
       syncStatusBar({
@@ -699,11 +784,13 @@ export async function runMergeReadyWatchLoop(
         },
         status,
       });
+      publishStatus?.({ lifecycle: 'watching', status });
 
       const classification = classifyMergeReadyWatchStatus(status);
       if (classification.actionability === 'stop') {
         const stopOutcome = resolveMergeReadyWatchStopOutcome(status, classification);
         setMergeReadyWatchStatus(options.ctx, `Stopped · ${stopOutcome.message}`);
+        publishStatus?.({ lifecycle: 'stopped', status, summary: stopOutcome.message });
         options.ctx.ui.notify(
           `Stopping merge-ready watch for ${formatStatusTargetLabel(status)}: ${stopOutcome.message}`,
           stopOutcome.level,
@@ -730,6 +817,11 @@ export async function runMergeReadyWatchLoop(
       const signature = createMergeReadyWatchBlockerSignature(status, classification.repairItems);
       if (attemptedSignatures.has(signature)) {
         setMergeReadyWatchStatus(options.ctx, 'Stopped · repeated actionable blocker');
+        publishStatus?.({
+          lifecycle: 'stopped',
+          status,
+          summary: 'The same actionable blocker is still present after one attempt.',
+        });
         options.ctx.ui.notify(
           `Stopping merge-ready watch for ${formatStatusTargetLabel(status)}: the same actionable blocker is still present after one attempt.`,
           'warning',
@@ -751,6 +843,7 @@ export async function runMergeReadyWatchLoop(
         throwIfMergeReadyWatchAborted(options.signal);
         if (!dirtyState.ok) {
           setMergeReadyWatchStatus(options.ctx, 'Stopped · git working tree preflight failed');
+          publishStatus?.({ lifecycle: 'stopped', status, summary: dirtyState.message });
           options.ctx.ui.notify(
             `Stopping merge-ready watch for ${formatStatusTargetLabel(status)}: ${dirtyState.message}`,
             'warning',
@@ -760,6 +853,11 @@ export async function runMergeReadyWatchLoop(
 
         if (dirtyState.dirty) {
           setMergeReadyWatchStatus(options.ctx, 'Stopped · dirty working tree');
+          publishStatus?.({
+            lifecycle: 'stopped',
+            status,
+            summary: 'Local git changes are present, so auto-repair is disabled.',
+          });
           options.ctx.ui.notify(
             `Stopping merge-ready watch for ${formatStatusTargetLabel(status)}: local git changes are present, so auto-repair is disabled.`,
             'warning',
@@ -769,10 +867,12 @@ export async function runMergeReadyWatchLoop(
       }
 
       attemptedSignatures.add(signature);
+      const repairSummary = `${classification.repairItems.map((openItem) => openItem.id).join(', ')} repair queued`;
       setMergeReadyWatchStatus(
         options.ctx,
         `Repair queued ${formatStatusSubject(status)} · ${classification.repairItems.map((openItem) => openItem.id).join(', ')}`,
       );
+      publishStatus?.({ lifecycle: 'repairing', status, summary: repairSummary });
       options.ctx.ui.notify(
         `Queued repair for ${formatStatusTargetLabel(status)} for ${classification.repairItems.map((openItem) => openItem.id).join(', ')}.`,
         'info',
@@ -780,6 +880,11 @@ export async function runMergeReadyWatchLoop(
 
       if (typeof options.api.sendUserMessage !== 'function') {
         setMergeReadyWatchStatus(options.ctx, 'Stopped · repair handoff unavailable');
+        publishStatus?.({
+          lifecycle: 'error',
+          status,
+          summary: 'Pi sendUserMessage support is required for auto-repair.',
+        });
         options.ctx.ui.notify(
           `Stopping merge-ready watch for ${formatStatusTargetLabel(status)}: Pi sendUserMessage support is required for auto-repair.`,
           'error',
@@ -820,6 +925,7 @@ export async function runMergeReadyWatchLoop(
         ...(options.url === undefined ? {} : { url: options.url }),
         ...(options.timeout === undefined ? {} : { timeout: options.timeout }),
       });
+      lastStatus = refreshedStatus;
       throwIfMergeReadyWatchAborted(options.signal);
 
       syncStatusBar({
@@ -829,6 +935,7 @@ export async function runMergeReadyWatchLoop(
         },
         status: refreshedStatus,
       });
+      publishStatus?.({ lifecycle: 'watching', status: refreshedStatus });
 
       const refreshedClassification = classifyMergeReadyWatchStatus(refreshedStatus);
 
@@ -866,6 +973,11 @@ export async function runMergeReadyWatchLoop(
         );
         if (refreshedSignature === signature) {
           setMergeReadyWatchStatus(options.ctx, 'Stopped · repeated actionable blocker');
+          publishStatus?.({
+            lifecycle: 'stopped',
+            status: refreshedStatus,
+            summary: 'The same actionable blocker is still present after one attempt.',
+          });
           options.ctx.ui.notify(
             `Stopping merge-ready watch for ${formatStatusTargetLabel(refreshedStatus)}: the same actionable blocker is still present after one attempt.`,
             'warning',
@@ -887,6 +999,11 @@ export async function runMergeReadyWatchLoop(
           refreshedClassification,
         );
         setMergeReadyWatchStatus(options.ctx, `Stopped · ${stopOutcome.message}`);
+        publishStatus?.({
+          lifecycle: 'stopped',
+          status: refreshedStatus,
+          summary: stopOutcome.message,
+        });
         options.ctx.ui.notify(
           `Stopping merge-ready watch for ${formatStatusTargetLabel(refreshedStatus)}: ${stopOutcome.message}`,
           stopOutcome.level,
@@ -1127,6 +1244,46 @@ function createMergeReadyWatchStopOutcomeFromOpenItem(
   };
 }
 
+function createMergeReadyWatchStatusPublisher(options: {
+  api: Pick<MergeReadyWatchAPI, 'appendEntry' | 'events'>;
+  ctx: Pick<MergeReadyWatchContext, 'session' | 'sessionManager'>;
+  requestedUrl?: string;
+}) {
+  const session = resolveMergeReadyWatchSessionRef(options.ctx);
+
+  return (payload: {
+    lifecycle: MergeReadyWatchLifecycleState;
+    status?: MergeReadyStatus | undefined;
+    summary?: string | undefined;
+    updatedAt?: string | undefined;
+  }) =>
+    publishMergeReadyWatchStatus({
+      publisher: options.api,
+      lifecycle: payload.lifecycle,
+      status: payload.status,
+      summary: payload.summary,
+      updatedAt: payload.updatedAt,
+      ...(options.requestedUrl === undefined ? {} : { requestedUrl: options.requestedUrl }),
+      session,
+    });
+}
+
+function resolveMergeReadyWatchSessionRef(
+  ctx: Pick<MergeReadyWatchContext, 'session' | 'sessionManager'>,
+): MergeReadyWatchSessionRef {
+  const sessionId = ctx.session?.sessionId ?? ctx.sessionManager?.getSessionId?.();
+  const sessionFile = ctx.session?.sessionFile ?? ctx.sessionManager?.getSessionFile?.();
+
+  return {
+    ...(sessionId === undefined ? {} : { sessionId }),
+    ...(sessionFile === undefined ? {} : { sessionFile }),
+  };
+}
+
+function usesMergeReadyWatchStopShortcut(ctx: Pick<MergeReadyWatchContext, 'mode'>): boolean {
+  return ctx.mode === undefined || ctx.mode === 'tui';
+}
+
 function resolveSendUserMessageOptions(): { deliverAs: 'followUp' } {
   return { deliverAs: 'followUp' };
 }
@@ -1240,8 +1397,16 @@ function describeMergeReadyWatchRepairTarget(
 function setMergeReadyWatchStatus(ctx: MergeReadyWatchContext, text?: string): void {
   ctx.ui.setStatus?.(
     MERGE_READY_WATCH_STATUS_KEY,
-    text === undefined ? undefined : (ctx.ui.theme?.fg('dim', text) ?? text),
+    text === undefined ? undefined : renderMergeReadyWatchStatusText(ctx, text),
   );
+}
+
+function renderMergeReadyWatchStatusText(ctx: MergeReadyWatchContext, text: string): string {
+  try {
+    return ctx.ui.theme?.fg('dim', text) ?? text;
+  } catch {
+    return text;
+  }
 }
 
 function throwIfMergeReadyWatchAborted(signal: AbortSignal): void {

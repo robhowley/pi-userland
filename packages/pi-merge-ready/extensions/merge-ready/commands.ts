@@ -1,3 +1,4 @@
+import { launchMergeReadyWatchUI } from './watch-ui/launcher.js';
 import { getMergeReadyStatus } from './merge-ready.js';
 import { syncMergeReadyStatusBar } from './status-bar.js';
 import { selectMergeReadyBadgeId } from './status.js';
@@ -6,7 +7,6 @@ import {
   MERGE_READY_WATCH_DEFAULT_INTERVAL_SECONDS,
   MERGE_READY_WATCH_MAX_INTERVAL_SECONDS,
   MERGE_READY_WATCH_MIN_INTERVAL_SECONDS,
-  MERGE_READY_WATCH_STOP_SHORTCUT_LABEL,
   parseMergeReadyWatchIntervalSeconds,
   registerMergeReadyWatchLifecycle,
   registerMergeReadyWatchShortcut,
@@ -39,6 +39,11 @@ export type MergeReadyCommandContext = {
   isIdle?: () => boolean;
   waitForIdle?: () => Promise<void>;
   signal?: AbortSignal;
+  sessionManager?: {
+    getSessionDir?: () => string;
+    getSessionId?: () => string;
+    getSessionFile?: () => string | undefined;
+  };
   ui: {
     notify: (message: string, type?: MergeReadyCommandNotificationLevel) => void;
     setStatus?: (key: string, status?: string) => void;
@@ -71,13 +76,15 @@ export type MergeReadyCommandAPI = {
 };
 
 const WATCH_SUBCOMMAND = 'watch';
+const WATCH_UI_SUBCOMMAND = 'watch-ui';
 const JSON_FLAG = '--json';
 const URL_FLAG = '--url';
 const INTERVAL_FLAG = '--interval';
 
 export const MERGE_READY_COMMAND_STATUS_USAGE = `Usage: /${MERGE_READY_COMMAND_NAME} [${URL_FLAG} <${MERGE_READY_PULL_REQUEST_URL_EXAMPLE}>] [${JSON_FLAG}]`;
 export const MERGE_READY_COMMAND_WATCH_USAGE = `Usage: /${MERGE_READY_COMMAND_NAME} ${WATCH_SUBCOMMAND} [${URL_FLAG} <${MERGE_READY_PULL_REQUEST_URL_EXAMPLE}>] [${INTERVAL_FLAG} <seconds>]`;
-export const MERGE_READY_COMMAND_USAGE = `${MERGE_READY_COMMAND_STATUS_USAGE}\n${MERGE_READY_COMMAND_WATCH_USAGE}`;
+export const MERGE_READY_COMMAND_WATCH_UI_USAGE = `Usage: /${MERGE_READY_COMMAND_NAME} ${WATCH_UI_SUBCOMMAND}`;
+export const MERGE_READY_COMMAND_USAGE = `${MERGE_READY_COMMAND_STATUS_USAGE}\n${MERGE_READY_COMMAND_WATCH_USAGE}\n${MERGE_READY_COMMAND_WATCH_UI_USAGE}`;
 
 const BADGE_PRESENTATION: Record<
   MergeReadyBadgeId,
@@ -106,6 +113,10 @@ type MergeReadyCommandWatchRuntimeAPI = MergeReadyCommandAPI & {
     content: string,
     options?: { deliverAs?: 'steer' | 'followUp' },
   ) => Promise<void> | void;
+  appendEntry?: (customType: string, data?: unknown) => void;
+  events?: {
+    emit: (channel: string, data: unknown) => void;
+  };
   on?: (
     event: 'session_shutdown' | 'agent_end',
     handler: (event: unknown, ctx: unknown) => void | Promise<void>,
@@ -138,8 +149,19 @@ export function registerMergeReadyCommand(pi: MergeReadyCommandAPI): void {
         return;
       }
 
+      if (parsedArgs.mode === 'watch-ui') {
+        const sessionDir = ctx.sessionManager?.getSessionDir?.();
+        const launched = await launchMergeReadyWatchUI({
+          exec: pi.exec,
+          cwd: ctx.cwd,
+          ...(sessionDir === undefined ? {} : { sessionDir }),
+        });
+        ctx.ui.notify(launched.message, launched.level);
+        return;
+      }
+
       let url: string | undefined;
-      if (parsedArgs.url !== undefined) {
+      if ('url' in parsedArgs && parsedArgs.url !== undefined) {
         const validation = validateGitHubPullRequestUrl(parsedArgs.url);
         if (!validation.ok) {
           ctx.ui.notify(`Invalid ${URL_FLAG}: ${validation.message}`, 'error');
@@ -152,14 +174,6 @@ export function registerMergeReadyCommand(pi: MergeReadyCommandAPI): void {
       const exec = createCommandExec(pi, ctx);
 
       if (parsedArgs.mode === 'watch') {
-        if (ctx.mode !== undefined && ctx.mode !== 'tui') {
-          ctx.ui.notify(
-            `Merge-ready watch currently requires TUI mode because stop is provided via the ${MERGE_READY_WATCH_STOP_SHORTCUT_LABEL} shortcut.`,
-            'error',
-          );
-          return;
-        }
-
         const started = startMergeReadyWatch({
           api: watchPi,
           ctx: createMergeReadyWatchContext(ctx),
@@ -235,7 +249,7 @@ export function renderMergeReadyStatus(status: MergeReadyStatus): {
 }
 
 function getMergeReadyCommandArgumentCompletions(prefix: string) {
-  return [WATCH_SUBCOMMAND, URL_FLAG, JSON_FLAG, INTERVAL_FLAG]
+  return [WATCH_SUBCOMMAND, WATCH_UI_SUBCOMMAND, URL_FLAG, JSON_FLAG, INTERVAL_FLAG]
     .filter((flag) => flag.startsWith(prefix))
     .map((flag) => ({ value: flag, label: flag }));
 }
@@ -254,6 +268,10 @@ export type MergeReadyParsedCommandArgs =
       url?: string;
     }
   | {
+      ok: true;
+      mode: 'watch-ui';
+    }
+  | {
       ok: false;
       message: string;
     };
@@ -266,6 +284,10 @@ export function parseMergeReadyCommandArgs(args: string): MergeReadyParsedComman
 
   if (tokens[0] === WATCH_SUBCOMMAND) {
     return parseMergeReadyWatchCommandArgs(tokens.slice(1));
+  }
+
+  if (tokens[0] === WATCH_UI_SUBCOMMAND) {
+    return parseMergeReadyWatchUiCommandArgs(tokens.slice(1));
   }
 
   return parseMergeReadyStatusCommandArgs(tokens);
@@ -407,6 +429,14 @@ function parseMergeReadyWatchCommandArgs(tokens: string[]): MergeReadyParsedComm
   };
 }
 
+function parseMergeReadyWatchUiCommandArgs(tokens: string[]): MergeReadyParsedCommandArgs {
+  if (tokens.length > 0) {
+    return createCommandUsageError(`Unsupported arguments: ${tokens.join(' ')}`);
+  }
+
+  return { ok: true, mode: 'watch-ui' };
+}
+
 function createCommandUsageError(message: string): MergeReadyParsedCommandArgs {
   return {
     ok: false,
@@ -417,8 +447,10 @@ function createCommandUsageError(message: string): MergeReadyParsedCommandArgs {
 function createMergeReadyWatchContext(ctx: MergeReadyCommandContext): MergeReadyWatchContext {
   return {
     cwd: ctx.cwd,
+    ...(ctx.mode === undefined ? {} : { mode: ctx.mode }),
     ...(ctx.isIdle === undefined ? {} : { isIdle: ctx.isIdle }),
     ...(ctx.waitForIdle === undefined ? {} : { waitForIdle: ctx.waitForIdle }),
+    ...(ctx.sessionManager === undefined ? {} : { sessionManager: ctx.sessionManager }),
     ui: ctx.ui,
     ...(ctx.compact === undefined
       ? {}

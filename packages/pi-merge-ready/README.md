@@ -95,8 +95,8 @@ Start a watcher with:
 /merge-ready watch --url https://github.com/OWNER/REPO/pull/64 --interval 30
 ```
 
-`watch` is a long-lived foreground TUI command that polls merge readiness.
-Press `Ctrl-Shift-S` in the TUI to stop it.
+`watch` is a long-lived foreground command that polls merge readiness.
+In the TUI, press `Ctrl-Shift-S` to stop it. In headless SDK sessions, stop it by aborting or disposing the backing session.
 
 It will:
 
@@ -139,6 +139,24 @@ Watch behavior can be configured in Pi's `settings.json` (global: `~/.pi/agent/s
 | Option | Default | Description |
 |--------|---------|-------------|
 | `autoCompactRepair` | `true` | Trigger conversation compaction after successful repair loop completion. Compaction runs before the watch continues polling. Set to `false` to disable. |
+
+### Watch UI
+
+Launch the local multi-watch UI with:
+
+```bash
+/merge-ready watch-ui
+```
+
+It starts or reuses a detached localhost supervisor, opens a browser when possible, and always reports a fallback URL.
+
+V1 notes:
+
+- watches are URL-targeted headless Pi SDK sessions backed by persisted Pi JSONL sessions
+- the UI polls a token-gated `127.0.0.1` API only; there is no hosted service
+- transcript inspection is read-only and uses the stored session file for the selected watch
+- live session focus/open is not supported in v1; use the session id/path shown in the UI
+- if the supervisor restarts, previously active watches are shown as stale rather than assumed ready
 
 ### Agent tool
 

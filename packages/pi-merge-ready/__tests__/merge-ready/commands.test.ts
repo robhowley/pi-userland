@@ -725,6 +725,10 @@ describe('merge-ready command', () => {
       url,
       intervalSeconds: 30,
     });
+    expect(parseMergeReadyCommandArgs('watch-ui')).toEqual({
+      ok: true,
+      mode: 'watch-ui',
+    });
   });
 
   it('rejects invalid watch arguments with combined usage text', async () => {
@@ -776,21 +780,36 @@ describe('merge-ready command', () => {
     );
   });
 
-  it('rejects watch mode outside TUI because stop is shortcut-based', async () => {
-    const { api, getCommand } = createMockAPI();
+  it('allows watch mode outside TUI when sendUserMessage is available', async () => {
+    const { api, assertDone, getCommand } = createMockAPI([
+      ...createGitDiscoveryCalls({ timeout: MERGE_READY_COMMAND_TIMEOUT_MS }),
+      createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+        timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+      }),
+      createConversationsSuccessCall(buildConversationsPayload(), {
+        timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+      }),
+    ]);
+
     mergeReadyExtension(api);
     const handler = getCommand(MERGE_READY_COMMAND_NAME);
-    const ctx = createCommandContext({ mode: 'rpc' });
+    const abortController = new AbortController();
+    const ctx = createCommandContext({ mode: 'rpc', signal: abortController.signal });
 
-    await handler?.('watch --interval 30', ctx);
+    const run = handler?.('watch --interval 15', ctx) ?? Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getActiveMergeReadyWatch()).not.toBeNull();
 
-    expect(vi.mocked(ctx.ui.notify).mock.calls).toEqual([
-      [
-        'Merge-ready watch currently requires TUI mode because stop is provided via the Ctrl-Shift-S shortcut.',
-        'error',
-      ],
-    ]);
+    abortController.abort();
+    await run;
+
+    assertDone();
     expect(getActiveMergeReadyWatch()).toBeNull();
+    expect(vi.mocked(ctx.ui.notify)).toHaveBeenCalledWith(
+      'Watching merge readiness for current branch PR every 15s.',
+      'info',
+    );
+    expect(ctx.ui.setStatus).toHaveBeenCalledWith(MERGE_READY_WATCH_STATUS_KEY, undefined);
   });
 
   it('keeps watch foreground until the command signal is aborted', async () => {

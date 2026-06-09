@@ -1061,6 +1061,57 @@ describe('merge-ready watch loop', () => {
     });
   });
 
+  it('falls back to plain watch status text when theme access throws', async () => {
+    const ctx = createWatchContext();
+    const sendUserMessage = vi.fn(
+      async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
+    );
+
+    Object.defineProperty(ctx.ui, 'theme', {
+      configurable: true,
+      get: () => {
+        throw new Error('Theme not initialized. Call initTheme() first.');
+      },
+    });
+
+    const start = startMergeReadyWatch({
+      api: { sendUserMessage },
+      ctx,
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
+      intervalSeconds: 30,
+      url: RUNTIME_URL_TARGET.url,
+      dependencies: {
+        getStatus: createStatusSequence([createUrlReadyStatus()]),
+        sleep: vi.fn(async () => undefined),
+        syncStatusBar: vi.fn(),
+        checkDirtyWorkingTree: vi.fn(async () => ({ ok: true as const, dirty: false })),
+        maxIterations: 1,
+      },
+    });
+
+    expect(start).toMatchObject({ ok: true, level: 'info' });
+    if (!start.ok) {
+      return;
+    }
+
+    await expect(start.promise).resolves.toMatchObject({
+      kind: 'stopped',
+      reason: 'max_iterations',
+    });
+    expect(vi.mocked(ctx.ui.notify)).not.toHaveBeenCalledWith(
+      expect.stringContaining('Theme not initialized. Call initTheme() first.'),
+      'error',
+    );
+    expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(
+      MERGE_READY_WATCH_STATUS_KEY,
+      `Watching ${RUNTIME_URL_TARGET.url} · starting…`,
+    );
+    expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(
+      MERGE_READY_WATCH_STATUS_KEY,
+      'Watching #64 · Ready to merge',
+    );
+  });
+
   it.each([
     { name: 'wait-only', status: createUrlCiRunningStatus() },
     { name: 'ready', status: createUrlReadyStatus() },
@@ -1087,7 +1138,7 @@ describe('merge-ready watch loop', () => {
       },
     });
 
-    expect(result).toEqual({ kind: 'stopped', reason: 'max_iterations' });
+    expect(result).toMatchObject({ kind: 'stopped', reason: 'max_iterations' });
     expect(sendUserMessage).not.toHaveBeenCalled();
     expect(checkDirtyWorkingTree).not.toHaveBeenCalled();
     expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(
@@ -1247,7 +1298,10 @@ describe('merge-ready watch loop', () => {
     ).toBe(false);
 
     pollDelay.resolve();
-    await expect(start.promise).resolves.toEqual({ kind: 'stopped', reason: 'max_iterations' });
+    await expect(start.promise).resolves.toMatchObject({
+      kind: 'stopped',
+      reason: 'max_iterations',
+    });
 
     const prompt = vi.mocked(sendUserMessage).mock.calls[0]?.[0];
     expect(prompt).toContain('Use the merge-ready-loop skill');
@@ -1493,7 +1547,10 @@ describe('merge-ready watch loop', () => {
     ).toBe(false);
 
     pollDelay.resolve();
-    await expect(start.promise).resolves.toEqual({ kind: 'stopped', reason: 'max_iterations' });
+    await expect(start.promise).resolves.toMatchObject({
+      kind: 'stopped',
+      reason: 'max_iterations',
+    });
 
     const prompt = vi.mocked(sendUserMessage).mock.calls[0]?.[0];
     expect(prompt).toContain(`Use the merge-ready-loop skill for ${RUNTIME_URL_TARGET.url}.`);
