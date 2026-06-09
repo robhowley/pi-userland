@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.1](https://github.com/robhowley/pi-userland/compare/pi-structured-return-v1.10.0...pi-structured-return-v1.10.1) (2026-06-09)
+
+
+### Bug Fixes
+
+* add pi-userland keyword to all package.json files ([#77](https://github.com/robhowley/pi-userland/issues/77)) ([fa234bd](https://github.com/robhowley/pi-userland/commit/fa234bd70ce0f80f62681b421ee931c17bc076dd))
+
 ## [1.10.0](https://github.com/robhowley/pi-userland/compare/pi-structured-return-v1.9.1...pi-structured-return-v1.10.0) (2026-05-02)
 
 

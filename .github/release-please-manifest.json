@@ -1,8 +1,8 @@
 {
-  "packages/pi-merge-ready": "0.6.0",
-  "packages/pi-openrouter": "0.11.0",
-  "packages/pi-session-hygiene": "0.2.1",
-  "packages/pi-spinner-verbs": "3.3.1",
-  "packages/pi-structured-return": "1.10.0",
-  "packages/pi-yolo-seatbelt": "0.2.0"
+  "packages/pi-merge-ready": "0.6.1",
+  "packages/pi-openrouter": "0.11.1",
+  "packages/pi-session-hygiene": "0.2.2",
+  "packages/pi-spinner-verbs": "3.3.2",
+  "packages/pi-structured-return": "1.10.1",
+  "packages/pi-yolo-seatbelt": "0.2.1"
 }

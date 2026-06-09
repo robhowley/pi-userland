@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.3.2](https://github.com/robhowley/pi-userland/compare/pi-spinner-verbs-v3.3.1...pi-spinner-verbs-v3.3.2) (2026-06-09)
+
+
+### Bug Fixes
+
+* add pi-userland keyword to all package.json files ([#77](https://github.com/robhowley/pi-userland/issues/77)) ([fa234bd](https://github.com/robhowley/pi-userland/commit/fa234bd70ce0f80f62681b421ee931c17bc076dd))
+
 ## [3.3.1](https://github.com/robhowley/pi-userland/compare/pi-spinner-verbs-v3.3.0...pi-spinner-verbs-v3.3.1) (2026-05-01)
 
 
