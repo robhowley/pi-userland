@@ -20,7 +20,8 @@
     "repair-loop",
     "agent-loop",
     "github-pr",
-    "code-review"
+    "code-review",
+    "pi-userland"
   ],
   "pi": {
     "extensions": [
