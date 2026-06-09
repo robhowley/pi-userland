@@ -71,7 +71,7 @@ mkdir -p packages/$NAME/__tests__
   "publishConfig": {
     "access": "public"
   },
-  "keywords": ["pi-package"],
+  "keywords": ["pi-package", "pi-userland"],
   "pi": {
     "extensions": ["./extensions/<basename>"]
   },
