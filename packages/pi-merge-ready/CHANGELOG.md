@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/robhowley/pi-userland/compare/pi-merge-ready-v0.6.0...pi-merge-ready-v0.6.1) (2026-06-09)
+
+
+### Bug Fixes
+
+* add pi-userland keyword to all package.json files ([#77](https://github.com/robhowley/pi-userland/issues/77)) ([fa234bd](https://github.com/robhowley/pi-userland/commit/fa234bd70ce0f80f62681b421ee931c17bc076dd))
+
 ## [0.6.0](https://github.com/robhowley/pi-userland/compare/pi-merge-ready-v0.5.0...pi-merge-ready-v0.6.0) (2026-06-08)
 
 
