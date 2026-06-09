@@ -11,7 +11,8 @@
     "access": "public"
   },
   "keywords": [
-    "pi-package"
+    "pi-package",
+    "pi-userland"
   ],
   "pi": {
     "extensions": [

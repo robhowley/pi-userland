@@ -14,7 +14,8 @@
   },
   "keywords": [
     "pi-package",
-    "openrouter"
+    "openrouter",
+    "pi-userland"
   ],
   "pi": {
     "extensions": [

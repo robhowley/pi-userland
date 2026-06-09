@@ -18,7 +18,8 @@
     "pi",
     "pi-extension",
     "token-reduction",
-    "structured-output"
+    "structured-output",
+    "pi-userland"
   ],
   "pi": {
     "extensions": [
