@@ -80,7 +80,7 @@ mkdir -p packages/$NAME/__tests__
     "url": "https://github.com/robhowley/pi-userland.git",
     "directory": "packages/<name>"
   },
-  "homepage": "https://github.com/robhowley/pi-userland/tree/main/packages/<name>",
+  "homepage": "https://pi-userland.dev",
   "scripts": {
     "lint": "eslint extensions/",
     "format:check": "prettier --check extensions/",
@@ -88,9 +88,10 @@ mkdir -p packages/$NAME/__tests__
     "typecheck": "tsc --noEmit",
     "test": "vitest run __tests__"
   },
+  "license": "MIT",
   "peerDependencies": {
-    "@mariozechner/pi-ai": "*",
-    "@mariozechner/pi-coding-agent": "*"
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
   },
   "devDependencies": {
     "@types/node": "^22.15.17"
