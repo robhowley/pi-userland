@@ -1,5 +1,10 @@
 # Pi Userland
 
+[![CI](https://github.com/robhowley/pi-userland/actions/workflows/ci.yml/badge.svg)](https://github.com/robhowley/pi-userland/actions/workflows/ci.yml)
+[![license](https://img.shields.io/github/license/robhowley/pi-userland.svg)](https://github.com/robhowley/pi-userland/blob/main/LICENSE)
+[![site](https://img.shields.io/badge/site-pi--userland.dev-black.svg)](https://pi-userland.dev)
+[![npm packages](https://img.shields.io/badge/npm-pi--userland_packages-black.svg)](https://www.npmjs.com/search?page=0&q=keywords%3Api-userland&sortBy=downloads_monthly)
+
 Monorepo of independently publishable Pi packages.
 
 Small, focused packages to augment your Pi environment without adding unnecessary overhead.
