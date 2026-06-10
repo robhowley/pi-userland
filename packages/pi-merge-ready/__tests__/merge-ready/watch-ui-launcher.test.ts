@@ -1,4 +1,3 @@
-import { access } from 'node:fs/promises';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('node:fs/promises', () => ({
