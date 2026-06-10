@@ -1,69 +1,87 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Merge-ready watch</title>
-  <link rel="stylesheet" href="./style.css" />
-  <script defer src="./app.js"></script>
-</head>
-<body>
-  <article class="page" aria-label="Merge-ready watch localhost console">
-    <div class="topline">
-      <span><strong>MR-WATCH</strong> localhost console</span>
-      <span id="message" data-tone="info">Ready.</span>
-    </div>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Merge-ready watch</title>
+    <link rel="stylesheet" href="./style.css" />
+    <script defer src="./app.js"></script>
+  </head>
+  <body>
+    <article class="page" aria-label="Merge-ready watch localhost console">
+      <div class="topline">
+        <span><strong>MR-WATCH</strong> localhost console</span>
+        <span id="message" data-tone="info">Ready.</span>
+      </div>
 
-    <main id="watch-ui-layout">
-      <header>
-        <div>
-          <h1>Merge-ready watch</h1>
-          <p class="summary">Local control surface for PR watchers. Queue first, state first, session truth visible.</p>
-        </div>
-        <div class="cwd" id="cwd-note">New watches use cwd: loading…</div>
-      </header>
-
-      <div id="compact-status" class="compact-status" aria-label="Watch summary"></div>
-
-      <section class="shell" aria-label="Add watch">
-        <div class="shell-title">
-          <span>GitHub pull request URL</span>
-          <span>watch add</span>
-        </div>
-        <form id="add-watch-form">
-          <div class="prompt">$ mr watch</div>
-          <input id="watch-url" aria-label="GitHub pull request URL" placeholder="https://github.com/OWNER/REPO/pull/NUMBER" autocomplete="off" />
-          <button type="submit">Add watch</button>
-        </form>
-      </section>
-
-      <p class="note">Live focus/open is not supported in watch-ui v1. Use the session file path instead.</p>
-
-      <h2>Watch queue</h2>
-      <div id="watch-list" aria-live="polite"></div>
-
-      <section id="transcript-panel" class="transcript-panel" aria-label="Transcript" aria-hidden="true" hidden>
-        <div class="transcript-head">
+      <main id="watch-ui-layout">
+        <header>
           <div>
-            <div class="transcript-kicker">Transcript</div>
-            <h2 id="transcript-title">Transcript</h2>
+            <h1>Merge-ready watch</h1>
+            <p class="summary">
+              Local control surface for PR watchers. Queue first, state first, session truth
+              visible.
+            </p>
           </div>
-          <div class="transcript-head-actions">
-            <span id="transcript-status" class="transcript-status">Select a watch</span>
-            <button id="transcript-close" type="button" disabled>Close</button>
-          </div>
-        </div>
-        <p id="transcript-meta" class="transcript-meta">Select a watch to inspect its transcript.</p>
-        <div id="transcript-body" class="transcript-body">
-          <div id="transcript-content"></div>
-        </div>
-      </section>
+          <div class="cwd" id="cwd-note">New watches use cwd: loading…</div>
+        </header>
 
-      <footer>
-        <span>plain terminal controls</span>
-        <span>use session path for focus/open</span>
-      </footer>
-    </main>
-  </article>
-</body>
+        <div id="compact-status" class="compact-status" aria-label="Watch summary"></div>
+
+        <section class="shell" aria-label="Add watch">
+          <div class="shell-title">
+            <span>GitHub pull request URL</span>
+            <span>watch add</span>
+          </div>
+          <form id="add-watch-form">
+            <div class="prompt">$ mr watch</div>
+            <input
+              id="watch-url"
+              aria-label="GitHub pull request URL"
+              placeholder="https://github.com/OWNER/REPO/pull/NUMBER"
+              autocomplete="off"
+            />
+            <button type="submit">Add watch</button>
+          </form>
+        </section>
+
+        <p class="note">
+          Live focus/open is not supported in watch-ui v1. Use the session file path instead.
+        </p>
+
+        <h2>Watch queue</h2>
+        <div id="watch-list" aria-live="polite"></div>
+
+        <section
+          id="transcript-panel"
+          class="transcript-panel"
+          aria-label="Transcript"
+          aria-hidden="true"
+          hidden
+        >
+          <div class="transcript-head">
+            <div>
+              <div class="transcript-kicker">Transcript</div>
+              <h2 id="transcript-title">Transcript</h2>
+            </div>
+            <div class="transcript-head-actions">
+              <span id="transcript-status" class="transcript-status">Select a watch</span>
+              <button id="transcript-close" type="button" disabled>Close</button>
+            </div>
+          </div>
+          <p id="transcript-meta" class="transcript-meta">
+            Select a watch to inspect its transcript.
+          </p>
+          <div id="transcript-body" class="transcript-body">
+            <div id="transcript-content"></div>
+          </div>
+        </section>
+
+        <footer>
+          <span>plain terminal controls</span>
+          <span>use session path for focus/open</span>
+        </footer>
+      </main>
+    </article>
+  </body>
 </html>

@@ -144,7 +144,10 @@ function parseMergeReadyWatchUiAgentDirArg(args: string[]): string | undefined {
   return readMergeReadyWatchUiArgValue(args, '--agent-dir');
 }
 
-function readMergeReadyWatchUiArgValue(args: string[], flag: '--agent-dir' | '--cwd'): string | undefined {
+function readMergeReadyWatchUiArgValue(
+  args: string[],
+  flag: '--agent-dir' | '--cwd',
+): string | undefined {
   for (let index = 0; index < args.length; index += 1) {
     if (args[index] !== flag) {
       continue;

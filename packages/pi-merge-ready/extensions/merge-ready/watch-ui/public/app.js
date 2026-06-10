@@ -207,7 +207,10 @@ function renderWatchQueue(watches) {
   queue.setAttribute('aria-label', 'Tracked pull requests');
 
   const head = createElement('div', 'queue-head');
-  head.append(createElement('span', '', 'Tracked PRs'), createElement('strong', '', 'attention first'));
+  head.append(
+    createElement('span', '', 'Tracked PRs'),
+    createElement('strong', '', 'attention first'),
+  );
   queue.append(head);
 
   for (const watch of watches) {
@@ -339,22 +342,6 @@ function renderWatchFacts(watch) {
   return details;
 }
 
-function renderSelectedWatchPr(watch) {
-  const pr = createElement('div', 'pr');
-  pr.append(createElement('strong', '', 'PR'), ` ${watch.canonicalUrl ?? '(unknown PR URL)'}`);
-  return pr;
-}
-
-function renderWatchDetails(watch) {
-  const details = document.createElement('dl');
-  appendDefinition(details, 'Lifecycle', readWatchLifecycle(watch), readWatchTone(watch));
-  appendDefinition(details, 'Merge state', readWatchMergeState(watch));
-  appendDefinition(details, 'Updated', formatAge(watch.updatedAt));
-  appendDefinition(details, 'Open item', readWatchOpenItem(watch));
-  appendDefinition(details, 'Cwd', watch.cwd ?? '(unknown cwd)');
-  return details;
-}
-
 function appendDefinition(dl, term, value, tone = '') {
   dl.append(createElement('dt', '', term), createElement('dd', tone, value));
 }
@@ -422,17 +409,6 @@ function renderWatchTimeline(watch) {
   return timeline;
 }
 
-function renderHandleBox(label, value) {
-  const box = createElement('div', 'handle-box');
-  const head = createElement('div', 'handle-head');
-  const copy = createButton('copy', !value || value === '(none)' || value === '(unknown)', async () => {
-    await copyText(value);
-  });
-  head.append(createElement('span', '', label), copy);
-  box.append(head, createElement('div', 'handle-value', value));
-  return box;
-}
-
 function renderWatchActions(watch) {
   const actions = createElement('div', 'actions');
   actions.setAttribute('aria-label', 'Watch actions');
@@ -467,10 +443,6 @@ function renderWatchActions(watch) {
     } catch (error) {
       setMessage(readErrorMessage(error), 'error');
     }
-  });
-
-  const copyPathButton = createButton('Copy path', !watch.session?.sessionFile, async () => {
-    await copyText(watch.session.sessionFile);
   });
 
   const removeButton = createButton('Remove', watch.state === 'active', async () => {
@@ -936,7 +908,10 @@ function scrollTranscriptPanelIntoView() {
 }
 
 function createPrLink(watch, label = 'PR ↗') {
-  const url = typeof watch?.canonicalUrl === 'string' ? watch.canonicalUrl : watch?.lastStatus?.pr?.url ?? '';
+  const url =
+    typeof watch?.canonicalUrl === 'string'
+      ? watch.canonicalUrl
+      : (watch?.lastStatus?.pr?.url ?? '');
   const link = document.createElement('a');
   link.className = 'pr-link';
   link.href = url || '#';
@@ -999,7 +974,11 @@ function readWatchPriority(watch) {
     return 0;
   }
 
-  if (summary.includes('needs user') || summary.includes('manual') || summary.includes('ambiguous')) {
+  if (
+    summary.includes('needs user') ||
+    summary.includes('manual') ||
+    summary.includes('ambiguous')
+  ) {
     return 1;
   }
 
@@ -1037,7 +1016,10 @@ function readWatchCounts(watches) {
     const mergeState = readWatchMergeState(watch);
     if (priority <= 1) {
       counts.needsUser += 1;
-    } else if (['repairing', 'verifying', 'active'].includes(lifecycle) || watch.state === 'active') {
+    } else if (
+      ['repairing', 'verifying', 'active'].includes(lifecycle) ||
+      watch.state === 'active'
+    ) {
       counts.activeLoops += 1;
     } else if (mergeState === 'pending' || lifecycle === 'waiting') {
       counts.waiting += 1;
@@ -1061,7 +1043,10 @@ function readWatchTone(watch) {
     return 'bad';
   }
 
-  if (mergeState === 'pending' || ['repairing', 'verifying', 'active', 'waiting'].includes(readWatchLifecycle(watch))) {
+  if (
+    mergeState === 'pending' ||
+    ['repairing', 'verifying', 'active', 'waiting'].includes(readWatchLifecycle(watch))
+  ) {
     return 'warn';
   }
 
