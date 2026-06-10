@@ -13,8 +13,6 @@ import {
 } from '../../extensions/merge-ready/watch-ui/launcher.js';
 import { MERGE_READY_WATCH_UI_SERVICE } from '../../extensions/merge-ready/watch-ui/supervisor-state.js';
 
-const mockAccess = vi.mocked(access);
-
 const PATHS = {
   stateDir: '/tmp/merge-ready/watch-ui',
   supervisorInfoFile: '/tmp/merge-ready/watch-ui/supervisor.json',
