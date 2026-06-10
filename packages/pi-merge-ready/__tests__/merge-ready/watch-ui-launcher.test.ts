@@ -1,4 +1,9 @@
+import { access } from 'node:fs/promises';
 import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('node:fs/promises', () => ({
+  access: vi.fn(async () => undefined),
+}));
 import {
   createMergeReadyWatchUiOpenCommand,
   launchMergeReadyWatchUIWithDependencies,
@@ -7,6 +12,8 @@ import {
   resolveMergeReadyWatchUiSupervisorMainPath,
 } from '../../extensions/merge-ready/watch-ui/launcher.js';
 import { MERGE_READY_WATCH_UI_SERVICE } from '../../extensions/merge-ready/watch-ui/supervisor-state.js';
+
+const mockAccess = vi.mocked(access);
 
 const PATHS = {
   stateDir: '/tmp/merge-ready/watch-ui',
