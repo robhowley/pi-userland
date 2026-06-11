@@ -1,6 +1,9 @@
+import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {
+  AuthStorage,
   DefaultResourceLoader,
+  ModelRegistry,
   SessionManager,
   createAgentSession,
   createEventBus,
@@ -15,6 +18,15 @@ import {
   type MergeReadyWatchStatusRecord,
 } from '../watch-status.js';
 import {
+  createMergeReadyWatchUiSnapshotModel,
+  assertMergeReadyWatchUiRuntimeSnapshot,
+  getMergeReadyWatchUiRuntimePaths,
+  isMergeReadyWatchUiRuntimePreflightError,
+  MergeReadyWatchUiRuntimePreflightError,
+  type MergeReadyWatchUiRuntimeSnapshot,
+} from './runtime-snapshot.js';
+import {
+  getMergeReadyWatchUiPaths,
   readMergeReadyPersistedWatchesState,
   reconcilePersistedWatchesState,
   writeMergeReadyPersistedWatchesState,
@@ -36,9 +48,18 @@ export type MergeReadyWatchResourceLoaderLike = {
   reload: () => Promise<void>;
 };
 
+type MergeReadyWatchSessionRuntimeConfig = {
+  authStorage: AuthStorage;
+  model: MergeReadyWatchUiRuntimeSnapshot['model'];
+  modelRegistry: ModelRegistry;
+  thinkingLevel: MergeReadyWatchUiRuntimeSnapshot['thinkingLevel'];
+};
+
 export type MergeReadyWatchSessionRunnerDependencies = {
   agentDir?: string;
+  createAuthStorage?: (authStoragePath: string) => AuthStorage;
   createEventBus?: typeof createEventBus;
+  createModelRegistry?: (authStorage: AuthStorage, modelRegistryPath: string) => ModelRegistry;
   createResourceLoader?: (options: {
     cwd: string;
     agentDir: string;
@@ -47,10 +68,14 @@ export type MergeReadyWatchSessionRunnerDependencies = {
     skillPath: string;
   }) => MergeReadyWatchResourceLoaderLike;
   createSession?: (options: {
+    authStorage?: AuthStorage;
     cwd: string;
     agentDir: string;
+    model?: MergeReadyWatchUiRuntimeSnapshot['model'];
+    modelRegistry?: ModelRegistry;
     resourceLoader: MergeReadyWatchResourceLoaderLike;
     sessionManager: SessionManager;
+    thinkingLevel?: MergeReadyWatchUiRuntimeSnapshot['thinkingLevel'];
   }) => Promise<{ session: MergeReadyWatchSessionLike }>;
   createSessionManager?: (cwd: string) => SessionManager;
   now?: () => Date;
@@ -61,6 +86,7 @@ export type CreateMergeReadyWatchSessionRunnerOptions = {
   defaultCwd: string;
   extensionDir: string;
   paths: MergeReadyWatchUiPaths;
+  runtimeSnapshot?: MergeReadyWatchUiRuntimeSnapshot;
   skillPath: string;
   dependencies?: MergeReadyWatchSessionRunnerDependencies;
 };
@@ -93,6 +119,12 @@ type MergeReadyLiveWatchHandle = {
 
 export class MergeReadyWatchSessionRunner {
   private readonly agentDir: string;
+  private readonly createAuthStorage: NonNullable<
+    MergeReadyWatchSessionRunnerDependencies['createAuthStorage']
+  >;
+  private readonly createModelRegistry: NonNullable<
+    MergeReadyWatchSessionRunnerDependencies['createModelRegistry']
+  >;
   private readonly createResourceLoader: NonNullable<
     MergeReadyWatchSessionRunnerDependencies['createResourceLoader']
   >;
@@ -111,6 +143,7 @@ export class MergeReadyWatchSessionRunner {
     MergeReadyWatchSessionRunnerDependencies['readTranscript']
   >;
   private readonly recordsById = new Map<string, MergeReadyPersistedWatchRecord>();
+  private readonly runtimeSnapshot: MergeReadyWatchUiRuntimeSnapshot | undefined;
   private readonly skillPath: string;
   private readonly unsubscribeStatus: () => void;
   private readonly liveHandles = new Map<string, MergeReadyLiveWatchHandle>();
@@ -119,19 +152,27 @@ export class MergeReadyWatchSessionRunner {
   private constructor(options: CreateMergeReadyWatchSessionRunnerOptions) {
     const dependencies = options.dependencies ?? {};
 
-    this.agentDir = dependencies.agentDir ?? getAgentDir();
+    this.runtimeSnapshot = options.runtimeSnapshot;
+    this.agentDir = path.resolve(
+      options.runtimeSnapshot?.agentDir ?? dependencies.agentDir ?? getAgentDir(),
+    );
+    this.createAuthStorage = dependencies.createAuthStorage ?? AuthStorage.create;
+    this.createModelRegistry = dependencies.createModelRegistry ?? ModelRegistry.create;
     this.createResourceLoader =
       dependencies.createResourceLoader ?? createDefaultMergeReadyWatchResourceLoader;
     this.createSession = dependencies.createSession ?? createDefaultMergeReadyWatchSession;
     this.createSessionManager =
       dependencies.createSessionManager ?? ((cwd: string) => SessionManager.create(cwd));
-    this.defaultCwd = options.defaultCwd;
+    this.defaultCwd = options.runtimeSnapshot?.defaultCwd ?? options.defaultCwd;
     this.eventBus = (dependencies.createEventBus ?? createEventBus)();
     this.extensionDir = options.extensionDir;
     this.now = dependencies.now ?? (() => new Date());
     this.paths = options.paths;
     this.readTranscript = dependencies.readTranscript ?? readMergeReadyTranscript;
     this.skillPath = options.skillPath;
+    if (this.runtimeSnapshot) {
+      assertMergeReadyWatchUiPathsMatchAgentDir(this.paths, this.agentDir);
+    }
     this.unsubscribeStatus = this.eventBus.on(MERGE_READY_WATCH_STATUS_EVENT, (data) => {
       this.handleStatusEvent(data);
     });
@@ -184,12 +225,27 @@ export class MergeReadyWatchSessionRunner {
     await resourceLoader.reload();
 
     const sessionManager = this.createSessionManager(cwd);
-    const { session } = await this.createSession({
-      cwd,
-      agentDir: this.agentDir,
-      resourceLoader,
-      sessionManager,
-    });
+    const sessionRuntime = this.createWatchSessionRuntime();
+    let session: MergeReadyWatchSessionLike;
+    try {
+      ({ session } = await this.createSession({
+        ...(sessionRuntime ?? {}),
+        cwd,
+        agentDir: this.agentDir,
+        resourceLoader,
+        sessionManager,
+      }));
+    } catch (error) {
+      if (isMergeReadyWatchUiRuntimePreflightError(error)) {
+        throw error;
+      }
+      if (this.runtimeSnapshot) {
+        throw new MergeReadyWatchUiRuntimePreflightError(
+          `unable to create a child session from the captured runtime: ${getErrorMessage(error)}`,
+        );
+      }
+      throw error;
+    }
 
     if (!session.sessionFile) {
       session.dispose();
@@ -503,6 +559,59 @@ export class MergeReadyWatchSessionRunner {
     };
   }
 
+  private createWatchSessionRuntime(): MergeReadyWatchSessionRuntimeConfig | undefined {
+    const snapshot = this.runtimeSnapshot;
+    if (!snapshot) {
+      return undefined;
+    }
+
+    assertMergeReadyWatchUiRuntimeSnapshot(snapshot);
+    const runtimePaths = getMergeReadyWatchUiRuntimePaths(this.agentDir);
+
+    let authStorage: AuthStorage;
+    try {
+      authStorage = this.createAuthStorage(runtimePaths.authStoragePath);
+    } catch (error) {
+      throw new MergeReadyWatchUiRuntimePreflightError(
+        `failed to load auth storage from ${runtimePaths.authStoragePath}: ${getErrorMessage(error)}`,
+      );
+    }
+
+    const authStorageErrors = authStorage.drainErrors();
+    if (authStorageErrors.length > 0) {
+      throw new MergeReadyWatchUiRuntimePreflightError(
+        `failed to load auth storage from ${runtimePaths.authStoragePath}: ${authStorageErrors.map((error) => error.message).join('; ')}`,
+      );
+    }
+
+    if (snapshot.auth.apiKey) {
+      authStorage.setRuntimeApiKey(snapshot.auth.provider, snapshot.auth.apiKey);
+    }
+
+    let modelRegistry: ModelRegistry;
+    try {
+      modelRegistry = this.createModelRegistry(authStorage, runtimePaths.modelRegistryPath);
+    } catch (error) {
+      throw new MergeReadyWatchUiRuntimePreflightError(
+        `failed to load model registry from ${runtimePaths.modelRegistryPath}: ${getErrorMessage(error)}`,
+      );
+    }
+
+    const modelRegistryError = modelRegistry.getError();
+    if (modelRegistryError) {
+      throw new MergeReadyWatchUiRuntimePreflightError(
+        `failed to load model registry from ${runtimePaths.modelRegistryPath}: ${modelRegistryError}`,
+      );
+    }
+
+    return {
+      authStorage,
+      model: createMergeReadyWatchUiSnapshotModel(snapshot),
+      modelRegistry,
+      thinkingLevel: snapshot.thinkingLevel,
+    };
+  }
+
   private async persist(): Promise<void> {
     const snapshot = this.snapshotState();
     this.writeQueue = this.writeQueue.then(() =>
@@ -535,16 +644,24 @@ function createDefaultMergeReadyWatchResourceLoader(options: {
 }
 
 async function createDefaultMergeReadyWatchSession(options: {
+  authStorage?: AuthStorage;
   cwd: string;
   agentDir: string;
+  model?: MergeReadyWatchUiRuntimeSnapshot['model'];
+  modelRegistry?: ModelRegistry;
   resourceLoader: MergeReadyWatchResourceLoaderLike;
   sessionManager: SessionManager;
+  thinkingLevel?: MergeReadyWatchUiRuntimeSnapshot['thinkingLevel'];
 }): Promise<{ session: MergeReadyWatchSessionLike }> {
   const { session } = await createAgentSession({
+    ...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
     cwd: options.cwd,
     agentDir: options.agentDir,
+    ...(options.model === undefined ? {} : { model: options.model }),
+    ...(options.modelRegistry === undefined ? {} : { modelRegistry: options.modelRegistry }),
     resourceLoader: options.resourceLoader as never,
     sessionManager: options.sessionManager,
+    ...(options.thinkingLevel === undefined ? {} : { thinkingLevel: options.thinkingLevel }),
   });
   return { session };
 }
@@ -612,4 +729,31 @@ function isAbortLikeError(error: unknown): boolean {
 function normalizeWatchCwd(cwd: string | undefined, fallbackCwd: string): string {
   const trimmed = cwd?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : fallbackCwd;
+}
+
+function assertMergeReadyWatchUiPathsMatchAgentDir(
+  paths: MergeReadyWatchUiPaths,
+  agentDir: string,
+): void {
+  const expectedPaths = getMergeReadyWatchUiPaths(agentDir);
+  const pathEntries: Array<[string, string, string]> = [
+    ['stateDir', paths.stateDir, expectedPaths.stateDir],
+    ['supervisorInfoFile', paths.supervisorInfoFile, expectedPaths.supervisorInfoFile],
+    ['tokenFile', paths.tokenFile, expectedPaths.tokenFile],
+    ['watchesFile', paths.watchesFile, expectedPaths.watchesFile],
+    ['logFile', paths.logFile, expectedPaths.logFile],
+    ['startupLockDir', paths.startupLockDir, expectedPaths.startupLockDir],
+  ];
+  const mismatches = pathEntries.filter(
+    ([, actual, expected]) => path.resolve(actual) !== path.resolve(expected),
+  );
+
+  if (mismatches.length === 0) {
+    return;
+  }
+
+  const [field, actual, expected] = mismatches[0]!;
+  throw new MergeReadyWatchUiRuntimePreflightError(
+    `captured agentDir ${JSON.stringify(agentDir)} does not match runner ${field} (${JSON.stringify(actual)}; expected ${JSON.stringify(expected)}).`,
+  );
 }
