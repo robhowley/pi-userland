@@ -6,6 +6,8 @@ export type MergeReadyWatchUiHealth = {
   port: number;
   startedAt: string;
   packageVersion: string;
+  snapshotLoaded: boolean;
+  snapshotSignature: string;
 };
 
 export function createMergeReadyWatchUiUrl(port: number, token: string, cwd?: string): string {
@@ -41,7 +43,16 @@ export async function fetchMergeReadyWatchUiHealth(
       return null;
     }
 
-    return payload as MergeReadyWatchUiHealth;
+    return {
+      service: payload.service,
+      pid: payload.pid,
+      port: payload.port,
+      startedAt: payload.startedAt,
+      packageVersion: payload.packageVersion,
+      snapshotLoaded: typeof payload.snapshotLoaded === 'boolean' ? payload.snapshotLoaded : false,
+      snapshotSignature:
+        typeof payload.snapshotSignature === 'string' ? payload.snapshotSignature : '',
+    };
   } catch {
     return null;
   }

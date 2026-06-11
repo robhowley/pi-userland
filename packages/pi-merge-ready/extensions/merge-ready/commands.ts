@@ -1,4 +1,9 @@
 import { launchMergeReadyWatchUI } from './watch-ui/launcher.js';
+import type {
+  WatchUiRuntimeModel,
+  WatchUiRuntimeModelRegistry,
+  WatchUiThinkingLevel,
+} from './watch-ui/runtime-snapshot.js';
 import { getMergeReadyStatus } from './merge-ready.js';
 import { syncMergeReadyStatusBar } from './status-bar.js';
 import { selectMergeReadyBadgeId } from './status.js';
@@ -35,8 +40,11 @@ export type MergeReadyCommandCompactOptions = {
 
 export type MergeReadyCommandContext = {
   cwd: string;
+  getThinkingLevel?: () => WatchUiThinkingLevel | undefined;
   mode?: 'tui' | 'rpc' | 'json' | 'print';
   isIdle?: () => boolean;
+  model?: WatchUiRuntimeModel;
+  modelRegistry?: WatchUiRuntimeModelRegistry;
   waitForIdle?: () => Promise<void>;
   signal?: AbortSignal;
   sessionManager?: {
@@ -154,6 +162,9 @@ export function registerMergeReadyCommand(pi: MergeReadyCommandAPI): void {
         const launched = await launchMergeReadyWatchUI({
           exec: pi.exec,
           cwd: ctx.cwd,
+          getThinkingLevel: ctx.getThinkingLevel,
+          model: ctx.model,
+          modelRegistry: ctx.modelRegistry,
           ...(sessionDir === undefined ? {} : { sessionDir }),
         });
         ctx.ui.notify(launched.message, launched.level);

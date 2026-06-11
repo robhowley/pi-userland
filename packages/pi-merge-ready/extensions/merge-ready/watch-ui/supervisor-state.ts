@@ -26,6 +26,8 @@ export type MergeReadyWatchSupervisorInfo = {
   defaultCwd: string;
   extensionDir: string;
   extensionEntryPath: string;
+  snapshotLoaded: boolean;
+  snapshotSignature: string;
 };
 
 export type MergeReadyWatchRecordState = 'active' | 'stopped' | 'stale' | 'error';

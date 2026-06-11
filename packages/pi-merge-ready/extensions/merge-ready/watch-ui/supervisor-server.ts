@@ -22,6 +22,8 @@ export type CreateMergeReadyWatchUiSupervisorServerOptions = {
   port?: number;
   publicDir: string;
   runner: MergeReadyWatchUiRunner;
+  snapshotLoaded: boolean;
+  snapshotSignature: string;
   token: string;
 };
 
@@ -99,6 +101,8 @@ async function handleMergeReadyWatchUiRequest(options: {
       port: resolveLocalPort(options.request),
       startedAt: options.startedAt,
       packageVersion: options.options.packageVersion,
+      snapshotLoaded: options.options.snapshotLoaded,
+      snapshotSignature: options.options.snapshotSignature,
     });
     return;
   }

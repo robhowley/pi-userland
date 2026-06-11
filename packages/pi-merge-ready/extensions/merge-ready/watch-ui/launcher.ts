@@ -3,7 +3,16 @@ import { closeSync, openSync } from 'node:fs';
 import { access } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { VERSION, getAgentDir } from '@earendil-works/pi-coding-agent';
 import { getErrorMessage } from '../internal.js';
+import {
+  captureWatchUiRuntimeSnapshot,
+  removeWatchUiRuntimeSnapshotHandoff,
+  writeWatchUiRuntimeSnapshotHandoff,
+  type WatchUiRuntimeModel,
+  type WatchUiRuntimeModelRegistry,
+  type WatchUiThinkingLevel,
+} from './runtime-snapshot.js';
 import {
   createMergeReadyWatchUiUrl,
   fetchMergeReadyWatchUiHealth,
@@ -32,6 +41,9 @@ export type LaunchMergeReadyWatchUIOptions = {
   ) => Promise<{ stdout: string; stderr: string; code: number; killed: boolean }>;
   agentDir?: string;
   cwd: string;
+  getThinkingLevel?: () => WatchUiThinkingLevel | undefined;
+  model?: WatchUiRuntimeModel;
+  modelRegistry?: WatchUiRuntimeModelRegistry;
   openBrowser?: boolean;
   sessionDir?: string;
   startupTimeoutMs?: number;
@@ -48,6 +60,7 @@ export type MergeReadyWatchUiBrowserOpenResult =
 
 export type LaunchMergeReadyWatchUIDependencies = {
   acquireStartupLock: typeof acquireMergeReadyWatchUiStartupLock;
+  captureRuntimeSnapshot: typeof captureWatchUiRuntimeSnapshot;
   ensureToken: typeof ensureMergeReadyWatchUiToken;
   fetchHealth: typeof fetchMergeReadyWatchUiHealth;
   getPaths: typeof getMergeReadyWatchUiPaths;
@@ -58,32 +71,45 @@ export type LaunchMergeReadyWatchUIDependencies = {
   }) => Promise<MergeReadyWatchUiBrowserOpenResult>;
   readSupervisorInfo: typeof readMergeReadyWatchSupervisorInfo;
   readToken: typeof readMergeReadyWatchUiToken;
+  removeRuntimeSnapshotHandoff: typeof removeWatchUiRuntimeSnapshotHandoff;
   sleep: (ms: number) => Promise<void>;
   spawnSupervisor: (options: {
-    agentDir?: string;
+    agentDir: string;
     defaultCwd: string;
     logFile: string;
     packageRoot: string;
+    runtimeSnapshotPath: string;
     supervisorMainPath: string;
   }) => Promise<void>;
+  stopSupervisor: (options: {
+    info: MergeReadyWatchSupervisorInfo;
+    fetchHealth: typeof fetchMergeReadyWatchUiHealth;
+    sleep: (ms: number) => Promise<void>;
+  }) => Promise<void>;
+  writeRuntimeSnapshotHandoff: typeof writeWatchUiRuntimeSnapshotHandoff;
 };
 
 const DEFAULT_STARTUP_TIMEOUT_MS = 10_000;
 const DEFAULT_HEALTH_POLL_INTERVAL_MS = 100;
+const DEFAULT_SUPERVISOR_STOP_TIMEOUT_MS = 5_000;
 
 export async function launchMergeReadyWatchUI(
   options: LaunchMergeReadyWatchUIOptions,
 ): Promise<LaunchMergeReadyWatchUIResult> {
   return launchMergeReadyWatchUIWithDependencies(options, {
     acquireStartupLock: acquireMergeReadyWatchUiStartupLock,
+    captureRuntimeSnapshot: captureWatchUiRuntimeSnapshot,
     ensureToken: ensureMergeReadyWatchUiToken,
     fetchHealth: fetchMergeReadyWatchUiHealth,
     getPaths: getMergeReadyWatchUiPaths,
     openBrowser: openMergeReadyWatchUiInBrowser,
     readSupervisorInfo: readMergeReadyWatchSupervisorInfo,
     readToken: readMergeReadyWatchUiToken,
+    removeRuntimeSnapshotHandoff: removeWatchUiRuntimeSnapshotHandoff,
     sleep: delay,
     spawnSupervisor: spawnDetachedMergeReadyWatchUiSupervisor,
+    stopSupervisor: stopMergeReadyWatchUiSupervisor,
+    writeRuntimeSnapshotHandoff: writeWatchUiRuntimeSnapshotHandoff,
   });
 }
 
@@ -91,13 +117,22 @@ export async function launchMergeReadyWatchUIWithDependencies(
   options: LaunchMergeReadyWatchUIOptions,
   dependencies: LaunchMergeReadyWatchUIDependencies,
 ): Promise<LaunchMergeReadyWatchUIResult> {
-  const agentDir = resolveMergeReadyWatchUiAgentDir(options);
+  const agentDir = resolveMergeReadyWatchUiAgentDir(options) ?? getAgentDir();
   const paths = dependencies.getPaths(agentDir);
   const startupTimeoutMs = options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS;
 
   try {
+    const snapshot = await dependencies.captureRuntimeSnapshot({
+      agentDir,
+      defaultCwd: options.cwd,
+      getThinkingLevel: options.getThinkingLevel,
+      model: options.model,
+      modelRegistry: options.modelRegistry,
+      sdkVersion: VERSION,
+    });
+
     const existingSupervisor = await readHealthySupervisorInfo(paths, dependencies);
-    if (existingSupervisor) {
+    if (canReuseSupervisor(existingSupervisor, snapshot.signature)) {
       return openOrReportMergeReadyWatchUi({
         cwd: options.cwd,
         exec: options.exec,
@@ -114,9 +149,11 @@ export async function launchMergeReadyWatchUIWithDependencies(
       timeoutMs: startupTimeoutMs,
     });
 
+    let runtimeSnapshotPath: string | undefined;
+
     try {
       const healthyDuringLock = await readHealthySupervisorInfo(paths, dependencies);
-      if (healthyDuringLock) {
+      if (canReuseSupervisor(healthyDuringLock, snapshot.signature)) {
         return openOrReportMergeReadyWatchUi({
           cwd: options.cwd,
           exec: options.exec,
@@ -129,15 +166,25 @@ export async function launchMergeReadyWatchUIWithDependencies(
         });
       }
 
+      if (healthyDuringLock) {
+        await dependencies.stopSupervisor({
+          info: healthyDuringLock,
+          fetchHealth: dependencies.fetchHealth,
+          sleep: dependencies.sleep,
+        });
+      }
+
       const packageRoot = resolveMergeReadyWatchUiPackageRoot();
       const supervisorMainPath = resolveMergeReadyWatchUiSupervisorMainPath();
       await access(supervisorMainPath);
       await dependencies.ensureToken(paths);
+      runtimeSnapshotPath = await dependencies.writeRuntimeSnapshotHandoff(paths, snapshot);
       await dependencies.spawnSupervisor({
-        ...(agentDir === undefined ? {} : { agentDir }),
-        defaultCwd: options.cwd,
+        agentDir,
+        defaultCwd: snapshot.defaultCwd,
         logFile: paths.logFile,
         packageRoot,
+        runtimeSnapshotPath,
         supervisorMainPath,
       });
 
@@ -145,7 +192,9 @@ export async function launchMergeReadyWatchUIWithDependencies(
         paths,
         dependencies,
         startupTimeoutMs,
+        snapshot.signature,
       );
+      runtimeSnapshotPath = undefined;
       return openOrReportMergeReadyWatchUi({
         cwd: options.cwd,
         exec: options.exec,
@@ -157,6 +206,9 @@ export async function launchMergeReadyWatchUIWithDependencies(
         reused: false,
       });
     } finally {
+      if (runtimeSnapshotPath) {
+        await dependencies.removeRuntimeSnapshotHandoff(runtimeSnapshotPath).catch(() => undefined);
+      }
       await releaseLock();
     }
   } catch (error) {
@@ -229,10 +281,11 @@ export async function openMergeReadyWatchUiInBrowser(options: {
 }
 
 export async function spawnDetachedMergeReadyWatchUiSupervisor(options: {
-  agentDir?: string;
+  agentDir: string;
   defaultCwd: string;
   logFile: string;
   packageRoot: string;
+  runtimeSnapshotPath: string;
   supervisorMainPath: string;
 }): Promise<void> {
   const logFd = openSync(options.logFile, 'a');
@@ -244,14 +297,17 @@ export async function spawnDetachedMergeReadyWatchUiSupervisor(options: {
         options.supervisorMainPath,
         '--cwd',
         options.defaultCwd,
-        ...(options.agentDir === undefined ? [] : ['--agent-dir', options.agentDir]),
+        '--agent-dir',
+        options.agentDir,
+        '--runtime-snapshot',
+        options.runtimeSnapshotPath,
       ],
       {
         cwd: options.packageRoot,
         detached: true,
         env: {
           ...process.env,
-          ...(options.agentDir === undefined ? {} : { PI_CODING_AGENT_DIR: options.agentDir }),
+          PI_CODING_AGENT_DIR: options.agentDir,
         },
         stdio: ['ignore', logFd, logFd],
       },
@@ -304,6 +360,40 @@ export function resolveMergeReadyWatchUiSupervisorMainPath(fromFileUrl = import.
     'merge-ready',
     'watch-ui',
     'supervisor-main.js',
+  );
+}
+
+export async function stopMergeReadyWatchUiSupervisor(options: {
+  info: MergeReadyWatchSupervisorInfo;
+  fetchHealth: typeof fetchMergeReadyWatchUiHealth;
+  sleep: (ms: number) => Promise<void>;
+  timeoutMs?: number;
+}): Promise<void> {
+  if (options.info.pid <= 0) {
+    return;
+  }
+
+  try {
+    process.kill(options.info.pid, 'SIGTERM');
+  } catch (error) {
+    if (isNodeErrorWithCode(error, 'ESRCH')) {
+      return;
+    }
+    throw error;
+  }
+
+  const deadline = Date.now() + (options.timeoutMs ?? DEFAULT_SUPERVISOR_STOP_TIMEOUT_MS);
+  while (Date.now() < deadline) {
+    const health = await options.fetchHealth(options.info.port);
+    if (!health || health.pid !== options.info.pid) {
+      return;
+    }
+
+    await options.sleep(DEFAULT_HEALTH_POLL_INTERVAL_MS);
+  }
+
+  throw new Error(
+    `Timed out stopping existing merge-ready watch UI supervisor ${String(options.info.pid)}.`,
   );
 }
 
@@ -379,7 +469,18 @@ function normalizeHealthySupervisorInfo(
     port: health.port,
     startedAt: health.startedAt,
     packageVersion: health.packageVersion,
+    snapshotLoaded: health.snapshotLoaded,
+    snapshotSignature: health.snapshotSignature,
   };
+}
+
+function canReuseSupervisor(
+  info: MergeReadyWatchSupervisorInfo | null,
+  expectedSignature: string,
+): info is MergeReadyWatchSupervisorInfo {
+  return (
+    info !== null && info.snapshotLoaded === true && info.snapshotSignature === expectedSignature
+  );
 }
 
 async function waitForHealthySupervisor(
@@ -389,12 +490,13 @@ async function waitForHealthySupervisor(
     'fetchHealth' | 'readSupervisorInfo' | 'sleep'
   >,
   timeoutMs: number,
+  expectedSignature: string,
 ): Promise<MergeReadyWatchSupervisorInfo> {
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
     const healthy = await readHealthySupervisorInfo(paths, dependencies);
-    if (healthy) {
+    if (canReuseSupervisor(healthy, expectedSignature)) {
       return healthy;
     }
 
@@ -402,7 +504,16 @@ async function waitForHealthySupervisor(
   }
 
   throw new Error(
-    `Timed out waiting for merge-ready watch UI supervisor startup. See ${paths.logFile}`,
+    `Timed out waiting for merge-ready watch UI supervisor startup with runtime signature ${expectedSignature}. See ${paths.logFile}`,
+  );
+}
+
+function isNodeErrorWithCode(error: unknown, code: string): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as { code?: unknown }).code === code
   );
 }
 

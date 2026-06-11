@@ -311,7 +311,9 @@ function createRuntimeSnapshot(
   };
 }
 
-function createMockSession(overrides: Partial<MergeReadyWatchSessionLike> = {}): MergeReadyWatchSessionLike {
+function createMockSession(
+  overrides: Partial<MergeReadyWatchSessionLike> = {},
+): MergeReadyWatchSessionLike {
   return {
     sessionId: 'session-123',
     sessionFile: '/tmp/session-123.jsonl',

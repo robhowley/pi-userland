@@ -153,6 +153,7 @@ It starts or reuses a detached localhost supervisor, opens a browser when possib
 V1 notes:
 
 - watches are URL-targeted headless Pi SDK sessions backed by persisted Pi JSONL sessions
+- child watch sessions inherit the launching session's captured Pi runtime snapshot (agentDir, model, thinking level, and resolved auth); launch fails early if that runtime cannot be resolved safely
 - the UI polls a token-gated `127.0.0.1` API only; there is no hosted service
 - transcript inspection is read-only and uses the stored session file for the selected watch
 - live session focus/open is not supported in v1; use the session id/path shown in the UI

@@ -1,8 +1,9 @@
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { getAgentDir } from '@earendil-works/pi-coding-agent';
+import { VERSION } from '@earendil-works/pi-coding-agent';
 import { getErrorMessage } from '../internal.js';
+import { readWatchUiRuntimeSnapshotHandoff } from './runtime-snapshot.js';
 import { createMergeReadyWatchSessionRunner } from './session-runner.js';
 import { createMergeReadyWatchUiSupervisorServer } from './supervisor-server.js';
 import {
@@ -18,8 +19,29 @@ export async function runMergeReadyWatchUiSupervisorMain(
   args = process.argv.slice(2),
 ): Promise<void> {
   const packageRoot = resolveMergeReadyWatchUiPackageRoot();
-  const defaultCwd = parseMergeReadyWatchUiDefaultCwdArg(args) ?? process.cwd();
-  const agentDir = parseMergeReadyWatchUiAgentDirArg(args) ?? getAgentDir();
+  const runtimeSnapshotPath = parseMergeReadyWatchUiRuntimeSnapshotArg(args);
+  if (!runtimeSnapshotPath) {
+    throw new Error('Missing required --runtime-snapshot for merge-ready watch UI supervisor.');
+  }
+
+  const snapshot = await readWatchUiRuntimeSnapshotHandoff(runtimeSnapshotPath, {
+    expectedSdkVersion: VERSION,
+  });
+  const argDefaultCwd = parseMergeReadyWatchUiDefaultCwdArg(args);
+  const argAgentDir = parseMergeReadyWatchUiAgentDirArg(args);
+  if (argDefaultCwd && path.resolve(argDefaultCwd) !== snapshot.defaultCwd) {
+    throw new Error(
+      `Merge-ready watch UI runtime snapshot cwd mismatch: launcher=${snapshot.defaultCwd} arg=${path.resolve(argDefaultCwd)}.`,
+    );
+  }
+  if (argAgentDir && path.resolve(argAgentDir) !== snapshot.agentDir) {
+    throw new Error(
+      `Merge-ready watch UI runtime snapshot agentDir mismatch: launcher=${snapshot.agentDir} arg=${path.resolve(argAgentDir)}.`,
+    );
+  }
+
+  const defaultCwd = snapshot.defaultCwd;
+  const agentDir = snapshot.agentDir;
   const paths = getMergeReadyWatchUiPaths(agentDir);
   const publicDir = path.join(
     packageRoot,
@@ -40,15 +62,15 @@ export async function runMergeReadyWatchUiSupervisorMain(
     defaultCwd,
     extensionDir,
     paths,
+    runtimeSnapshot: snapshot,
     skillPath,
-    dependencies: {
-      agentDir,
-    },
   });
   const server = await createMergeReadyWatchUiSupervisorServer({
     packageVersion,
     publicDir,
     runner,
+    snapshotLoaded: true,
+    snapshotSignature: snapshot.signature,
     token,
   });
 
@@ -62,6 +84,8 @@ export async function runMergeReadyWatchUiSupervisorMain(
     defaultCwd,
     extensionDir,
     extensionEntryPath,
+    snapshotLoaded: true,
+    snapshotSignature: snapshot.signature,
   });
 
   let shuttingDown = false;
@@ -123,7 +147,8 @@ export async function runMergeReadyWatchUiSupervisorMain(
 
 export function resolveMergeReadyWatchUiPackageRoot(fromFileUrl = import.meta.url): string {
   const filePath = fileURLToPath(fromFileUrl);
-  return path.resolve(path.dirname(filePath), '../../../../');
+  const threeLevelsUp = path.resolve(path.dirname(filePath), '../../..');
+  return path.basename(threeLevelsUp) === 'dist' ? path.dirname(threeLevelsUp) : threeLevelsUp;
 }
 
 async function readMergeReadyWatchUiPackageVersion(packageRoot: string): Promise<string> {
@@ -144,9 +169,13 @@ function parseMergeReadyWatchUiAgentDirArg(args: string[]): string | undefined {
   return readMergeReadyWatchUiArgValue(args, '--agent-dir');
 }
 
+function parseMergeReadyWatchUiRuntimeSnapshotArg(args: string[]): string | undefined {
+  return readMergeReadyWatchUiArgValue(args, '--runtime-snapshot');
+}
+
 function readMergeReadyWatchUiArgValue(
   args: string[],
-  flag: '--agent-dir' | '--cwd',
+  flag: '--agent-dir' | '--cwd' | '--runtime-snapshot',
 ): string | undefined {
   for (let index = 0; index < args.length; index += 1) {
     if (args[index] !== flag) {

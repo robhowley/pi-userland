@@ -68,6 +68,8 @@ describe('merge-ready watch UI supervisor server', () => {
       packageVersion: '0.6.0',
       publicDir,
       runner,
+      snapshotLoaded: true,
+      snapshotSignature: 'runtime-signature-1',
       token: 'token-123',
     });
     servers.push(server);
@@ -77,6 +79,8 @@ describe('merge-ready watch UI supervisor server', () => {
     await expect(healthResponse.json()).resolves.toMatchObject({
       service: 'merge-ready-watch-ui',
       packageVersion: '0.6.0',
+      snapshotLoaded: true,
+      snapshotSignature: 'runtime-signature-1',
     });
 
     const unauthorizedResponse = await fetch(`http://127.0.0.1:${String(server.port)}/api/watches`);
