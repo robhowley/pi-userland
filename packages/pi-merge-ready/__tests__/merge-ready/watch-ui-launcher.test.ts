@@ -13,6 +13,7 @@ import {
   resolveMergeReadyWatchUiAgentDir,
   resolveMergeReadyWatchUiPackageRoot,
   resolveMergeReadyWatchUiSupervisorMainPath,
+  stopMergeReadyWatchUIWithDependencies,
 } from '../../extensions/merge-ready/watch-ui/launcher.js';
 import type { MergeReadyWatchUiHealth } from '../../extensions/merge-ready/watch-ui/supervisor-client.js';
 import {
@@ -164,6 +165,7 @@ describe('merge-ready watch UI launcher', () => {
         readSupervisorInfo,
         readToken: vi.fn(async () => 'token-123'),
         removeRuntimeSnapshotHandoff,
+        removeSupervisorInfo: vi.fn(async () => undefined),
         sleep: vi.fn(async () => undefined),
         spawnSupervisor,
         stopSupervisor: vi.fn(async () => undefined),
@@ -220,6 +222,7 @@ describe('merge-ready watch UI launcher', () => {
         readSupervisorInfo: vi.fn(async () => null),
         readToken: vi.fn(async () => 'token-123'),
         removeRuntimeSnapshotHandoff: vi.fn(async () => undefined),
+        removeSupervisorInfo: vi.fn(async () => undefined),
         sleep: vi.fn(async () => undefined),
         spawnSupervisor,
         stopSupervisor: vi.fn(async () => undefined),
@@ -261,6 +264,7 @@ describe('merge-ready watch UI launcher', () => {
         readSupervisorInfo: vi.fn(async (_paths: unknown) => SUPERVISOR_INFO),
         readToken: vi.fn(async () => 'token-123'),
         removeRuntimeSnapshotHandoff: vi.fn(async () => undefined),
+        removeSupervisorInfo: vi.fn(async () => undefined),
         sleep: vi.fn(async () => undefined),
         spawnSupervisor,
         stopSupervisor: vi.fn(async () => undefined),
@@ -318,6 +322,7 @@ describe('merge-ready watch UI launcher', () => {
           .mockResolvedValueOnce(SUPERVISOR_INFO),
         readToken: vi.fn(async () => 'token-123'),
         removeRuntimeSnapshotHandoff: vi.fn(async () => undefined),
+        removeSupervisorInfo: vi.fn(async () => undefined),
         sleep: vi.fn(async () => undefined),
         spawnSupervisor,
         stopSupervisor,
@@ -362,6 +367,7 @@ describe('merge-ready watch UI launcher', () => {
         readSupervisorInfo: vi.fn(async () => null),
         readToken: vi.fn(async () => 'token-123'),
         removeRuntimeSnapshotHandoff,
+        removeSupervisorInfo: vi.fn(async () => undefined),
         sleep: vi.fn(async () => undefined),
         spawnSupervisor: vi.fn(async () => undefined),
         stopSupervisor: vi.fn(async () => undefined),
@@ -372,5 +378,85 @@ describe('merge-ready watch UI launcher', () => {
     expect(removeRuntimeSnapshotHandoff).toHaveBeenCalledWith('/tmp/runtime-snapshot.json');
     expect(result.level).toBe('error');
     expect(result.message).toContain('runtime signature');
+  });
+
+  it('stops a healthy supervisor for the current session agent', async () => {
+    const stopSupervisor = vi.fn(async () => undefined);
+    const removeSupervisorInfo = vi.fn(async () => undefined);
+    const getPaths = vi.fn(() => PATHS);
+    const fetchHealth = vi.fn(async () => SUPERVISOR_HEALTH);
+    const sleep = vi.fn(async () => undefined);
+
+    const result = await stopMergeReadyWatchUIWithDependencies(
+      {
+        sessionDir: '/Users/me/.pi/agent-or/sessions/--repo--',
+      },
+      {
+        fetchHealth,
+        getPaths,
+        readSupervisorInfo: vi.fn(async () => SUPERVISOR_INFO),
+        removeSupervisorInfo,
+        sleep,
+        stopSupervisor,
+      },
+    );
+
+    expect(getPaths).toHaveBeenCalledWith('/Users/me/.pi/agent-or');
+    expect(stopSupervisor).toHaveBeenCalledWith({
+      info: SUPERVISOR_INFO,
+      fetchHealth,
+      sleep,
+    });
+    expect(removeSupervisorInfo).toHaveBeenCalledWith(PATHS);
+    expect(result).toEqual({
+      level: 'info',
+      message: 'Stopped merge-ready watch UI.',
+    });
+  });
+
+  it('reports when watch-ui is not running', async () => {
+    const stopSupervisor = vi.fn(async () => undefined);
+
+    const result = await stopMergeReadyWatchUIWithDependencies(
+      {},
+      {
+        fetchHealth: vi.fn(async () => SUPERVISOR_HEALTH),
+        getPaths: vi.fn(() => PATHS),
+        readSupervisorInfo: vi.fn(async () => null),
+        removeSupervisorInfo: vi.fn(async () => undefined),
+        sleep: vi.fn(async () => undefined),
+        stopSupervisor,
+      },
+    );
+
+    expect(stopSupervisor).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      level: 'info',
+      message: 'Merge-ready watch UI is not running.',
+    });
+  });
+
+  it('clears stale supervisor state when health probing fails', async () => {
+    const removeSupervisorInfo = vi.fn(async () => undefined);
+    const stopSupervisor = vi.fn(async () => undefined);
+
+    const result = await stopMergeReadyWatchUIWithDependencies(
+      {},
+      {
+        fetchHealth: vi.fn(async () => null),
+        getPaths: vi.fn(() => PATHS),
+        readSupervisorInfo: vi.fn(async () => SUPERVISOR_INFO),
+        removeSupervisorInfo,
+        sleep: vi.fn(async () => undefined),
+        stopSupervisor,
+      },
+    );
+
+    expect(stopSupervisor).not.toHaveBeenCalled();
+    expect(removeSupervisorInfo).toHaveBeenCalledWith(PATHS);
+    expect(result).toEqual({
+      level: 'warning',
+      message: 'Merge-ready watch UI is not responding. Cleared stale supervisor state.',
+    });
   });
 });

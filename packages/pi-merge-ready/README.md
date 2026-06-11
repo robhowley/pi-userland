@@ -148,7 +148,13 @@ Launch the local multi-watch UI with:
 /merge-ready watch-ui
 ```
 
-It starts or reuses a detached localhost supervisor, opens a browser when possible, and always reports a fallback URL.
+Stop the detached watch-ui supervisor with:
+
+```bash
+/merge-ready watch-ui stop
+```
+
+It starts or reuses a detached localhost supervisor, opens a browser when possible, and always reports a fallback URL. The stop command shuts down that detached supervisor and stops any active watches it owns.
 
 V1 notes:
 

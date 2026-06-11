@@ -24,6 +24,7 @@ import {
   getMergeReadyWatchUiPaths,
   readMergeReadyWatchSupervisorInfo,
   readMergeReadyWatchUiToken,
+  removeMergeReadyWatchSupervisorInfo,
   type MergeReadyWatchSupervisorInfo,
   type MergeReadyWatchUiPaths,
 } from './supervisor-state.js';
@@ -49,6 +50,8 @@ export type LaunchMergeReadyWatchUIOptions = {
   startupTimeoutMs?: number;
 };
 
+export type StopMergeReadyWatchUIOptions = Pick<LaunchMergeReadyWatchUIOptions, 'agentDir' | 'sessionDir'>;
+
 export type MergeReadyWatchUiBrowserOpenResult =
   | {
       opened: true;
@@ -72,6 +75,7 @@ export type LaunchMergeReadyWatchUIDependencies = {
   readSupervisorInfo: typeof readMergeReadyWatchSupervisorInfo;
   readToken: typeof readMergeReadyWatchUiToken;
   removeRuntimeSnapshotHandoff: typeof removeWatchUiRuntimeSnapshotHandoff;
+  removeSupervisorInfo: typeof removeMergeReadyWatchSupervisorInfo;
   sleep: (ms: number) => Promise<void>;
   spawnSupervisor: (options: {
     agentDir: string;
@@ -88,6 +92,11 @@ export type LaunchMergeReadyWatchUIDependencies = {
   }) => Promise<void>;
   writeRuntimeSnapshotHandoff: typeof writeWatchUiRuntimeSnapshotHandoff;
 };
+
+export type StopMergeReadyWatchUIDependencies = Pick<
+  LaunchMergeReadyWatchUIDependencies,
+  'fetchHealth' | 'getPaths' | 'readSupervisorInfo' | 'removeSupervisorInfo' | 'sleep' | 'stopSupervisor'
+>;
 
 const DEFAULT_STARTUP_TIMEOUT_MS = 10_000;
 const DEFAULT_HEALTH_POLL_INTERVAL_MS = 100;
@@ -106,11 +115,69 @@ export async function launchMergeReadyWatchUI(
     readSupervisorInfo: readMergeReadyWatchSupervisorInfo,
     readToken: readMergeReadyWatchUiToken,
     removeRuntimeSnapshotHandoff: removeWatchUiRuntimeSnapshotHandoff,
+    removeSupervisorInfo: removeMergeReadyWatchSupervisorInfo,
     sleep: delay,
     spawnSupervisor: spawnDetachedMergeReadyWatchUiSupervisor,
     stopSupervisor: stopMergeReadyWatchUiSupervisor,
     writeRuntimeSnapshotHandoff: writeWatchUiRuntimeSnapshotHandoff,
   });
+}
+
+export async function stopMergeReadyWatchUI(
+  options: StopMergeReadyWatchUIOptions,
+): Promise<LaunchMergeReadyWatchUIResult> {
+  return stopMergeReadyWatchUIWithDependencies(options, {
+    fetchHealth: fetchMergeReadyWatchUiHealth,
+    getPaths: getMergeReadyWatchUiPaths,
+    readSupervisorInfo: readMergeReadyWatchSupervisorInfo,
+    removeSupervisorInfo: removeMergeReadyWatchSupervisorInfo,
+    sleep: delay,
+    stopSupervisor: stopMergeReadyWatchUiSupervisor,
+  });
+}
+
+export async function stopMergeReadyWatchUIWithDependencies(
+  options: StopMergeReadyWatchUIOptions,
+  dependencies: StopMergeReadyWatchUIDependencies,
+): Promise<LaunchMergeReadyWatchUIResult> {
+  const agentDir = resolveMergeReadyWatchUiAgentDir(options) ?? getAgentDir();
+  const paths = dependencies.getPaths(agentDir);
+
+  try {
+    const info = await dependencies.readSupervisorInfo(paths);
+    if (!info) {
+      return {
+        level: 'info',
+        message: 'Merge-ready watch UI is not running.',
+      };
+    }
+
+    const health = await dependencies.fetchHealth(info.port);
+    if (!health) {
+      await dependencies.removeSupervisorInfo(paths).catch(() => undefined);
+      return {
+        level: 'warning',
+        message: 'Merge-ready watch UI is not responding. Cleared stale supervisor state.',
+      };
+    }
+
+    await dependencies.stopSupervisor({
+      info: normalizeHealthySupervisorInfo(info, health),
+      fetchHealth: dependencies.fetchHealth,
+      sleep: dependencies.sleep,
+    });
+    await dependencies.removeSupervisorInfo(paths).catch(() => undefined);
+
+    return {
+      level: 'info',
+      message: 'Stopped merge-ready watch UI.',
+    };
+  } catch (error) {
+    return {
+      level: 'error',
+      message: `Failed to stop merge-ready watch UI: ${getErrorMessage(error)}`,
+    };
+  }
 }
 
 export async function launchMergeReadyWatchUIWithDependencies(

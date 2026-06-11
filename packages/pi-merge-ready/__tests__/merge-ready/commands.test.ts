@@ -728,6 +728,12 @@ describe('merge-ready command', () => {
     expect(parseMergeReadyCommandArgs('watch-ui')).toEqual({
       ok: true,
       mode: 'watch-ui',
+      action: 'launch',
+    });
+    expect(parseMergeReadyCommandArgs('watch-ui stop')).toEqual({
+      ok: true,
+      mode: 'watch-ui',
+      action: 'stop',
     });
   });
 
@@ -738,6 +744,10 @@ describe('merge-ready command', () => {
       level: 'info' as const,
       message: 'mock watch-ui launch',
     }));
+    const stopMergeReadyWatchUI = vi.fn(async (_options: unknown) => ({
+      level: 'info' as const,
+      message: 'mock watch-ui stop',
+    }));
 
     vi.doMock('../../extensions/merge-ready/watch-ui/launcher.js', async () => {
       const actual = await vi.importActual<
@@ -746,6 +756,7 @@ describe('merge-ready command', () => {
       return {
         ...actual,
         launchMergeReadyWatchUI,
+        stopMergeReadyWatchUI,
       };
     });
 
@@ -786,6 +797,7 @@ describe('merge-ready command', () => {
       await handler?.('watch-ui', ctx);
 
       expect(launchMergeReadyWatchUI).toHaveBeenCalledTimes(1);
+      expect(stopMergeReadyWatchUI).not.toHaveBeenCalled();
       const launchOptions = launchMergeReadyWatchUI.mock.calls[0]?.[0];
       expect(launchOptions).toEqual({
         exec: runtimeApi.exec,
@@ -796,6 +808,55 @@ describe('merge-ready command', () => {
         sessionDir: '/Users/me/.pi/agent-or/sessions/--repo--',
       });
       expect(ctx.ui.notify).toHaveBeenCalledWith('mock watch-ui launch', 'info');
+    } finally {
+      vi.doUnmock('../../extensions/merge-ready/watch-ui/launcher.js');
+      vi.resetModules();
+    }
+  });
+
+  it('stops watch-ui for the current session agent', async () => {
+    vi.resetModules();
+
+    const launchMergeReadyWatchUI = vi.fn(async (_options: unknown) => ({
+      level: 'info' as const,
+      message: 'mock watch-ui launch',
+    }));
+    const stopMergeReadyWatchUI = vi.fn(async (_options: unknown) => ({
+      level: 'info' as const,
+      message: 'mock watch-ui stop',
+    }));
+
+    vi.doMock('../../extensions/merge-ready/watch-ui/launcher.js', async () => {
+      const actual = await vi.importActual<
+        typeof import('../../extensions/merge-ready/watch-ui/launcher.js')
+      >('../../extensions/merge-ready/watch-ui/launcher.js');
+      return {
+        ...actual,
+        launchMergeReadyWatchUI,
+        stopMergeReadyWatchUI,
+      };
+    });
+
+    try {
+      const { registerMergeReadyCommand } = await import('../../extensions/merge-ready/commands.js');
+      const { api, getCommand } = createMockAPI();
+
+      registerMergeReadyCommand(api);
+
+      const handler = getCommand(MERGE_READY_COMMAND_NAME);
+      const ctx = createCommandContext();
+      ctx.sessionManager = {
+        getSessionDir: vi.fn(() => '/Users/me/.pi/agent-or/sessions/--repo--'),
+      };
+
+      await handler?.('watch-ui stop', ctx);
+
+      expect(launchMergeReadyWatchUI).not.toHaveBeenCalled();
+      expect(stopMergeReadyWatchUI).toHaveBeenCalledTimes(1);
+      expect(stopMergeReadyWatchUI).toHaveBeenCalledWith({
+        sessionDir: '/Users/me/.pi/agent-or/sessions/--repo--',
+      });
+      expect(ctx.ui.notify).toHaveBeenCalledWith('mock watch-ui stop', 'info');
     } finally {
       vi.doUnmock('../../extensions/merge-ready/watch-ui/launcher.js');
       vi.resetModules();

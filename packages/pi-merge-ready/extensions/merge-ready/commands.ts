@@ -1,4 +1,4 @@
-import { launchMergeReadyWatchUI } from './watch-ui/launcher.js';
+import { launchMergeReadyWatchUI, stopMergeReadyWatchUI } from './watch-ui/launcher.js';
 import type {
   WatchUiRuntimeModel,
   WatchUiRuntimeModelRegistry,
@@ -84,13 +84,14 @@ export type MergeReadyCommandAPI = {
 
 const WATCH_SUBCOMMAND = 'watch';
 const WATCH_UI_SUBCOMMAND = 'watch-ui';
+const WATCH_UI_STOP_SUBCOMMAND = 'stop';
 const JSON_FLAG = '--json';
 const URL_FLAG = '--url';
 const INTERVAL_FLAG = '--interval';
 
 export const MERGE_READY_COMMAND_STATUS_USAGE = `Usage: /${MERGE_READY_COMMAND_NAME} [${URL_FLAG} <${MERGE_READY_PULL_REQUEST_URL_EXAMPLE}>] [${JSON_FLAG}]`;
 export const MERGE_READY_COMMAND_WATCH_USAGE = `Usage: /${MERGE_READY_COMMAND_NAME} ${WATCH_SUBCOMMAND} [${URL_FLAG} <${MERGE_READY_PULL_REQUEST_URL_EXAMPLE}>] [${INTERVAL_FLAG} <seconds>]`;
-export const MERGE_READY_COMMAND_WATCH_UI_USAGE = `Usage: /${MERGE_READY_COMMAND_NAME} ${WATCH_UI_SUBCOMMAND}`;
+export const MERGE_READY_COMMAND_WATCH_UI_USAGE = `Usage: /${MERGE_READY_COMMAND_NAME} ${WATCH_UI_SUBCOMMAND} [${WATCH_UI_STOP_SUBCOMMAND}]`;
 export const MERGE_READY_COMMAND_USAGE = `${MERGE_READY_COMMAND_STATUS_USAGE}\n${MERGE_READY_COMMAND_WATCH_USAGE}\n${MERGE_READY_COMMAND_WATCH_UI_USAGE}`;
 
 const BADGE_PRESENTATION: Record<
@@ -159,17 +160,22 @@ export function registerMergeReadyCommand(pi: MergeReadyCommandAPI): void {
 
       if (parsedArgs.mode === 'watch-ui') {
         const sessionDir = ctx.sessionManager?.getSessionDir?.();
-        const launched = await launchMergeReadyWatchUI({
-          exec: pi.exec,
-          cwd: ctx.cwd,
-          ...(watchPi.getThinkingLevel === undefined
-            ? {}
-            : { getThinkingLevel: watchPi.getThinkingLevel }),
-          ...(ctx.model === undefined ? {} : { model: ctx.model }),
-          ...(ctx.modelRegistry === undefined ? {} : { modelRegistry: ctx.modelRegistry }),
-          ...(sessionDir === undefined ? {} : { sessionDir }),
-        });
-        ctx.ui.notify(launched.message, launched.level);
+        const watchUiResult =
+          parsedArgs.action === 'stop'
+            ? await stopMergeReadyWatchUI({
+                ...(sessionDir === undefined ? {} : { sessionDir }),
+              })
+            : await launchMergeReadyWatchUI({
+                exec: pi.exec,
+                cwd: ctx.cwd,
+                ...(watchPi.getThinkingLevel === undefined
+                  ? {}
+                  : { getThinkingLevel: watchPi.getThinkingLevel }),
+                ...(ctx.model === undefined ? {} : { model: ctx.model }),
+                ...(ctx.modelRegistry === undefined ? {} : { modelRegistry: ctx.modelRegistry }),
+                ...(sessionDir === undefined ? {} : { sessionDir }),
+              });
+        ctx.ui.notify(watchUiResult.message, watchUiResult.level);
         return;
       }
 
@@ -283,6 +289,7 @@ export type MergeReadyParsedCommandArgs =
   | {
       ok: true;
       mode: 'watch-ui';
+      action: 'launch' | 'stop';
     }
   | {
       ok: false;
@@ -443,11 +450,15 @@ function parseMergeReadyWatchCommandArgs(tokens: string[]): MergeReadyParsedComm
 }
 
 function parseMergeReadyWatchUiCommandArgs(tokens: string[]): MergeReadyParsedCommandArgs {
-  if (tokens.length > 0) {
-    return createCommandUsageError(`Unsupported arguments: ${tokens.join(' ')}`);
+  if (tokens.length === 0) {
+    return { ok: true, mode: 'watch-ui', action: 'launch' };
   }
 
-  return { ok: true, mode: 'watch-ui' };
+  if (tokens.length === 1 && tokens[0] === WATCH_UI_STOP_SUBCOMMAND) {
+    return { ok: true, mode: 'watch-ui', action: 'stop' };
+  }
+
+  return createCommandUsageError(`Unsupported arguments: ${tokens.join(' ')}`);
 }
 
 function createCommandUsageError(message: string): MergeReadyParsedCommandArgs {
