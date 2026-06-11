@@ -124,6 +124,22 @@ Watch safety:
 - Dirty-worktree preflight: current-branch `watch` repairs refuse to run when local changes are already present in the ambient checkout.
 - Explicit `--url` watch repairs are instructed to use an isolated worktree for the PR head repo/branch and skip ambient dirty-worktree preflight.
 
+### Configuration
+
+Watch behavior can be configured in Pi's `settings.json` (global: `~/.pi/agent/settings.json`, project-local: `.pi/settings.json`).
+
+```json
+{
+  "pi-merge-ready": {
+    "autoCompactRepair": true
+  }
+}
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `autoCompactRepair` | `true` | Trigger conversation compaction after successful repair loop completion. Compaction runs before the watch continues polling. Set to `false` to disable. |
+
 ### Agent tool
 
 Agents get a `merge_ready_status` tool:
