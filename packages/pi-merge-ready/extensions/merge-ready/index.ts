@@ -10,6 +10,7 @@ export * from './github.js';
 export * from './conversations.js';
 export * from './merge-ready.js';
 export * from './commands.js';
+export * from './config.js';
 export * from './status-bar.js';
 export * from './tool.js';
 export * from './watch.js';

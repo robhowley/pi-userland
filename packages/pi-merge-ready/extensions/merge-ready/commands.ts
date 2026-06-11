@@ -39,6 +39,8 @@ export type MergeReadyCommandContext = {
       fg: (color: string, text: string) => string;
     };
   };
+  // Compaction callback from ExtensionContext
+  compact?: (options?: { customInstructions?: string }) => Promise<void>;
 };
 
 export type MergeReadyCommandRegistration = {
@@ -153,7 +155,7 @@ export function registerMergeReadyCommand(pi: MergeReadyCommandAPI): void {
 
         const started = startMergeReadyWatch({
           api: watchPi,
-          ctx,
+          ctx: ctx.compact ? { ...ctx, compact: ctx.compact.bind(ctx) } : ctx,
           exec,
           intervalSeconds: parsedArgs.intervalSeconds,
           ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
