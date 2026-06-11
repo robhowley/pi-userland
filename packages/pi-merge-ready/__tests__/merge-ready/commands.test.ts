@@ -731,6 +731,77 @@ describe('merge-ready command', () => {
     });
   });
 
+  it('launches watch-ui with API-level thinking level even when command ctx lacks it', async () => {
+    vi.resetModules();
+
+    const launchMergeReadyWatchUI = vi.fn(async (_options: unknown) => ({
+      level: 'info' as const,
+      message: 'mock watch-ui launch',
+    }));
+
+    vi.doMock('../../extensions/merge-ready/watch-ui/launcher.js', async () => {
+      const actual = await vi.importActual<
+        typeof import('../../extensions/merge-ready/watch-ui/launcher.js')
+      >('../../extensions/merge-ready/watch-ui/launcher.js');
+      return {
+        ...actual,
+        launchMergeReadyWatchUI,
+      };
+    });
+
+    try {
+      const { registerMergeReadyCommand } = await import('../../extensions/merge-ready/commands.js');
+      const { api, getCommand } = createMockAPI();
+      const getThinkingLevel = vi.fn(() => 'high' as const);
+      const runtimeApi = { ...api, getThinkingLevel };
+
+      registerMergeReadyCommand(runtimeApi);
+
+      const handler = getCommand(MERGE_READY_COMMAND_NAME);
+      const ctx = createCommandContext();
+      const model: NonNullable<MergeReadyCommandContext['model']> = {
+        id: 'claude-sonnet-4-20250514',
+        name: 'Claude Sonnet 4',
+        api: 'anthropic-messages',
+        provider: 'anthropic',
+        baseUrl: 'https://api.anthropic.com/v1/messages',
+        reasoning: true,
+        input: ['text'],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 8_192,
+      };
+      const modelRegistry: NonNullable<MergeReadyCommandContext['modelRegistry']> = {
+        getApiKeyAndHeaders: vi.fn(),
+      };
+
+      ctx.model = model;
+      ctx.modelRegistry = modelRegistry;
+      ctx.sessionManager = {
+        getSessionDir: vi.fn(() => '/Users/me/.pi/agent-or/sessions/--repo--'),
+      };
+
+      expect('getThinkingLevel' in ctx).toBe(false);
+
+      await handler?.('watch-ui', ctx);
+
+      expect(launchMergeReadyWatchUI).toHaveBeenCalledTimes(1);
+      const launchOptions = launchMergeReadyWatchUI.mock.calls[0]?.[0];
+      expect(launchOptions).toEqual({
+        exec: runtimeApi.exec,
+        cwd: '/repo',
+        getThinkingLevel,
+        model,
+        modelRegistry,
+        sessionDir: '/Users/me/.pi/agent-or/sessions/--repo--',
+      });
+      expect(ctx.ui.notify).toHaveBeenCalledWith('mock watch-ui launch', 'info');
+    } finally {
+      vi.doUnmock('../../extensions/merge-ready/watch-ui/launcher.js');
+      vi.resetModules();
+    }
+  });
+
   it('rejects invalid watch arguments with combined usage text', async () => {
     const { api, getCommand } = createMockAPI();
     mergeReadyExtension(api);

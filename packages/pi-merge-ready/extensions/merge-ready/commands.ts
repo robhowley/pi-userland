@@ -40,7 +40,6 @@ export type MergeReadyCommandCompactOptions = {
 
 export type MergeReadyCommandContext = {
   cwd: string;
-  getThinkingLevel?: () => WatchUiThinkingLevel | undefined;
   mode?: 'tui' | 'rpc' | 'json' | 'print';
   isIdle?: () => boolean;
   model?: WatchUiRuntimeModel;
@@ -117,6 +116,7 @@ const BADGE_PRESENTATION: Record<
 };
 
 type MergeReadyCommandWatchRuntimeAPI = MergeReadyCommandAPI & {
+  getThinkingLevel?: () => WatchUiThinkingLevel | undefined;
   sendUserMessage?: (
     content: string,
     options?: { deliverAs?: 'steer' | 'followUp' },
@@ -162,7 +162,9 @@ export function registerMergeReadyCommand(pi: MergeReadyCommandAPI): void {
         const launched = await launchMergeReadyWatchUI({
           exec: pi.exec,
           cwd: ctx.cwd,
-          ...(ctx.getThinkingLevel === undefined ? {} : { getThinkingLevel: ctx.getThinkingLevel }),
+          ...(watchPi.getThinkingLevel === undefined
+            ? {}
+            : { getThinkingLevel: watchPi.getThinkingLevel }),
           ...(ctx.model === undefined ? {} : { model: ctx.model }),
           ...(ctx.modelRegistry === undefined ? {} : { modelRegistry: ctx.modelRegistry }),
           ...(sessionDir === undefined ? {} : { sessionDir }),
