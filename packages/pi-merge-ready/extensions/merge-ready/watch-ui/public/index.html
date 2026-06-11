@@ -29,12 +29,8 @@
         <div id="compact-status" class="compact-status" aria-label="Watch summary"></div>
 
         <section class="shell" aria-label="Add watch">
-          <div class="shell-title">
-            <span>GitHub pull request URL</span>
-            <span>watch add</span>
-          </div>
           <form id="add-watch-form">
-            <div class="prompt">$ mr watch</div>
+            <div class="prompt">$ watch</div>
             <input
               id="watch-url"
               aria-label="GitHub pull request URL"
@@ -45,9 +41,6 @@
           </form>
         </section>
 
-        <p class="note">
-          Live focus/open is not supported in watch-ui v1. Use the session file path instead.
-        </p>
 
         <h2>Watch queue</h2>
         <div id="watch-list" aria-live="polite"></div>
@@ -79,7 +72,6 @@
 
         <footer>
           <span>plain terminal controls</span>
-          <span>use session path for focus/open</span>
         </footer>
       </main>
     </article>

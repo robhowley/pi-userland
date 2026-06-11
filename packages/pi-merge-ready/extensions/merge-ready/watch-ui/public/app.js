@@ -431,20 +431,6 @@ function renderWatchActions(watch) {
     },
   );
 
-  const openButton = createButton('Session info', false, async () => {
-    try {
-      const payload = await api(`/api/watches/${encodeURIComponent(watch.id)}/open`, {
-        method: 'POST',
-      });
-      setMessage(
-        payload.message ?? 'Session info unavailable.',
-        payload.supported ? 'info' : 'warning',
-      );
-    } catch (error) {
-      setMessage(readErrorMessage(error), 'error');
-    }
-  });
-
   const removeButton = createButton('Remove', watch.state === 'active', async () => {
     try {
       await api(`/api/watches/${encodeURIComponent(watch.id)}`, { method: 'DELETE' });
@@ -462,7 +448,7 @@ function renderWatchActions(watch) {
   });
   removeButton.classList.add('danger');
 
-  actions.append(stopButton, transcriptButton, openButton, removeButton);
+  actions.append(stopButton, transcriptButton, removeButton);
   return actions;
 }
 
