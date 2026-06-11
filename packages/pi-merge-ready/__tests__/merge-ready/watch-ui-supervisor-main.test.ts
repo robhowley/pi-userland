@@ -9,7 +9,7 @@ const mocked = vi.hoisted(() => ({
   ensureMergeReadyWatchUiStateDir: vi.fn(async () => undefined),
   ensureMergeReadyWatchUiToken: vi.fn(async () => 'token-123'),
   removeMergeReadyWatchSupervisorInfo: vi.fn(async () => undefined),
-  writeMergeReadyWatchSupervisorInfo: vi.fn(async () => undefined),
+  writeMergeReadyWatchSupervisorInfo: vi.fn(async (_paths: unknown, _info: unknown) => undefined),
 }));
 
 vi.mock('@earendil-works/pi-coding-agent', () => ({

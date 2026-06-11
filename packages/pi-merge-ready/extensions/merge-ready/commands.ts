@@ -162,9 +162,9 @@ export function registerMergeReadyCommand(pi: MergeReadyCommandAPI): void {
         const launched = await launchMergeReadyWatchUI({
           exec: pi.exec,
           cwd: ctx.cwd,
-          getThinkingLevel: ctx.getThinkingLevel,
-          model: ctx.model,
-          modelRegistry: ctx.modelRegistry,
+          ...(ctx.getThinkingLevel === undefined ? {} : { getThinkingLevel: ctx.getThinkingLevel }),
+          ...(ctx.model === undefined ? {} : { model: ctx.model }),
+          ...(ctx.modelRegistry === undefined ? {} : { modelRegistry: ctx.modelRegistry }),
           ...(sessionDir === undefined ? {} : { sessionDir }),
         });
         ctx.ui.notify(launched.message, launched.level);

@@ -14,11 +14,15 @@ import {
   resolveMergeReadyWatchUiPackageRoot,
   resolveMergeReadyWatchUiSupervisorMainPath,
 } from '../../extensions/merge-ready/watch-ui/launcher.js';
+import type { MergeReadyWatchUiHealth } from '../../extensions/merge-ready/watch-ui/supervisor-client.js';
+import {
+  MERGE_READY_WATCH_UI_SERVICE,
+  type MergeReadyWatchSupervisorInfo,
+} from '../../extensions/merge-ready/watch-ui/supervisor-state.js';
 import {
   type WatchUiRuntimeSnapshot,
   type WatchUiRuntimeModel,
 } from '../../extensions/merge-ready/watch-ui/runtime-snapshot.js';
-import { MERGE_READY_WATCH_UI_SERVICE } from '../../extensions/merge-ready/watch-ui/supervisor-state.js';
 
 const PATHS = {
   stateDir: '/tmp/merge-ready/watch-ui',
@@ -58,7 +62,7 @@ const SNAPSHOT: WatchUiRuntimeSnapshot = {
   signature: 'runtime-signature-1',
 };
 
-const SUPERVISOR_INFO = {
+const SUPERVISOR_INFO: MergeReadyWatchSupervisorInfo = {
   service: MERGE_READY_WATCH_UI_SERVICE,
   pid: 42,
   port: 43123,
@@ -72,7 +76,7 @@ const SUPERVISOR_INFO = {
   snapshotSignature: SNAPSHOT.signature,
 };
 
-const SUPERVISOR_HEALTH = {
+const SUPERVISOR_HEALTH: MergeReadyWatchUiHealth = {
   service: MERGE_READY_WATCH_UI_SERVICE,
   pid: 42,
   port: 43123,
@@ -131,7 +135,7 @@ describe('merge-ready watch UI launcher', () => {
     const removeRuntimeSnapshotHandoff = vi.fn(async () => undefined);
     const getPaths = vi.fn(() => PATHS);
     const readSupervisorInfo = vi
-      .fn()
+      .fn(async (_paths: unknown): Promise<MergeReadyWatchSupervisorInfo | null> => SUPERVISOR_INFO)
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(null)
       .mockResolvedValue(SUPERVISOR_INFO);
@@ -152,7 +156,9 @@ describe('merge-ready watch UI launcher', () => {
         acquireStartupLock: vi.fn(async () => async () => undefined),
         captureRuntimeSnapshot,
         ensureToken: vi.fn(async () => 'token-123'),
-        fetchHealth: vi.fn(async () => SUPERVISOR_HEALTH),
+        fetchHealth: vi.fn(
+          async (_port: number, _options?: { signal?: AbortSignal }) => SUPERVISOR_HEALTH,
+        ),
         getPaths,
         openBrowser: vi.fn(async () => ({ opened: true as const })),
         readSupervisorInfo,
@@ -247,10 +253,12 @@ describe('merge-ready watch UI launcher', () => {
         acquireStartupLock: vi.fn(async () => async () => undefined),
         captureRuntimeSnapshot: vi.fn(async () => SNAPSHOT),
         ensureToken: vi.fn(async () => 'token-123'),
-        fetchHealth: vi.fn(async () => SUPERVISOR_HEALTH),
+        fetchHealth: vi.fn(
+          async (_port: number, _options?: { signal?: AbortSignal }) => SUPERVISOR_HEALTH,
+        ),
         getPaths: vi.fn(() => PATHS),
         openBrowser,
-        readSupervisorInfo: vi.fn(async () => SUPERVISOR_INFO),
+        readSupervisorInfo: vi.fn(async (_paths: unknown) => SUPERVISOR_INFO),
         readToken: vi.fn(async () => 'token-123'),
         removeRuntimeSnapshotHandoff: vi.fn(async () => undefined),
         sleep: vi.fn(async () => undefined),

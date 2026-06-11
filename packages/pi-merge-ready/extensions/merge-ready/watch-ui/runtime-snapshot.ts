@@ -132,10 +132,8 @@ export function createWatchUiRuntimeSnapshotSignature(
     ...snapshot,
     signature: 'pending-signature',
   });
-  const payload = {
-    ...normalized,
-  };
-  delete payload.signature;
+  const { signature, ...payload } = normalized;
+  void signature;
   return createHash('sha256').update(stableStringify(payload)).digest('hex');
 }
 

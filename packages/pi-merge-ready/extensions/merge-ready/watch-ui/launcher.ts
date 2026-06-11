@@ -125,9 +125,11 @@ export async function launchMergeReadyWatchUIWithDependencies(
     const snapshot = await dependencies.captureRuntimeSnapshot({
       agentDir,
       defaultCwd: options.cwd,
-      getThinkingLevel: options.getThinkingLevel,
-      model: options.model,
-      modelRegistry: options.modelRegistry,
+      ...(options.getThinkingLevel === undefined
+        ? {}
+        : { getThinkingLevel: options.getThinkingLevel }),
+      ...(options.model === undefined ? {} : { model: options.model }),
+      ...(options.modelRegistry === undefined ? {} : { modelRegistry: options.modelRegistry }),
       sdkVersion: VERSION,
     });
 
