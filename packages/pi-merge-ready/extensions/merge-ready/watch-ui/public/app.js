@@ -1,9 +1,9 @@
 /* global Headers, URLSearchParams, document, fetch, navigator, setInterval, window */
 
 const state = {
-  currentCwd: '',
+  draftCwd: '',
+  draftCwdInitialized: false,
   messageEl: document.getElementById('message'),
-  cwdNoteEl: document.getElementById('cwd-note'),
   compactStatusEl: document.getElementById('compact-status'),
   watchListEl: document.getElementById('watch-list'),
   watchUiLayoutEl: document.getElementById('watch-ui-layout'),
@@ -16,6 +16,7 @@ const state = {
   transcriptContentEl: document.getElementById('transcript-content'),
   token: '',
   urlInput: document.getElementById('watch-url'),
+  cwdInput: document.getElementById('watch-cwd'),
   watches: [],
   selectedWatchId: '',
   selectedTranscriptWatchId: '',
@@ -33,25 +34,30 @@ const state = {
 };
 
 const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+const launchCwd = hashParams.get('cwd');
 state.token = hashParams.get('token') ?? '';
-state.currentCwd = hashParams.get('cwd') ?? '';
+state.draftCwd = launchCwd ?? '';
+state.draftCwdInitialized = launchCwd !== null;
+syncCwdInputValue(state.draftCwd);
 
 const form = document.getElementById('add-watch-form');
 form?.addEventListener('submit', async (event) => {
   event.preventDefault();
   const url = state.urlInput?.value.trim() ?? '';
+  const cwd = state.cwdInput?.value.trim() ?? state.draftCwd.trim();
   if (!url) {
     setMessage('Enter a GitHub pull request URL.', 'warning');
     return;
   }
 
+  state.draftCwd = cwd;
+  state.draftCwdInitialized = true;
+  syncCwdInputValue(cwd);
+
   try {
     const response = await api('/api/watches', {
       method: 'POST',
-      body: JSON.stringify({
-        url,
-        ...(state.currentCwd ? { cwd: state.currentCwd } : {}),
-      }),
+      body: JSON.stringify({ url, cwd }),
     });
     setMessage(
       response.message ?? (response.created ? 'Watch added.' : 'Watch already exists.'),
@@ -64,6 +70,11 @@ form?.addEventListener('submit', async (event) => {
   } catch (error) {
     setMessage(readErrorMessage(error), 'error');
   }
+});
+
+state.cwdInput?.addEventListener('input', () => {
+  state.draftCwd = state.cwdInput?.value ?? '';
+  state.draftCwdInitialized = true;
 });
 
 state.transcriptCloseEl?.addEventListener('click', () => {
@@ -87,13 +98,10 @@ async function refreshWatches() {
 
   try {
     const payload = await api('/api/watches');
-    if (!state.currentCwd && typeof payload.defaultCwd === 'string') {
-      state.currentCwd = payload.defaultCwd;
-    }
+    prefillDraftCwd(payload.defaultCwd);
 
     state.watches = sortWatchesByAttention(Array.isArray(payload.watches) ? payload.watches : []);
     ensureSelectedWatch();
-    renderCwdNote(payload.defaultCwd);
     renderCompactStatus(state.watches);
     reconcileSelectedTranscriptWithWatches();
     renderWatches(state.watches);
@@ -151,13 +159,27 @@ function ensureCompactStatusElement() {
   state.compactStatusEl = compactStatus;
 }
 
-function renderCwdNote(defaultCwd) {
-  if (!state.cwdNoteEl) {
+function prefillDraftCwd(defaultCwd) {
+  if (state.draftCwdInitialized) {
     return;
   }
 
-  const effectiveCwd = state.currentCwd || defaultCwd || '(unknown cwd)';
-  state.cwdNoteEl.textContent = `New watches use cwd: ${effectiveCwd}`;
+  const cwd = typeof defaultCwd === 'string' ? defaultCwd.trim() : '';
+  if (!cwd) {
+    return;
+  }
+
+  state.draftCwd = cwd;
+  state.draftCwdInitialized = true;
+  syncCwdInputValue(cwd);
+}
+
+function syncCwdInputValue(value) {
+  if (!state.cwdInput) {
+    return;
+  }
+
+  state.cwdInput.value = value;
 }
 
 function renderCompactStatus(watches) {

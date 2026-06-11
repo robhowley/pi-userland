@@ -6,6 +6,7 @@ import {
   createMergeReadyWatchUiSupervisorServer,
   type MergeReadyWatchUiRunner,
 } from '../../extensions/merge-ready/watch-ui/supervisor-server.js';
+import { MergeReadyWatchInputError } from '../../extensions/merge-ready/watch-ui/session-runner.js';
 
 describe('merge-ready watch UI supervisor server', () => {
   const servers: Array<{ close: () => Promise<void> }> = [];
@@ -120,7 +121,130 @@ describe('merge-ready watch UI supervisor server', () => {
       ],
     });
   });
+
+  it('forwards cwd on POST /api/watches and allows omission', async () => {
+    const publicDir = await createPublicDir();
+    const watch = createWatchRecord();
+    const addWatch = vi.fn(async (_options) => ({ created: true, watch }));
+    const runner: MergeReadyWatchUiRunner = {
+      addWatch,
+      getDefaultCwd: vi.fn(() => '/repo'),
+      listWatches: vi.fn(() => [watch]),
+      openWatch: vi.fn(async (_id) => null),
+      readTranscriptForWatch: vi.fn(async (_id, _tail) => ({ watch, rows: [] })),
+      removeWatch: vi.fn(async (_id) => true),
+      stopWatch: vi.fn(async (_id) => null),
+    };
+
+    const server = await createMergeReadyWatchUiSupervisorServer({
+      packageVersion: '0.6.0',
+      publicDir,
+      runner,
+      snapshotLoaded: true,
+      snapshotSignature: 'runtime-signature-1',
+      token: 'token-123',
+    });
+    servers.push(server);
+
+    const withCwdResponse = await fetch(`http://127.0.0.1:${String(server.port)}/api/watches`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer token-123',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ url: watch.canonicalUrl, cwd: '/repo/worktree' }),
+    });
+    expect(withCwdResponse.status).toBe(200);
+
+    const withoutCwdResponse = await fetch(`http://127.0.0.1:${String(server.port)}/api/watches`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer token-123',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ url: watch.canonicalUrl }),
+    });
+    expect(withoutCwdResponse.status).toBe(200);
+
+    expect(addWatch).toHaveBeenNthCalledWith(1, {
+      url: watch.canonicalUrl,
+      cwd: '/repo/worktree',
+    });
+    expect(addWatch).toHaveBeenNthCalledWith(2, {
+      url: watch.canonicalUrl,
+    });
+  });
+
+  it('returns 400 for watch input validation errors from the runner', async () => {
+    const publicDir = await createPublicDir();
+    const watch = createWatchRecord();
+    const runner: MergeReadyWatchUiRunner = {
+      addWatch: vi.fn(async (_options) => {
+        throw new MergeReadyWatchInputError('cwd does not exist: "/repo/missing"');
+      }),
+      getDefaultCwd: vi.fn(() => '/repo'),
+      listWatches: vi.fn(() => [watch]),
+      openWatch: vi.fn(async (_id) => null),
+      readTranscriptForWatch: vi.fn(async (_id, _tail) => ({ watch, rows: [] })),
+      removeWatch: vi.fn(async (_id) => true),
+      stopWatch: vi.fn(async (_id) => null),
+    };
+
+    const server = await createMergeReadyWatchUiSupervisorServer({
+      packageVersion: '0.6.0',
+      publicDir,
+      runner,
+      snapshotLoaded: true,
+      snapshotSignature: 'runtime-signature-1',
+      token: 'token-123',
+    });
+    servers.push(server);
+
+    const response = await fetch(`http://127.0.0.1:${String(server.port)}/api/watches`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer token-123',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ url: watch.canonicalUrl, cwd: '/repo/missing' }),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: 'cwd does not exist: "/repo/missing"',
+    });
+  });
 });
+
+function createWatchRecord() {
+  return {
+    id: 'one',
+    canonicalUrl: 'https://github.com/shopify/pi/pull/64',
+    cwd: '/repo',
+    createdAt: '2026-06-08T12:00:00.000Z',
+    updatedAt: '2026-06-08T12:01:00.000Z',
+    state: 'active' as const,
+    session: {
+      sessionId: 'session-123',
+      sessionFile: '/tmp/session.jsonl',
+    },
+    lastStatus: {
+      schemaVersion: 1 as const,
+      lifecycle: 'watching' as const,
+      mergeReadyState: 'pending' as const,
+      summary: 'Checks are still running',
+      updatedAt: '2026-06-08T12:01:00.000Z',
+      target: {
+        mode: 'url' as const,
+        requestedUrl: 'https://github.com/shopify/pi/pull/64',
+      },
+      session: {
+        sessionId: 'session-123',
+        sessionFile: '/tmp/session.jsonl',
+      },
+    },
+  };
+}
 
 async function createPublicDir(): Promise<string> {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'merge-ready-watch-ui-'));

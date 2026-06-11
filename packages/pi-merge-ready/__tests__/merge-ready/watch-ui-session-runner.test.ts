@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -11,7 +11,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   MERGE_READY_WATCH_STATUS_EVENT,
   createMergeReadyWatchStatusRecord,
-} from '../../extensions/merge-ready/index.js';
+} from '../../extensions/merge-ready/watch-status.js';
 import {
   createMergeReadyWatchSessionRunner,
   type MergeReadyWatchSessionLike,
@@ -36,12 +36,13 @@ const BASE_MODEL: MergeReadyWatchUiRuntimeSnapshot['model'] = {
 describe('merge-ready watch UI session runner', () => {
   it('dedupes watches by canonical URL and updates persisted state from live status events', async () => {
     const agentDir = await mkdtemp(path.join(os.tmpdir(), 'merge-ready-watch-ui-agent-'));
+    const defaultCwd = await mkdtemp(path.join(os.tmpdir(), 'merge-ready-watch-ui-default-'));
     const paths = getMergeReadyWatchUiPaths(agentDir);
     const promptDeferred = createDeferred<void>();
     let eventBus = createEventBus();
 
     const runner = await createMergeReadyWatchSessionRunner({
-      defaultCwd: '/repo',
+      defaultCwd,
       extensionDir: '/pkg/dist/extensions/merge-ready',
       paths,
       skillPath: '/pkg/skills/merge-ready-loop/SKILL.md',
@@ -103,8 +104,201 @@ describe('merge-ready watch UI session runner', () => {
     await runner.dispose();
   });
 
+  it('normalizes explicit cwd inputs before persisting and creating a session', async () => {
+    const agentDir = await mkdtemp(path.join(os.tmpdir(), 'merge-ready-watch-ui-agent-'));
+    const defaultCwd = await mkdtemp(path.join(os.tmpdir(), 'merge-ready-watch-ui-default-'));
+    const relativeCwd = `nested${path.sep}.${path.sep}repo`;
+    const explicitCwd = path.join(defaultCwd, 'nested', 'repo');
+    await mkdir(explicitCwd, { recursive: true });
+    const expectedCwd = await realpath(explicitCwd);
+    const paths = getMergeReadyWatchUiPaths(agentDir);
+    const promptDeferred = createDeferred<void>();
+    const createResourceLoader = vi.fn(() => ({
+      reload: vi.fn(async () => undefined),
+    }));
+    const createSession = vi.fn(async (_options) => ({
+      session: createMockSession({ prompt: vi.fn(() => promptDeferred.promise) }),
+    }));
+
+    const runner = await createMergeReadyWatchSessionRunner({
+      defaultCwd,
+      extensionDir: '/pkg/dist/extensions/merge-ready',
+      paths,
+      skillPath: '/pkg/skills/merge-ready-loop/SKILL.md',
+      dependencies: {
+        agentDir,
+        createResourceLoader,
+        createSession,
+        createSessionManager: (cwd) => SessionManager.inMemory(cwd),
+      },
+    });
+
+    const added = await runner.addWatch({ url: URL, cwd: `  ${relativeCwd}  ` });
+
+    expect(added).toMatchObject({
+      created: true,
+      watch: {
+        canonicalUrl: URL,
+        cwd: expectedCwd,
+      },
+    });
+    expect(createResourceLoader).toHaveBeenCalledWith(expect.objectContaining({ cwd: expectedCwd }));
+    expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ cwd: expectedCwd }));
+
+    const persistedWatches = await readFile(paths.watchesFile, 'utf8');
+    expect(persistedWatches).toContain(expectedCwd);
+    expect(persistedWatches).not.toContain(relativeCwd);
+
+    promptDeferred.resolve();
+    await flushAsyncWork();
+    await runner.dispose();
+  });
+
+  it('treats blank cwd like omitted and persists the normalized default cwd', async () => {
+    const agentDir = await mkdtemp(path.join(os.tmpdir(), 'merge-ready-watch-ui-agent-'));
+    const defaultCwd = await mkdtemp(path.join(os.tmpdir(), 'merge-ready-watch-ui-default-'));
+    const expectedDefaultCwd = await realpath(defaultCwd);
+    const paths = getMergeReadyWatchUiPaths(agentDir);
+    const promptDeferred = createDeferred<void>();
+    const createSession = vi.fn(async (_options) => ({
+      session: createMockSession({ prompt: vi.fn(() => promptDeferred.promise) }),
+    }));
+
+    const runner = await createMergeReadyWatchSessionRunner({
+      defaultCwd,
+      extensionDir: '/pkg/dist/extensions/merge-ready',
+      paths,
+      skillPath: '/pkg/skills/merge-ready-loop/SKILL.md',
+      dependencies: {
+        agentDir,
+        createResourceLoader: vi.fn(() => ({
+          reload: vi.fn(async () => undefined),
+        })),
+        createSession,
+        createSessionManager: (cwd) => SessionManager.inMemory(cwd),
+      },
+    });
+
+    const added = await runner.addWatch({ url: URL, cwd: '   ' });
+
+    expect(added).toMatchObject({
+      created: true,
+      watch: {
+        cwd: expectedDefaultCwd,
+      },
+    });
+    expect(createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: expectedDefaultCwd }),
+    );
+
+    promptDeferred.resolve();
+    await flushAsyncWork();
+    await runner.dispose();
+  });
+
+  it('rejects nonexistent cwd values clearly before creating a session', async () => {
+    const agentDir = await mkdtemp(path.join(os.tmpdir(), 'merge-ready-watch-ui-agent-'));
+    const defaultCwd = await mkdtemp(path.join(os.tmpdir(), 'merge-ready-watch-ui-default-'));
+    const missingCwd = path.join(defaultCwd, 'missing-repo');
+    const paths = getMergeReadyWatchUiPaths(agentDir);
+    const createResourceLoader = vi.fn();
+    const createSession = vi.fn();
+
+    const runner = await createMergeReadyWatchSessionRunner({
+      defaultCwd,
+      extensionDir: '/pkg/dist/extensions/merge-ready',
+      paths,
+      skillPath: '/pkg/skills/merge-ready-loop/SKILL.md',
+      dependencies: {
+        agentDir,
+        createResourceLoader: createResourceLoader as never,
+        createSession: createSession as never,
+        createSessionManager: (cwd) => SessionManager.inMemory(cwd),
+      },
+    });
+
+    await expect(runner.addWatch({ url: URL, cwd: missingCwd })).rejects.toThrow(
+      `cwd does not exist: ${JSON.stringify(missingCwd)}`,
+    );
+    expect(createResourceLoader).not.toHaveBeenCalled();
+    expect(createSession).not.toHaveBeenCalled();
+    await runner.dispose();
+  });
+
+  it('rejects non-directory cwd values clearly before creating a session', async () => {
+    const agentDir = await mkdtemp(path.join(os.tmpdir(), 'merge-ready-watch-ui-agent-'));
+    const defaultCwd = await mkdtemp(path.join(os.tmpdir(), 'merge-ready-watch-ui-default-'));
+    const fileCwd = path.join(defaultCwd, 'not-a-directory.txt');
+    await writeFile(fileCwd, 'hello');
+    const expectedFileCwd = await realpath(fileCwd);
+    const paths = getMergeReadyWatchUiPaths(agentDir);
+    const createResourceLoader = vi.fn();
+    const createSession = vi.fn();
+
+    const runner = await createMergeReadyWatchSessionRunner({
+      defaultCwd,
+      extensionDir: '/pkg/dist/extensions/merge-ready',
+      paths,
+      skillPath: '/pkg/skills/merge-ready-loop/SKILL.md',
+      dependencies: {
+        agentDir,
+        createResourceLoader: createResourceLoader as never,
+        createSession: createSession as never,
+        createSessionManager: (cwd) => SessionManager.inMemory(cwd),
+      },
+    });
+
+    await expect(runner.addWatch({ url: URL, cwd: fileCwd })).rejects.toThrow(
+      `cwd is not a directory: ${JSON.stringify(expectedFileCwd)}`,
+    );
+    expect(createResourceLoader).not.toHaveBeenCalled();
+    expect(createSession).not.toHaveBeenCalled();
+    await runner.dispose();
+  });
+
+  it('returns a cwd-aware duplicate message when the same PR is requested from a different cwd', async () => {
+    const agentDir = await mkdtemp(path.join(os.tmpdir(), 'merge-ready-watch-ui-agent-'));
+    const firstCwd = await mkdtemp(path.join(os.tmpdir(), 'merge-ready-watch-ui-first-'));
+    const secondCwd = await mkdtemp(path.join(os.tmpdir(), 'merge-ready-watch-ui-second-'));
+    const expectedFirstCwd = await realpath(firstCwd);
+    const expectedSecondCwd = await realpath(secondCwd);
+    const paths = getMergeReadyWatchUiPaths(agentDir);
+    const promptDeferred = createDeferred<void>();
+
+    const runner = await createMergeReadyWatchSessionRunner({
+      defaultCwd: firstCwd,
+      extensionDir: '/pkg/dist/extensions/merge-ready',
+      paths,
+      skillPath: '/pkg/skills/merge-ready-loop/SKILL.md',
+      dependencies: {
+        agentDir,
+        createResourceLoader: vi.fn(() => ({
+          reload: vi.fn(async () => undefined),
+        })),
+        createSession: vi.fn(async (_options) => ({
+          session: createMockSession({ prompt: vi.fn(() => promptDeferred.promise) }),
+        })),
+        createSessionManager: (cwd) => SessionManager.inMemory(cwd),
+      },
+    });
+
+    await runner.addWatch({ url: URL });
+    const duplicate = await runner.addWatch({ url: URL, cwd: secondCwd });
+
+    expect(duplicate.created).toBe(false);
+    expect(duplicate.message).toContain(`Current cwd: ${JSON.stringify(expectedFirstCwd)}`);
+    expect(duplicate.message).toContain(`Requested cwd: ${JSON.stringify(expectedSecondCwd)}`);
+    expect(duplicate.message).toContain('Remove the existing watch and recreate it');
+    expect(runner.listWatches()).toHaveLength(1);
+
+    promptDeferred.resolve();
+    await flushAsyncWork();
+    await runner.dispose();
+  });
+
   it('executes the registered merge-ready command directly when duplicate invocation names are present', async () => {
     const agentDir = await mkdtemp(path.join(os.tmpdir(), 'merge-ready-watch-ui-agent-'));
+    const defaultCwd = await mkdtemp(path.join(os.tmpdir(), 'merge-ready-watch-ui-default-'));
     const paths = getMergeReadyWatchUiPaths(agentDir);
     const watchDeferred = createDeferred<void>();
     const prompt = vi.fn(async () => undefined);
@@ -117,7 +311,7 @@ describe('merge-ready watch UI session runner', () => {
     const mergeReadyHandler = vi.fn(() => watchDeferred.promise);
 
     const runner = await createMergeReadyWatchSessionRunner({
-      defaultCwd: '/repo',
+      defaultCwd,
       extensionDir: '/pkg/dist/extensions/merge-ready',
       paths,
       skillPath: '/pkg/skills/merge-ready-loop/SKILL.md',
@@ -166,6 +360,8 @@ describe('merge-ready watch UI session runner', () => {
 
   it('injects explicit runtime objects into child sessions and preserves the captured agentDir', async () => {
     const agentDir = await mkdtemp(path.join(os.tmpdir(), 'merge-ready-watch-ui-agent-'));
+    const snapshotDefaultCwd = await mkdtemp(path.join(os.tmpdir(), 'merge-ready-watch-ui-default-'));
+    const expectedSnapshotDefaultCwd = await realpath(snapshotDefaultCwd);
     const paths = getMergeReadyWatchUiPaths(agentDir);
     const promptDeferred = createDeferred<void>();
     const authStorage = AuthStorage.inMemory();
@@ -184,7 +380,7 @@ describe('merge-ready watch UI session runner', () => {
       extensionDir: '/pkg/dist/extensions/merge-ready',
       paths,
       runtimeSnapshot: createRuntimeSnapshot(agentDir, {
-        defaultCwd: '/snapshot-default',
+        defaultCwd: snapshotDefaultCwd,
         auth: {
           provider: 'anthropic',
           apiKey: 'sk-runtime-secret',
@@ -212,12 +408,12 @@ describe('merge-ready watch UI session runner', () => {
       },
     });
 
-    expect(runner.getDefaultCwd()).toBe('/snapshot-default');
+    expect(runner.getDefaultCwd()).toBe(snapshotDefaultCwd);
 
     await runner.addWatch({ url: URL });
 
     expect(createResourceLoader).toHaveBeenCalledWith(
-      expect.objectContaining({ agentDir, cwd: '/snapshot-default' }),
+      expect.objectContaining({ agentDir, cwd: expectedSnapshotDefaultCwd }),
     );
     expect(authStoragePath).toBe(path.join(agentDir, 'auth.json'));
     expect(modelRegistryPath).toBe(path.join(agentDir, 'models.json'));
@@ -248,7 +444,7 @@ describe('merge-ready watch UI session runner', () => {
     const createSession = vi.fn();
 
     const runner = await createMergeReadyWatchSessionRunner({
-      defaultCwd: '/repo',
+      defaultCwd: agentDir,
       extensionDir: '/pkg/dist/extensions/merge-ready',
       paths,
       runtimeSnapshot: createRuntimeSnapshot(agentDir, {
@@ -285,7 +481,7 @@ describe('merge-ready watch UI session runner', () => {
     const secretHeaderValue = 'runtime-secret-header';
 
     const runner = await createMergeReadyWatchSessionRunner({
-      defaultCwd: '/repo',
+      defaultCwd: agentDir,
       extensionDir: '/pkg/dist/extensions/merge-ready',
       paths,
       runtimeSnapshot: createRuntimeSnapshot(agentDir, {
@@ -334,7 +530,7 @@ function createRuntimeSnapshot(
   const base: MergeReadyWatchUiRuntimeSnapshot = {
     sdkVersion: '0.74.0',
     agentDir,
-    defaultCwd: '/repo',
+    defaultCwd: agentDir,
     model: {
       ...BASE_MODEL,
     },

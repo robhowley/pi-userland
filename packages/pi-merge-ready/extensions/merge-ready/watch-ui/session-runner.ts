@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { realpath, stat } from 'node:fs/promises';
 import {
   AuthStorage,
   DefaultResourceLoader,
@@ -114,6 +115,13 @@ export type MergeReadyTranscriptResult = {
   watch: MergeReadyPersistedWatchRecord;
 };
 
+export class MergeReadyWatchInputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'MergeReadyWatchInputError';
+  }
+}
+
 export type MergeReadyOpenWatchResult = {
   message: string;
   session: {
@@ -212,21 +220,24 @@ export class MergeReadyWatchSessionRunner {
   }
 
   async addWatch(options: { cwd?: string; url: string }): Promise<MergeReadyAddWatchResult> {
-    const target = assertValidGitHubPullRequestUrl(options.url.trim());
+    let target: ReturnType<typeof assertValidGitHubPullRequestUrl>;
+    try {
+      target = assertValidGitHubPullRequestUrl(options.url.trim());
+    } catch (error) {
+      throw new MergeReadyWatchInputError(getErrorMessage(error));
+    }
+
     const canonicalUrl = target.url;
+    const cwd = await normalizeWatchCwd(options.cwd, this.defaultCwd);
     const existing = this.findWatchByCanonicalUrl(canonicalUrl);
     if (existing) {
       return {
         created: false,
-        message:
-          existing.state === 'active'
-            ? 'Watch already exists.'
-            : 'Watch already exists. Remove it before re-adding in v1.',
+        message: formatDuplicateWatchMessage(existing, cwd),
         watch: structuredClone(existing),
       };
     }
 
-    const cwd = normalizeWatchCwd(options.cwd, this.defaultCwd);
     const resourceLoader = this.createResourceLoader({
       cwd,
       agentDir: this.agentDir,
@@ -773,9 +784,55 @@ function isAbortLikeError(error: unknown): boolean {
   );
 }
 
-function normalizeWatchCwd(cwd: string | undefined, fallbackCwd: string): string {
+async function normalizeWatchCwd(
+  cwd: string | undefined,
+  fallbackCwd: string,
+): Promise<string> {
+  const resolvedFallbackCwd = path.resolve(fallbackCwd);
   const trimmed = cwd?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : fallbackCwd;
+  const candidate = trimmed && trimmed.length > 0 ? trimmed : resolvedFallbackCwd;
+  const resolvedCwd = path.isAbsolute(candidate)
+    ? path.resolve(candidate)
+    : path.resolve(resolvedFallbackCwd, candidate);
+
+  let canonicalCwd: string;
+  try {
+    canonicalCwd = await realpath(resolvedCwd);
+  } catch (error) {
+    if (isNodeErrorWithCode(error, 'ENOENT')) {
+      throw new MergeReadyWatchInputError(`cwd does not exist: ${JSON.stringify(resolvedCwd)}`);
+    }
+    throw error;
+  }
+
+  const cwdStat = await stat(canonicalCwd);
+  if (!cwdStat.isDirectory()) {
+    throw new MergeReadyWatchInputError(`cwd is not a directory: ${JSON.stringify(canonicalCwd)}`);
+  }
+
+  return canonicalCwd;
+}
+
+function formatDuplicateWatchMessage(
+  existing: MergeReadyPersistedWatchRecord,
+  requestedCwd: string,
+): string {
+  if (existing.cwd !== requestedCwd) {
+    return `Watch already exists for this PR. Current cwd: ${JSON.stringify(existing.cwd)}. Requested cwd: ${JSON.stringify(requestedCwd)}. Remove the existing watch and recreate it to use the requested cwd in v1.`;
+  }
+
+  return existing.state === 'active'
+    ? 'Watch already exists.'
+    : 'Watch already exists. Remove it before re-adding in v1.';
+}
+
+function isNodeErrorWithCode(error: unknown, code: string): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as { code?: unknown }).code === code
+  );
 }
 
 function assertMergeReadyWatchUiPathsMatchAgentDir(

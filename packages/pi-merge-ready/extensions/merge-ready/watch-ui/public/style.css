@@ -57,6 +57,9 @@ body {
   color: var(--muted);
   font-size: 12px;
 }
+#message:empty {
+  display: none;
+}
 .topline strong {
   color: var(--ink);
   font-weight: 700;
@@ -67,10 +70,7 @@ main {
 }
 
 header {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 24px;
-  align-items: start;
+  display: block;
 }
 
 h1 {
@@ -83,18 +83,7 @@ h1 {
 
 .summary {
   margin: 0;
-  max-width: 760px;
   color: var(--muted);
-}
-.cwd {
-  color: var(--muted);
-  text-align: right;
-  white-space: nowrap;
-  font-size: 13px;
-}
-.cwd code {
-  color: var(--ink);
-  font-family: inherit;
 }
 
 .compact-status {
@@ -147,7 +136,7 @@ h1 {
 form {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
-  min-height: 44px;
+  align-items: stretch;
 }
 .prompt {
   display: flex;
@@ -156,6 +145,33 @@ form {
   border-right: 1px solid var(--terminal-rule);
   color: #8fbcbb;
   white-space: nowrap;
+}
+.watch-form-fields {
+  min-width: 0;
+  display: grid;
+}
+.watch-form-field {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+}
+.watch-form-field + .watch-form-field {
+  border-top: 1px solid var(--terminal-rule);
+}
+.watch-form-label {
+  display: flex;
+  align-items: center;
+  min-height: 42px;
+  padding: 0 13px;
+  border-right: 1px solid var(--terminal-rule);
+  color: #8f98a8;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.watch-form-field input {
+  width: 100%;
+  min-height: 42px;
 }
 input {
   min-width: 0;
@@ -547,14 +563,6 @@ dd.bad {
   color: var(--faint);
 }
 
-footer {
-  margin-top: 22px;
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  color: var(--faint);
-  font-size: 12px;
-}
 code {
   font-family: inherit;
 }
@@ -587,9 +595,8 @@ code {
   form {
     grid-template-columns: 1fr;
   }
-  .cwd {
-    text-align: left;
-    white-space: normal;
+  .watch-form-fields {
+    border-top: 1px solid var(--terminal-rule);
   }
   .prompt,
   .shell button {
@@ -1013,7 +1020,7 @@ dd {
 
 .detail-compact .state-title {
   margin: 0;
-  max-width: 360px;
+  max-width: none;
   font-size: clamp(17px, 1.45vw, 22px);
   line-height: 1.08;
   letter-spacing: -0.05em;

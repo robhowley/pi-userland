@@ -11,7 +11,7 @@
     <article class="page" aria-label="Merge-ready watch localhost console">
       <div class="topline">
         <span><strong>MR-WATCH</strong> localhost console</span>
-        <span id="message" data-tone="info">Ready.</span>
+        <span id="message" data-tone="info"></span>
       </div>
 
       <main id="watch-ui-layout">
@@ -23,7 +23,6 @@
               visible.
             </p>
           </div>
-          <div class="cwd" id="cwd-note">New watches use cwd: loading…</div>
         </header>
 
         <div id="compact-status" class="compact-status" aria-label="Watch summary"></div>
@@ -31,12 +30,26 @@
         <section class="shell" aria-label="Add watch">
           <form id="add-watch-form">
             <div class="prompt">$ watch</div>
-            <input
-              id="watch-url"
-              aria-label="GitHub pull request URL"
-              placeholder="https://github.com/OWNER/REPO/pull/NUMBER"
-              autocomplete="off"
-            />
+            <div class="watch-form-fields">
+              <label class="watch-form-field">
+                <span class="watch-form-label">url</span>
+                <input
+                  id="watch-url"
+                  aria-label="GitHub pull request URL"
+                  placeholder="https://github.com/OWNER/REPO/pull/NUMBER"
+                  autocomplete="off"
+                />
+              </label>
+              <label class="watch-form-field">
+                <span class="watch-form-label">cwd</span>
+                <input
+                  id="watch-cwd"
+                  aria-label="Watch working directory"
+                  placeholder="/path/to/repo"
+                  autocomplete="off"
+                />
+              </label>
+            </div>
             <button type="submit">Add watch</button>
           </form>
         </section>
@@ -68,10 +81,6 @@
             <div id="transcript-content"></div>
           </div>
         </section>
-
-        <footer>
-          <span>plain terminal controls</span>
-        </footer>
       </main>
     </article>
   </body>

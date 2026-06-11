@@ -2,8 +2,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { getErrorMessage } from '../internal.js';
+import { MergeReadyWatchInputError, type MergeReadyWatchSessionRunner } from './session-runner.js';
 import { MERGE_READY_WATCH_UI_SERVICE } from './supervisor-state.js';
-import type { MergeReadyWatchSessionRunner } from './session-runner.js';
 
 export type MergeReadyWatchUiRunner = Pick<
   MergeReadyWatchSessionRunner,
@@ -161,12 +161,22 @@ async function handleMergeReadyWatchUiApiRequest(
     }
 
     const cwd = typeof body['cwd'] === 'string' ? body['cwd'] : undefined;
-    const added = await options.options.runner.addWatch({
-      url: urlValue,
-      ...(cwd === undefined ? {} : { cwd }),
-    });
-    sendJson(options.response, 200, added);
-    return;
+    try {
+      const added = await options.options.runner.addWatch({
+        url: urlValue,
+        ...(cwd === undefined ? {} : { cwd }),
+      });
+      sendJson(options.response, 200, added);
+      return;
+    } catch (error) {
+      if (error instanceof MergeReadyWatchInputError) {
+        sendJson(options.response, 400, {
+          error: error.message,
+        });
+        return;
+      }
+      throw error;
+    }
   }
 
   const stopMatch = matchWatchRoute(pathname, '/stop');
