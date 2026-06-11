@@ -36,12 +36,24 @@ import {
 } from './supervisor-state.js';
 import { readMergeReadyTranscript, type MergeReadyTranscriptRow } from './transcript.js';
 
+type MergeReadyWatchRegisteredCommandLike = {
+  name: string;
+  invocationName: string;
+  handler: (...args: any[]) => Promise<void>;
+};
+
+type MergeReadyWatchExtensionRunnerLike = {
+  createCommandContext: () => any;
+  getRegisteredCommands: () => MergeReadyWatchRegisteredCommandLike[];
+};
+
 export type MergeReadyWatchSessionLike = {
   sessionId: string;
   sessionFile: string | undefined;
   prompt: (text: string) => Promise<void>;
   abort: () => Promise<void>;
   dispose: () => void;
+  extensionRunner?: MergeReadyWatchExtensionRunnerLike;
 };
 
 export type MergeReadyWatchResourceLoaderLike = {
@@ -280,7 +292,7 @@ export class MergeReadyWatchSessionRunner {
     await this.persist();
 
     try {
-      const promptPromise = session.prompt(`/merge-ready watch --url ${canonicalUrl}`);
+      const promptPromise = startMergeReadyWatchInSession(session, canonicalUrl);
       this.liveHandles.set(id, {
         session,
         promptPromise,
@@ -625,6 +637,41 @@ export async function createMergeReadyWatchSessionRunner(
   options: CreateMergeReadyWatchSessionRunnerOptions,
 ): Promise<MergeReadyWatchSessionRunner> {
   return MergeReadyWatchSessionRunner.create(options);
+}
+
+async function startMergeReadyWatchInSession(
+  session: MergeReadyWatchSessionLike,
+  canonicalUrl: string,
+): Promise<void> {
+  const command = resolveMergeReadyWatchCommand(session);
+  if (command) {
+    await command.handler(
+      `watch --url ${canonicalUrl}`,
+      session.extensionRunner?.createCommandContext(),
+    );
+    return;
+  }
+
+  await session.prompt(`/merge-ready watch --url ${canonicalUrl}`);
+}
+
+function resolveMergeReadyWatchCommand(
+  session: MergeReadyWatchSessionLike,
+): MergeReadyWatchRegisteredCommandLike | undefined {
+  const commands = session.extensionRunner?.getRegisteredCommands();
+  if (!commands || commands.length === 0) {
+    return undefined;
+  }
+
+  const mergeReadyCommands = commands.filter((command) => command.name === 'merge-ready');
+  if (mergeReadyCommands.length === 0) {
+    return undefined;
+  }
+
+  return (
+    mergeReadyCommands.find((command) => command.invocationName === 'merge-ready') ??
+    mergeReadyCommands[0]
+  );
 }
 
 function createDefaultMergeReadyWatchResourceLoader(options: {

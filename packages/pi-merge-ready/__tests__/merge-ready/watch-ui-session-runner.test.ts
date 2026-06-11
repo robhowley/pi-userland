@@ -103,6 +103,67 @@ describe('merge-ready watch UI session runner', () => {
     await runner.dispose();
   });
 
+  it('executes the registered merge-ready command directly when duplicate invocation names are present', async () => {
+    const agentDir = await mkdtemp(path.join(os.tmpdir(), 'merge-ready-watch-ui-agent-'));
+    const paths = getMergeReadyWatchUiPaths(agentDir);
+    const watchDeferred = createDeferred<void>();
+    const prompt = vi.fn(async () => undefined);
+    const commandContext = {
+      ui: {
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+      },
+    };
+    const mergeReadyHandler = vi.fn(() => watchDeferred.promise);
+
+    const runner = await createMergeReadyWatchSessionRunner({
+      defaultCwd: '/repo',
+      extensionDir: '/pkg/dist/extensions/merge-ready',
+      paths,
+      skillPath: '/pkg/skills/merge-ready-loop/SKILL.md',
+      dependencies: {
+        createResourceLoader: vi.fn(() => ({
+          reload: vi.fn(async () => undefined),
+        })),
+        createSession: vi.fn(async (_options) => ({
+          session: createMockSession({
+            prompt,
+            extensionRunner: {
+              createCommandContext: vi.fn(() => commandContext),
+              getRegisteredCommands: vi.fn(() => [
+                {
+                  name: 'merge-ready',
+                  invocationName: 'merge-ready:1',
+                  handler: mergeReadyHandler,
+                },
+                {
+                  name: 'merge-ready',
+                  invocationName: 'merge-ready:2',
+                  handler: vi.fn(async () => undefined),
+                },
+              ]),
+            },
+          }),
+        })),
+        createSessionManager: (cwd) => SessionManager.inMemory(cwd),
+      },
+    });
+
+    await runner.addWatch({ url: URL });
+
+    expect(mergeReadyHandler).toHaveBeenCalledWith(`watch --url ${URL}`, commandContext);
+    expect(prompt).not.toHaveBeenCalled();
+
+    watchDeferred.resolve();
+    await flushAsyncWork();
+
+    expect(runner.listWatches()[0]).toMatchObject({
+      state: 'stopped',
+    });
+
+    await runner.dispose();
+  });
+
   it('injects explicit runtime objects into child sessions and preserves the captured agentDir', async () => {
     const agentDir = await mkdtemp(path.join(os.tmpdir(), 'merge-ready-watch-ui-agent-'));
     const paths = getMergeReadyWatchUiPaths(agentDir);
