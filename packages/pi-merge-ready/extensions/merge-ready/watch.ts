@@ -833,7 +833,7 @@ export async function runMergeReadyWatchLoop(
       const refreshedClassification = classifyMergeReadyWatchStatus(refreshedStatus);
 
       // After successful repair, trigger compaction if configured
-      if (refreshedClassification.actionability !== 'repair') {
+      if (refreshedClassification.actionability === 'wait') {
         const loadConfigFn = options.loadConfig ?? loadMergeReadyConfigAsync;
         const config = await loadConfigFn(options.ctx.cwd);
 
