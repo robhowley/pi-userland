@@ -50,7 +50,10 @@ export type LaunchMergeReadyWatchUIOptions = {
   startupTimeoutMs?: number;
 };
 
-export type StopMergeReadyWatchUIOptions = Pick<LaunchMergeReadyWatchUIOptions, 'agentDir' | 'sessionDir'>;
+export type StopMergeReadyWatchUIOptions = Pick<
+  LaunchMergeReadyWatchUIOptions,
+  'agentDir' | 'sessionDir'
+>;
 
 export type MergeReadyWatchUiBrowserOpenResult =
   | {
@@ -95,7 +98,12 @@ export type LaunchMergeReadyWatchUIDependencies = {
 
 export type StopMergeReadyWatchUIDependencies = Pick<
   LaunchMergeReadyWatchUIDependencies,
-  'fetchHealth' | 'getPaths' | 'readSupervisorInfo' | 'removeSupervisorInfo' | 'sleep' | 'stopSupervisor'
+  | 'fetchHealth'
+  | 'getPaths'
+  | 'readSupervisorInfo'
+  | 'removeSupervisorInfo'
+  | 'sleep'
+  | 'stopSupervisor'
 >;
 
 const DEFAULT_STARTUP_TIMEOUT_MS = 10_000;

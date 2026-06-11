@@ -1758,7 +1758,11 @@ describe('merge-ready watch loop', () => {
     expect(onSettled).not.toHaveBeenCalled();
 
     compactResult.resolve();
-    await expect(result).resolves.toEqual({ kind: 'stopped', reason: 'max_iterations' });
+    await expect(result).resolves.toMatchObject({
+      kind: 'stopped',
+      reason: 'max_iterations',
+      status: createReadyStatus(),
+    });
     expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(
       MERGE_READY_WATCH_STATUS_KEY,
       expect.stringContaining('Watching #42 · Ready to merge'),
@@ -1796,7 +1800,11 @@ describe('merge-ready watch loop', () => {
       loadConfig: vi.fn(async () => ({ autoCompactRepair: true })),
     });
 
-    expect(result).toEqual({ kind: 'stopped', reason: 'max_iterations' });
+    expect(result).toMatchObject({
+      kind: 'stopped',
+      reason: 'max_iterations',
+      status: createCiRunningStatus(),
+    });
     expect(ctx.compact).toHaveBeenCalledTimes(1);
     expect(vi.mocked(ctx.ui.notify).mock.calls).toContainEqual([
       'Compaction failed after repair: Compaction exploded',
