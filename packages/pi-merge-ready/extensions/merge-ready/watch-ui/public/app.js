@@ -435,15 +435,20 @@ function renderWatchActions(watch) {
   const actions = createElement('div', 'actions');
   actions.setAttribute('aria-label', 'Watch actions');
 
-  const stopButton = createButton('Stop', watch.state !== 'active', async () => {
-    try {
-      await api(`/api/watches/${encodeURIComponent(watch.id)}/stop`, { method: 'POST' });
-      setMessage('Watch stopped.', 'info');
-      await refreshWatches();
-    } catch (error) {
-      setMessage(readErrorMessage(error), 'error');
-    }
-  });
+  const actionButton =
+    watch.state === 'active'
+      ? createButton('Stop', false, async () => {
+          try {
+            await api(`/api/watches/${encodeURIComponent(watch.id)}/stop`, { method: 'POST' });
+            setMessage('Watch stopped.', 'info');
+            await refreshWatches();
+          } catch (error) {
+            setMessage(readErrorMessage(error), 'error');
+          }
+        })
+      : createButton('Restart', false, async () => {
+          await restartWatch(watch);
+        });
 
   const transcriptButton = createButton(
     watch.id === state.selectedTranscriptWatchId ? 'Hide transcript' : 'Transcript',
@@ -470,8 +475,54 @@ function renderWatchActions(watch) {
   });
   removeButton.classList.add('danger');
 
-  actions.append(stopButton, transcriptButton, removeButton);
+  actions.append(actionButton, transcriptButton, removeButton);
   return actions;
+}
+
+async function restartWatch(watch) {
+  const restartingSelectedTranscript = watch.id === state.selectedTranscriptWatchId;
+  const restartingSelectedWatch = watch.id === state.selectedWatchId;
+
+  try {
+    await api(`/api/watches/${encodeURIComponent(watch.id)}`, { method: 'DELETE' });
+  } catch (error) {
+    setMessage(readErrorMessage(error), 'error');
+    return;
+  }
+
+  if (restartingSelectedTranscript) {
+    clearSelectedTranscript();
+  }
+
+  if (restartingSelectedWatch) {
+    state.selectedWatchId = '';
+  }
+
+  try {
+    const response = await api('/api/watches', {
+      method: 'POST',
+      body: JSON.stringify({
+        url: watch.canonicalUrl,
+        cwd: watch.cwd,
+      }),
+    });
+
+    if (!response.created) {
+      await refreshWatches();
+      setMessage(response.message ?? 'Watch already exists.', 'warning');
+      return;
+    }
+
+    if (restartingSelectedWatch) {
+      state.selectedWatchId = response.watch?.id ?? '';
+    }
+
+    setMessage('Watch restarted.', 'info');
+    await refreshWatches();
+  } catch (error) {
+    await refreshWatches();
+    setMessage(readErrorMessage(error), 'error');
+  }
 }
 
 async function copyText(value) {
