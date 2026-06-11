@@ -939,6 +939,12 @@ export async function runMergeReadyWatchLoop(
 
       const refreshedClassification = classifyMergeReadyWatchStatus(refreshedStatus);
 
+      // A successful wait transition means the previous actionable blocker was cleared
+      // enough to resume polling, so future same-shaped blockers should be retriable.
+      if (refreshedClassification.actionability === 'wait') {
+        attemptedSignatures.clear();
+      }
+
       // After successful repair, trigger compaction if configured
       if (refreshedClassification.actionability === 'wait') {
         const loadConfigFn = options.loadConfig ?? loadMergeReadyConfigAsync;

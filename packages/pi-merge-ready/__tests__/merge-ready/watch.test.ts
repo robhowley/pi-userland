@@ -1427,6 +1427,71 @@ describe('merge-ready watch loop', () => {
     ]);
   });
 
+  it('clears attempted actionable signatures after a repair settles into wait and allows the same signature later', async () => {
+    const ctx = createWatchContext();
+    const firstAgentEnd = createDeferred<void>();
+    const secondAgentEnd = createDeferred<void>();
+    let repairTurn = 0;
+    const waitForAgentEnd = vi.fn(() => {
+      repairTurn += 1;
+      return repairTurn === 1 ? firstAgentEnd.promise : secondAgentEnd.promise;
+    });
+    const sendUserMessage = vi.fn(
+      async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
+    );
+    const checkDirtyWorkingTree = vi.fn(async () => ({ ok: true as const, dirty: false }));
+    const result = runMergeReadyWatchLoop({
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
+      api: { sendUserMessage },
+      ctx,
+      intervalSeconds: 30,
+      signal: new AbortController().signal,
+      dependencies: {
+        getStatus: createStatusSequence([
+          createCiFailingStatus(),
+          createCiRunningStatus(),
+          createCiFailingStatus(),
+          createCiRunningStatus(),
+        ]),
+        sleep: vi.fn(async () => undefined),
+        syncStatusBar: vi.fn(),
+        checkDirtyWorkingTree,
+        waitForAgentEnd,
+        maxIterations: 2,
+      },
+      loadConfig: vi.fn(async () => ({ autoCompactRepair: false })),
+    });
+    const onSettled = vi.fn();
+    result.finally(onSettled);
+
+    await flushMicrotasks(12);
+
+    expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(checkDirtyWorkingTree).toHaveBeenCalledTimes(1);
+    expect(onSettled).not.toHaveBeenCalled();
+
+    firstAgentEnd.resolve();
+    await flushMicrotasks(12);
+
+    expect(sendUserMessage).toHaveBeenCalledTimes(2);
+    expect(checkDirtyWorkingTree).toHaveBeenCalledTimes(2);
+    expect(waitForAgentEnd).toHaveBeenCalledTimes(2);
+    expect(onSettled).not.toHaveBeenCalled();
+    expect(vi.mocked(ctx.ui.notify).mock.calls).not.toContainEqual([
+      'Stopping merge-ready watch for https://github.com/robhowley/pi-userland/pull/42: the same actionable blocker is still present after one attempt.',
+      'warning',
+    ]);
+
+    secondAgentEnd.resolve();
+
+    await expect(result).resolves.toMatchObject({
+      kind: 'stopped',
+      reason: 'max_iterations',
+      status: createCiRunningStatus(),
+    });
+    expect(sendUserMessage).toHaveBeenCalledTimes(2);
+  });
+
   it('stops on a repeated URL actionable signature only after the post-agent_end refresh', async () => {
     const ctx = createWatchContext();
     const sendUserMessage = vi.fn(
@@ -1752,7 +1817,10 @@ describe('merge-ready watch loop', () => {
       vi
         .mocked(ctx.ui.setStatus!)
         .mock.calls.filter(([key]) => key === MERGE_READY_WATCH_STATUS_KEY)
-        .some(([, value]) => typeof value === 'string' && value.includes('Watching #42 · Ready to merge')),
+        .some(
+          ([, value]) =>
+            typeof value === 'string' && value.includes('Watching #42 · Ready to merge'),
+        ),
     ).toBe(false);
     expect(sleep).not.toHaveBeenCalled();
     expect(onSettled).not.toHaveBeenCalled();
