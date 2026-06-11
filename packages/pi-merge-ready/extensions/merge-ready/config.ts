@@ -8,26 +8,58 @@ export const DEFAULT_MERGE_READY_CONFIG: MergeReadyConfig = {
   autoCompactRepair: true,
 };
 
-/**
- * Load merge-ready configuration from Pi settings.json.
- * Uses SettingsManager to auto-resolve global/project layering.
- */
-export function loadMergeReadyConfig(cwd: string): MergeReadyConfig {
-  const settingsManager = SettingsManager.create(cwd);
-  const settings = settingsManager.getGlobalSettings();
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
-  const mrSettings = settings['pi-merge-ready' as keyof typeof settings];
-  if (typeof mrSettings === 'object' && mrSettings !== null) {
-    const config = mrSettings as Record<string, unknown>;
+function getMergeReadySettings(settings: Record<string, unknown>): unknown {
+  return settings['pi-merge-ready'];
+}
+
+function mergeScopedMergeReadySettings(
+  globalSettings: Record<string, unknown>,
+  projectSettings: Record<string, unknown>,
+): unknown {
+  const globalMergeReadySettings = getMergeReadySettings(globalSettings);
+  const projectMergeReadySettings = getMergeReadySettings(projectSettings);
+
+  if (isRecord(globalMergeReadySettings) && isRecord(projectMergeReadySettings)) {
     return {
-      autoCompactRepair:
-        typeof config['autoCompactRepair'] === 'boolean'
-          ? config['autoCompactRepair']
-          : DEFAULT_MERGE_READY_CONFIG.autoCompactRepair,
+      ...globalMergeReadySettings,
+      ...projectMergeReadySettings,
     };
   }
 
-  return DEFAULT_MERGE_READY_CONFIG;
+  return projectMergeReadySettings === undefined
+    ? globalMergeReadySettings
+    : projectMergeReadySettings;
+}
+
+function parseMergeReadyConfig(rawConfig: unknown): MergeReadyConfig {
+  if (!isRecord(rawConfig)) {
+    return DEFAULT_MERGE_READY_CONFIG;
+  }
+
+  return {
+    autoCompactRepair:
+      typeof rawConfig['autoCompactRepair'] === 'boolean'
+        ? rawConfig['autoCompactRepair']
+        : DEFAULT_MERGE_READY_CONFIG.autoCompactRepair,
+  };
+}
+
+/**
+ * Load merge-ready configuration from Pi settings.json.
+ * Uses SettingsManager global + project settings layering.
+ */
+export function loadMergeReadyConfig(cwd: string): MergeReadyConfig {
+  const settingsManager = SettingsManager.create(cwd);
+  const mergedMergeReadySettings = mergeScopedMergeReadySettings(
+    settingsManager.getGlobalSettings() as Record<string, unknown>,
+    settingsManager.getProjectSettings() as Record<string, unknown>,
+  );
+
+  return parseMergeReadyConfig(mergedMergeReadySettings);
 }
 
 /**

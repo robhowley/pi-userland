@@ -11,6 +11,7 @@ import {
   registerMergeReadyWatchLifecycle,
   registerMergeReadyWatchShortcut,
   startMergeReadyWatch,
+  type MergeReadyWatchContext,
 } from './watch.js';
 import type { MergeReadyExec, MergeReadyExecOptions, MergeReadyExecResult } from './git.js';
 import type {
@@ -26,6 +27,12 @@ export const MERGE_READY_COMMAND_TIMEOUT_MS = 20_000;
 
 export type MergeReadyCommandNotificationLevel = 'info' | 'warning' | 'error';
 
+export type MergeReadyCommandCompactOptions = {
+  customInstructions?: string;
+  onComplete?: () => void;
+  onError?: (error: Error) => void;
+};
+
 export type MergeReadyCommandContext = {
   cwd: string;
   mode?: 'tui' | 'rpc' | 'json' | 'print';
@@ -39,8 +46,8 @@ export type MergeReadyCommandContext = {
       fg: (color: string, text: string) => string;
     };
   };
-  // Compaction callback from ExtensionContext
-  compact?: (options?: { customInstructions?: string }) => Promise<void>;
+  // Callback-style compaction from ExtensionContext
+  compact?: (options?: MergeReadyCommandCompactOptions) => void;
 };
 
 export type MergeReadyCommandRegistration = {
@@ -155,7 +162,7 @@ export function registerMergeReadyCommand(pi: MergeReadyCommandAPI): void {
 
         const started = startMergeReadyWatch({
           api: watchPi,
-          ctx: ctx.compact ? { ...ctx, compact: ctx.compact.bind(ctx) } : ctx,
+          ctx: createMergeReadyWatchContext(ctx),
           exec,
           intervalSeconds: parsedArgs.intervalSeconds,
           ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
@@ -404,6 +411,29 @@ function createCommandUsageError(message: string): MergeReadyParsedCommandArgs {
   return {
     ok: false,
     message: `${message}. ${MERGE_READY_COMMAND_USAGE}`,
+  };
+}
+
+function createMergeReadyWatchContext(ctx: MergeReadyCommandContext): MergeReadyWatchContext {
+  return {
+    cwd: ctx.cwd,
+    ...(ctx.isIdle === undefined ? {} : { isIdle: ctx.isIdle }),
+    ...(ctx.waitForIdle === undefined ? {} : { waitForIdle: ctx.waitForIdle }),
+    ui: ctx.ui,
+    ...(ctx.compact === undefined
+      ? {}
+      : {
+          compact: (options) =>
+            new Promise<void>((resolve, reject) => {
+              ctx.compact?.({
+                ...(options?.customInstructions === undefined
+                  ? {}
+                  : { customInstructions: options.customInstructions }),
+                onComplete: () => resolve(),
+                onError: (error) => reject(error),
+              });
+            }),
+        }),
   };
 }
 

@@ -844,7 +844,12 @@ export async function runMergeReadyWatchLoop(
               customInstructions:
                 'Compaction triggered after successful merge-ready repair loop completion',
             });
+            throwIfMergeReadyWatchAborted(options.signal);
           } catch (error) {
+            if (options.signal.aborted) {
+              throw createAbortError(options.signal.reason);
+            }
+
             // Log error but don't fail the watch loop
             options.ctx.ui.notify(
               `Compaction failed after repair: ${getErrorMessage(error)}`,
