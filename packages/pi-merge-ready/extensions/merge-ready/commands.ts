@@ -61,7 +61,9 @@ export type MergeReadyCommandContext = {
   };
   // Callback-style compaction from ExtensionContext
   compact?: (options?: MergeReadyCommandCompactOptions) => void;
-  onMergeReadyWatchStart?: (result: Pick<StartMergeReadyWatchResult, 'ok' | 'level' | 'message'>) => void;
+  onMergeReadyWatchStart?: (
+    result: Pick<StartMergeReadyWatchResult, 'ok' | 'level' | 'message'>,
+  ) => void;
 };
 
 export type MergeReadyCommandRegistration = {

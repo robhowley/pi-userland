@@ -327,9 +327,7 @@ export function getActiveMergeReadyWatch(
   owner?: MergeReadyWatchRuntimeOwner,
   runtimeContext?: MergeReadyWatchRuntimeContext,
 ): ActiveMergeReadyWatcher | null {
-  return (
-    resolveActiveMergeReadyWatchRuntimeState({ owner, runtimeContext })?.activeWatcher ?? null
-  );
+  return resolveActiveMergeReadyWatchRuntimeState({ owner, runtimeContext })?.activeWatcher ?? null;
 }
 
 export async function resetMergeReadyWatchState(): Promise<void> {
@@ -341,9 +339,7 @@ export async function resetMergeReadyWatchState(): Promise<void> {
   mergeReadyWatchRuntimeStateBySessionKey.clear();
 }
 
-function createMergeReadyWatchRuntimeState(
-  sessionKey?: string,
-): MergeReadyWatchRuntimeState {
+function createMergeReadyWatchRuntimeState(sessionKey?: string): MergeReadyWatchRuntimeState {
   return {
     activeWatcher: null,
     ...(sessionKey === undefined ? {} : { sessionKey }),
@@ -363,7 +359,8 @@ function toMergeReadyWatchRuntimeContext(
 function getMergeReadyWatchRuntimeSessionKey(
   runtimeContext: MergeReadyWatchRuntimeContext | undefined,
 ): string | null {
-  const sessionId = runtimeContext?.session?.sessionId ?? runtimeContext?.sessionManager?.getSessionId?.();
+  const sessionId =
+    runtimeContext?.session?.sessionId ?? runtimeContext?.sessionManager?.getSessionId?.();
   if (typeof sessionId === 'string' && sessionId.trim().length > 0) {
     return `id:${sessionId.trim()}`;
   }
@@ -467,9 +464,7 @@ function resolvePendingRepairMergeReadyWatchRuntimeState(
 
   return hasScopedMergeReadyWatchRuntimeLocator(options)
     ? null
-    : findSingleActiveMergeReadyWatchRuntimeState(
-        (watcher) => watcher.pendingRepairTurn !== null,
-      );
+    : findSingleActiveMergeReadyWatchRuntimeState((watcher) => watcher.pendingRepairTurn !== null);
 }
 
 function findSingleActiveMergeReadyWatchRuntimeState(

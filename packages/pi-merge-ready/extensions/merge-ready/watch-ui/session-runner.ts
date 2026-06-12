@@ -807,10 +807,7 @@ function isAbortLikeError(error: unknown): boolean {
   );
 }
 
-async function normalizeWatchCwd(
-  cwd: string | undefined,
-  fallbackCwd: string,
-): Promise<string> {
+async function normalizeWatchCwd(cwd: string | undefined, fallbackCwd: string): Promise<string> {
   const resolvedFallbackCwd = path.resolve(fallbackCwd);
   const trimmed = cwd?.trim();
   const candidate = trimmed && trimmed.length > 0 ? trimmed : resolvedFallbackCwd;
