@@ -3,11 +3,22 @@ import { resolvePresenceThresholds } from './constants.js';
 import { writePresenceRecord } from './writer.js';
 import type { PresenceDiagnostic, PresenceRecord, PresenceThresholds } from './types.js';
 
+const PRESENCE_RUNTIME_STATE_KEY = '__piSessionDeckPresenceRuntimeState__';
+
 export interface PresenceRuntimeIdentity {
   runtimeId: string;
   pid: number;
   startedAt: string;
 }
+
+export type PresenceRuntimeStartup =
+  | {
+      state: 'healthy';
+    }
+  | {
+      state: 'degraded';
+      diagnostic: PresenceDiagnostic;
+    };
 
 export interface PresenceRuntimeStartOptions {
   directory?: string;
@@ -24,15 +35,40 @@ export interface PresenceRuntimeStartOptions {
 export interface PresenceRuntimeController {
   runtime: PresenceRuntimeIdentity;
   directory?: string;
+  startup: PresenceRuntimeStartup;
   stop: () => Promise<void>;
   isRunning: () => boolean;
 }
 
-let cachedRuntimeIdentity: PresenceRuntimeIdentity | null = null;
-let activeStartPromise: Promise<PresenceRuntimeController> | null = null;
-let activeTimer: ReturnType<typeof setInterval> | null = null;
-let activeDirectory: string | undefined;
-let activeClearInterval: typeof globalThis.clearInterval = globalThis.clearInterval;
+interface PresenceRuntimeState {
+  cachedRuntimeIdentity: PresenceRuntimeIdentity | null;
+  activeStartPromise: Promise<PresenceRuntimeController> | null;
+  activeTimer: ReturnType<typeof setInterval> | null;
+  activeDirectory: string | undefined;
+  activeClearInterval: typeof globalThis.clearInterval;
+}
+
+type PresenceRuntimeGlobalState = typeof globalThis & {
+  [PRESENCE_RUNTIME_STATE_KEY]?: PresenceRuntimeState;
+};
+
+function getPresenceRuntimeState(): PresenceRuntimeState {
+  const globalState = globalThis as PresenceRuntimeGlobalState;
+  const existingState = globalState[PRESENCE_RUNTIME_STATE_KEY];
+  if (existingState !== undefined) {
+    return existingState;
+  }
+
+  const createdState: PresenceRuntimeState = {
+    cachedRuntimeIdentity: null,
+    activeStartPromise: null,
+    activeTimer: null,
+    activeDirectory: undefined,
+    activeClearInterval: globalThis.clearInterval,
+  };
+  globalState[PRESENCE_RUNTIME_STATE_KEY] = createdState;
+  return createdState;
+}
 
 export function getPresenceRuntimeIdentity(
   options: {
@@ -41,40 +77,45 @@ export function getPresenceRuntimeIdentity(
     randomUUID?: () => string;
   } = {},
 ): PresenceRuntimeIdentity {
-  if (cachedRuntimeIdentity !== null) {
-    return cachedRuntimeIdentity;
+  const state = getPresenceRuntimeState();
+  if (state.cachedRuntimeIdentity !== null) {
+    return state.cachedRuntimeIdentity;
   }
 
   const now = options.now ?? (() => new Date());
   const pid = options.pid ?? process.pid;
   const randomUUID = options.randomUUID ?? nodeRandomUUID;
 
-  cachedRuntimeIdentity = {
+  state.cachedRuntimeIdentity = {
     runtimeId: randomUUID(),
     pid,
     startedAt: now().toISOString(),
   };
 
-  return cachedRuntimeIdentity;
+  return state.cachedRuntimeIdentity;
 }
 
 export async function ensurePresenceRuntimeStarted(
   options: PresenceRuntimeStartOptions = {},
 ): Promise<PresenceRuntimeController> {
-  if (activeStartPromise !== null) {
-    return activeStartPromise;
+  const state = getPresenceRuntimeState();
+  if (state.activeStartPromise !== null) {
+    return state.activeStartPromise;
   }
 
   const runtime = getPresenceRuntimeIdentity(options);
+  const directory = options.directory;
   const now = options.now ?? (() => new Date());
   const thresholds = resolvePresenceThresholds(options.thresholds);
   const setIntervalImpl = options.setInterval ?? globalThis.setInterval;
-  activeClearInterval = options.clearInterval ?? globalThis.clearInterval;
-  activeDirectory = options.directory;
+  state.activeClearInterval = options.clearInterval ?? globalThis.clearInterval;
+  state.activeDirectory = directory;
 
   const writeRecord = options.writeRecord ?? writePresenceRecord;
 
-  const writeHeartbeat = async (heartbeatAt: string): Promise<void> => {
+  const writeHeartbeat = async (
+    heartbeatAt: string,
+  ): Promise<{ ok: true } | { ok: false; diagnostic: PresenceDiagnostic }> => {
     const record: PresenceRecord = {
       runtimeId: runtime.runtimeId,
       pid: runtime.pid,
@@ -84,53 +125,78 @@ export async function ensurePresenceRuntimeStarted(
 
     try {
       await writeRecord(record, {
-        ...(options.directory === undefined ? {} : { directory: options.directory }),
+        ...(directory === undefined ? {} : { directory }),
       });
+      return { ok: true };
     } catch (error) {
-      options.onDiagnostic?.({
-        code: 'write_error',
-        message: `Failed to write presence record: ${getErrorMessage(error)}`,
-        ...(options.directory === undefined ? {} : { filePath: options.directory }),
-      });
+      const diagnostic = createWriteErrorDiagnostic(error, directory);
+      try {
+        options.onDiagnostic?.(diagnostic);
+      } catch {
+        // Keep write failures fail-open even when a diagnostic sink misbehaves.
+      }
+      return {
+        ok: false,
+        diagnostic,
+      };
     }
   };
 
-  activeStartPromise = (async () => {
-    await writeHeartbeat(runtime.startedAt);
+  state.activeStartPromise = (async () => {
+    const startupWrite = await writeHeartbeat(runtime.startedAt);
+    const startup: PresenceRuntimeStartup =
+      startupWrite.ok === true
+        ? { state: 'healthy' }
+        : { state: 'degraded', diagnostic: startupWrite.diagnostic };
 
-    if (activeTimer === null) {
-      activeTimer = setIntervalImpl(() => {
+    if (state.activeTimer === null) {
+      state.activeTimer = setIntervalImpl(() => {
         void writeHeartbeat(now().toISOString());
       }, thresholds.heartbeatIntervalMs);
-      activeTimer.unref?.();
+      state.activeTimer.unref?.();
     }
 
     return {
       runtime,
-      ...(activeDirectory === undefined ? {} : { directory: activeDirectory }),
+      ...(directory === undefined ? {} : { directory }),
+      startup,
       stop: async () => {
         await stopPresenceRuntime();
       },
-      isRunning: () => activeTimer !== null,
+      isRunning: () => getPresenceRuntimeState().activeTimer !== null,
     };
   })();
 
-  return activeStartPromise;
+  return state.activeStartPromise;
 }
 
 export async function stopPresenceRuntime(): Promise<void> {
-  if (activeTimer !== null) {
-    activeClearInterval(activeTimer);
-    activeTimer = null;
+  const state = getPresenceRuntimeState();
+  if (state.activeTimer !== null) {
+    state.activeClearInterval(state.activeTimer);
+    state.activeTimer = null;
   }
 
-  activeStartPromise = null;
-  activeDirectory = undefined;
+  state.activeStartPromise = null;
+  state.activeDirectory = undefined;
+  state.activeClearInterval = globalThis.clearInterval;
 }
 
 export async function resetPresenceRuntimeForTests(): Promise<void> {
+  const state = getPresenceRuntimeState();
   await stopPresenceRuntime();
-  cachedRuntimeIdentity = null;
+  state.cachedRuntimeIdentity = null;
+}
+
+function createWriteErrorDiagnostic(
+  error: unknown,
+  directory: string | undefined,
+): PresenceDiagnostic {
+  return {
+    code: 'write_error',
+    message: `Failed to write presence record: ${getErrorMessage(error)}`,
+    ...(directory === undefined ? {} : { filePath: directory }),
+  };
 }
 
 function getErrorMessage(error: unknown): string {
