@@ -15,7 +15,10 @@ import {
   resolveMergeReadyWatchUiSupervisorMainPath,
   stopMergeReadyWatchUIWithDependencies,
 } from '../../extensions/merge-ready/watch-ui/launcher.js';
-import type { MergeReadyWatchUiHealth } from '../../extensions/merge-ready/watch-ui/supervisor-client.js';
+import {
+  createMergeReadyWatchUiUrl,
+  type MergeReadyWatchUiHealth,
+} from '../../extensions/merge-ready/watch-ui/supervisor-client.js';
 import {
   MERGE_READY_WATCH_UI_SERVICE,
   type MergeReadyWatchSupervisorInfo,
@@ -130,6 +133,12 @@ describe('merge-ready watch UI launcher', () => {
     ).toBe('/repo/packages/pi-merge-ready/dist/extensions/merge-ready/watch-ui/supervisor-main.js');
   });
 
+  it('builds watch-ui URLs with only the bootstrap token', () => {
+    expect(createMergeReadyWatchUiUrl(43123, 'token-123')).toBe(
+      'http://127.0.0.1:43123/#token=token-123',
+    );
+  });
+
   it('captures the parent runtime and passes the runtime snapshot handoff to a new supervisor', async () => {
     const captureRuntimeSnapshot = vi.fn(async () => SNAPSHOT);
     const spawnSupervisor = vi.fn(async () => undefined);
@@ -191,7 +200,7 @@ describe('merge-ready watch UI launcher', () => {
     expect(removeRuntimeSnapshotHandoff).not.toHaveBeenCalled();
     expect(result).toEqual({
       level: 'info',
-      message: 'Merge-ready watch UI launched: http://127.0.0.1:43123/#token=token-123&cwd=%2Frepo',
+      message: 'Merge-ready watch UI launched: http://127.0.0.1:43123/#token=token-123',
     });
   });
 
@@ -276,7 +285,7 @@ describe('merge-ready watch UI launcher', () => {
     expect(openBrowser).toHaveBeenCalledTimes(1);
     expect(result.level).toBe('warning');
     expect(result.message).toContain('Merge-ready watch UI is already running');
-    expect(result.message).toContain('Visit http://127.0.0.1:43123/#token=token-123&cwd=%2Frepo');
+    expect(result.message).toContain('Visit http://127.0.0.1:43123/#token=token-123');
   });
 
   it('restarts a healthy supervisor when the runtime signature changes', async () => {
@@ -338,7 +347,7 @@ describe('merge-ready watch UI launcher', () => {
     expect(spawnSupervisor).toHaveBeenCalledTimes(1);
     expect(result).toEqual({
       level: 'info',
-      message: 'Merge-ready watch UI launched: http://127.0.0.1:43123/#token=token-123&cwd=%2Frepo',
+      message: 'Merge-ready watch UI launched: http://127.0.0.1:43123/#token=token-123',
     });
   });
 

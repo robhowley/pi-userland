@@ -10,12 +10,8 @@ export type MergeReadyWatchUiHealth = {
   snapshotSignature: string;
 };
 
-export function createMergeReadyWatchUiUrl(port: number, token: string, cwd?: string): string {
+export function createMergeReadyWatchUiUrl(port: number, token: string): string {
   const params = new URLSearchParams({ token });
-  if (cwd) {
-    params.set('cwd', cwd);
-  }
-
   return `http://127.0.0.1:${String(port)}/#${params.toString()}`;
 }
 

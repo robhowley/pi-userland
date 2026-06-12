@@ -1,4 +1,4 @@
-/* global Headers, URLSearchParams, document, fetch, navigator, setInterval, window */
+/* global Headers, URLSearchParams, document, fetch, navigator, window */
 
 const state = {
   draftCwd: '',
@@ -31,13 +31,14 @@ const state = {
   selectedTranscriptWatchSnapshot: null,
   selectedTranscriptTail: 120,
   lastTranscriptContentSignature: '',
+  refreshIntervalId: null,
 };
 
-const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
-const launchCwd = hashParams.get('cwd');
-state.token = hashParams.get('token') ?? '';
-state.draftCwd = launchCwd ?? '';
-state.draftCwdInitialized = launchCwd !== null;
+const TOKEN_STORAGE_KEY = 'merge-ready-watch-ui-token';
+const RELAUNCH_MESSAGE = 'Missing merge-ready watch UI token. Reopen watch-ui from Pi.';
+const REFRESH_INTERVAL_MS = 3_000;
+
+state.token = bootstrapToken();
 syncCwdInputValue(state.draftCwd);
 
 const form = document.getElementById('add-watch-form');
@@ -85,14 +86,92 @@ ensureCompactStatusElement();
 renderCompactStatus([]);
 renderWatches([]);
 renderTranscriptPanel();
-void refreshWatches();
-setInterval(() => {
+if (state.token) {
+  startRefreshLoop();
   void refreshWatches();
-}, 3_000);
+} else {
+  setMessage(RELAUNCH_MESSAGE, 'error');
+}
+
+function bootstrapToken() {
+  const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+  const hashToken = hashParams.get('token')?.trim() ?? '';
+
+  scrubLaunchHash();
+  if (hashToken) {
+    writeStoredToken(hashToken);
+    return hashToken;
+  }
+
+  return readStoredToken();
+}
+
+function scrubLaunchHash() {
+  if (!window.location.hash || typeof window.history.replaceState !== 'function') {
+    return;
+  }
+
+  window.history.replaceState(
+    window.history.state,
+    '',
+    `${window.location.pathname}${window.location.search}`,
+  );
+}
+
+function readStoredToken() {
+  try {
+    return window.sessionStorage.getItem(TOKEN_STORAGE_KEY)?.trim() ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function writeStoredToken(token) {
+  try {
+    window.sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
+  } catch {
+    // Ignore sessionStorage failures and continue with the in-memory bootstrap token.
+  }
+}
+
+function clearStoredToken() {
+  try {
+    window.sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+  } catch {
+    // Ignore sessionStorage failures while failing closed.
+  }
+}
+
+function startRefreshLoop() {
+  if (!state.token || state.refreshIntervalId !== null) {
+    return;
+  }
+
+  state.refreshIntervalId = window.setInterval(() => {
+    void refreshWatches();
+  }, REFRESH_INTERVAL_MS);
+}
+
+function stopRefreshLoop() {
+  if (state.refreshIntervalId === null) {
+    return;
+  }
+
+  window.clearInterval(state.refreshIntervalId);
+  state.refreshIntervalId = null;
+}
+
+function invalidateToken() {
+  clearStoredToken();
+  state.token = '';
+  stopRefreshLoop();
+  setMessage(RELAUNCH_MESSAGE, 'error');
+}
 
 async function refreshWatches() {
   if (!state.token) {
-    setMessage('Missing merge-ready watch UI token in the URL hash.', 'error');
+    stopRefreshLoop();
+    setMessage(RELAUNCH_MESSAGE, 'error');
     return;
   }
 
@@ -117,6 +196,10 @@ async function refreshWatches() {
 }
 
 async function api(pathname, options = {}) {
+  if (!state.token) {
+    throw new Error(RELAUNCH_MESSAGE);
+  }
+
   const headers = new Headers(options.headers ?? {});
   headers.set('Authorization', `Bearer ${state.token}`);
   if (options.body && !headers.has('Content-Type')) {
@@ -131,6 +214,11 @@ async function api(pathname, options = {}) {
   const text = await response.text();
   const payload = text ? JSON.parse(text) : {};
   if (!response.ok) {
+    if (response.status === 401) {
+      invalidateToken();
+      throw new Error(RELAUNCH_MESSAGE);
+    }
+
     throw new Error(
       typeof payload.error === 'string'
         ? payload.error

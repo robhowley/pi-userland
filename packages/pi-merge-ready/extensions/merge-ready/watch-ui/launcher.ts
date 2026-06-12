@@ -492,7 +492,7 @@ async function openOrReportMergeReadyWatchUi(options: {
     };
   }
 
-  const url = createMergeReadyWatchUiUrl(options.info.port, token, options.cwd);
+  const url = createMergeReadyWatchUiUrl(options.info.port, token);
   if (!options.openBrowser) {
     return {
       level: 'info',
