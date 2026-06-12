@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/robhowley/pi-userland/compare/pi-merge-ready-v0.6.1...pi-merge-ready-v0.7.0) (2026-06-12)
+
+
+### Features
+
+* **pi-merge-ready:** add autoCompactRepair config option ([#81](https://github.com/robhowley/pi-userland/issues/81)) ([2171c01](https://github.com/robhowley/pi-userland/commit/2171c01091789b9ffe3688ff29661e8be902cdb9))
+
 ## [0.6.1](https://github.com/robhowley/pi-userland/compare/pi-merge-ready-v0.6.0...pi-merge-ready-v0.6.1) (2026-06-09)
 
 
