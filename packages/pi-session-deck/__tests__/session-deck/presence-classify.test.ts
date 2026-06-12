@@ -79,6 +79,22 @@ describe('classifyPresenceRecord', () => {
     expect(result.reason).toBe('pid_reused');
   });
 
+  it('marks slightly future timestamps unknown', async () => {
+    const inspectPid = vi.fn(async () => ({ status: 'matches' as const }));
+
+    const result = await classifyPresenceRecord(
+      buildRecord({ heartbeatAt: '2026-06-12T12:00:02.000Z' }),
+      {
+        now: NOW,
+        inspectPid,
+      },
+    );
+
+    expect(result.presenceState).toBe('unknown');
+    expect(result.reason).toBe('future_timestamp');
+    expect(inspectPid).not.toHaveBeenCalled();
+  });
+
   it('marks far-future timestamps unknown', async () => {
     const result = await classifyPresenceRecord(
       buildRecord({ heartbeatAt: '2026-06-12T12:10:00.000Z' }),

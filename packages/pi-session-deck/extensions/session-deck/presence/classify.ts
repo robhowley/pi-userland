@@ -29,10 +29,7 @@ export async function classifyPresenceRecord(
     return createPresenceSummary(record, 'unknown', Number.NaN, 'invalid_timestamp');
   }
 
-  if (
-    startedAtMs > nowMs + thresholds.futureSkewMs ||
-    heartbeatAtMs > nowMs + thresholds.futureSkewMs
-  ) {
+  if (startedAtMs > nowMs || heartbeatAtMs > nowMs) {
     return createPresenceSummary(record, 'unknown', nowMs - heartbeatAtMs, 'future_timestamp');
   }
 
