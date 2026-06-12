@@ -121,6 +121,41 @@ describe('merge-ready watch UI supervisor server', () => {
     });
   });
 
+  it('returns the generic 404 for removed POST /api/watches/:id/open', async () => {
+    const publicDir = await createPublicDir();
+    const watch = createWatchRecord();
+    const runner: MergeReadyWatchUiRunner = {
+      addWatch: vi.fn(async (_options) => ({ created: true, watch })),
+      getDefaultCwd: vi.fn(() => '/repo'),
+      listWatches: vi.fn(() => [watch]),
+      readTranscriptForWatch: vi.fn(async (_id, _tail) => ({ watch, rows: [] })),
+      removeWatch: vi.fn(async (_id) => true),
+      stopWatch: vi.fn(async (_id) => null),
+    };
+
+    const server = await createMergeReadyWatchUiSupervisorServer({
+      packageVersion: '0.6.0',
+      publicDir,
+      runner,
+      snapshotLoaded: true,
+      snapshotSignature: 'runtime-signature-1',
+      token: 'token-123',
+    });
+    servers.push(server);
+
+    const response = await fetch(`http://127.0.0.1:${String(server.port)}/api/watches/one/open`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer token-123',
+      },
+    });
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({
+      error: 'Not found',
+    });
+  });
+
   it('forwards cwd on POST /api/watches and allows omission', async () => {
     const publicDir = await createPublicDir();
     const watch = createWatchRecord();
