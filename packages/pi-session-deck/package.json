@@ -11,9 +11,16 @@
   "publishConfig": {
     "access": "public"
   },
-  "keywords": ["pi-package", "pi-userland", "sessions", "status"],
+  "keywords": [
+    "pi-package",
+    "pi-userland",
+    "sessions",
+    "status"
+  ],
   "pi": {
-    "extensions": ["./extensions/session-deck"]
+    "extensions": [
+      "./extensions/session-deck"
+    ]
   },
   "repository": {
     "type": "git",
