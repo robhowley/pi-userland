@@ -976,6 +976,114 @@ describe('merge-ready command', () => {
     expect(ctx.ui.setStatus).toHaveBeenCalledWith(MERGE_READY_WATCH_STATUS_KEY, undefined);
   });
 
+  it('allows separately registered command runtimes to watch different PRs concurrently', async () => {
+    const firstUrl = 'https://github.com/shopify/pi/pull/64';
+    const secondUrl = 'https://github.com/shopify/pi/pull/65';
+    const firstTarget = {
+      mode: 'url' as const,
+      url: firstUrl,
+      owner: 'shopify',
+      repo: 'pi',
+      prNumber: 64,
+    };
+    const secondTarget = {
+      mode: 'url' as const,
+      url: secondUrl,
+      owner: 'shopify',
+      repo: 'pi',
+      prNumber: 65,
+    };
+    const firstPayload = buildPullRequestPayload({
+      number: 64,
+      title: 'Support explicit PR URL targets',
+      url: firstUrl,
+      headRefName: 'feat/explicit-pr-url',
+      headRepository: {
+        name: 'pi',
+      },
+      headRepositoryOwner: {
+        login: 'shopify',
+      },
+      baseRefName: 'main',
+    });
+    const secondPayload = buildPullRequestPayload({
+      number: 65,
+      title: 'Support concurrent watch sessions',
+      url: secondUrl,
+      headRefName: 'feat/concurrent-watch-sessions',
+      headRepository: {
+        name: 'pi',
+      },
+      headRepositoryOwner: {
+        login: 'shopify',
+      },
+      baseRefName: 'main',
+    });
+    const firstRuntime = createMockAPI([
+      createPullRequestViewSuccessCall(firstPayload, {
+        timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+        target: firstTarget,
+      }),
+      createConversationsSuccessCall(buildConversationsPayload(), {
+        timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+        repositoryOwner: 'shopify',
+        repositoryName: 'pi',
+        pullRequestNumber: 64,
+      }),
+    ]);
+    const secondRuntime = createMockAPI([
+      createPullRequestViewSuccessCall(secondPayload, {
+        timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+        target: secondTarget,
+      }),
+      createConversationsSuccessCall(buildConversationsPayload(), {
+        timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+        repositoryOwner: 'shopify',
+        repositoryName: 'pi',
+        pullRequestNumber: 65,
+      }),
+    ]);
+
+    mergeReadyExtension(firstRuntime.api);
+    mergeReadyExtension(secondRuntime.api);
+    const firstHandler = firstRuntime.getCommand(MERGE_READY_COMMAND_NAME);
+    const secondHandler = secondRuntime.getCommand(MERGE_READY_COMMAND_NAME);
+    const firstAbortController = new AbortController();
+    const secondAbortController = new AbortController();
+    const firstCtx = createCommandContext({
+      mode: 'rpc',
+      signal: firstAbortController.signal,
+    });
+    const secondCtx = createCommandContext({
+      mode: 'rpc',
+      signal: secondAbortController.signal,
+    });
+
+    const firstRun =
+      firstHandler?.(`watch --url ${firstUrl} --interval 15`, firstCtx) ?? Promise.resolve();
+    const secondRun =
+      secondHandler?.(`watch --url ${secondUrl} --interval 15`, secondCtx) ?? Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    await flushMicrotasks();
+
+    expect(getActiveMergeReadyWatch(firstRuntime.api)).not.toBeNull();
+    expect(getActiveMergeReadyWatch(secondRuntime.api)).not.toBeNull();
+    expect(getActiveMergeReadyWatch()).toBeNull();
+
+    firstAbortController.abort();
+    await firstRun;
+
+    firstRuntime.assertDone();
+    expect(getActiveMergeReadyWatch(firstRuntime.api)).toBeNull();
+    expect(getActiveMergeReadyWatch(secondRuntime.api)).not.toBeNull();
+
+    secondAbortController.abort();
+    await secondRun;
+
+    secondRuntime.assertDone();
+    expect(getActiveMergeReadyWatch(secondRuntime.api)).toBeNull();
+  });
+
   it('wraps callback-based compaction into a blocking watch promise', async () => {
     vi.resetModules();
 

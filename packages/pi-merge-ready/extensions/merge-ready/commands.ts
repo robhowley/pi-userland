@@ -17,6 +17,7 @@ import {
   registerMergeReadyWatchShortcut,
   startMergeReadyWatch,
   type MergeReadyWatchContext,
+  type StartMergeReadyWatchResult,
 } from './watch.js';
 import type { MergeReadyExec, MergeReadyExecOptions, MergeReadyExecResult } from './git.js';
 import type {
@@ -60,6 +61,7 @@ export type MergeReadyCommandContext = {
   };
   // Callback-style compaction from ExtensionContext
   compact?: (options?: MergeReadyCommandCompactOptions) => void;
+  onMergeReadyWatchStart?: (result: Pick<StartMergeReadyWatchResult, 'ok' | 'level' | 'message'>) => void;
 };
 
 export type MergeReadyCommandRegistration = {
@@ -201,6 +203,11 @@ export function registerMergeReadyCommand(pi: MergeReadyCommandAPI): void {
           ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
           timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
           ...(url === undefined ? {} : { url }),
+        });
+        ctx.onMergeReadyWatchStart?.({
+          ok: started.ok,
+          level: started.level,
+          message: started.message,
         });
         ctx.ui.notify(started.message, started.level);
         if (started.ok) {

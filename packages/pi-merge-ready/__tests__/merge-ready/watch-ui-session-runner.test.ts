@@ -7,7 +7,14 @@ import {
   SessionManager,
   createEventBus,
 } from '@earendil-works/pi-coding-agent';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  createMergeReadyStatus,
+  resetMergeReadyWatchState,
+  startMergeReadyWatch,
+  stopActiveMergeReadyWatch,
+  type MergeReadyStatus,
+} from '../../extensions/merge-ready/index.js';
 import {
   MERGE_READY_WATCH_STATUS_EVENT,
   createMergeReadyWatchStatusRecord,
@@ -32,6 +39,10 @@ const BASE_MODEL: MergeReadyWatchUiRuntimeSnapshot['model'] = {
   contextWindow: 200_000,
   maxTokens: 8_192,
 };
+
+afterEach(async () => {
+  await resetMergeReadyWatchState();
+});
 
 describe('merge-ready watch UI session runner', () => {
   it('dedupes watches by canonical URL and updates persisted state from live status events', async () => {
@@ -100,6 +111,86 @@ describe('merge-ready watch UI session runner', () => {
     expect(runner.listWatches()[0]).toMatchObject({
       state: 'stopped',
     });
+
+    await runner.dispose();
+  });
+
+  it('keeps different PR watches active concurrently across child sessions and preserves same-PR dedupe', async () => {
+    const secondUrl = 'https://github.com/shopify/pi/pull/65';
+    const agentDir = await mkdtemp(path.join(os.tmpdir(), 'merge-ready-watch-ui-agent-'));
+    const defaultCwd = await mkdtemp(path.join(os.tmpdir(), 'merge-ready-watch-ui-default-'));
+    const paths = getMergeReadyWatchUiPaths(agentDir);
+    const sessionSpecs = [
+      {
+        sessionId: 'session-64',
+        sessionFile: '/tmp/session-64.jsonl',
+        url: URL,
+        prNumber: 64,
+      },
+      {
+        sessionId: 'session-65',
+        sessionFile: '/tmp/session-65.jsonl',
+        url: secondUrl,
+        prNumber: 65,
+      },
+    ];
+    let sessionIndex = 0;
+
+    const runner = await createMergeReadyWatchSessionRunner({
+      defaultCwd,
+      extensionDir: '/pkg/dist/extensions/merge-ready',
+      paths,
+      skillPath: '/pkg/skills/merge-ready-loop/SKILL.md',
+      dependencies: {
+        agentDir,
+        createResourceLoader: vi.fn(() => ({
+          reload: vi.fn(async () => undefined),
+        })),
+        createSession: vi.fn(async (options) => {
+          const spec = sessionSpecs[sessionIndex++];
+          expect(spec).toBeDefined();
+          return {
+            session: createMockConcurrentWatchSession({
+              cwd: options.cwd,
+              sessionId: spec!.sessionId,
+              sessionFile: spec!.sessionFile,
+              url: spec!.url,
+              owner: 'shopify',
+              repo: 'pi',
+              prNumber: spec!.prNumber,
+            }),
+          };
+        }),
+        createSessionManager: (cwd) => SessionManager.inMemory(cwd),
+      },
+    });
+
+    const first = await runner.addWatch({ url: URL });
+    const second = await runner.addWatch({ url: secondUrl });
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    expect(first.created).toBe(true);
+    expect(second.created).toBe(true);
+    expect(runner.getWatch(first.watch.id)).toMatchObject({
+      canonicalUrl: URL,
+      state: 'active',
+    });
+    expect(runner.getWatch(second.watch.id)).toMatchObject({
+      canonicalUrl: secondUrl,
+      state: 'active',
+    });
+
+    const duplicate = await runner.addWatch({ url: `${URL}/` });
+    expect(duplicate.created).toBe(false);
+    expect(runner.listWatches()).toHaveLength(2);
+
+    await runner.stopWatch(first.watch.id);
+    expect(runner.getWatch(first.watch.id)).toMatchObject({ state: 'stopped' });
+    expect(runner.getWatch(second.watch.id)).toMatchObject({ state: 'active' });
+
+    await runner.stopWatch(second.watch.id);
+    expect(runner.getWatch(second.watch.id)).toMatchObject({ state: 'stopped' });
 
     await runner.dispose();
   });
@@ -522,6 +613,149 @@ describe('merge-ready watch UI session runner', () => {
     expect(persistedAuthStorage).not.toContain(secretHeaderValue);
   });
 });
+
+type MergeReadyWatchStartHookPayload = {
+  ok: boolean;
+  level: 'info' | 'warning' | 'error';
+  message: string;
+};
+
+function createMockConcurrentWatchSession(options: {
+  cwd: string;
+  sessionId: string;
+  sessionFile: string;
+  url: string;
+  owner: string;
+  repo: string;
+  prNumber: number;
+}): MergeReadyWatchSessionLike {
+  const api = {
+    sendUserMessage: vi.fn(async () => undefined),
+  };
+  const ui = {
+    notify: vi.fn(),
+    setStatus: vi.fn(),
+  };
+  const sleep = createAbortableWatchSleep();
+  const status = createReadyUrlStatus({
+    url: options.url,
+    owner: options.owner,
+    repo: options.repo,
+    prNumber: options.prNumber,
+  });
+  const handler = vi.fn(
+    async (
+      _args: string,
+      commandContext?: { onMergeReadyWatchStart?: (result: MergeReadyWatchStartHookPayload) => void },
+    ) => {
+      const start = startMergeReadyWatch({
+        api,
+        ctx: {
+          cwd: options.cwd,
+          mode: 'rpc',
+          sessionManager: {
+            getSessionId: () => options.sessionId,
+            getSessionFile: () => options.sessionFile,
+          },
+          ui,
+        },
+        exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
+        intervalSeconds: 15,
+        url: options.url,
+        dependencies: {
+          getStatus: vi.fn(async () => status),
+          sleep,
+          syncStatusBar: vi.fn(),
+          checkDirtyWorkingTree: vi.fn(async () => ({ ok: true as const, dirty: false })),
+        },
+      });
+
+      commandContext?.onMergeReadyWatchStart?.({
+        ok: start.ok,
+        level: start.level,
+        message: start.message,
+      });
+
+      if (start.ok) {
+        await start.promise;
+      }
+    },
+  );
+
+  return createMockSession({
+    sessionId: options.sessionId,
+    sessionFile: options.sessionFile,
+    abort: vi.fn(async () => {
+      stopActiveMergeReadyWatch(api);
+    }),
+    extensionRunner: {
+      createCommandContext: vi.fn(() => ({})),
+      getRegisteredCommands: vi.fn(() => [
+        {
+          name: 'merge-ready',
+          invocationName: 'merge-ready',
+          handler,
+        },
+      ]),
+    },
+  });
+}
+
+function createReadyUrlStatus(options: {
+  url: string;
+  owner: string;
+  repo: string;
+  prNumber: number;
+}): MergeReadyStatus {
+  return createMergeReadyStatus({
+    generatedAt: '2026-06-12T00:00:00.000Z',
+    target: {
+      mode: 'url',
+      url: options.url,
+      owner: options.owner,
+      repo: options.repo,
+      prNumber: options.prNumber,
+    },
+    pr: {
+      lifecycle: 'open',
+      number: options.prNumber,
+      title: `Watch ${String(options.prNumber)}`,
+      url: options.url,
+      headRefName: `feat/watch-${String(options.prNumber)}`,
+      baseRefName: 'main',
+    },
+    signals: {
+      draft: false,
+      mergeability: 'mergeable',
+      checks: 'passing',
+      review: 'approved',
+      unresolvedConversations: false,
+      unresolvedConversationRequirement: 'optional',
+    },
+  });
+}
+
+function createAbortableWatchSleep() {
+  return vi.fn((_ms: number, signal?: AbortSignal) => {
+    if (signal?.aborted) {
+      const error = new Error('Aborted');
+      error.name = 'AbortError';
+      return Promise.reject(error);
+    }
+
+    return new Promise<void>((_resolve, reject) => {
+      signal?.addEventListener(
+        'abort',
+        () => {
+          const error = new Error('Aborted');
+          error.name = 'AbortError';
+          reject(error);
+        },
+        { once: true },
+      );
+    });
+  });
+}
 
 function createRuntimeSnapshot(
   agentDir: string,

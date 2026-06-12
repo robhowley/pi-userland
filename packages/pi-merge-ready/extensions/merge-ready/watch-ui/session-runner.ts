@@ -137,6 +137,16 @@ type MergeReadyLiveWatchHandle = {
   session: MergeReadyWatchSessionLike;
 };
 
+type MergeReadyWatchStartResultHookPayload = {
+  ok: boolean;
+  level: 'info' | 'warning' | 'error';
+  message: string;
+};
+
+type MergeReadyWatchCommandContextLike = {
+  onMergeReadyWatchStart?: (result: MergeReadyWatchStartResultHookPayload) => void;
+};
+
 export class MergeReadyWatchSessionRunner {
   private readonly agentDir: string;
   private readonly createAuthStorage: NonNullable<
@@ -656,10 +666,23 @@ async function startMergeReadyWatchInSession(
 ): Promise<void> {
   const command = resolveMergeReadyWatchCommand(session);
   if (command) {
-    await command.handler(
-      `watch --url ${canonicalUrl}`,
-      session.extensionRunner?.createCommandContext(),
-    );
+    const commandContext = session.extensionRunner?.createCommandContext();
+    let startResult: MergeReadyWatchStartResultHookPayload | undefined;
+
+    if (typeof commandContext === 'object' && commandContext !== null) {
+      const commandContextWithHook = commandContext as MergeReadyWatchCommandContextLike;
+      const previousHook = commandContextWithHook.onMergeReadyWatchStart;
+      commandContextWithHook.onMergeReadyWatchStart = (result) => {
+        startResult = result;
+        previousHook?.(result);
+      };
+    }
+
+    await command.handler(`watch --url ${canonicalUrl}`, commandContext);
+
+    if (startResult && !startResult.ok) {
+      throw new Error(startResult.message);
+    }
     return;
   }
 

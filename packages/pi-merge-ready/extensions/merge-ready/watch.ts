@@ -274,16 +274,36 @@ const REPAIR_OPEN_ITEM_ID_SET = new Set<string>(MERGE_READY_WATCH_REPAIR_OPEN_IT
 const WAIT_OPEN_ITEM_ID_SET = new Set<string>(MERGE_READY_WATCH_WAIT_OPEN_ITEM_IDS);
 const STOP_OPEN_ITEM_ID_SET = new Set<string>(MERGE_READY_WATCH_STOP_OPEN_ITEM_IDS);
 
-let activeWatcher: ActiveMergeReadyWatcher | null = null;
+type MergeReadyWatchRuntimeOwner = MergeReadyWatchAPI | MergeReadyWatchShortcutAPI;
+
+export type MergeReadyWatchRuntimeContext = Pick<
+  MergeReadyWatchContext,
+  'session' | 'sessionManager'
+>;
+
+type MergeReadyWatchRuntimeLocator = {
+  owner?: MergeReadyWatchRuntimeOwner | undefined;
+  runtimeContext?: MergeReadyWatchRuntimeContext | undefined;
+};
+
+type MergeReadyWatchRuntimeState = {
+  activeWatcher: ActiveMergeReadyWatcher | null;
+  sessionKey?: string;
+};
+
+const defaultMergeReadyWatchRuntimeState = createMergeReadyWatchRuntimeState();
+const mergeReadyWatchRuntimeStateByOwner = new WeakMap<object, MergeReadyWatchRuntimeState>();
+const mergeReadyWatchRuntimeStateBySessionKey = new Map<string, MergeReadyWatchRuntimeState>();
+const activeMergeReadyWatchRuntimeStates = new Set<MergeReadyWatchRuntimeState>();
 let nextWatcherId = 1;
 const pendingWatcherPromises = new Set<Promise<MergeReadyWatchResult>>();
 
 export function registerMergeReadyWatchLifecycle(api: MergeReadyWatchAPI): void {
-  api.on?.('session_shutdown', () => {
-    stopActiveMergeReadyWatch();
+  api.on?.('session_shutdown', (_event, eventCtx) => {
+    stopActiveMergeReadyWatch(api, toMergeReadyWatchRuntimeContext(eventCtx));
   });
-  api.on?.('agent_end', () => {
-    resolveActiveMergeReadyWatchAgentEnd();
+  api.on?.('agent_end', (_event, eventCtx) => {
+    resolveActiveMergeReadyWatchAgentEnd(api, toMergeReadyWatchRuntimeContext(eventCtx));
   });
 }
 
@@ -291,7 +311,7 @@ export function registerMergeReadyWatchShortcut(api: MergeReadyWatchShortcutAPI)
   api.registerShortcut?.(MERGE_READY_WATCH_STOP_SHORTCUT, {
     description: 'Stop active merge-ready watch',
     handler: (ctx) => {
-      const stop = stopActiveMergeReadyWatch();
+      const stop = stopActiveMergeReadyWatch(api);
       if (!stop.stopped) {
         return;
       }
@@ -303,14 +323,194 @@ export function registerMergeReadyWatchShortcut(api: MergeReadyWatchShortcutAPI)
   });
 }
 
-export function getActiveMergeReadyWatch(): ActiveMergeReadyWatcher | null {
-  return activeWatcher;
+export function getActiveMergeReadyWatch(
+  owner?: MergeReadyWatchRuntimeOwner,
+  runtimeContext?: MergeReadyWatchRuntimeContext,
+): ActiveMergeReadyWatcher | null {
+  return (
+    resolveActiveMergeReadyWatchRuntimeState({ owner, runtimeContext })?.activeWatcher ?? null
+  );
 }
 
 export async function resetMergeReadyWatchState(): Promise<void> {
-  stopActiveMergeReadyWatch();
+  for (const runtimeState of [...activeMergeReadyWatchRuntimeStates]) {
+    stopActiveMergeReadyWatchForState(runtimeState);
+  }
   nextWatcherId = 1;
   await Promise.allSettled([...pendingWatcherPromises]);
+  mergeReadyWatchRuntimeStateBySessionKey.clear();
+}
+
+function createMergeReadyWatchRuntimeState(
+  sessionKey?: string,
+): MergeReadyWatchRuntimeState {
+  return {
+    activeWatcher: null,
+    ...(sessionKey === undefined ? {} : { sessionKey }),
+  };
+}
+
+function toMergeReadyWatchRuntimeContext(
+  value: unknown,
+): MergeReadyWatchRuntimeContext | undefined {
+  if (typeof value !== 'object' || value === null) {
+    return undefined;
+  }
+
+  return value as MergeReadyWatchRuntimeContext;
+}
+
+function getMergeReadyWatchRuntimeSessionKey(
+  runtimeContext: MergeReadyWatchRuntimeContext | undefined,
+): string | null {
+  const sessionId = runtimeContext?.session?.sessionId ?? runtimeContext?.sessionManager?.getSessionId?.();
+  if (typeof sessionId === 'string' && sessionId.trim().length > 0) {
+    return `id:${sessionId.trim()}`;
+  }
+
+  const sessionFile =
+    runtimeContext?.session?.sessionFile ?? runtimeContext?.sessionManager?.getSessionFile?.();
+  if (typeof sessionFile === 'string' && sessionFile.trim().length > 0) {
+    return `file:${sessionFile.trim()}`;
+  }
+
+  return null;
+}
+
+function lookupMergeReadyWatchRuntimeState(
+  options: MergeReadyWatchRuntimeLocator = {},
+): MergeReadyWatchRuntimeState | null {
+  const sessionKey = getMergeReadyWatchRuntimeSessionKey(options.runtimeContext);
+  if (sessionKey) {
+    return mergeReadyWatchRuntimeStateBySessionKey.get(sessionKey) ?? null;
+  }
+
+  const owner = options.owner;
+  if (!owner || typeof owner !== 'object') {
+    return null;
+  }
+
+  return mergeReadyWatchRuntimeStateByOwner.get(owner) ?? null;
+}
+
+function associateMergeReadyWatchRuntimeState(
+  runtimeState: MergeReadyWatchRuntimeState,
+  options: MergeReadyWatchRuntimeLocator = {},
+): MergeReadyWatchRuntimeState {
+  const sessionKey = getMergeReadyWatchRuntimeSessionKey(options.runtimeContext);
+  if (sessionKey) {
+    runtimeState.sessionKey ??= sessionKey;
+    mergeReadyWatchRuntimeStateBySessionKey.set(sessionKey, runtimeState);
+  }
+
+  const owner = options.owner;
+  if (owner && typeof owner === 'object') {
+    mergeReadyWatchRuntimeStateByOwner.set(owner, runtimeState);
+  }
+
+  return runtimeState;
+}
+
+function hasScopedMergeReadyWatchRuntimeLocator(
+  options: MergeReadyWatchRuntimeLocator = {},
+): boolean {
+  return (
+    getMergeReadyWatchRuntimeSessionKey(options.runtimeContext) !== null ||
+    (options.owner !== undefined && typeof options.owner === 'object')
+  );
+}
+
+function resolveMergeReadyWatchRuntimeState(
+  options: MergeReadyWatchRuntimeLocator = {},
+): MergeReadyWatchRuntimeState {
+  const existingRuntimeState = lookupMergeReadyWatchRuntimeState(options);
+  if (existingRuntimeState) {
+    return associateMergeReadyWatchRuntimeState(existingRuntimeState, options);
+  }
+
+  const sessionKey = getMergeReadyWatchRuntimeSessionKey(options.runtimeContext);
+  if (sessionKey) {
+    return associateMergeReadyWatchRuntimeState(
+      createMergeReadyWatchRuntimeState(sessionKey),
+      options,
+    );
+  }
+
+  const owner = options.owner;
+  if (!owner || typeof owner !== 'object') {
+    return defaultMergeReadyWatchRuntimeState;
+  }
+
+  return associateMergeReadyWatchRuntimeState(createMergeReadyWatchRuntimeState(), options);
+}
+
+function resolveActiveMergeReadyWatchRuntimeState(
+  options: MergeReadyWatchRuntimeLocator = {},
+): MergeReadyWatchRuntimeState | null {
+  const runtimeState = lookupMergeReadyWatchRuntimeState(options);
+  if (runtimeState?.activeWatcher) {
+    return runtimeState;
+  }
+
+  return hasScopedMergeReadyWatchRuntimeLocator(options)
+    ? null
+    : findSingleActiveMergeReadyWatchRuntimeState();
+}
+
+function resolvePendingRepairMergeReadyWatchRuntimeState(
+  options: MergeReadyWatchRuntimeLocator = {},
+): MergeReadyWatchRuntimeState | null {
+  const runtimeState = lookupMergeReadyWatchRuntimeState(options);
+  if (runtimeState?.activeWatcher?.pendingRepairTurn) {
+    return runtimeState;
+  }
+
+  return hasScopedMergeReadyWatchRuntimeLocator(options)
+    ? null
+    : findSingleActiveMergeReadyWatchRuntimeState(
+        (watcher) => watcher.pendingRepairTurn !== null,
+      );
+}
+
+function findSingleActiveMergeReadyWatchRuntimeState(
+  predicate: (watcher: ActiveMergeReadyWatcher) => boolean = () => true,
+): MergeReadyWatchRuntimeState | null {
+  let match: MergeReadyWatchRuntimeState | null = null;
+
+  for (const runtimeState of activeMergeReadyWatchRuntimeStates) {
+    const watcher = runtimeState.activeWatcher;
+    if (!watcher || !predicate(watcher)) {
+      continue;
+    }
+
+    if (match) {
+      return null;
+    }
+
+    match = runtimeState;
+  }
+
+  return match;
+}
+
+function releaseMergeReadyWatchRuntimeState(runtimeState: MergeReadyWatchRuntimeState): void {
+  if (runtimeState.activeWatcher || runtimeState.sessionKey === undefined) {
+    return;
+  }
+
+  mergeReadyWatchRuntimeStateBySessionKey.delete(runtimeState.sessionKey);
+}
+
+function findMergeReadyWatchRuntimeStateBySignal(
+  signal: AbortSignal,
+): MergeReadyWatchRuntimeState | null {
+  for (const runtimeState of activeMergeReadyWatchRuntimeStates) {
+    if (runtimeState.activeWatcher?.abortController.signal === signal) {
+      return runtimeState;
+    }
+  }
+
+  return null;
 }
 
 export function parseMergeReadyWatchIntervalSeconds(
@@ -475,14 +675,18 @@ export function startMergeReadyWatch(
   options: StartMergeReadyWatchOptions,
 ): StartMergeReadyWatchResult {
   const supportsStopShortcut = usesMergeReadyWatchStopShortcut(options.ctx);
+  const runtimeState = resolveMergeReadyWatchRuntimeState({
+    owner: options.api,
+    runtimeContext: options.ctx,
+  });
 
-  if (activeWatcher) {
+  if (runtimeState.activeWatcher) {
     return {
       ok: false,
       level: 'warning',
       message: supportsStopShortcut
-        ? `Merge-ready watch is already active for ${activeWatcher.targetLabel}. Press ${MERGE_READY_WATCH_STOP_SHORTCUT_LABEL} to stop it before starting another.`
-        : `Merge-ready watch is already active for ${activeWatcher.targetLabel}.`,
+        ? `Merge-ready watch is already active for ${runtimeState.activeWatcher.targetLabel}. Press ${MERGE_READY_WATCH_STOP_SHORTCUT_LABEL} to stop it before starting another.`
+        : `Merge-ready watch is already active for ${runtimeState.activeWatcher.targetLabel}.`,
     };
   }
 
@@ -505,7 +709,8 @@ export function startMergeReadyWatch(
     pendingRepairTurn: null,
   };
   nextWatcherId += 1;
-  activeWatcher = watcher;
+  runtimeState.activeWatcher = watcher;
+  activeMergeReadyWatchRuntimeStates.add(runtimeState);
 
   let lastPublishedLifecycle: MergeReadyWatchLifecycleState | null = null;
   let lastPublishedStatus: MergeReadyStatus | undefined;
@@ -589,10 +794,13 @@ export function startMergeReadyWatch(
       watcher.pendingRepairTurn = null;
       pendingWatcherPromises.delete(watcher.promise);
 
-      const shouldClearWatchStatus = activeWatcher === null || activeWatcher.id === watcher.id;
-      if (activeWatcher?.id === watcher.id) {
-        activeWatcher = null;
+      const shouldClearWatchStatus =
+        runtimeState.activeWatcher === null || runtimeState.activeWatcher.id === watcher.id;
+      if (runtimeState.activeWatcher?.id === watcher.id) {
+        runtimeState.activeWatcher = null;
+        activeMergeReadyWatchRuntimeStates.delete(runtimeState);
       }
+      releaseMergeReadyWatchRuntimeState(runtimeState);
       if (shouldClearWatchStatus) {
         setMergeReadyWatchStatus(options.ctx);
       }
@@ -613,13 +821,25 @@ export function startMergeReadyWatch(
   };
 }
 
-export function stopActiveMergeReadyWatch(): StopActiveMergeReadyWatchResult {
-  const watcher = activeWatcher;
+export function stopActiveMergeReadyWatch(
+  owner?: MergeReadyWatchRuntimeOwner,
+  runtimeContext?: MergeReadyWatchRuntimeContext,
+): StopActiveMergeReadyWatchResult {
+  const runtimeState = resolveActiveMergeReadyWatchRuntimeState({ owner, runtimeContext });
+  return runtimeState ? stopActiveMergeReadyWatchForState(runtimeState) : { stopped: false };
+}
+
+function stopActiveMergeReadyWatchForState(
+  runtimeState: MergeReadyWatchRuntimeState,
+): StopActiveMergeReadyWatchResult {
+  const watcher = runtimeState.activeWatcher;
   if (!watcher) {
     return { stopped: false };
   }
 
-  activeWatcher = null;
+  runtimeState.activeWatcher = null;
+  activeMergeReadyWatchRuntimeStates.delete(runtimeState);
+  releaseMergeReadyWatchRuntimeState(runtimeState);
   const phase = watcher.phase;
   if (watcher.pendingRepairTurn) {
     const pendingRepairTurn = watcher.pendingRepairTurn;
@@ -638,7 +858,8 @@ export function stopActiveMergeReadyWatch(): StopActiveMergeReadyWatchResult {
 function waitForActiveMergeReadyWatchAgentEnd(signal: AbortSignal): Promise<void> {
   throwIfMergeReadyWatchAborted(signal);
 
-  const watcher = activeWatcher;
+  const runtimeState = findMergeReadyWatchRuntimeStateBySignal(signal);
+  const watcher = runtimeState?.activeWatcher;
   if (!watcher) {
     return Promise.reject(
       new Error('Merge-ready watch agent_end waiting requires an active watcher.'),
@@ -677,29 +898,32 @@ function waitForActiveMergeReadyWatchAgentEnd(signal: AbortSignal): Promise<void
   });
 }
 
-function resolveActiveMergeReadyWatchAgentEnd(): void {
-  const pendingRepairTurn = activeWatcher?.pendingRepairTurn;
-  if (!pendingRepairTurn) {
+function resolveActiveMergeReadyWatchAgentEnd(
+  owner?: MergeReadyWatchRuntimeOwner,
+  runtimeContext?: MergeReadyWatchRuntimeContext,
+): void {
+  const runtimeState = resolvePendingRepairMergeReadyWatchRuntimeState({ owner, runtimeContext });
+  const watcher = runtimeState?.activeWatcher;
+  const pendingRepairTurn = watcher?.pendingRepairTurn;
+  if (!watcher || !pendingRepairTurn) {
     return;
   }
 
-  if (activeWatcher) {
-    activeWatcher.phase = 'watching';
-    activeWatcher.pendingRepairTurn = null;
-  }
+  watcher.phase = 'watching';
+  watcher.pendingRepairTurn = null;
   pendingRepairTurn.resolve();
 }
 
-function rejectActiveMergeReadyWatchAgentEnd(error: unknown): void {
-  const pendingRepairTurn = activeWatcher?.pendingRepairTurn;
-  if (!pendingRepairTurn) {
+function rejectActiveMergeReadyWatchAgentEnd(error: unknown, signal: AbortSignal): void {
+  const runtimeState = findMergeReadyWatchRuntimeStateBySignal(signal);
+  const watcher = runtimeState?.activeWatcher;
+  const pendingRepairTurn = watcher?.pendingRepairTurn;
+  if (!watcher || !pendingRepairTurn) {
     return;
   }
 
-  if (activeWatcher) {
-    activeWatcher.phase = 'watching';
-    activeWatcher.pendingRepairTurn = null;
-  }
+  watcher.phase = 'watching';
+  watcher.pendingRepairTurn = null;
   pendingRepairTurn.reject(error);
 }
 
@@ -900,18 +1124,14 @@ export async function runMergeReadyWatchLoop(
           resolveSendUserMessageOptions(),
         );
       } catch (error) {
-        if (options.dependencies?.waitForAgentEnd === undefined) {
-          rejectActiveMergeReadyWatchAgentEnd(error);
-        }
+        rejectActiveMergeReadyWatchAgentEnd(error, options.signal);
         throw error;
       }
 
       const repairDispatchFailure = Promise.resolve(sendUserMessageResult).then(
         () => new Promise<never>(() => {}),
         (error) => {
-          if (options.dependencies?.waitForAgentEnd === undefined) {
-            rejectActiveMergeReadyWatchAgentEnd(error);
-          }
+          rejectActiveMergeReadyWatchAgentEnd(error, options.signal);
           throw error;
         },
       );
