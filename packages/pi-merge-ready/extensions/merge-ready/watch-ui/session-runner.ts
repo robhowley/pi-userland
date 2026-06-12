@@ -13,6 +13,7 @@ import {
 } from '@earendil-works/pi-coding-agent';
 import { getErrorMessage } from '../internal.js';
 import { assertValidGitHubPullRequestUrl } from '../target.js';
+import { stopActiveMergeReadyWatch } from '../watch.js';
 import {
   MERGE_READY_WATCH_STATUS_EVENT,
   createMergeReadyWatchStatusRecord,
@@ -380,6 +381,18 @@ export class MergeReadyWatchSessionRunner {
 
     this.liveHandles.delete(id);
 
+    // Signal the watcher loop to stop before session teardown, so the
+    // promptPromise settles cleanly (resolved) instead of rejecting with a
+    // stale-context error after session.dispose().
+    const sessionRef: { sessionId?: string; sessionFile?: string } = {};
+    if (record.session.sessionId) {
+      sessionRef.sessionId = record.session.sessionId;
+    }
+    if (record.session.sessionFile) {
+      sessionRef.sessionFile = record.session.sessionFile;
+    }
+    stopActiveMergeReadyWatch(undefined, { session: sessionRef });
+
     try {
       await liveHandle.session.abort();
     } catch (error) {
@@ -511,7 +524,10 @@ export class MergeReadyWatchSessionRunner {
     }
 
     if (error !== undefined) {
-      if (watch.state === 'stopped' && isAbortLikeError(error)) {
+      // If stopWatch() already marked this watch stopped, any post-stop
+      // promise rejection is a teardown artifact (e.g. stale-context error
+      // from session.dispose()). Preserve the stopped state.
+      if (watch.state === 'stopped') {
         await this.persist();
         return;
       }
@@ -794,16 +810,6 @@ function isMergeReadyWatchStatusRecord(value: unknown): value is MergeReadyWatch
     'summary' in value &&
     'target' in value &&
     'session' in value
-  );
-}
-
-function isAbortLikeError(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'name' in error &&
-    ((error as { name?: unknown }).name === 'AbortError' ||
-      (error as { name?: unknown }).name === 'CanceledError')
   );
 }
 
