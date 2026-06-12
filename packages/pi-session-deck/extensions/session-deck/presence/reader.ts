@@ -1,3 +1,4 @@
+import type { Dirent } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { classifyPresenceRecord } from './classify.js';
@@ -11,13 +12,20 @@ import type {
   PresenceView,
 } from './types.js';
 
+export type PresenceDirectoryReader = (
+  path: string,
+  options: { withFileTypes: true },
+) => Promise<Dirent<string>[]>;
+
+export type PresenceFileReader = (path: string, encoding: 'utf8') => Promise<string>;
+
 export interface ReadPresenceViewOptions {
   directory?: string;
   now?: Date;
   thresholds?: Partial<PresenceThresholds>;
   inspectPid?: InspectPresencePid;
-  readdir?: typeof readdir;
-  readFile?: typeof readFile;
+  readdir?: PresenceDirectoryReader;
+  readFile?: PresenceFileReader;
 }
 
 export async function readPresenceView(
@@ -26,10 +34,10 @@ export async function readPresenceView(
   const directory = options.directory ?? getDefaultPresenceDirectory();
   const diagnostics: PresenceDiagnostic[] = [];
   const records: PresenceSummary[] = [];
-  const readdirImpl = options.readdir ?? readdir;
-  const readFileImpl = options.readFile ?? readFile;
+  const readdirImpl = (options.readdir ?? readdir) as PresenceDirectoryReader;
+  const readFileImpl = (options.readFile ?? readFile) as PresenceFileReader;
 
-  let entries: Awaited<ReturnType<typeof readdirImpl>>;
+  let entries: Dirent<string>[];
   try {
     entries = await readdirImpl(directory, { withFileTypes: true });
   } catch (error) {
@@ -104,9 +112,9 @@ export async function readPresenceView(
 
     records.push(
       await classifyPresenceRecord(record, {
-        now: options.now,
-        thresholds: options.thresholds,
-        inspectPid: options.inspectPid,
+        ...(options.now === undefined ? {} : { now: options.now }),
+        ...(options.thresholds === undefined ? {} : { thresholds: options.thresholds }),
+        ...(options.inspectPid === undefined ? {} : { inspectPid: options.inspectPid }),
       }),
     );
   }
@@ -130,7 +138,7 @@ function normalizePresenceRecord(candidate: unknown): PresenceRecord | null {
     return null;
   }
 
-  if (!Number.isInteger(pid) || pid <= 0) {
+  if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) {
     return null;
   }
 

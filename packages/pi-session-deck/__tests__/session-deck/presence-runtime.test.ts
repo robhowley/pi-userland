@@ -5,6 +5,7 @@ import {
 } from '../../extensions/session-deck/presence/command.js';
 import {
   ensurePresenceRuntimeStarted,
+  getPresenceRuntimeIdentity,
   resetPresenceRuntimeForTests,
 } from '../../extensions/session-deck/presence/runtime.js';
 import type {
@@ -27,7 +28,7 @@ describe('presence runtime lifecycle', () => {
     vi.useRealTimers();
   });
 
-  it('writes immediately and keeps one runtime identity across repeated starts', async () => {
+  it('writes immediately and keeps one runtime identity across repeated starts and /new-style restarts', async () => {
     const writes: PresenceRecord[] = [];
     const writeRecord = vi.fn(async (record: PresenceRecord) => {
       writes.push(record);
@@ -55,6 +56,24 @@ describe('presence runtime lifecycle', () => {
       startedAt: '2026-06-12T12:00:00.000Z',
       heartbeatAt: '2026-06-12T12:00:10.000Z',
     });
+  });
+
+  it('creates a new runtimeId after a simulated Pi process restart', async () => {
+    const first = getPresenceRuntimeIdentity({
+      now: () => new Date('2026-06-12T12:00:00.000Z'),
+      randomUUID: () => 'runtime-1',
+    });
+
+    await resetPresenceRuntimeForTests();
+
+    const second = getPresenceRuntimeIdentity({
+      now: () => new Date('2026-06-12T12:05:00.000Z'),
+      randomUUID: () => 'runtime-2',
+    });
+
+    expect(second.runtimeId).toBe('runtime-2');
+    expect(second.runtimeId).not.toBe(first.runtimeId);
+    expect(second.startedAt).toBe('2026-06-12T12:05:00.000Z');
   });
 });
 

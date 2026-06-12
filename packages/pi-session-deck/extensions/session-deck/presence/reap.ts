@@ -1,15 +1,23 @@
+import type { Dirent } from 'node:fs';
 import { readdir, readFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { resolvePresenceThresholds } from './constants.js';
 import { getDefaultPresenceDirectory, isPresenceRecordFile } from './store.js';
 import type { PresenceDiagnostic, PresenceRecord, PresenceThresholds } from './types.js';
 
+export type PresenceDirectoryReader = (
+  path: string,
+  options: { withFileTypes: true },
+) => Promise<Dirent<string>[]>;
+
+export type PresenceFileReader = (path: string, encoding: 'utf8') => Promise<string>;
+
 export interface ReapPresenceRecordsOptions {
   directory?: string;
   now?: Date;
   thresholds?: Partial<PresenceThresholds>;
-  readdir?: typeof readdir;
-  readFile?: typeof readFile;
+  readdir?: PresenceDirectoryReader;
+  readFile?: PresenceFileReader;
   unlink?: typeof unlink;
 }
 
@@ -25,13 +33,13 @@ export async function reapPresenceRecords(
   const thresholds = resolvePresenceThresholds(options.thresholds);
   const now = options.now ?? new Date();
   const nowMs = now.getTime();
-  const readdirImpl = options.readdir ?? readdir;
-  const readFileImpl = options.readFile ?? readFile;
+  const readdirImpl = (options.readdir ?? readdir) as PresenceDirectoryReader;
+  const readFileImpl = (options.readFile ?? readFile) as PresenceFileReader;
   const unlinkImpl = options.unlink ?? unlink;
   const removed: string[] = [];
   const diagnostics: PresenceDiagnostic[] = [];
 
-  let entries: Awaited<ReturnType<typeof readdirImpl>>;
+  let entries: Dirent<string>[];
   try {
     entries = await readdirImpl(directory, { withFileTypes: true });
   } catch (error) {
@@ -149,7 +157,7 @@ function normalizePresenceRecord(candidate: unknown): PresenceRecord | null {
     return null;
   }
 
-  if (!Number.isInteger(pid) || pid <= 0) {
+  if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) {
     return null;
   }
 
