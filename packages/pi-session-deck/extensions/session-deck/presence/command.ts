@@ -1,6 +1,17 @@
-import { SESSION_DECK_PRESENCE_COMMAND_NAME } from './constants.js';
+import { basename } from 'node:path';
+import { SESSION_DECK_COMMAND_NAME } from './constants.js';
+import {
+  reapPresenceRecords,
+  type ReapPresenceRecordsOptions,
+  type ReapPresenceRecordsResult,
+} from './reap.js';
 import { readPresenceView, type ReadPresenceViewOptions } from './reader.js';
-import type { PresenceState, PresenceSummary, PresenceView } from './types.js';
+import type {
+  PresenceDiagnostic,
+  PresenceState,
+  PresenceSummary,
+  PresenceView,
+} from './types.js';
 
 export type PresenceCommandNotificationLevel = 'info' | 'warning' | 'error';
 
@@ -27,12 +38,15 @@ export interface PresenceCommandAPI {
 
 export interface RegisterPresenceCommandOptions extends ReadPresenceViewOptions {
   readPresenceView?: typeof readPresenceView;
+  reapPresenceRecords?: typeof reapPresenceRecords;
+  unlink?: ReapPresenceRecordsOptions['unlink'];
 }
 
 export type ParsedPresenceCommandArgs =
   | {
       ok: true;
       all: boolean;
+      reap: boolean;
     }
   | {
       ok: false;
@@ -40,16 +54,19 @@ export type ParsedPresenceCommandArgs =
     };
 
 const SHOW_ALL_FLAG = '--all';
-const USAGE = `Usage: /${SESSION_DECK_PRESENCE_COMMAND_NAME} [${SHOW_ALL_FLAG}]`;
+const REAP_FLAG = '--reap';
+const USAGE = `Usage: /${SESSION_DECK_COMMAND_NAME} [${SHOW_ALL_FLAG}] [${REAP_FLAG}]`;
 const DEFAULT_VISIBLE_STATES: PresenceState[] = ['live', 'stale'];
+const COMMAND_FLAGS = [SHOW_ALL_FLAG, REAP_FLAG] as const;
 
 export function registerPresenceCommand(
   pi: PresenceCommandAPI,
   options: RegisterPresenceCommandOptions = {},
 ): void {
   const readPresence = options.readPresenceView ?? readPresenceView;
+  const reapPresence = options.reapPresenceRecords ?? reapPresenceRecords;
 
-  pi.registerCommand(SESSION_DECK_PRESENCE_COMMAND_NAME, {
+  pi.registerCommand(SESSION_DECK_COMMAND_NAME, {
     description: 'Show Pi runtime presence from ~/.pi/session-deck/presence',
     getArgumentCompletions: getPresenceCommandCompletions,
     handler: async (args, ctx) => {
@@ -59,15 +76,10 @@ export function registerPresenceCommand(
         return;
       }
 
-      const view = await readPresence({
-        ...(options.directory === undefined ? {} : { directory: options.directory }),
-        ...(options.now === undefined ? {} : { now: options.now }),
-        ...(options.thresholds === undefined ? {} : { thresholds: options.thresholds }),
-        ...(options.inspectPid === undefined ? {} : { inspectPid: options.inspectPid }),
-        ...(options.readdir === undefined ? {} : { readdir: options.readdir }),
-        ...(options.readFile === undefined ? {} : { readFile: options.readFile }),
-      });
-
+      const reapResult = parsedArgs.reap
+        ? await reapPresence(getReapPresenceOptions(options))
+        : null;
+      const view = await readPresence(getReadPresenceOptions(options));
       const visibleRecords = parsedArgs.all
         ? view.records
         : view.records.filter((record) => DEFAULT_VISIBLE_STATES.includes(record.presenceState));
@@ -76,7 +88,15 @@ export function registerPresenceCommand(
         diagnostics: parsedArgs.all ? view.diagnostics : [],
       };
 
-      ctx.ui.notify(renderPresenceView(visibleView, { all: parsedArgs.all }), 'info');
+      const message =
+        reapResult === null
+          ? renderPresenceView(visibleView, { all: parsedArgs.all })
+          : renderPresenceCommandResult(visibleView, {
+              all: parsedArgs.all,
+              reapResult,
+            });
+
+      ctx.ui.notify(message, 'info');
     },
   });
 }
@@ -87,15 +107,30 @@ export function parsePresenceCommandArgs(args: string): ParsedPresenceCommandArg
     .split(/\s+/)
     .filter((token) => token.length > 0);
 
-  if (tokens.length === 0) {
-    return { ok: true, all: false };
+  let all = false;
+  let reap = false;
+
+  for (const token of tokens) {
+    if (token === SHOW_ALL_FLAG) {
+      if (all) {
+        return { ok: false, message: USAGE };
+      }
+      all = true;
+      continue;
+    }
+
+    if (token === REAP_FLAG) {
+      if (reap) {
+        return { ok: false, message: USAGE };
+      }
+      reap = true;
+      continue;
+    }
+
+    return { ok: false, message: USAGE };
   }
 
-  if (tokens.length === 1 && tokens[0] === SHOW_ALL_FLAG) {
-    return { ok: true, all: true };
-  }
-
-  return { ok: false, message: USAGE };
+  return { ok: true, all, reap };
 }
 
 export function renderPresenceView(view: PresenceView, options: { all: boolean }): string {
@@ -113,16 +148,90 @@ export function renderPresenceView(view: PresenceView, options: { all: boolean }
   if (options.all && view.diagnostics.length > 0) {
     lines.push('Diagnostics:');
     for (const diagnostic of view.diagnostics) {
-      const location = diagnostic.filePath === undefined ? '' : ` (${diagnostic.filePath})`;
-      lines.push(`- ${diagnostic.code}${location}: ${diagnostic.message}`);
+      lines.push(formatDiagnostic(diagnostic));
     }
   }
 
   return lines.join('\n');
 }
 
+function renderPresenceCommandResult(
+  view: PresenceView,
+  options: { all: boolean; reapResult: ReapPresenceRecordsResult },
+): string {
+  return [
+    ...renderReapResult(options.reapResult),
+    '',
+    renderPresenceView(view, { all: options.all }),
+  ].join('\n');
+}
+
+function renderReapResult(result: ReapPresenceRecordsResult): string[] {
+  const lines = [formatReapSummary(result.removed.length)];
+
+  if (result.removed.length > 0) {
+    lines.push('Removed:');
+    for (const filePath of result.removed) {
+      lines.push(`- ${formatReapedRecord(filePath)}`);
+    }
+  }
+
+  if (result.diagnostics.length > 0) {
+    lines.push('Reap diagnostics:');
+    for (const diagnostic of result.diagnostics) {
+      lines.push(formatDiagnostic(diagnostic));
+    }
+  }
+
+  return lines;
+}
+
+function formatReapSummary(removedCount: number): string {
+  return `Reap complete: removed ${removedCount} expired presence ${pluralize(
+    removedCount,
+    'record',
+  )}.`;
+}
+
+function formatReapedRecord(filePath: string): string {
+  const runtimeId = basename(filePath, '.json');
+  return runtimeId.length > 0 ? runtimeId : filePath;
+}
+
+function formatDiagnostic(diagnostic: PresenceDiagnostic): string {
+  const location = diagnostic.filePath === undefined ? '' : ` (${diagnostic.filePath})`;
+  return `- ${diagnostic.code}${location}: ${diagnostic.message}`;
+}
+
 function getPresenceCommandCompletions(prefix: string) {
-  return SHOW_ALL_FLAG.startsWith(prefix) ? [{ value: SHOW_ALL_FLAG, label: SHOW_ALL_FLAG }] : null;
+  const matches = COMMAND_FLAGS.filter((flag) => flag.startsWith(prefix)).map((flag) => ({
+    value: flag,
+    label: flag,
+  }));
+
+  return matches.length > 0 ? matches : null;
+}
+
+function getReadPresenceOptions(options: RegisterPresenceCommandOptions): ReadPresenceViewOptions {
+  return {
+    ...(options.directory === undefined ? {} : { directory: options.directory }),
+    ...(options.now === undefined ? {} : { now: options.now }),
+    ...(options.thresholds === undefined ? {} : { thresholds: options.thresholds }),
+    ...(options.inspectPid === undefined ? {} : { inspectPid: options.inspectPid }),
+    ...(options.readdir === undefined ? {} : { readdir: options.readdir }),
+    ...(options.readFile === undefined ? {} : { readFile: options.readFile }),
+  };
+}
+
+function getReapPresenceOptions(options: RegisterPresenceCommandOptions): ReapPresenceRecordsOptions {
+  return {
+    ...(options.directory === undefined ? {} : { directory: options.directory }),
+    ...(options.now === undefined ? {} : { now: options.now }),
+    ...(options.thresholds === undefined ? {} : { thresholds: options.thresholds }),
+    ...(options.readdir === undefined ? {} : { readdir: options.readdir }),
+    ...(options.readFile === undefined ? {} : { readFile: options.readFile }),
+    ...(options.unlink === undefined ? {} : { unlink: options.unlink }),
+  };
 }
 
 function formatPresenceSummary(record: PresenceSummary): string {
@@ -157,4 +266,8 @@ function formatDuration(durationMs: number): string {
   return `${Math.round(durationMs / (60 * 60_000))}h`;
 }
 
-export { SESSION_DECK_PRESENCE_COMMAND_NAME };
+function pluralize(count: number, singular: string): string {
+  return count === 1 ? singular : `${singular}s`;
+}
+
+export { SESSION_DECK_COMMAND_NAME };

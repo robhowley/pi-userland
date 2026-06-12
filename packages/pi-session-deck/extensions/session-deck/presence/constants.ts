@@ -2,7 +2,7 @@ import type { PresenceThresholds } from './types.js';
 
 export const PRESENCE_PATH_SEGMENTS = ['.pi', 'session-deck', 'presence'] as const;
 
-export const SESSION_DECK_PRESENCE_COMMAND_NAME = 'session-deck-presence';
+export const SESSION_DECK_COMMAND_NAME = 'session-deck';
 
 export const DEFAULT_PRESENCE_THRESHOLDS: PresenceThresholds = {
   heartbeatIntervalMs: 10_000,
