@@ -13,8 +13,9 @@ Small, focused packages to augment your Pi environment without adding unnecessar
 
 | Package                                                           | Description                                                                                                                                 |
 | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`pi-merge-ready`](packages/pi-merge-ready/README.md)             | PR merge-readiness for Pi: status bar and slash-command status, exact PR URL targeting, blocker context, and agent repair loops.             |
-| [`pi-openrouter`](packages/pi-openrouter/README.md)               | OpenRouter usage/account overlays, model sync, api key management, and session tagging for Pi.                                                                  |
+| [`pi-merge-ready`](packages/pi-merge-ready/README.md)             | PR merge-readiness for Pi: status bar and slash-command status, exact PR URL targeting, blocker context, and agent repair loops.            |
+| [`pi-openrouter`](packages/pi-openrouter/README.md)               | OpenRouter usage/account overlays, model sync, api key management, and session tagging for Pi.                                              |
+| [`pi-session-deck`](packages/pi-session-deck/README.md)           | Pi runtime presence foundation: heartbeat-backed presence records with live/stale views, optional --all diagnostics, and --reap cleanup.    |
 | [`pi-session-hygiene`](packages/pi-session-hygiene/README.md)     | Status bar indicator for session cost, context, and cache rate to track session health                                                      |
 | [`pi-spinner-verbs`](packages/pi-spinner-verbs/README.md)         | Customizes thinking text with themed verbs (e.g., "Paying the iron price...", "With fire and blood...") for sessions with more personality. |
 | [`pi-structured-return`](packages/pi-structured-return/README.md) | Save money by turning noisy CLI output into compact structured results (fewer tokens), full logs preserved.                                 |

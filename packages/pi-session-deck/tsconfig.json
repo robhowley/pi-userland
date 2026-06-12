@@ -1,0 +1,7 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "../../.tsc-out/packages/pi-session-deck"
+  },
+  "include": ["extensions", "__tests__"]
+}
