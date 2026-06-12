@@ -22,9 +22,9 @@
   },
   "homepage": "https://pi-userland.dev",
   "scripts": {
-    "lint": "eslint extensions/",
-    "format:check": "prettier --check extensions/",
-    "format:write": "prettier --write extensions/",
+    "lint": "eslint extensions/ __tests__/",
+    "format:check": "prettier --check extensions/ __tests__/",
+    "format:write": "prettier --write extensions/ __tests__/",
     "typecheck": "tsc --noEmit",
     "test": "vitest run __tests__"
   },
