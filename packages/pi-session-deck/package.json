@@ -2,7 +2,7 @@
   "name": "@robhowley/pi-session-deck",
   "version": "0.1.0",
   "type": "module",
-  "description": "A terminal-native overview of all your live Pi sessions: status, usage, cwd, branch, model, and last activity in one compact deck.",
+  "description": "Pi runtime presence foundation: heartbeat-backed presence records with live/stale views, optional --all diagnostics, and --reap cleanup.",
   "files": [
     "extensions",
     "README.md",
