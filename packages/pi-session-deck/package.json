@@ -1,0 +1,39 @@
+{
+  "name": "@robhowley/pi-session-deck",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "A terminal-native overview of all your live Pi sessions: status, usage, cwd, branch, model, and last activity in one compact deck.",
+  "files": [
+    "extensions",
+    "README.md",
+    "../LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": ["pi-package", "pi-userland", "sessions", "status"],
+  "pi": {
+    "extensions": ["./extensions/session-deck"]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/robhowley/pi-userland.git",
+    "directory": "packages/pi-session-deck"
+  },
+  "homepage": "https://pi-userland.dev",
+  "scripts": {
+    "lint": "eslint extensions/",
+    "format:check": "prettier --check extensions/",
+    "format:write": "prettier --write extensions/",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run __tests__"
+  },
+  "license": "MIT",
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.17"
+  }
+}
