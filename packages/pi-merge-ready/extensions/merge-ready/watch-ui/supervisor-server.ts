@@ -9,7 +9,6 @@ export type MergeReadyWatchUiRunner = Pick<
   MergeReadyWatchSessionRunner,
   | 'addWatch'
   | 'getDefaultCwd'
-  | 'openWatch'
   | 'readTranscriptForWatch'
   | 'removeWatch'
   | 'stopWatch'
@@ -211,20 +210,6 @@ async function handleMergeReadyWatchUiApiRequest(
     return;
   }
 
-  const openMatch = matchWatchRoute(pathname, '/open');
-  if (openMatch && options.request.method === 'POST') {
-    const opened = await options.options.runner.openWatch(openMatch.id);
-    if (!opened) {
-      sendJson(options.response, 404, {
-        error: 'Watch not found.',
-      });
-      return;
-    }
-
-    sendJson(options.response, 200, opened);
-    return;
-  }
-
   const deleteMatch = matchDeleteWatchRoute(pathname);
   if (deleteMatch && options.request.method === 'DELETE') {
     const removed = await options.options.runner.removeWatch(deleteMatch.id);
@@ -287,10 +272,7 @@ function resolveLocalPort(request: IncomingMessage): number {
   return typeof address === 'number' ? address : 0;
 }
 
-function matchWatchRoute(
-  pathname: string,
-  suffix: '/open' | '/stop' | '/transcript',
-): { id: string } | null {
+function matchWatchRoute(pathname: string, suffix: '/stop' | '/transcript'): { id: string } | null {
   const match = new RegExp(`^/api/watches/([^/]+)${suffix}$`, 'u').exec(pathname);
   if (!match?.[1]) {
     return null;

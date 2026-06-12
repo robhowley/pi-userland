@@ -123,16 +123,6 @@ export class MergeReadyWatchInputError extends Error {
   }
 }
 
-export type MergeReadyOpenWatchResult = {
-  message: string;
-  session: {
-    sessionId?: string;
-    sessionFile?: string;
-  };
-  supported: false;
-  watch: MergeReadyPersistedWatchRecord;
-};
-
 type MergeReadyLiveWatchHandle = {
   promptPromise: Promise<void>;
   session: MergeReadyWatchSessionLike;
@@ -446,23 +436,6 @@ export class MergeReadyWatchSessionRunner {
 
     return {
       rows: await this.readTranscript(sessionFile, tail),
-      watch: structuredClone(watch),
-    };
-  }
-
-  async openWatch(id: string): Promise<MergeReadyOpenWatchResult | null> {
-    const watch = this.recordsById.get(id);
-    if (!watch) {
-      return null;
-    }
-
-    return {
-      supported: false,
-      message:
-        'Live focus/open is not supported in watch-ui v1. Use the session file path instead.',
-      session: {
-        ...watch.session,
-      },
       watch: structuredClone(watch),
     };
   }

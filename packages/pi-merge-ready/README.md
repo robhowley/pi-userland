@@ -136,9 +136,9 @@ Watch behavior can be configured in Pi's `settings.json` (global: `~/.pi/agent/s
 }
 ```
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `autoCompactRepair` | `true` | Trigger conversation compaction after successful repair loop completion. Compaction runs before the watch continues polling. Set to `false` to disable. |
+| Option              | Default | Description                                                                                                                                             |
+| ------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `autoCompactRepair` | `true`  | Trigger conversation compaction after successful repair loop completion. Compaction runs before the watch continues polling. Set to `false` to disable. |
 
 ### Watch UI
 
@@ -162,7 +162,7 @@ V1 notes:
 - child watch sessions inherit the launching session's captured Pi runtime snapshot (agentDir, model, thinking level, and resolved auth); launch fails early if that runtime cannot be resolved safely
 - the UI polls a token-gated `127.0.0.1` API only; there is no hosted service
 - transcript inspection is read-only and uses the stored session file for the selected watch
-- live session focus/open is not supported in v1; use the session id/path shown in the UI
+- supported watch controls are stop, restart, and remove; the UI also shows session id/path metadata for debugging and supportability
 - if the supervisor restarts, previously active watches are shown as stale rather than assumed ready
 
 ### Agent tool

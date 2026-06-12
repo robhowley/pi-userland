@@ -49,7 +49,6 @@ describe('merge-ready watch UI supervisor server', () => {
       addWatch: vi.fn(async (_options) => ({ created: true, watch })),
       getDefaultCwd: vi.fn(() => '/repo'),
       listWatches: vi.fn(() => [watch]),
-      openWatch: vi.fn(async (_id) => null),
       readTranscriptForWatch: async (_id, _tail) => ({
         watch,
         rows: [
@@ -130,7 +129,6 @@ describe('merge-ready watch UI supervisor server', () => {
       addWatch,
       getDefaultCwd: vi.fn(() => '/repo'),
       listWatches: vi.fn(() => [watch]),
-      openWatch: vi.fn(async (_id) => null),
       readTranscriptForWatch: vi.fn(async (_id, _tail) => ({ watch, rows: [] })),
       removeWatch: vi.fn(async (_id) => true),
       stopWatch: vi.fn(async (_id) => null),
@@ -184,7 +182,6 @@ describe('merge-ready watch UI supervisor server', () => {
       }),
       getDefaultCwd: vi.fn(() => '/repo'),
       listWatches: vi.fn(() => [watch]),
-      openWatch: vi.fn(async (_id) => null),
       readTranscriptForWatch: vi.fn(async (_id, _tail) => ({ watch, rows: [] })),
       removeWatch: vi.fn(async (_id) => true),
       stopWatch: vi.fn(async (_id) => null),
