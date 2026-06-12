@@ -381,9 +381,9 @@ export class MergeReadyWatchSessionRunner {
 
     this.liveHandles.delete(id);
 
-    // Signal the watcher loop to stop before session teardown, so the
-    // promptPromise settles cleanly (resolved) instead of rejecting with a
-    // stale-context error after session.dispose().
+    // Signal the watcher loop to stop before session teardown. When a watcher
+    // is found, wait for its promise to finish while the extension context is
+    // still valid; its finally block still publishes/clears status through ctx.
     const sessionRef: { sessionId?: string; sessionFile?: string } = {};
     if (record.session.sessionId) {
       sessionRef.sessionId = record.session.sessionId;
@@ -391,12 +391,16 @@ export class MergeReadyWatchSessionRunner {
     if (record.session.sessionFile) {
       sessionRef.sessionFile = record.session.sessionFile;
     }
-    stopActiveMergeReadyWatch(undefined, { session: sessionRef });
+    const stop = stopActiveMergeReadyWatch(undefined, { session: sessionRef });
 
     try {
       await liveHandle.session.abort();
     } catch (error) {
       record.lastError = getErrorMessage(error);
+    }
+
+    if (stop.stopped) {
+      await Promise.resolve(liveHandle.promptPromise).catch(() => undefined);
     }
 
     try {
@@ -405,7 +409,9 @@ export class MergeReadyWatchSessionRunner {
       // Best-effort cleanup only.
     }
 
-    await Promise.resolve(liveHandle.promptPromise).catch(() => undefined);
+    if (!stop.stopped) {
+      await Promise.resolve(liveHandle.promptPromise).catch(() => undefined);
+    }
     await this.persist();
     return structuredClone(record);
   }
