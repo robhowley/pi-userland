@@ -24,7 +24,7 @@ import {
   startMergeReadyWatch,
   stopActiveMergeReadyWatch,
   syncMergeReadyStatusBar,
-  type MergeReadyCommandContext,
+  type MergeReadyWatchContext,
   type MergeReadyOpenItem,
   type MergeReadyPullRequest,
   type MergeReadySignals,
@@ -274,10 +274,9 @@ function createStatusAmbiguousStatus(): MergeReadyStatus {
   });
 }
 
-function createWatchContext(): MergeReadyCommandContext {
+function createWatchContext(): MergeReadyWatchContext {
   return {
     cwd: '/repo',
-    mode: 'tui',
     isIdle: vi.fn(() => true),
     waitForIdle: vi.fn(async () => undefined),
     ui: {
@@ -1643,6 +1642,165 @@ describe('merge-ready watch loop', () => {
 
     expect(visibleAfterStop).toEqual({ text: '❔ No PR', cached: true });
     expect(refreshCtx.ui.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '❔ No PR');
+  });
+
+  it('awaits blocking compaction before resuming polling after a successful repair', async () => {
+    const compactResult = createDeferred<void>();
+    const waitForAgentEnd = createDeferred<void>();
+    const ctx: Parameters<typeof runMergeReadyWatchLoop>[0]['ctx'] = {
+      ...createWatchContext(),
+      compact: vi.fn(() => compactResult.promise),
+    };
+    const sleep = vi.fn(async () => undefined);
+    const loadConfig = vi.fn(async () => ({ autoCompactRepair: true }));
+
+    const result = runMergeReadyWatchLoop({
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
+      api: {
+        sendUserMessage: vi.fn(
+          async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
+        ),
+      },
+      ctx,
+      intervalSeconds: 30,
+      signal: new AbortController().signal,
+      dependencies: {
+        getStatus: createStatusSequence([createCiFailingStatus(), createReadyStatus()]),
+        sleep,
+        syncStatusBar: vi.fn(),
+        checkDirtyWorkingTree: vi.fn(async () => ({ ok: true as const, dirty: false })),
+        waitForAgentEnd: vi.fn(() => waitForAgentEnd.promise),
+        maxIterations: 1,
+      },
+      loadConfig,
+    });
+    const onSettled = vi.fn();
+    result.finally(onSettled);
+
+    await flushMicrotasks(12);
+    waitForAgentEnd.resolve();
+    await flushMicrotasks(12);
+
+    expect(ctx.compact).toHaveBeenCalledTimes(1);
+    expect(ctx.compact).toHaveBeenCalledWith({
+      customInstructions:
+        'Compaction triggered after successful merge-ready repair loop completion',
+    });
+    expect(loadConfig).toHaveBeenCalledWith('/repo');
+    expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(
+      MERGE_READY_WATCH_STATUS_KEY,
+      expect.stringContaining('Compacting after successful repair…'),
+    );
+    expect(
+      vi
+        .mocked(ctx.ui.setStatus!)
+        .mock.calls.filter(([key]) => key === MERGE_READY_WATCH_STATUS_KEY)
+        .some(([, value]) => typeof value === 'string' && value.includes('Watching #42 · Ready to merge')),
+    ).toBe(false);
+    expect(sleep).not.toHaveBeenCalled();
+    expect(onSettled).not.toHaveBeenCalled();
+
+    compactResult.resolve();
+    await expect(result).resolves.toEqual({ kind: 'stopped', reason: 'max_iterations' });
+    expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(
+      MERGE_READY_WATCH_STATUS_KEY,
+      expect.stringContaining('Watching #42 · Ready to merge'),
+    );
+    expect(sleep).toHaveBeenCalledTimes(1);
+  });
+
+  it('warns on compaction failure and keeps polling', async () => {
+    const ctx: Parameters<typeof runMergeReadyWatchLoop>[0]['ctx'] = {
+      ...createWatchContext(),
+      compact: vi.fn(async () => {
+        throw new Error('Compaction exploded');
+      }),
+    };
+    const sleep = vi.fn(async () => undefined);
+
+    const result = await runMergeReadyWatchLoop({
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
+      api: {
+        sendUserMessage: vi.fn(
+          async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
+        ),
+      },
+      ctx,
+      intervalSeconds: 30,
+      signal: new AbortController().signal,
+      dependencies: {
+        getStatus: createStatusSequence([createCiFailingStatus(), createCiRunningStatus()]),
+        sleep,
+        syncStatusBar: vi.fn(),
+        checkDirtyWorkingTree: vi.fn(async () => ({ ok: true as const, dirty: false })),
+        waitForAgentEnd: vi.fn(async () => undefined),
+        maxIterations: 1,
+      },
+      loadConfig: vi.fn(async () => ({ autoCompactRepair: true })),
+    });
+
+    expect(result).toEqual({ kind: 'stopped', reason: 'max_iterations' });
+    expect(ctx.compact).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(ctx.ui.notify).mock.calls).toContainEqual([
+      'Compaction failed after repair: Compaction exploded',
+      'warning',
+    ]);
+    expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(
+      MERGE_READY_WATCH_STATUS_KEY,
+      expect.stringContaining('Watching #42 · Checks are still running'),
+    );
+    expect(sleep).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats stop-during-compaction as watch abort when compaction rejects on abort', async () => {
+    const abortController = new AbortController();
+    const ctx: Parameters<typeof runMergeReadyWatchLoop>[0]['ctx'] = {
+      ...createWatchContext(),
+      compact: vi.fn(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            abortController.signal.addEventListener(
+              'abort',
+              () => {
+                const error = new Error('Aborted');
+                error.name = 'AbortError';
+                reject(error);
+              },
+              { once: true },
+            );
+          }),
+      ),
+    };
+    const result = runMergeReadyWatchLoop({
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
+      api: {
+        sendUserMessage: vi.fn(
+          async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
+        ),
+      },
+      ctx,
+      intervalSeconds: 30,
+      signal: abortController.signal,
+      dependencies: {
+        getStatus: createStatusSequence([createCiFailingStatus(), createReadyStatus()]),
+        sleep: vi.fn(async () => undefined),
+        syncStatusBar: vi.fn(),
+        checkDirtyWorkingTree: vi.fn(async () => ({ ok: true as const, dirty: false })),
+        waitForAgentEnd: vi.fn(async () => undefined),
+      },
+      loadConfig: vi.fn(async () => ({ autoCompactRepair: true })),
+    });
+
+    await flushMicrotasks(12);
+    expect(ctx.compact).toHaveBeenCalledTimes(1);
+
+    abortController.abort();
+
+    await expect(result).resolves.toEqual({ kind: 'aborted', reason: 'aborted' });
+    expect(vi.mocked(ctx.ui.notify).mock.calls).not.toContainEqual([
+      'Compaction failed after repair: Aborted',
+      'warning',
+    ]);
   });
 
   it('creates stable blocker signatures across generatedAt and detail ordering changes', () => {

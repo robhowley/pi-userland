@@ -1,4 +1,5 @@
 import { getErrorMessage, runNormalizedExecCommand } from './internal.js';
+import { loadMergeReadyConfigAsync, type MergeReadyConfig } from './config.js';
 import { getMergeReadyStatus } from './merge-ready.js';
 import { suspendMergeReadyStatusBar, syncMergeReadyStatusBar } from './status-bar.js';
 import type { MergeReadyExec } from './git.js';
@@ -86,6 +87,8 @@ export type MergeReadyWatchContext = {
       fg: (color: string, text: string) => string;
     };
   };
+  // Compaction callback (blocking) - passed from ExtensionContext
+  compact?: (options?: { customInstructions?: string }) => Promise<void>;
 };
 
 export type MergeReadyWatchAPI = {
@@ -174,6 +177,8 @@ export type RunMergeReadyWatchLoopOptions = {
   signal: AbortSignal;
   url?: string;
   dependencies?: MergeReadyWatchLoopDependencies;
+  // Optional config loader for testing/mocking
+  loadConfig?: (cwd: string) => Promise<MergeReadyConfig> | MergeReadyConfig;
 };
 
 export type StartMergeReadyWatchOptions = {
@@ -826,6 +831,34 @@ export async function runMergeReadyWatchLoop(
       });
 
       const refreshedClassification = classifyMergeReadyWatchStatus(refreshedStatus);
+
+      // After successful repair, trigger compaction if configured
+      if (refreshedClassification.actionability === 'wait') {
+        const loadConfigFn = options.loadConfig ?? loadMergeReadyConfigAsync;
+        const config = await loadConfigFn(options.ctx.cwd);
+
+        if (config.autoCompactRepair && options.ctx.compact) {
+          try {
+            setMergeReadyWatchStatus(options.ctx, 'Compacting after successful repair…');
+            await options.ctx.compact({
+              customInstructions:
+                'Compaction triggered after successful merge-ready repair loop completion',
+            });
+            throwIfMergeReadyWatchAborted(options.signal);
+          } catch (error) {
+            if (options.signal.aborted) {
+              throw createAbortError(options.signal.reason);
+            }
+
+            // Log error but don't fail the watch loop
+            options.ctx.ui.notify(
+              `Compaction failed after repair: ${getErrorMessage(error)}`,
+              'warning',
+            );
+          }
+        }
+      }
+
       if (refreshedClassification.actionability === 'repair') {
         const refreshedSignature = createMergeReadyWatchBlockerSignature(
           refreshedStatus,

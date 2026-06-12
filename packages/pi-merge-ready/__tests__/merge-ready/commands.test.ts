@@ -16,6 +16,7 @@ import mergeReadyExtension, {
   resetMergeReadyWatchState,
   type MergeReadyCommandAPI,
   type MergeReadyCommandContext,
+  type StartMergeReadyWatchOptions,
 } from '../../extensions/merge-ready/index.js';
 import {
   CURRENT_BRANCH_TARGET,
@@ -135,7 +136,11 @@ function createMockAPI(expectedCalls: ExpectedExecCall[] = []): {
 }
 
 function createCommandContext(
-  options: { mode?: MergeReadyCommandContext['mode']; signal?: AbortSignal } = {},
+  options: {
+    mode?: MergeReadyCommandContext['mode'];
+    signal?: AbortSignal;
+    compact?: MergeReadyCommandContext['compact'];
+  } = {},
 ): MergeReadyCommandContext {
   return {
     cwd: '/repo',
@@ -143,6 +148,7 @@ function createCommandContext(
     isIdle: vi.fn(() => true),
     waitForIdle: vi.fn(async () => undefined),
     ...(options.signal === undefined ? {} : { signal: options.signal }),
+    ...(options.compact === undefined ? {} : { compact: options.compact }),
     ui: {
       notify: vi.fn(),
       setStatus: vi.fn(),
@@ -177,6 +183,7 @@ describe('merge-ready command', () => {
   afterEach(async () => {
     resetMergeReadyStatusBarCache();
     await resetMergeReadyWatchState();
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
@@ -816,6 +823,82 @@ describe('merge-ready command', () => {
       'info',
     );
     expect(ctx.ui.setStatus).toHaveBeenCalledWith(MERGE_READY_WATCH_STATUS_KEY, undefined);
+  });
+
+  it('wraps callback-based compaction into a blocking watch promise', async () => {
+    vi.resetModules();
+
+    const startMergeReadyWatch = vi.fn(() => ({
+      ok: false as const,
+      level: 'warning' as const,
+      message: 'mock watch start',
+    }));
+
+    vi.doMock('../../extensions/merge-ready/watch.js', async () => {
+      const actual = await vi.importActual<typeof import('../../extensions/merge-ready/watch.js')>(
+        '../../extensions/merge-ready/watch.js',
+      );
+      return {
+        ...actual,
+        startMergeReadyWatch,
+      };
+    });
+
+    const { registerMergeReadyCommand } = await import('../../extensions/merge-ready/commands.js');
+    const { api, getCommand } = createMockAPI();
+    registerMergeReadyCommand(api);
+
+    const handler = getCommand(MERGE_READY_COMMAND_NAME);
+    let onComplete: (() => void) | undefined;
+    let onError: ((error: Error) => void) | undefined;
+    const compact = vi.fn(
+      (options?: Parameters<NonNullable<MergeReadyCommandContext['compact']>>[0]) => {
+        onComplete = options?.onComplete;
+        onError = options?.onError;
+      },
+    );
+    const ctx = createCommandContext({ compact });
+
+    await handler?.('watch --interval 15', ctx);
+
+    expect(startMergeReadyWatch).toHaveBeenCalledTimes(1);
+    const startCall = startMergeReadyWatch.mock.calls[0];
+    expect(startCall).toBeDefined();
+    const [startOptions] = startCall as unknown as [StartMergeReadyWatchOptions];
+    const watchCtx = startOptions.ctx;
+    expect(watchCtx.compact).toBeTypeOf('function');
+
+    const wrappedCompact = watchCtx.compact?.({
+      customInstructions: 'Compaction triggered after successful merge-ready repair loop completion',
+    });
+    await flushMicrotasks();
+
+    expect(compact).toHaveBeenCalledWith({
+      customInstructions:
+        'Compaction triggered after successful merge-ready repair loop completion',
+      onComplete: expect.any(Function),
+      onError: expect.any(Function),
+    });
+    expect(onComplete).toBeTypeOf('function');
+    expect(onError).toBeTypeOf('function');
+
+    let settled = false;
+    wrappedCompact?.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await flushMicrotasks();
+    expect(settled).toBe(false);
+
+    onComplete?.();
+    await expect(wrappedCompact).resolves.toBeUndefined();
+
+    vi.doUnmock('../../extensions/merge-ready/watch.js');
+    vi.resetModules();
   });
 
   it('queues URL-targeted repair with isolated-worktree instructions and waits for agent_end before refreshing', async () => {
