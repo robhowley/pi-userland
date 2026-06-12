@@ -6,12 +6,7 @@ import {
   type ReapPresenceRecordsResult,
 } from './reap.js';
 import { readPresenceView, type ReadPresenceViewOptions } from './reader.js';
-import type {
-  PresenceDiagnostic,
-  PresenceState,
-  PresenceSummary,
-  PresenceView,
-} from './types.js';
+import type { PresenceDiagnostic, PresenceState, PresenceSummary, PresenceView } from './types.js';
 
 export type PresenceCommandNotificationLevel = 'info' | 'warning' | 'error';
 
@@ -67,7 +62,7 @@ export function registerPresenceCommand(
   const reapPresence = options.reapPresenceRecords ?? reapPresenceRecords;
 
   pi.registerCommand(SESSION_DECK_COMMAND_NAME, {
-    description: 'Show Pi runtime presence from ~/.pi/session-deck/presence',
+    description: 'Show Pi session presence from ~/.pi/session-deck/presence',
     getArgumentCompletions: getPresenceCommandCompletions,
     handler: async (args, ctx) => {
       const parsedArgs = parsePresenceCommandArgs(args);
@@ -137,9 +132,9 @@ export function renderPresenceView(view: PresenceView, options: { all: boolean }
   const lines: string[] = [];
 
   if (view.records.length === 0) {
-    lines.push(options.all ? 'No presence records found.' : 'No live or stale Pi runtimes found.');
+    lines.push(options.all ? 'No presence records found.' : 'No live or stale Pi sessions found.');
   } else {
-    lines.push(options.all ? 'Pi runtime presence' : 'Pi runtime presence (live + stale)');
+    lines.push(options.all ? 'Pi sessions (all presence records)' : 'Pi sessions (live + stale)');
     for (const record of view.records) {
       lines.push(formatPresenceSummary(record));
     }
@@ -223,7 +218,9 @@ function getReadPresenceOptions(options: RegisterPresenceCommandOptions): ReadPr
   };
 }
 
-function getReapPresenceOptions(options: RegisterPresenceCommandOptions): ReapPresenceRecordsOptions {
+function getReapPresenceOptions(
+  options: RegisterPresenceCommandOptions,
+): ReapPresenceRecordsOptions {
   return {
     ...(options.directory === undefined ? {} : { directory: options.directory }),
     ...(options.now === undefined ? {} : { now: options.now }),

@@ -1,7 +1,8 @@
+import type { Dirent } from 'node:fs';
 import { mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readPresenceView } from '../../extensions/session-deck/presence/reader.js';
 import { reapPresenceRecords } from '../../extensions/session-deck/presence/reap.js';
 import type { PresenceRecord } from '../../extensions/session-deck/presence/types.js';
@@ -27,6 +28,13 @@ async function createPresenceDirectory(): Promise<string> {
 
 async function writeRecord(directory: string, record: PresenceRecord): Promise<void> {
   await writeFile(join(directory, `${record.runtimeId}.json`), JSON.stringify(record), 'utf8');
+}
+
+function createFileDirent(name: string): Dirent<string> {
+  return {
+    name,
+    isFile: () => true,
+  } as Dirent<string>;
 }
 
 afterEach(async () => {
@@ -70,5 +78,31 @@ describe('presence reaping', () => {
 
     expect(reapResult.removed).toEqual([join(directory, 'old-runtime.json')]);
     expect(await readdir(directory)).toEqual([]);
+  });
+
+  it('reports write diagnostics when removing an expired record fails', async () => {
+    const directory = '/tmp/session-deck';
+    const filePath = join(directory, 'old-runtime.json');
+    const unlink = vi.fn(async () => {
+      throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    });
+
+    const reapResult = await reapPresenceRecords({
+      directory,
+      now: NOW,
+      readdir: async () => [createFileDirent('old-runtime.json')],
+      readFile: async () => JSON.stringify(buildRecord('old-runtime', '2026-06-10T11:59:55.000Z')),
+      unlink,
+    });
+
+    expect(unlink).toHaveBeenCalledWith(filePath);
+    expect(reapResult.removed).toEqual([]);
+    expect(reapResult.diagnostics).toEqual([
+      {
+        code: 'write_error',
+        filePath,
+        message: 'Failed to reap presence record: permission denied',
+      },
+    ]);
   });
 });

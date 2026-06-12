@@ -9,9 +9,11 @@ import {
   getPresenceRuntimeIdentity,
   resetPresenceRuntimeForTests,
 } from '../../extensions/session-deck/presence/runtime.js';
+import type { ReapPresenceRecordsResult } from '../../extensions/session-deck/presence/reap.js';
 import type {
   PresenceCommandAPI,
   PresenceCommandContext,
+  PresenceCommandRegistration,
 } from '../../extensions/session-deck/presence/command.js';
 import type { PresenceRecord, PresenceView } from '../../extensions/session-deck/presence/types.js';
 
@@ -82,6 +84,7 @@ describe('session-deck command', () => {
   function createMockAPI(): {
     api: PresenceCommandAPI;
     getHandler: () => ((args: string, ctx: PresenceCommandContext) => Promise<void>) | undefined;
+    getRegistration: () => PresenceCommandRegistration | undefined;
   } {
     const api = {
       registerCommand: vi.fn(),
@@ -90,6 +93,7 @@ describe('session-deck command', () => {
     return {
       api,
       getHandler: () => vi.mocked(api.registerCommand).mock.calls[0]?.[1].handler,
+      getRegistration: () => vi.mocked(api.registerCommand).mock.calls[0]?.[1],
     };
   }
 
@@ -119,6 +123,10 @@ describe('session-deck command', () => {
       ok: false,
       message: 'Usage: /session-deck [--all] [--reap]',
     });
+    expect(parsePresenceCommandArgs('--reap --reap')).toEqual({
+      ok: false,
+      message: 'Usage: /session-deck [--all] [--reap]',
+    });
     expect(parsePresenceCommandArgs('--bogus')).toEqual({
       ok: false,
       message: 'Usage: /session-deck [--all] [--reap]',
@@ -145,6 +153,23 @@ describe('session-deck command', () => {
       'Usage: /session-deck [--all] [--reap]',
       'error',
     );
+  });
+
+  it('offers --all and --reap argument completions', () => {
+    const { api, getRegistration } = createMockAPI();
+
+    registerPresenceCommand(api, {
+      readPresenceView: vi.fn(async () => ({ records: [], diagnostics: [] })),
+    });
+
+    const completions = getRegistration()?.getArgumentCompletions?.('');
+    expect(completions).toEqual([
+      { value: '--all', label: '--all' },
+      { value: '--reap', label: '--reap' },
+    ]);
+    expect(getRegistration()?.getArgumentCompletions?.('--r')).toEqual([
+      { value: '--reap', label: '--reap' },
+    ]);
   });
 
   it('shows only live and stale records by default and diagnostics with --all', async () => {
@@ -206,6 +231,7 @@ describe('session-deck command', () => {
 
     const [defaultMessage, defaultLevel] = vi.mocked(ctx.ui.notify).mock.calls[0] ?? [];
     expect(defaultLevel).toBe('info');
+    expect(defaultMessage).toContain('Pi sessions (live + stale)');
     expect(defaultMessage).toContain('live-runtime');
     expect(defaultMessage).toContain('stale-runtime');
     expect(defaultMessage).not.toContain('dead-runtime');
@@ -218,55 +244,51 @@ describe('session-deck command', () => {
     expect(reapPresenceRecords).not.toHaveBeenCalled();
 
     const [allMessage] = vi.mocked(ctx.ui.notify).mock.calls[0] ?? [];
+    expect(allMessage).toContain('Pi sessions (all presence records)');
     expect(allMessage).toContain('dead-runtime');
     expect(allMessage).toContain('Diagnostics:');
     expect(allMessage).toContain('/tmp/broken.json');
   });
 
-  it('runs reap only when explicitly requested and reports removals', async () => {
+  it('runs reap only when explicitly requested for the default post-reap view', async () => {
     const { api, getHandler } = createMockAPI();
-    const readPresenceView = vi.fn(async () => ({
-      records: [
-        {
-          runtimeId: 'live-runtime',
-          pid: 100,
-          startedAt: '2026-06-12T11:55:00.000Z',
-          heartbeatAt: '2026-06-12T11:59:55.000Z',
-          heartbeatAgeMs: 5_000,
-          presenceState: 'live',
-          reason: 'fresh_heartbeat',
-        },
-        {
-          runtimeId: 'dead-runtime',
-          pid: 102,
-          startedAt: '2026-06-12T11:40:00.000Z',
-          heartbeatAt: '2026-06-12T11:49:00.000Z',
-          heartbeatAgeMs: 660_000,
-          presenceState: 'dead',
-          reason: 'heartbeat_expired',
-        },
-      ],
-      diagnostics: [
-        {
-          code: 'read_error',
-          message: 'Failed to read one record',
-          filePath: '/tmp/read-error.json',
-        },
-      ],
-    }));
-    const reapPresenceRecords = vi.fn(async () => ({
-      removed: [
-        '/tmp/session-deck/old-runtime.json',
-        '/tmp/session-deck/other-runtime.json',
-      ],
-      diagnostics: [
-        {
-          code: 'malformed_record',
-          message: 'Ignored malformed JSON',
-          filePath: '/tmp/broken.json',
-        },
-      ],
-    }));
+    const readPresenceView = vi.fn(
+      async (): Promise<PresenceView> => ({
+        records: [
+          {
+            runtimeId: 'live-runtime',
+            pid: 100,
+            startedAt: '2026-06-12T11:55:00.000Z',
+            heartbeatAt: '2026-06-12T11:59:55.000Z',
+            heartbeatAgeMs: 5_000,
+            presenceState: 'live',
+            reason: 'fresh_heartbeat',
+          },
+          {
+            runtimeId: 'dead-runtime',
+            pid: 102,
+            startedAt: '2026-06-12T11:40:00.000Z',
+            heartbeatAt: '2026-06-12T11:49:00.000Z',
+            heartbeatAgeMs: 660_000,
+            presenceState: 'dead',
+            reason: 'heartbeat_expired',
+          },
+        ],
+        diagnostics: [
+          {
+            code: 'read_error',
+            message: 'Failed to read one record',
+            filePath: '/tmp/read-error.json',
+          },
+        ],
+      }),
+    );
+    const reapPresenceRecords = vi.fn(
+      async (): Promise<ReapPresenceRecordsResult> => ({
+        removed: ['/tmp/session-deck/old-runtime.json'],
+        diagnostics: [],
+      }),
+    );
 
     registerPresenceCommand(api, {
       readPresenceView,
@@ -277,7 +299,77 @@ describe('session-deck command', () => {
     expect(handler).toBeTypeOf('function');
 
     const ctx = createCommandContext();
-    await handler?.('--reap --all', ctx);
+    await handler?.('--reap', ctx);
+
+    expect(reapPresenceRecords).toHaveBeenCalledTimes(1);
+    expect(readPresenceView).toHaveBeenCalledTimes(1);
+
+    const [message, level] = vi.mocked(ctx.ui.notify).mock.calls[0] ?? [];
+    expect(level).toBe('info');
+    expect(message).toContain('Reap complete: removed 1 expired presence record.');
+    expect(message).toContain('old-runtime');
+    expect(message).toContain('Pi sessions (live + stale)');
+    expect(message).toContain('live-runtime');
+    expect(message).not.toContain('dead-runtime');
+    expect(message).not.toContain('Diagnostics:');
+  });
+
+  it('runs reap only when explicitly requested and reports removals', async () => {
+    const { api, getHandler } = createMockAPI();
+    const readPresenceView = vi.fn(
+      async (): Promise<PresenceView> => ({
+        records: [
+          {
+            runtimeId: 'live-runtime',
+            pid: 100,
+            startedAt: '2026-06-12T11:55:00.000Z',
+            heartbeatAt: '2026-06-12T11:59:55.000Z',
+            heartbeatAgeMs: 5_000,
+            presenceState: 'live',
+            reason: 'fresh_heartbeat',
+          },
+          {
+            runtimeId: 'dead-runtime',
+            pid: 102,
+            startedAt: '2026-06-12T11:40:00.000Z',
+            heartbeatAt: '2026-06-12T11:49:00.000Z',
+            heartbeatAgeMs: 660_000,
+            presenceState: 'dead',
+            reason: 'heartbeat_expired',
+          },
+        ],
+        diagnostics: [
+          {
+            code: 'read_error',
+            message: 'Failed to read one record',
+            filePath: '/tmp/read-error.json',
+          },
+        ],
+      }),
+    );
+    const reapPresenceRecords = vi.fn(
+      async (): Promise<ReapPresenceRecordsResult> => ({
+        removed: ['/tmp/session-deck/old-runtime.json', '/tmp/session-deck/other-runtime.json'],
+        diagnostics: [
+          {
+            code: 'malformed_record',
+            message: 'Ignored malformed JSON',
+            filePath: '/tmp/broken.json',
+          },
+        ],
+      }),
+    );
+
+    registerPresenceCommand(api, {
+      readPresenceView,
+      reapPresenceRecords,
+    });
+
+    const handler = getHandler();
+    expect(handler).toBeTypeOf('function');
+
+    const ctx = createCommandContext();
+    await handler?.('--all --reap', ctx);
 
     expect(reapPresenceRecords).toHaveBeenCalledTimes(1);
     expect(readPresenceView).toHaveBeenCalledTimes(1);
@@ -290,7 +382,7 @@ describe('session-deck command', () => {
     expect(message).toContain('other-runtime');
     expect(message).toContain('Reap diagnostics:');
     expect(message).toContain('/tmp/broken.json');
-    expect(message).toContain('Pi runtime presence');
+    expect(message).toContain('Pi sessions (all presence records)');
     expect(message).toContain('live-runtime');
     expect(message).toContain('dead-runtime');
     expect(message).toContain('Diagnostics:');
@@ -307,7 +399,7 @@ describe('session-deck command', () => {
     expect(vi.mocked(api.registerCommand)).toHaveBeenCalledWith(
       SESSION_DECK_COMMAND_NAME,
       expect.objectContaining({
-        description: expect.stringContaining('Pi runtime presence'),
+        description: expect.stringContaining('Pi session presence'),
       }),
     );
   });

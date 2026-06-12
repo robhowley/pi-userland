@@ -129,7 +129,7 @@ export async function reapPresenceRecords(
       if (errorCode !== 'ENOENT') {
         diagnostics.push(
           createDiagnostic(
-            'read_error',
+            'write_error',
             `Failed to reap presence record: ${getErrorMessage(error)}`,
             {
               filePath,

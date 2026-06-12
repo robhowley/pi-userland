@@ -10,6 +10,7 @@ pi install npm:@robhowley/pi-session-deck
 
 ## Commands
 
-- `/session-deck` shows live and stale runtimes.
-- `/session-deck --all` shows all runtime states plus diagnostics.
-- `/session-deck --reap` removes expired presence records, reports what changed, and shows the refreshed view.
+- `/session-deck` shows live and stale Pi sessions.
+- `/session-deck --all` includes dead and unknown records plus read diagnostics.
+- `/session-deck --reap` removes presence records older than the 24h reap threshold, reports how many were removed, and shows the refreshed default view.
+- `/session-deck --all --reap` combines both modes; flag order does not matter.
