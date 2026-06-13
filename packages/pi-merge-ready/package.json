@@ -5,6 +5,7 @@
   "license": "MIT",
   "type": "module",
   "files": [
+    "dist",
     "extensions",
     "skills",
     "README.md",
@@ -35,9 +36,11 @@
   },
   "homepage": "https://pi-userland.dev",
   "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && mkdir -p dist/extensions/merge-ready/watch-ui/public && cp extensions/merge-ready/watch-ui/public/* dist/extensions/merge-ready/watch-ui/public/",
     "lint": "eslint extensions/",
     "format:check": "prettier --check extensions/",
     "format:write": "prettier --write extensions/",
+    "prepack": "npm run build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run __tests__"
   },

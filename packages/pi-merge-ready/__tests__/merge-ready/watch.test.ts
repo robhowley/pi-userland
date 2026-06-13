@@ -69,13 +69,23 @@ const BASE_SIGNALS: MergeReadySignals = {
   unresolvedConversationRequirement: 'optional',
 };
 
-const RUNTIME_URL_TARGET = {
+type RuntimeUrlTarget = Extract<MergeReadyTarget, { mode: 'url' }>;
+
+const RUNTIME_URL_TARGET: RuntimeUrlTarget = {
   mode: 'url',
   url: 'https://github.com/shopify/pi/pull/64',
   owner: 'shopify',
   repo: 'pi',
   prNumber: 64,
-} as const;
+};
+
+const SECOND_RUNTIME_URL_TARGET: RuntimeUrlTarget = {
+  mode: 'url',
+  url: 'https://github.com/shopify/pi/pull/65',
+  owner: 'shopify',
+  repo: 'pi',
+  prNumber: 65,
+};
 
 function buildOpenItem(
   id: MergeReadyOpenItem['id'],
@@ -118,15 +128,24 @@ function buildRuntimeOpenPr(overrides: Partial<NonNullable<MergeReadyStatus['pr'
   };
 }
 
-function buildRuntimeUrlOpenPr(overrides: Partial<NonNullable<MergeReadyStatus['pr']>> = {}) {
+function buildRuntimeUrlOpenPr(
+  target: RuntimeUrlTarget = RUNTIME_URL_TARGET,
+  overrides: Partial<NonNullable<MergeReadyStatus['pr']>> = {},
+) {
   return buildRuntimeOpenPr({
-    number: 64,
-    title: 'Support explicit PR URL targets',
-    url: RUNTIME_URL_TARGET.url,
-    headRefName: 'feat/explicit-pr-url',
+    number: target.prNumber,
+    title:
+      target.prNumber === RUNTIME_URL_TARGET.prNumber
+        ? 'Support explicit PR URL targets'
+        : `Support explicit PR URL target #${String(target.prNumber)}`,
+    url: target.url,
+    headRefName:
+      target.prNumber === RUNTIME_URL_TARGET.prNumber
+        ? 'feat/explicit-pr-url'
+        : `feat/explicit-pr-url-${String(target.prNumber)}`,
     headRepository: {
-      owner: 'shopify',
-      repo: 'pi',
+      owner: target.owner,
+      repo: target.repo,
     },
     ...overrides,
   });
@@ -196,11 +215,13 @@ function createCiRunningStatus(overrides: Partial<MergeReadyStatus> = {}): Merge
   };
 }
 
-function createUrlCiFailingStatus(): MergeReadyStatus {
+function createUrlCiFailingStatus(
+  target: RuntimeUrlTarget = RUNTIME_URL_TARGET,
+): MergeReadyStatus {
   return createMergeReadyStatus({
     generatedAt: GENERATED_AT,
-    target: RUNTIME_URL_TARGET,
-    pr: buildRuntimeUrlOpenPr(),
+    target,
+    pr: buildRuntimeUrlOpenPr(target),
     signals: {
       draft: false,
       mergeability: 'mergeable',
@@ -217,11 +238,13 @@ function createUrlCiFailingStatus(): MergeReadyStatus {
   });
 }
 
-function createUrlCiRunningStatus(): MergeReadyStatus {
+function createUrlCiRunningStatus(
+  target: RuntimeUrlTarget = RUNTIME_URL_TARGET,
+): MergeReadyStatus {
   return createMergeReadyStatus({
     generatedAt: GENERATED_AT,
-    target: RUNTIME_URL_TARGET,
-    pr: buildRuntimeUrlOpenPr(),
+    target,
+    pr: buildRuntimeUrlOpenPr(target),
     signals: {
       draft: false,
       mergeability: 'mergeable',
@@ -238,11 +261,13 @@ function createUrlCiRunningStatus(): MergeReadyStatus {
   });
 }
 
-function createUrlReadyStatus(): MergeReadyStatus {
+function createUrlReadyStatus(
+  target: RuntimeUrlTarget = RUNTIME_URL_TARGET,
+): MergeReadyStatus {
   return createMergeReadyStatus({
     generatedAt: GENERATED_AT,
-    target: RUNTIME_URL_TARGET,
-    pr: buildRuntimeUrlOpenPr(),
+    target,
+    pr: buildRuntimeUrlOpenPr(target),
     signals: {
       draft: false,
       mergeability: 'mergeable',
@@ -274,11 +299,26 @@ function createStatusAmbiguousStatus(): MergeReadyStatus {
   });
 }
 
-function createWatchContext(): MergeReadyWatchContext {
+function createWatchContext(
+  options: {
+    sessionId?: string;
+    sessionFile?: string;
+  } = {},
+): MergeReadyWatchContext {
+  const { sessionId, sessionFile } = options;
+  const sessionManager =
+    sessionId === undefined && sessionFile === undefined
+      ? undefined
+      : {
+          ...(sessionId === undefined ? {} : { getSessionId: () => sessionId }),
+          ...(sessionFile === undefined ? {} : { getSessionFile: () => sessionFile }),
+        };
+
   return {
     cwd: '/repo',
     isIdle: vi.fn(() => true),
     waitForIdle: vi.fn(async () => undefined),
+    ...(sessionManager === undefined ? {} : { sessionManager }),
     ui: {
       notify: vi.fn(),
       setStatus: vi.fn(),
@@ -299,6 +339,28 @@ function createShortcutContext(
 function createStatusSequence(statuses: MergeReadyStatus[]) {
   let index = 0;
   return vi.fn(async (_options?: unknown) => statuses[Math.min(index++, statuses.length - 1)]!);
+}
+
+function createAbortableSleep() {
+  return vi.fn((_ms: number, signal?: AbortSignal) => {
+    if (signal?.aborted) {
+      const error = new Error('Aborted');
+      error.name = 'AbortError';
+      return Promise.reject(error);
+    }
+
+    return new Promise<void>((_resolve, reject) => {
+      signal?.addEventListener(
+        'abort',
+        () => {
+          const error = new Error('Aborted');
+          error.name = 'AbortError';
+          reject(error);
+        },
+        { once: true },
+      );
+    });
+  });
 }
 
 function createDeferred<T>() {
@@ -824,37 +886,20 @@ describe('merge-ready watch shortcut', () => {
   it('stops an active watch without aborting an idle session', async () => {
     const ctx = createWatchContext();
     const { api, getHandler } = createWatchShortcutAPI();
-    registerMergeReadyWatchShortcut(api);
+    const watchApi = Object.assign(api, {
+      sendUserMessage: vi.fn(async () => undefined),
+    });
+    registerMergeReadyWatchShortcut(watchApi);
     const handler = getHandler(MERGE_READY_WATCH_STOP_SHORTCUT);
 
     const start = startMergeReadyWatch({
-      api: {
-        sendUserMessage: vi.fn(async () => undefined),
-      },
+      api: watchApi,
       ctx,
       exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
       intervalSeconds: 30,
       dependencies: {
         getStatus: createStatusSequence([createReadyStatus()]),
-        sleep: vi.fn((_ms: number, signal?: AbortSignal) => {
-          if (signal?.aborted) {
-            const error = new Error('Aborted');
-            error.name = 'AbortError';
-            return Promise.reject(error);
-          }
-
-          return new Promise<void>((_resolve, reject) => {
-            signal?.addEventListener(
-              'abort',
-              () => {
-                const error = new Error('Aborted');
-                error.name = 'AbortError';
-                reject(error);
-              },
-              { once: true },
-            );
-          });
-        }),
+        sleep: createAbortableSleep(),
         syncStatusBar: vi.fn(),
         checkDirtyWorkingTree: async () => ({ ok: true, dirty: false }),
       },
@@ -880,37 +925,20 @@ describe('merge-ready watch shortcut', () => {
   it('aborts the session when the shortcut fires during non-idle active watch work', async () => {
     const ctx = createWatchContext();
     const { api, getHandler } = createWatchShortcutAPI();
-    registerMergeReadyWatchShortcut(api);
+    const watchApi = Object.assign(api, {
+      sendUserMessage: vi.fn(async () => undefined),
+    });
+    registerMergeReadyWatchShortcut(watchApi);
     const handler = getHandler(MERGE_READY_WATCH_STOP_SHORTCUT);
 
     const start = startMergeReadyWatch({
-      api: {
-        sendUserMessage: vi.fn(async () => undefined),
-      },
+      api: watchApi,
       ctx,
       exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
       intervalSeconds: 30,
       dependencies: {
         getStatus: createStatusSequence([createReadyStatus()]),
-        sleep: vi.fn((_ms: number, signal?: AbortSignal) => {
-          if (signal?.aborted) {
-            const error = new Error('Aborted');
-            error.name = 'AbortError';
-            return Promise.reject(error);
-          }
-
-          return new Promise<void>((_resolve, reject) => {
-            signal?.addEventListener(
-              'abort',
-              () => {
-                const error = new Error('Aborted');
-                error.name = 'AbortError';
-                reject(error);
-              },
-              { once: true },
-            );
-          });
-        }),
+        sleep: createAbortableSleep(),
         syncStatusBar: vi.fn(),
         checkDirtyWorkingTree: async () => ({ ok: true, dirty: false }),
       },
@@ -936,14 +964,16 @@ describe('merge-ready watch shortcut', () => {
   it('stops a repair_queued watch and aborts pending repair work', async () => {
     const ctx = createWatchContext();
     const { api, getHandler } = createWatchShortcutAPI();
-    registerMergeReadyWatchShortcut(api);
+    const watchApi = Object.assign(api, {
+      sendUserMessage: vi.fn(
+        async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
+      ),
+    });
+    registerMergeReadyWatchShortcut(watchApi);
     const handler = getHandler(MERGE_READY_WATCH_STOP_SHORTCUT);
-    const sendUserMessage = vi.fn(
-      async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
-    );
 
     const start = startMergeReadyWatch({
-      api: { sendUserMessage },
+      api: watchApi,
       ctx,
       exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
       intervalSeconds: 30,
@@ -985,33 +1015,16 @@ describe('merge-ready watch loop', () => {
     vi.useRealTimers();
   });
 
-  it('allows only one active foreground watcher at a time', async () => {
+  it('allows only one active foreground watcher per runtime owner', async () => {
     const ctx = createWatchContext();
     const sendUserMessage = vi.fn(
       async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
     );
-    const sleep = vi.fn((_ms: number, signal?: AbortSignal) => {
-      if (signal?.aborted) {
-        const error = new Error('Aborted');
-        error.name = 'AbortError';
-        return Promise.reject(error);
-      }
-
-      return new Promise<void>((_resolve, reject) => {
-        signal?.addEventListener(
-          'abort',
-          () => {
-            const error = new Error('Aborted');
-            error.name = 'AbortError';
-            reject(error);
-          },
-          { once: true },
-        );
-      });
-    });
+    const api = { sendUserMessage };
+    const sleep = createAbortableSleep();
 
     const firstStart = startMergeReadyWatch({
-      api: { sendUserMessage },
+      api,
       ctx,
       exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
       intervalSeconds: 30,
@@ -1023,7 +1036,7 @@ describe('merge-ready watch loop', () => {
       },
     });
     const secondStart = startMergeReadyWatch({
-      api: { sendUserMessage },
+      api,
       ctx,
       exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
       intervalSeconds: 30,
@@ -1043,6 +1056,182 @@ describe('merge-ready watch loop', () => {
     }
   });
 
+  it('allows different runtime owners to watch different PRs concurrently and stop independently', async () => {
+    const firstCtx = createWatchContext({
+      sessionId: 'watch-session-a',
+      sessionFile: '/tmp/watch-session-a.jsonl',
+    });
+    const secondCtx = createWatchContext({
+      sessionId: 'watch-session-b',
+      sessionFile: '/tmp/watch-session-b.jsonl',
+    });
+    const firstApi = {
+      sendUserMessage: vi.fn(
+        async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
+      ),
+    };
+    const secondApi = {
+      sendUserMessage: vi.fn(
+        async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
+      ),
+    };
+    const sleep = createAbortableSleep();
+
+    const firstStart = startMergeReadyWatch({
+      api: firstApi,
+      ctx: firstCtx,
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
+      intervalSeconds: 30,
+      url: RUNTIME_URL_TARGET.url,
+      dependencies: {
+        getStatus: createStatusSequence([createUrlReadyStatus(RUNTIME_URL_TARGET)]),
+        sleep,
+        syncStatusBar: vi.fn(),
+        checkDirtyWorkingTree: vi.fn(async () => ({ ok: true as const, dirty: false })),
+      },
+    });
+    const secondStart = startMergeReadyWatch({
+      api: secondApi,
+      ctx: secondCtx,
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
+      intervalSeconds: 30,
+      url: SECOND_RUNTIME_URL_TARGET.url,
+      dependencies: {
+        getStatus: createStatusSequence([createUrlReadyStatus(SECOND_RUNTIME_URL_TARGET)]),
+        sleep,
+        syncStatusBar: vi.fn(),
+        checkDirtyWorkingTree: vi.fn(async () => ({ ok: true as const, dirty: false })),
+      },
+    });
+
+    expect(firstStart).toMatchObject({ ok: true, level: 'info' });
+    expect(secondStart).toMatchObject({ ok: true, level: 'info' });
+    if (!firstStart.ok || !secondStart.ok) {
+      return;
+    }
+
+    await flushMicrotasks();
+
+    expect(getActiveMergeReadyWatch(firstApi)).toMatchObject({
+      targetLabel: RUNTIME_URL_TARGET.url,
+      phase: 'watching',
+    });
+    expect(getActiveMergeReadyWatch(secondApi)).toMatchObject({
+      targetLabel: SECOND_RUNTIME_URL_TARGET.url,
+      phase: 'watching',
+    });
+    expect(getActiveMergeReadyWatch()).toBeNull();
+
+    expect(stopActiveMergeReadyWatch(firstApi)).toEqual({
+      stopped: true,
+      targetLabel: RUNTIME_URL_TARGET.url,
+      phase: 'watching',
+    });
+    expect(getActiveMergeReadyWatch(firstApi)).toBeNull();
+    expect(getActiveMergeReadyWatch(secondApi)).toMatchObject({
+      targetLabel: SECOND_RUNTIME_URL_TARGET.url,
+      phase: 'watching',
+    });
+
+    await expect(firstStart.promise).resolves.toEqual({ kind: 'aborted', reason: 'aborted' });
+
+    expect(stopActiveMergeReadyWatch(secondApi)).toEqual({
+      stopped: true,
+      targetLabel: SECOND_RUNTIME_URL_TARGET.url,
+      phase: 'watching',
+    });
+    await expect(secondStart.promise).resolves.toEqual({ kind: 'aborted', reason: 'aborted' });
+  });
+
+  it('scopes agent_end resolution to the owning runtime when multiple repair turns are queued', async () => {
+    const firstCtx = createWatchContext({
+      sessionId: 'watch-session-a',
+      sessionFile: '/tmp/watch-session-a.jsonl',
+    });
+    const secondCtx = createWatchContext({
+      sessionId: 'watch-session-b',
+      sessionFile: '/tmp/watch-session-b.jsonl',
+    });
+    const firstPollDelay = createDeferred<void>();
+    const secondPollDelay = createDeferred<void>();
+    const { api: firstApi, getHandler: getFirstHandler } = createWatchLifecycleAPI(
+      vi.fn(async () => undefined),
+    );
+    const { api: secondApi, getHandler: getSecondHandler } = createWatchLifecycleAPI(
+      vi.fn(async () => undefined),
+    );
+    registerMergeReadyWatchLifecycle(firstApi);
+    registerMergeReadyWatchLifecycle(secondApi);
+
+    const firstStart = startMergeReadyWatch({
+      api: firstApi,
+      ctx: firstCtx,
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
+      intervalSeconds: 30,
+      url: RUNTIME_URL_TARGET.url,
+      dependencies: {
+        getStatus: createStatusSequence([
+          createUrlCiFailingStatus(RUNTIME_URL_TARGET),
+          createUrlCiRunningStatus(RUNTIME_URL_TARGET),
+        ]),
+        sleep: vi.fn((_ms: number, _signal?: AbortSignal) => firstPollDelay.promise),
+        syncStatusBar: vi.fn(),
+        checkDirtyWorkingTree: vi.fn(async () => ({ ok: true as const, dirty: false })),
+        maxIterations: 1,
+      },
+    });
+    const secondStart = startMergeReadyWatch({
+      api: secondApi,
+      ctx: secondCtx,
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
+      intervalSeconds: 30,
+      url: SECOND_RUNTIME_URL_TARGET.url,
+      dependencies: {
+        getStatus: createStatusSequence([
+          createUrlCiFailingStatus(SECOND_RUNTIME_URL_TARGET),
+          createUrlCiRunningStatus(SECOND_RUNTIME_URL_TARGET),
+        ]),
+        sleep: vi.fn((_ms: number, _signal?: AbortSignal) => secondPollDelay.promise),
+        syncStatusBar: vi.fn(),
+        checkDirtyWorkingTree: vi.fn(async () => ({ ok: true as const, dirty: false })),
+        maxIterations: 1,
+      },
+    });
+
+    expect(firstStart).toMatchObject({ ok: true, level: 'info' });
+    expect(secondStart).toMatchObject({ ok: true, level: 'info' });
+    if (!firstStart.ok || !secondStart.ok) {
+      return;
+    }
+
+    await flushMicrotasks();
+    expect(getActiveMergeReadyWatch(firstApi)?.phase).toBe('repair_queued');
+    expect(getActiveMergeReadyWatch(secondApi)?.phase).toBe('repair_queued');
+
+    await getFirstHandler('agent_end')?.({}, undefined);
+    await flushMicrotasks();
+
+    expect(getActiveMergeReadyWatch(firstApi)?.phase).toBe('watching');
+    expect(getActiveMergeReadyWatch(secondApi)?.phase).toBe('repair_queued');
+
+    firstPollDelay.resolve();
+    await expect(firstStart.promise).resolves.toMatchObject({
+      kind: 'stopped',
+      reason: 'max_iterations',
+    });
+
+    await getSecondHandler('agent_end')?.({}, undefined);
+    await flushMicrotasks();
+
+    expect(getActiveMergeReadyWatch(secondApi)?.phase).toBe('watching');
+
+    secondPollDelay.resolve();
+    await expect(secondStart.promise).resolves.toMatchObject({
+      kind: 'stopped',
+      reason: 'max_iterations',
+    });
+  });
+
   it('requires repair handoff support for URL watches because they may auto-repair', () => {
     const ctx = createWatchContext();
 
@@ -1059,6 +1248,57 @@ describe('merge-ready watch loop', () => {
       level: 'error',
       message: 'Merge-ready watch requires Pi sendUserMessage support.',
     });
+  });
+
+  it('falls back to plain watch status text when theme access throws', async () => {
+    const ctx = createWatchContext();
+    const sendUserMessage = vi.fn(
+      async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
+    );
+
+    Object.defineProperty(ctx.ui, 'theme', {
+      configurable: true,
+      get: () => {
+        throw new Error('Theme not initialized. Call initTheme() first.');
+      },
+    });
+
+    const start = startMergeReadyWatch({
+      api: { sendUserMessage },
+      ctx,
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
+      intervalSeconds: 30,
+      url: RUNTIME_URL_TARGET.url,
+      dependencies: {
+        getStatus: createStatusSequence([createUrlReadyStatus()]),
+        sleep: vi.fn(async () => undefined),
+        syncStatusBar: vi.fn(),
+        checkDirtyWorkingTree: vi.fn(async () => ({ ok: true as const, dirty: false })),
+        maxIterations: 1,
+      },
+    });
+
+    expect(start).toMatchObject({ ok: true, level: 'info' });
+    if (!start.ok) {
+      return;
+    }
+
+    await expect(start.promise).resolves.toMatchObject({
+      kind: 'stopped',
+      reason: 'max_iterations',
+    });
+    expect(vi.mocked(ctx.ui.notify)).not.toHaveBeenCalledWith(
+      expect.stringContaining('Theme not initialized. Call initTheme() first.'),
+      'error',
+    );
+    expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(
+      MERGE_READY_WATCH_STATUS_KEY,
+      `Watching ${RUNTIME_URL_TARGET.url} · starting…`,
+    );
+    expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(
+      MERGE_READY_WATCH_STATUS_KEY,
+      'Watching #64 · Ready to merge',
+    );
   });
 
   it.each([
@@ -1087,7 +1327,7 @@ describe('merge-ready watch loop', () => {
       },
     });
 
-    expect(result).toEqual({ kind: 'stopped', reason: 'max_iterations' });
+    expect(result).toMatchObject({ kind: 'stopped', reason: 'max_iterations' });
     expect(sendUserMessage).not.toHaveBeenCalled();
     expect(checkDirtyWorkingTree).not.toHaveBeenCalled();
     expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(
@@ -1247,7 +1487,10 @@ describe('merge-ready watch loop', () => {
     ).toBe(false);
 
     pollDelay.resolve();
-    await expect(start.promise).resolves.toEqual({ kind: 'stopped', reason: 'max_iterations' });
+    await expect(start.promise).resolves.toMatchObject({
+      kind: 'stopped',
+      reason: 'max_iterations',
+    });
 
     const prompt = vi.mocked(sendUserMessage).mock.calls[0]?.[0];
     expect(prompt).toContain('Use the merge-ready-loop skill');
@@ -1373,6 +1616,71 @@ describe('merge-ready watch loop', () => {
     ]);
   });
 
+  it('clears attempted actionable signatures after a repair settles into wait and allows the same signature later', async () => {
+    const ctx = createWatchContext();
+    const firstAgentEnd = createDeferred<void>();
+    const secondAgentEnd = createDeferred<void>();
+    let repairTurn = 0;
+    const waitForAgentEnd = vi.fn(() => {
+      repairTurn += 1;
+      return repairTurn === 1 ? firstAgentEnd.promise : secondAgentEnd.promise;
+    });
+    const sendUserMessage = vi.fn(
+      async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
+    );
+    const checkDirtyWorkingTree = vi.fn(async () => ({ ok: true as const, dirty: false }));
+    const result = runMergeReadyWatchLoop({
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
+      api: { sendUserMessage },
+      ctx,
+      intervalSeconds: 30,
+      signal: new AbortController().signal,
+      dependencies: {
+        getStatus: createStatusSequence([
+          createCiFailingStatus(),
+          createCiRunningStatus(),
+          createCiFailingStatus(),
+          createCiRunningStatus(),
+        ]),
+        sleep: vi.fn(async () => undefined),
+        syncStatusBar: vi.fn(),
+        checkDirtyWorkingTree,
+        waitForAgentEnd,
+        maxIterations: 2,
+      },
+      loadConfig: vi.fn(async () => ({ autoCompactRepair: false })),
+    });
+    const onSettled = vi.fn();
+    result.finally(onSettled);
+
+    await flushMicrotasks(12);
+
+    expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(checkDirtyWorkingTree).toHaveBeenCalledTimes(1);
+    expect(onSettled).not.toHaveBeenCalled();
+
+    firstAgentEnd.resolve();
+    await flushMicrotasks(12);
+
+    expect(sendUserMessage).toHaveBeenCalledTimes(2);
+    expect(checkDirtyWorkingTree).toHaveBeenCalledTimes(2);
+    expect(waitForAgentEnd).toHaveBeenCalledTimes(2);
+    expect(onSettled).not.toHaveBeenCalled();
+    expect(vi.mocked(ctx.ui.notify).mock.calls).not.toContainEqual([
+      'Stopping merge-ready watch for https://github.com/robhowley/pi-userland/pull/42: the same actionable blocker is still present after one attempt.',
+      'warning',
+    ]);
+
+    secondAgentEnd.resolve();
+
+    await expect(result).resolves.toMatchObject({
+      kind: 'stopped',
+      reason: 'max_iterations',
+      status: createCiRunningStatus(),
+    });
+    expect(sendUserMessage).toHaveBeenCalledTimes(2);
+  });
+
   it('stops on a repeated URL actionable signature only after the post-agent_end refresh', async () => {
     const ctx = createWatchContext();
     const sendUserMessage = vi.fn(
@@ -1493,7 +1801,10 @@ describe('merge-ready watch loop', () => {
     ).toBe(false);
 
     pollDelay.resolve();
-    await expect(start.promise).resolves.toEqual({ kind: 'stopped', reason: 'max_iterations' });
+    await expect(start.promise).resolves.toMatchObject({
+      kind: 'stopped',
+      reason: 'max_iterations',
+    });
 
     const prompt = vi.mocked(sendUserMessage).mock.calls[0]?.[0];
     expect(prompt).toContain(`Use the merge-ready-loop skill for ${RUNTIME_URL_TARGET.url}.`);
@@ -1695,13 +2006,20 @@ describe('merge-ready watch loop', () => {
       vi
         .mocked(ctx.ui.setStatus!)
         .mock.calls.filter(([key]) => key === MERGE_READY_WATCH_STATUS_KEY)
-        .some(([, value]) => typeof value === 'string' && value.includes('Watching #42 · Ready to merge')),
+        .some(
+          ([, value]) =>
+            typeof value === 'string' && value.includes('Watching #42 · Ready to merge'),
+        ),
     ).toBe(false);
     expect(sleep).not.toHaveBeenCalled();
     expect(onSettled).not.toHaveBeenCalled();
 
     compactResult.resolve();
-    await expect(result).resolves.toEqual({ kind: 'stopped', reason: 'max_iterations' });
+    await expect(result).resolves.toMatchObject({
+      kind: 'stopped',
+      reason: 'max_iterations',
+      status: createReadyStatus(),
+    });
     expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(
       MERGE_READY_WATCH_STATUS_KEY,
       expect.stringContaining('Watching #42 · Ready to merge'),
@@ -1739,7 +2057,11 @@ describe('merge-ready watch loop', () => {
       loadConfig: vi.fn(async () => ({ autoCompactRepair: true })),
     });
 
-    expect(result).toEqual({ kind: 'stopped', reason: 'max_iterations' });
+    expect(result).toMatchObject({
+      kind: 'stopped',
+      reason: 'max_iterations',
+      status: createCiRunningStatus(),
+    });
     expect(ctx.compact).toHaveBeenCalledTimes(1);
     expect(vi.mocked(ctx.ui.notify).mock.calls).toContainEqual([
       'Compaction failed after repair: Compaction exploded',

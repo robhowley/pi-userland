@@ -95,8 +95,8 @@ Start a watcher with:
 /merge-ready watch --url https://github.com/OWNER/REPO/pull/64 --interval 30
 ```
 
-`watch` is a long-lived foreground TUI command that polls merge readiness.
-Press `Ctrl-Shift-S` in the TUI to stop it.
+`watch` is a long-lived foreground command that polls merge readiness.
+In the TUI, press `Ctrl-Shift-S` to stop it. In headless SDK sessions, stop it by aborting or disposing the backing session.
 
 It will:
 
@@ -136,9 +136,34 @@ Watch behavior can be configured in Pi's `settings.json` (global: `~/.pi/agent/s
 }
 ```
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `autoCompactRepair` | `true` | Trigger conversation compaction after successful repair loop completion. Compaction runs before the watch continues polling. Set to `false` to disable. |
+| Option              | Default | Description                                                                                                                                             |
+| ------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `autoCompactRepair` | `true`  | Trigger conversation compaction after successful repair loop completion. Compaction runs before the watch continues polling. Set to `false` to disable. |
+
+### Watch UI
+
+Launch the local multi-watch UI with:
+
+```bash
+/merge-ready watch-ui
+```
+
+Stop the detached watch-ui supervisor with:
+
+```bash
+/merge-ready watch-ui stop
+```
+
+It starts or reuses a detached localhost supervisor, opens a browser when possible, and always reports a fallback URL. The stop command shuts down that detached supervisor and stops any active watches it owns.
+
+V1 notes:
+
+- watches are URL-targeted headless Pi SDK sessions backed by persisted Pi JSONL sessions
+- child watch sessions inherit the launching session's captured Pi runtime snapshot (agentDir, model, thinking level, and resolved auth); launch fails early if that runtime cannot be resolved safely
+- the UI polls a token-gated `127.0.0.1` API only; there is no hosted service
+- transcript inspection is read-only and uses the stored session file for the selected watch
+- supported watch controls are stop, restart, and remove; the UI also shows session id/path metadata for debugging and supportability
+- if the supervisor restarts, previously active watches are shown as stale rather than assumed ready
 
 ### Agent tool
 

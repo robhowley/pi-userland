@@ -725,6 +725,142 @@ describe('merge-ready command', () => {
       url,
       intervalSeconds: 30,
     });
+    expect(parseMergeReadyCommandArgs('watch-ui')).toEqual({
+      ok: true,
+      mode: 'watch-ui',
+      action: 'launch',
+    });
+    expect(parseMergeReadyCommandArgs('watch-ui stop')).toEqual({
+      ok: true,
+      mode: 'watch-ui',
+      action: 'stop',
+    });
+  });
+
+  it('launches watch-ui with API-level thinking level even when command ctx lacks it', async () => {
+    vi.resetModules();
+
+    const launchMergeReadyWatchUI = vi.fn(async (_options: unknown) => ({
+      level: 'info' as const,
+      message: 'mock watch-ui launch',
+    }));
+    const stopMergeReadyWatchUI = vi.fn(async (_options: unknown) => ({
+      level: 'info' as const,
+      message: 'mock watch-ui stop',
+    }));
+
+    vi.doMock('../../extensions/merge-ready/watch-ui/launcher.js', async () => {
+      const actual = await vi.importActual<
+        typeof import('../../extensions/merge-ready/watch-ui/launcher.js')
+      >('../../extensions/merge-ready/watch-ui/launcher.js');
+      return {
+        ...actual,
+        launchMergeReadyWatchUI,
+        stopMergeReadyWatchUI,
+      };
+    });
+
+    try {
+      const { registerMergeReadyCommand } = await import('../../extensions/merge-ready/commands.js');
+      const { api, getCommand } = createMockAPI();
+      const getThinkingLevel = vi.fn(() => 'high' as const);
+      const runtimeApi = { ...api, getThinkingLevel };
+
+      registerMergeReadyCommand(runtimeApi);
+
+      const handler = getCommand(MERGE_READY_COMMAND_NAME);
+      const ctx = createCommandContext();
+      const model: NonNullable<MergeReadyCommandContext['model']> = {
+        id: 'claude-sonnet-4-20250514',
+        name: 'Claude Sonnet 4',
+        api: 'anthropic-messages',
+        provider: 'anthropic',
+        baseUrl: 'https://api.anthropic.com/v1/messages',
+        reasoning: true,
+        input: ['text'],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 8_192,
+      };
+      const modelRegistry: NonNullable<MergeReadyCommandContext['modelRegistry']> = {
+        getApiKeyAndHeaders: vi.fn(),
+      };
+
+      ctx.model = model;
+      ctx.modelRegistry = modelRegistry;
+      ctx.sessionManager = {
+        getSessionDir: vi.fn(() => '/Users/me/.pi/agent-or/sessions/--repo--'),
+      };
+
+      expect('getThinkingLevel' in ctx).toBe(false);
+
+      await handler?.('watch-ui', ctx);
+
+      expect(launchMergeReadyWatchUI).toHaveBeenCalledTimes(1);
+      expect(stopMergeReadyWatchUI).not.toHaveBeenCalled();
+      const launchOptions = launchMergeReadyWatchUI.mock.calls[0]?.[0];
+      expect(launchOptions).toEqual({
+        exec: runtimeApi.exec,
+        cwd: '/repo',
+        getThinkingLevel,
+        model,
+        modelRegistry,
+        sessionDir: '/Users/me/.pi/agent-or/sessions/--repo--',
+      });
+      expect(ctx.ui.notify).toHaveBeenCalledWith('mock watch-ui launch', 'info');
+    } finally {
+      vi.doUnmock('../../extensions/merge-ready/watch-ui/launcher.js');
+      vi.resetModules();
+    }
+  });
+
+  it('stops watch-ui for the current session agent', async () => {
+    vi.resetModules();
+
+    const launchMergeReadyWatchUI = vi.fn(async (_options: unknown) => ({
+      level: 'info' as const,
+      message: 'mock watch-ui launch',
+    }));
+    const stopMergeReadyWatchUI = vi.fn(async (_options: unknown) => ({
+      level: 'info' as const,
+      message: 'mock watch-ui stop',
+    }));
+
+    vi.doMock('../../extensions/merge-ready/watch-ui/launcher.js', async () => {
+      const actual = await vi.importActual<
+        typeof import('../../extensions/merge-ready/watch-ui/launcher.js')
+      >('../../extensions/merge-ready/watch-ui/launcher.js');
+      return {
+        ...actual,
+        launchMergeReadyWatchUI,
+        stopMergeReadyWatchUI,
+      };
+    });
+
+    try {
+      const { registerMergeReadyCommand } = await import('../../extensions/merge-ready/commands.js');
+      const { api, getCommand } = createMockAPI();
+
+      registerMergeReadyCommand(api);
+
+      const handler = getCommand(MERGE_READY_COMMAND_NAME);
+      const ctx = createCommandContext();
+      ctx.sessionManager = {
+        getSessionDir: vi.fn(() => '/Users/me/.pi/agent-or/sessions/--repo--'),
+      };
+
+      await handler?.('watch-ui stop', ctx);
+
+      expect(launchMergeReadyWatchUI).not.toHaveBeenCalled();
+      expect(stopMergeReadyWatchUI).toHaveBeenCalledTimes(1);
+      expect(stopMergeReadyWatchUI).toHaveBeenCalledWith({
+        sessionDir: '/Users/me/.pi/agent-or/sessions/--repo--',
+      });
+      expect(ctx.ui.notify).toHaveBeenCalledWith('mock watch-ui stop', 'info');
+    } finally {
+      vi.doUnmock('../../extensions/merge-ready/watch-ui/launcher.js');
+      vi.resetModules();
+    }
   });
 
   it('rejects invalid watch arguments with combined usage text', async () => {
@@ -776,21 +912,36 @@ describe('merge-ready command', () => {
     );
   });
 
-  it('rejects watch mode outside TUI because stop is shortcut-based', async () => {
-    const { api, getCommand } = createMockAPI();
+  it('allows watch mode outside TUI when sendUserMessage is available', async () => {
+    const { api, assertDone, getCommand } = createMockAPI([
+      ...createGitDiscoveryCalls({ timeout: MERGE_READY_COMMAND_TIMEOUT_MS }),
+      createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+        timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+      }),
+      createConversationsSuccessCall(buildConversationsPayload(), {
+        timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+      }),
+    ]);
+
     mergeReadyExtension(api);
     const handler = getCommand(MERGE_READY_COMMAND_NAME);
-    const ctx = createCommandContext({ mode: 'rpc' });
+    const abortController = new AbortController();
+    const ctx = createCommandContext({ mode: 'rpc', signal: abortController.signal });
 
-    await handler?.('watch --interval 30', ctx);
+    const run = handler?.('watch --interval 15', ctx) ?? Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getActiveMergeReadyWatch()).not.toBeNull();
 
-    expect(vi.mocked(ctx.ui.notify).mock.calls).toEqual([
-      [
-        'Merge-ready watch currently requires TUI mode because stop is provided via the Ctrl-Shift-S shortcut.',
-        'error',
-      ],
-    ]);
+    abortController.abort();
+    await run;
+
+    assertDone();
     expect(getActiveMergeReadyWatch()).toBeNull();
+    expect(vi.mocked(ctx.ui.notify)).toHaveBeenCalledWith(
+      'Watching merge readiness for current branch PR every 15s.',
+      'info',
+    );
+    expect(ctx.ui.setStatus).toHaveBeenCalledWith(MERGE_READY_WATCH_STATUS_KEY, undefined);
   });
 
   it('keeps watch foreground until the command signal is aborted', async () => {
@@ -823,6 +974,114 @@ describe('merge-ready command', () => {
       'info',
     );
     expect(ctx.ui.setStatus).toHaveBeenCalledWith(MERGE_READY_WATCH_STATUS_KEY, undefined);
+  });
+
+  it('allows separately registered command runtimes to watch different PRs concurrently', async () => {
+    const firstUrl = 'https://github.com/shopify/pi/pull/64';
+    const secondUrl = 'https://github.com/shopify/pi/pull/65';
+    const firstTarget = {
+      mode: 'url' as const,
+      url: firstUrl,
+      owner: 'shopify',
+      repo: 'pi',
+      prNumber: 64,
+    };
+    const secondTarget = {
+      mode: 'url' as const,
+      url: secondUrl,
+      owner: 'shopify',
+      repo: 'pi',
+      prNumber: 65,
+    };
+    const firstPayload = buildPullRequestPayload({
+      number: 64,
+      title: 'Support explicit PR URL targets',
+      url: firstUrl,
+      headRefName: 'feat/explicit-pr-url',
+      headRepository: {
+        name: 'pi',
+      },
+      headRepositoryOwner: {
+        login: 'shopify',
+      },
+      baseRefName: 'main',
+    });
+    const secondPayload = buildPullRequestPayload({
+      number: 65,
+      title: 'Support concurrent watch sessions',
+      url: secondUrl,
+      headRefName: 'feat/concurrent-watch-sessions',
+      headRepository: {
+        name: 'pi',
+      },
+      headRepositoryOwner: {
+        login: 'shopify',
+      },
+      baseRefName: 'main',
+    });
+    const firstRuntime = createMockAPI([
+      createPullRequestViewSuccessCall(firstPayload, {
+        timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+        target: firstTarget,
+      }),
+      createConversationsSuccessCall(buildConversationsPayload(), {
+        timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+        repositoryOwner: 'shopify',
+        repositoryName: 'pi',
+        pullRequestNumber: 64,
+      }),
+    ]);
+    const secondRuntime = createMockAPI([
+      createPullRequestViewSuccessCall(secondPayload, {
+        timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+        target: secondTarget,
+      }),
+      createConversationsSuccessCall(buildConversationsPayload(), {
+        timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+        repositoryOwner: 'shopify',
+        repositoryName: 'pi',
+        pullRequestNumber: 65,
+      }),
+    ]);
+
+    mergeReadyExtension(firstRuntime.api);
+    mergeReadyExtension(secondRuntime.api);
+    const firstHandler = firstRuntime.getCommand(MERGE_READY_COMMAND_NAME);
+    const secondHandler = secondRuntime.getCommand(MERGE_READY_COMMAND_NAME);
+    const firstAbortController = new AbortController();
+    const secondAbortController = new AbortController();
+    const firstCtx = createCommandContext({
+      mode: 'rpc',
+      signal: firstAbortController.signal,
+    });
+    const secondCtx = createCommandContext({
+      mode: 'rpc',
+      signal: secondAbortController.signal,
+    });
+
+    const firstRun =
+      firstHandler?.(`watch --url ${firstUrl} --interval 15`, firstCtx) ?? Promise.resolve();
+    const secondRun =
+      secondHandler?.(`watch --url ${secondUrl} --interval 15`, secondCtx) ?? Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    await flushMicrotasks();
+
+    expect(getActiveMergeReadyWatch(firstRuntime.api)).not.toBeNull();
+    expect(getActiveMergeReadyWatch(secondRuntime.api)).not.toBeNull();
+    expect(getActiveMergeReadyWatch()).toBeNull();
+
+    firstAbortController.abort();
+    await firstRun;
+
+    firstRuntime.assertDone();
+    expect(getActiveMergeReadyWatch(firstRuntime.api)).toBeNull();
+    expect(getActiveMergeReadyWatch(secondRuntime.api)).not.toBeNull();
+
+    secondAbortController.abort();
+    await secondRun;
+
+    secondRuntime.assertDone();
+    expect(getActiveMergeReadyWatch(secondRuntime.api)).toBeNull();
   });
 
   it('wraps callback-based compaction into a blocking watch promise', async () => {
