@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/robhowley/pi-userland/compare/pi-merge-ready-v0.7.0...pi-merge-ready-v0.8.0) (2026-06-13)
+
+
+### Features
+
+* **pi-merge-ready:** add merge-ready watch UI ([#80](https://github.com/robhowley/pi-userland/issues/80)) ([feaf126](https://github.com/robhowley/pi-userland/commit/feaf1265b4008a5809c13f267517fec2e13d1891))
+
 ## [0.7.0](https://github.com/robhowley/pi-userland/compare/pi-merge-ready-v0.6.1...pi-merge-ready-v0.7.0) (2026-06-12)
 
 
