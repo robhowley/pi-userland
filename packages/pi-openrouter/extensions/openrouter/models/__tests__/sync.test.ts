@@ -2,28 +2,30 @@
  * Tests for the sync engine.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ExtensionContext, ModelRegistry } from '@mariozechner/pi-coding-agent';
 import type { CatalogMode, PiModelConfig, SkipReason, SyncResult } from '../types.js';
 import { ROUTER_ALIASES } from '../types.js';
 import { createPiModelConfig, createValidModel } from '../../__tests__/fixtures.js';
+// Import modules
 import {
+  syncModels,
+  setSyncState,
+  getSyncState,
+  getStatusText,
   areModelsAvailable,
+  includeBuiltinRouterModels,
+  isExplicitFreeModelId,
   filterModelsForCatalogMode,
   getActiveCatalogState,
   getBuiltinRoutersForCatalogMode,
-  getSkipReasonsAsync,
-  getStatusText,
-  getSyncState,
-  includeBuiltinRouterModels,
-  isExplicitFreeModelId,
   setActiveCatalogState,
-  setSyncState,
-  syncModels,
+  getSkipReasonsAsync,
 } from '../sync.js';
 import { fetchUserModels, AuthError } from '../../client.js';
 import { loadCache, saveCache } from '../cache.js';
 
+// Mock the client module to control API behavior
 vi.mock('../../client.js', () => ({
   fetchUserModels: vi.fn(),
   isConfigured: vi.fn(),
@@ -36,12 +38,17 @@ vi.mock('../../client.js', () => ({
   },
 }));
 
+// Mock the cache module
 vi.mock('../cache.js', () => ({
   loadCache: vi.fn(),
   saveCache: vi.fn(),
   setCacheDir: vi.fn(),
 }));
 
+/**
+ * Factory for creating minimal mock ExtensionContext.
+ * Only implements methods/properties actually used by sync tests.
+ */
 function createMockExtensionContext(
   overrides: {
     registerProvider?: typeof vi.fn;
@@ -100,6 +107,11 @@ function createMockUI(): ExtensionContext['ui'] {
   };
 }
 
+/**
+ * Creates a mock session manager for testing.
+ * Uses `as any` since we only need the mock to satisfy ExtensionContext type,
+ * and sync tests don't actually use the session manager.
+ */
 function createMockSessionManager(): ExtensionContext['sessionManager'] {
   const mockFn = vi.fn;
   return {
@@ -560,6 +572,25 @@ describe('getStatusText', () => {
     const text = getStatusText();
     expect(text).toContain('cached');
     expect(text).toContain('287 registered');
+  });
+
+  it('should return broken for complete failure', () => {
+    setSyncState({
+      success: false,
+      outcome: 'unavailable',
+      requestedMode: 'full',
+      catalogMode: null,
+      registeredCount: 0,
+      skippedCount: 0,
+      skippedDetails: [],
+      source: 'none',
+      cacheUpdated: false,
+      cacheAgeMs: null,
+      error: 'missing or invalid OpenRouter auth',
+    });
+    const text = getStatusText();
+    expect(text).toContain('broken');
+    expect(text).toContain('0 registered');
   });
 });
 
