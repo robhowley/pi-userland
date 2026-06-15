@@ -344,12 +344,8 @@ export async function syncModels(
     }
 
     // Attempt 3: No cache available - complete failure.
-    // Mark the active state as stale so the status label reflects
-    // that models are still usable but the sync is failing.
+    // Preserve any previously active in-memory catalog.
     const activeState = getActiveCatalogState();
-    if (activeState) {
-      setActiveCatalogState({ ...activeState, source: 'stale', cacheAgeMs: activeState.cacheAgeMs });
-    }
     const result: SyncResult = {
       success: false,
       outcome: 'unavailable',
@@ -376,7 +372,7 @@ export function getStatusText(): string {
   const activeState = getActiveCatalogState();
 
   if (activeState) {
-    const status = activeState.source === 'cache' ? 'cached' : activeState.source === 'stale' ? 'stale' : 'healthy';
+    const status = activeState.source === 'cache' ? 'cached' : 'healthy';
     return `OpenRouter models: ${status} (${activeState.registeredCount} registered)`;
   }
 

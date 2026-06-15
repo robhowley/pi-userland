@@ -73,7 +73,7 @@ export type CatalogMode = 'full' | 'free-only';
 /**
  * Source for the currently active OpenRouter catalog.
  */
-export type CatalogSource = 'api' | 'cache' | 'stale';
+export type CatalogSource = 'api' | 'cache';
 
 /**
  * Rich classification for the last sync attempt.
