@@ -276,7 +276,8 @@ async function handleModelsStatusCommand(
     const groupedReasons = flags['--skipped'] ? groupSkipReasons(visibleSkipReasons) : {};
     const visibleCacheAgeMs = cacheAgeMs ?? activeCatalogState.cacheAgeMs;
 
-    let message = `OpenRouter models healthy\n${visibleRegisteredCount} registered${visibleSkipCount > 0 ? ` · ${visibleSkipCount} skipped` : ''} · ${getCatalogModeLabel(activeCatalogState.mode)} · cache age: ${formatDuration(visibleCacheAgeMs)}`;
+    const statusLabel = activeCatalogState.source === 'cache' ? 'cached' : 'healthy';
+    let message = `OpenRouter models ${statusLabel}\n${visibleRegisteredCount} registered${visibleSkipCount > 0 ? ` · ${visibleSkipCount} skipped` : ''} · ${getCatalogModeLabel(activeCatalogState.mode)} · cache age: ${formatDuration(visibleCacheAgeMs)}`;
 
     if (flags['--skipped']) {
       message += formatSkippedDetails(visibleSkipCount, groupedReasons, visibleSkipReasons);
