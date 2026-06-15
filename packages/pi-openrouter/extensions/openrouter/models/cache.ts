@@ -1,7 +1,7 @@
 import { readFile, writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
-import type { ModelsCache } from './types.js';
+import type { CatalogMode, ModelsCache } from './types.js';
 import { MS_PER_MINUTE } from './types.js';
 
 const CACHE_FILENAME = 'models-cache.json';
@@ -49,6 +49,16 @@ function isValidCacheTimestamp(timestamp: number, now = Date.now()): boolean {
 }
 
 /**
+ * Normalize persisted catalog mode.
+ * Missing mode means an older cache file and defaults to full catalog mode.
+ */
+function normalizeCatalogMode(mode: unknown): CatalogMode | null {
+  if (mode === undefined) return 'full';
+  if (mode === 'full' || mode === 'free-only') return mode;
+  return null;
+}
+
+/**
  * Clamp future timestamps when saving so new cache writes never persist negative ages.
  */
 function normalizeTimestampForSave(timestamp: number, now = Date.now()): number {
@@ -64,18 +74,29 @@ export async function loadCache(): Promise<ModelsCache | null> {
   try {
     const cachePath = getCachePath();
     const data = await readFile(cachePath, 'utf-8');
-    const parsed = JSON.parse(data) as ModelsCache;
+    const parsed = JSON.parse(data) as Partial<ModelsCache> & { catalogMode?: unknown };
 
-    // Validate structure
+    // Validate required structure
     if (!parsed.models || !Array.isArray(parsed.models) || typeof parsed.timestamp !== 'number') {
       return null;
     }
 
-    if (!isValidCacheTimestamp(parsed.timestamp)) {
+    const catalogMode = normalizeCatalogMode(parsed.catalogMode);
+    if (!catalogMode || !isValidCacheTimestamp(parsed.timestamp)) {
       return null;
     }
 
-    return parsed;
+    const normalizedCache: ModelsCache = {
+      catalogMode,
+      models: parsed.models,
+      timestamp: parsed.timestamp,
+    };
+
+    if (Array.isArray(parsed.skippedDetails)) {
+      normalizedCache.skippedDetails = parsed.skippedDetails;
+    }
+
+    return normalizedCache;
   } catch {
     // File doesn't exist, permission error, or invalid JSON
     return null;
@@ -90,6 +111,7 @@ export async function saveCache(cache: ModelsCache): Promise<void> {
   const cachePath = getCachePath();
   const normalizedCache: ModelsCache = {
     ...cache,
+    catalogMode: normalizeCatalogMode(cache.catalogMode) ?? 'full',
     timestamp: normalizeTimestampForSave(cache.timestamp),
   };
   await writeFile(cachePath, JSON.stringify(normalizedCache, null, 2));

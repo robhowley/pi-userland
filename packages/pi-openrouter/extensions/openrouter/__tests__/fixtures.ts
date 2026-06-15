@@ -66,6 +66,7 @@ export function createValidModel(overrides?: Partial<OpenRouterModel>): OpenRout
  */
 export function createMockCache(overrides: Partial<ModelsCache> = {}): ModelsCache {
   return {
+    catalogMode: 'full',
     models: [createValidModel()],
     timestamp: Date.now() - 1000, // 1 second ago
     ...overrides,

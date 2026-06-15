@@ -66,23 +66,56 @@ export interface PiModelConfig {
 }
 
 /**
- * Result of a sync operation
+ * Registered catalog mode.
+ */
+export type CatalogMode = 'full' | 'free-only';
+
+/**
+ * Source for the currently active OpenRouter catalog.
+ */
+export type CatalogSource = 'api' | 'cache';
+
+/**
+ * Rich classification for the last sync attempt.
+ */
+export type SyncOutcome = 'synced' | 'cache-fallback' | 'no-change' | 'unavailable';
+
+/**
+ * Result of a sync operation.
  */
 export interface SyncResult {
   success: boolean;
+  outcome: SyncOutcome;
+  requestedMode: CatalogMode;
+  catalogMode: CatalogMode | null;
   registeredCount: number;
   skippedCount: number;
   skippedDetails?: SkipReason[]; // Track why models were skipped
-  source: 'api' | 'cache' | 'none';
+  source: CatalogSource | 'none';
   cacheUpdated: boolean;
   cacheAgeMs: number | null;
   error: string | null;
 }
 
 /**
- * Cache file structure - using our OpenRouterModel type for consistency
+ * Snapshot of the catalog currently registered with Pi.
+ */
+export interface ActiveCatalogState {
+  mode: CatalogMode;
+  registeredModelIds?: string[];
+  registeredCount: number;
+  skippedCount: number;
+  skippedDetails: SkipReason[];
+  source: CatalogSource;
+  cacheAgeMs: number;
+}
+
+/**
+ * Cache file structure - using our OpenRouterModel type for consistency.
+ * Stores the raw models for the currently active catalog mode.
  */
 export interface ModelsCache {
+  catalogMode: CatalogMode;
   models: OpenRouterModel[];
   skippedDetails?: SkipReason[]; // New field for tracking skip reasons
   timestamp: number;
