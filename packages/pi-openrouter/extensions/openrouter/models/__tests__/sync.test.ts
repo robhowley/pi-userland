@@ -494,7 +494,7 @@ describe('syncModels', () => {
       registeredCount: 4,
       skippedCount: 0,
       skippedDetails: [],
-      source: 'api',
+      source: 'stale',
       cacheAgeMs: 0,
     });
     expect(await areModelsAvailable()).toBe(true);
