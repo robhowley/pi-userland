@@ -14,9 +14,7 @@ function makeExecGit(results: Record<string, { stdout: string; exitCode: number 
 
 describe('identity git resolution', () => {
   it('resolves worktree, branch, remote, and root for a normal repo', async () => {
-    const { resolveGitInfo } = await import(
-      '../../extensions/session-deck/identity/git.js'
-    );
+    const { resolveGitInfo } = await import('../../extensions/session-deck/identity/git.js');
 
     const execGit = makeExecGit({
       'rev-parse --show-toplevel': { stdout: '/home/user/project\n', exitCode: 0 },
@@ -34,9 +32,7 @@ describe('identity git resolution', () => {
   });
 
   it('returns null fields when not in a git repo', async () => {
-    const { resolveGitInfo } = await import(
-      '../../extensions/session-deck/identity/git.js'
-    );
+    const { resolveGitInfo } = await import('../../extensions/session-deck/identity/git.js');
 
     const execGit = makeExecGit({
       'rev-parse --show-toplevel': { stdout: '', exitCode: 128 },
@@ -51,9 +47,7 @@ describe('identity git resolution', () => {
   });
 
   it('returns null branch on detached HEAD', async () => {
-    const { resolveGitInfo } = await import(
-      '../../extensions/session-deck/identity/git.js'
-    );
+    const { resolveGitInfo } = await import('../../extensions/session-deck/identity/git.js');
 
     const execGit = makeExecGit({
       'rev-parse --show-toplevel': { stdout: '/home/user/project\n', exitCode: 0 },
@@ -70,9 +64,7 @@ describe('identity git resolution', () => {
   });
 
   it('uses gh CLI for PR URL when available', async () => {
-    const { resolvePrUrl } = await import(
-      '../../extensions/session-deck/identity/git.js'
-    );
+    const { resolvePrUrl } = await import('../../extensions/session-deck/identity/git.js');
 
     const execGhCli = vi.fn().mockResolvedValue({
       stdout: 'https://github.com/owner/repo/pull/42\n',
@@ -88,9 +80,7 @@ describe('identity git resolution', () => {
   });
 
   it('falls back to git remote construction when gh CLI fails', async () => {
-    const { resolvePrUrl } = await import(
-      '../../extensions/session-deck/identity/git.js'
-    );
+    const { resolvePrUrl } = await import('../../extensions/session-deck/identity/git.js');
 
     const execGhCli = vi.fn().mockRejectedValue(new Error('gh not installed'));
     const execGit = makeExecGit({
@@ -107,9 +97,7 @@ describe('identity git resolution', () => {
   });
 
   it('returns null PR URL when git remote is not GitHub', async () => {
-    const { resolvePrUrl } = await import(
-      '../../extensions/session-deck/identity/git.js'
-    );
+    const { resolvePrUrl } = await import('../../extensions/session-deck/identity/git.js');
 
     const execGhCli = vi.fn().mockRejectedValue(new Error('gh not installed'));
     const execGit = makeExecGit({
@@ -126,9 +114,7 @@ describe('identity git resolution', () => {
   });
 
   it('returns null PR URL on detached HEAD', async () => {
-    const { resolvePrUrl } = await import(
-      '../../extensions/session-deck/identity/git.js'
-    );
+    const { resolvePrUrl } = await import('../../extensions/session-deck/identity/git.js');
 
     const result = await resolvePrUrl('/home/user/project', null as never);
 

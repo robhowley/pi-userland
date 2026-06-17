@@ -12,9 +12,8 @@ function makePresenceView(overrides?: Partial<PresenceView>): PresenceView {
 
 describe('identity reader — join', () => {
   it('joins presence records with matching identity records', async () => {
-    const { readJoinedSessionView } = await import(
-      '../../extensions/session-deck/identity/reader.js'
-    );
+    const { readJoinedSessionView } =
+      await import('../../extensions/session-deck/identity/reader.js');
 
     const identityRecords: Record<string, unknown> = {
       'rt-1': {
@@ -33,9 +32,9 @@ describe('identity reader — join', () => {
       },
     };
 
-    const readdirImpl = vi.fn().mockResolvedValue([
-      { name: 'rt-1.json', isFile: () => true } as unknown as Dirent,
-    ]);
+    const readdirImpl = vi
+      .fn()
+      .mockResolvedValue([{ name: 'rt-1.json', isFile: () => true } as unknown as Dirent]);
 
     const readFileImpl = vi
       .fn()
@@ -73,9 +72,8 @@ describe('identity reader — join', () => {
   });
 
   it('sets identity fields to null when identity record is missing', async () => {
-    const { readJoinedSessionView } = await import(
-      '../../extensions/session-deck/identity/reader.js'
-    );
+    const { readJoinedSessionView } =
+      await import('../../extensions/session-deck/identity/reader.js');
 
     const readdirImpl = vi.fn().mockResolvedValue([]);
     const readFileImpl = vi.fn().mockRejectedValue(new Error('ENOENT'));
@@ -108,13 +106,12 @@ describe('identity reader — join', () => {
   });
 
   it('reports orphan identity records via diagnostics', async () => {
-    const { readJoinedSessionView } = await import(
-      '../../extensions/session-deck/identity/reader.js'
-    );
+    const { readJoinedSessionView } =
+      await import('../../extensions/session-deck/identity/reader.js');
 
-    const readdirImpl = vi.fn().mockResolvedValue([
-      { name: 'orphan.json', isFile: () => true } as unknown as Dirent,
-    ]);
+    const readdirImpl = vi
+      .fn()
+      .mockResolvedValue([{ name: 'orphan.json', isFile: () => true } as unknown as Dirent]);
 
     const orphanRecord = {
       runtimeId: 'orphan',
@@ -131,9 +128,7 @@ describe('identity reader — join', () => {
       identitySource: 'startup',
     };
 
-    const readFileImpl = vi
-      .fn()
-      .mockResolvedValue(JSON.stringify(orphanRecord));
+    const readFileImpl = vi.fn().mockResolvedValue(JSON.stringify(orphanRecord));
 
     const view = await readJoinedSessionView({
       presenceView: makePresenceView({ records: [] }),
@@ -146,13 +141,12 @@ describe('identity reader — join', () => {
   });
 
   it('handles malformed identity JSON gracefully', async () => {
-    const { readJoinedSessionView } = await import(
-      '../../extensions/session-deck/identity/reader.js'
-    );
+    const { readJoinedSessionView } =
+      await import('../../extensions/session-deck/identity/reader.js');
 
-    const readdirImpl = vi.fn().mockResolvedValue([
-      { name: 'rt-1.json', isFile: () => true } as unknown as Dirent,
-    ]);
+    const readdirImpl = vi
+      .fn()
+      .mockResolvedValue([{ name: 'rt-1.json', isFile: () => true } as unknown as Dirent]);
 
     const readFileImpl = vi.fn().mockResolvedValue('not valid json {{{');
 
@@ -181,9 +175,8 @@ describe('identity reader — join', () => {
   });
 
   it('computes identity freshness correctly', async () => {
-    const { computeIdentityFreshness } = await import(
-      '../../extensions/session-deck/identity/reader.js'
-    );
+    const { computeIdentityFreshness } =
+      await import('../../extensions/session-deck/identity/reader.js');
     const nowMs = new Date('2026-06-17T12:00:00.000Z').getTime();
 
     // Fresh (≤2m)

@@ -3,9 +3,8 @@ import type { SessionIdentityRecord } from '../../extensions/session-deck/identi
 
 describe('identity writer', () => {
   it('serializes a complete identity record to JSON', async () => {
-    const { serializeIdentityRecord } = await import(
-      '../../extensions/session-deck/identity/writer.js'
-    );
+    const { serializeIdentityRecord } =
+      await import('../../extensions/session-deck/identity/writer.js');
 
     const record: SessionIdentityRecord = {
       runtimeId: 'rt-1',
@@ -31,9 +30,8 @@ describe('identity writer', () => {
   });
 
   it('serializes nullable fields correctly', async () => {
-    const { serializeIdentityRecord } = await import(
-      '../../extensions/session-deck/identity/writer.js'
-    );
+    const { serializeIdentityRecord } =
+      await import('../../extensions/session-deck/identity/writer.js');
 
     const record: SessionIdentityRecord = {
       runtimeId: 'rt-2',
@@ -61,16 +59,13 @@ describe('identity writer', () => {
   });
 
   it('writes identity record atomically (temp + rename)', async () => {
-    const { writeIdentityRecord } = await import(
-      '../../extensions/session-deck/identity/writer.js'
-    );
+    const { writeIdentityRecord } =
+      await import('../../extensions/session-deck/identity/writer.js');
 
     const mkdir = vi.fn().mockResolvedValue(undefined);
     const writeFile = vi.fn().mockResolvedValue(undefined);
     const rename = vi.fn().mockResolvedValue(undefined);
-    const createTempPath = vi
-      .fn()
-      .mockReturnValue('/tmp/.dir/rt-1.mock-temp.tmp');
+    const createTempPath = vi.fn().mockReturnValue('/tmp/.dir/rt-1.mock-temp.tmp');
 
     const record: SessionIdentityRecord = {
       runtimeId: 'rt-1',
@@ -102,9 +97,8 @@ describe('identity writer', () => {
   });
 
   it('rejects when mkdir fails', async () => {
-    const { writeIdentityRecord } = await import(
-      '../../extensions/session-deck/identity/writer.js'
-    );
+    const { writeIdentityRecord } =
+      await import('../../extensions/session-deck/identity/writer.js');
 
     const mkdir = vi.fn().mockRejectedValue(new Error('permission denied'));
 
