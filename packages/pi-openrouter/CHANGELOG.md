@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.11.1...pi-openrouter-v0.12.0) (2026-06-17)
+
+
+### Features
+
+* **pi-openrouter:** integrate free-only catalog mode ([#87](https://github.com/robhowley/pi-userland/issues/87)) ([1885bf7](https://github.com/robhowley/pi-userland/commit/1885bf760bf9f42464d6142f54061a0cadb1ab71))
+
 ## [0.11.1](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.11.0...pi-openrouter-v0.11.1) (2026-06-09)
 
 
