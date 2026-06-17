@@ -9,7 +9,12 @@ import { createSessionState, type SessionState } from './session-state.js';
 import { writeLocalUsage, type LocalUsageEvent } from './local-usage.js';
 import { loadCache, getCacheAgeMs, formatDuration } from './models/cache.js';
 import { mapOpenRouterModels } from './models/mapper.js';
-import { includeBuiltinRouterModels, isSyncEnabled } from './models/sync.js';
+import {
+  filterModelsForCatalogMode,
+  includeBuiltinRouterModels,
+  isSyncEnabled,
+  setActiveCatalogState,
+} from './models/sync.js';
 import { loadOpenRouterStatusBar } from './status-bar.js';
 
 let sessionState: SessionState | null = null;
@@ -90,8 +95,13 @@ export async function loadStartupCacheState(
   }
 
   try {
-    const { configs } = await mapOpenRouterModels(cache.models);
-    const configsWithRouters = includeBuiltinRouterModels(configs);
+    const filteredCacheModels = filterModelsForCatalogMode(cache.models, cache.catalogMode);
+    const { configs, skipped, skippedDetails } = await mapOpenRouterModels(filteredCacheModels);
+    const configsWithRouters = includeBuiltinRouterModels(configs, cache.catalogMode);
+    const effectiveSkippedDetails = cache.skippedDetails ?? skippedDetails;
+    const skippedCount =
+      effectiveSkippedDetails.length > 0 ? effectiveSkippedDetails.length : skipped;
+    const cacheAgeMs = getCacheAgeMs(cache);
 
     pi.registerProvider('openrouter', {
       baseUrl: 'https://openrouter.ai/api/v1',
@@ -101,9 +111,19 @@ export async function loadStartupCacheState(
       authHeader: true,
     });
 
+    setActiveCatalogState({
+      mode: cache.catalogMode,
+      registeredModelIds: configsWithRouters.map((config) => config.id),
+      registeredCount: configsWithRouters.length,
+      skippedCount,
+      skippedDetails: effectiveSkippedDetails,
+      source: 'cache',
+      cacheAgeMs,
+    });
+
     startupState.info = {
       count: configsWithRouters.length,
-      age: formatDuration(getCacheAgeMs(cache)),
+      age: formatDuration(cacheAgeMs),
     };
   } catch (error) {
     startupState.warning = `OpenRouter: cached models found but failed to register: ${error instanceof Error ? error.message : String(error)}`;

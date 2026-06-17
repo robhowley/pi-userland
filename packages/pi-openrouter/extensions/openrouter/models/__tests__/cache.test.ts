@@ -45,11 +45,12 @@ describe('loadCache', () => {
   });
 
   it('should return parsed cache when file exists and is valid', async () => {
-    const mockCache = createMockCache({ timestamp: 1234567890 });
+    const mockCache = createMockCache({ catalogMode: 'free-only', timestamp: 1234567890 });
     await saveCache(mockCache);
 
     const result = await loadCache();
     expect(result).not.toBeNull();
+    expect(result!.catalogMode).toBe('free-only');
     expect(result!.timestamp).toBe(1234567890);
     expect(result!.models).toHaveLength(1);
     expect(result!.models[0]!.id).toBe('test/model');
@@ -71,6 +72,23 @@ describe('loadCache', () => {
 
     const result = await loadCache();
     expect(result).toBeNull();
+  });
+
+  it('should normalize old cache files without catalogMode to full', async () => {
+    await mkdir(testCacheDir, { recursive: true });
+    const cacheFile = join(testCacheDir, 'models-cache.json');
+    const oldCache = createMockCache({ timestamp: 1234567890 });
+    const legacyCache = {
+      models: oldCache.models,
+      skippedDetails: oldCache.skippedDetails,
+      timestamp: oldCache.timestamp,
+    };
+
+    await writeFile(cacheFile, JSON.stringify(legacyCache));
+
+    const result = await loadCache();
+    expect(result).not.toBeNull();
+    expect(result!.catalogMode).toBe('full');
   });
 
   it('should return null when cache timestamp is too far in the future', async () => {
@@ -98,6 +116,7 @@ describe('saveCache', () => {
     // Verify it can be loaded back
     const loaded = await loadCache();
     expect(loaded).not.toBeNull();
+    expect(loaded!.catalogMode).toBe('full');
     expect(loaded!.timestamp).toBe(mockCache.timestamp);
     expect(loaded!.models).toEqual(mockCache.models);
   });

@@ -8,8 +8,10 @@ const mocks = vi.hoisted(() => ({
   getCacheAgeMs: vi.fn(),
   formatDuration: vi.fn(),
   mapOpenRouterModels: vi.fn(),
+  filterModelsForCatalogMode: vi.fn(),
   includeBuiltinRouterModels: vi.fn(),
   isSyncEnabled: vi.fn(),
+  setActiveCatalogState: vi.fn(),
   loadOpenRouterStatusBar: vi.fn(),
 }));
 
@@ -37,8 +39,10 @@ vi.mock('../models/mapper.js', () => ({
 }));
 
 vi.mock('../models/sync.js', () => ({
+  filterModelsForCatalogMode: mocks.filterModelsForCatalogMode,
   includeBuiltinRouterModels: mocks.includeBuiltinRouterModels,
   isSyncEnabled: mocks.isSyncEnabled,
+  setActiveCatalogState: mocks.setActiveCatalogState,
 }));
 
 vi.mock('../status-bar.js', () => ({
@@ -97,7 +101,12 @@ describe('openrouter hooks', () => {
     mocks.loadCache.mockResolvedValue(null);
     mocks.getCacheAgeMs.mockReturnValue(60000);
     mocks.formatDuration.mockReturnValue('1 minute');
-    mocks.mapOpenRouterModels.mockResolvedValue({ configs: [{ id: 'model-a' }] });
+    mocks.mapOpenRouterModels.mockResolvedValue({
+      configs: [{ id: 'model-a' }],
+      skipped: 0,
+      skippedDetails: [],
+    });
+    mocks.filterModelsForCatalogMode.mockImplementation((models: Array<{ id: string }>) => models);
     mocks.includeBuiltinRouterModels.mockReturnValue([{ id: 'model-a' }, { id: 'router' }]);
     mocks.isSyncEnabled.mockReturnValue(true);
     mocks.loadOpenRouterStatusBar.mockResolvedValue({ kind: 'empty' });
@@ -107,23 +116,86 @@ describe('openrouter hooks', () => {
     vi.useRealTimers();
   });
 
-  it('loads cached startup models and preserves startup cache info', async () => {
+  it('loads cached startup models, respects cached mode, and seeds active catalog state', async () => {
     const { pi } = createMockPi();
     const { loadStartupCacheState } = await loadHooksModule();
 
     mocks.loadCache.mockResolvedValue({
+      catalogMode: 'full',
       models: [{ id: 'cached/model-a' }],
+      skippedDetails: [],
       timestamp: Date.now() - 60000,
     });
 
     const startupState = await loadStartupCacheState(pi as any);
 
+    expect(mocks.filterModelsForCatalogMode).toHaveBeenCalledWith(
+      [{ id: 'cached/model-a' }],
+      'full',
+    );
+    expect(mocks.includeBuiltinRouterModels).toHaveBeenCalledWith([{ id: 'model-a' }], 'full');
     expect(pi.registerProvider).toHaveBeenCalledWith('openrouter', {
       baseUrl: 'https://openrouter.ai/api/v1',
       apiKey: 'OPENROUTER_API_KEY',
       api: 'openai-completions',
       models: [{ id: 'model-a' }, { id: 'router' }],
       authHeader: true,
+    });
+    expect(mocks.setActiveCatalogState).toHaveBeenCalledWith({
+      mode: 'full',
+      registeredModelIds: ['model-a', 'router'],
+      registeredCount: 2,
+      skippedCount: 0,
+      skippedDetails: [],
+      source: 'cache',
+      cacheAgeMs: 60000,
+    });
+    expect(startupState).toEqual({
+      info: {
+        count: 2,
+        age: '1 minute',
+      },
+    });
+  });
+
+  it('loads cached free-only startup models with free-only router injection only', async () => {
+    const { pi } = createMockPi();
+    const { loadStartupCacheState } = await loadHooksModule();
+
+    mocks.loadCache.mockResolvedValue({
+      catalogMode: 'free-only',
+      models: [{ id: 'cached/model-a:free' }],
+      skippedDetails: [{ id: 'bad/model:free', reason: 'missing context window' }],
+      timestamp: Date.now() - 60000,
+    });
+    mocks.mapOpenRouterModels.mockResolvedValue({
+      configs: [{ id: 'cached/model-a:free' }],
+      skipped: 1,
+      skippedDetails: [{ id: 'bad/model:free', reason: 'missing context window' }],
+    });
+    mocks.includeBuiltinRouterModels.mockReturnValue([
+      { id: 'cached/model-a:free' },
+      { id: 'openrouter/free' },
+    ]);
+
+    const startupState = await loadStartupCacheState(pi as any);
+
+    expect(mocks.filterModelsForCatalogMode).toHaveBeenCalledWith(
+      [{ id: 'cached/model-a:free' }],
+      'free-only',
+    );
+    expect(mocks.includeBuiltinRouterModels).toHaveBeenCalledWith(
+      [{ id: 'cached/model-a:free' }],
+      'free-only',
+    );
+    expect(mocks.setActiveCatalogState).toHaveBeenCalledWith({
+      mode: 'free-only',
+      registeredModelIds: ['cached/model-a:free', 'openrouter/free'],
+      registeredCount: 2,
+      skippedCount: 1,
+      skippedDetails: [{ id: 'bad/model:free', reason: 'missing context window' }],
+      source: 'cache',
+      cacheAgeMs: 60000,
     });
     expect(startupState).toEqual({
       info: {
@@ -138,14 +210,21 @@ describe('openrouter hooks', () => {
     const { loadStartupCacheState } = await loadHooksModule();
 
     mocks.loadCache.mockResolvedValue({
-      models: [{ id: 'cached/model-a' }],
+      catalogMode: 'free-only',
+      models: [{ id: 'cached/model-a:free' }],
+      skippedDetails: [],
       timestamp: Date.now() - 60000,
     });
     mocks.mapOpenRouterModels.mockRejectedValue(new Error('mapper failed'));
 
     const startupState = await loadStartupCacheState(pi as any);
 
+    expect(mocks.filterModelsForCatalogMode).toHaveBeenCalledWith(
+      [{ id: 'cached/model-a:free' }],
+      'free-only',
+    );
     expect(pi.registerProvider).not.toHaveBeenCalled();
+    expect(mocks.setActiveCatalogState).not.toHaveBeenCalled();
     expect(startupState).toEqual({
       warning: 'OpenRouter: cached models found but failed to register: mapper failed',
     });

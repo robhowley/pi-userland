@@ -1,6 +1,7 @@
 # pi-openrouter
 
 A [Pi](https://pi.dev/) extension for live OpenRouter visibility and environment sync: usage/account TUI overlays, automatic `session_id` tagging, user-scoped model catalog sync, api key management, and local model field overrides.
+A [Pi](https://pi.dev/) extension for live OpenRouter visibility and environment sync: usage/account TUI overlays, automatic session_id tagging, full or free-only model catalog sync, API key management, and local model field overrides.
 
 ## Installation
 
@@ -32,7 +33,9 @@ export OPENROUTER_MANAGEMENT_KEY=sk-or-...
 /openrouter session                  # current OpenRouter session_id
 /openrouter api-key-create           # create an API key (management key required)
 /openrouter models-sync              # sync user-scoped OpenRouter models into Pi
+/openrouter models-sync --free       # sync only openrouter/free plus explicit :free models
 /openrouter models-status            # show model sync/cache status
+/openrouter models-status --free     # show only registered/skipped free models
 /openrouter models-status --skipped  # show skipped model reasons
 /openrouter model-override-set       # set local model field overrides
 /openrouter model-override-list      # list local model field overrides
@@ -47,6 +50,29 @@ export OPENROUTER_MANAGEMENT_KEY=sk-or-...
 
 The sync uses OpenRouter’s authenticated user model catalog, so Pi can see the models available to your account instead of only the default provider list. This intentionally replaces Pi's OpenRouter provider model list with your user-scoped catalog plus OpenRouter's built-in router aliases (`openrouter/auto`, `openrouter/free`, and `openrouter/owl-alpha`). It does not merge in every built-in model unless that model is returned by your OpenRouter account catalog.
 
+### Free models only
+
+To sync only OpenRouter's free route and explicit free model variants:
+
+```shell
+/openrouter models-sync --free
+```
+
+This registers `openrouter/free` plus available `*:free` models.
+
+Use `openrouter/free` for OpenRouter's built-in free model router, or select a specific `:free` model when you want direct control.
+
+Free models are best-effort and rate-limited by OpenRouter. They are useful for experiments and low-stakes work, not guaranteed coding loops.
+
+Example free-only status output:
+
+```text
+OpenRouter models healthy
+28 registered · 3 skipped · free-only catalog · cache age: 4m
+```
+
+Run `/openrouter models-sync` again to restore the full user-scoped catalog.
+
 `/openrouter models-status`
 
 Model count and cache health live here. The Pi footer/status bar does not persistently show `OpenRouter {N} models` anymore.
@@ -55,7 +81,7 @@ Example status output:
 
 ```text
 OpenRouter models healthy
-363 registered · 2 skipped · cache age: 2m
+363 registered · 12 skipped · full catalog · cache age: 4m
 ```
 
 To see why models were skipped:

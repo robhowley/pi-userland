@@ -22,6 +22,7 @@ import type { CurrentKeyRelation, KeyInfo, RollupStatus } from './account-types.
 import {
   syncModels,
   getSyncState,
+  getActiveCatalogState,
   isSyncEnabled,
   getSkipReasonsAsync,
   groupSkipReasons,
@@ -29,7 +30,7 @@ import {
 import { loadCache, getCacheAgeMs, formatDuration } from './models/cache.js';
 import { loadModelOverrides } from './models/overrides.js';
 import { getSkipReasonHint } from './models/skip-hints.js';
-import type { ModelOverridesFile } from './models/types.js';
+import type { CatalogMode, ModelOverridesFile, SkipReason, SyncResult } from './models/types.js';
 import {
   handleModelOverrideSet,
   handleModelOverrideClear,
@@ -111,7 +112,7 @@ async function handleOpenRouterCommand(args: string, ctx: ExtensionContext): Pro
       break;
     }
     case 'models-sync': {
-      await handleModelsSyncCommand(ctx);
+      await handleModelsSyncCommand(ctx, flags);
       break;
     }
     case 'models-status': {
@@ -176,7 +177,34 @@ function notifyCurrentSession(ctx: {
   ctx.ui.notify(`OpenRouter session_id\n${getCurrentSessionId(ctx)}`, 'info');
 }
 
-async function handleModelsSyncCommand(ctx: ExtensionContext): Promise<void> {
+function getRequestedCatalogMode(flags: Record<string, boolean>): CatalogMode {
+  return flags['--free'] ? 'free-only' : 'full';
+}
+
+function getCatalogModeLabel(mode: CatalogMode): string {
+  return mode === 'free-only' ? 'free-only catalog' : 'full catalog';
+}
+
+function resolveCatalogMode(result: SyncResult, fallbackMode: CatalogMode): CatalogMode {
+  return result.catalogMode ?? fallbackMode;
+}
+
+function isNoCatalogChange(result: SyncResult): boolean {
+  return result.outcome === 'no-change';
+}
+
+function isFreeCatalogModelId(id: string): boolean {
+  return id === 'openrouter/free' || id.endsWith(':free');
+}
+
+function filterFreeSkipReasons(skipReasons: SkipReason[]): SkipReason[] {
+  return skipReasons.filter((item) => isFreeCatalogModelId(item.id));
+}
+
+async function handleModelsSyncCommand(
+  ctx: ExtensionContext,
+  flags: Record<string, boolean>,
+): Promise<void> {
   if (!isSyncEnabled()) {
     ctx.ui.notify(
       'OpenRouter model sync is disabled. Set openrouterModelSync: true in ~/.pi/agent/settings.json to enable.',
@@ -185,19 +213,39 @@ async function handleModelsSyncCommand(ctx: ExtensionContext): Promise<void> {
     return;
   }
 
-  const result = await syncModels(ctx);
-  if (!result.success) {
-    let message = '';
-    if (result.source === 'cache') {
-      message = `OpenRouter models sync failed\n${result.registeredCount} registered from cache\nCache age: ${formatDuration(result.cacheAgeMs)}\nError: ${result.error}`;
-    } else {
-      message = `OpenRouter models unavailable\n0 registered\nError: ${result.error}`;
-    }
-    ctx.ui.notify(message, result.source === 'cache' ? 'warning' : 'error');
+  const requestedMode = getRequestedCatalogMode(flags);
+  const result = await syncModels(ctx, requestedMode);
+
+  if (requestedMode === 'free-only' && isNoCatalogChange(result)) {
+    ctx.ui.notify('No free OpenRouter models found\nNo model catalog changed', 'info');
     return;
   }
 
-  const message = `OpenRouter models synced\n${result.registeredCount} registered${result.skippedCount > 0 ? ` · ${result.skippedCount} skipped` : ''} · cache updated`;
+  if (!result.success) {
+    if (result.source === 'cache') {
+      const activeCatalogState = getActiveCatalogState();
+      const activeCatalogMode = resolveCatalogMode(
+        result,
+        activeCatalogState?.mode ?? requestedMode,
+      );
+      ctx.ui.notify(
+        `OpenRouter models refresh failed\nUsing last successful ${getCatalogModeLabel(activeCatalogMode)} · cache age: ${formatDuration(result.cacheAgeMs)}`,
+        'warning',
+      );
+      return;
+    }
+
+    ctx.ui.notify(`OpenRouter models unavailable\n0 registered\nError: ${result.error}`, 'error');
+    return;
+  }
+
+  let message = `${requestedMode === 'free-only' ? 'OpenRouter free models synced' : 'OpenRouter models synced'}\n${result.registeredCount} registered${result.skippedCount > 0 ? ` · ${result.skippedCount} skipped` : ''} · cache age: 0m`;
+
+  if (requestedMode === 'free-only') {
+    message +=
+      "\n\nSelect openrouter/free for OpenRouter's built-in free router, or choose a specific :free model.";
+  }
+
   ctx.ui.notify(message, 'info');
 }
 
@@ -206,11 +254,41 @@ async function handleModelsStatusCommand(
   flags: Record<string, boolean>,
 ): Promise<void> {
   const state = getSyncState();
-  const skipReasons = await getSkipReasonsAsync();
-  const groupedReasons = groupSkipReasons(skipReasons);
+  const activeCatalogState = getActiveCatalogState();
 
   const cache = await loadCache();
   const cacheAgeMs = cache ? getCacheAgeMs(cache) : null;
+
+  if (activeCatalogState) {
+    const activeSkipReasons = activeCatalogState.skippedDetails;
+    const visibleSkipReasons = flags['--free']
+      ? filterFreeSkipReasons(activeSkipReasons)
+      : activeSkipReasons;
+    const visibleSkipCount = flags['--free']
+      ? visibleSkipReasons.length
+      : activeCatalogState.skippedCount;
+    const visibleRegisteredIds = flags['--free']
+      ? (activeCatalogState.registeredModelIds ?? []).filter(isFreeCatalogModelId)
+      : (activeCatalogState.registeredModelIds ?? []);
+    const visibleRegisteredCount = flags['--free']
+      ? visibleRegisteredIds.length
+      : activeCatalogState.registeredCount;
+    const groupedReasons = flags['--skipped'] ? groupSkipReasons(visibleSkipReasons) : {};
+    const visibleCacheAgeMs = cacheAgeMs ?? activeCatalogState.cacheAgeMs;
+
+    const statusLabel = activeCatalogState.source === 'cache' ? 'cached' : 'healthy';
+    let message = `OpenRouter models ${statusLabel}\n${visibleRegisteredCount} registered${visibleSkipCount > 0 ? ` · ${visibleSkipCount} skipped` : ''} · ${getCatalogModeLabel(activeCatalogState.mode)} · cache age: ${formatDuration(visibleCacheAgeMs)}`;
+
+    if (flags['--skipped']) {
+      message += formatSkippedDetails(visibleSkipCount, groupedReasons, visibleSkipReasons);
+    }
+    ctx.ui.notify(message, 'info');
+    return;
+  }
+
+  const skipReasons = await getSkipReasonsAsync();
+  const visibleSkipReasons = flags['--free'] ? filterFreeSkipReasons(skipReasons) : skipReasons;
+  const groupedReasons = flags['--skipped'] ? groupSkipReasons(visibleSkipReasons) : {};
 
   if (!state && !cache) {
     ctx.ui.notify('OpenRouter models: not synced', 'error');
@@ -225,22 +303,22 @@ async function handleModelsStatusCommand(
   }
 
   if (state?.success) {
-    const skipCount = skipReasons.length;
+    const skipCount = visibleSkipReasons.length;
     let message = `OpenRouter models healthy\n${state.registeredCount} registered${skipCount > 0 ? ` · ${skipCount} skipped` : ''} · cache age: ${formatDuration(cacheAgeMs)}`;
 
     if (flags['--skipped']) {
-      message += formatSkippedDetails(skipCount, groupedReasons, skipReasons);
+      message += formatSkippedDetails(skipCount, groupedReasons, visibleSkipReasons);
     }
     ctx.ui.notify(message, 'info');
     return;
   }
 
   if (state?.source === 'cache') {
-    const skipCount = skipReasons.length;
+    const skipCount = visibleSkipReasons.length;
     let message = `OpenRouter models cached\n${state.registeredCount} registered${skipCount > 0 ? ` · ${skipCount} skipped` : ''}\nCache age: ${formatDuration(cacheAgeMs)}\nError: ${state.error}`;
 
     if (flags['--skipped']) {
-      message += formatSkippedDetails(skipCount, groupedReasons, skipReasons);
+      message += formatSkippedDetails(skipCount, groupedReasons, visibleSkipReasons);
     }
     ctx.ui.notify(message, 'warning');
     return;
@@ -398,7 +476,7 @@ function getErrorMessage(error: unknown): string {
 function formatSkippedDetails(
   skipCount: number,
   groupedReasons: Record<string, number>,
-  skipReasons: Array<{ id: string; reason: string; hint?: string }>,
+  skipReasons: SkipReason[],
 ): string {
   if (skipCount === 0) {
     return '\n\nNo skipped models';

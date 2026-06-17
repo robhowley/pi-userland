@@ -49,6 +49,7 @@ const { mocks, overlayConstructorCalls, MockUsageOverlayComponent } = vi.hoisted
       sortKeys: vi.fn(),
       syncModels: vi.fn(),
       getSyncState: vi.fn(),
+      getActiveCatalogState: vi.fn(),
       isSyncEnabled: vi.fn(),
       getSkipReasonsAsync: vi.fn(),
       groupSkipReasons: vi.fn(),
@@ -107,6 +108,7 @@ vi.mock('../account-format.js', () => ({
 vi.mock('../models/sync.js', () => ({
   syncModels: mocks.syncModels,
   getSyncState: mocks.getSyncState,
+  getActiveCatalogState: mocks.getActiveCatalogState,
   isSyncEnabled: mocks.isSyncEnabled,
   getSkipReasonsAsync: mocks.getSkipReasonsAsync,
   groupSkipReasons: mocks.groupSkipReasons,
@@ -210,6 +212,20 @@ function createKeyInventory(
   };
 }
 
+function createActiveCatalogState(overrides: Record<string, unknown> = {}) {
+  const registeredModelIds = ['openrouter/free', 'provider/model-a:free', 'provider/model-b'];
+  return {
+    mode: 'full',
+    registeredModelIds,
+    registeredCount: registeredModelIds.length,
+    skippedDetails: [],
+    skippedCount: 0,
+    source: 'api',
+    cacheAgeMs: 0,
+    ...overrides,
+  };
+}
+
 describe('registerOpenRouterCommands', () => {
   beforeEach(() => {
     vi.resetAllMocks();
@@ -237,9 +253,15 @@ describe('registerOpenRouterCommands', () => {
     mocks.sortKeys.mockImplementation((keys) => keys);
     mocks.syncModels.mockResolvedValue({ success: true, registeredCount: 3, skippedCount: 0 });
     mocks.getSyncState.mockReturnValue(null);
+    mocks.getActiveCatalogState.mockReturnValue(null);
     mocks.isSyncEnabled.mockReturnValue(true);
     mocks.getSkipReasonsAsync.mockResolvedValue([]);
-    mocks.groupSkipReasons.mockReturnValue({});
+    mocks.groupSkipReasons.mockImplementation((reasons: Array<{ reason: string }>) =>
+      reasons.reduce<Record<string, number>>((counts, reason) => {
+        counts[reason.reason] = (counts[reason.reason] || 0) + 1;
+        return counts;
+      }, {}),
+    );
     mocks.loadCache.mockResolvedValue(null);
     mocks.getCacheAgeMs.mockReturnValue(60000);
     mocks.formatDuration.mockReturnValue('1 minute');
@@ -485,7 +507,7 @@ describe('registerOpenRouterCommands', () => {
     );
   });
 
-  it('keeps models-sync success notifications unchanged', async () => {
+  it('routes full models-sync through explicit full mode and updated success copy', async () => {
     const { commands, pi } = createMockPi();
     const ctx = createMockContext();
 
@@ -498,36 +520,97 @@ describe('registerOpenRouterCommands', () => {
     registerOpenRouterCommands(pi as any);
     await commands.get('openrouter').handler('models-sync', ctx);
 
-    expect(mocks.syncModels).toHaveBeenCalledWith(ctx);
+    expect(mocks.syncModels).toHaveBeenCalledWith(ctx, 'full');
     expect(ctx.ui.notify).toHaveBeenCalledWith(
-      'OpenRouter models synced\n9 registered · 2 skipped · cache updated',
+      'OpenRouter models synced\n9 registered · 2 skipped · cache age: 0m',
       'info',
     );
   });
 
-  it('shows grouped skipped-details hints once per reason', async () => {
+  it('threads --free through models-sync and shows the free-only sync note', async () => {
     const { commands, pi } = createMockPi();
     const ctx = createMockContext();
 
-    mocks.getSyncState.mockReturnValue({ success: true, registeredCount: 7 });
-    mocks.getSkipReasonsAsync.mockResolvedValue([
-      {
-        id: 'provider/a',
-        reason: 'missing context window',
-        hint: "Add a local contextWindow override with '/openrouter model-override-set <model-id> contextWindow=<tokens>' if the model's limit is known.",
-      },
-      { id: 'provider/b', reason: 'missing context window' },
-    ]);
-    mocks.groupSkipReasons.mockReturnValue({ 'missing context window': 2 });
-    mocks.loadCache.mockResolvedValue({ models: [], timestamp: Date.now() - 60000 });
-    mocks.getCacheAgeMs.mockReturnValue(60000);
-    mocks.formatDuration.mockReturnValue('1 minute');
+    mocks.syncModels.mockResolvedValue({
+      success: true,
+      registeredCount: 28,
+      skippedCount: 3,
+    });
 
     registerOpenRouterCommands(pi as any);
-    await commands.get('openrouter').handler('models-status --skipped', ctx);
+    await commands.get('openrouter').handler('models-sync --free', ctx);
+
+    expect(mocks.syncModels).toHaveBeenCalledWith(ctx, 'free-only');
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      "OpenRouter free models synced\n28 registered · 3 skipped · cache age: 0m\n\nSelect openrouter/free for OpenRouter's built-in free router, or choose a specific :free model.",
+      'info',
+    );
+  });
+
+  it('shows the free-empty no-op copy exactly', async () => {
+    const { commands, pi } = createMockPi();
+    const ctx = createMockContext();
+
+    mocks.syncModels.mockResolvedValue({
+      success: false,
+      outcome: 'no-change',
+      requestedMode: 'free-only',
+      catalogMode: 'full',
+      registeredCount: 0,
+      skippedCount: 0,
+      source: 'api',
+      cacheUpdated: false,
+      cacheAgeMs: 0,
+      error: null,
+    });
+
+    registerOpenRouterCommands(pi as any);
+    await commands.get('openrouter').handler('models-sync --free', ctx);
+
+    expect(mocks.syncModels).toHaveBeenCalledWith(ctx, 'free-only');
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      'No free OpenRouter models found\nNo model catalog changed',
+      'info',
+    );
+  });
+
+  it('shows grouped skipped-details hints once per reason for models-status --free in free-only mode', async () => {
+    const { commands, pi } = createMockPi();
+    const ctx = createMockContext();
+
+    mocks.getActiveCatalogState.mockReturnValue(
+      createActiveCatalogState({
+        mode: 'free-only',
+        registeredModelIds: [
+          'openrouter/free',
+          'provider/a:free',
+          'provider/b:free',
+          'provider/c:free',
+          'provider/d:free',
+          'provider/e:free',
+          'provider/f:free',
+        ],
+        registeredCount: 7,
+        skippedDetails: [
+          {
+            id: 'provider/a:free',
+            reason: 'missing context window',
+            hint: "Add a local contextWindow override with '/openrouter model-override-set <model-id> contextWindow=<tokens>' if the model's limit is known.",
+          },
+          { id: 'provider/b:free', reason: 'missing context window' },
+        ],
+        skippedCount: 2,
+      }),
+    );
+    mocks.loadCache.mockResolvedValue({ models: [], timestamp: Date.now() - 60000 });
+    mocks.getCacheAgeMs.mockReturnValue(60000);
+    mocks.formatDuration.mockReturnValue('1m');
+
+    registerOpenRouterCommands(pi as any);
+    await commands.get('openrouter').handler('models-status --free --skipped', ctx);
 
     expect(ctx.ui.notify).toHaveBeenCalledWith(
-      "OpenRouter models healthy\n7 registered · 2 skipped · cache age: 1 minute\n\nOpenRouter skipped models: 2\n\n2 missing context window\n  suggestion: Add a local contextWindow override with '/openrouter model-override-set <model-id> contextWindow=<tokens>' if the model's limit is known.\n- provider/a\n- provider/b\n",
+      "OpenRouter models healthy\n7 registered · 2 skipped · free-only catalog · cache age: 1m\n\nOpenRouter skipped models: 2\n\n2 missing context window\n  suggestion: Add a local contextWindow override with '/openrouter model-override-set <model-id> contextWindow=<tokens>' if the model's limit is known.\n- provider/a:free\n- provider/b:free\n",
       'info',
     );
   });
@@ -656,10 +739,17 @@ describe('registerOpenRouterCommands', () => {
   });
 
   describe('models-sync failure paths', () => {
-    it('shows cache-backed failure with warning level and cache metadata', async () => {
+    it('shows mode-aware cache-backed refresh failure copy', async () => {
       const { commands, pi } = createMockPi();
       const ctx = createMockContext();
 
+      mocks.getActiveCatalogState.mockReturnValue(
+        createActiveCatalogState({
+          mode: 'free-only',
+          registeredModelIds: ['openrouter/free', 'provider/a:free'],
+          registeredCount: 2,
+        }),
+      );
       mocks.syncModels.mockResolvedValue({
         success: false,
         source: 'cache',
@@ -667,13 +757,13 @@ describe('registerOpenRouterCommands', () => {
         cacheAgeMs: 300000,
         error: 'API timeout',
       });
-      mocks.formatDuration.mockReturnValue('5 minutes');
+      mocks.formatDuration.mockReturnValue('5m');
 
       registerOpenRouterCommands(pi as any);
       await commands.get('openrouter').handler('models-sync', ctx);
 
       expect(ctx.ui.notify).toHaveBeenCalledWith(
-        'OpenRouter models sync failed\n5 registered from cache\nCache age: 5 minutes\nError: API timeout',
+        'OpenRouter models refresh failed\nUsing last successful free-only catalog · cache age: 5m',
         'warning',
       );
     });
@@ -730,34 +820,42 @@ describe('registerOpenRouterCommands', () => {
       );
     });
 
-    it('shows cache-backed failure warning with skip details when --skipped flag present', async () => {
+    it('filters active full catalogs for models-status --skipped --free regardless of flag order', async () => {
       const { commands, pi } = createMockPi();
       const ctx = createMockContext();
 
-      mocks.getSyncState.mockReturnValue({
-        success: false,
-        source: 'cache',
-        registeredCount: 8,
-        error: 'Auth expired',
-      });
-      mocks.getSkipReasonsAsync.mockResolvedValue([
-        { id: 'test/model', reason: 'missing pricing' },
-      ]);
-      mocks.groupSkipReasons.mockReturnValue({ 'missing pricing': 1 });
-      mocks.loadCache.mockResolvedValue({ models: [], timestamp: Date.now() - 180000 });
-      mocks.getCacheAgeMs.mockReturnValue(180000);
-      mocks.formatDuration.mockReturnValue('3 minutes');
+      mocks.getActiveCatalogState.mockReturnValue(
+        createActiveCatalogState({
+          mode: 'full',
+          registeredModelIds: [
+            'openrouter/free',
+            'provider/free-a:free',
+            'provider/paid-a',
+            'provider/paid-b',
+          ],
+          registeredCount: 4,
+          skippedDetails: [
+            {
+              id: 'provider/free-b:free',
+              reason: 'missing context window',
+              hint: "Add a local contextWindow override with '/openrouter model-override-set <model-id> contextWindow=<tokens>' if the model's limit is known.",
+            },
+            { id: 'provider/paid-c', reason: 'missing pricing' },
+          ],
+          skippedCount: 2,
+        }),
+      );
+      mocks.loadCache.mockResolvedValue({ models: [], timestamp: Date.now() - 240000 });
+      mocks.getCacheAgeMs.mockReturnValue(240000);
+      mocks.formatDuration.mockReturnValue('4m');
 
       registerOpenRouterCommands(pi as any);
-      await commands.get('openrouter').handler('models-status --skipped', ctx);
+      await commands.get('openrouter').handler('models-status --free --skipped', ctx);
 
-      const notifyCall = ctx.ui.notify.mock.calls[0];
-      expect(notifyCall[1]).toBe('warning');
-      expect(notifyCall[0]).toContain('OpenRouter models cached');
-      expect(notifyCall[0]).toContain('8 registered · 1 skipped');
-      expect(notifyCall[0]).toContain('Cache age: 3 minutes');
-      expect(notifyCall[0]).toContain('Error: Auth expired');
-      expect(notifyCall[0]).toContain('missing pricing');
+      expect(ctx.ui.notify).toHaveBeenCalledWith(
+        "OpenRouter models healthy\n2 registered · 1 skipped · full catalog · cache age: 4m\n\nOpenRouter skipped models: 1\n\n1 missing context window\n  suggestion: Add a local contextWindow override with '/openrouter model-override-set <model-id> contextWindow=<tokens>' if the model's limit is known.\n- provider/free-b:free\n",
+        'info',
+      );
     });
 
     it('shows broken error when state exists but not from cache and not success', async () => {
