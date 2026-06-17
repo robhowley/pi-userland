@@ -53,7 +53,7 @@ Create `~/.pi/agent/yolo-seatbelt.json`:
 {
   "logLevel": "warn",
   "rules": {
-    "git.push-force-with-lease": "allow",
+    "git.push-force": "allow",
     "rm-rf-root": "block"
   }
 }
