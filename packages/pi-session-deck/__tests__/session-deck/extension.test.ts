@@ -8,6 +8,10 @@ afterEach(() => {
 type SessionStartHandler = (
   event: { reason: 'startup' | 'reload' | 'new' | 'resume' | 'fork' },
   ctx: {
+    sessionManager?: {
+      getSessionId: () => string;
+      getSessionFile: () => string;
+    };
     ui: {
       setStatus: (key: string, text: string | undefined) => void;
     };
@@ -28,13 +32,21 @@ describe('pi-session-deck extension', () => {
       isRunning: vi.fn(() => true),
       stop: vi.fn(),
     });
-    const registerPresenceCommand = vi.fn();
+    const ensureIdentityRuntimeStarted = vi.fn().mockResolvedValue({
+      refreshIdentity: vi.fn().mockResolvedValue(undefined),
+      getIdentity: vi.fn().mockReturnValue(null),
+      isRunning: vi.fn(() => true),
+    });
+    const registerSessionDeckCommand = vi.fn();
 
     vi.doMock('../../extensions/session-deck/presence/runtime.js', () => ({
       ensurePresenceRuntimeStarted,
     }));
-    vi.doMock('../../extensions/session-deck/presence/command.js', () => ({
-      registerPresenceCommand,
+    vi.doMock('../../extensions/session-deck/identity/runtime.js', () => ({
+      ensureIdentityRuntimeStarted,
+    }));
+    vi.doMock('../../extensions/session-deck/identity/command.js', () => ({
+      registerSessionDeckCommand,
       SESSION_DECK_COMMAND_NAME: 'session-deck',
     }));
 
@@ -44,16 +56,19 @@ describe('pi-session-deck extension', () => {
       on: vi.fn((event: string, handler: SessionStartHandler) => {
         handlers.set(event, handler);
       }),
-      registerCommand: vi.fn(),
     };
 
     await install(pi as never);
 
-    expect(registerPresenceCommand).toHaveBeenCalledWith(pi);
+    expect(registerSessionDeckCommand).toHaveBeenCalledWith(pi);
     expect(Array.from(handlers.keys())).toEqual(['session_start']);
     expect(ensurePresenceRuntimeStarted).toHaveBeenCalledTimes(1);
 
     const ctx = {
+      sessionManager: {
+        getSessionId: () => 'session-1',
+        getSessionFile: () => '/tmp/session-1.md',
+      },
       ui: {
         setStatus: vi.fn(),
       },
@@ -63,6 +78,7 @@ describe('pi-session-deck extension', () => {
     await handlers.get('session_start')?.({ reason: 'new' }, ctx);
 
     expect(ensurePresenceRuntimeStarted).toHaveBeenCalledTimes(3);
+    expect(ensureIdentityRuntimeStarted).toHaveBeenCalledTimes(2);
     expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenNthCalledWith(1, 'session-deck', undefined);
     expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenNthCalledWith(2, 'session-deck', undefined);
   });
@@ -85,13 +101,21 @@ describe('pi-session-deck extension', () => {
       isRunning: vi.fn(() => true),
       stop: vi.fn(),
     });
-    const registerPresenceCommand = vi.fn();
+    const ensureIdentityRuntimeStarted = vi.fn().mockResolvedValue({
+      refreshIdentity: vi.fn().mockResolvedValue(undefined),
+      getIdentity: vi.fn().mockReturnValue(null),
+      isRunning: vi.fn(() => true),
+    });
+    const registerSessionDeckCommand = vi.fn();
 
     vi.doMock('../../extensions/session-deck/presence/runtime.js', () => ({
       ensurePresenceRuntimeStarted,
     }));
-    vi.doMock('../../extensions/session-deck/presence/command.js', () => ({
-      registerPresenceCommand,
+    vi.doMock('../../extensions/session-deck/identity/runtime.js', () => ({
+      ensureIdentityRuntimeStarted,
+    }));
+    vi.doMock('../../extensions/session-deck/identity/command.js', () => ({
+      registerSessionDeckCommand,
       SESSION_DECK_COMMAND_NAME: 'session-deck',
     }));
 
@@ -101,12 +125,15 @@ describe('pi-session-deck extension', () => {
       on: vi.fn((event: string, handler: SessionStartHandler) => {
         handlers.set(event, handler);
       }),
-      registerCommand: vi.fn(),
     };
 
     await install(pi as never);
 
     const ctx = {
+      sessionManager: {
+        getSessionId: () => 'session-1',
+        getSessionFile: () => '/tmp/session-1.md',
+      },
       ui: {
         setStatus: vi.fn(),
       },
