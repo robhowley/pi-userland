@@ -1,6 +1,6 @@
 {
   "name": "@robhowley/pi-openrouter",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "type": "module",
   "description": "Live OpenRouter spend/account TUI overlays, user-scoped or free-only model sync, api key management, and session tagging for Pi.",
   "license": "MIT",

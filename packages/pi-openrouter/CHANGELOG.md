@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.1](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.12.0...pi-openrouter-v0.12.1) (2026-06-17)
+
+
+### Bug Fixes
+
+* **pi-openrouter:** readme intro typo ([#91](https://github.com/robhowley/pi-userland/issues/91)) ([36b22ae](https://github.com/robhowley/pi-userland/commit/36b22ae64ff5f23f9f50278947588c12bf5eeacc))
+
 ## [0.12.0](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.11.1...pi-openrouter-v0.12.0) (2026-06-17)
 
 
