@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/robhowley/pi-userland/compare/pi-yolo-seatbelt-v0.2.1...pi-yolo-seatbelt-v0.3.0) (2026-06-17)
+
+
+### Features
+
+* **pi-yolo-seatbelt:** add git.push-force-with-lease rule ([#89](https://github.com/robhowley/pi-userland/issues/89)) ([3a08912](https://github.com/robhowley/pi-userland/commit/3a08912f7286a91c030d62e56aec2d281a6c9395))
+
 ## [0.2.1](https://github.com/robhowley/pi-userland/compare/pi-yolo-seatbelt-v0.2.0...pi-yolo-seatbelt-v0.2.1) (2026-06-09)
 
 
