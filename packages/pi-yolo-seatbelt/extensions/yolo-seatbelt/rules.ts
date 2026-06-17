@@ -28,7 +28,7 @@ export interface RuleDefinition {
 
 /**
  * Built-in rule definitions registry
- * All 18 filters in a single flat list
+ * All 19 filters in a single flat list
  */
 
 export const BUILTIN_RULES: RuleDefinition[] = [
@@ -140,9 +140,15 @@ export const BUILTIN_RULES: RuleDefinition[] = [
   },
   {
     id: 'git.push-force',
-    pattern: /\bgit\s+push\b.*--force/,
+    pattern: /\bgit\s+push\b.*--force(?!-with-lease)/,
     defaultSeverity: RuleSeverity.ASK,
     description: 'git push --force',
+  },
+  {
+    id: 'git.push-force-with-lease',
+    pattern: /\bgit\s+push\b.*--force-with-lease/,
+    defaultSeverity: RuleSeverity.ALLOW,
+    description: 'git push --force-with-lease',
   },
   {
     id: 'git.rebase-interactive',

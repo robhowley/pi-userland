@@ -39,6 +39,7 @@ yolo-seatbelt intercepts bash tool calls and evaluates commands against a set of
 | `git.reset-hard`         | `git reset --hard`  | |
 | `git.clean-force`        | `git clean -f/d/x`   | |
 | `git.push-force`         | `git push --force`   | |
+| `git.push-force-with-lease` | `git push --force-with-lease` | |
 | `git.rebase-interactive` | `git rebase -i`      | |
 | `git.filter-branch`      | `git filter-branch`  | |
 | `git.update-ref`         | `git update-ref`     | |

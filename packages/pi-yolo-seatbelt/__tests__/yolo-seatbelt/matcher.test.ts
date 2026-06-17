@@ -58,8 +58,10 @@ describe('classify', () => {
       expect(classify('git push --force').decision).toBe(RuleSeverity.ASK);
     });
 
-    it('asks for git push --force-with-lease', () => {
-      expect(classify('git push --force-with-lease').decision).toBe(RuleSeverity.ASK);
+    it('allows git push --force-with-lease', () => {
+      const result = classify('git push --force-with-lease');
+      expect(result.decision).toBe(RuleSeverity.ALLOW);
+      expect(result.rule?.id).toBe('git.push-force-with-lease');
     });
 
     it('asks for git rebase -i', () => {
@@ -110,6 +112,10 @@ describe('classify', () => {
 
     it('allows git push without force', () => {
       expect(classify('git push origin main').decision).toBe(RuleSeverity.ALLOW);
+    });
+
+    it('allows git push --force-with-lease from bulk', () => {
+      expect(classify('git push --force-with-lease').decision).toBe(RuleSeverity.ALLOW);
     });
   });
 });
