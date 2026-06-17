@@ -11,7 +11,7 @@ import { BUILTIN_RULES, type RuleDefinition, SEVERITY_ORDER } from './matcher.js
  * Intercepts bash tool calls and evaluates commands for safety.
  * Returns { block: true, reason } for dangerous commands.
  *
- * Phase D: All 18 built-in command filters are now user-configurable
+ * Phase D: All 19 built-in command filters are now user-configurable
  * via rule IDs in the configuration file.
  */
 

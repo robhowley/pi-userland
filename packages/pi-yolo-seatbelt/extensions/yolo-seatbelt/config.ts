@@ -3,7 +3,7 @@
  *
  * Loads user configuration from ~/.pi/agent/yolo-seatbelt.json
  *
- * Configuration is fully rule-based - all 18 built-in filters
+ * Configuration is fully rule-based - all 19 built-in filters
  * can be configured by rule ID.
  */
 
