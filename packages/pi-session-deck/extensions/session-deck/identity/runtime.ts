@@ -36,6 +36,7 @@ interface IdentityRuntimeState {
   activeDirectory: string | undefined;
   activeClearInterval: typeof globalThis.clearInterval;
   runtimeId: string | undefined;
+  sessionManager: SessionManagerLike | null;
 }
 
 type IdentityRuntimeGlobalState = typeof globalThis & {
@@ -72,6 +73,7 @@ export async function ensureIdentityRuntimeStarted(
 
   state.runtimeId = runtimeId;
   state.activeDirectory = config.directory;
+  state.sessionManager = null;
 
   state.activeStartPromise = (async () => {
     const controller: IdentityRuntimeController = {
@@ -87,13 +89,19 @@ export async function ensureIdentityRuntimeStarted(
           return;
         }
 
+        // Store sessionManager reference for periodic reuse
+        if (sessionManager !== undefined) {
+          state.sessionManager = sessionManager;
+        }
+
         const writeRecord = config.writeRecord ?? writeIdentityRecord;
         const directory = state.activeDirectory;
+        const sm = state.sessionManager ?? sessionManager;
 
         try {
           const record = await collectSessionIdentity(rid, {
             runtimeId: rid,
-            ...(sessionManager === undefined ? {} : { sessionManager }),
+            ...(sm === null ? {} : { sessionManager: sm }),
             ...(config.now === undefined ? {} : { now: config.now }),
             ...(config.cwd === undefined ? {} : { cwd: config.cwd }),
             ...(config.execGit === undefined ? {} : { execGit: config.execGit }),
