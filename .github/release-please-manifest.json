@@ -3,7 +3,7 @@
   "packages/pi-openrouter": "0.12.1",
   "packages/pi-session-deck": "0.2.0",
   "packages/pi-session-hygiene": "0.2.2",
-  "packages/pi-spinner-verbs": "3.3.2",
+  "packages/pi-spinner-verbs": "3.4.0",
   "packages/pi-structured-return": "1.10.1",
   "packages/pi-yolo-seatbelt": "0.3.0"
 }
