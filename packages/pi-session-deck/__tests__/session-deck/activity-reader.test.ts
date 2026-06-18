@@ -15,6 +15,7 @@ function buildJoinedView(overrides: Partial<JoinedSessionView> = {}): JoinedSess
         startedAt: '2026-06-17T11:00:00.000Z',
         sessionId: 'session-abc',
         sessionFile: '/tmp/session-abc.json',
+        sessionName: null,
         cwd: '/tmp/project',
         worktree: '/tmp/project',
         branch: 'main',

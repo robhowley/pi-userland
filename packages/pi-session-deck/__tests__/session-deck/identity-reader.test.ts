@@ -20,6 +20,7 @@ describe('identity reader — join', () => {
         runtimeId: 'rt-1',
         sessionId: 'session-abc',
         sessionFile: '/tmp/session-abc.md',
+        sessionName: 'Focused session',
         cwd: '/home/user/project',
         worktree: '/home/user/project',
         branch: 'main',
@@ -64,6 +65,7 @@ describe('identity reader — join', () => {
     const record = view.records[0]!;
     expect(record.runtimeId).toBe('rt-1');
     expect(record.sessionId).toBe('session-abc');
+    expect(record.sessionName).toBe('Focused session');
     expect(record.branch).toBe('main');
     expect(record.cwd).toBe('/home/user/project');
     expect(record.prUrl).toBe('https://github.com/owner/repo/pull/42');
@@ -103,6 +105,52 @@ describe('identity reader — join', () => {
     expect(record.branch).toBeNull();
     expect(record.prUrl).toBeNull();
     expect(record.identityFreshness).toBe('missing');
+  });
+
+  it('normalizes missing sessionName from stored identity records to null', async () => {
+    const { readJoinedSessionView } =
+      await import('../../extensions/session-deck/identity/reader.js');
+
+    const readdirImpl = vi
+      .fn()
+      .mockResolvedValue([{ name: 'rt-1.json', isFile: () => true } as unknown as Dirent]);
+
+    const legacyRecord = {
+      runtimeId: 'rt-1',
+      sessionId: 'session-abc',
+      sessionFile: '/tmp/session-abc.md',
+      cwd: '/home/user/project',
+      worktree: '/home/user/project',
+      branch: 'main',
+      prUrl: null,
+      identityUpdatedAt: new Date().toISOString(),
+      sessionStartedAt: new Date().toISOString(),
+      gitRemote: null,
+      gitRoot: null,
+      identitySource: 'startup',
+    };
+
+    const readFileImpl = vi.fn().mockResolvedValue(JSON.stringify(legacyRecord));
+
+    const view = await readJoinedSessionView({
+      presenceView: makePresenceView({
+        records: [
+          {
+            runtimeId: 'rt-1',
+            pid: 1234,
+            startedAt: new Date().toISOString(),
+            heartbeatAt: new Date().toISOString(),
+            heartbeatAgeMs: 5_000,
+            presenceState: 'live',
+            reason: 'fresh_heartbeat',
+          },
+        ],
+      }),
+      readdir: readdirImpl,
+      readFile: readFileImpl,
+    });
+
+    expect(view.records[0]?.sessionName).toBeNull();
   });
 
   it('surfaces persisted identity diagnostics in record and top-level diagnostics', async () => {

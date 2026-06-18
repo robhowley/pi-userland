@@ -10,6 +10,7 @@ describe('identity writer', () => {
       runtimeId: 'rt-1',
       sessionId: 'session-abc',
       sessionFile: '/tmp/session-abc.md',
+      sessionName: 'Focused session',
       cwd: '/home/user/project',
       worktree: '/home/user/project',
       branch: 'main',
@@ -24,6 +25,7 @@ describe('identity writer', () => {
     const json = serializeIdentityRecord(record);
     const parsed = JSON.parse(json);
     expect(parsed.runtimeId).toBe('rt-1');
+    expect(parsed.sessionName).toBe('Focused session');
     expect(parsed.branch).toBe('main');
     expect(parsed.prUrl).toBe('https://github.com/owner/repo/pull/42');
     expect(parsed.identitySource).toBe('startup');
@@ -52,6 +54,7 @@ describe('identity writer', () => {
     const parsed = JSON.parse(json);
     expect(parsed.runtimeId).toBe('rt-2');
     expect(parsed.sessionId).toBeNull();
+    expect(parsed).not.toHaveProperty('sessionName');
     expect(parsed.cwd).toBeNull();
     expect(parsed.branch).toBeNull();
     expect(parsed.prUrl).toBeNull();

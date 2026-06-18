@@ -67,6 +67,7 @@ function buildJoinedView(): JoinedSessionView {
         presenceReason: 'fresh_heartbeat',
         sessionId: 'session-abc',
         sessionFile: '/tmp/session-abc.json',
+        sessionName: null,
         cwd: '/home/user/project',
         worktree: '/home/user/project',
         branch: 'main',

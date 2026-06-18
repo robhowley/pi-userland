@@ -27,6 +27,7 @@ describe('identity collector', () => {
     const mockSessionManager = {
       getSessionId: () => 'session-123',
       getSessionFile: () => '/tmp/session-123.json',
+      getSessionName: () => 'Focused session',
     };
 
     const record = await collectSessionIdentity('rt-1', {
@@ -42,11 +43,37 @@ describe('identity collector', () => {
     expect(record.runtimeId).toBe('rt-1');
     expect(record.sessionId).toBe('session-123');
     expect(record.sessionFile).toBe('/tmp/session-123.json');
+    expect(record.sessionName).toBe('Focused session');
     expect(record.cwd).toBe('/home/user/project');
     expect(record.worktree).toBe('/home/user/project');
     expect(record.branch).toBe('main');
     expect(record.gitRemote).toBe('https://github.com/owner/repo.git');
     expect(record.identitySource).toBe('startup');
+  });
+
+  it('omits sessionName when it is not set', async () => {
+    const { collectSessionIdentity } =
+      await import('../../extensions/session-deck/identity/collector.js');
+
+    const execGit = makeExecGit({
+      'rev-parse --show-toplevel': { stdout: '', exitCode: 128 },
+    });
+
+    const record = await collectSessionIdentity('rt-1', {
+      runtimeId: 'rt-1',
+      sessionManager: {
+        getSessionId: () => 'session-123',
+        getSessionFile: () => '/tmp/session-123.json',
+        getSessionName: () => undefined,
+      },
+      execGit,
+      execGhCli: null,
+      identitySource: 'startup',
+      cwd: '/tmp',
+      now: () => new Date('2026-06-17T12:00:00.000Z'),
+    });
+
+    expect(record).not.toHaveProperty('sessionName');
   });
 
   it('falls back to process.cwd() when cwd option is not provided', async () => {

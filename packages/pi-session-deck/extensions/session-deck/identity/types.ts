@@ -5,6 +5,7 @@ import type { PresenceDiagnosticCode } from '../presence/types.js';
 export interface SessionManagerLike {
   getSessionId: () => string | null;
   getSessionFile: () => string | null;
+  getSessionName?: () => string | null | undefined;
 }
 
 // ─── Identity runtime controller ─────────────────────────────────────
@@ -21,6 +22,7 @@ export interface SessionIdentityRecord {
   runtimeId: string;
   sessionId: string | null;
   sessionFile: string | null;
+  sessionName?: string;
   cwd: string | null;
   worktree: string | null;
   branch: string | null;
@@ -84,6 +86,7 @@ export interface JoinedSessionRecord {
   // Identity fields (nullable)
   sessionId: string | null;
   sessionFile: string | null;
+  sessionName: string | null;
   cwd: string | null;
   worktree: string | null;
   branch: string | null;

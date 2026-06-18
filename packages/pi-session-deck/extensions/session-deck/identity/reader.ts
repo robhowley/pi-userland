@@ -186,6 +186,7 @@ function joinRecord(
     // Identity fields
     sessionId: identity?.sessionId ?? null,
     sessionFile: identity?.sessionFile ?? null,
+    sessionName: identity?.sessionName ?? null,
     cwd: identity?.cwd ?? null,
     worktree: identity?.worktree ?? null,
     branch: identity?.branch ?? null,
@@ -245,11 +246,13 @@ function normalizeIdentityRecord(candidate: unknown): SessionIdentityRecord | nu
   }
 
   const diagnostics = normalizeDiagnostics(candidate['diagnostics']);
+  const sessionName = normalizeStringField(candidate['sessionName']);
 
   return {
     runtimeId,
     sessionId: normalizeStringField(candidate['sessionId']),
     sessionFile: normalizeStringField(candidate['sessionFile']),
+    ...(sessionName === null ? {} : { sessionName }),
     cwd: normalizeStringField(candidate['cwd']),
     worktree: normalizeStringField(candidate['worktree']),
     branch: normalizeStringField(candidate['branch']),

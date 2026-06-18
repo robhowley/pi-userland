@@ -37,6 +37,7 @@ export async function collectSessionIdentity(
 
   const sessionId = options.sessionManager?.getSessionId() ?? null;
   const sessionFile = options.sessionManager?.getSessionFile() ?? null;
+  const sessionName = normalizeOptionalStringField(options.sessionManager?.getSessionName?.());
 
   // Emit diagnostics for missing session fields
   if (sessionId === null) {
@@ -115,6 +116,7 @@ export async function collectSessionIdentity(
     runtimeId,
     sessionId,
     sessionFile,
+    ...(sessionName === undefined ? {} : { sessionName }),
     cwd,
     worktree: gitInfo.worktree,
     branch: gitInfo.branch,
@@ -126,4 +128,12 @@ export async function collectSessionIdentity(
     identitySource: options.identitySource,
     diagnostics,
   };
+}
+
+function normalizeOptionalStringField(value: unknown): string | undefined {
+  if (typeof value === 'string' && value.length > 0) {
+    return value;
+  }
+
+  return undefined;
 }

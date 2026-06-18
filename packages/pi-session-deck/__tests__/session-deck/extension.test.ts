@@ -107,7 +107,7 @@ describe('pi-session-deck extension', () => {
         getSessionId: () => 'session-1',
         getSessionFile: () => '/tmp/session-1.md',
         getEntries: () => [],
-        getSessionName: () => null,
+        getSessionName: () => 'Focused session',
         getCwd: () => '/repo',
       },
       ui: {
@@ -122,6 +122,7 @@ describe('pi-session-deck extension', () => {
     expect(ensurePresenceRuntimeStarted).toHaveBeenCalledTimes(3);
     expect(refreshIdentity).toHaveBeenNthCalledWith(1, 'startup', expect.any(Object));
     expect(refreshIdentity).toHaveBeenNthCalledWith(2, 'new', expect.any(Object));
+    expect(refreshIdentity.mock.calls[0]?.[1]?.getSessionName?.()).toBe('Focused session');
     expect(refreshActivity).toHaveBeenNthCalledWith(1, 'startup', expect.any(Object));
     expect(refreshActivity).toHaveBeenNthCalledWith(2, 'new', expect.any(Object));
 

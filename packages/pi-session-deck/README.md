@@ -19,7 +19,7 @@ pi install npm:@robhowley/pi-session-deck
 ## What it provides
 
 - Heartbeat-backed presence tracking.
-- Session identity sidecars at `~/.pi/session-deck/identity/${runtimeId}.json`.
+- Session identity sidecars at `~/.pi/session-deck/identity/${runtimeId}.json`, including `sessionName` when set via `/name` or `--name`.
 - Current activity sidecars at `~/.pi/session-deck/activity/${runtimeId}.json`.
 - Chip sidecars at `~/.pi/session-deck/chips/${runtimeId}/${source}.${chipId}.json`.
 - Zero-touch mirroring of visible `ctx.ui.setStatus()` footer statuses into chip files.
