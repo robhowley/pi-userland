@@ -102,9 +102,9 @@ importers:
 
   packages/pi-spinner-verbs:
     dependencies:
-      '@mariozechner/pi-coding-agent':
+      '@earendil-works/pi-coding-agent':
         specifier: '*'
-        version: 0.68.1(ws@8.20.0)(zod@4.3.6)
+        version: 0.74.0(ws@8.20.0)(zod@4.3.6)
     devDependencies:
       '@types/node':
         specifier: ^22.15.17
