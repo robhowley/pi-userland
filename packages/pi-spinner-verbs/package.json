@@ -1,6 +1,6 @@
 {
   "name": "@robhowley/pi-spinner-verbs",
-  "version": "3.3.2",
+  "version": "3.4.0",
   "type": "module",
   "description": "Themed thinking text for Pi: built-in spinner verb packs, random per-session themes, and custom verb files.",
   "license": "MIT",

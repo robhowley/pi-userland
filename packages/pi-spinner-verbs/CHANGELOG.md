@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.4.0](https://github.com/robhowley/pi-userland/compare/pi-spinner-verbs-v3.3.2...pi-spinner-verbs-v3.4.0) (2026-06-18)
+
+
+### Features
+
+* **pi-spinner-verbs:** add harry-potter spinner verbs ([#94](https://github.com/robhowley/pi-userland/issues/94)) ([da92aa1](https://github.com/robhowley/pi-userland/commit/da92aa1dd500ed2452732e2f9ffba4e9db5c08b2))
+
 ## [3.3.2](https://github.com/robhowley/pi-userland/compare/pi-spinner-verbs-v3.3.1...pi-spinner-verbs-v3.3.2) (2026-06-09)
 
 
