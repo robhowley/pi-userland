@@ -159,6 +159,49 @@ describe('identity runtime lifecycle', () => {
     expect(lastCall?.runtimeId).toBe('rt-1');
   });
 
+  it('serializes concurrent refreshes so newer session state wins', async () => {
+    let allowFirstGitLookup = false;
+    let releaseFirstGitLookup!: () => void;
+    const execGit = vi.fn(async (_cwd: string, ...args: string[]) => {
+      if (args.join(' ') === 'rev-parse --show-toplevel' && !allowFirstGitLookup) {
+        allowFirstGitLookup = true;
+        await new Promise<void>((resolve) => {
+          releaseFirstGitLookup = resolve;
+        });
+      }
+
+      return { stdout: '', exitCode: 128 };
+    });
+    const writeRecord = vi.fn().mockResolvedValue(undefined);
+
+    const controller = await ensureIdentityRuntimeStarted('rt-1', {
+      execGhCli: null,
+      execGit,
+      writeRecord,
+      now: () => new Date('2026-06-17T12:00:00.000Z'),
+    });
+
+    const startupRefresh = controller.refreshIdentity('startup', {
+      getSessionId: () => 'session-old',
+      getSessionFile: () => '/tmp/session-old.json',
+    });
+    const newRefresh = controller.refreshIdentity('new', {
+      getSessionId: () => 'session-new',
+      getSessionFile: () => '/tmp/session-new.json',
+    });
+
+    expect(controller.getIdentity()).toBeNull();
+    await Promise.resolve();
+    releaseFirstGitLookup();
+    await Promise.all([startupRefresh, newRefresh]);
+
+    expect(writeRecord).toHaveBeenCalledTimes(2);
+    expect(writeRecord.mock.calls[0]?.[0].sessionId).toBe('session-old');
+    expect(writeRecord.mock.calls[1]?.[0].sessionId).toBe('session-new');
+    expect(controller.getIdentity()?.sessionId).toBe('session-new');
+    expect(controller.getIdentity()?.identitySource).toBe('new');
+  });
+
   it('stopIdentityRuntime stops the timer and clears state', async () => {
     const writeRecord = vi.fn().mockResolvedValue(undefined);
     const controller = await ensureIdentityRuntimeStarted('rt-1', {

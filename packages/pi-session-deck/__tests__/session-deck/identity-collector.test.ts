@@ -13,7 +13,7 @@ function makeExecGit(results: Record<string, { stdout: string; exitCode: number 
 }
 
 describe('identity collector', () => {
-  it('collects session identity with Git info', async () => {
+  it('collects session identity with session-owned cwd and Git info', async () => {
     const { collectSessionIdentity } =
       await import('../../extensions/session-deck/identity/collector.js');
 
@@ -28,6 +28,7 @@ describe('identity collector', () => {
       getSessionId: () => 'session-123',
       getSessionFile: () => '/tmp/session-123.json',
       getSessionName: () => 'Focused session',
+      getCwd: () => '/home/user/project',
     };
 
     const record = await collectSessionIdentity('rt-1', {
@@ -36,7 +37,7 @@ describe('identity collector', () => {
       execGit,
       execGhCli: null,
       identitySource: 'startup',
-      cwd: '/home/user/project',
+      cwd: '/tmp/wrong-fallback',
       now: () => new Date('2026-06-17T12:00:00.000Z'),
     });
 
@@ -49,6 +50,31 @@ describe('identity collector', () => {
     expect(record.branch).toBe('main');
     expect(record.gitRemote).toBe('https://github.com/owner/repo.git');
     expect(record.identitySource).toBe('startup');
+    expect(execGit).toHaveBeenCalledWith('/home/user/project', 'rev-parse', '--show-toplevel');
+  });
+
+  it('falls back to explicit cwd when session-owned cwd is unavailable', async () => {
+    const { collectSessionIdentity } =
+      await import('../../extensions/session-deck/identity/collector.js');
+
+    const execGit = makeExecGit({
+      'rev-parse --show-toplevel': { stdout: '', exitCode: 128 },
+    });
+
+    const record = await collectSessionIdentity('rt-1', {
+      runtimeId: 'rt-1',
+      sessionManager: {
+        getSessionId: () => 'session-123',
+        getSessionFile: () => '/tmp/session-123.json',
+      },
+      execGit,
+      execGhCli: null,
+      identitySource: 'startup',
+      cwd: '/tmp/explicit-cwd',
+      now: () => new Date('2026-06-17T12:00:00.000Z'),
+    });
+
+    expect(record.cwd).toBe('/tmp/explicit-cwd');
   });
 
   it('omits sessionName when it is not set', async () => {

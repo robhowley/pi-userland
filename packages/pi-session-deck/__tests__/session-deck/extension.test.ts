@@ -123,6 +123,7 @@ describe('pi-session-deck extension', () => {
     expect(refreshIdentity).toHaveBeenNthCalledWith(1, 'startup', expect.any(Object));
     expect(refreshIdentity).toHaveBeenNthCalledWith(2, 'new', expect.any(Object));
     expect(refreshIdentity.mock.calls[0]?.[1]?.getSessionName?.()).toBe('Focused session');
+    expect(refreshIdentity.mock.calls[0]?.[1]?.getCwd?.()).toBe('/repo');
     expect(refreshActivity).toHaveBeenNthCalledWith(1, 'startup', expect.any(Object));
     expect(refreshActivity).toHaveBeenNthCalledWith(2, 'new', expect.any(Object));
 

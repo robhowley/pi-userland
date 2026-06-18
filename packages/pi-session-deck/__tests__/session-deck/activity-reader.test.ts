@@ -47,6 +47,60 @@ describe('activity reader', () => {
     );
   });
 
+  it('does not trust null-session activity when identity is missing', async () => {
+    const readdir = vi
+      .fn()
+      .mockResolvedValue([{ name: 'rt-1.json', isFile: () => true } as unknown as Dirent]);
+    const readFile = vi.fn().mockResolvedValue(
+      JSON.stringify({
+        runtimeId: 'rt-1',
+        sessionId: null,
+        activityState: 'waiting',
+        idle: true,
+        busy: false,
+        currentTurnStartedAt: null,
+        currentToolName: null,
+        lastEventAt: '2026-06-17T12:09:18.000Z',
+        lastError: null,
+        activityUpdatedAt: '2026-06-17T12:09:18.000Z',
+      }),
+    );
+
+    const view = await readSessionDeckView({
+      joinedView: buildJoinedView({
+        records: [
+          {
+            ...buildJoinedView().records[0]!,
+            sessionId: null,
+            sessionFile: null,
+            cwd: null,
+            worktree: null,
+            branch: null,
+            prUrl: null,
+            identityUpdatedAt: null,
+            identityFreshness: 'missing',
+            diagnostics: [
+              {
+                code: 'identity_missing',
+                message: 'No identity record for this runtime',
+                runtimeId: 'rt-1',
+              },
+            ],
+          },
+        ],
+      }),
+      now: new Date('2026-06-17T12:10:00.000Z'),
+      readdir,
+      readFile,
+    });
+
+    expect(view.records[0]?.activityState).toBe('unknown');
+    expect(view.records[0]?.idle).toBeNull();
+    expect(view.records[0]?.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
+      'identity_missing',
+    );
+  });
+
   it('joins activity when runtimeId and sessionId match', async () => {
     const readdir = vi
       .fn()
@@ -109,6 +163,45 @@ describe('activity reader', () => {
     expect(view.records[0]?.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
       'session_mismatch',
     );
+  });
+
+  it('allows explicit null-session identity to match null-session activity', async () => {
+    const readdir = vi
+      .fn()
+      .mockResolvedValue([{ name: 'rt-1.json', isFile: () => true } as unknown as Dirent]);
+    const readFile = vi.fn().mockResolvedValue(
+      JSON.stringify({
+        runtimeId: 'rt-1',
+        sessionId: null,
+        activityState: 'waiting',
+        idle: true,
+        busy: false,
+        currentTurnStartedAt: null,
+        currentToolName: null,
+        lastEventAt: '2026-06-17T12:09:18.000Z',
+        lastError: null,
+        activityUpdatedAt: '2026-06-17T12:09:18.000Z',
+      }),
+    );
+
+    const view = await readSessionDeckView({
+      joinedView: buildJoinedView({
+        records: [
+          {
+            ...buildJoinedView().records[0]!,
+            sessionId: null,
+            sessionFile: null,
+            identityFreshness: 'fresh',
+          },
+        ],
+      }),
+      now: new Date('2026-06-17T12:10:00.000Z'),
+      readdir,
+      readFile,
+    });
+
+    expect(view.records[0]?.activityState).toBe('waiting');
+    expect(view.records[0]?.idle).toBe(true);
   });
 
   it('surfaces malformed activity without breaking the row', async () => {

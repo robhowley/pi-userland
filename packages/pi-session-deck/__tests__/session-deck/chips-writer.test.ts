@@ -89,7 +89,7 @@ describe('writeChipRecord', () => {
 
     const runtimeDir = join(directory, 'rt-abc');
     const fileNames = (await readdir(runtimeDir)).sort();
-    expect(fileNames).toEqual(['pi-merge-ready.default.json']);
+    expect(fileNames).toEqual(['pi-merge-ready.default.session.json']);
   });
 
   it('writes different chip IDs as separate files', async () => {
@@ -107,7 +107,32 @@ describe('writeChipRecord', () => {
 
     const runtimeDir = join(directory, 'rt-abc');
     const fileNames = (await readdir(runtimeDir)).sort();
-    expect(fileNames).toEqual(['pi-merge-ready.current-pr.json', 'pi-session-hygiene.health.json']);
+    expect(fileNames).toEqual([
+      'pi-merge-ready.current-pr.session.json',
+      'pi-session-hygiene.health.session.json',
+    ]);
+  });
+
+  it('keeps session-scoped and runtime-scoped chips with the same source and chipId', async () => {
+    const directory = await createChipsDirectory();
+
+    await writeChipRecord(buildRecord({ chipId: 'status', text: 'Session status' }), { directory });
+    await writeChipRecord(
+      buildRecord({
+        chipId: 'status',
+        scope: 'runtime',
+        sessionId: null,
+        text: 'Runtime status',
+      }),
+      { directory },
+    );
+
+    const runtimeDir = join(directory, 'rt-abc');
+    const fileNames = (await readdir(runtimeDir)).sort();
+    expect(fileNames).toEqual([
+      'pi-merge-ready.status.runtime.json',
+      'pi-merge-ready.status.session.json',
+    ]);
   });
 
   it('fails gracefully when mkdir fails', async () => {
@@ -155,21 +180,28 @@ describe('writeChipRecord', () => {
 });
 
 describe('clearChipRecord', () => {
-  it('removes an existing chip file', async () => {
+  it('removes only the requested scoped chip file', async () => {
     const directory = await createChipsDirectory();
-    await writeChipRecord(buildRecord({ scope: 'runtime', sessionId: null }), { directory });
+    await writeChipRecord(buildRecord({ chipId: 'default' }), { directory });
+    await writeChipRecord(
+      buildRecord({ chipId: 'default', scope: 'runtime', sessionId: null, text: 'runtime' }),
+      { directory },
+    );
 
     const cleared = await clearChipRecord(
       {
         source: 'pi-merge-ready',
         chipId: 'default',
+        scope: 'runtime',
         runtimeId: 'rt-abc',
       },
       { directory },
     );
 
     expect(cleared).toBe(true);
-    expect(await readdir(join(directory, 'rt-abc'))).toEqual([]);
+    expect((await readdir(join(directory, 'rt-abc'))).sort()).toEqual([
+      'pi-merge-ready.default.session.json',
+    ]);
   });
 
   it('uses shared diagnostics for invalid clear keys', async () => {

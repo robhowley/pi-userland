@@ -84,7 +84,7 @@ describe('createStatusMirror', () => {
     );
     await mirror.observeStatuses(new Map([['merge-ready', '\u001b[2m✅ Ready\u001b[0m']]));
 
-    const file = join(directory, 'runtime-1', 'merge-ready.default.json');
+    const file = join(directory, 'runtime-1', 'merge-ready.default.session.json');
     const record = JSON.parse(await readFile(file, 'utf8')) as SessionDeckChipRecord;
 
     expect(record).toEqual({
@@ -130,12 +130,12 @@ describe('createStatusMirror', () => {
 
     const runtimeDir = join(directory, 'runtime-1');
     expect((await readdir(runtimeDir)).sort()).toEqual([
-      'openrouter.default.json',
-      'session-hygiene.default.json',
+      'openrouter.default.session.json',
+      'session-hygiene.default.session.json',
     ]);
 
     const openrouter = JSON.parse(
-      await readFile(join(runtimeDir, 'openrouter.default.json'), 'utf8'),
+      await readFile(join(runtimeDir, 'openrouter.default.session.json'), 'utf8'),
     ) as SessionDeckChipRecord;
     expect(openrouter.text).toBe('$2.34');
     expect(openrouter.updatedAt).toBe('2026-06-18T16:05:00.000Z');
@@ -193,7 +193,7 @@ describe('createStatusMirror', () => {
 
     await mirror.observeStatuses(new Map([['merge-ready', 'Ready']]));
     const record = JSON.parse(
-      await readFile(join(directory, 'runtime-1', 'merge-ready.default.json'), 'utf8'),
+      await readFile(join(directory, 'runtime-1', 'merge-ready.default.session.json'), 'utf8'),
     ) as SessionDeckChipRecord;
 
     expect(record.sessionId).toBe('session-2');
@@ -252,7 +252,7 @@ describe('createStatusMirror', () => {
 
     await vi.waitFor(async () => {
       const record = JSON.parse(
-        await readFile(join(directory, 'runtime-1', 'merge-ready.default.json'), 'utf8'),
+        await readFile(join(directory, 'runtime-1', 'merge-ready.default.session.json'), 'utf8'),
       ) as SessionDeckChipRecord;
       expect(record.text).toBe('Ready');
     });

@@ -17,6 +17,7 @@ import {
   getChipRuntimeDirectory,
   getChipsDirectory,
   resolveChipId,
+  resolveChipScope,
 } from './store.js';
 import type {
   ChipDiagnosticSink,
@@ -33,7 +34,13 @@ export interface WriteChipRecordOptions {
   mkdir?: typeof mkdir;
   writeFile?: typeof writeFile;
   rename?: typeof rename;
-  createTempPath?: (source: string, chipId: string, runtimeId: string, directory: string) => string;
+  createTempPath?: (
+    source: string,
+    chipId: string,
+    scope: string,
+    runtimeId: string,
+    directory: string,
+  ) => string;
   onDiagnostic?: ChipDiagnosticSink;
 }
 
@@ -104,8 +111,20 @@ export async function writeChipRecord(
   try {
     await mkdirImpl(runtimeDir, { recursive: true });
 
-    const targetPath = getChipRecordPath(record.source, record.chipId, record.runtimeId, chipsDir);
-    const tempPath = createTempPath(record.source, record.chipId, record.runtimeId, chipsDir);
+    const targetPath = getChipRecordPath(
+      record.source,
+      record.chipId,
+      record.scope,
+      record.runtimeId,
+      chipsDir,
+    );
+    const tempPath = createTempPath(
+      record.source,
+      record.chipId,
+      record.scope,
+      record.runtimeId,
+      chipsDir,
+    );
 
     await writeFileImpl(tempPath, serializeChipRecord(record), 'utf8');
     await renameImpl(tempPath, targetPath);
@@ -146,6 +165,7 @@ export async function clearChipRecord(
       return false;
     }
   }
+  const scope = resolveChipScope(key.scope);
 
   const runtimeId = key.runtimeId;
   if (!isNonEmptyString(runtimeId)) {
@@ -154,7 +174,7 @@ export async function clearChipRecord(
   }
 
   const chipsDir = options.directory ?? getChipsDirectory();
-  const targetPath = getChipRecordPath(key.source, chipId, runtimeId, chipsDir);
+  const targetPath = getChipRecordPath(key.source, chipId, scope, runtimeId, chipsDir);
   const unlinkImpl = options.rm ?? unlink;
 
   try {

@@ -57,6 +57,7 @@ export async function readJoinedSessionView(
       diagnostics.push({
         code: 'identity_read_error',
         message: `Failed to read identity directory: ${getErrorMessage(error)}`,
+        filePath: directory,
       });
     }
     identityEntries = [];
@@ -80,6 +81,7 @@ export async function readJoinedSessionView(
           code: 'identity_read_error',
           message: `Failed to read identity record: ${getErrorMessage(error)}`,
           runtimeId,
+          filePath,
         });
       }
       continue;
@@ -93,6 +95,7 @@ export async function readJoinedSessionView(
         code: 'malformed_identity_record' as IdentityDiagnosticCode,
         message: `Ignored malformed JSON: ${getErrorMessage(error)}`,
         runtimeId,
+        filePath,
       });
       continue;
     }
@@ -103,11 +106,22 @@ export async function readJoinedSessionView(
         code: 'malformed_identity_record' as IdentityDiagnosticCode,
         message: 'Ignored malformed record: expected runtimeId and identityUpdatedAt',
         runtimeId,
+        filePath,
       });
       continue;
     }
 
-    identityRecords.set(record.runtimeId, record);
+    if (record.runtimeId !== runtimeId) {
+      diagnostics.push({
+        code: 'malformed_identity_record' as IdentityDiagnosticCode,
+        message: 'Ignored malformed record: runtimeId does not match filename',
+        runtimeId,
+        filePath,
+      });
+      continue;
+    }
+
+    identityRecords.set(runtimeId, record);
   }
 
   // Join presence records with identity records

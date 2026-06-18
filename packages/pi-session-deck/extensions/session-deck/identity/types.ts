@@ -6,6 +6,7 @@ export interface SessionManagerLike {
   getSessionId: () => string | null;
   getSessionFile: () => string | null;
   getSessionName?: () => string | null | undefined;
+  getCwd?: () => string | null | undefined;
 }
 
 // ─── Identity runtime controller ─────────────────────────────────────

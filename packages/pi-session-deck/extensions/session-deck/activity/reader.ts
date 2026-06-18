@@ -65,6 +65,7 @@ export async function readSessionDeckView(
     const derived = deriveActivity({
       activity: scan.records.get(joinedRecord.runtimeId) ?? null,
       sessionId: joinedRecord.sessionId,
+      sessionIdentityVerified: joinedRecord.identityFreshness !== 'missing',
       ...(options.now === undefined ? {} : { now: options.now }),
       ...(options.thresholds === undefined ? {} : { thresholds: options.thresholds }),
       baseDiagnostics: activityDiagnostics,

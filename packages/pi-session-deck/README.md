@@ -21,7 +21,7 @@ pi install npm:@robhowley/pi-session-deck
 - Heartbeat-backed presence tracking.
 - Session identity sidecars at `~/.pi/session-deck/identity/${runtimeId}.json`, including `sessionName` when set via `/name` or `--name`.
 - Current activity sidecars at `~/.pi/session-deck/activity/${runtimeId}.json`.
-- Chip sidecars at `~/.pi/session-deck/chips/${runtimeId}/${source}.${chipId}.json`.
+- Chip sidecars at `~/.pi/session-deck/chips/${runtimeId}/${source}.${chipId}.${scope}.json`.
 - Zero-touch mirroring of visible `ctx.ui.setStatus()` footer statuses into chip files.
 - `/new` resets activity for the new sessionId while keeping the same runtimeId.
 - Compact activity states: `waiting`, `thinking`, `tool-running`, `error`, `unknown`.
@@ -71,7 +71,7 @@ Default mirrored fields:
 
 ### Mirroring rules
 
-- Writes or replaces `${source}.default.json` on add/change.
+- Writes or replaces `${source}.default.session.json` on add/change.
 - Clears the chip file when the status disappears.
 - Strips ANSI/control characters, collapses whitespace, and trims before persistence.
 - Treats empty-after-sanitize text as absent.
@@ -82,8 +82,8 @@ Default mirrored fields:
 ### Path convention
 
 ```text
-~/.pi/session-deck/chips/{runtimeId}/{source}.{chipId}.json
-~/.pi/session-deck/chips/{runtimeId}/.{source}.{chipId}.{uuid}.tmp
+~/.pi/session-deck/chips/{runtimeId}/{source}.{chipId}.{scope}.json
+~/.pi/session-deck/chips/{runtimeId}/.{source}.{chipId}.{scope}.{uuid}.tmp
 ```
 
 ### Limits

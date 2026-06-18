@@ -31,22 +31,27 @@ export function getChipRuntimeDirectory(
 export function getChipRecordPath(
   source: string,
   chipId: string,
+  scope: string,
   runtimeId: string,
   chipsDirectory = getChipsDirectory(),
 ): string {
-  return join(getChipRuntimeDirectory(runtimeId, chipsDirectory), `${source}.${chipId}.json`);
+  return join(
+    getChipRuntimeDirectory(runtimeId, chipsDirectory),
+    `${source}.${chipId}.${scope}.json`,
+  );
 }
 
 export function createChipTempPath(
   source: string,
   chipId: string,
+  scope: string,
   runtimeId: string,
   chipsDirectory = getChipsDirectory(),
   tempId = randomUUID(),
 ): string {
   return join(
     getChipRuntimeDirectory(runtimeId, chipsDirectory),
-    `.${source}.${chipId}.${tempId}.tmp`,
+    `.${source}.${chipId}.${scope}.${tempId}.tmp`,
   );
 }
 

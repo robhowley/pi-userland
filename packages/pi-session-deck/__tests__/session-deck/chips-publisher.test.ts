@@ -50,7 +50,7 @@ describe('publishSessionDeckChip', () => {
     expect(result).not.toBeNull();
     expect(diagnostics).toEqual([]);
 
-    const file = join(dir, runtime.runtimeId, 'pi-session-hygiene.default.json');
+    const file = join(dir, runtime.runtimeId, 'pi-session-hygiene.default.session.json');
     const record = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
     expect(record['runtimeId']).toBe(runtime.runtimeId);
     expect(record['sessionId']).toBe('session-1');
@@ -161,7 +161,7 @@ describe('publishSessionDeckChip', () => {
     expect(result).not.toBeNull();
     expect(diagnostics).toContain('chip_level_invalid');
 
-    const file = join(dir, runtime.runtimeId, 'pi-test.default.json');
+    const file = join(dir, runtime.runtimeId, 'pi-test.default.runtime.json');
     const record = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
     expect(record['level']).toBe('unknown');
   });
@@ -229,7 +229,7 @@ describe('publishSessionDeckChip', () => {
     );
 
     expect(result).not.toBeNull();
-    const file = join(dir, runtime.runtimeId, 'pi-openrouter.default.json');
+    const file = join(dir, runtime.runtimeId, 'pi-openrouter.default.runtime.json');
     const record = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
     expect(record['scope']).toBe('runtime');
     expect(record['sessionId']).toBeNull();
@@ -305,6 +305,6 @@ describe('clearSessionDeckChip', () => {
 
     expect(cleared).toBe(true);
     const fileNames = (await readdir(join(dir, runtime.runtimeId))).sort();
-    expect(fileNames).toEqual(['pi-test.b.json']);
+    expect(fileNames).toEqual(['pi-test.b.runtime.json']);
   });
 });

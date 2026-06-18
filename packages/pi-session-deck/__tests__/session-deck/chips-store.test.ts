@@ -36,31 +36,31 @@ describe('getChipRuntimeDirectory', () => {
 
 describe('getChipRecordPath', () => {
   it('returns correct file path', () => {
-    const path = getChipRecordPath(SOURCE, CHIP_ID, RUNTIME_ID, '/base');
-    expect(path).toBe('/base/rt-abc123/pi-merge-ready.current-pr.json');
+    const path = getChipRecordPath(SOURCE, CHIP_ID, 'session', RUNTIME_ID, '/base');
+    expect(path).toBe('/base/rt-abc123/pi-merge-ready.current-pr.session.json');
   });
 });
 
 describe('createChipTempPath', () => {
   it('creates a temp path with UUID suffix', () => {
-    const path = createChipTempPath(SOURCE, CHIP_ID, RUNTIME_ID, '/base', MOCK_UUID);
+    const path = createChipTempPath(SOURCE, CHIP_ID, 'session', RUNTIME_ID, '/base', MOCK_UUID);
     expect(path).toBe(
-      '/base/rt-abc123/.pi-merge-ready.current-pr.00000000-0000-4000-8000-000000000000.tmp',
+      '/base/rt-abc123/.pi-merge-ready.current-pr.session.00000000-0000-4000-8000-000000000000.tmp',
     );
   });
 });
 
 describe('isChipRecordFile', () => {
   it('returns true for record files', () => {
-    expect(isChipRecordFile('pi-merge-ready.current-pr.json')).toBe(true);
+    expect(isChipRecordFile('pi-merge-ready.current-pr.session.json')).toBe(true);
   });
 
   it('returns false for temp files starting with dot', () => {
-    expect(isChipRecordFile('.pi-merge-ready.current-pr.mock-uuid.tmp')).toBe(false);
+    expect(isChipRecordFile('.pi-merge-ready.current-pr.session.mock-uuid.tmp')).toBe(false);
   });
 
   it('returns false for hidden json files', () => {
-    expect(isChipRecordFile('.pi-merge-ready.current-pr.json')).toBe(false);
+    expect(isChipRecordFile('.pi-merge-ready.current-pr.session.json')).toBe(false);
   });
 
   it('returns false for non-JSON extensions', () => {

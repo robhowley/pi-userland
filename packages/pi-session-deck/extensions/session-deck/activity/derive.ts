@@ -9,6 +9,7 @@ import type {
 export interface DeriveActivityOptions {
   activity: SessionActivityRecord | null;
   sessionId: string | null;
+  sessionIdentityVerified?: boolean;
   now?: Date;
   thresholds?: Partial<ActivityThresholds>;
   baseDiagnostics?: ActivityDiagnostic[];
@@ -19,6 +20,7 @@ export function deriveActivity(options: DeriveActivityOptions): DerivedActivity 
   const nowMs = now.getTime();
   const thresholds = resolveActivityThresholds(options.thresholds);
   const diagnostics = [...(options.baseDiagnostics ?? [])];
+  const sessionIdentityVerified = options.sessionIdentityVerified ?? true;
 
   if (options.activity === null) {
     if (!hasBlockingActivityDiagnostic(diagnostics)) {
@@ -33,6 +35,10 @@ export function deriveActivity(options: DeriveActivityOptions): DerivedActivity 
 
   const activity = options.activity;
   const trustedFields = getTrustedFields(activity);
+
+  if (!sessionIdentityVerified) {
+    return createUnknownActivity(diagnostics);
+  }
 
   if (activity.sessionId !== options.sessionId) {
     diagnostics.push({

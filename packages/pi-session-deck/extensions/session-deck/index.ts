@@ -143,6 +143,7 @@ function createSessionManager(ctx: SessionStartContext): SessionManagerLike {
     getSessionId: () => ctx.sessionManager?.getSessionId() ?? null,
     getSessionFile: () => ctx.sessionManager?.getSessionFile() ?? null,
     getSessionName: () => ctx.sessionManager?.getSessionName?.(),
+    getCwd: () => ctx.sessionManager?.getCwd?.() ?? ctx.cwd,
   };
 }
 

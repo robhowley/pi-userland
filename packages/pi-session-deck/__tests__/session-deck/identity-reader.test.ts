@@ -275,7 +275,66 @@ describe('identity reader — join', () => {
     expect(view.records).toHaveLength(1);
     const record = view.records[0]!;
     expect(record.sessionId).toBeNull();
-    expect(view.diagnostics.some((d) => d.code === 'malformed_identity_record')).toBe(true);
+    expect(view.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: 'malformed_identity_record',
+        runtimeId: 'rt-1',
+        filePath: expect.stringContaining('rt-1.json'),
+      }),
+    );
+  });
+
+  it('rejects identity records whose embedded runtimeId mismatches the filename', async () => {
+    const { readJoinedSessionView } =
+      await import('../../extensions/session-deck/identity/reader.js');
+
+    const readdirImpl = vi
+      .fn()
+      .mockResolvedValue([{ name: 'rt-1.json', isFile: () => true } as unknown as Dirent]);
+
+    const readFileImpl = vi.fn().mockResolvedValue(
+      JSON.stringify({
+        runtimeId: 'rt-other',
+        sessionId: 'session-abc',
+        sessionFile: '/tmp/session-abc.md',
+        cwd: '/tmp/project',
+        worktree: '/tmp/project',
+        branch: 'main',
+        prUrl: null,
+        identityUpdatedAt: new Date().toISOString(),
+        sessionStartedAt: new Date().toISOString(),
+        gitRemote: null,
+        gitRoot: null,
+        identitySource: 'startup',
+      }),
+    );
+
+    const view = await readJoinedSessionView({
+      presenceView: makePresenceView({
+        records: [
+          {
+            runtimeId: 'rt-1',
+            pid: 1234,
+            startedAt: new Date().toISOString(),
+            heartbeatAt: new Date().toISOString(),
+            heartbeatAgeMs: 5_000,
+            presenceState: 'live',
+            reason: 'fresh_heartbeat',
+          },
+        ],
+      }),
+      readdir: readdirImpl,
+      readFile: readFileImpl,
+    });
+
+    expect(view.records[0]?.sessionId).toBeNull();
+    expect(view.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: 'malformed_identity_record',
+        runtimeId: 'rt-1',
+        filePath: expect.stringContaining('rt-1.json'),
+      }),
+    );
   });
 
   it('computes identity freshness correctly', async () => {

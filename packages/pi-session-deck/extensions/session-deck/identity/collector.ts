@@ -31,7 +31,7 @@ export async function collectSessionIdentity(
 ): Promise<SessionIdentityRecord> {
   const now = options.now ?? (() => new Date());
   const nowIso = now().toISOString();
-  const cwd = options.cwd ?? process.cwd();
+  const cwd = resolveCollectorCwd(options);
 
   const diagnostics: IdentityDiagnostic[] = [];
 
@@ -136,4 +136,12 @@ function normalizeOptionalStringField(value: unknown): string | undefined {
   }
 
   return undefined;
+}
+
+function resolveCollectorCwd(options: IdentityCollectorOptions): string {
+  return (
+    normalizeOptionalStringField(options.sessionManager?.getCwd?.()) ??
+    normalizeOptionalStringField(options.cwd) ??
+    process.cwd()
+  );
 }

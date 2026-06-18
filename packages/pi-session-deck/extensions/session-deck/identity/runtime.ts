@@ -34,6 +34,7 @@ interface IdentityRuntimeState {
   activeClearInterval: typeof globalThis.clearInterval;
   runtimeId: string | undefined;
   sessionManager: SessionManagerLike | null;
+  pendingMutation: Promise<void>;
 }
 
 type IdentityRuntimeGlobalState = typeof globalThis & {
@@ -55,6 +56,7 @@ function getIdentityRuntimeState(): IdentityRuntimeState {
     activeClearInterval: globalThis.clearInterval,
     runtimeId: undefined,
     sessionManager: null,
+    pendingMutation: Promise.resolve(),
   };
   globalState[IDENTITY_RUNTIME_STATE_KEY] = createdState;
   return createdState;
@@ -75,58 +77,52 @@ export async function ensureIdentityRuntimeStarted(
 
   state.activeStartPromise = (async () => {
     const controller: IdentityRuntimeController = {
-      refreshIdentity: async (
-        source: string,
-        sessionManager?: {
-          getSessionId: () => string | null;
-          getSessionFile: () => string | null;
-        },
-      ) => {
-        const rid = state.runtimeId;
-        if (rid === undefined) {
-          return;
-        }
-
-        // Store sessionManager reference for periodic reuse
-        if (sessionManager !== undefined) {
-          state.sessionManager = sessionManager;
-        }
-
-        const writeRecord = config.writeRecord ?? writeIdentityRecord;
-        const directory = state.activeDirectory;
-        const sm = state.sessionManager ?? sessionManager;
-
-        try {
-          const record = await collectSessionIdentity(rid, {
-            runtimeId: rid,
-            ...(sm === null || sm === undefined ? {} : { sessionManager: sm }),
-            ...(config.now === undefined ? {} : { now: config.now }),
-            ...(config.cwd === undefined ? {} : { cwd: config.cwd }),
-            ...(config.execGit === undefined ? {} : { execGit: config.execGit }),
-            ...(config.execGhCli === undefined ? {} : { execGhCli: config.execGhCli }),
-            ...(state.cachedIdentity === null ? {} : { existingRecord: state.cachedIdentity }),
-            identitySource: source,
-            ...(config.onDiagnostic === undefined ? {} : { onDiagnostic: config.onDiagnostic }),
-          });
-
-          await writeRecord(record, {
-            ...(directory === undefined ? {} : { directory }),
-          });
-
-          state.cachedIdentity = record;
-        } catch (error) {
-          const diagnostic: IdentityDiagnostic = {
-            code: 'identity_write_error',
-            message: `Failed to write identity record: ${getErrorMessage(error)}`,
-            runtimeId: rid,
-          };
-          try {
-            config.onDiagnostic?.(diagnostic);
-          } catch {
-            // Fail-open on diagnostic sink errors
+      refreshIdentity: async (source: string, sessionManager?: SessionManagerLike) =>
+        runSerialized(state, async () => {
+          const rid = state.runtimeId;
+          if (rid === undefined) {
+            return;
           }
-        }
-      },
+
+          if (sessionManager !== undefined) {
+            state.sessionManager = sessionManager;
+          }
+
+          const writeRecord = config.writeRecord ?? writeIdentityRecord;
+          const directory = state.activeDirectory;
+          const sm = state.sessionManager ?? sessionManager;
+
+          try {
+            const record = await collectSessionIdentity(rid, {
+              runtimeId: rid,
+              ...(sm === null || sm === undefined ? {} : { sessionManager: sm }),
+              ...(config.now === undefined ? {} : { now: config.now }),
+              ...(config.cwd === undefined ? {} : { cwd: config.cwd }),
+              ...(config.execGit === undefined ? {} : { execGit: config.execGit }),
+              ...(config.execGhCli === undefined ? {} : { execGhCli: config.execGhCli }),
+              ...(state.cachedIdentity === null ? {} : { existingRecord: state.cachedIdentity }),
+              identitySource: source,
+              ...(config.onDiagnostic === undefined ? {} : { onDiagnostic: config.onDiagnostic }),
+            });
+
+            await writeRecord(record, {
+              ...(directory === undefined ? {} : { directory }),
+            });
+
+            state.cachedIdentity = record;
+          } catch (error) {
+            const diagnostic: IdentityDiagnostic = {
+              code: 'identity_write_error',
+              message: `Failed to write identity record: ${getErrorMessage(error)}`,
+              runtimeId: rid,
+            };
+            try {
+              config.onDiagnostic?.(diagnostic);
+            } catch {
+              // Fail-open on diagnostic sink errors
+            }
+          }
+        }),
       getIdentity: () => state.cachedIdentity,
       isRunning: () => state.activeTimer !== null,
     };
@@ -156,12 +152,25 @@ export async function stopIdentityRuntime(): Promise<void> {
   state.activeDirectory = undefined;
   state.runtimeId = undefined;
   state.sessionManager = null;
+  state.pendingMutation = Promise.resolve();
 }
 
 export async function resetIdentityRuntimeForTests(): Promise<void> {
   const state = getIdentityRuntimeState();
   await stopIdentityRuntime();
   state.cachedIdentity = null;
+}
+
+async function runSerialized<T>(
+  state: IdentityRuntimeState,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const run = state.pendingMutation.then(operation, operation);
+  state.pendingMutation = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
 }
 
 function getErrorMessage(error: unknown): string {
