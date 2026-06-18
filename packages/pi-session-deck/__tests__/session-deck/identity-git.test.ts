@@ -79,7 +79,7 @@ describe('identity git resolution', () => {
     expect(result.strategy).toBe('gh_cli');
   });
 
-  it('falls back to git remote construction when gh CLI fails', async () => {
+  it('returns null with pr_ambiguous when gh CLI is unavailable', async () => {
     const { resolvePrUrl } = await import('../../extensions/session-deck/identity/git.js');
 
     const execGhCli = vi.fn().mockRejectedValue(new Error('gh not installed'));
@@ -92,8 +92,10 @@ describe('identity git resolution', () => {
       execGit,
     });
 
-    expect(result.prUrl).toBe('https://github.com/owner/repo/pull/feature-x');
-    expect(result.strategy).toBe('git_remote_based');
+    // Cannot construct exact PR URL from branch alone without gh CLI
+    expect(result.prUrl).toBeNull();
+    expect(result.strategy).toBe('gh_cli_unavailable');
+    expect(result.diagnostic).toBe('pr_ambiguous');
   });
 
   it('returns null PR URL when git remote is not GitHub', async () => {
@@ -120,5 +122,23 @@ describe('identity git resolution', () => {
 
     expect(result.prUrl).toBeNull();
     expect(result.diagnostic).toBe('detached_head');
+  });
+
+  it('returns null PR URL when gh CLI fails and git remote also fails', async () => {
+    const { resolvePrUrl } = await import('../../extensions/session-deck/identity/git.js');
+
+    const execGhCli = vi.fn().mockRejectedValue(new Error('gh not installed'));
+    const execGit = makeExecGit({
+      'remote get-url origin': { stdout: '', exitCode: 128 },
+    });
+
+    const result = await resolvePrUrl('/home/user/project', 'feature-x', {
+      execGhCli,
+      execGit,
+    });
+
+    expect(result.prUrl).toBeNull();
+    expect(result.strategy).toBe('git_remote_failed');
+    expect(result.diagnostic).toBe('pr_lookup_failed');
   });
 });

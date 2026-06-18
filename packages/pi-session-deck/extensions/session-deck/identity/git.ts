@@ -126,7 +126,9 @@ export async function resolvePrUrl(
     }
   }
 
-  // Fallback: construct from git remote origin + branch name
+  // Fallback: try to construct PR URL from git remote origin + branch
+  // Using gh CLI to query the remote by 'headRefName' is the only reliable way to
+  // get an exact PR URL from a branch name. Without gh CLI, we report pr_ambiguous.
   const execGit = options.execGit ?? defaultExecGit;
   try {
     const { stdout, exitCode } = await execGit(worktree, 'remote', 'get-url', 'origin');
@@ -140,10 +142,9 @@ export async function resolvePrUrl(
       return { prUrl: null, strategy: 'non_github_remote', diagnostic: 'pr_lookup_failed' };
     }
 
-    const [, , owner, repo] = ghMatch;
-    const prUrl = `https://github.com/${owner}/${repo}/pull/${encodeURIComponent(branch)}`;
-
-    return { prUrl, strategy: 'git_remote_based' };
+    // We cannot construct an exact PR URL from branch alone.
+    // Return null with pr_ambiguous to signal this limitation.
+    return { prUrl: null, strategy: 'gh_cli_unavailable', diagnostic: 'pr_ambiguous' };
   } catch {
     return { prUrl: null, strategy: 'failed', diagnostic: 'pr_lookup_failed' };
   }

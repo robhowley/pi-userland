@@ -1,5 +1,23 @@
 import type { PresenceDiagnosticCode } from '../presence/types.js';
 
+// ─── Session manager ────────────────────────────────────────────────
+
+export interface SessionManagerLike {
+  getSessionId: () => string | null;
+  getSessionFile: () => string | null;
+}
+
+// ─── Identity runtime controller ─────────────────────────────────────
+
+export interface IdentityRuntimeController {
+  refreshIdentity: (
+    source: string,
+    sessionManager?: SessionManagerLike,
+  ) => Promise<void>;
+  getIdentity: () => SessionIdentityRecord | null;
+  isRunning: () => boolean;
+}
+
 // ─── Identity record ────────────────────────────────────────────────
 
 export interface SessionIdentityRecord {

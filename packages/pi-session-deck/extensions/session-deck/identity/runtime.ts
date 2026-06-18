@@ -1,7 +1,7 @@
 import { DEFAULT_IDENTITY_REFRESH_INTERVAL_MS } from './constants.js';
 import { collectSessionIdentity } from './collector.js';
 import { writeIdentityRecord } from './writer.js';
-import type { GitExec, IdentityDiagnostic, SessionIdentityRecord } from './types.js';
+import type { GitExec, IdentityDiagnostic, SessionIdentityRecord, SessionManagerLike, IdentityRuntimeController } from './types.js';
 
 const IDENTITY_RUNTIME_STATE_KEY = '__piSessionDeckIdentityRuntimeState__';
 
@@ -16,17 +16,6 @@ export interface IdentityRuntimeConfig {
     options: { directory?: string },
   ) => Promise<unknown>;
   onDiagnostic?: (diagnostic: IdentityDiagnostic) => void;
-}
-
-export interface SessionManagerLike {
-  getSessionId: () => string | null;
-  getSessionFile: () => string | null;
-}
-
-export interface IdentityRuntimeController {
-  refreshIdentity: (source: string, sessionManager?: SessionManagerLike) => Promise<void>;
-  getIdentity: () => SessionIdentityRecord | null;
-  isRunning: () => boolean;
 }
 
 interface IdentityRuntimeState {
@@ -57,6 +46,7 @@ function getIdentityRuntimeState(): IdentityRuntimeState {
     activeDirectory: undefined,
     activeClearInterval: globalThis.clearInterval,
     runtimeId: undefined,
+    sessionManager: null,
   };
   globalState[IDENTITY_RUNTIME_STATE_KEY] = createdState;
   return createdState;
@@ -105,7 +95,9 @@ export async function ensureIdentityRuntimeStarted(
             ...(config.now === undefined ? {} : { now: config.now }),
             ...(config.cwd === undefined ? {} : { cwd: config.cwd }),
             ...(config.execGit === undefined ? {} : { execGit: config.execGit }),
+            existingRecord: state.cachedIdentity ?? undefined,
             identitySource: source,
+            onDiagnostic: config.onDiagnostic,
           });
 
           await writeRecord(record, {

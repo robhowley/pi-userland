@@ -1,16 +1,27 @@
 import { resolveGitInfo, resolvePrUrl } from './git.js';
-import type { GitExec, SessionIdentityRecord } from './types.js';
+import type {
+  GitExec,
+  IdentityDiagnostic,
+  IdentityDiagnosticCode,
+  SessionIdentityRecord,
+  SessionManagerLike,
+} from './types.js';
 
 export interface IdentityCollectorOptions {
   runtimeId: string;
-  sessionManager?: {
-    getSessionId: () => string | null;
-    getSessionFile: () => string | null;
-  };
+  sessionManager?: SessionManagerLike;
   now?: () => Date;
   cwd?: string;
   execGit?: GitExec;
   identitySource: string;
+  /**
+   * Existing identity record to preserve sessionStartedAt across periodic refreshes.
+   */
+  existingRecord?: SessionIdentityRecord;
+  /**
+   * Optional diagnostic sink to emit diagnostics during collection.
+   */
+  onDiagnostic?: (diagnostic: IdentityDiagnostic) => void;
 }
 
 export async function collectSessionIdentity(
@@ -21,13 +32,56 @@ export async function collectSessionIdentity(
   const nowIso = now().toISOString();
   const cwd = options.cwd ?? process.cwd();
 
+  const diagnostics: IdentityDiagnostic[] = [];
+
   const sessionId = options.sessionManager?.getSessionId() ?? null;
   const sessionFile = options.sessionManager?.getSessionFile() ?? null;
+
+  // Emit diagnostics for missing session fields
+  if (sessionId === null) {
+    diagnostics.push({
+      code: 'session_id_missing',
+      message: 'Session ID is null — sessionManager not available or not started',
+      runtimeId,
+    });
+  }
+  if (sessionFile === null) {
+    diagnostics.push({
+      code: 'session_file_missing',
+      message: 'Session file is null — sessionManager not available or not started',
+      runtimeId,
+    });
+  }
+
+  // Preserve sessionStartedAt from existing record, only set on first collection
+  const existingSessionStartedAt = options.existingRecord?.sessionStartedAt ?? null;
+  const sessionStartedAt = existingSessionStartedAt ?? nowIso;
 
   // Resolve Git info
   const gitInfo = await resolveGitInfo(cwd, {
     ...(options.execGit === undefined ? {} : { execGit: options.execGit }),
   });
+
+  // Emit diagnostics for Git resolution
+  if (gitInfo.worktree === null) {
+    diagnostics.push({
+      code: 'not_git_repo',
+      message: `Not a git repository: ${cwd}`,
+      runtimeId,
+    });
+  } else if (gitInfo.branch === null) {
+    diagnostics.push({
+      code: 'detached_head',
+      message: `Git HEAD is detached at ${gitInfo.worktree}`,
+      runtimeId,
+    });
+  } else if (gitInfo.root === null) {
+    diagnostics.push({
+      code: 'git_lookup_failed',
+      message: `Failed to resolve git root for ${gitInfo.worktree}`,
+      runtimeId,
+    });
+  }
 
   // Resolve PR URL if we have worktree + branch
   let prUrl: string | null = null;
@@ -36,6 +90,23 @@ export async function collectSessionIdentity(
       ...(options.execGit === undefined ? {} : { execGit: options.execGit }),
     });
     prUrl = prResult.prUrl;
+
+    if (prUrl === null && prResult.diagnostic !== undefined) {
+      diagnostics.push({
+        code: prResult.diagnostic,
+        message: `PR URL lookup failed for ${gitInfo.branch} at ${gitInfo.worktree}: ${prResult.strategy}`,
+        runtimeId,
+      });
+    }
+  }
+
+  // Emit diagnostics to the sink
+  for (const d of diagnostics) {
+    try {
+      options.onDiagnostic?.(d);
+    } catch {
+      // Fail-open on diagnostic sink errors
+    }
   }
 
   return {
@@ -47,7 +118,7 @@ export async function collectSessionIdentity(
     branch: gitInfo.branch,
     prUrl,
     identityUpdatedAt: nowIso,
-    sessionStartedAt: nowIso,
+    sessionStartedAt,
     gitRemote: gitInfo.remote,
     gitRoot: gitInfo.root,
     identitySource: options.identitySource,
