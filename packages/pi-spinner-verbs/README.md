@@ -92,7 +92,7 @@ Your custom file can be a plain JSON array:
 | Theme | Sample                                                        |
 |-------|---------------------------------------------------------------|
 | `game-of-thrones` | Taking the black..., Winter is coming..., By your leave...    |
-| `lord-of-the-rings` | One does not simply..., You shall not pass..." So it begins... |
+| `lord-of-the-rings` | One does not simply..., You shall not pass... So it begins... |
 | `action-movie` | Yippee-ki-yay..., I'll be back..., I know kung fu...          |
 | `game-show` | Come on down..., Survey says..., Is that your final answer... |
 | `harry-potter` | Accio..., Expecto Patronum..., Wingardium Leviosa...      |
