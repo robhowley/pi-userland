@@ -165,6 +165,7 @@ async function runSerialized<T>(
   state: IdentityRuntimeState,
   operation: () => Promise<T>,
 ): Promise<T> {
+  state.pendingMutation ??= Promise.resolve();
   const run = state.pendingMutation.then(operation, operation);
   state.pendingMutation = run.then(
     () => undefined,
