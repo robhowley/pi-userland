@@ -2,6 +2,8 @@
   "name": "@robhowley/pi-spinner-verbs",
   "version": "3.3.2",
   "type": "module",
+  "description": "Themed thinking text for Pi: built-in spinner verb packs, random per-session themes, and custom verb files.",
+  "license": "MIT",
   "files": [
     "extensions",
     "spinner-verbs",
@@ -13,7 +15,10 @@
   },
   "keywords": [
     "pi-package",
-    "pi-userland"
+    "pi-userland",
+    "spinner",
+    "spinner-verbs",
+    "pi-extension"
   ],
   "pi": {
     "extensions": [
@@ -25,7 +30,7 @@
     "url": "https://github.com/robhowley/pi-userland.git",
     "directory": "packages/pi-spinner-verbs"
   },
-  "homepage": "https://github.com/robhowley/pi-userland/tree/main/packages/pi-spinner-verbs",
+  "homepage": "https://pi-userland.dev",
   "scripts": {
     "lint": "eslint extensions/",
     "format:check": "prettier --check extensions/",
@@ -34,7 +39,7 @@
     "test": "vitest run __tests__"
   },
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "*"
   },
   "devDependencies": {
     "@types/node": "^22.15.17"
