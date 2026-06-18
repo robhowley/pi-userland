@@ -1,17 +1,25 @@
 import { basename } from 'node:path';
+import { readSessionDeckView, type ReadSessionDeckViewOptions } from '../activity/reader.js';
+import type {
+  SessionDeckDiagnostic,
+  SessionDeckRecord,
+  SessionDeckView,
+} from '../activity/types.js';
 import { SESSION_DECK_COMMAND_NAME } from '../presence/constants.js';
 import { reapPresenceRecords, type ReapPresenceRecordsOptions } from '../presence/reap.js';
 import { readPresenceView, type ReadPresenceViewOptions } from '../presence/reader.js';
 import { readJoinedSessionView, type ReadJoinedSessionViewOptions } from './reader.js';
-import type { JoinedDiagnostic, JoinedSessionRecord, JoinedSessionView } from './types.js';
 import type { PresenceDiagnostic, PresenceState, PresenceView } from '../presence/types.js';
 import type { PresenceCommandAPI, PresenceCommandContext } from '../presence/command.js';
 
 export interface RegisterSessionDeckCommandOptions extends ReadPresenceViewOptions {
   identityDirectory?: string;
+  activityDirectory?: string;
   identityFreshnessThresholds?: Partial<import('./types.js').IdentityFreshnessThresholds>;
+  activityThresholds?: Partial<import('../activity/types.js').ActivityThresholds>;
   readPresenceView?: typeof readPresenceView;
   readJoinedSessionView?: typeof readJoinedSessionView;
+  readSessionDeckView?: typeof readSessionDeckView;
   reapPresenceRecords?: typeof reapPresenceRecords;
   unlink?: ReapPresenceRecordsOptions['unlink'];
 }
@@ -41,10 +49,11 @@ export function registerSessionDeckCommand(
 ): void {
   const readPresence = options.readPresenceView ?? readPresenceView;
   const readJoined = options.readJoinedSessionView ?? readJoinedSessionView;
+  const readSessionDeck = options.readSessionDeckView ?? readSessionDeckView;
   const reapPresence = options.reapPresenceRecords ?? reapPresenceRecords;
 
   pi.registerCommand(SESSION_DECK_COMMAND_NAME, {
-    description: 'Show Pi session presence and identity from ~/.pi/session-deck',
+    description: 'Show Pi session presence, identity, and activity from ~/.pi/session-deck',
     getArgumentCompletions: getSessionDeckCommandCompletions,
     handler: async (args: string, ctx: PresenceCommandContext) => {
       const parsedArgs = parseSessionDeckCommandArgs(args);
@@ -54,29 +63,27 @@ export function registerSessionDeckCommand(
       }
 
       const reapResult = parsedArgs.reap ? await reapPresence(getReapOptions(options)) : null;
-
-      // Read presence view and join with identity
       const presenceView = await readPresence(getReadPresenceOptions(options));
       const joinedView = await readJoined(getReadJoinedOptions(options, presenceView));
+      const sessionDeckView = await readSessionDeck(getReadSessionDeckOptions(options, joinedView));
 
-      // Filter by visibility
       const visibleRecords = parsedArgs.all
-        ? joinedView.records
-        : joinedView.records.filter((record) =>
+        ? sessionDeckView.records
+        : sessionDeckView.records.filter((record) =>
             DEFAULT_VISIBLE_STATES.includes(record.presenceState as PresenceState),
           );
-      const visibleView: JoinedSessionView = {
+      const visibleView: SessionDeckView = {
         records: visibleRecords,
-        diagnostics: parsedArgs.all ? joinedView.diagnostics : [],
+        diagnostics: parsedArgs.all ? sessionDeckView.diagnostics : [],
       };
 
       const message =
         reapResult === null
-          ? renderJoinedSessionView(visibleView, {
+          ? renderSessionDeckView(visibleView, {
               all: parsedArgs.all,
               showIdentity: parsedArgs.identity,
             })
-          : renderJoinedSessionCommandResult(visibleView, {
+          : renderSessionDeckCommandResult(visibleView, {
               all: parsedArgs.all,
               showIdentity: parsedArgs.identity,
               reapResult,
@@ -128,10 +135,8 @@ export function parseSessionDeckCommandArgs(args: string): ParsedSessionDeckComm
   return { ok: true, all, reap, identity };
 }
 
-// ─── Rendering ──────────────────────────────────────────────────────
-
-export function renderJoinedSessionView(
-  view: JoinedSessionView,
+export function renderSessionDeckView(
+  view: SessionDeckView,
   options: { all: boolean; showIdentity: boolean },
 ): string {
   const lines: string[] = [];
@@ -141,22 +146,22 @@ export function renderJoinedSessionView(
   } else {
     lines.push(options.all ? 'Pi sessions (all records)' : 'Pi sessions (live + stale)');
     for (const record of view.records) {
-      lines.push(formatJoinedSessionRecord(record, options.showIdentity));
+      lines.push(formatSessionDeckRecord(record, options));
     }
   }
 
   if (options.all && view.diagnostics.length > 0) {
     lines.push('Diagnostics:');
     for (const diagnostic of view.diagnostics) {
-      lines.push(formatJoinedDiagnostic(diagnostic));
+      lines.push(formatSessionDeckDiagnostic(diagnostic));
     }
   }
 
   return lines.join('\n');
 }
 
-function renderJoinedSessionCommandResult(
-  view: JoinedSessionView,
+function renderSessionDeckCommandResult(
+  view: SessionDeckView,
   options: {
     all: boolean;
     showIdentity: boolean;
@@ -166,7 +171,7 @@ function renderJoinedSessionCommandResult(
   return [
     ...renderJoinedReapResult(options.reapResult),
     '',
-    renderJoinedSessionView(view, { all: options.all, showIdentity: options.showIdentity }),
+    renderSessionDeckView(view, { all: options.all, showIdentity: options.showIdentity }),
   ].join('\n');
 }
 
@@ -210,7 +215,7 @@ function formatPresenceDiagnostic(diagnostic: PresenceDiagnostic): string {
   return `- ${diagnostic.code}${location}: ${diagnostic.message}`;
 }
 
-function formatJoinedDiagnostic(diagnostic: JoinedDiagnostic): string {
+function formatSessionDeckDiagnostic(diagnostic: SessionDeckDiagnostic): string {
   const location =
     diagnostic.runtimeId !== undefined
       ? ` runtime=${diagnostic.runtimeId}`
@@ -220,14 +225,17 @@ function formatJoinedDiagnostic(diagnostic: JoinedDiagnostic): string {
   return `- ${diagnostic.code}${location}: ${diagnostic.message}`;
 }
 
-function formatJoinedSessionRecord(record: JoinedSessionRecord, showIdentity: boolean): string {
+function formatSessionDeckRecord(
+  record: SessionDeckRecord,
+  options: { all: boolean; showIdentity: boolean },
+): string {
   const parts: string[] = [`- ${record.runtimeId}`];
 
-  parts.push(`state=${record.presenceState}`);
+  parts.push(`activity=${formatActivitySummary(record)}`);
+  parts.push(`presence=${record.presenceState}`);
   parts.push(`pid=${record.pid}`);
   parts.push(`age=${formatDuration(record.heartbeatAgeMs)}`);
 
-  // Identity fields when available
   if (record.cwd !== null) {
     parts.push(`cwd=${shortenHomePath(record.cwd)}`);
   }
@@ -238,18 +246,14 @@ function formatJoinedSessionRecord(record: JoinedSessionRecord, showIdentity: bo
 
   if (record.prUrl !== null) {
     const prMatch = record.prUrl.match(/\/pull\/(\d+)$/);
-    if (prMatch) {
-      parts.push(`pr=#${prMatch[1]}`);
-    } else {
-      parts.push(`pr=${record.prUrl}`);
-    }
+    parts.push(prMatch ? `pr=#${prMatch[1]}` : `pr=${record.prUrl}`);
   }
 
-  if (record.sessionId !== null && showIdentity) {
+  if (record.sessionId !== null && options.showIdentity) {
     parts.push(`session=${record.sessionId.slice(0, 8)}`);
   }
 
-  if (record.identityFreshness !== 'missing' && showIdentity) {
+  if (record.identityFreshness !== 'missing' && options.showIdentity) {
     parts.push(`identity=${record.identityFreshness}`);
   }
 
@@ -257,13 +261,53 @@ function formatJoinedSessionRecord(record: JoinedSessionRecord, showIdentity: bo
     parts.push(`reason=${record.presenceReason}`);
   }
 
-  if (showIdentity && record.diagnostics.length > 0) {
-    for (const diag of record.diagnostics) {
-      parts.push(`[${diag.code}]`);
+  if (options.all && record.diagnostics.length > 0) {
+    for (const diagnostic of record.diagnostics) {
+      parts.push(`[${diagnostic.code}]`);
     }
   }
 
   return parts.join('  ');
+}
+
+function formatActivitySummary(record: SessionDeckRecord): string {
+  switch (record.activityState) {
+    case 'waiting':
+      return 'waiting';
+    case 'thinking':
+      return record.activityAgeMs === null
+        ? 'thinking'
+        : `thinking ${formatDuration(record.activityAgeMs)}`;
+    case 'tool-running': {
+      const toolName = record.currentToolName === null ? '' : `: ${record.currentToolName}`;
+      const age = record.activityAgeMs === null ? '' : ` ${formatDuration(record.activityAgeMs)}`;
+      return `tool-running${toolName}${age}`;
+    }
+    case 'error':
+      return record.lastError === null ? 'error' : `error: ${record.lastError}`;
+    case 'unknown': {
+      const diagnostics = record.diagnostics
+        .map((diagnostic) => diagnostic.code)
+        .filter((code) =>
+          [
+            'activity_missing',
+            'activity_stale',
+            'session_mismatch',
+            'busy_idle_conflict',
+            'turn_started_missing',
+            'tool_name_missing',
+            'tool_stuck',
+            'last_event_missing',
+            'last_event_future',
+            'malformed_activity_record',
+            'activity_write_error',
+            'activity_read_error',
+          ].includes(code),
+        );
+      const suffix = diagnostics.length === 0 ? '' : ` [${diagnostics.join(',')}]`;
+      return `unknown${suffix}`;
+    }
+  }
 }
 
 function shortenHomePath(cwd: string): string {
@@ -298,8 +342,6 @@ function pluralize(count: number, singular: string): string {
   return count === 1 ? singular : `${singular}s`;
 }
 
-// ─── Completions ────────────────────────────────────────────────────
-
 function getSessionDeckCommandCompletions(prefix: string) {
   const matches = COMMAND_FLAGS.filter((flag) => flag.startsWith(prefix)).map((flag) => ({
     value: flag,
@@ -308,8 +350,6 @@ function getSessionDeckCommandCompletions(prefix: string) {
 
   return matches.length > 0 ? matches : null;
 }
-
-// ─── Options helpers ────────────────────────────────────────────────
 
 function getReadPresenceOptions(
   options: RegisterSessionDeckCommandOptions,
@@ -337,6 +377,22 @@ function getReadJoinedOptions(
     ...(options.identityFreshnessThresholds === undefined
       ? {}
       : { identityFreshnessThresholds: options.identityFreshnessThresholds }),
+    ...(options.readdir === undefined ? {} : { readdir: options.readdir }),
+    ...(options.readFile === undefined ? {} : { readFile: options.readFile }),
+  };
+}
+
+function getReadSessionDeckOptions(
+  options: RegisterSessionDeckCommandOptions,
+  joinedView: import('./types.js').JoinedSessionView,
+): ReadSessionDeckViewOptions {
+  return {
+    joinedView,
+    ...(options.activityDirectory === undefined
+      ? {}
+      : { activityDirectory: options.activityDirectory }),
+    ...(options.now === undefined ? {} : { now: options.now }),
+    ...(options.activityThresholds === undefined ? {} : { thresholds: options.activityThresholds }),
     ...(options.readdir === undefined ? {} : { readdir: options.readdir }),
     ...(options.readFile === undefined ? {} : { readFile: options.readFile }),
   };
