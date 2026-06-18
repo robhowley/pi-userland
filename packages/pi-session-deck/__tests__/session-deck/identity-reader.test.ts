@@ -105,6 +105,62 @@ describe('identity reader — join', () => {
     expect(record.identityFreshness).toBe('missing');
   });
 
+  it('surfaces persisted identity diagnostics in record and top-level diagnostics', async () => {
+    const { readJoinedSessionView } =
+      await import('../../extensions/session-deck/identity/reader.js');
+
+    const readdirImpl = vi
+      .fn()
+      .mockResolvedValue([{ name: 'rt-1.json', isFile: () => true } as unknown as Dirent]);
+
+    const recordWithDiagnostics = {
+      runtimeId: 'rt-1',
+      sessionId: null,
+      sessionFile: null,
+      cwd: '/tmp',
+      worktree: null,
+      branch: null,
+      prUrl: null,
+      identityUpdatedAt: new Date().toISOString(),
+      sessionStartedAt: new Date().toISOString(),
+      gitRemote: null,
+      gitRoot: null,
+      identitySource: 'startup',
+      diagnostics: [
+        {
+          code: 'not_git_repo',
+          message: 'Not a git repository: /tmp',
+          runtimeId: 'rt-1',
+        },
+      ],
+    };
+
+    const readFileImpl = vi.fn().mockResolvedValue(JSON.stringify(recordWithDiagnostics));
+
+    const view = await readJoinedSessionView({
+      presenceView: makePresenceView({
+        records: [
+          {
+            runtimeId: 'rt-1',
+            pid: 1234,
+            startedAt: new Date().toISOString(),
+            heartbeatAt: new Date().toISOString(),
+            heartbeatAgeMs: 5_000,
+            presenceState: 'live',
+            reason: 'fresh_heartbeat',
+          },
+        ],
+      }),
+      readdir: readdirImpl,
+      readFile: readFileImpl,
+    });
+
+    expect(view.records[0]?.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
+      'not_git_repo',
+    );
+    expect(view.diagnostics.map((diagnostic) => diagnostic.code)).toContain('not_git_repo');
+  });
+
   it('reports orphan identity records via diagnostics', async () => {
     const { readJoinedSessionView } =
       await import('../../extensions/session-deck/identity/reader.js');

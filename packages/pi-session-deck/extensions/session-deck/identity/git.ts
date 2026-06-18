@@ -1,5 +1,5 @@
 import { execFile as nodeExecFile } from 'node:child_process';
-import type { GitExec, GitResolvedInfo, PrLookupResult } from './types.js';
+import type { GhExec, GitExec, GitResolvedInfo, PrLookupResult } from './types.js';
 
 export interface ResolveGitInfoOptions {
   execGit?: GitExec;
@@ -8,7 +8,7 @@ export interface ResolveGitInfoOptions {
 
 export interface ResolvePrUrlOptions {
   execGit?: GitExec;
-  execGhCli?: (args: string[]) => Promise<{ stdout: string; exitCode: number }>;
+  execGhCli?: GhExec | null;
   timeoutMs?: number;
 }
 
@@ -42,13 +42,16 @@ const defaultExecGit: GitExec = async (cwd, ...args) => {
   return { stdout: result.stdout, exitCode: result.exitCode };
 };
 
-const defaultExecGhCli = async (args: string[]): Promise<{ stdout: string; exitCode: number }> => {
+const defaultExecGhCli: GhExec = async (
+  cwd,
+  args,
+): Promise<{ stdout: string; exitCode: number }> => {
   const result = await new Promise<{ stdout: string; stderr: string; exitCode: number }>(
     (resolve) => {
       const child = nodeExecFile(
         'gh',
         args,
-        { encoding: 'utf8', windowsHide: true },
+        { cwd, encoding: 'utf8', windowsHide: true },
         (error, stdout, stderr) => {
           if (error === null) {
             resolve({ stdout, stderr, exitCode: 0 });
@@ -101,19 +104,18 @@ export async function resolvePrUrl(
     return { prUrl: null, strategy: 'none', diagnostic: 'detached_head' };
   }
 
-  // Try gh CLI first
-  if (options.execGhCli !== undefined) {
-    const execGhCli = options.execGhCli ?? defaultExecGhCli;
+  // Try gh CLI first. Passing execGhCli: null explicitly disables this path.
+  const execGhCli = options.execGhCli === null ? null : (options.execGhCli ?? defaultExecGhCli);
+  if (execGhCli !== null) {
     try {
-      const { stdout, exitCode } = await execGhCli([
+      const { stdout, exitCode } = await execGhCli(worktree, [
         'pr',
         'view',
+        branch,
         '--json',
         'url',
         '--jq',
         '.url',
-        '--repo',
-        worktree,
       ]);
       if (exitCode === 0 && stdout.trim().length > 0) {
         const url = stdout.trim();

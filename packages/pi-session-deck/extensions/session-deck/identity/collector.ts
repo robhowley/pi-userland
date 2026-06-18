@@ -1,8 +1,8 @@
 import { resolveGitInfo, resolvePrUrl } from './git.js';
 import type {
+  GhExec,
   GitExec,
   IdentityDiagnostic,
-  IdentityDiagnosticCode,
   SessionIdentityRecord,
   SessionManagerLike,
 } from './types.js';
@@ -13,6 +13,7 @@ export interface IdentityCollectorOptions {
   now?: () => Date;
   cwd?: string;
   execGit?: GitExec;
+  execGhCli?: GhExec | null;
   identitySource: string;
   /**
    * Existing identity record to preserve sessionStartedAt across periodic refreshes.
@@ -88,6 +89,7 @@ export async function collectSessionIdentity(
   if (gitInfo.worktree !== null && gitInfo.branch !== null) {
     const prResult = await resolvePrUrl(gitInfo.worktree, gitInfo.branch, {
       ...(options.execGit === undefined ? {} : { execGit: options.execGit }),
+      ...(options.execGhCli === undefined ? {} : { execGhCli: options.execGhCli }),
     });
     prUrl = prResult.prUrl;
 
@@ -122,5 +124,6 @@ export async function collectSessionIdentity(
     gitRemote: gitInfo.remote,
     gitRoot: gitInfo.root,
     identitySource: options.identitySource,
+    diagnostics,
   };
 }

@@ -1,7 +1,14 @@
 import { DEFAULT_IDENTITY_REFRESH_INTERVAL_MS } from './constants.js';
 import { collectSessionIdentity } from './collector.js';
 import { writeIdentityRecord } from './writer.js';
-import type { GitExec, IdentityDiagnostic, SessionIdentityRecord, SessionManagerLike, IdentityRuntimeController } from './types.js';
+import type {
+  GhExec,
+  GitExec,
+  IdentityDiagnostic,
+  IdentityRuntimeController,
+  SessionIdentityRecord,
+  SessionManagerLike,
+} from './types.js';
 
 const IDENTITY_RUNTIME_STATE_KEY = '__piSessionDeckIdentityRuntimeState__';
 
@@ -11,6 +18,7 @@ export interface IdentityRuntimeConfig {
   now?: () => Date;
   cwd?: string;
   execGit?: GitExec;
+  execGhCli?: GhExec | null;
   writeRecord?: (
     record: SessionIdentityRecord,
     options: { directory?: string },
@@ -91,13 +99,14 @@ export async function ensureIdentityRuntimeStarted(
         try {
           const record = await collectSessionIdentity(rid, {
             runtimeId: rid,
-            ...(sm === null ? {} : { sessionManager: sm }),
+            ...(sm === null || sm === undefined ? {} : { sessionManager: sm }),
             ...(config.now === undefined ? {} : { now: config.now }),
             ...(config.cwd === undefined ? {} : { cwd: config.cwd }),
             ...(config.execGit === undefined ? {} : { execGit: config.execGit }),
-            existingRecord: state.cachedIdentity ?? undefined,
+            ...(config.execGhCli === undefined ? {} : { execGhCli: config.execGhCli }),
+            ...(state.cachedIdentity === null ? {} : { existingRecord: state.cachedIdentity }),
             identitySource: source,
-            onDiagnostic: config.onDiagnostic,
+            ...(config.onDiagnostic === undefined ? {} : { onDiagnostic: config.onDiagnostic }),
           });
 
           await writeRecord(record, {
@@ -146,6 +155,7 @@ export async function stopIdentityRuntime(): Promise<void> {
   state.activeStartPromise = null;
   state.activeDirectory = undefined;
   state.runtimeId = undefined;
+  state.sessionManager = null;
 }
 
 export async function resetIdentityRuntimeForTests(): Promise<void> {

@@ -10,10 +10,7 @@ export interface SessionManagerLike {
 // ─── Identity runtime controller ─────────────────────────────────────
 
 export interface IdentityRuntimeController {
-  refreshIdentity: (
-    source: string,
-    sessionManager?: SessionManagerLike,
-  ) => Promise<void>;
+  refreshIdentity: (source: string, sessionManager?: SessionManagerLike) => Promise<void>;
   getIdentity: () => SessionIdentityRecord | null;
   isRunning: () => boolean;
 }
@@ -33,6 +30,7 @@ export interface SessionIdentityRecord {
   gitRemote: string | null;
   gitRoot: string | null;
   identitySource: string;
+  diagnostics?: IdentityDiagnostic[];
 }
 
 // ─── Identity diagnostics ───────────────────────────────────────────
@@ -128,3 +126,5 @@ export type GitExec = (
   cwd: string,
   ...args: string[]
 ) => Promise<{ stdout: string; exitCode: number }>;
+
+export type GhExec = (cwd: string, args: string[]) => Promise<{ stdout: string; exitCode: number }>;

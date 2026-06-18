@@ -14,9 +14,8 @@ function makeExecGit(results: Record<string, { stdout: string; exitCode: number 
 
 describe('identity collector', () => {
   it('collects session identity with Git info', async () => {
-    const { collectSessionIdentity } = await import(
-      '../../extensions/session-deck/identity/collector.js'
-    );
+    const { collectSessionIdentity } =
+      await import('../../extensions/session-deck/identity/collector.js');
 
     const execGit = makeExecGit({
       'rev-parse --show-toplevel': { stdout: '/home/user/project\n', exitCode: 0 },
@@ -34,6 +33,7 @@ describe('identity collector', () => {
       runtimeId: 'rt-1',
       sessionManager: mockSessionManager,
       execGit,
+      execGhCli: null,
       identitySource: 'startup',
       cwd: '/home/user/project',
       now: () => new Date('2026-06-17T12:00:00.000Z'),
@@ -50,9 +50,8 @@ describe('identity collector', () => {
   });
 
   it('falls back to process.cwd() when cwd option is not provided', async () => {
-    const { collectSessionIdentity } = await import(
-      '../../extensions/session-deck/identity/collector.js'
-    );
+    const { collectSessionIdentity } =
+      await import('../../extensions/session-deck/identity/collector.js');
 
     const execGit = makeExecGit({
       'rev-parse --show-toplevel': { stdout: '', exitCode: 128 },
@@ -61,6 +60,7 @@ describe('identity collector', () => {
     const record = await collectSessionIdentity('rt-1', {
       runtimeId: 'rt-1',
       execGit,
+      execGhCli: null,
       identitySource: 'startup',
       now: () => new Date('2026-06-17T12:00:00.000Z'),
     });
@@ -69,9 +69,8 @@ describe('identity collector', () => {
   });
 
   it('preserves sessionStartedAt across periodic refreshes via existingRecord', async () => {
-    const { collectSessionIdentity } = await import(
-      '../../extensions/session-deck/identity/collector.js'
-    );
+    const { collectSessionIdentity } =
+      await import('../../extensions/session-deck/identity/collector.js');
 
     const execGit = makeExecGit({
       'rev-parse --show-toplevel': { stdout: '', exitCode: 128 },
@@ -82,11 +81,11 @@ describe('identity collector', () => {
       getSessionFile: () => '/tmp/session-456.json',
     };
 
-    // First collection: sessionStartedAt should be set to now
     const firstRecord = await collectSessionIdentity('rt-1', {
       runtimeId: 'rt-1',
       sessionManager: mockSessionManager,
       execGit,
+      execGhCli: null,
       identitySource: 'startup',
       cwd: '/tmp',
       now: () => new Date('2026-06-17T12:00:00.000Z'),
@@ -95,11 +94,11 @@ describe('identity collector', () => {
     expect(firstRecord.sessionStartedAt).toBe('2026-06-17T12:00:00.000Z');
     expect(firstRecord.identityUpdatedAt).toBe('2026-06-17T12:00:00.000Z');
 
-    // Second collection (periodic refresh): sessionStartedAt should be preserved
     const secondRecord = await collectSessionIdentity('rt-1', {
       runtimeId: 'rt-1',
       sessionManager: mockSessionManager,
       execGit,
+      execGhCli: null,
       identitySource: 'periodic',
       cwd: '/tmp',
       existingRecord: firstRecord,
@@ -111,9 +110,8 @@ describe('identity collector', () => {
   });
 
   it('emits diagnostics for missing session fields', async () => {
-    const { collectSessionIdentity } = await import(
-      '../../extensions/session-deck/identity/collector.js'
-    );
+    const { collectSessionIdentity } =
+      await import('../../extensions/session-deck/identity/collector.js');
 
     const execGit = makeExecGit({
       'rev-parse --show-toplevel': { stdout: '', exitCode: 128 },
@@ -125,6 +123,7 @@ describe('identity collector', () => {
     await collectSessionIdentity('rt-1', {
       runtimeId: 'rt-1',
       execGit,
+      execGhCli: null,
       identitySource: 'startup',
       cwd: '/tmp',
       now: () => new Date('2026-06-17T12:00:00.000Z'),
@@ -138,9 +137,8 @@ describe('identity collector', () => {
   });
 
   it('emits diagnostics for non-git directory', async () => {
-    const { collectSessionIdentity } = await import(
-      '../../extensions/session-deck/identity/collector.js'
-    );
+    const { collectSessionIdentity } =
+      await import('../../extensions/session-deck/identity/collector.js');
 
     const execGit = makeExecGit({
       'rev-parse --show-toplevel': { stdout: '', exitCode: 128 },
@@ -152,6 +150,7 @@ describe('identity collector', () => {
     await collectSessionIdentity('rt-1', {
       runtimeId: 'rt-1',
       execGit,
+      execGhCli: null,
       identitySource: 'startup',
       cwd: '/tmp',
       now: () => new Date('2026-06-17T12:00:00.000Z'),
@@ -164,9 +163,8 @@ describe('identity collector', () => {
   });
 
   it('emits diagnostics for detached HEAD', async () => {
-    const { collectSessionIdentity } = await import(
-      '../../extensions/session-deck/identity/collector.js'
-    );
+    const { collectSessionIdentity } =
+      await import('../../extensions/session-deck/identity/collector.js');
 
     const execGit = makeExecGit({
       'rev-parse --show-toplevel': { stdout: '/home/user/project\n', exitCode: 0 },
@@ -181,6 +179,7 @@ describe('identity collector', () => {
     await collectSessionIdentity('rt-1', {
       runtimeId: 'rt-1',
       execGit,
+      execGhCli: null,
       identitySource: 'startup',
       cwd: '/home/user/project',
       now: () => new Date('2026-06-17T12:00:00.000Z'),
@@ -189,5 +188,27 @@ describe('identity collector', () => {
 
     const codes = diagnostics.map((d: any) => d.code);
     expect(codes).toContain('detached_head');
+  });
+
+  it('persists collector diagnostics on the returned record', async () => {
+    const { collectSessionIdentity } =
+      await import('../../extensions/session-deck/identity/collector.js');
+
+    const execGit = makeExecGit({
+      'rev-parse --show-toplevel': { stdout: '', exitCode: 128 },
+    });
+
+    const record = await collectSessionIdentity('rt-1', {
+      runtimeId: 'rt-1',
+      execGit,
+      execGhCli: null,
+      identitySource: 'startup',
+      cwd: '/tmp',
+      now: () => new Date('2026-06-17T12:00:00.000Z'),
+    });
+
+    expect(record.diagnostics?.map((diagnostic) => diagnostic.code)).toEqual(
+      expect.arrayContaining(['session_id_missing', 'session_file_missing', 'not_git_repo']),
+    );
   });
 });

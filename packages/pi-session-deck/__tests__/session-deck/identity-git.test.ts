@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { GitExec } from '../../extensions/session-deck/identity/types.js';
+import type { GhExec, GitExec } from '../../extensions/session-deck/identity/types.js';
 
 function makeExecGit(results: Record<string, { stdout: string; exitCode: number }>): GitExec {
   return vi.fn(async (_cwd: string, ...args: string[]) => {
@@ -66,7 +66,7 @@ describe('identity git resolution', () => {
   it('uses gh CLI for PR URL when available', async () => {
     const { resolvePrUrl } = await import('../../extensions/session-deck/identity/git.js');
 
-    const execGhCli = vi.fn().mockResolvedValue({
+    const execGhCli: GhExec = vi.fn().mockResolvedValue({
       stdout: 'https://github.com/owner/repo/pull/42\n',
       exitCode: 0,
     });
@@ -77,12 +77,21 @@ describe('identity git resolution', () => {
 
     expect(result.prUrl).toBe('https://github.com/owner/repo/pull/42');
     expect(result.strategy).toBe('gh_cli');
+    expect(vi.mocked(execGhCli)).toHaveBeenCalledWith('/home/user/project', [
+      'pr',
+      'view',
+      'feature-x',
+      '--json',
+      'url',
+      '--jq',
+      '.url',
+    ]);
   });
 
   it('returns null with pr_ambiguous when gh CLI is unavailable', async () => {
     const { resolvePrUrl } = await import('../../extensions/session-deck/identity/git.js');
 
-    const execGhCli = vi.fn().mockRejectedValue(new Error('gh not installed'));
+    const execGhCli: GhExec = vi.fn().mockRejectedValue(new Error('gh not installed'));
     const execGit = makeExecGit({
       'remote get-url origin': { stdout: 'https://github.com/owner/repo.git\n', exitCode: 0 },
     });
@@ -101,7 +110,7 @@ describe('identity git resolution', () => {
   it('returns null PR URL when git remote is not GitHub', async () => {
     const { resolvePrUrl } = await import('../../extensions/session-deck/identity/git.js');
 
-    const execGhCli = vi.fn().mockRejectedValue(new Error('gh not installed'));
+    const execGhCli: GhExec = vi.fn().mockRejectedValue(new Error('gh not installed'));
     const execGit = makeExecGit({
       'remote get-url origin': { stdout: 'https://gitlab.com/owner/repo.git\n', exitCode: 0 },
     });
@@ -127,7 +136,7 @@ describe('identity git resolution', () => {
   it('returns null PR URL when gh CLI fails and git remote also fails', async () => {
     const { resolvePrUrl } = await import('../../extensions/session-deck/identity/git.js');
 
-    const execGhCli = vi.fn().mockRejectedValue(new Error('gh not installed'));
+    const execGhCli: GhExec = vi.fn().mockRejectedValue(new Error('gh not installed'));
     const execGit = makeExecGit({
       'remote get-url origin': { stdout: '', exitCode: 128 },
     });

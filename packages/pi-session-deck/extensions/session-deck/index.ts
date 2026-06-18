@@ -5,7 +5,8 @@ import {
   ensurePresenceRuntimeStarted,
   type PresenceRuntimeController,
 } from './presence/runtime.js';
-import { ensureIdentityRuntimeStarted, type SessionManagerLike } from './identity/runtime.js';
+import { ensureIdentityRuntimeStarted } from './identity/runtime.js';
+import type { SessionManagerLike } from './identity/types.js';
 
 export default async function (pi: ExtensionAPI): Promise<void> {
   registerSessionDeckCommand(pi as unknown as PresenceCommandAPI);

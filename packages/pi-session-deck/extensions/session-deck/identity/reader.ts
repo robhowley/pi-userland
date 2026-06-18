@@ -7,6 +7,7 @@ import {
 } from './constants.js';
 import { getDefaultIdentityDirectory, isIdentityRecordFile } from './store.js';
 import type {
+  IdentityDiagnostic,
   IdentityDiagnosticCode,
   IdentityFreshness,
   IdentityFreshnessThresholds,
@@ -119,6 +120,7 @@ export async function readJoinedSessionView(
 
     const joined = joinRecord(presence, identity, now, freshnessThresholds);
     joinedRecords.push(joined);
+    diagnostics.push(...joined.diagnostics);
   }
 
   // Track orphan identity records (identity without matching presence)
@@ -162,6 +164,15 @@ function joinRecord(
       message: 'No identity record for this runtime',
       runtimeId: presence.runtimeId,
     });
+  } else if (identity.diagnostics !== undefined) {
+    for (const diagnostic of identity.diagnostics) {
+      recordDiagnostics.push({
+        code: diagnostic.code,
+        message: diagnostic.message,
+        runtimeId: diagnostic.runtimeId ?? presence.runtimeId,
+        ...(diagnostic.filePath === undefined ? {} : { filePath: diagnostic.filePath }),
+      });
+    }
   }
 
   const joinedRecord: JoinedSessionRecord = {
@@ -233,6 +244,8 @@ function normalizeIdentityRecord(candidate: unknown): SessionIdentityRecord | nu
     return null;
   }
 
+  const diagnostics = normalizeDiagnostics(candidate['diagnostics']);
+
   return {
     runtimeId,
     sessionId: normalizeStringField(candidate['sessionId']),
@@ -246,6 +259,38 @@ function normalizeIdentityRecord(candidate: unknown): SessionIdentityRecord | nu
     gitRemote: normalizeStringField(candidate['gitRemote']),
     gitRoot: normalizeStringField(candidate['gitRoot']),
     identitySource: ensureString(candidate['identitySource']),
+    ...(diagnostics === undefined ? {} : { diagnostics }),
+  };
+}
+
+function normalizeDiagnostics(value: unknown): IdentityDiagnostic[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const diagnostics = value
+    .map((entry) => normalizeDiagnostic(entry))
+    .filter((entry): entry is IdentityDiagnostic => entry !== null);
+
+  return diagnostics.length > 0 ? diagnostics : undefined;
+}
+
+function normalizeDiagnostic(value: unknown): IdentityDiagnostic | null {
+  if (!isObject(value)) {
+    return null;
+  }
+
+  const code = value['code'];
+  const message = value['message'];
+  if (typeof code !== 'string' || typeof message !== 'string') {
+    return null;
+  }
+
+  return {
+    code: code as IdentityDiagnostic['code'],
+    message,
+    ...(typeof value['runtimeId'] === 'string' ? { runtimeId: value['runtimeId'] } : {}),
+    ...(typeof value['filePath'] === 'string' ? { filePath: value['filePath'] } : {}),
   };
 }
 
