@@ -24,7 +24,8 @@ export type ChipDiagnosticCode =
   | 'chip_clear_error'
   | 'chip_scope_invalid'
   | 'chip_runtime_id_missing'
-  | 'chip_session_id_missing';
+  | 'chip_session_id_missing'
+  | 'chip_mirror_error';
 
 export interface ChipDiagnostic {
   code: ChipDiagnosticCode;

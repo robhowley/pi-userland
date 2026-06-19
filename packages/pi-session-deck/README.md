@@ -26,21 +26,50 @@ pi install npm:@robhowley/pi-session-deck
 - `/new` resets activity for the new sessionId while keeping the same runtimeId.
 - Compact activity states: `waiting`, `thinking`, `tool-running`, `error`, `unknown`.
 
-## P4 chips — manual publishing only today
+## P4 chips — automatic setStatus mirroring
 
-`pi-session-deck` keeps the chip backend, but normal sessions do **not** auto-mirror `ctx.ui.setStatus()` output into chip files.
+`pi-session-deck` mirrors `ctx.ui.setStatus()` output into chip JSON sidecars on every session.
 
-Why: under current public Pi APIs, the only documented way to read extension statuses is through a custom footer callback:
+### How it works
 
-- `ctx.ui.setFooter((tui, theme, footerData) => ...)`
-- `footerData.getExtensionStatuses(): ReadonlyMap<string, string>`
+`pi-session-deck` wraps `ctx.ui.setStatus` during `session_start` to capture each status call. The wrapper:
 
-`ctx.ui.setFooter(...)` replaces the built-in Pi footer, so using it for "read-only" mirroring regresses core footer behavior. `pi-session-deck` therefore keeps only the explicit chip publishing backend until Pi exposes a passive observer.
+1. Calls the original `setStatus` first (footer rendering is untouched).
+2. Asynchronously writes the sanitized visible text to a chip file.
+3. Clears the chip file on `setStatus(key, undefined)` or empty-after-sanitize text.
+4. Dedupes repeated writes for the same source + text.
 
-### What remains available today
+This avoids using `ctx.ui.setFooter()` entirely — the native Pi footer is never replaced.
 
-- Chip JSON schema, store paths, and atomic write/clear helpers remain in place.
-- The optional low-level publisher helper is the safe current path for explicit chip writes.
+### Captured fields
+
+| Field | Source |
+|---|---|
+| `source` | Status key (must pass slug validation) |
+| `text` | Visible status text (ANSI/control stripped) |
+| `updatedAt` | Mirror time (ISO 8601) |
+| `runtimeId` | Presence runtime identity |
+| `sessionId` | Current session (from `sessionManager.getSessionId()`) |
+
+Default fallback values:
+- `chipId: 'default'`
+- `scope: 'session'`
+- `level: 'unknown'`
+
+### Mirroring rules
+
+- Writes or replaces `${source}.default.session.json` on add/change.
+- Strips ANSI/control characters, normalizes whitespace, and trims before persistence.
+- Treats empty-after-sanitize text as absent (clears the chip).
+- Dedupes: repeated identical `source + sanitizedText` does not rewrite.
+- Session shutdown clears all tracked mirrored chips.
+- Repeated `session_start` does not double-wrap.
+
+### Known limits
+
+- If another extension calls `setStatus` during its own very early `session_start` before `pi-session-deck` installs the wrapper, that first value can be missed until the next refresh.
+- Shortcut-created fresh UI contexts are not covered by the shared-context patch.
+- This mirror captures footer-status text only; structured chip publishing remains the better contract for richer semantics.
 
 ### Current chip record shape
 
@@ -66,15 +95,9 @@ interface SessionDeckChipRecord {
 ~/.pi/session-deck/chips/{runtimeId}/.{source}.{chipId}.{scope}.{uuid}.tmp
 ```
 
-### Limits
-
-- Until Pi exposes a passive observer, normal sessions do not mirror `ctx.ui.setStatus()` output automatically.
-- A future safe observer would still only see key + visible text, not source-owned `level`, `ttlMs`, multiple chip IDs, or runtime scope.
-- `/session-deck` does not consume chip files yet; this is backend groundwork only.
-
 ## Optional low-level publisher helper
 
-A manual publisher helper exists for custom pipelines and is the safe current P4 integration path:
+A manual publisher helper exists for custom pipelines and richer package-owned data:
 
 ```ts
 import {
