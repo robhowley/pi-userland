@@ -1,6 +1,6 @@
 {
   "name": "@robhowley/pi-session-deck",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "Pi runtime presence foundation: heartbeat-backed presence records with live/stale views, optional --all diagnostics, and --reap cleanup.",
   "files": [
