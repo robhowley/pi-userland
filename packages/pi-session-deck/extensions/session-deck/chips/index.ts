@@ -1,9 +1,9 @@
 /**
  * pi-session-deck P4 chips module index
  *
- * The primary v1 path is zero-touch footer mirroring inside the
- * session-deck extension. These exports remain available for
- * low-level/manual chip publishing and direct store access.
+ * Footer-mirror backend code remains available for future safe integration,
+ * but normal sessions do not auto-install a custom footer. These exports
+ * remain available for low-level/manual chip publishing and direct store access.
  */
 
 export { publishSessionDeckChip, clearSessionDeckChip } from './publisher.js';

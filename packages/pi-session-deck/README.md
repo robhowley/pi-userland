@@ -22,26 +22,29 @@ pi install npm:@robhowley/pi-session-deck
 - Session identity sidecars at `~/.pi/session-deck/identity/${runtimeId}.json`, including `sessionName` when set via `/name` or `--name`.
 - Current activity sidecars at `~/.pi/session-deck/activity/${runtimeId}.json`.
 - Chip sidecars at `~/.pi/session-deck/chips/${runtimeId}/${source}.${chipId}.${scope}.json`.
-- Zero-touch mirroring of visible `ctx.ui.setStatus()` footer statuses into chip files.
+- Backend chip sidecars plus a manual publisher helper for explicit chip writes.
 - `/new` resets activity for the new sessionId while keeping the same runtimeId.
 - Compact activity states: `waiting`, `thinking`, `tool-running`, `error`, `unknown`.
 
-## P4 chips — zero-touch `setStatus()` mirroring
+## P4 chips — footer-based zero-touch mirroring is disabled by default
 
-If another extension already calls `ctx.ui.setStatus(key, text)`, `pi-session-deck` can mirror that visible footer status into a chip JSON file with no source-package changes.
+`pi-session-deck` keeps the chip backend and mirror helper code, but normal sessions do **not** auto-mirror `ctx.ui.setStatus()` output into chip files.
 
-### Mirror source
-
-The mirror reads the documented footer data surface:
+Why: under current public Pi APIs, the only documented way to read extension statuses is through a custom footer callback:
 
 - `ctx.ui.setFooter((tui, theme, footerData) => ...)`
 - `footerData.getExtensionStatuses(): ReadonlyMap<string, string>`
 
-This means chip mirroring is **TUI/footer-only** in v1. Non-UI runs do not emit mirrored chips.
+`ctx.ui.setFooter(...)` replaces the built-in Pi footer, so using it for "read-only" mirroring regresses core footer behavior. Until Pi exposes a passive status observer, footer-based zero-touch mirroring should be treated as unsafe and unavailable by default.
 
-### Mirrored record mapping
+### What remains available today
 
-Each visible status becomes one session-scoped chip file:
+- Chip JSON schema, store paths, and atomic write/clear helpers remain in place.
+- `session_start` still resets mirror runtime/session state for backend correctness.
+- `/new` and `session_shutdown` still clear tracked mirrored chip files.
+- The optional low-level publisher helper is the safe current path for explicit chip writes.
+
+### Current chip record shape
 
 ```ts
 interface SessionDeckChipRecord {
@@ -58,27 +61,6 @@ interface SessionDeckChipRecord {
 }
 ```
 
-Default mirrored fields:
-
-- `source = status key`
-- `chipId = "default"`
-- `scope = "session"`
-- `level = "unknown"`
-- `text = sanitized visible status text`
-- `updatedAt = observation time`
-- `runtimeId` from the shared presence runtime
-- `sessionId` from `ctx.sessionManager.getSessionId()`
-
-### Mirroring rules
-
-- Writes or replaces `${source}.default.session.json` on add/change.
-- Clears the chip file when the status disappears.
-- Strips ANSI/control characters, collapses whitespace, and trims before persistence.
-- Treats empty-after-sanitize text as absent.
-- Resets mirror snapshot state on each `session_start`.
-- Clears tracked mirrored chips on `/new` and `session_shutdown`.
-- Fails open: diagnostics only, no throws through render or event paths.
-
 ### Path convention
 
 ```text
@@ -88,13 +70,13 @@ Default mirrored fields:
 
 ### Limits
 
-- The mirror only sees key + visible text, so v1 does **not** recover source-owned `level`, `ttlMs`, multiple chip IDs, or runtime scope.
-- Extensions that do not use `ctx.ui.setStatus()` are not mirrored automatically.
+- Until Pi exposes a passive observer, normal sessions do not mirror `ctx.ui.setStatus()` output automatically.
+- If footer-based mirroring is ever re-enabled, it would still only see key + visible text, not source-owned `level`, `ttlMs`, multiple chip IDs, or runtime scope.
 - `/session-deck` does not consume chip files yet; this is backend groundwork only.
 
 ## Optional low-level publisher helper
 
-A manual publisher helper still exists for custom pipelines, but it is no longer the primary P4 integration story:
+A manual publisher helper exists for custom pipelines and is the safe current P4 integration path:
 
 ```ts
 import {

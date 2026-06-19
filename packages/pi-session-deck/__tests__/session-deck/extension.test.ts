@@ -8,7 +8,6 @@ afterEach(() => {
 type RegisteredHandler = (event: any, ctx: any) => Promise<void>;
 
 function createMirrorMocks() {
-  const footerFactory = vi.fn();
   const statusMirror = {
     reconfigure: vi.fn().mockResolvedValue(undefined),
     resetSnapshot: vi.fn().mockResolvedValue(undefined),
@@ -18,15 +17,14 @@ function createMirrorMocks() {
   };
 
   return {
-    footerFactory,
     statusMirror,
     createStatusMirror: vi.fn(() => statusMirror),
-    createStatusMirrorFooterFactory: vi.fn(() => footerFactory),
+    createStatusMirrorFooterFactory: vi.fn(),
   };
 }
 
 describe('pi-session-deck extension', () => {
-  it('registers activity hooks, installs the footer mirror, and resets it on repeated session_start events', async () => {
+  it('registers activity hooks, preserves the core footer, and resets mirrored chip state on repeated session_start events', async () => {
     const ensurePresenceRuntimeStarted = vi.fn().mockResolvedValue({
       runtime: {
         runtimeId: 'runtime-1',
@@ -153,18 +151,8 @@ describe('pi-session-deck extension', () => {
       'session-1',
     );
 
-    expect(mirrorMocks.createStatusMirrorFooterFactory).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        cwd: '/repo',
-        model: { id: 'gpt-5', provider: 'openai' },
-        getContextUsage: ctx.getContextUsage,
-        sessionManager: ctx.sessionManager,
-      }),
-      mirrorMocks.statusMirror,
-    );
-    expect(ctx.ui.setFooter).toHaveBeenNthCalledWith(1, mirrorMocks.footerFactory);
-    expect(ctx.ui.setFooter).toHaveBeenNthCalledWith(2, mirrorMocks.footerFactory);
+    expect(mirrorMocks.createStatusMirrorFooterFactory).not.toHaveBeenCalled();
+    expect(ctx.ui.setFooter).not.toHaveBeenCalled();
 
     expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenNthCalledWith(1, 'session-deck', undefined);
     expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenNthCalledWith(2, 'session-deck', undefined);
@@ -312,7 +300,7 @@ describe('pi-session-deck extension', () => {
     expect(stopIdentityRuntime).toHaveBeenCalledTimes(1);
   });
 
-  it('skips footer install when no footer API is available', async () => {
+  it('does not install the footer mirror by default even when footer APIs are available', async () => {
     const ensurePresenceRuntimeStarted = vi.fn().mockResolvedValue({
       runtime: {
         runtimeId: 'runtime-1',
@@ -366,19 +354,21 @@ describe('pi-session-deck extension', () => {
     await install(pi as never);
 
     const ctx = {
-      mode: 'print',
+      mode: 'tui',
       sessionManager: {
         getSessionId: () => 'session-1',
         getSessionFile: () => '/tmp/session-1.md',
       },
       ui: {
         setStatus: vi.fn(),
+        setFooter: vi.fn(),
       },
     };
 
     await handlers.get('session_start')?.({ reason: 'startup' }, ctx);
 
     expect(mirrorMocks.createStatusMirrorFooterFactory).not.toHaveBeenCalled();
+    expect(vi.mocked(ctx.ui.setFooter)).not.toHaveBeenCalled();
     expect(mirrorMocks.statusMirror.reconfigure).toHaveBeenCalledTimes(1);
     expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith('session-deck', undefined);
   });

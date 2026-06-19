@@ -7,12 +7,7 @@ import {
   type PresenceRuntimeController,
 } from './presence/runtime.js';
 import { ensureIdentityRuntimeStarted, stopIdentityRuntime } from './identity/runtime.js';
-import {
-  createStatusMirror,
-  createStatusMirrorFooterFactory,
-  type SessionDeckStatusMirror,
-  type StatusMirrorFooterFactory,
-} from './chips/mirror.js';
+import { createStatusMirror } from './chips/mirror.js';
 import type { SessionManagerLike } from './identity/types.js';
 
 type SessionStartReason = 'startup' | 'reload' | 'new' | 'resume' | 'fork';
@@ -38,7 +33,6 @@ interface SessionStartContext {
   };
   ui: {
     setStatus: (key: string, text: string | undefined) => void;
-    setFooter?: (factory: StatusMirrorFooterFactory | undefined) => void;
   };
 }
 
@@ -72,7 +66,6 @@ export default async function (pi: ExtensionAPI): Promise<void> {
         resetSnapshot: true,
       },
     );
-    installStatusMirrorFooter(ctx, statusMirror);
 
     ctx.ui.setStatus(SESSION_DECK_COMMAND_NAME, getPresenceStartupStatus(presenceRuntime));
 
@@ -145,27 +138,6 @@ function createSessionManager(ctx: SessionStartContext): SessionManagerLike {
     getSessionName: () => ctx.sessionManager?.getSessionName?.(),
     getCwd: () => ctx.sessionManager?.getCwd?.() ?? ctx.cwd,
   };
-}
-
-function installStatusMirrorFooter(
-  ctx: SessionStartContext,
-  statusMirror: SessionDeckStatusMirror,
-): void {
-  if (ctx.mode === 'json' || ctx.mode === 'print' || typeof ctx.ui.setFooter !== 'function') {
-    return;
-  }
-
-  ctx.ui.setFooter(
-    createStatusMirrorFooterFactory(
-      {
-        ...(ctx.cwd === undefined ? {} : { cwd: ctx.cwd }),
-        ...(ctx.model === undefined ? {} : { model: ctx.model }),
-        ...(ctx.getContextUsage === undefined ? {} : { getContextUsage: ctx.getContextUsage }),
-        ...(ctx.sessionManager === undefined ? {} : { sessionManager: ctx.sessionManager }),
-      },
-      statusMirror,
-    ),
-  );
 }
 
 function getActivityMessage(event: { message?: unknown }): {
