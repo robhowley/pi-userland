@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createStatusMirror,
-  createStatusMirrorFooterFactory,
   diffMirroredStatusSnapshots,
   sanitizeMirroredStatusText,
 } from '../../extensions/session-deck/chips/mirror.js';
@@ -198,64 +197,6 @@ describe('createStatusMirror', () => {
 
     expect(record.sessionId).toBe('session-2');
     expect(record.updatedAt).toBe('2026-06-18T16:10:00.000Z');
-  });
-
-  it('renders through the footer factory and mirrors footer statuses', async () => {
-    const directory = await createTestDir();
-    const mirror = createStatusMirror({
-      now: () => new Date('2026-06-18T16:00:00.000Z'),
-    });
-
-    await mirror.reconfigure(
-      {
-        runtimeId: 'runtime-1',
-        getSessionId: () => 'session-1',
-        directory,
-      },
-      { resetSnapshot: true },
-    );
-
-    const footerFactory = createStatusMirrorFooterFactory(
-      {
-        cwd: '/repo',
-        model: { id: 'gpt-5', provider: 'openai' },
-        getContextUsage: () => ({ percent: 12.5, contextWindow: 200_000 }),
-        sessionManager: {
-          getEntries: () => [],
-          getSessionName: () => 'session-1',
-          getCwd: () => '/repo',
-        },
-      },
-      mirror,
-    );
-
-    const component = footerFactory(
-      { requestRender: vi.fn() },
-      { fg: (_tone, text) => text },
-      {
-        getGitBranch: () => 'main',
-        getExtensionStatuses: () => new Map([['merge-ready', '\u001b[2mReady\u001b[0m']]),
-        getAvailableProviderCount: () => 1,
-        onBranchChange: () => vi.fn(),
-      },
-    );
-
-    const lines = component.render(80);
-
-    expect(lines).toHaveLength(3);
-    expect(lines[0]).toContain('/repo');
-    expect(lines[0]).toContain('(main)');
-    expect(lines[0]).toContain('session-1');
-    expect(lines[1]).toContain('12.5%/200k');
-    expect(lines[1]).toContain('gpt-5');
-    expect(lines[2]).toBe('Ready');
-
-    await vi.waitFor(async () => {
-      const record = JSON.parse(
-        await readFile(join(directory, 'runtime-1', 'merge-ready.default.session.json'), 'utf8'),
-      ) as SessionDeckChipRecord;
-      expect(record.text).toBe('Ready');
-    });
   });
 
   it('fails open when write and clear operations throw', async () => {

@@ -1,9 +1,8 @@
 /**
  * pi-session-deck P4 chips module index
  *
- * Footer-mirror backend code remains available for future safe integration,
- * but normal sessions do not auto-install a custom footer. These exports
- * remain available for low-level/manual chip publishing and direct store access.
+ * Public exports stay focused on manual chip publishing and direct store access.
+ * No footer mirroring helper is exported or auto-installed.
  */
 
 export { publishSessionDeckChip, clearSessionDeckChip } from './publisher.js';

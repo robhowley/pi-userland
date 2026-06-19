@@ -19,12 +19,11 @@ function createMirrorMocks() {
   return {
     statusMirror,
     createStatusMirror: vi.fn(() => statusMirror),
-    createStatusMirrorFooterFactory: vi.fn(),
   };
 }
 
 describe('pi-session-deck extension', () => {
-  it('registers activity hooks, preserves the core footer, and resets mirrored chip state on repeated session_start events', async () => {
+  it('registers activity hooks, preserves footer ownership, and resets mirrored chip state on repeated session_start events', async () => {
     const ensurePresenceRuntimeStarted = vi.fn().mockResolvedValue({
       runtime: {
         runtimeId: 'runtime-1',
@@ -151,7 +150,6 @@ describe('pi-session-deck extension', () => {
       'session-1',
     );
 
-    expect(mirrorMocks.createStatusMirrorFooterFactory).not.toHaveBeenCalled();
     expect(ctx.ui.setFooter).not.toHaveBeenCalled();
 
     expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenNthCalledWith(1, 'session-deck', undefined);
@@ -300,7 +298,7 @@ describe('pi-session-deck extension', () => {
     expect(stopIdentityRuntime).toHaveBeenCalledTimes(1);
   });
 
-  it('does not install the footer mirror by default even when footer APIs are available', async () => {
+  it('does not touch footer APIs during startup even when they are available', async () => {
     const ensurePresenceRuntimeStarted = vi.fn().mockResolvedValue({
       runtime: {
         runtimeId: 'runtime-1',
@@ -367,13 +365,12 @@ describe('pi-session-deck extension', () => {
 
     await handlers.get('session_start')?.({ reason: 'startup' }, ctx);
 
-    expect(mirrorMocks.createStatusMirrorFooterFactory).not.toHaveBeenCalled();
     expect(vi.mocked(ctx.ui.setFooter)).not.toHaveBeenCalled();
     expect(mirrorMocks.statusMirror.reconfigure).toHaveBeenCalledTimes(1);
     expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith('session-deck', undefined);
   });
 
-  it('surfaces degraded startup state in the footer status', async () => {
+  it('surfaces degraded startup state through session-deck status', async () => {
     const ensurePresenceRuntimeStarted = vi.fn().mockResolvedValue({
       runtime: {
         runtimeId: 'runtime-1',

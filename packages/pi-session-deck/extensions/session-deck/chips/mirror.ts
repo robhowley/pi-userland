@@ -1,4 +1,3 @@
-import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
 import {
   CHIP_DIAGNOSTIC_CODES,
@@ -49,51 +48,6 @@ export interface SessionDeckStatusMirror {
   clearTracked(): Promise<void>;
   getSnapshot(): MirroredStatusSnapshot;
 }
-
-export interface StatusMirrorFooterContext {
-  cwd?: string;
-  model?: {
-    id?: string;
-    provider?: string;
-    reasoning?: unknown;
-  } | null;
-  getContextUsage?: () => {
-    percent?: number | null;
-    contextWindow?: number | null;
-  } | null;
-  sessionManager?: {
-    getEntries?: () => unknown[];
-    getSessionName?: () => string | null;
-    getCwd?: () => string;
-  };
-}
-
-interface FooterThemeLike {
-  fg: (tone: string, text: string) => string;
-}
-
-interface FooterTuiLike {
-  requestRender: () => void;
-}
-
-interface FooterDataLike {
-  getGitBranch: () => string | null;
-  getExtensionStatuses: () => ReadonlyMap<string, string>;
-  getAvailableProviderCount: () => number;
-  onBranchChange: (callback: () => void) => () => void;
-}
-
-interface FooterComponentLike {
-  render: (width: number) => string[];
-  invalidate: () => void;
-  dispose?: () => void;
-}
-
-export type StatusMirrorFooterFactory = (
-  tui: FooterTuiLike,
-  theme: FooterThemeLike,
-  footerData: FooterDataLike,
-) => FooterComponentLike;
 
 export function sanitizeMirroredStatusText(text: string): string {
   return replaceControlCharacters(stripVTControlCharacters(text))
@@ -311,47 +265,6 @@ export function createStatusMirror(options: StatusMirrorOptions = {}): SessionDe
   }
 }
 
-export function createStatusMirrorFooterFactory(
-  context: StatusMirrorFooterContext,
-  mirror: SessionDeckStatusMirror,
-  options: { onDiagnostic?: ChipDiagnosticSink } = {},
-): StatusMirrorFooterFactory {
-  const emit = options.onDiagnostic ?? noopDiagnostic;
-
-  return (tui, theme, footerData) => {
-    const unsubscribe = footerData.onBranchChange(() => {
-      try {
-        tui.requestRender();
-      } catch (error) {
-        emit(
-          CHIP_DIAGNOSTIC_CODES.CHIP_MIRROR_ERROR,
-          `Failed to request footer render: ${getErrorMessage(error)}`,
-        );
-      }
-    });
-
-    return {
-      dispose: unsubscribe,
-      invalidate() {
-        // no-op; footerData owns branch invalidation and status mirroring samples on render
-      },
-      render(width) {
-        try {
-          const statuses = footerData.getExtensionStatuses();
-          void mirror.observeStatuses(statuses);
-          return renderFooterLines(width, theme, footerData, context, statuses);
-        } catch (error) {
-          emit(
-            CHIP_DIAGNOSTIC_CODES.CHIP_MIRROR_ERROR,
-            `Failed to render session-deck footer mirror: ${getErrorMessage(error)}`,
-          );
-          return [];
-        }
-      },
-    };
-  };
-}
-
 function buildMirroredStatusSnapshot(
   statuses: ReadonlyMap<string, string>,
   emit: ChipDiagnosticSink,
@@ -378,144 +291,6 @@ function buildMirroredStatusSnapshot(
   }
 
   return snapshot;
-}
-
-function renderFooterLines(
-  width: number,
-  theme: FooterThemeLike,
-  footerData: FooterDataLike,
-  context: StatusMirrorFooterContext,
-  statuses: ReadonlyMap<string, string>,
-): string[] {
-  const lines = [
-    applyTheme(theme, 'dim', truncateToWidth(renderPwdLine(footerData, context), width)),
-    applyTheme(theme, 'dim', renderStatsLine(width, footerData, context)),
-  ];
-
-  const statusTexts = Array.from(statuses.entries())
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([, text]) => sanitizeMirroredStatusText(text))
-    .filter((text) => text.length > 0);
-
-  if (statusTexts.length > 0) {
-    lines.push(applyTheme(theme, 'dim', truncateToWidth(statusTexts.join(' '), width)));
-  }
-
-  return lines;
-}
-
-function renderPwdLine(footerData: FooterDataLike, context: StatusMirrorFooterContext): string {
-  const cwd = resolveFooterCwd(context);
-  let pwd = formatCwdForFooter(cwd, process.env['HOME'] || process.env['USERPROFILE']);
-
-  const branch = safeCall(() => footerData.getGitBranch(), null);
-  if (branch !== null && branch.length > 0) {
-    pwd = `${pwd} (${branch})`;
-  }
-
-  const sessionName = safeCall(() => context.sessionManager?.getSessionName?.() ?? null, null);
-  if (sessionName !== null && sessionName.length > 0) {
-    pwd = `${pwd} • ${sessionName}`;
-  }
-
-  return pwd;
-}
-
-function renderStatsLine(
-  width: number,
-  footerData: FooterDataLike,
-  context: StatusMirrorFooterContext,
-): string {
-  const totals = getAssistantUsageTotals(context.sessionManager?.getEntries);
-  const statsParts: string[] = [];
-
-  if (totals.input > 0) {
-    statsParts.push(`↑${formatTokens(totals.input)}`);
-  }
-  if (totals.output > 0) {
-    statsParts.push(`↓${formatTokens(totals.output)}`);
-  }
-  if (totals.cacheRead > 0) {
-    statsParts.push(`R${formatTokens(totals.cacheRead)}`);
-  }
-  if (totals.cacheWrite > 0) {
-    statsParts.push(`W${formatTokens(totals.cacheWrite)}`);
-  }
-  if (totals.cost > 0) {
-    statsParts.push(`$${totals.cost.toFixed(3)}`);
-  }
-
-  const contextUsage = safeCall(() => context.getContextUsage?.() ?? null, null);
-  const contextWindow =
-    typeof contextUsage?.contextWindow === 'number' && contextUsage.contextWindow > 0
-      ? contextUsage.contextWindow
-      : null;
-  const contextPercent =
-    typeof contextUsage?.percent === 'number' ? contextUsage.percent.toFixed(1) : null;
-  if (contextWindow !== null || contextPercent !== null) {
-    const left = contextPercent ?? '?';
-    const right = contextWindow === null ? '?' : formatTokens(contextWindow);
-    statsParts.push(`${left}%/${right}`.replace('?%/', '?/'));
-  }
-
-  const leftText = statsParts.join(' ');
-  const baseModel = typeof context.model?.id === 'string' ? context.model.id : 'no-model';
-  const providerCount = safeCall(() => footerData.getAvailableProviderCount(), 0);
-  const rightText =
-    providerCount > 1 && typeof context.model?.provider === 'string'
-      ? `(${context.model.provider}) ${baseModel}`
-      : baseModel;
-
-  if (leftText.length === 0) {
-    return truncateToWidth(rightText, width);
-  }
-
-  return alignFooterSides(leftText, rightText, width);
-}
-
-function getAssistantUsageTotals(getEntries: (() => unknown[]) | undefined): {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  cost: number;
-} {
-  const totals = {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    cost: 0,
-  };
-
-  const entries = safeCall(() => getEntries?.() ?? [], [] as unknown[]);
-  for (const entry of entries) {
-    if (!isObject(entry) || entry['type'] !== 'message') {
-      continue;
-    }
-
-    const message = entry['message'];
-    if (!isObject(message) || message['role'] !== 'assistant') {
-      continue;
-    }
-
-    const usage = message['usage'];
-    if (!isObject(usage)) {
-      continue;
-    }
-
-    totals.input += getNumber(usage['input']);
-    totals.output += getNumber(usage['output']);
-    totals.cacheRead += getNumber(usage['cacheRead']);
-    totals.cacheWrite += getNumber(usage['cacheWrite']);
-
-    const cost = usage['cost'];
-    if (isObject(cost)) {
-      totals.cost += getNumber(cost['total']);
-    }
-  }
-
-  return totals;
 }
 
 function resolveSessionId(
@@ -589,93 +364,6 @@ function removeSourcesFromSnapshot(
   return next;
 }
 
-function resolveFooterCwd(context: StatusMirrorFooterContext): string {
-  return (
-    context.cwd ??
-    safeCall(() => context.sessionManager?.getCwd?.() ?? process.cwd(), process.cwd())
-  );
-}
-
-function applyTheme(theme: FooterThemeLike, tone: string, text: string): string {
-  return safeCall(() => theme.fg(tone, text), text);
-}
-
-function alignFooterSides(left: string, right: string, width: number): string {
-  const leftWidth = visibleWidth(left);
-  const rightWidth = visibleWidth(right);
-  const minimumPadding = 2;
-
-  if (leftWidth + minimumPadding + rightWidth <= width) {
-    return `${left}${' '.repeat(width - leftWidth - rightWidth)}${right}`;
-  }
-
-  const availableForRight = Math.max(0, width - leftWidth - minimumPadding);
-  if (availableForRight === 0) {
-    return truncateToWidth(left, width);
-  }
-
-  const truncatedRight = truncateToWidth(right, availableForRight, '');
-  const padding = ' '.repeat(Math.max(0, width - leftWidth - visibleWidth(truncatedRight)));
-  return `${left}${padding}${truncatedRight}`;
-}
-
-function visibleWidth(text: string): number {
-  return stripVTControlCharacters(text).length;
-}
-
-function truncateToWidth(text: string, width: number, ellipsis = '...'): string {
-  if (width <= 0) {
-    return '';
-  }
-
-  if (visibleWidth(text) <= width) {
-    return text;
-  }
-
-  if (ellipsis.length >= width) {
-    return ellipsis.slice(0, width);
-  }
-
-  return `${text.slice(0, Math.max(0, width - ellipsis.length))}${ellipsis}`;
-}
-
-function formatTokens(count: number): string {
-  if (count < 1_000) {
-    return count.toString();
-  }
-  if (count < 10_000) {
-    return `${(count / 1_000).toFixed(1)}k`;
-  }
-  if (count < 1_000_000) {
-    return `${Math.round(count / 1_000)}k`;
-  }
-  if (count < 10_000_000) {
-    return `${(count / 1_000_000).toFixed(1)}M`;
-  }
-  return `${Math.round(count / 1_000_000)}M`;
-}
-
-function formatCwdForFooter(cwd: string, home: string | undefined): string {
-  if (home === undefined) {
-    return cwd;
-  }
-
-  const resolvedCwd = resolve(cwd);
-  const resolvedHome = resolve(home);
-  const relativeToHome = relative(resolvedHome, resolvedCwd);
-  const isInsideHome =
-    relativeToHome === '' ||
-    (relativeToHome !== '..' &&
-      !relativeToHome.startsWith(`..${sep}`) &&
-      !isAbsolute(relativeToHome));
-
-  if (!isInsideHome) {
-    return cwd;
-  }
-
-  return relativeToHome === '' ? '~' : `~${sep}${relativeToHome}`;
-}
-
 function replaceControlCharacters(text: string): string {
   let sanitized = '';
 
@@ -689,22 +377,6 @@ function replaceControlCharacters(text: string): string {
 
 function isControlCodePoint(codePoint: number): boolean {
   return (codePoint >= 0 && codePoint <= 31) || (codePoint >= 127 && codePoint <= 159);
-}
-
-function getNumber(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
-}
-
-function isObject(candidate: unknown): candidate is Record<string, unknown> {
-  return typeof candidate === 'object' && candidate !== null;
-}
-
-function safeCall<T>(callback: () => T, fallback: T): T {
-  try {
-    return callback();
-  } catch {
-    return fallback;
-  }
 }
 
 function getErrorMessage(error: unknown): string {

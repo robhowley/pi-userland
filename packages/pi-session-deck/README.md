@@ -26,9 +26,9 @@ pi install npm:@robhowley/pi-session-deck
 - `/new` resets activity for the new sessionId while keeping the same runtimeId.
 - Compact activity states: `waiting`, `thinking`, `tool-running`, `error`, `unknown`.
 
-## P4 chips — footer-based zero-touch mirroring is disabled by default
+## P4 chips — zero-touch status mirroring is not supported today
 
-`pi-session-deck` keeps the chip backend and mirror helper code, but normal sessions do **not** auto-mirror `ctx.ui.setStatus()` output into chip files.
+`pi-session-deck` keeps the chip backend, but normal sessions do **not** auto-mirror `ctx.ui.setStatus()` output into chip files.
 
 Why: under current public Pi APIs, the only documented way to read extension statuses is through a custom footer callback:
 
@@ -40,7 +40,7 @@ Why: under current public Pi APIs, the only documented way to read extension sta
 ### What remains available today
 
 - Chip JSON schema, store paths, and atomic write/clear helpers remain in place.
-- `session_start` still resets mirror runtime/session state for backend correctness.
+- Internal mirror state still resets on `session_start` for backend correctness.
 - `/new` and `session_shutdown` still clear tracked mirrored chip files.
 - The optional low-level publisher helper is the safe current path for explicit chip writes.
 
@@ -71,7 +71,7 @@ interface SessionDeckChipRecord {
 ### Limits
 
 - Until Pi exposes a passive observer, normal sessions do not mirror `ctx.ui.setStatus()` output automatically.
-- If footer-based mirroring is ever re-enabled, it would still only see key + visible text, not source-owned `level`, `ttlMs`, multiple chip IDs, or runtime scope.
+- A future safe observer would still only see key + visible text, not source-owned `level`, `ttlMs`, multiple chip IDs, or runtime scope.
 - `/session-deck` does not consume chip files yet; this is backend groundwork only.
 
 ## Optional low-level publisher helper
