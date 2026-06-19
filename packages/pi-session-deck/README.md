@@ -26,7 +26,7 @@ pi install npm:@robhowley/pi-session-deck
 - `/new` resets activity for the new sessionId while keeping the same runtimeId.
 - Compact activity states: `waiting`, `thinking`, `tool-running`, `error`, `unknown`.
 
-## P4 chips — zero-touch status mirroring is not supported today
+## P4 chips — manual publishing only today
 
 `pi-session-deck` keeps the chip backend, but normal sessions do **not** auto-mirror `ctx.ui.setStatus()` output into chip files.
 
@@ -35,13 +35,11 @@ Why: under current public Pi APIs, the only documented way to read extension sta
 - `ctx.ui.setFooter((tui, theme, footerData) => ...)`
 - `footerData.getExtensionStatuses(): ReadonlyMap<string, string>`
 
-`ctx.ui.setFooter(...)` replaces the built-in Pi footer, so using it for "read-only" mirroring regresses core footer behavior. Until Pi exposes a passive status observer, footer-based zero-touch mirroring should be treated as unsafe and unavailable by default.
+`ctx.ui.setFooter(...)` replaces the built-in Pi footer, so using it for "read-only" mirroring regresses core footer behavior. `pi-session-deck` therefore keeps only the explicit chip publishing backend until Pi exposes a passive observer.
 
 ### What remains available today
 
 - Chip JSON schema, store paths, and atomic write/clear helpers remain in place.
-- Internal mirror state still resets on `session_start` for backend correctness.
-- `/new` and `session_shutdown` still clear tracked mirrored chip files.
 - The optional low-level publisher helper is the safe current path for explicit chip writes.
 
 ### Current chip record shape
@@ -85,7 +83,7 @@ import {
 } from '@robhowley/pi-session-deck/extensions/session-deck/chips/publisher.js';
 ```
 
-It reuses the same validation and atomic write path as the mirror.
+It reuses the same validation and atomic write path as the underlying chip writer.
 
 ## Privacy limits
 

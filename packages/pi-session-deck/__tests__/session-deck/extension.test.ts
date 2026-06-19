@@ -7,23 +7,8 @@ afterEach(() => {
 
 type RegisteredHandler = (event: any, ctx: any) => Promise<void>;
 
-function createMirrorMocks() {
-  const statusMirror = {
-    reconfigure: vi.fn().mockResolvedValue(undefined),
-    resetSnapshot: vi.fn().mockResolvedValue(undefined),
-    observeStatuses: vi.fn().mockResolvedValue(undefined),
-    clearTracked: vi.fn().mockResolvedValue(undefined),
-    getSnapshot: vi.fn().mockReturnValue(new Map()),
-  };
-
-  return {
-    statusMirror,
-    createStatusMirror: vi.fn(() => statusMirror),
-  };
-}
-
 describe('pi-session-deck extension', () => {
-  it('registers activity hooks, preserves footer ownership, and resets mirrored chip state on repeated session_start events', async () => {
+  it('registers activity hooks, preserves footer ownership, and refreshes identity/activity on repeated session_start events', async () => {
     const ensurePresenceRuntimeStarted = vi.fn().mockResolvedValue({
       runtime: {
         runtimeId: 'runtime-1',
@@ -39,7 +24,6 @@ describe('pi-session-deck extension', () => {
     const refreshIdentity = vi.fn().mockResolvedValue(undefined);
     const refreshActivity = vi.fn().mockResolvedValue(undefined);
     const registerSessionDeckCommand = vi.fn();
-    const mirrorMocks = createMirrorMocks();
 
     vi.doMock('../../extensions/session-deck/presence/runtime.js', () => ({
       ensurePresenceRuntimeStarted,
@@ -67,7 +51,6 @@ describe('pi-session-deck extension', () => {
     vi.doMock('../../extensions/session-deck/identity/command.js', () => ({
       registerSessionDeckCommand,
     }));
-    vi.doMock('../../extensions/session-deck/chips/mirror.js', () => mirrorMocks);
 
     const { default: install } = await import('../../extensions/session-deck/index.js');
     const handlers = new Map<string, RegisteredHandler>();
@@ -80,7 +63,6 @@ describe('pi-session-deck extension', () => {
     await install(pi as never);
 
     expect(registerSessionDeckCommand).toHaveBeenCalledWith(pi);
-    expect(mirrorMocks.createStatusMirror).toHaveBeenCalledTimes(1);
     expect(Array.from(handlers.keys())).toEqual([
       'session_start',
       'message_end',
@@ -123,35 +105,7 @@ describe('pi-session-deck extension', () => {
     expect(refreshIdentity.mock.calls[0]?.[1]?.getCwd?.()).toBe('/repo');
     expect(refreshActivity).toHaveBeenNthCalledWith(1, 'startup', expect.any(Object));
     expect(refreshActivity).toHaveBeenNthCalledWith(2, 'new', expect.any(Object));
-
-    expect(mirrorMocks.statusMirror.reconfigure).toHaveBeenNthCalledWith(
-      1,
-      {
-        runtimeId: 'runtime-1',
-        getSessionId: expect.any(Function),
-      },
-      {
-        clearTracked: false,
-        resetSnapshot: true,
-      },
-    );
-    expect(mirrorMocks.statusMirror.reconfigure).toHaveBeenNthCalledWith(
-      2,
-      {
-        runtimeId: 'runtime-1',
-        getSessionId: expect.any(Function),
-      },
-      {
-        clearTracked: true,
-        resetSnapshot: true,
-      },
-    );
-    expect(mirrorMocks.statusMirror.reconfigure.mock.calls[0]?.[0].getSessionId()).toBe(
-      'session-1',
-    );
-
     expect(ctx.ui.setFooter).not.toHaveBeenCalled();
-
     expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenNthCalledWith(1, 'session-deck', undefined);
     expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenNthCalledWith(2, 'session-deck', undefined);
   });
@@ -197,7 +151,6 @@ describe('pi-session-deck extension', () => {
     vi.doMock('../../extensions/session-deck/identity/command.js', () => ({
       registerSessionDeckCommand: vi.fn(),
     }));
-    vi.doMock('../../extensions/session-deck/chips/mirror.js', () => createMirrorMocks());
 
     const { default: install } = await import('../../extensions/session-deck/index.js');
     const handlers = new Map<string, RegisteredHandler>();
@@ -239,7 +192,7 @@ describe('pi-session-deck extension', () => {
     expect(activityRuntime.recordTurnEnd).toHaveBeenCalledTimes(1);
   });
 
-  it('clears tracked mirrored chips on session_shutdown', async () => {
+  it('stops the identity runtime on session_shutdown', async () => {
     const ensurePresenceRuntimeStarted = vi.fn().mockResolvedValue({
       runtime: {
         runtimeId: 'runtime-1',
@@ -253,7 +206,6 @@ describe('pi-session-deck extension', () => {
       stop: vi.fn(),
     });
     const stopIdentityRuntime = vi.fn().mockResolvedValue(undefined);
-    const mirrorMocks = createMirrorMocks();
 
     vi.doMock('../../extensions/session-deck/presence/runtime.js', () => ({
       ensurePresenceRuntimeStarted,
@@ -281,7 +233,6 @@ describe('pi-session-deck extension', () => {
     vi.doMock('../../extensions/session-deck/identity/command.js', () => ({
       registerSessionDeckCommand: vi.fn(),
     }));
-    vi.doMock('../../extensions/session-deck/chips/mirror.js', () => mirrorMocks);
 
     const { default: install } = await import('../../extensions/session-deck/index.js');
     const handlers = new Map<string, RegisteredHandler>();
@@ -294,7 +245,6 @@ describe('pi-session-deck extension', () => {
     await install(pi as never);
     await handlers.get('session_shutdown')?.({}, {});
 
-    expect(mirrorMocks.statusMirror.clearTracked).toHaveBeenCalledTimes(1);
     expect(stopIdentityRuntime).toHaveBeenCalledTimes(1);
   });
 
@@ -311,7 +261,6 @@ describe('pi-session-deck extension', () => {
       isRunning: vi.fn(() => true),
       stop: vi.fn(),
     });
-    const mirrorMocks = createMirrorMocks();
 
     vi.doMock('../../extensions/session-deck/presence/runtime.js', () => ({
       ensurePresenceRuntimeStarted,
@@ -339,7 +288,6 @@ describe('pi-session-deck extension', () => {
     vi.doMock('../../extensions/session-deck/identity/command.js', () => ({
       registerSessionDeckCommand: vi.fn(),
     }));
-    vi.doMock('../../extensions/session-deck/chips/mirror.js', () => mirrorMocks);
 
     const { default: install } = await import('../../extensions/session-deck/index.js');
     const handlers = new Map<string, RegisteredHandler>();
@@ -366,7 +314,6 @@ describe('pi-session-deck extension', () => {
     await handlers.get('session_start')?.({ reason: 'startup' }, ctx);
 
     expect(vi.mocked(ctx.ui.setFooter)).not.toHaveBeenCalled();
-    expect(mirrorMocks.statusMirror.reconfigure).toHaveBeenCalledTimes(1);
     expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith('session-deck', undefined);
   });
 
@@ -415,7 +362,6 @@ describe('pi-session-deck extension', () => {
     vi.doMock('../../extensions/session-deck/identity/command.js', () => ({
       registerSessionDeckCommand: vi.fn(),
     }));
-    vi.doMock('../../extensions/session-deck/chips/mirror.js', () => createMirrorMocks());
 
     const { default: install } = await import('../../extensions/session-deck/index.js');
     const handlers = new Map<string, RegisteredHandler>();

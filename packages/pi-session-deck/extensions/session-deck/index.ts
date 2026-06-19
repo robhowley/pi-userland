@@ -7,7 +7,6 @@ import {
   type PresenceRuntimeController,
 } from './presence/runtime.js';
 import { ensureIdentityRuntimeStarted, stopIdentityRuntime } from './identity/runtime.js';
-import { createStatusMirror } from './chips/mirror.js';
 import type { SessionManagerLike } from './identity/types.js';
 
 type SessionStartReason = 'startup' | 'reload' | 'new' | 'resume' | 'fork';
@@ -38,7 +37,6 @@ interface SessionStartContext {
 
 export default async function (pi: ExtensionAPI): Promise<void> {
   registerSessionDeckCommand(pi as unknown as PresenceCommandAPI);
-  const statusMirror = createStatusMirror();
 
   function on<TArgs extends unknown[]>(
     event: string,
@@ -55,17 +53,6 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   on('session_start', async (event: { reason: SessionStartReason }, ctx: SessionStartContext) => {
     const presenceRuntime = await ensurePresenceRuntimeStarted();
     const sessionManager = createSessionManager(ctx);
-
-    await statusMirror.reconfigure(
-      {
-        runtimeId: presenceRuntime.runtime.runtimeId,
-        getSessionId: sessionManager.getSessionId,
-      },
-      {
-        clearTracked: event.reason === 'new',
-        resetSnapshot: true,
-      },
-    );
 
     ctx.ui.setStatus(SESSION_DECK_COMMAND_NAME, getPresenceStartupStatus(presenceRuntime));
 
@@ -115,9 +102,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     await activityRuntime.recordTurnEnd();
   });
 
-  // ─── session_shutdown: clear mirrored session chips + stop polling ──────
   on('session_shutdown', async () => {
-    await statusMirror.clearTracked();
     await stopIdentityRuntime();
   });
 

@@ -10,7 +10,27 @@ import { reapPresenceRecords, type ReapPresenceRecordsOptions } from '../presenc
 import { readPresenceView, type ReadPresenceViewOptions } from '../presence/reader.js';
 import { readJoinedSessionView, type ReadJoinedSessionViewOptions } from './reader.js';
 import type { PresenceDiagnostic, PresenceState, PresenceView } from '../presence/types.js';
-import type { PresenceCommandAPI, PresenceCommandContext } from '../presence/command.js';
+
+export interface PresenceCommandContext {
+  ui: {
+    notify: (message: string, level: 'info' | 'warning' | 'error') => void;
+  };
+}
+
+export interface PresenceCommandRegistration {
+  description?: string;
+  getArgumentCompletions?: (
+    prefix: string,
+  ) =>
+    | Array<{ value: string; label: string }>
+    | null
+    | Promise<Array<{ value: string; label: string }> | null>;
+  handler: (args: string, ctx: PresenceCommandContext) => Promise<void>;
+}
+
+export interface PresenceCommandAPI {
+  registerCommand: (name: string, options: PresenceCommandRegistration) => void;
+}
 
 export interface RegisterSessionDeckCommandOptions extends ReadPresenceViewOptions {
   identityDirectory?: string;
@@ -410,5 +430,3 @@ function getReapOptions(options: RegisterSessionDeckCommandOptions): ReapPresenc
 }
 
 export { SESSION_DECK_COMMAND_NAME };
-
-export type { PresenceCommandContext, PresenceCommandAPI } from '../presence/command.js';

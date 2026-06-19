@@ -8,7 +8,7 @@ import type {
   PresenceCommandAPI,
   PresenceCommandContext,
   PresenceCommandRegistration,
-} from '../../extensions/session-deck/presence/command.js';
+} from '../../extensions/session-deck/identity/command.js';
 import type { PresenceView } from '../../extensions/session-deck/presence/types.js';
 import type { JoinedSessionView } from '../../extensions/session-deck/identity/types.js';
 import type { SessionDeckView } from '../../extensions/session-deck/activity/types.js';

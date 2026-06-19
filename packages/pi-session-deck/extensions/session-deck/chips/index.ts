@@ -2,7 +2,7 @@
  * pi-session-deck P4 chips module index
  *
  * Public exports stay focused on manual chip publishing and direct store access.
- * No footer mirroring helper is exported or auto-installed.
+ * Unsupported footer/status mirroring paths are intentionally absent.
  */
 
 export { publishSessionDeckChip, clearSessionDeckChip } from './publisher.js';

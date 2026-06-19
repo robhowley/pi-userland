@@ -24,8 +24,7 @@ export type ChipDiagnosticCode =
   | 'chip_clear_error'
   | 'chip_scope_invalid'
   | 'chip_runtime_id_missing'
-  | 'chip_session_id_missing'
-  | 'chip_mirror_error';
+  | 'chip_session_id_missing';
 
 export interface ChipDiagnostic {
   code: ChipDiagnosticCode;
@@ -92,27 +91,6 @@ export interface ClearSessionDeckChipKey {
   scope?: ChipScope;
   runtimeId?: string;
   sessionId?: string | null;
-}
-
-export type MirroredStatusSnapshot = ReadonlyMap<string, string>;
-
-export interface MirroredStatusDiff {
-  upserts: Array<{ source: string; text: string }>;
-  removals: string[];
-}
-
-export interface MirroredStatusContext {
-  runtimeId: string;
-  getSessionId: () => string | null;
-  directory?: string;
-}
-
-export interface MirroredStatusTrackingEntry {
-  runtimeId: string;
-  source: string;
-  chipId: string;
-  scope: ChipScope;
-  directory?: string;
 }
 
 export type ChipDiagnosticSink = (code: ChipDiagnosticCode, message: string) => void;
