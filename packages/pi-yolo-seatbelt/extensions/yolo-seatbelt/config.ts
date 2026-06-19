@@ -49,8 +49,8 @@ export function getConfigPath(): string {
  *
  * @returns User configuration with defaults applied
  */
-export function loadConfig(): Config {
-  const configPath = getConfigPath();
+export function loadConfig(configPath?: string): Config {
+  configPath = configPath ?? getConfigPath();
 
   try {
     if (!fs.existsSync(configPath)) {
