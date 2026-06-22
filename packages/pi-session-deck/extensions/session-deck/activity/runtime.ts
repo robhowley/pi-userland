@@ -350,7 +350,8 @@ function getCurrentOrWaitingRecord(
 }
 
 function getCurrentSessionId(state: ActivityRuntimeState): string | null {
-  const currentSessionId = state.sessionManager?.getSessionId() ?? state.lastSeenSessionId;
+  const currentSessionId =
+    safeCall(() => state.sessionManager?.getSessionId(), null) ?? state.lastSeenSessionId;
   return currentSessionId ?? null;
 }
 
@@ -407,6 +408,14 @@ async function writeSnapshot(
     } catch {
       // Fail-open on diagnostic sink errors.
     }
+  }
+}
+
+function safeCall<T>(callback: () => T, fallback: T): T {
+  try {
+    return callback();
+  } catch {
+    return fallback;
   }
 }
 

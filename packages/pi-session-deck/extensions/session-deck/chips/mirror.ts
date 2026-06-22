@@ -37,6 +37,27 @@ export interface SetStatusMirror {
   clearTracked(): Promise<void>;
 }
 
+interface ResolvedStatusContext {
+  runtimeId: string;
+  sessionId: string | null;
+}
+
+interface MirroredStatusEntry {
+  runtimeId: string;
+  sessionId: string;
+  text: string;
+}
+
+interface StatusMirrorPatch {
+  originalSetStatus: (key: string, text: string | undefined) => void;
+  wrappedSetStatus: (key: string, text: string | undefined) => void;
+  mirrorSetStatus: (key: string, text: string | undefined) => Promise<void>;
+}
+
+type SetStatusUi = {
+  setStatus: (key: string, text: string | undefined) => void;
+} & Record<string, unknown>;
+
 // ─── Helpers ──────────────────────────────────────────────────────────
 
 function sanitizeVisibleText(raw: string): string {
@@ -63,53 +84,106 @@ export function createSetStatusMirror(options: StatusMirrorOptions = {}): SetSta
   const directory = options.directory;
 
   let context: MirroredStatusContext | null = null;
+  let configuredContext: ResolvedStatusContext | null = null;
+  let lifecycleVersion = 0;
+  let operationQueue = Promise.resolve();
 
-  // Track last-written text per source to skip identical writes
-  const lastMirrored = new Map<string, string>();
+  // Track the last committed record per source so dedupe does not cross lifecycle boundaries.
+  const lastMirrored = new Map<string, MirroredStatusEntry>();
 
   return {
     reconfigure(nextContext) {
+      const previousContext = configuredContext;
+      const nextResolvedContext: ResolvedStatusContext = {
+        runtimeId: nextContext.runtimeId,
+        sessionId: safeCall(() => nextContext.getSessionId(), null) ?? null,
+      };
+
       context = {
         runtimeId: nextContext.runtimeId,
         getSessionId: nextContext.getSessionId,
       };
+      configuredContext = nextResolvedContext;
+      lifecycleVersion += 1;
+
+      if (!shouldClearTracked(previousContext, nextResolvedContext)) {
+        return;
+      }
+
+      const clearContext: ResolvedStatusContext = previousContext;
+      const trackedSources = Array.from(lastMirrored.keys());
+      lastMirrored.clear();
+
+      void enqueue(async () => {
+        await clearSources(clearContext, trackedSources);
+      });
     },
 
     install(ui) {
-      if ((ui as Record<string, unknown>)[PATCH_KEY] === true) {
-        return; // already patched
+      const target = ui as SetStatusUi;
+      const existingPatch = readPatch(target);
+      if (existingPatch !== null) {
+        existingPatch.mirrorSetStatus = queueMirrorSetStatus;
+        return;
       }
 
-      const priorSetStatus = ui.setStatus.bind(ui);
+      const patch: StatusMirrorPatch = {
+        originalSetStatus: target.setStatus.bind(target),
+        wrappedSetStatus: (key, text) => {
+          // Always delegate to the original first
+          patch.originalSetStatus(key, text);
 
-      const wrapped = (key: string, text: string | undefined): void => {
-        // Always delegate to the original first
-        priorSetStatus(key, text);
-
-        // Then mirror asynchronously (fail open — never throw through caller)
-        mirrorSetStatus(key, text).catch((error) => {
-          emit(
-            CHIP_DIAGNOSTIC_CODES.CHIP_MIRROR_ERROR,
-            `Failed to mirror status "${key}": ${getErrorMessage(error)}`,
-          );
-        });
+          // Then mirror asynchronously (fail open — never throw through caller)
+          patch.mirrorSetStatus(key, text).catch((error) => {
+            emit(
+              CHIP_DIAGNOSTIC_CODES.CHIP_MIRROR_ERROR,
+              `Failed to mirror status "${key}": ${getErrorMessage(error)}`,
+            );
+          });
+        },
+        mirrorSetStatus: queueMirrorSetStatus,
       };
 
-      (ui as Record<string, unknown>)[PATCH_KEY] = true;
-      ui.setStatus = wrapped;
+      target[PATCH_KEY] = patch;
+      target.setStatus = patch.wrappedSetStatus;
     },
 
     async clearTracked() {
-      const sources = Array.from(lastMirrored.keys());
-      for (const source of sources) {
-        await clearSourceChip(source);
-      }
+      const previousContext = resolveContextSnapshot(context);
+      const trackedSources = Array.from(lastMirrored.keys());
+
+      context = null;
+      configuredContext = null;
+      lifecycleVersion += 1;
       lastMirrored.clear();
+
+      await enqueue(async () => {
+        await clearSources(previousContext, trackedSources);
+      });
     },
   };
 
-  async function mirrorSetStatus(source: string, text: string | undefined): Promise<void> {
-    if (context === null) {
+  function queueMirrorSetStatus(source: string, text: string | undefined): Promise<void> {
+    const snapshot = resolveContextSnapshot(context);
+    const version = lifecycleVersion;
+    return enqueue(async () => {
+      await mirrorSetStatus(snapshot, version, source, text);
+    });
+  }
+
+  function enqueue(task: () => Promise<void>): Promise<void> {
+    const next = operationQueue.then(task, task);
+    operationQueue = next.catch(() => {});
+    return next;
+  }
+
+  async function mirrorSetStatus(
+    snapshot: ResolvedStatusContext | null,
+    version: number,
+    source: string,
+    text: string | undefined,
+  ): Promise<void> {
+    if (snapshot === null || version !== lifecycleVersion) {
       return;
     }
 
@@ -121,31 +195,36 @@ export function createSetStatusMirror(options: StatusMirrorOptions = {}): SetSta
 
     // Clear case: undefined or empty-after-sanitize
     if (text === undefined) {
-      await clearSourceChip(source);
-      lastMirrored.delete(source);
+      await clearSourceChip(snapshot, source);
+      if (version === lifecycleVersion) {
+        lastMirrored.delete(source);
+      }
       return;
     }
 
     const sanitized = sanitizeVisibleText(text);
     if (sanitized.length === 0) {
-      await clearSourceChip(source);
-      lastMirrored.delete(source);
+      await clearSourceChip(snapshot, source);
+      if (version === lifecycleVersion) {
+        lastMirrored.delete(source);
+      }
       return;
     }
 
-    // Skip if text hasn't changed (no-op dedupe)
-    const previous = lastMirrored.get(source);
-    if (previous === sanitized) {
-      return;
-    }
-
-    const sessionId = safeCall(() => context!.getSessionId(), null);
-
-    if (!isNonEmptyString(sessionId)) {
+    if (!isNonEmptyString(snapshot.sessionId)) {
       emit(
         CHIP_DIAGNOSTIC_CODES.CHIP_SESSION_ID_MISSING,
         `Cannot mirror status "${source}" without a resolved sessionId`,
       );
+      return;
+    }
+
+    const previous = lastMirrored.get(source);
+    if (
+      previous?.runtimeId === snapshot.runtimeId &&
+      previous.sessionId === snapshot.sessionId &&
+      previous.text === sanitized
+    ) {
       return;
     }
 
@@ -157,8 +236,8 @@ export function createSetStatusMirror(options: StatusMirrorOptions = {}): SetSta
         chipId: DEFAULT_CHIP_ID,
         scope: DEFAULT_CHIP_SCOPE,
         level: DEFAULT_CHIP_LEVEL,
-        runtimeId: context.runtimeId,
-        sessionId,
+        runtimeId: snapshot.runtimeId,
+        sessionId: snapshot.sessionId,
       },
       {
         ...(directory === undefined ? {} : { directory }),
@@ -166,32 +245,100 @@ export function createSetStatusMirror(options: StatusMirrorOptions = {}): SetSta
       },
     );
 
-    if (result !== null) {
-      lastMirrored.set(source, sanitized);
-    }
-  }
-
-  async function clearSourceChip(source: string): Promise<void> {
-    if (context === null) {
+    if (result === null) {
       return;
     }
 
+    if (version !== lifecycleVersion) {
+      await clearSourceChip(snapshot, source);
+      return;
+    }
+
+    lastMirrored.set(source, {
+      runtimeId: snapshot.runtimeId,
+      sessionId: snapshot.sessionId,
+      text: sanitized,
+    });
+  }
+
+  async function clearSources(
+    snapshot: ResolvedStatusContext | null,
+    sources: string[],
+  ): Promise<void> {
+    if (snapshot === null) {
+      return;
+    }
+
+    for (const source of sources) {
+      await clearSourceChip(snapshot, source);
+    }
+  }
+
+  async function clearSourceChip(snapshot: ResolvedStatusContext, source: string): Promise<void> {
     await clearSessionDeckChip(
       {
         source,
         chipId: DEFAULT_CHIP_ID,
         scope: DEFAULT_CHIP_SCOPE,
-        runtimeId: context.runtimeId,
+        runtimeId: snapshot.runtimeId,
       },
       {
         ...(directory === undefined ? {} : { directory }),
         onDiagnostic: emit,
-      }
+      },
     );
   }
 }
 
 // ─── Utilities ────────────────────────────────────────────────────────
+
+function resolveContextSnapshot(
+  context: MirroredStatusContext | null,
+): ResolvedStatusContext | null {
+  if (context === null) {
+    return null;
+  }
+
+  return {
+    runtimeId: context.runtimeId,
+    sessionId: safeCall(() => context.getSessionId(), null) ?? null,
+  };
+}
+
+function shouldClearTracked(
+  previousContext: ResolvedStatusContext | null,
+  nextContext: ResolvedStatusContext,
+): previousContext is ResolvedStatusContext {
+  if (previousContext === null) {
+    return false;
+  }
+
+  return (
+    previousContext.runtimeId !== nextContext.runtimeId ||
+    previousContext.sessionId !== nextContext.sessionId ||
+    previousContext.sessionId === null ||
+    nextContext.sessionId === null
+  );
+}
+
+function readPatch(ui: SetStatusUi): StatusMirrorPatch | null {
+  const patch = ui[PATCH_KEY];
+  if (!isStatusMirrorPatch(patch)) {
+    return null;
+  }
+
+  return patch;
+}
+
+function isStatusMirrorPatch(candidate: unknown): candidate is StatusMirrorPatch {
+  return (
+    typeof candidate === 'object' &&
+    candidate !== null &&
+    typeof (candidate as StatusMirrorPatch).originalSetStatus === 'function' &&
+    typeof (candidate as StatusMirrorPatch).wrappedSetStatus === 'function' &&
+    typeof (candidate as StatusMirrorPatch).mirrorSetStatus === 'function'
+  );
+}
 
 function safeCall<T>(callback: () => T, fallback: T): T {
   try {

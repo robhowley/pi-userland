@@ -153,19 +153,21 @@ describe('pi-session-deck extension', () => {
   });
 
   it('surfaces degraded startup state through session-deck status', async () => {
-    setupMocks(vi.fn().mockResolvedValue({
-      runtime: { runtimeId: 'runtime-1', pid: 1234, startedAt: '2026-06-12T12:00:00.000Z' },
-      startup: {
-        state: 'degraded',
-        diagnostic: {
-          code: 'write_error',
-          message: 'Failed to write presence record: permission denied',
-          filePath: '/tmp/session-deck/presence',
+    setupMocks(
+      vi.fn().mockResolvedValue({
+        runtime: { runtimeId: 'runtime-1', pid: 1234, startedAt: '2026-06-12T12:00:00.000Z' },
+        startup: {
+          state: 'degraded',
+          diagnostic: {
+            code: 'write_error',
+            message: 'Failed to write presence record: permission denied',
+            filePath: '/tmp/session-deck/presence',
+          },
         },
-      },
-      isRunning: vi.fn(() => true),
-      stop: vi.fn(),
-    }));
+        isRunning: vi.fn(() => true),
+        stop: vi.fn(),
+      }),
+    );
     const { handlers } = await installExtension();
 
     const ctx = makeCtx();

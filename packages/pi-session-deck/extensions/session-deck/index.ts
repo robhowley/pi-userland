@@ -116,7 +116,6 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     await stopIdentityRuntime();
   });
 
-
   await ensurePresenceRuntimeStarted();
 }
 

@@ -67,6 +67,43 @@ describe('createSetStatusMirror', () => {
 
       expect(original).toHaveBeenCalledTimes(1);
     });
+
+    it('hands patched setStatus ownership to the latest mirror instance', async () => {
+      const firstDir = await createTestDir();
+      const secondDir = await createTestDir();
+      const runtime = getPresenceRuntimeIdentity();
+      const ui = makeUi();
+
+      const firstMirror = createSetStatusMirror({ directory: firstDir });
+      firstMirror.reconfigure({
+        runtimeId: runtime.runtimeId,
+        getSessionId: () => 'session-1',
+      });
+      firstMirror.install(ui);
+
+      const secondMirror = createSetStatusMirror({ directory: secondDir });
+      secondMirror.reconfigure({
+        runtimeId: runtime.runtimeId,
+        getSessionId: () => 'session-1',
+      });
+      secondMirror.install(ui);
+
+      ui.setStatus('handoff', 'connected');
+
+      await vi.waitFor(async () => {
+        const files = await readdir(join(secondDir, runtime.runtimeId));
+        expect(files).toContain('handoff.default.session.json');
+      });
+
+      const secondRecord = await readChipFile(secondDir, runtime.runtimeId, 'handoff');
+      expect(secondRecord).toMatchObject({
+        source: 'handoff',
+        text: 'connected',
+        sessionId: 'session-1',
+      });
+
+      await expect(readChipFile(firstDir, runtime.runtimeId, 'handoff')).rejects.toThrow();
+    });
   });
 
   describe('mirror writes', () => {
@@ -151,7 +188,10 @@ describe('createSetStatusMirror', () => {
       });
 
       // Read the file to get the updatedAt before second call
-      const before = await readChipFile(dir, runtime.runtimeId, 'pi-dupe') as Record<string, unknown>;
+      const before = (await readChipFile(dir, runtime.runtimeId, 'pi-dupe')) as Record<
+        string,
+        unknown
+      >;
       const beforeUpdatedAt = before['updatedAt'] as string;
 
       // Wait a tick, then set the same text again
@@ -162,7 +202,10 @@ describe('createSetStatusMirror', () => {
       await new Promise((r) => setTimeout(r, 100));
 
       // File should still have the original updatedAt (not rewritten)
-      const after = await readChipFile(dir, runtime.runtimeId, 'pi-dupe') as Record<string, unknown>;
+      const after = (await readChipFile(dir, runtime.runtimeId, 'pi-dupe')) as Record<
+        string,
+        unknown
+      >;
       expect(after['updatedAt']).toBe(beforeUpdatedAt);
     });
 
@@ -189,6 +232,51 @@ describe('createSetStatusMirror', () => {
         const record = await readChipFile(dir, runtime.runtimeId, 'pi-change');
         expect(record).toMatchObject({ text: 'second' });
       });
+    });
+
+    it('clears prior tracked sources on session change and rewrites identical text for the new session', async () => {
+      const dir = await createTestDir();
+      const runtime = getPresenceRuntimeIdentity();
+      const mirror = createSetStatusMirror({ directory: dir });
+      const ui = makeUi();
+      let sessionId = 'session-1';
+
+      mirror.reconfigure({
+        runtimeId: runtime.runtimeId,
+        getSessionId: () => sessionId,
+      });
+      mirror.install(ui);
+
+      ui.setStatus('source-a', 'same text');
+      ui.setStatus('source-b', 'stale text');
+      await vi.waitFor(async () => {
+        const files = await readdir(join(dir, runtime.runtimeId));
+        expect(files).toHaveLength(2);
+      });
+
+      sessionId = 'session-2';
+      mirror.reconfigure({
+        runtimeId: runtime.runtimeId,
+        getSessionId: () => sessionId,
+      });
+
+      await vi.waitFor(async () => {
+        const files = await readdir(join(dir, runtime.runtimeId));
+        expect(files).toHaveLength(0);
+      });
+
+      ui.setStatus('source-a', 'same text');
+      await vi.waitFor(async () => {
+        const record = await readChipFile(dir, runtime.runtimeId, 'source-a');
+        expect(record).toMatchObject({
+          source: 'source-a',
+          text: 'same text',
+          sessionId: 'session-2',
+        });
+      });
+
+      const files = await readdir(join(dir, runtime.runtimeId));
+      expect(files).toEqual(['source-a.default.session.json']);
     });
   });
 

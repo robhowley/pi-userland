@@ -35,9 +35,11 @@ export async function collectSessionIdentity(
 
   const diagnostics: IdentityDiagnostic[] = [];
 
-  const sessionId = options.sessionManager?.getSessionId() ?? null;
-  const sessionFile = options.sessionManager?.getSessionFile() ?? null;
-  const sessionName = normalizeOptionalStringField(options.sessionManager?.getSessionName?.());
+  const sessionId = safeCall(() => options.sessionManager?.getSessionId(), null) ?? null;
+  const sessionFile = safeCall(() => options.sessionManager?.getSessionFile(), null) ?? null;
+  const sessionName = normalizeOptionalStringField(
+    safeCall(() => options.sessionManager?.getSessionName?.(), null),
+  );
 
   // Emit diagnostics for missing session fields
   if (sessionId === null) {
@@ -130,6 +132,14 @@ export async function collectSessionIdentity(
   };
 }
 
+function safeCall<T>(callback: () => T, fallback: T): T {
+  try {
+    return callback();
+  } catch {
+    return fallback;
+  }
+}
+
 function normalizeOptionalStringField(value: unknown): string | undefined {
   if (typeof value === 'string' && value.length > 0) {
     return value;
@@ -140,7 +150,7 @@ function normalizeOptionalStringField(value: unknown): string | undefined {
 
 function resolveCollectorCwd(options: IdentityCollectorOptions): string {
   return (
-    normalizeOptionalStringField(options.sessionManager?.getCwd?.()) ??
+    normalizeOptionalStringField(safeCall(() => options.sessionManager?.getCwd?.(), null)) ??
     normalizeOptionalStringField(options.cwd) ??
     process.cwd()
   );
