@@ -135,6 +135,11 @@ export const CHIP_DIAGNOSTIC_CODES = {
   CHIP_RUNTIME_ID_MISSING: 'chip_runtime_id_missing',
   CHIP_SESSION_ID_MISSING: 'chip_session_id_missing',
   CHIP_MIRROR_ERROR: 'chip_mirror_error',
+  CHIP_READ_ERROR: 'chip_read_error',
+  MALFORMED_CHIP_RECORD: 'malformed_chip_record',
+  ORPHAN_CHIP: 'orphan_chip',
+  CHIP_SESSION_MISMATCH: 'chip_session_mismatch',
+  CHIP_EXPIRED: 'chip_expired',
 } as const satisfies Record<string, ChipDiagnosticCode>;
 
 export type ChipDiagnosticCodeKey = keyof typeof CHIP_DIAGNOSTIC_CODES;

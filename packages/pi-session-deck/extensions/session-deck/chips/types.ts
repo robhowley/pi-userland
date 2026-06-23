@@ -25,11 +25,17 @@ export type ChipDiagnosticCode =
   | 'chip_scope_invalid'
   | 'chip_runtime_id_missing'
   | 'chip_session_id_missing'
-  | 'chip_mirror_error';
+  | 'chip_mirror_error'
+  | 'chip_read_error'
+  | 'malformed_chip_record'
+  | 'orphan_chip'
+  | 'chip_session_mismatch'
+  | 'chip_expired';
 
 export interface ChipDiagnostic {
   code: ChipDiagnosticCode;
   message: string;
+  runtimeId?: string;
   source?: string;
   chipId?: string;
   filePath?: string;

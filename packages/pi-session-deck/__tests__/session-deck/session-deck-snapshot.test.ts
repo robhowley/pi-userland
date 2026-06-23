@@ -1,0 +1,316 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { writeActivityRecord } from '../../extensions/session-deck/activity/writer.js';
+import { writeChipRecord } from '../../extensions/session-deck/chips/writer.js';
+import { writeIdentityRecord } from '../../extensions/session-deck/identity/writer.js';
+import { writePresenceRecord } from '../../extensions/session-deck/presence/writer.js';
+import { readSessionDeckSnapshot } from '../../extensions/session-deck/reader.js';
+import type { SessionActivityRecord } from '../../extensions/session-deck/activity/types.js';
+import type { SessionDeckChipRecord } from '../../extensions/session-deck/chips/types.js';
+import type { SessionIdentityRecord } from '../../extensions/session-deck/identity/types.js';
+import type { PresenceRecord } from '../../extensions/session-deck/presence/types.js';
+
+const createdDirectories: string[] = [];
+
+function buildPresenceRecord(overrides: Partial<PresenceRecord> = {}): PresenceRecord {
+  return {
+    runtimeId: 'rt-1',
+    pid: 101,
+    startedAt: '2026-06-23T12:00:00.000Z',
+    heartbeatAt: '2026-06-23T12:09:55.000Z',
+    ...overrides,
+  };
+}
+
+function buildIdentityRecord(
+  overrides: Partial<SessionIdentityRecord> = {},
+): SessionIdentityRecord {
+  return {
+    runtimeId: 'rt-1',
+    sessionId: 'session-1',
+    sessionFile: '/tmp/session-1.json',
+    sessionName: 'alpha',
+    cwd: '/tmp/project',
+    worktree: '/tmp/project',
+    branch: 'main',
+    prUrl: 'https://github.com/owner/repo/pull/42',
+    identityUpdatedAt: '2026-06-23T12:09:50.000Z',
+    sessionStartedAt: '2026-06-23T12:00:00.000Z',
+    gitRemote: 'git@github.com:owner/repo.git',
+    gitRoot: '/tmp/project',
+    identitySource: 'startup',
+    ...overrides,
+  };
+}
+
+function buildActivityRecord(
+  overrides: Partial<SessionActivityRecord> = {},
+): SessionActivityRecord {
+  return {
+    runtimeId: 'rt-1',
+    sessionId: 'session-1',
+    activityState: 'waiting',
+    idle: true,
+    busy: false,
+    currentTurnStartedAt: null,
+    currentToolName: null,
+    lastEventAt: '2026-06-23T12:09:58.000Z',
+    lastError: null,
+    activityUpdatedAt: '2026-06-23T12:09:58.000Z',
+    ...overrides,
+  };
+}
+
+function buildChipRecord(overrides: Partial<SessionDeckChipRecord> = {}): SessionDeckChipRecord {
+  return {
+    schemaVersion: 1,
+    runtimeId: 'rt-1',
+    sessionId: 'session-1',
+    source: 'alpha',
+    chipId: 'default',
+    scope: 'session',
+    text: 'merge ready',
+    level: 'ok',
+    updatedAt: '2026-06-23T12:09:30.000Z',
+    ...overrides,
+  };
+}
+
+async function createSnapshotDirectories(): Promise<{
+  presenceDirectory: string;
+  identityDirectory: string;
+  activityDirectory: string;
+  chipsDirectory: string;
+}> {
+  const root = await mkdtemp(join(tmpdir(), 'pi-session-deck-snapshot-'));
+  createdDirectories.push(root);
+  return {
+    presenceDirectory: join(root, 'presence'),
+    identityDirectory: join(root, 'identity'),
+    activityDirectory: join(root, 'activity'),
+    chipsDirectory: join(root, 'chips'),
+  };
+}
+
+afterEach(async () => {
+  await Promise.all(
+    createdDirectories
+      .splice(0)
+      .map((directory) => rm(directory, { recursive: true, force: true })),
+  );
+});
+
+describe('readSessionDeckSnapshot', () => {
+  it('returns a slim joined row with presence, identity, activity, and chip texts', async () => {
+    const directories = await createSnapshotDirectories();
+
+    await writePresenceRecord(buildPresenceRecord(), { directory: directories.presenceDirectory });
+    await writeIdentityRecord(buildIdentityRecord(), { directory: directories.identityDirectory });
+    await writeActivityRecord(buildActivityRecord(), { directory: directories.activityDirectory });
+    await writeChipRecord(buildChipRecord({ source: 'alpha', text: 'merge ready' }), {
+      directory: directories.chipsDirectory,
+    });
+    await writeChipRecord(buildChipRecord({ source: 'beta', chipId: 'queue', text: 'queue 2' }), {
+      directory: directories.chipsDirectory,
+    });
+
+    const snapshot = await readSessionDeckSnapshot({
+      directory: directories.presenceDirectory,
+      identityDirectory: directories.identityDirectory,
+      activityDirectory: directories.activityDirectory,
+      chipsDirectory: directories.chipsDirectory,
+      now: new Date('2026-06-23T12:10:00.000Z'),
+      inspectPid: vi.fn().mockResolvedValue({ status: 'matches' }),
+    });
+
+    expect(snapshot.generatedAt).toBe('2026-06-23T12:10:00.000Z');
+    expect(snapshot.diagnostics).toEqual([]);
+    expect(snapshot.records).toEqual([
+      {
+        runtimeId: 'rt-1',
+        presenceState: 'live',
+        presenceReason: 'fresh_heartbeat',
+        heartbeatAgeMs: 5_000,
+        sessionId: 'session-1',
+        sessionName: 'alpha',
+        cwd: '/tmp/project',
+        branch: 'main',
+        prUrl: 'https://github.com/owner/repo/pull/42',
+        activityState: 'waiting',
+        activityAgeMs: null,
+        currentToolName: null,
+        lastError: null,
+        chips: ['merge ready', 'queue 2'],
+        diagnostics: [],
+      },
+    ]);
+
+    const record = snapshot.records[0]!;
+    for (const field of [
+      'pid',
+      'startedAt',
+      'sessionFile',
+      'worktree',
+      'identityFreshness',
+      'idle',
+      'busy',
+      'currentTurnStartedAt',
+      'lastEventAt',
+      'activityUpdatedAt',
+      'schemaVersion',
+      'chipId',
+      'scope',
+      'level',
+      'ttlMs',
+      'updatedAt',
+    ]) {
+      expect(record).not.toHaveProperty(field);
+    }
+  });
+
+  it('preserves duplicate visible chip texts from distinct raw records', async () => {
+    const directories = await createSnapshotDirectories();
+
+    await writePresenceRecord(buildPresenceRecord(), { directory: directories.presenceDirectory });
+    await writeIdentityRecord(buildIdentityRecord(), { directory: directories.identityDirectory });
+    await writeActivityRecord(buildActivityRecord(), { directory: directories.activityDirectory });
+    await writeChipRecord(
+      buildChipRecord({
+        source: 'alpha',
+        scope: 'runtime',
+        sessionId: null,
+        chipId: 'a',
+        text: 'ready',
+      }),
+      { directory: directories.chipsDirectory },
+    );
+    await writeChipRecord(
+      buildChipRecord({
+        source: 'beta',
+        scope: 'runtime',
+        sessionId: null,
+        chipId: 'b',
+        text: 'ready',
+      }),
+      { directory: directories.chipsDirectory },
+    );
+
+    const snapshot = await readSessionDeckSnapshot({
+      directory: directories.presenceDirectory,
+      identityDirectory: directories.identityDirectory,
+      activityDirectory: directories.activityDirectory,
+      chipsDirectory: directories.chipsDirectory,
+      now: new Date('2026-06-23T12:10:00.000Z'),
+      inspectPid: vi.fn().mockResolvedValue({ status: 'matches' }),
+    });
+
+    expect(snapshot.records[0]?.chips).toEqual(['ready', 'ready']);
+  });
+
+  it('suppresses session-scoped chips when session membership is not trustworthy', async () => {
+    const directories = await createSnapshotDirectories();
+
+    await writePresenceRecord(buildPresenceRecord(), { directory: directories.presenceDirectory });
+    await writeActivityRecord(
+      buildActivityRecord({ sessionId: null, activityUpdatedAt: '2026-06-23T12:09:58.000Z' }),
+      { directory: directories.activityDirectory },
+    );
+    await writeChipRecord(
+      buildChipRecord({ sessionId: 'session-old', text: 'stale session chip' }),
+      { directory: directories.chipsDirectory },
+    );
+
+    const snapshot = await readSessionDeckSnapshot({
+      directory: directories.presenceDirectory,
+      identityDirectory: directories.identityDirectory,
+      activityDirectory: directories.activityDirectory,
+      chipsDirectory: directories.chipsDirectory,
+      now: new Date('2026-06-23T12:10:00.000Z'),
+      inspectPid: vi.fn().mockResolvedValue({ status: 'matches' }),
+    });
+
+    expect(snapshot.records[0]?.sessionId).toBeNull();
+    expect(snapshot.records[0]?.chips).toEqual([]);
+    expect(snapshot.records[0]?.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
+      'chip_session_mismatch',
+    );
+    expect(snapshot.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
+      'chip_session_mismatch',
+    );
+  });
+
+  it('suppresses old session chips when activity has moved to a new sessionId', async () => {
+    const directories = await createSnapshotDirectories();
+
+    await writePresenceRecord(buildPresenceRecord(), { directory: directories.presenceDirectory });
+    await writeIdentityRecord(
+      buildIdentityRecord({ sessionId: 'session-old', sessionFile: '/tmp/session-old.json' }),
+      { directory: directories.identityDirectory },
+    );
+    await writeActivityRecord(
+      buildActivityRecord({
+        sessionId: 'session-new',
+        activityUpdatedAt: '2026-06-23T12:09:58.000Z',
+      }),
+      { directory: directories.activityDirectory },
+    );
+    await writeChipRecord(
+      buildChipRecord({ sessionId: 'session-old', text: 'stale session chip' }),
+      { directory: directories.chipsDirectory },
+    );
+
+    const snapshot = await readSessionDeckSnapshot({
+      directory: directories.presenceDirectory,
+      identityDirectory: directories.identityDirectory,
+      activityDirectory: directories.activityDirectory,
+      chipsDirectory: directories.chipsDirectory,
+      now: new Date('2026-06-23T12:10:00.000Z'),
+      inspectPid: vi.fn().mockResolvedValue({ status: 'matches' }),
+    });
+
+    expect(snapshot.records[0]?.sessionId).toBe('session-old');
+    expect(snapshot.records[0]?.activityState).toBe('unknown');
+    expect(snapshot.records[0]?.chips).toEqual([]);
+    expect(snapshot.records[0]?.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(
+      expect.arrayContaining(['session_mismatch', 'chip_session_mismatch']),
+    );
+    expect(snapshot.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(
+      expect.arrayContaining(['session_mismatch', 'chip_session_mismatch']),
+    );
+  });
+
+  it('carries expired chip diagnostics onto the row and top-level snapshot', async () => {
+    const directories = await createSnapshotDirectories();
+
+    await writePresenceRecord(buildPresenceRecord(), { directory: directories.presenceDirectory });
+    await writeIdentityRecord(buildIdentityRecord(), { directory: directories.identityDirectory });
+    await writeActivityRecord(buildActivityRecord(), { directory: directories.activityDirectory });
+    await writeChipRecord(
+      buildChipRecord({
+        scope: 'runtime',
+        sessionId: null,
+        text: 'expired',
+        updatedAt: '2026-06-23T12:00:00.000Z',
+        ttlMs: 30_000,
+      }),
+      { directory: directories.chipsDirectory },
+    );
+
+    const snapshot = await readSessionDeckSnapshot({
+      directory: directories.presenceDirectory,
+      identityDirectory: directories.identityDirectory,
+      activityDirectory: directories.activityDirectory,
+      chipsDirectory: directories.chipsDirectory,
+      now: new Date('2026-06-23T12:01:00.000Z'),
+      inspectPid: vi.fn().mockResolvedValue({ status: 'matches' }),
+    });
+
+    expect(snapshot.records[0]?.chips).toEqual([]);
+    expect(snapshot.records[0]?.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
+      'chip_expired',
+    );
+    expect(snapshot.diagnostics.map((diagnostic) => diagnostic.code)).toContain('chip_expired');
+  });
+});

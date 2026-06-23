@@ -9,9 +9,11 @@ import type {
   PresenceCommandContext,
   PresenceCommandRegistration,
 } from '../../extensions/session-deck/identity/command.js';
-import type { PresenceView } from '../../extensions/session-deck/presence/types.js';
-import type { JoinedSessionView } from '../../extensions/session-deck/identity/types.js';
-import type { SessionDeckView } from '../../extensions/session-deck/activity/types.js';
+import type {
+  SessionDeckDiagnostic,
+  SessionDeckRecord,
+  SessionDeckSnapshot,
+} from '../../extensions/session-deck/types.js';
 
 function createMockAPI(): {
   api: PresenceCommandAPI;
@@ -37,47 +39,37 @@ function createCommandContext(): PresenceCommandContext {
   };
 }
 
-function buildPresenceView(): PresenceView {
+function buildSnapshotRecord(overrides: Partial<SessionDeckRecord> = {}): SessionDeckRecord {
   return {
-    records: [
-      {
-        runtimeId: 'rt-1',
-        pid: 101,
-        startedAt: '2026-06-17T11:00:00.000Z',
-        heartbeatAt: '2026-06-17T12:09:55.000Z',
-        heartbeatAgeMs: 5_000,
-        presenceState: 'live',
-        reason: 'fresh_heartbeat',
-      },
-    ],
+    runtimeId: 'rt-1',
+    presenceState: 'live',
+    presenceReason: 'fresh_heartbeat',
+    heartbeatAgeMs: 5_000,
+    sessionId: 'session-abc',
+    sessionName: 'alpha',
+    cwd: '/home/user/project',
+    branch: 'main',
+    prUrl: 'https://github.com/owner/repo/pull/42',
+    activityState: 'waiting',
+    activityAgeMs: null,
+    currentToolName: null,
+    lastError: null,
+    chips: [],
     diagnostics: [],
+    ...overrides,
   };
 }
 
-function buildJoinedView(): JoinedSessionView {
+function buildSnapshot(
+  options: {
+    records?: SessionDeckRecord[];
+    diagnostics?: SessionDeckDiagnostic[];
+  } = {},
+): SessionDeckSnapshot {
   return {
-    records: [
-      {
-        runtimeId: 'rt-1',
-        pid: 101,
-        presenceState: 'live',
-        heartbeatAt: '2026-06-17T12:09:55.000Z',
-        heartbeatAgeMs: 5_000,
-        startedAt: '2026-06-17T11:00:00.000Z',
-        presenceReason: 'fresh_heartbeat',
-        sessionId: 'session-abc',
-        sessionFile: '/tmp/session-abc.json',
-        sessionName: null,
-        cwd: '/home/user/project',
-        worktree: '/home/user/project',
-        branch: 'main',
-        prUrl: 'https://github.com/owner/repo/pull/42',
-        identityUpdatedAt: '2026-06-17T12:09:00.000Z',
-        identityFreshness: 'fresh',
-        diagnostics: [],
-      },
-    ],
-    diagnostics: [],
+    generatedAt: '2026-06-17T12:10:00.000Z',
+    records: options.records ?? [buildSnapshotRecord()],
+    diagnostics: options.diagnostics ?? [],
   };
 }
 
@@ -117,9 +109,7 @@ describe('session-deck joined command', () => {
     const { api, getRegistration } = createMockAPI();
 
     registerSessionDeckCommand(api, {
-      readPresenceView: vi.fn(async () => buildPresenceView()),
-      readJoinedSessionView: vi.fn(async () => buildJoinedView()),
-      readSessionDeckView: vi.fn(async () => ({ records: [], diagnostics: [] })),
+      readSessionDeckSnapshot: vi.fn(async () => buildSnapshot({ records: [] })),
     });
 
     expect(getRegistration()?.getArgumentCompletions?.('')).toEqual([
@@ -129,83 +119,38 @@ describe('session-deck joined command', () => {
     ]);
   });
 
-  it('renders compact activity summaries and all-mode diagnostics', async () => {
+  it('renders compact activity summaries, inline chips, and all-mode diagnostics', async () => {
     const { api, getHandler } = createMockAPI();
-    const readPresenceView = vi.fn(async () => buildPresenceView());
-    const readJoinedSessionView = vi.fn(async () => buildJoinedView());
-    const readSessionDeckView = vi.fn(
-      async (): Promise<SessionDeckView> => ({
+    const readSessionDeckSnapshot = vi.fn(async () =>
+      buildSnapshot({
         records: [
-          {
-            ...buildJoinedView().records[0]!,
-            activityState: 'waiting',
-            activityAgeMs: null,
-            idle: true,
-            busy: false,
-            currentTurnStartedAt: null,
-            currentToolName: null,
-            lastEventAt: '2026-06-17T12:09:55.000Z',
-            lastError: null,
-            activityUpdatedAt: '2026-06-17T12:09:55.000Z',
-            diagnostics: [],
-          },
-          {
-            ...buildJoinedView().records[0]!,
+          buildSnapshotRecord({ chips: ['merge-ready clean'] }),
+          buildSnapshotRecord({
             runtimeId: 'rt-2',
+            presenceState: 'stale',
             activityState: 'thinking',
             activityAgeMs: 180_000,
-            idle: false,
-            busy: true,
-            currentTurnStartedAt: '2026-06-17T12:07:00.000Z',
-            currentToolName: null,
-            lastEventAt: '2026-06-17T12:09:55.000Z',
-            lastError: null,
-            activityUpdatedAt: '2026-06-17T12:09:55.000Z',
-            diagnostics: [],
-          },
-          {
-            ...buildJoinedView().records[0]!,
+            chips: [],
+          }),
+          buildSnapshotRecord({
             runtimeId: 'rt-3',
             activityState: 'tool-running',
             activityAgeMs: 42_000,
-            idle: false,
-            busy: true,
-            currentTurnStartedAt: '2026-06-17T12:07:00.000Z',
             currentToolName: 'read',
-            lastEventAt: '2026-06-17T12:09:18.000Z',
-            lastError: null,
-            activityUpdatedAt: '2026-06-17T12:09:18.000Z',
-            diagnostics: [],
-          },
-          {
-            ...buildJoinedView().records[0]!,
+            chips: ['status syncing', 'queue 2'],
+          }),
+          buildSnapshotRecord({
             runtimeId: 'rt-4',
             activityState: 'error',
-            activityAgeMs: null,
-            idle: false,
-            busy: false,
-            currentTurnStartedAt: null,
-            currentToolName: null,
-            lastEventAt: '2026-06-17T12:09:30.000Z',
             lastError: 'tool bash failed',
-            activityUpdatedAt: '2026-06-17T12:09:30.000Z',
-            diagnostics: [{ code: 'last_error_active', message: 'Assistant error is active' }],
-          },
-          {
-            ...buildJoinedView().records[0]!,
+          }),
+          buildSnapshotRecord({
             runtimeId: 'rt-5',
             presenceState: 'dead',
             activityState: 'unknown',
-            activityAgeMs: null,
-            idle: null,
-            busy: null,
-            currentTurnStartedAt: null,
-            currentToolName: null,
-            lastEventAt: null,
-            lastError: null,
-            activityUpdatedAt: null,
             diagnostics: [{ code: 'activity_stale', message: 'Activity record is stale' }],
-          },
+            chips: ['session warning'],
+          }),
         ],
         diagnostics: [
           {
@@ -218,9 +163,7 @@ describe('session-deck joined command', () => {
     );
 
     registerSessionDeckCommand(api, {
-      readPresenceView,
-      readJoinedSessionView,
-      readSessionDeckView,
+      readSessionDeckSnapshot,
     });
 
     const handler = getHandler();
@@ -229,34 +172,86 @@ describe('session-deck joined command', () => {
     await handler?.('', ctx);
     const [defaultMessage] = vi.mocked(ctx.ui.notify).mock.calls[0] ?? [];
     expect(defaultMessage).toContain('activity=waiting');
+    expect(defaultMessage).toContain('chips=[merge-ready clean]');
     expect(defaultMessage).toContain('activity=thinking 3m');
     expect(defaultMessage).toContain('activity=tool-running: read 42s');
+    expect(defaultMessage).toContain('chips=[status syncing | queue 2]');
     expect(defaultMessage).toContain('activity=error: tool bash failed');
     expect(defaultMessage).not.toContain('rt-5');
     expect(defaultMessage).toContain('presence=live');
+    expect(defaultMessage).not.toContain('scope=');
+    expect(defaultMessage).not.toContain('updatedAt=');
 
     vi.mocked(ctx.ui.notify).mockClear();
     await handler?.('--all', ctx);
     const [allMessage] = vi.mocked(ctx.ui.notify).mock.calls[0] ?? [];
     expect(allMessage).toContain('rt-5');
+    expect(allMessage).toContain('chips=[session warning]');
     expect(allMessage).toContain('activity=unknown [activity_stale]');
     expect(allMessage).toContain('Diagnostics:');
     expect(allMessage).toContain('malformed_activity_record');
+  });
+
+  it('shows identity extras only with --identity', async () => {
+    const { api, getHandler } = createMockAPI();
+
+    registerSessionDeckCommand(api, {
+      readSessionDeckSnapshot: vi.fn(async () => buildSnapshot()),
+    });
+
+    const handler = getHandler();
+    const ctx = createCommandContext();
+
+    await handler?.('', ctx);
+    const [defaultMessage] = vi.mocked(ctx.ui.notify).mock.calls[0] ?? [];
+    expect(defaultMessage).not.toContain('session=session-');
+    expect(defaultMessage).not.toContain('name=alpha');
+
+    vi.mocked(ctx.ui.notify).mockClear();
+    await handler?.('--identity', ctx);
+    const [identityMessage] = vi.mocked(ctx.ui.notify).mock.calls[0] ?? [];
+    expect(identityMessage).toContain('session=session-');
+    expect(identityMessage).toContain('name=alpha');
+  });
+
+  it('preserves reap output while reading the joined snapshot', async () => {
+    const { api, getHandler } = createMockAPI();
+    const reapPresence = vi.fn(async () => ({
+      removed: ['/tmp/rt-expired.json'],
+      diagnostics: [],
+    }));
+    const readSessionDeckSnapshot = vi.fn(async () => buildSnapshot({ records: [] }));
+
+    registerSessionDeckCommand(api, {
+      readSessionDeckSnapshot,
+      reapPresenceRecords: reapPresence,
+    });
+
+    const handler = getHandler();
+    const ctx = createCommandContext();
+
+    await handler?.('--reap', ctx);
+
+    expect(reapPresence).toHaveBeenCalledTimes(1);
+    expect(readSessionDeckSnapshot).toHaveBeenCalledTimes(1);
+    const [message] = vi.mocked(ctx.ui.notify).mock.calls[0] ?? [];
+    expect(message).toContain('Reap complete: removed 1 expired presence record.');
+    expect(message).toContain('Removed:');
+    expect(message).toContain('- rt-expired');
+    expect(message).toContain('No live or stale Pi sessions found.');
   });
 
   it('registers the expected slash command name', () => {
     const { api } = createMockAPI();
 
     registerSessionDeckCommand(api, {
-      readPresenceView: vi.fn(async () => buildPresenceView()),
-      readJoinedSessionView: vi.fn(async () => buildJoinedView()),
-      readSessionDeckView: vi.fn(async () => ({ records: [], diagnostics: [] })),
+      readSessionDeckSnapshot: vi.fn(async () => buildSnapshot({ records: [] })),
     });
 
     expect(vi.mocked(api.registerCommand)).toHaveBeenCalledWith(
       SESSION_DECK_COMMAND_NAME,
       expect.objectContaining({
-        description: expect.stringContaining('presence, identity, and activity'),
+        description: expect.stringContaining('presence, identity, activity, and chips'),
       }),
     );
   });
