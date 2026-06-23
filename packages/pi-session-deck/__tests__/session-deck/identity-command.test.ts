@@ -15,6 +15,8 @@ import type {
   SessionDeckSnapshot,
 } from '../../extensions/session-deck/types.js';
 
+const HOME = process.env['HOME'] ?? '/home/user';
+
 function createMockAPI(): {
   api: PresenceCommandAPI;
   getHandler: () => ((args: string, ctx: PresenceCommandContext) => Promise<void>) | undefined;
@@ -41,13 +43,13 @@ function createCommandContext(): PresenceCommandContext {
 
 function buildSnapshotRecord(overrides: Partial<SessionDeckRecord> = {}): SessionDeckRecord {
   return {
-    runtimeId: 'rt-1',
+    runtimeId: '922f7ac8deadbeef',
     presenceState: 'live',
     presenceReason: 'fresh_heartbeat',
     heartbeatAgeMs: 5_000,
     sessionId: 'session-abc',
     sessionName: 'alpha',
-    cwd: '/home/user/project',
+    cwd: `${HOME}/project`,
     branch: 'main',
     prUrl: 'https://github.com/owner/repo/pull/42',
     activityState: 'waiting',
@@ -119,7 +121,7 @@ describe('session-deck joined command', () => {
     ]);
   });
 
-  it('renders compact activity summaries, inline chips, and all-mode diagnostics', async () => {
+  it('renders the scannable multi-line shape and keeps diagnostics in all mode', async () => {
     const { api, getHandler } = createMockAPI();
     const readSessionDeckSnapshot = vi.fn(async () =>
       buildSnapshot({
@@ -128,6 +130,8 @@ describe('session-deck joined command', () => {
           buildSnapshotRecord({
             runtimeId: 'rt-2',
             presenceState: 'stale',
+            presenceReason: 'heartbeat_expired',
+            heartbeatAgeMs: 180_000,
             activityState: 'thinking',
             activityAgeMs: 180_000,
             chips: [],
@@ -145,8 +149,15 @@ describe('session-deck joined command', () => {
             lastError: 'tool bash failed',
           }),
           buildSnapshotRecord({
+            runtimeId: 'rt-6',
+            cwd: `${HOME}/scratch`,
+            branch: null,
+            prUrl: null,
+          }),
+          buildSnapshotRecord({
             runtimeId: 'rt-5',
             presenceState: 'dead',
+            presenceReason: 'pid_missing',
             activityState: 'unknown',
             diagnostics: [{ code: 'activity_stale', message: 'Activity record is stale' }],
             chips: ['session warning'],
@@ -171,23 +182,28 @@ describe('session-deck joined command', () => {
 
     await handler?.('', ctx);
     const [defaultMessage] = vi.mocked(ctx.ui.notify).mock.calls[0] ?? [];
-    expect(defaultMessage).toContain('activity=waiting');
-    expect(defaultMessage).toContain('chips=[merge-ready clean]');
-    expect(defaultMessage).toContain('activity=thinking 3m');
-    expect(defaultMessage).toContain('activity=tool-running: read 42s');
-    expect(defaultMessage).toContain('chips=[status syncing | queue 2]');
-    expect(defaultMessage).toContain('activity=error: tool bash failed');
+    expect(defaultMessage).toContain('Pi sessions (live + stale)');
+    expect(defaultMessage).toContain('922f7ac8  waiting  5s');
+    expect(defaultMessage).toContain('  project  main  #42');
+    expect(defaultMessage).toContain('  merge-ready clean');
+    expect(defaultMessage).toContain('rt-2  thinking 3m  3m  stale  reason=heartbeat_expired');
+    expect(defaultMessage).toContain('rt-3  tool-running: read 42s  5s');
+    expect(defaultMessage).toContain('  status syncing | queue 2');
+    expect(defaultMessage).toContain('rt-4  error: tool bash failed  5s');
+    expect(defaultMessage).toContain('  ~/scratch');
     expect(defaultMessage).not.toContain('rt-5');
-    expect(defaultMessage).toContain('presence=live');
+    expect(defaultMessage).not.toContain('presence=live');
+    expect(defaultMessage).not.toContain('reason=fresh_heartbeat');
+    expect(defaultMessage).not.toContain('chips=');
     expect(defaultMessage).not.toContain('scope=');
     expect(defaultMessage).not.toContain('updatedAt=');
 
     vi.mocked(ctx.ui.notify).mockClear();
     await handler?.('--all', ctx);
     const [allMessage] = vi.mocked(ctx.ui.notify).mock.calls[0] ?? [];
-    expect(allMessage).toContain('rt-5');
-    expect(allMessage).toContain('chips=[session warning]');
-    expect(allMessage).toContain('activity=unknown [activity_stale]');
+    expect(allMessage).toContain('rt-5  unknown  5s  dead  reason=pid_missing');
+    expect(allMessage).toContain('  session warning');
+    expect(allMessage).toContain('  diagnostics: activity_stale');
     expect(allMessage).toContain('Diagnostics:');
     expect(allMessage).toContain('malformed_activity_record');
   });

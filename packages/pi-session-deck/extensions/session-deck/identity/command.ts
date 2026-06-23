@@ -150,12 +150,18 @@ export function renderSessionDeckView(
     lines.push(options.all ? 'No session records found.' : 'No live or stale Pi sessions found.');
   } else {
     lines.push(options.all ? 'Pi sessions (all records)' : 'Pi sessions (live + stale)');
-    for (const record of view.records) {
+    for (const [index, record] of view.records.entries()) {
+      if (index > 0) {
+        lines.push('');
+      }
       lines.push(formatSessionDeckRecord(record, options));
     }
   }
 
   if (options.all && view.diagnostics.length > 0) {
+    if (lines.length > 0) {
+      lines.push('');
+    }
     lines.push('Diagnostics:');
     for (const diagnostic of view.diagnostics) {
       lines.push(formatSessionDeckDiagnostic(diagnostic));
@@ -234,49 +240,108 @@ function formatSessionDeckRecord(
   record: SessionDeckRecord,
   options: { all: boolean; showIdentity: boolean },
 ): string {
-  const parts: string[] = [`- ${record.runtimeId}`];
+  const lines = [
+    [
+      formatShortId(record.runtimeId),
+      formatActivitySummary(record),
+      formatDuration(record.heartbeatAgeMs),
+      ...formatPresenceDetails(record),
+    ].join('  '),
+  ];
 
-  parts.push(`activity=${formatActivitySummary(record)}`);
+  const contextLine = formatRecordContext(record);
+  if (contextLine !== null) {
+    lines.push(`  ${contextLine}`);
+  }
 
   if (record.chips.length > 0) {
-    parts.push(formatChips(record.chips));
+    lines.push(`  ${formatChips(record.chips)}`);
   }
 
-  parts.push(`presence=${record.presenceState}`);
-  parts.push(`age=${formatDuration(record.heartbeatAgeMs)}`);
-
-  if (record.cwd !== null) {
-    parts.push(`cwd=${shortenHomePath(record.cwd)}`);
+  const identityLine = options.showIdentity ? formatIdentityDetails(record) : null;
+  if (identityLine !== null) {
+    lines.push(`  ${identityLine}`);
   }
 
-  if (record.branch !== null) {
-    parts.push(`branch=${record.branch}`);
+  const diagnosticsLine = options.all ? formatRecordDiagnostics(record.diagnostics) : null;
+  if (diagnosticsLine !== null) {
+    lines.push(`  ${diagnosticsLine}`);
   }
 
-  if (record.prUrl !== null) {
-    const prMatch = record.prUrl.match(/\/pull\/(\d+)$/);
-    parts.push(prMatch ? `pr=#${prMatch[1]}` : `pr=${record.prUrl}`);
+  return lines.join('\n');
+}
+
+function formatPresenceDetails(record: SessionDeckRecord): string[] {
+  const details: string[] = [];
+
+  if (record.presenceState !== 'live') {
+    details.push(record.presenceState);
   }
 
-  if (record.sessionId !== null && options.showIdentity) {
-    parts.push(`session=${record.sessionId.slice(0, 8)}`);
+  if (record.presenceReason !== undefined && record.presenceReason !== 'fresh_heartbeat') {
+    details.push(`reason=${record.presenceReason}`);
   }
 
-  if (options.showIdentity && record.sessionName !== null) {
+  return details;
+}
+
+function formatRecordContext(record: SessionDeckRecord): string | null {
+  const parts = [
+    formatRepoOrCwd(record.cwd, record.branch !== null || record.prUrl !== null),
+    record.branch,
+    formatPr(record.prUrl),
+  ].filter((part): part is string => part !== null);
+
+  return parts.length > 0 ? parts.join('  ') : null;
+}
+
+function formatRepoOrCwd(cwd: string | null, preferBasename: boolean): string | null {
+  if (cwd === null) {
+    return null;
+  }
+
+  const shortenedCwd = shortenHomePath(cwd);
+  if (!preferBasename) {
+    return shortenedCwd;
+  }
+
+  const repoName = basename(cwd);
+  return repoName.length > 0 && repoName !== '/' && repoName !== '.' ? repoName : shortenedCwd;
+}
+
+function formatPr(prUrl: string | null): string | null {
+  if (prUrl === null) {
+    return null;
+  }
+
+  const prMatch = prUrl.match(/\/pull\/(\d+)$/);
+  return prMatch ? `#${prMatch[1]}` : prUrl;
+}
+
+function formatIdentityDetails(record: SessionDeckRecord): string | null {
+  const parts: string[] = [];
+
+  if (record.sessionId !== null) {
+    parts.push(`session=${record.sessionId}`);
+  }
+
+  if (record.sessionName !== null) {
     parts.push(`name=${record.sessionName}`);
   }
 
-  if (record.presenceReason !== undefined) {
-    parts.push(`reason=${record.presenceReason}`);
+  return parts.length > 0 ? parts.join('  ') : null;
+}
+
+function formatRecordDiagnostics(diagnostics: SessionDeckDiagnostic[]): string | null {
+  if (diagnostics.length === 0) {
+    return null;
   }
 
-  if (options.all && record.diagnostics.length > 0) {
-    for (const diagnostic of record.diagnostics) {
-      parts.push(`[${diagnostic.code}]`);
-    }
-  }
+  return `diagnostics: ${[...new Set(diagnostics.map((diagnostic) => diagnostic.code))].join(' | ')}`;
+}
 
-  return parts.join('  ');
+function formatShortId(id: string): string {
+  return id.length <= 8 ? id : id.slice(0, 8);
 }
 
 function formatActivitySummary(record: SessionDeckRecord): string {
@@ -294,33 +359,13 @@ function formatActivitySummary(record: SessionDeckRecord): string {
     }
     case 'error':
       return record.lastError === null ? 'error' : `error: ${record.lastError}`;
-    case 'unknown': {
-      const diagnostics = record.diagnostics
-        .map((diagnostic) => diagnostic.code)
-        .filter((code) =>
-          [
-            'activity_missing',
-            'activity_stale',
-            'session_mismatch',
-            'busy_idle_conflict',
-            'turn_started_missing',
-            'tool_name_missing',
-            'tool_stuck',
-            'last_event_missing',
-            'last_event_future',
-            'malformed_activity_record',
-            'activity_write_error',
-            'activity_read_error',
-          ].includes(code),
-        );
-      const suffix = diagnostics.length === 0 ? '' : ` [${diagnostics.join(',')}]`;
-      return `unknown${suffix}`;
-    }
+    case 'unknown':
+      return 'unknown';
   }
 }
 
 function formatChips(chips: string[]): string {
-  return `chips=[${chips.join(' | ')}]`;
+  return chips.join(' | ');
 }
 
 function shortenHomePath(cwd: string): string {
