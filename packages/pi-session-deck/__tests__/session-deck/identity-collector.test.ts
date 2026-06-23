@@ -77,6 +77,46 @@ describe('identity collector', () => {
     expect(record.cwd).toBe('/tmp/explicit-cwd');
   });
 
+  it('fails open when sessionManager callbacks throw', async () => {
+    const { collectSessionIdentity } =
+      await import('../../extensions/session-deck/identity/collector.js');
+
+    const execGit = makeExecGit({
+      'rev-parse --show-toplevel': { stdout: '', exitCode: 128 },
+    });
+
+    const record = await collectSessionIdentity('rt-1', {
+      runtimeId: 'rt-1',
+      sessionManager: {
+        getSessionId: () => {
+          throw new Error('session id unavailable');
+        },
+        getSessionFile: () => {
+          throw new Error('session file unavailable');
+        },
+        getSessionName: () => {
+          throw new Error('session name unavailable');
+        },
+        getCwd: () => {
+          throw new Error('cwd unavailable');
+        },
+      },
+      execGit,
+      execGhCli: null,
+      identitySource: 'startup',
+      cwd: '/tmp/explicit-cwd',
+      now: () => new Date('2026-06-17T12:00:00.000Z'),
+    });
+
+    expect(record.sessionId).toBeNull();
+    expect(record.sessionFile).toBeNull();
+    expect(record).not.toHaveProperty('sessionName');
+    expect(record.cwd).toBe('/tmp/explicit-cwd');
+    expect(record.diagnostics?.map((diagnostic) => diagnostic.code)).toEqual(
+      expect.arrayContaining(['session_id_missing', 'session_file_missing', 'not_git_repo']),
+    );
+  });
+
   it('omits sessionName when it is not set', async () => {
     const { collectSessionIdentity } =
       await import('../../extensions/session-deck/identity/collector.js');

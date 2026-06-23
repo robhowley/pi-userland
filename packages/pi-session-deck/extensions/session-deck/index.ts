@@ -7,6 +7,7 @@ import {
   type PresenceRuntimeController,
 } from './presence/runtime.js';
 import { ensureIdentityRuntimeStarted, stopIdentityRuntime } from './identity/runtime.js';
+import { createSetStatusMirror } from './chips/mirror.js';
 import type { SessionManagerLike } from './identity/types.js';
 
 type SessionStartReason = 'startup' | 'reload' | 'new' | 'resume' | 'fork';
@@ -37,6 +38,7 @@ interface SessionStartContext {
 
 export default async function (pi: ExtensionAPI): Promise<void> {
   registerSessionDeckCommand(pi as unknown as PresenceCommandAPI);
+  const statusMirror = createSetStatusMirror();
 
   function on<TArgs extends unknown[]>(
     event: string,
@@ -53,6 +55,13 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   on('session_start', async (event: { reason: SessionStartReason }, ctx: SessionStartContext) => {
     const presenceRuntime = await ensurePresenceRuntimeStarted();
     const sessionManager = createSessionManager(ctx);
+
+    // Install setStatus wrapper before session-deck sets its own status
+    statusMirror.install(ctx.ui);
+    statusMirror.reconfigure({
+      runtimeId: presenceRuntime.runtime.runtimeId,
+      getSessionId: sessionManager.getSessionId,
+    });
 
     ctx.ui.setStatus(SESSION_DECK_COMMAND_NAME, getPresenceStartupStatus(presenceRuntime));
 
@@ -103,6 +112,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   });
 
   on('session_shutdown', async () => {
+    await statusMirror.clearTracked();
     await stopIdentityRuntime();
   });
 

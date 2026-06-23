@@ -134,6 +134,7 @@ export const CHIP_DIAGNOSTIC_CODES = {
   CHIP_SCOPE_INVALID: 'chip_scope_invalid',
   CHIP_RUNTIME_ID_MISSING: 'chip_runtime_id_missing',
   CHIP_SESSION_ID_MISSING: 'chip_session_id_missing',
+  CHIP_MIRROR_ERROR: 'chip_mirror_error',
 } as const satisfies Record<string, ChipDiagnosticCode>;
 
 export type ChipDiagnosticCodeKey = keyof typeof CHIP_DIAGNOSTIC_CODES;
