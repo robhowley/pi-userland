@@ -1,15 +1,9 @@
 import { basename } from 'node:path';
-import { readSessionDeckView, type ReadSessionDeckViewOptions } from '../activity/reader.js';
-import type {
-  SessionDeckDiagnostic,
-  SessionDeckRecord,
-  SessionDeckView,
-} from '../activity/types.js';
+import { readSessionDeckSnapshot, type ReadSessionDeckSnapshotOptions } from '../reader.js';
+import type { SessionDeckDiagnostic, SessionDeckRecord, SessionDeckSnapshot } from '../types.js';
 import { SESSION_DECK_COMMAND_NAME } from '../presence/constants.js';
 import { reapPresenceRecords, type ReapPresenceRecordsOptions } from '../presence/reap.js';
-import { readPresenceView, type ReadPresenceViewOptions } from '../presence/reader.js';
-import { readJoinedSessionView, type ReadJoinedSessionViewOptions } from './reader.js';
-import type { PresenceDiagnostic, PresenceState, PresenceView } from '../presence/types.js';
+import type { PresenceDiagnostic, PresenceState } from '../presence/types.js';
 
 export interface PresenceCommandContext {
   ui: {
@@ -32,14 +26,8 @@ export interface PresenceCommandAPI {
   registerCommand: (name: string, options: PresenceCommandRegistration) => void;
 }
 
-export interface RegisterSessionDeckCommandOptions extends ReadPresenceViewOptions {
-  identityDirectory?: string;
-  activityDirectory?: string;
-  identityFreshnessThresholds?: Partial<import('./types.js').IdentityFreshnessThresholds>;
-  activityThresholds?: Partial<import('../activity/types.js').ActivityThresholds>;
-  readPresenceView?: typeof readPresenceView;
-  readJoinedSessionView?: typeof readJoinedSessionView;
-  readSessionDeckView?: typeof readSessionDeckView;
+export interface RegisterSessionDeckCommandOptions extends ReadSessionDeckSnapshotOptions {
+  readSessionDeckSnapshot?: typeof readSessionDeckSnapshot;
   reapPresenceRecords?: typeof reapPresenceRecords;
   unlink?: ReapPresenceRecordsOptions['unlink'];
 }
@@ -67,13 +55,11 @@ export function registerSessionDeckCommand(
   pi: PresenceCommandAPI,
   options: RegisterSessionDeckCommandOptions = {},
 ): void {
-  const readPresence = options.readPresenceView ?? readPresenceView;
-  const readJoined = options.readJoinedSessionView ?? readJoinedSessionView;
-  const readSessionDeck = options.readSessionDeckView ?? readSessionDeckView;
+  const readSnapshot = options.readSessionDeckSnapshot ?? readSessionDeckSnapshot;
   const reapPresence = options.reapPresenceRecords ?? reapPresenceRecords;
 
   pi.registerCommand(SESSION_DECK_COMMAND_NAME, {
-    description: 'Show Pi session presence, identity, and activity from ~/.pi/session-deck',
+    description: 'Show Pi session presence, identity, activity, and chips from ~/.pi/session-deck',
     getArgumentCompletions: getSessionDeckCommandCompletions,
     handler: async (args: string, ctx: PresenceCommandContext) => {
       const parsedArgs = parseSessionDeckCommandArgs(args);
@@ -83,18 +69,17 @@ export function registerSessionDeckCommand(
       }
 
       const reapResult = parsedArgs.reap ? await reapPresence(getReapOptions(options)) : null;
-      const presenceView = await readPresence(getReadPresenceOptions(options));
-      const joinedView = await readJoined(getReadJoinedOptions(options, presenceView));
-      const sessionDeckView = await readSessionDeck(getReadSessionDeckOptions(options, joinedView));
+      const sessionDeckSnapshot = await readSnapshot(getReadSessionDeckSnapshotOptions(options));
 
       const visibleRecords = parsedArgs.all
-        ? sessionDeckView.records
-        : sessionDeckView.records.filter((record) =>
-            DEFAULT_VISIBLE_STATES.includes(record.presenceState as PresenceState),
+        ? sessionDeckSnapshot.records
+        : sessionDeckSnapshot.records.filter((record) =>
+            DEFAULT_VISIBLE_STATES.includes(record.presenceState),
           );
-      const visibleView: SessionDeckView = {
+      const visibleView: SessionDeckSnapshot = {
+        generatedAt: sessionDeckSnapshot.generatedAt,
         records: visibleRecords,
-        diagnostics: parsedArgs.all ? sessionDeckView.diagnostics : [],
+        diagnostics: parsedArgs.all ? sessionDeckSnapshot.diagnostics : [],
       };
 
       const message =
@@ -156,7 +141,7 @@ export function parseSessionDeckCommandArgs(args: string): ParsedSessionDeckComm
 }
 
 export function renderSessionDeckView(
-  view: SessionDeckView,
+  view: SessionDeckSnapshot,
   options: { all: boolean; showIdentity: boolean },
 ): string {
   const lines: string[] = [];
@@ -165,12 +150,18 @@ export function renderSessionDeckView(
     lines.push(options.all ? 'No session records found.' : 'No live or stale Pi sessions found.');
   } else {
     lines.push(options.all ? 'Pi sessions (all records)' : 'Pi sessions (live + stale)');
-    for (const record of view.records) {
+    for (const [index, record] of view.records.entries()) {
+      if (index > 0) {
+        lines.push('');
+      }
       lines.push(formatSessionDeckRecord(record, options));
     }
   }
 
   if (options.all && view.diagnostics.length > 0) {
+    if (lines.length > 0) {
+      lines.push('');
+    }
     lines.push('Diagnostics:');
     for (const diagnostic of view.diagnostics) {
       lines.push(formatSessionDeckDiagnostic(diagnostic));
@@ -181,7 +172,7 @@ export function renderSessionDeckView(
 }
 
 function renderSessionDeckCommandResult(
-  view: SessionDeckView,
+  view: SessionDeckSnapshot,
   options: {
     all: boolean;
     showIdentity: boolean;
@@ -249,45 +240,102 @@ function formatSessionDeckRecord(
   record: SessionDeckRecord,
   options: { all: boolean; showIdentity: boolean },
 ): string {
-  const parts: string[] = [`- ${record.runtimeId}`];
+  const lines = [
+    [
+      formatShortId(record.runtimeId),
+      formatActivitySummary(record),
+      formatDuration(record.heartbeatAgeMs),
+      ...formatPresenceDetails(record),
+    ].join('  '),
+  ];
 
-  parts.push(`activity=${formatActivitySummary(record)}`);
-  parts.push(`presence=${record.presenceState}`);
-  parts.push(`pid=${record.pid}`);
-  parts.push(`age=${formatDuration(record.heartbeatAgeMs)}`);
-
-  if (record.cwd !== null) {
-    parts.push(`cwd=${shortenHomePath(record.cwd)}`);
+  if (record.sessionName !== null) {
+    lines.push(`  ${record.sessionName}`);
   }
 
-  if (record.branch !== null) {
-    parts.push(`branch=${record.branch}`);
+  const contextLine = formatRecordContext(record);
+  if (contextLine !== null) {
+    lines.push(`  ${contextLine}`);
   }
 
-  if (record.prUrl !== null) {
-    const prMatch = record.prUrl.match(/\/pull\/(\d+)$/);
-    parts.push(prMatch ? `pr=#${prMatch[1]}` : `pr=${record.prUrl}`);
+  if (record.chips.length > 0) {
+    lines.push(`  ${formatChips(record.chips)}`);
   }
 
-  if (record.sessionId !== null && options.showIdentity) {
-    parts.push(`session=${record.sessionId.slice(0, 8)}`);
+  const identityLine = options.showIdentity ? formatIdentityDetails(record) : null;
+  if (identityLine !== null) {
+    lines.push(`  ${identityLine}`);
   }
 
-  if (record.identityFreshness !== 'missing' && options.showIdentity) {
-    parts.push(`identity=${record.identityFreshness}`);
+  const diagnosticsLine = options.all ? formatRecordDiagnostics(record.diagnostics) : null;
+  if (diagnosticsLine !== null) {
+    lines.push(`  ${diagnosticsLine}`);
   }
 
-  if (record.presenceReason !== undefined) {
-    parts.push(`reason=${record.presenceReason}`);
+  return lines.join('\n');
+}
+
+function formatPresenceDetails(record: SessionDeckRecord): string[] {
+  const details: string[] = [];
+
+  if (record.presenceState !== 'live') {
+    details.push(record.presenceState);
   }
 
-  if (options.all && record.diagnostics.length > 0) {
-    for (const diagnostic of record.diagnostics) {
-      parts.push(`[${diagnostic.code}]`);
-    }
+  if (record.presenceReason !== undefined && record.presenceReason !== 'fresh_heartbeat') {
+    details.push(`reason=${record.presenceReason}`);
   }
 
-  return parts.join('  ');
+  return details;
+}
+
+function formatRecordContext(record: SessionDeckRecord): string | null {
+  const parts = [
+    formatRepoOrCwd(record.cwd, record.branch !== null || record.prUrl !== null),
+    record.branch,
+    formatPr(record.prUrl),
+  ].filter((part): part is string => part !== null);
+
+  return parts.length > 0 ? parts.join('  ') : null;
+}
+
+function formatRepoOrCwd(cwd: string | null, preferBasename: boolean): string | null {
+  if (cwd === null) {
+    return null;
+  }
+
+  const shortenedCwd = shortenHomePath(cwd);
+  if (!preferBasename) {
+    return shortenedCwd;
+  }
+
+  const repoName = basename(cwd);
+  return repoName.length > 0 && repoName !== '/' && repoName !== '.' ? repoName : shortenedCwd;
+}
+
+function formatPr(prUrl: string | null): string | null {
+  if (prUrl === null) {
+    return null;
+  }
+
+  const prMatch = prUrl.match(/\/pull\/(\d+)$/);
+  return prMatch ? `#${prMatch[1]}` : prUrl;
+}
+
+function formatIdentityDetails(record: SessionDeckRecord): string | null {
+  return record.sessionId !== null ? `session=${record.sessionId}` : null;
+}
+
+function formatRecordDiagnostics(diagnostics: SessionDeckDiagnostic[]): string | null {
+  if (diagnostics.length === 0) {
+    return null;
+  }
+
+  return `diagnostics: ${[...new Set(diagnostics.map((diagnostic) => diagnostic.code))].join(' | ')}`;
+}
+
+function formatShortId(id: string): string {
+  return id.length <= 8 ? id : id.slice(0, 8);
 }
 
 function formatActivitySummary(record: SessionDeckRecord): string {
@@ -305,29 +353,13 @@ function formatActivitySummary(record: SessionDeckRecord): string {
     }
     case 'error':
       return record.lastError === null ? 'error' : `error: ${record.lastError}`;
-    case 'unknown': {
-      const diagnostics = record.diagnostics
-        .map((diagnostic) => diagnostic.code)
-        .filter((code) =>
-          [
-            'activity_missing',
-            'activity_stale',
-            'session_mismatch',
-            'busy_idle_conflict',
-            'turn_started_missing',
-            'tool_name_missing',
-            'tool_stuck',
-            'last_event_missing',
-            'last_event_future',
-            'malformed_activity_record',
-            'activity_write_error',
-            'activity_read_error',
-          ].includes(code),
-        );
-      const suffix = diagnostics.length === 0 ? '' : ` [${diagnostics.join(',')}]`;
-      return `unknown${suffix}`;
-    }
+    case 'unknown':
+      return 'unknown';
   }
+}
+
+function formatChips(chips: string[]): string {
+  return chips.join(' | ');
 }
 
 function shortenHomePath(cwd: string): string {
@@ -371,48 +403,27 @@ function getSessionDeckCommandCompletions(prefix: string) {
   return matches.length > 0 ? matches : null;
 }
 
-function getReadPresenceOptions(
+function getReadSessionDeckSnapshotOptions(
   options: RegisterSessionDeckCommandOptions,
-): ReadPresenceViewOptions {
+): ReadSessionDeckSnapshotOptions {
   return {
     ...(options.directory === undefined ? {} : { directory: options.directory }),
-    ...(options.now === undefined ? {} : { now: options.now }),
-    ...(options.thresholds === undefined ? {} : { thresholds: options.thresholds }),
-    ...(options.inspectPid === undefined ? {} : { inspectPid: options.inspectPid }),
-    ...(options.readdir === undefined ? {} : { readdir: options.readdir }),
-    ...(options.readFile === undefined ? {} : { readFile: options.readFile }),
-  };
-}
-
-function getReadJoinedOptions(
-  options: RegisterSessionDeckCommandOptions,
-  presenceView: PresenceView,
-): ReadJoinedSessionViewOptions {
-  return {
-    presenceView,
     ...(options.identityDirectory === undefined
       ? {}
       : { identityDirectory: options.identityDirectory }),
-    ...(options.now === undefined ? {} : { now: options.now }),
-    ...(options.identityFreshnessThresholds === undefined
-      ? {}
-      : { identityFreshnessThresholds: options.identityFreshnessThresholds }),
-    ...(options.readdir === undefined ? {} : { readdir: options.readdir }),
-    ...(options.readFile === undefined ? {} : { readFile: options.readFile }),
-  };
-}
-
-function getReadSessionDeckOptions(
-  options: RegisterSessionDeckCommandOptions,
-  joinedView: import('./types.js').JoinedSessionView,
-): ReadSessionDeckViewOptions {
-  return {
-    joinedView,
     ...(options.activityDirectory === undefined
       ? {}
       : { activityDirectory: options.activityDirectory }),
+    ...(options.chipsDirectory === undefined ? {} : { chipsDirectory: options.chipsDirectory }),
     ...(options.now === undefined ? {} : { now: options.now }),
-    ...(options.activityThresholds === undefined ? {} : { thresholds: options.activityThresholds }),
+    ...(options.thresholds === undefined ? {} : { thresholds: options.thresholds }),
+    ...(options.identityFreshnessThresholds === undefined
+      ? {}
+      : { identityFreshnessThresholds: options.identityFreshnessThresholds }),
+    ...(options.activityThresholds === undefined
+      ? {}
+      : { activityThresholds: options.activityThresholds }),
+    ...(options.inspectPid === undefined ? {} : { inspectPid: options.inspectPid }),
     ...(options.readdir === undefined ? {} : { readdir: options.readdir }),
     ...(options.readFile === undefined ? {} : { readFile: options.readFile }),
   };

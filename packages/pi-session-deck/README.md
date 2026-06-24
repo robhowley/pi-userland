@@ -1,6 +1,6 @@
 # pi-session-deck
 
-Pi runtime presence foundation plus session identity/activity sidecars. P4 chips are still **backend-only** today: `pi-session-deck` writes chip JSON sidecars, but `/session-deck` does not read or render them yet.
+Pi runtime presence foundation plus session identity/activity sidecars. `/session-deck` now reads the joined snapshot and renders scannable multi-line rows, including joined chip text when chip sidecars are present.
 
 ## Installation
 
@@ -10,10 +10,10 @@ pi install npm:@robhowley/pi-session-deck
 
 ## Commands
 
-- `/session-deck` shows live and stale Pi runtime rows with joined identity + current activity.
+- `/session-deck` shows live and stale Pi runtime rows in a compact multi-line shape: short runtime id + activity + age, session name when set, repo/cwd + branch/PR, and joined chip text when present.
 - `/session-deck --all` includes dead and unknown presence records plus read diagnostics.
 - `/session-deck --reap` removes presence records older than the 24h reap threshold.
-- `/session-deck --identity` shows extra identity details for each runtime.
+- `/session-deck --identity` shows extra identity details for each runtime, including the full session id.
 - `/session-deck --all --reap --identity` combines all modes; flag order does not matter.
 
 ## What it provides
@@ -22,13 +22,13 @@ pi install npm:@robhowley/pi-session-deck
 - Session identity sidecars at `~/.pi/session-deck/identity/${runtimeId}.json`, including `sessionName` when set via `/name` or `--name`.
 - Current activity sidecars at `~/.pi/session-deck/activity/${runtimeId}.json`.
 - Chip sidecars at `~/.pi/session-deck/chips/${runtimeId}/${source}.${chipId}.${scope}.json`.
-- Backend chip sidecars plus a manual publisher helper for explicit chip writes.
+- Joined chip rendering in `/session-deck`, backed by chip sidecars plus a manual publisher helper for explicit chip writes.
 - `/new` resets activity for the new sessionId while keeping the same runtimeId.
 - Compact activity states: `waiting`, `thinking`, `tool-running`, `error`, `unknown`.
 
 ## P4 chips — automatic setStatus mirroring
 
-`pi-session-deck` mirrors `ctx.ui.setStatus()` output into chip JSON sidecars on every session.
+`pi-session-deck` mirrors `ctx.ui.setStatus()` output into chip JSON sidecars on every session. `/session-deck` reads the joined snapshot and renders visible chip text on its own indented line without exposing raw chip metadata.
 
 ### How it works
 
@@ -43,15 +43,16 @@ This avoids using `ctx.ui.setFooter()` entirely — the native Pi footer is neve
 
 ### Captured fields
 
-| Field | Source |
-|---|---|
-| `source` | Status key (must pass slug validation) |
-| `text` | Visible status text (ANSI/control stripped) |
-| `updatedAt` | Mirror time (ISO 8601) |
-| `runtimeId` | Presence runtime identity |
+| Field       | Source                                                 |
+| ----------- | ------------------------------------------------------ |
+| `source`    | Status key (must pass slug validation)                 |
+| `text`      | Visible status text (ANSI/control stripped)            |
+| `updatedAt` | Mirror time (ISO 8601)                                 |
+| `runtimeId` | Presence runtime identity                              |
 | `sessionId` | Current session (from `sessionManager.getSessionId()`) |
 
 Default fallback values:
+
 - `chipId: 'default'`
 - `scope: 'session'`
 - `level: 'unknown'`
@@ -62,6 +63,7 @@ Default fallback values:
 - Strips ANSI/control characters, normalizes whitespace, and trims before persistence.
 - Treats empty-after-sanitize text as absent (clears the chip).
 - Dedupes: repeated identical `source + sanitizedText` does not rewrite.
+- Session-scoped chips only render while their saved `sessionId` still matches the runtime's current trusted session; runtime-scoped chips can survive `/new`.
 - Session shutdown clears all tracked mirrored chips.
 - Repeated `session_start` does not double-wrap.
 
