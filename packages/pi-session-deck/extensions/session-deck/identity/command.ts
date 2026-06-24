@@ -249,6 +249,10 @@ function formatSessionDeckRecord(
     ].join('  '),
   ];
 
+  if (record.sessionName !== null) {
+    lines.push(`  ${record.sessionName}`);
+  }
+
   const contextLine = formatRecordContext(record);
   if (contextLine !== null) {
     lines.push(`  ${contextLine}`);
@@ -319,17 +323,7 @@ function formatPr(prUrl: string | null): string | null {
 }
 
 function formatIdentityDetails(record: SessionDeckRecord): string | null {
-  const parts: string[] = [];
-
-  if (record.sessionId !== null) {
-    parts.push(`session=${record.sessionId}`);
-  }
-
-  if (record.sessionName !== null) {
-    parts.push(`name=${record.sessionName}`);
-  }
-
-  return parts.length > 0 ? parts.join('  ') : null;
+  return record.sessionId !== null ? `session=${record.sessionId}` : null;
 }
 
 function formatRecordDiagnostics(diagnostics: SessionDeckDiagnostic[]): string | null {

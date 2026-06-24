@@ -48,7 +48,7 @@ function buildSnapshotRecord(overrides: Partial<SessionDeckRecord> = {}): Sessio
     presenceReason: 'fresh_heartbeat',
     heartbeatAgeMs: 5_000,
     sessionId: 'session-abc',
-    sessionName: 'alpha',
+    sessionName: null,
     cwd: `${HOME}/project`,
     branch: 'main',
     prUrl: 'https://github.com/owner/repo/pull/42',
@@ -126,7 +126,7 @@ describe('session-deck joined command', () => {
     const readSessionDeckSnapshot = vi.fn(async () =>
       buildSnapshot({
         records: [
-          buildSnapshotRecord({ chips: ['merge-ready clean'] }),
+          buildSnapshotRecord({ sessionName: 'alpha', chips: ['merge-ready clean'] }),
           buildSnapshotRecord({
             runtimeId: 'rt-2',
             presenceState: 'stale',
@@ -184,6 +184,7 @@ describe('session-deck joined command', () => {
     const [defaultMessage] = vi.mocked(ctx.ui.notify).mock.calls[0] ?? [];
     expect(defaultMessage).toContain('Pi sessions (live + stale)');
     expect(defaultMessage).toContain('922f7ac8  waiting  5s');
+    expect(defaultMessage).toContain('  alpha');
     expect(defaultMessage).toContain('  project  main  #42');
     expect(defaultMessage).toContain('  merge-ready clean');
     expect(defaultMessage).toContain('rt-2  thinking 3m  3m  stale  reason=heartbeat_expired');
@@ -208,11 +209,13 @@ describe('session-deck joined command', () => {
     expect(allMessage).toContain('malformed_activity_record');
   });
 
-  it('shows identity extras only with --identity', async () => {
+  it('shows session names by default and keeps session ids behind --identity', async () => {
     const { api, getHandler } = createMockAPI();
 
     registerSessionDeckCommand(api, {
-      readSessionDeckSnapshot: vi.fn(async () => buildSnapshot()),
+      readSessionDeckSnapshot: vi.fn(async () =>
+        buildSnapshot({ records: [buildSnapshotRecord({ sessionName: 'alpha' })] }),
+      ),
     });
 
     const handler = getHandler();
@@ -220,14 +223,16 @@ describe('session-deck joined command', () => {
 
     await handler?.('', ctx);
     const [defaultMessage] = vi.mocked(ctx.ui.notify).mock.calls[0] ?? [];
+    expect(defaultMessage).toContain('  alpha');
     expect(defaultMessage).not.toContain('session=session-');
     expect(defaultMessage).not.toContain('name=alpha');
 
     vi.mocked(ctx.ui.notify).mockClear();
     await handler?.('--identity', ctx);
     const [identityMessage] = vi.mocked(ctx.ui.notify).mock.calls[0] ?? [];
+    expect(identityMessage).toContain('  alpha');
     expect(identityMessage).toContain('session=session-');
-    expect(identityMessage).toContain('name=alpha');
+    expect(identityMessage).not.toContain('name=alpha');
   });
 
   it('preserves reap output while reading the joined snapshot', async () => {

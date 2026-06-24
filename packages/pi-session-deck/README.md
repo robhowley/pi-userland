@@ -10,10 +10,10 @@ pi install npm:@robhowley/pi-session-deck
 
 ## Commands
 
-- `/session-deck` shows live and stale Pi runtime rows in a compact multi-line shape: short runtime id + activity + age, repo/cwd + branch/PR, and joined chip text when present.
+- `/session-deck` shows live and stale Pi runtime rows in a compact multi-line shape: short runtime id + activity + age, session name when set, repo/cwd + branch/PR, and joined chip text when present.
 - `/session-deck --all` includes dead and unknown presence records plus read diagnostics.
 - `/session-deck --reap` removes presence records older than the 24h reap threshold.
-- `/session-deck --identity` shows extra identity details for each runtime.
+- `/session-deck --identity` shows extra identity details for each runtime, including the full session id.
 - `/session-deck --all --reap --identity` combines all modes; flag order does not matter.
 
 ## What it provides
