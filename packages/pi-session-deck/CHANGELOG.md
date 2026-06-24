@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/robhowley/pi-userland/compare/pi-session-deck-v0.4.0...pi-session-deck-v0.5.0) (2026-06-24)
+
+
+### Features
+
+* **pi-session-deck:** add joined session snapshot ([#99](https://github.com/robhowley/pi-userland/issues/99)) ([9432689](https://github.com/robhowley/pi-userland/commit/9432689133171ad89d7d2a6015de5e966558aa95))
+
 ## [0.4.0](https://github.com/robhowley/pi-userland/compare/pi-session-deck-v0.3.0...pi-session-deck-v0.4.0) (2026-06-23)
 
 
