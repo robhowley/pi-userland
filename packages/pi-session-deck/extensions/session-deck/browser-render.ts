@@ -118,49 +118,37 @@ export function formatSessionDeckBrowserCardLines(
   options: SessionDeckRecordRenderOptions,
 ): string[] {
   const title = getDisplayTitle(record);
-  const sections: string[][] = [[title.text]];
+  const lines = [title.text];
 
-  const locationLines = formatCardLocationLines(record, title.source);
-  if (locationLines.length > 0) {
-    sections.push(locationLines);
+  if (record.cwd !== null) {
+    lines.push(`cwd: ${shortenHomePath(record.cwd)}`);
   }
 
-  sections.push([
-    `presence: ${formatPresenceIcon(record.presenceState)} ${record.presenceState}`,
-    `activity: ${formatSelectedActivity(record)}`,
-  ]);
-
-  const pr = formatPr(record.prUrl);
-  const metadataLines = [
-    ...(record.branch === null ? [] : [`branch: ${record.branch}`]),
-    ...(pr === null ? [] : [`pr: ${pr}`]),
-  ];
-  if (metadataLines.length > 0) {
-    sections.push(metadataLines);
+  const branchAndPrLine = formatCardBranchAndPrLine(record);
+  if (branchAndPrLine !== null) {
+    lines.push(branchAndPrLine);
   }
 
-  const chipLines = formatCardChipLines(record.chips);
-  if (chipLines.length > 0) {
-    sections.push(chipLines);
+  lines.push(formatCardStatusLine(record));
+
+  if (record.chips.length > 0) {
+    lines.push('');
+    lines.push(`chips: ${formatChipPreview(record.chips)}`);
   }
 
-  const debugLines = [
-    `heartbeat: ${formatDuration(record.heartbeatAgeMs)} ago${formatPresenceReasonSuffix(record)}`,
-    formatRuntimeLine(record),
-  ];
+  lines.push(formatRuntimeLine(record));
 
   const identityLine = options.showIdentity ? formatCardIdentityDetails(record) : null;
   if (identityLine !== null) {
-    debugLines.push(identityLine);
+    lines.push(identityLine);
   }
 
   const diagnosticsLine = options.all ? formatRecordDiagnostics(record.diagnostics) : null;
   if (diagnosticsLine !== null) {
-    debugLines.push(diagnosticsLine);
+    lines.push(diagnosticsLine);
   }
 
-  sections.push(debugLines);
-  return joinSections(sections);
+  return lines;
 }
 
 export function shouldDimSessionDeckBrowserRow(record: SessionDeckRecord): boolean {
@@ -295,29 +283,26 @@ function formatRecordContext(record: SessionDeckRecord): string | null {
   return parts.length > 0 ? parts.join('  ') : null;
 }
 
-function formatCardLocationLines(
-  record: SessionDeckRecord,
-  titleSource: SessionDeckBrowserRow['titleSource'],
-): string[] {
-  const lines: string[] = [];
+function formatCardBranchAndPrLine(record: SessionDeckRecord): string | null {
+  const pr = formatPr(record.prUrl);
+  const parts = [
+    record.branch === null ? null : `branch: ${record.branch}`,
+    pr === null ? null : `pr: ${pr}`,
+  ].filter((part): part is string => part !== null);
 
-  if (record.repoName !== null && titleSource !== 'repoName') {
-    lines.push(`repo: ${record.repoName}`);
-  }
-
-  if (record.cwd !== null) {
-    lines.push(`cwd: ${shortenHomePath(record.cwd)}`);
-  }
-
-  return lines;
+  return parts.length > 0 ? parts.join(' · ') : null;
 }
 
-function formatCardChipLines(chips: string[]): string[] {
-  if (chips.length === 0) {
-    return [];
-  }
+function formatCardStatusLine(record: SessionDeckRecord): string {
+  return joinDisplayParts(
+    `presence: ${formatPresenceIcon(record.presenceState)} ${record.presenceState}`,
+    `activity: ${formatSelectedActivity(record)}`,
+    `heartbeat: ${formatCardHeartbeat(record)}`,
+  );
+}
 
-  return ['chips:', ...chips.map((chip) => `  - ${chip}`)];
+function formatCardHeartbeat(record: SessionDeckRecord): string {
+  return `${formatDuration(record.heartbeatAgeMs)} ago${formatPresenceReasonSuffix(record)}`;
 }
 
 function formatRuntimeLine(record: SessionDeckRecord): string {
@@ -499,22 +484,4 @@ function truncateMiddle(value: string, maxLength: number): string {
 
 function joinDisplayParts(...parts: Array<string | null>): string {
   return parts.filter((part): part is string => part !== null && part.length > 0).join(' · ');
-}
-
-function joinSections(sections: string[][]): string[] {
-  const lines: string[] = [];
-
-  for (const section of sections) {
-    if (section.length === 0) {
-      continue;
-    }
-
-    if (lines.length > 0) {
-      lines.push('');
-    }
-
-    lines.push(...section);
-  }
-
-  return lines;
 }

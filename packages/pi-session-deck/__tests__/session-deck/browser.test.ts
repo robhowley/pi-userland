@@ -109,13 +109,16 @@ describe('SessionDeckBrowser', () => {
     expect(renderText(browser)).toContain('No live or stale Pi sessions found.');
   });
 
-  it('renders compact dashboard rows with chips on line 2 and a boxed selected card', () => {
+  it('keeps the top-pane dashboard unchanged and compacts only the selected card', () => {
     const browser = createBrowser({
       all: true,
       showIdentity: true,
       initialView: buildSnapshot({
         records: [
-          buildSnapshotRecord({ chips: ['merge-ready clean', 'queue 2'] }),
+          buildSnapshotRecord({
+            chips: ['merge-ready clean', 'queue 2'],
+            diagnostics: [{ code: 'activity_stale', message: 'Activity record is stale' }],
+          }),
           buildSnapshotRecord({
             runtimeId: 'rt-2',
             pid: 202,
@@ -142,17 +145,15 @@ describe('SessionDeckBrowser', () => {
     expect(output).not.toContain('Selected session');
     expect(output).toContain('┌');
     expect(output).toContain('│ alpha');
-    expect(output).toContain('│ repo: project');
     expect(output).toContain('│ cwd: ~/project');
-    expect(output).toContain('│ presence: ● live');
-    expect(output).toContain('│ activity: waiting');
-    expect(output).toContain('│ chips:');
-    expect(output).toContain('│   - merge-ready clean');
-    expect(output).toContain('│   - queue 2');
-    expect(output).toContain('│ heartbeat: 5s ago');
+    expect(output).toContain('│ branch: main · pr: #42');
+    expect(output).toContain('│ presence: ● live · activity: waiting · heartbeat: 5s ago');
+    expect(output).toContain('│ chips: merge-ready clean · queue 2');
     expect(output).toContain('│ runtime: 922f7ac8deadbeef · pid: 101');
     expect(output).toContain('│ session: session-abc');
-    expect(output).not.toContain('\n  merge-ready clean\n');
+    expect(output).toContain('│ diagnostics: activity_stale');
+    expect(output).not.toContain('│ repo:');
+    expect(output).not.toContain('│   - merge-ready clean');
   });
 
   it('uses session name, then repo name, then cwd basename, then runtime id in the list and card', () => {
@@ -224,7 +225,8 @@ describe('SessionDeckBrowser', () => {
             heartbeatAgeMs: 240_000,
             activityState: 'thinking',
             activityAgeMs: 180_000,
-            chips: ['queue 2'],
+            diagnostics: [{ code: 'activity_stale', message: 'Activity record is stale' }],
+            chips: [],
           }),
         ],
       }),
@@ -235,10 +237,13 @@ describe('SessionDeckBrowser', () => {
     expect(requestRender).toHaveBeenCalledTimes(1);
     const selectedOutput = renderText(browser);
     expect(selectedOutput).toContain('› ◌ thinking  bravo  project · #42 · 4m · main');
-    expect(selectedOutput).toContain('  │ queue 2');
-    expect(selectedOutput).toContain('│ presence: ◌ stale');
-    expect(selectedOutput).toContain('│ activity: thinking · 3m');
+    expect(selectedOutput).toContain('  │ no chips');
+    expect(selectedOutput).toContain(
+      '│ presence: ◌ stale · activity: thinking · 3m · heartbeat: 4m ago · heartbeat expired',
+    );
     expect(selectedOutput).toContain('│ session: session-2');
+    expect(selectedOutput).not.toContain('│ chips:');
+    expect(selectedOutput).not.toContain('│ diagnostics:');
 
     browser.handleInput('enter');
 
@@ -362,7 +367,7 @@ describe('SessionDeckBrowser', () => {
     expect(requestRender).toHaveBeenCalled();
   });
 
-  it('clips branch first on narrow line 1 and width-truncates the joined chip preview', () => {
+  it('clips branch first on narrow top-pane line 1 and width-truncates the joined chip preview', () => {
     const browser = createBrowser({
       initialView: buildSnapshot({
         records: [
@@ -381,6 +386,39 @@ describe('SessionDeckBrowser', () => {
     expect(output).not.toContain('session-deck-cleanup');
     expect(output).toContain('merge-ready clean · queue 2');
     expect(output).not.toContain('needs-review soon');
+  });
+
+  it('wraps the compact selected card cleanly at narrow widths', () => {
+    const browser = createBrowser({
+      all: true,
+      showIdentity: true,
+      initialView: buildSnapshot({
+        records: [
+          buildSnapshotRecord({
+            runtimeId: 'rt-long',
+            sessionName: 'a very long session name that should wrap cleanly in the detail pane',
+            cwd: `${HOME}/really/long/path/that/should/be/wrapped/in/the/selected/card`,
+            branch: 'rh-pr21733-pr5-docs-config-fixture-hygiene-and-session-deck-cleanup',
+            activityState: 'error',
+            activityAgeMs: 42_000,
+            heartbeatAgeMs: 240_000,
+            presenceState: 'stale',
+            presenceReason: 'heartbeat_expired',
+            lastError: 'tool bash failed because the selected row is intentionally oversized',
+            chips: ['merge-ready clean', 'queue 2', 'needs-review soon'],
+            diagnostics: [{ code: 'activity_stale', message: 'Activity record is stale' }],
+          }),
+        ],
+      }),
+    });
+
+    const lines = renderLines(browser, 38);
+    const boxedContentLines = lines.filter((line) => line.startsWith('│ '));
+
+    expect(lines.every((line) => visibleWidth(line) <= 38)).toBe(true);
+    expect(boxedContentLines.length).toBeGreaterThan(9);
+    expect(boxedContentLines.some((line) => line.includes('chips:'))).toBe(true);
+    expect(boxedContentLines.some((line) => line.includes('diagnostics:'))).toBe(true);
   });
 
   it('keeps every rendered line within the requested width', () => {

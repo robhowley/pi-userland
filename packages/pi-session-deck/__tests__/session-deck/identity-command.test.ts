@@ -291,7 +291,10 @@ describe('session-deck joined command', () => {
       .mockResolvedValueOnce(
         buildSnapshot({
           records: [
-            buildSnapshotRecord({ sessionName: 'alpha' }),
+            buildSnapshotRecord({
+              sessionName: 'alpha',
+              chips: ['merge-ready clean', 'queue 2'],
+            }),
             buildSnapshotRecord({
               runtimeId: 'rt-dead',
               pid: 202,
@@ -332,10 +335,16 @@ describe('session-deck joined command', () => {
       expect(initialRender).toContain('Reap complete: removed 1 expired presence record.');
       expect(initialRender).toContain('Pi sessions · 1 live · 0 stale · 1 dead · 0 unknown');
       expect(initialRender).toContain('› ● waiting  alpha  project · #42 · 5s · main');
+      expect(initialRender).toContain('  │ merge-ready clean · queue 2');
       expect(initialRender).toContain('  × unknown  rt-dead  5s');
       expect(initialRender).not.toContain('Selected session');
+      expect(initialRender).toContain('cwd: ~/project');
+      expect(initialRender).toContain('branch: main · pr: #42');
+      expect(initialRender).toContain('presence: ● live · activity: waiting · heartbeat: 5s ago');
+      expect(initialRender).toContain('chips: merge-ready clean · queue 2');
       expect(initialRender).toContain('runtime: 922f7ac8deadbeef · pid: 101');
       expect(initialRender).toContain('session: session-abc');
+      expect(initialRender).not.toContain('repo: project');
 
       component.handleInput?.('r');
 

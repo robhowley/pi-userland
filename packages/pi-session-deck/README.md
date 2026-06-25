@@ -12,7 +12,7 @@ pi install npm:@robhowley/pi-session-deck
 
 - `/session-deck` opens a read-only TUI browser in Pi TUI mode and falls back to the existing compact multi-line text view elsewhere.
 - TUI rows are two-line dashboard rows: line 1 is `icon + activity + (sessionName ?? repoName ?? cwd basename ?? runtimeId) + repo/PR/age/branch`, and line 2 is chip preview only joined with `·` or dim `no chips` when empty.
-- The selected TUI inspector stays boxed, keeps full chip detail inside the card one-per-line, and is the only place for full `runtime`, `pid`, `cwd`, and `session` debug detail; `--identity` adds extra raw identity like `session: ...`.
+- The selected TUI inspector stays boxed but compact: title, `cwd`, inline `branch/pr`, inline `presence/activity/heartbeat`, optional blank spacer plus inline `chips: ...`, then `runtime/pid`; `--identity` adds `session: ...` and `--all` adds compact `diagnostics:`.
 - TUI browser keys: `↑/↓` move selection, `enter` toggles detail, `r` refreshes, `q`/`esc` closes.
 - `/session-deck --all` includes dead and unknown presence records plus read diagnostics.
 - `/session-deck --reap` removes presence records older than the 24h reap threshold before the initial view loads.
