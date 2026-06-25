@@ -100,7 +100,7 @@ export class SessionDeckBrowser {
       'accent',
       this.theme.bold(getSessionDeckBrowserTitle(this.view, this.all)),
     );
-    const help = this.theme.fg('dim', '↑↓ move · enter details · r refresh · q close');
+    const help = this.theme.fg('muted', '↑↓ move · enter details · r refresh · q close');
 
     pushWrappedLine(lines, title, width);
     pushWrappedLine(lines, help, width);
@@ -138,8 +138,8 @@ export class SessionDeckBrowser {
         const row = formatSessionDeckBrowserRow(record);
         const isSelected = index === this.selectedIndex;
 
-        lines.push(truncateToWidth(renderRowLine1(this.theme, record, row, isSelected), width));
-        lines.push(truncateToWidth(renderRowLine2(this.theme, record, row, isSelected), width));
+        lines.push(renderRowLine1(this.theme, record, row, isSelected, width));
+        lines.push(renderRowLine2(this.theme, record, row, isSelected, width));
       }
 
       if (windowed.end - windowed.start < this.view.records.length) {
@@ -163,7 +163,6 @@ export class SessionDeckBrowser {
       if (selected === null) {
         pushWrappedLine(lines, this.theme.fg('dim', 'No selected session.'), width);
       } else {
-        pushWrappedLine(lines, this.theme.fg('dim', 'Selected session'), width);
         const cardLines = formatSessionDeckBrowserCardLines(selected, {
           all: this.all,
           showIdentity: this.showIdentity,
@@ -177,7 +176,7 @@ export class SessionDeckBrowser {
 
     if (this.all && this.view.diagnostics.length > 0) {
       lines.push('');
-      pushWrappedLine(lines, this.theme.fg('accent', this.theme.bold('Diagnostics')), width);
+      pushWrappedLine(lines, this.theme.fg('muted', this.theme.bold('Diagnostics')), width);
       for (const diagnostic of this.view.diagnostics) {
         pushWrappedLine(lines, formatSessionDeckDiagnosticLine(diagnostic), width, '  ');
       }
@@ -230,14 +229,20 @@ function renderRowLine1(
   record: SessionDeckRecord,
   row: SessionDeckBrowserRow,
   isSelected: boolean,
+  width: number,
 ): string {
   const prefix = isSelected ? '› ' : '  ';
-  const title =
-    !isSelected && !shouldDimSessionDeckBrowserRow(record) && row.titleSource === 'sessionName'
-      ? theme.fg('accent', row.title)
-      : row.title;
+  const lead = `${prefix}${row.icon} ${row.activity}  `;
+  const coreMetadata = formatRowLine1Metadata(row, false);
+  const availableTitleWidth = Math.max(1, width - visibleWidth(lead) - visibleWidth(coreMetadata));
+  const title = truncateToWidth(styleRowTitle(theme, record, row, isSelected), availableTitleWidth);
+  const line = appendBranchMetadata(
+    `${lead}${title}${coreMetadata}`,
+    row.branchLabel,
+    coreMetadata.length > 0,
+  );
 
-  return styleRow(theme, `${prefix}${row.icon} ${row.activity}  ${title}`, record, isSelected);
+  return styleRowLine1(theme, line, record, isSelected, width);
 }
 
 function renderRowLine2(
@@ -245,25 +250,72 @@ function renderRowLine2(
   record: SessionDeckRecord,
   row: SessionDeckBrowserRow,
   isSelected: boolean,
+  width: number,
 ): string {
-  return styleRow(theme, `    ${row.subtitle}`, record, isSelected);
+  const prefix = isSelected ? theme.fg('accent', '  │ ') : '    ';
+  const chipText = row.hasChips
+    ? isSelected || !shouldDimSessionDeckBrowserRow(record)
+      ? row.chipPreview
+      : theme.fg('dim', row.chipPreview)
+    : theme.fg('dim', 'no chips');
+
+  return truncateToWidth(`${prefix}${chipText}`, width);
 }
 
-function styleRow(
+function formatRowLine1Metadata(row: SessionDeckBrowserRow, includeBranch: boolean): string {
+  const tokens = [
+    row.repoLabel,
+    row.prLabel,
+    row.ageLabel,
+    ...(includeBranch ? [row.branchLabel] : []),
+  ].filter((token): token is string => token !== null);
+
+  return tokens.length === 0 ? '' : `  ${tokens.join(' · ')}`;
+}
+
+function appendBranchMetadata(
+  line: string,
+  branchLabel: string | null,
+  hasCoreMetadata: boolean,
+): string {
+  if (branchLabel === null) {
+    return line;
+  }
+
+  return `${line}${hasCoreMetadata ? ' · ' : '  '}${branchLabel}`;
+}
+
+function styleRowTitle(
+  theme: Theme,
+  record: SessionDeckRecord,
+  row: SessionDeckBrowserRow,
+  isSelected: boolean,
+): string {
+  if (isSelected || shouldDimSessionDeckBrowserRow(record) || row.titleSource !== 'sessionName') {
+    return row.title;
+  }
+
+  return theme.fg('accent', row.title);
+}
+
+function styleRowLine1(
   theme: Theme,
   line: string,
   record: SessionDeckRecord,
   isSelected: boolean,
+  width: number,
 ): string {
+  const truncatedLine = truncateToWidth(line, width);
+
   if (isSelected) {
-    return theme.fg('accent', line);
+    return theme.fg('accent', truncatedLine);
   }
 
   if (shouldDimSessionDeckBrowserRow(record)) {
-    return theme.fg('dim', line);
+    return theme.fg('dim', truncatedLine);
   }
 
-  return line;
+  return truncatedLine;
 }
 
 function pushWrappedLine(lines: string[], line: string, width: number, prefix = ''): void {

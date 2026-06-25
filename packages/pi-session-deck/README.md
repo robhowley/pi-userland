@@ -1,6 +1,6 @@
 # pi-session-deck
 
-Pi runtime presence foundation plus session identity/activity sidecars. `/session-deck` now reads the joined snapshot and renders scannable multi-line rows, including joined chip text when chip sidecars are present.
+Pi runtime presence foundation plus session identity/activity sidecars. `/session-deck` now reads the joined snapshot and renders a compact top-pane dashboard with chip previews plus a selected inspector.
 
 ## Installation
 
@@ -10,9 +10,9 @@ pi install npm:@robhowley/pi-session-deck
 
 ## Commands
 
-- `/session-deck` opens a read-only TUI browser in Pi TUI mode and falls back to the compact multi-line text view elsewhere.
-- TUI rows are two-line scan rows: `sessionName ?? repo/cwd ?? runtimeId` on line 1 with a presence icon + activity token, then repo/branch/PR/age on line 2.
-- The selected TUI card is boxed/padded, keeps chips inside the card one-per-line, and shows `runtime` / `pid` debug details; `--identity` adds extra raw identity like `session: ...`.
+- `/session-deck` opens a read-only TUI browser in Pi TUI mode and falls back to the existing compact multi-line text view elsewhere.
+- TUI rows are two-line dashboard rows: line 1 is `icon + activity + (sessionName ?? repoName ?? cwd basename ?? runtimeId) + repo/PR/age/branch`, and line 2 is chip preview only joined with `·` or dim `no chips` when empty.
+- The selected TUI inspector stays boxed, keeps full chip detail inside the card one-per-line, and is the only place for full `runtime`, `pid`, `cwd`, and `session` debug detail; `--identity` adds extra raw identity like `session: ...`.
 - TUI browser keys: `↑/↓` move selection, `enter` toggles detail, `r` refreshes, `q`/`esc` closes.
 - `/session-deck --all` includes dead and unknown presence records plus read diagnostics.
 - `/session-deck --reap` removes presence records older than the 24h reap threshold before the initial view loads.

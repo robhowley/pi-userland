@@ -136,6 +136,7 @@ describe('readSessionDeckSnapshot', () => {
         heartbeatAgeMs: 5_000,
         sessionId: 'session-1',
         sessionName: 'alpha',
+        repoName: 'project',
         cwd: '/tmp/project',
         branch: 'main',
         prUrl: 'https://github.com/owner/repo/pull/42',
@@ -168,6 +169,29 @@ describe('readSessionDeckSnapshot', () => {
     ]) {
       expect(record).not.toHaveProperty(field);
     }
+  });
+
+  it('projects repoName from the identity worktree basename and falls back to null without one', async () => {
+    const directories = await createSnapshotDirectories();
+
+    await writePresenceRecord(buildPresenceRecord(), { directory: directories.presenceDirectory });
+    await writeIdentityRecord(buildIdentityRecord({ worktree: null }), {
+      directory: directories.identityDirectory,
+    });
+    await writeActivityRecord(buildActivityRecord(), { directory: directories.activityDirectory });
+
+    const snapshot = await readSessionDeckSnapshot({
+      directory: directories.presenceDirectory,
+      identityDirectory: directories.identityDirectory,
+      activityDirectory: directories.activityDirectory,
+      chipsDirectory: directories.chipsDirectory,
+      now: new Date('2026-06-23T12:10:00.000Z'),
+      inspectPid: vi.fn().mockResolvedValue({ status: 'matches' }),
+    });
+
+    expect(snapshot.records[0]?.repoName).toBeNull();
+    expect(snapshot.records[0]).not.toHaveProperty('worktree');
+    expect(snapshot.records[0]).not.toHaveProperty('gitRoot');
   });
 
   it('preserves duplicate visible chip texts from distinct raw records', async () => {

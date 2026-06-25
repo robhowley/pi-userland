@@ -10,8 +10,13 @@ export interface SessionDeckBrowserRow {
   icon: string;
   activity: string;
   title: string;
-  titleSource: 'sessionName' | 'location' | 'runtimeId';
-  subtitle: string;
+  titleSource: 'sessionName' | 'repoName' | 'cwd' | 'runtimeId';
+  repoLabel: string | null;
+  prLabel: string | null;
+  ageLabel: string;
+  branchLabel: string | null;
+  chipPreview: string;
+  hasChips: boolean;
 }
 
 export function getSessionDeckListHeading(all: boolean): string {
@@ -68,7 +73,7 @@ export function formatSessionDeckRecordLines(
   }
 
   if (record.chips.length > 0) {
-    lines.push(`  ${formatChips(record.chips)}`);
+    lines.push(`  ${formatTextChipSummary(record.chips)}`);
   }
 
   const identityLine = options.showIdentity ? formatTextIdentityDetails(record) : null;
@@ -93,19 +98,18 @@ export function formatSessionDeckRecord(
 
 export function formatSessionDeckBrowserRow(record: SessionDeckRecord): SessionDeckBrowserRow {
   const title = getDisplayTitle(record);
-  const subtitleTokens = [
-    title.source === 'sessionName' ? formatRepoOrCwd(record.cwd, true) : null,
-    formatListBranch(record.branch),
-    formatPr(record.prUrl),
-    formatDuration(getListAgeMs(record)),
-  ].filter((part): part is string => part !== null);
 
   return {
     icon: formatPresenceIcon(record.presenceState),
     activity: formatListActivity(record),
     title: title.text,
     titleSource: title.source,
-    subtitle: subtitleTokens.join(' · '),
+    repoLabel: getRepoLabel(record, title.source),
+    prLabel: formatPr(record.prUrl),
+    ageLabel: formatDuration(getListAgeMs(record)),
+    branchLabel: formatListBranch(record.branch),
+    chipPreview: formatChipPreview(record.chips),
+    hasChips: record.chips.length > 0,
   };
 }
 
@@ -116,7 +120,7 @@ export function formatSessionDeckBrowserCardLines(
   const title = getDisplayTitle(record);
   const sections: string[][] = [[title.text]];
 
-  const locationLines = formatCardLocationLines(record);
+  const locationLines = formatCardLocationLines(record, title.source);
   if (locationLines.length > 0) {
     sections.push(locationLines);
   }
@@ -193,12 +197,27 @@ function getDisplayTitle(record: SessionDeckRecord): {
     return { text: record.sessionName, source: 'sessionName' };
   }
 
-  const location = formatRepoOrCwd(record.cwd, true);
-  if (location !== null) {
-    return { text: location, source: 'location' };
+  if (record.repoName !== null) {
+    return { text: record.repoName, source: 'repoName' };
+  }
+
+  const cwdBasename = getCwdBasename(record.cwd);
+  if (cwdBasename !== null) {
+    return { text: cwdBasename, source: 'cwd' };
   }
 
   return { text: formatShortId(record.runtimeId), source: 'runtimeId' };
+}
+
+function getRepoLabel(
+  record: SessionDeckRecord,
+  titleSource: SessionDeckBrowserRow['titleSource'],
+): string | null {
+  if (titleSource === 'repoName' || titleSource === 'cwd') {
+    return null;
+  }
+
+  return record.repoName ?? getCwdBasename(record.cwd);
 }
 
 function formatPresenceIcon(state: SessionDeckRecord['presenceState']): string {
@@ -276,20 +295,20 @@ function formatRecordContext(record: SessionDeckRecord): string | null {
   return parts.length > 0 ? parts.join('  ') : null;
 }
 
-function formatCardLocationLines(record: SessionDeckRecord): string[] {
-  if (record.cwd === null) {
-    return [];
-  }
-
+function formatCardLocationLines(
+  record: SessionDeckRecord,
+  titleSource: SessionDeckBrowserRow['titleSource'],
+): string[] {
   const lines: string[] = [];
-  const cwd = shortenHomePath(record.cwd);
-  const repo = formatRepoOrCwd(record.cwd, true);
 
-  if (repo !== null && repo !== cwd) {
-    lines.push(`repo: ${repo}`);
+  if (record.repoName !== null && titleSource !== 'repoName') {
+    lines.push(`repo: ${record.repoName}`);
   }
 
-  lines.push(`cwd: ${cwd}`);
+  if (record.cwd !== null) {
+    lines.push(`cwd: ${shortenHomePath(record.cwd)}`);
+  }
+
   return lines;
 }
 
@@ -317,8 +336,21 @@ function formatRepoOrCwd(cwd: string | null, preferBasename: boolean): string | 
     return shortenedCwd;
   }
 
-  const repoName = basename(cwd);
-  return repoName.length > 0 && repoName !== '/' && repoName !== '.' ? repoName : shortenedCwd;
+  const cwdBasename = getCwdBasename(cwd);
+  return cwdBasename ?? shortenedCwd;
+}
+
+function getCwdBasename(cwd: string | null): string | null {
+  if (cwd === null) {
+    return null;
+  }
+
+  const cwdBasename = basename(cwd);
+  if (cwdBasename.length === 0 || cwdBasename === '/' || cwdBasename === '.') {
+    return shortenHomePath(cwd);
+  }
+
+  return cwdBasename;
 }
 
 function formatPr(prUrl: string | null): string | null {
@@ -370,8 +402,12 @@ function formatActivitySummary(record: SessionDeckRecord): string {
   }
 }
 
-function formatChips(chips: string[]): string {
+function formatTextChipSummary(chips: string[]): string {
   return chips.join(' | ');
+}
+
+function formatChipPreview(chips: string[]): string {
+  return chips.join(' · ');
 }
 
 function formatPresenceReasonSuffix(record: SessionDeckRecord): string {
@@ -432,6 +468,10 @@ function formatDuration(durationMs: number): string {
 }
 
 function getListAgeMs(record: SessionDeckRecord): number {
+  if (record.presenceState === 'stale' || record.presenceState === 'dead') {
+    return record.heartbeatAgeMs;
+  }
+
   return record.activityAgeMs ?? record.heartbeatAgeMs;
 }
 

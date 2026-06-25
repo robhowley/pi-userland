@@ -42,6 +42,7 @@ function buildSnapshotRecord(overrides: Partial<SessionDeckRecord> = {}): Sessio
     heartbeatAgeMs: 5_000,
     sessionId: 'session-abc',
     sessionName: 'alpha',
+    repoName: 'project',
     cwd: `${HOME}/project`,
     branch: 'main',
     prUrl: 'https://github.com/owner/repo/pull/42',
@@ -67,8 +68,12 @@ function buildSnapshot(
   };
 }
 
+function renderLines(browser: SessionDeckBrowser, width = 120): string[] {
+  return browser.render(width);
+}
+
 function renderText(browser: SessionDeckBrowser, width = 120): string {
-  return browser.render(width).join('\n');
+  return renderLines(browser, width).join('\n');
 }
 
 function createBrowser(
@@ -104,7 +109,7 @@ describe('SessionDeckBrowser', () => {
     expect(renderText(browser)).toContain('No live or stale Pi sessions found.');
   });
 
-  it('renders count-aware two-line rows and a boxed selected card', () => {
+  it('renders compact dashboard rows with chips on line 2 and a boxed selected card', () => {
     const browser = createBrowser({
       all: true,
       showIdentity: true,
@@ -118,6 +123,7 @@ describe('SessionDeckBrowser', () => {
             sessionName: 'bravo',
             presenceState: 'stale',
             presenceReason: 'heartbeat_expired',
+            heartbeatAgeMs: 240_000,
             activityState: 'thinking',
             activityAgeMs: 180_000,
             chips: [],
@@ -129,11 +135,11 @@ describe('SessionDeckBrowser', () => {
     const output = renderText(browser);
 
     expect(output).toContain('Pi sessions · 1 live · 1 stale · 0 dead · 0 unknown');
-    expect(output).toContain('› ● waiting  alpha');
-    expect(output).toContain('    project · main · #42 · 5s');
-    expect(output).toContain('  ◌ thinking  bravo');
-    expect(output).toContain('    project · main · #42 · 3m');
-    expect(output).toContain('Selected session');
+    expect(output).toContain('› ● waiting  alpha  project · #42 · 5s · main');
+    expect(output).toContain('  │ merge-ready clean · queue 2');
+    expect(output).toContain('  ◌ thinking  bravo  project · #42 · 4m · main');
+    expect(output).toContain('    no chips');
+    expect(output).not.toContain('Selected session');
     expect(output).toContain('┌');
     expect(output).toContain('│ alpha');
     expect(output).toContain('│ repo: project');
@@ -149,13 +155,22 @@ describe('SessionDeckBrowser', () => {
     expect(output).not.toContain('\n  merge-ready clean\n');
   });
 
-  it('uses session name, then cwd/repo, then runtime id in both the list and selected card', () => {
+  it('uses session name, then repo name, then cwd basename, then runtime id in the list and card', () => {
     const browser = createBrowser({
       initialView: buildSnapshot({
         records: [
           buildSnapshotRecord({
             sessionName: null,
-            cwd: `${HOME}/repo-one`,
+            repoName: 'repo-one',
+            cwd: `${HOME}/repo-one/packages/cli`,
+            branch: null,
+            prUrl: null,
+          }),
+          buildSnapshotRecord({
+            runtimeId: 'rt-2',
+            sessionName: null,
+            repoName: null,
+            cwd: `${HOME}/scratch/worker`,
             branch: null,
             prUrl: null,
           }),
@@ -163,6 +178,7 @@ describe('SessionDeckBrowser', () => {
             runtimeId: 'abcdef1234567890',
             pid: 303,
             sessionName: null,
+            repoName: null,
             cwd: null,
             branch: null,
             prUrl: null,
@@ -171,13 +187,21 @@ describe('SessionDeckBrowser', () => {
       }),
     });
 
-    expect(renderText(browser)).toContain('› ● waiting  repo-one');
+    expect(renderText(browser)).toContain('› ● waiting  repo-one  5s');
     expect(renderText(browser)).toContain('│ repo-one');
+    expect(renderText(browser)).toContain('│ cwd: ~/repo-one/packages/cli');
 
     browser.handleInput('down');
 
-    const output = renderText(browser);
-    expect(output).toContain('› ● waiting  abcdef12');
+    let output = renderText(browser);
+    expect(output).toContain('› ● waiting  worker  5s');
+    expect(output).toContain('│ worker');
+    expect(output).toContain('│ cwd: ~/scratch/worker');
+
+    browser.handleInput('down');
+
+    output = renderText(browser);
+    expect(output).toContain('› ● waiting  abcdef12  5s');
     expect(output).toContain('│ abcdef12');
     expect(output).toContain('│ runtime: abcdef1234567890 · pid: 303');
   });
@@ -197,6 +221,7 @@ describe('SessionDeckBrowser', () => {
             sessionName: 'bravo',
             presenceState: 'stale',
             presenceReason: 'heartbeat_expired',
+            heartbeatAgeMs: 240_000,
             activityState: 'thinking',
             activityAgeMs: 180_000,
             chips: ['queue 2'],
@@ -209,7 +234,8 @@ describe('SessionDeckBrowser', () => {
 
     expect(requestRender).toHaveBeenCalledTimes(1);
     const selectedOutput = renderText(browser);
-    expect(selectedOutput).toContain('› ◌ thinking  bravo');
+    expect(selectedOutput).toContain('› ◌ thinking  bravo  project · #42 · 4m · main');
+    expect(selectedOutput).toContain('  │ queue 2');
     expect(selectedOutput).toContain('│ presence: ◌ stale');
     expect(selectedOutput).toContain('│ activity: thinking · 3m');
     expect(selectedOutput).toContain('│ session: session-2');
@@ -232,6 +258,7 @@ describe('SessionDeckBrowser', () => {
             sessionName: 'bravo',
             presenceState: 'stale',
             presenceReason: 'heartbeat_expired',
+            heartbeatAgeMs: 240_000,
             activityState: 'thinking',
             activityAgeMs: 180_000,
           }),
@@ -240,7 +267,9 @@ describe('SessionDeckBrowser', () => {
             sessionName: 'charlie',
             presenceState: 'dead',
             presenceReason: 'pid_missing',
+            heartbeatAgeMs: 540_000,
             activityState: 'unknown',
+            chips: ['session warning'],
           }),
         ],
       }),
@@ -253,8 +282,34 @@ describe('SessionDeckBrowser', () => {
       .mock.calls.filter(([tone]) => tone === 'dim')
       .map(([, text]) => text);
 
-    expect(dimmedText.some((text) => text.includes('◌ thinking  bravo'))).toBe(true);
-    expect(dimmedText.some((text) => text.includes('× unknown  charlie'))).toBe(true);
+    expect(
+      dimmedText.some((text) => text.includes('◌ thinking  bravo  project · #42 · 4m · main')),
+    ).toBe(true);
+    expect(
+      dimmedText.some((text) => text.includes('× unknown  charlie  project · #42 · 9m · main')),
+    ).toBe(true);
+    expect(dimmedText.some((text) => text.includes('session warning'))).toBe(true);
+  });
+
+  it('keeps selected chip text readable by accenting only the line-2 gutter', () => {
+    const fg = vi.fn((_tone: string, text: string) => text);
+    const browser = createBrowser({
+      theme: createTheme({ fg }),
+      initialView: buildSnapshot({
+        records: [buildSnapshotRecord({ chips: ['merge-ready clean', 'queue 2'] })],
+      }),
+    });
+
+    browser.render(120);
+
+    const accentText = vi
+      .mocked(fg)
+      .mock.calls.filter(([tone]) => tone === 'accent')
+      .map(([, text]) => text);
+
+    expect(accentText.some((text) => text.includes('› ● waiting  alpha'))).toBe(true);
+    expect(accentText.some((text) => text === '  │ ')).toBe(true);
+    expect(accentText.some((text) => text.includes('merge-ready clean · queue 2'))).toBe(false);
   });
 
   it('closes on q and escape', () => {
@@ -301,10 +356,31 @@ describe('SessionDeckBrowser', () => {
 
     await vi.waitFor(() => {
       expect(reload).toHaveBeenCalledTimes(1);
-      expect(renderText(browser)).toContain('› ● waiting  bravo');
+      expect(renderText(browser)).toContain('› ● waiting  bravo  project · #42 · 5s · main');
     });
 
     expect(requestRender).toHaveBeenCalled();
+  });
+
+  it('clips branch first on narrow line 1 and width-truncates the joined chip preview', () => {
+    const browser = createBrowser({
+      initialView: buildSnapshot({
+        records: [
+          buildSnapshotRecord({
+            branch: 'rh-pr21733-pr5-docs-config-fixture-hygiene-and-session-deck-cleanup',
+            chips: ['merge-ready clean', 'queue 2', 'needs-review soon'],
+          }),
+        ],
+      }),
+    });
+
+    browser.handleInput('enter');
+    const output = renderText(browser, 44);
+
+    expect(output).toContain('› ● waiting  alpha  project · #42 · 5s');
+    expect(output).not.toContain('session-deck-cleanup');
+    expect(output).toContain('merge-ready clean · queue 2');
+    expect(output).not.toContain('needs-review soon');
   });
 
   it('keeps every rendered line within the requested width', () => {
@@ -319,13 +395,14 @@ describe('SessionDeckBrowser', () => {
             branch: 'rh-pr21733-pr5-docs-config-fixture-hygiene-and-session-deck-cleanup',
             lastError: 'tool bash failed because the selected row is intentionally oversized',
             activityState: 'error',
+            chips: ['merge-ready clean', 'queue 2'],
           }),
         ],
       }),
       reapLines: ['Reap complete: removed 10 expired presence records.'],
     });
 
-    const lines = browser.render(40);
+    const lines = renderLines(browser, 40);
 
     expect(lines.length).toBeGreaterThan(0);
     expect(lines.every((line) => visibleWidth(line) <= 40)).toBe(true);

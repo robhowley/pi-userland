@@ -24,6 +24,7 @@ export interface SessionDeckRecord {
   heartbeatAgeMs: number;
   sessionId: string | null;
   sessionName: string | null;
+  repoName: string | null;
   cwd: string | null;
   branch: string | null;
   prUrl: string | null;

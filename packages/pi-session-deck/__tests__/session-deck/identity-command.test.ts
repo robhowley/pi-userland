@@ -66,6 +66,7 @@ function buildSnapshotRecord(overrides: Partial<SessionDeckRecord> = {}): Sessio
     heartbeatAgeMs: 5_000,
     sessionId: 'session-abc',
     sessionName: null,
+    repoName: 'project',
     cwd: `${HOME}/project`,
     branch: 'main',
     prUrl: 'https://github.com/owner/repo/pull/42',
@@ -295,6 +296,7 @@ describe('session-deck joined command', () => {
               runtimeId: 'rt-dead',
               pid: 202,
               sessionName: null,
+              repoName: null,
               cwd: null,
               branch: null,
               prUrl: null,
@@ -329,9 +331,9 @@ describe('session-deck joined command', () => {
       const initialRender = component.render(120).join('\n');
       expect(initialRender).toContain('Reap complete: removed 1 expired presence record.');
       expect(initialRender).toContain('Pi sessions · 1 live · 0 stale · 1 dead · 0 unknown');
-      expect(initialRender).toContain('› ● waiting  alpha');
-      expect(initialRender).toContain('  × unknown  rt-dead');
-      expect(initialRender).toContain('Selected session');
+      expect(initialRender).toContain('› ● waiting  alpha  project · #42 · 5s · main');
+      expect(initialRender).toContain('  × unknown  rt-dead  5s');
+      expect(initialRender).not.toContain('Selected session');
       expect(initialRender).toContain('runtime: 922f7ac8deadbeef · pid: 101');
       expect(initialRender).toContain('session: session-abc');
 
@@ -339,7 +341,9 @@ describe('session-deck joined command', () => {
 
       await vi.waitFor(() => {
         expect(readSessionDeckSnapshot).toHaveBeenCalledTimes(2);
-        expect(component.render(120).join('\n')).toContain('› ● waiting  beta');
+        expect(component.render(120).join('\n')).toContain(
+          '› ● waiting  beta  project · #42 · 5s · main',
+        );
       });
     });
     const ctx = createCommandContext({
