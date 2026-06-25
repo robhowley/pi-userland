@@ -1,15 +1,17 @@
 import type { Theme } from '@earendil-works/pi-coding-agent';
 import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from '@mariozechner/pi-tui';
 import {
+  formatSessionDeckBrowserCardLines,
+  formatSessionDeckBrowserRow,
   formatSessionDeckDiagnosticLine,
-  formatSessionDeckRecordLines,
-  formatSessionDeckRecordSummary,
+  getSessionDeckBrowserTitle,
   getSessionDeckEmptyMessage,
-  getSessionDeckListHeading,
+  shouldDimSessionDeckBrowserRow,
 } from './browser-render.js';
-import type { SessionDeckSnapshot } from './types.js';
+import type { SessionDeckBrowserRow } from './browser-render.js';
+import type { SessionDeckRecord, SessionDeckSnapshot } from './types.js';
 
-const DEFAULT_MAX_VISIBLE_ROWS = 8;
+const DEFAULT_MAX_VISIBLE_ROWS = 6;
 
 export interface SessionDeckBrowserOptions {
   all: boolean;
@@ -94,8 +96,11 @@ export class SessionDeckBrowser {
     }
 
     const lines: string[] = [];
-    const title = this.theme.fg('accent', this.theme.bold(getSessionDeckListHeading(this.all)));
-    const help = this.theme.fg('dim', '↑↓ select • enter toggle detail • r refresh • q/esc close');
+    const title = this.theme.fg(
+      'accent',
+      this.theme.bold(getSessionDeckBrowserTitle(this.view, this.all)),
+    );
+    const help = this.theme.fg('dim', '↑↓ move · enter details · r refresh · q close');
 
     pushWrappedLine(lines, title, width);
     pushWrappedLine(lines, help, width);
@@ -130,10 +135,11 @@ export class SessionDeckBrowser {
 
       for (let index = windowed.start; index < windowed.end; index += 1) {
         const record = this.view.records[index]!;
-        const summary = formatSessionDeckRecordSummary(record);
+        const row = formatSessionDeckBrowserRow(record);
         const isSelected = index === this.selectedIndex;
-        const row = isSelected ? this.theme.fg('accent', `› ${summary}`) : `  ${summary}`;
-        lines.push(truncateToWidth(row, width));
+
+        lines.push(truncateToWidth(renderRowLine1(this.theme, record, row, isSelected), width));
+        lines.push(truncateToWidth(renderRowLine2(this.theme, record, row, isSelected), width));
       }
 
       if (windowed.end - windowed.start < this.view.records.length) {
@@ -141,7 +147,7 @@ export class SessionDeckBrowser {
           lines,
           this.theme.fg(
             'dim',
-            `Showing ${windowed.start + 1}-${windowed.end} of ${this.view.records.length} (${this.selectedIndex + 1}/${this.view.records.length})`,
+            `Showing ${windowed.start + 1}-${windowed.end} of ${this.view.records.length}`,
           ),
           width,
         );
@@ -151,19 +157,21 @@ export class SessionDeckBrowser {
     lines.push('');
 
     if (!this.detailVisible) {
-      pushWrappedLine(lines, this.theme.fg('dim', 'Detail hidden — press Enter to show.'), width);
+      pushWrappedLine(lines, this.theme.fg('dim', 'Details hidden · Enter to show.'), width);
     } else {
       const selected = this.view.records[this.selectedIndex] ?? null;
       if (selected === null) {
         pushWrappedLine(lines, this.theme.fg('dim', 'No selected session.'), width);
       } else {
-        pushWrappedLine(lines, this.theme.fg('accent', this.theme.bold('Selected')), width);
-        for (const line of formatSessionDeckRecordLines(selected, {
+        pushWrappedLine(lines, this.theme.fg('dim', 'Selected session'), width);
+        const cardLines = formatSessionDeckBrowserCardLines(selected, {
           all: this.all,
           showIdentity: this.showIdentity,
-        })) {
-          pushWrappedLine(lines, line, width, '  ');
+        });
+        if (cardLines.length > 0) {
+          cardLines[0] = this.theme.fg('accent', this.theme.bold(cardLines[0]!));
         }
+        pushBoxedLines(lines, cardLines, width);
       }
     }
 
@@ -217,6 +225,47 @@ export class SessionDeckBrowser {
   }
 }
 
+function renderRowLine1(
+  theme: Theme,
+  record: SessionDeckRecord,
+  row: SessionDeckBrowserRow,
+  isSelected: boolean,
+): string {
+  const prefix = isSelected ? '› ' : '  ';
+  const title =
+    !isSelected && !shouldDimSessionDeckBrowserRow(record) && row.titleSource === 'sessionName'
+      ? theme.fg('accent', row.title)
+      : row.title;
+
+  return styleRow(theme, `${prefix}${row.icon} ${row.activity}  ${title}`, record, isSelected);
+}
+
+function renderRowLine2(
+  theme: Theme,
+  record: SessionDeckRecord,
+  row: SessionDeckBrowserRow,
+  isSelected: boolean,
+): string {
+  return styleRow(theme, `    ${row.subtitle}`, record, isSelected);
+}
+
+function styleRow(
+  theme: Theme,
+  line: string,
+  record: SessionDeckRecord,
+  isSelected: boolean,
+): string {
+  if (isSelected) {
+    return theme.fg('accent', line);
+  }
+
+  if (shouldDimSessionDeckBrowserRow(record)) {
+    return theme.fg('dim', line);
+  }
+
+  return line;
+}
+
 function pushWrappedLine(lines: string[], line: string, width: number, prefix = ''): void {
   const prefixWidth = visibleWidth(prefix);
   if (width <= prefixWidth) {
@@ -235,6 +284,55 @@ function pushWrappedLine(lines: string[], line: string, width: number, prefix = 
     const currentPrefix = index === 0 ? prefix : continuationPrefix;
     lines.push(truncateToWidth(`${currentPrefix}${segment}`, width));
   }
+}
+
+function pushBoxedLines(lines: string[], contentLines: string[], width: number): void {
+  if (width <= 4) {
+    for (const line of contentLines) {
+      pushWrappedLine(lines, line, width, '  ');
+    }
+    return;
+  }
+
+  const innerWidth = Math.max(1, width - 4);
+  lines.push(truncateToWidth(`┌${'─'.repeat(Math.max(0, width - 2))}┐`, width));
+
+  if (contentLines.length === 0) {
+    lines.push(truncateToWidth(`│ ${' '.repeat(innerWidth)} │`, width));
+  } else {
+    for (const line of contentLines) {
+      pushBoxedWrappedLine(lines, line, width, innerWidth);
+    }
+  }
+
+  lines.push(truncateToWidth(`└${'─'.repeat(Math.max(0, width - 2))}┘`, width));
+}
+
+function pushBoxedWrappedLine(
+  lines: string[],
+  line: string,
+  width: number,
+  innerWidth: number,
+): void {
+  if (line.length === 0) {
+    lines.push(truncateToWidth(`│ ${' '.repeat(innerWidth)} │`, width));
+    return;
+  }
+
+  const wrapped = wrapTextWithAnsi(line, innerWidth);
+  if (wrapped.length === 0) {
+    lines.push(truncateToWidth(`│ ${' '.repeat(innerWidth)} │`, width));
+    return;
+  }
+
+  for (const segment of wrapped) {
+    lines.push(truncateToWidth(`│ ${padToVisibleWidth(segment, innerWidth)} │`, width));
+  }
+}
+
+function padToVisibleWidth(line: string, width: number): string {
+  const padding = Math.max(0, width - visibleWidth(line));
+  return `${line}${' '.repeat(padding)}`;
 }
 
 function getVisibleWindow(

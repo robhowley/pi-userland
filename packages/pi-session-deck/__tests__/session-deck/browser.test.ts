@@ -25,16 +25,18 @@ import type {
 
 const HOME = process.env['HOME'] ?? '/home/user';
 
-function createTheme(): Theme {
+function createTheme(overrides: Partial<Theme> = {}): Theme {
   return {
     bold: (text: string) => text,
     fg: (_tone: string, text: string) => text,
+    ...overrides,
   } as Theme;
 }
 
 function buildSnapshotRecord(overrides: Partial<SessionDeckRecord> = {}): SessionDeckRecord {
   return {
     runtimeId: '922f7ac8deadbeef',
+    pid: 101,
     presenceState: 'live',
     presenceReason: 'fresh_heartbeat',
     heartbeatAgeMs: 5_000,
@@ -78,6 +80,7 @@ function createBrowser(
     reload: () => Promise<SessionDeckSnapshot>;
     requestRender: () => void;
     reapLines: string[];
+    theme: Theme;
   }> = {},
 ): SessionDeckBrowser {
   return new SessionDeckBrowser({
@@ -88,7 +91,7 @@ function createBrowser(
     reload: overrides.reload ?? (async () => overrides.initialView ?? buildSnapshot()),
     requestRender: overrides.requestRender ?? (() => {}),
     ...(overrides.reapLines === undefined ? {} : { reapLines: overrides.reapLines }),
-    theme: createTheme(),
+    theme: overrides.theme ?? createTheme(),
   });
 }
 
@@ -101,6 +104,84 @@ describe('SessionDeckBrowser', () => {
     expect(renderText(browser)).toContain('No live or stale Pi sessions found.');
   });
 
+  it('renders count-aware two-line rows and a boxed selected card', () => {
+    const browser = createBrowser({
+      all: true,
+      showIdentity: true,
+      initialView: buildSnapshot({
+        records: [
+          buildSnapshotRecord({ chips: ['merge-ready clean', 'queue 2'] }),
+          buildSnapshotRecord({
+            runtimeId: 'rt-2',
+            pid: 202,
+            sessionId: 'session-2',
+            sessionName: 'bravo',
+            presenceState: 'stale',
+            presenceReason: 'heartbeat_expired',
+            activityState: 'thinking',
+            activityAgeMs: 180_000,
+            chips: [],
+          }),
+        ],
+      }),
+    });
+
+    const output = renderText(browser);
+
+    expect(output).toContain('Pi sessions · 1 live · 1 stale · 0 dead · 0 unknown');
+    expect(output).toContain('› ● waiting  alpha');
+    expect(output).toContain('    project · main · #42 · 5s');
+    expect(output).toContain('  ◌ thinking  bravo');
+    expect(output).toContain('    project · main · #42 · 3m');
+    expect(output).toContain('Selected session');
+    expect(output).toContain('┌');
+    expect(output).toContain('│ alpha');
+    expect(output).toContain('│ repo: project');
+    expect(output).toContain('│ cwd: ~/project');
+    expect(output).toContain('│ presence: ● live');
+    expect(output).toContain('│ activity: waiting');
+    expect(output).toContain('│ chips:');
+    expect(output).toContain('│   - merge-ready clean');
+    expect(output).toContain('│   - queue 2');
+    expect(output).toContain('│ heartbeat: 5s ago');
+    expect(output).toContain('│ runtime: 922f7ac8deadbeef · pid: 101');
+    expect(output).toContain('│ session: session-abc');
+    expect(output).not.toContain('\n  merge-ready clean\n');
+  });
+
+  it('uses session name, then cwd/repo, then runtime id in both the list and selected card', () => {
+    const browser = createBrowser({
+      initialView: buildSnapshot({
+        records: [
+          buildSnapshotRecord({
+            sessionName: null,
+            cwd: `${HOME}/repo-one`,
+            branch: null,
+            prUrl: null,
+          }),
+          buildSnapshotRecord({
+            runtimeId: 'abcdef1234567890',
+            pid: 303,
+            sessionName: null,
+            cwd: null,
+            branch: null,
+            prUrl: null,
+          }),
+        ],
+      }),
+    });
+
+    expect(renderText(browser)).toContain('› ● waiting  repo-one');
+    expect(renderText(browser)).toContain('│ repo-one');
+
+    browser.handleInput('down');
+
+    const output = renderText(browser);
+    expect(output).toContain('› ● waiting  abcdef12');
+    expect(output).toContain('│ abcdef12');
+    expect(output).toContain('│ runtime: abcdef1234567890 · pid: 303');
+  });
+
   it('moves selection and toggles the detail pane', () => {
     const requestRender = vi.fn();
     const browser = createBrowser({
@@ -111,8 +192,11 @@ describe('SessionDeckBrowser', () => {
           buildSnapshotRecord(),
           buildSnapshotRecord({
             runtimeId: 'rt-2',
+            pid: 202,
             sessionId: 'session-2',
             sessionName: 'bravo',
+            presenceState: 'stale',
+            presenceReason: 'heartbeat_expired',
             activityState: 'thinking',
             activityAgeMs: 180_000,
             chips: ['queue 2'],
@@ -124,13 +208,53 @@ describe('SessionDeckBrowser', () => {
     browser.handleInput('down');
 
     expect(requestRender).toHaveBeenCalledTimes(1);
-    expect(renderText(browser)).toContain('rt-2  thinking 3m  5s');
-    expect(renderText(browser)).toContain('  bravo');
-    expect(renderText(browser)).toContain('  session=session-2');
+    const selectedOutput = renderText(browser);
+    expect(selectedOutput).toContain('› ◌ thinking  bravo');
+    expect(selectedOutput).toContain('│ presence: ◌ stale');
+    expect(selectedOutput).toContain('│ activity: thinking · 3m');
+    expect(selectedOutput).toContain('│ session: session-2');
 
     browser.handleInput('enter');
 
-    expect(renderText(browser)).toContain('Detail hidden');
+    expect(renderText(browser)).toContain('Details hidden');
+  });
+
+  it('dims stale and dead rows when they are not selected', () => {
+    const fg = vi.fn((_tone: string, text: string) => text);
+    const browser = createBrowser({
+      all: true,
+      theme: createTheme({ fg }),
+      initialView: buildSnapshot({
+        records: [
+          buildSnapshotRecord(),
+          buildSnapshotRecord({
+            runtimeId: 'rt-2',
+            sessionName: 'bravo',
+            presenceState: 'stale',
+            presenceReason: 'heartbeat_expired',
+            activityState: 'thinking',
+            activityAgeMs: 180_000,
+          }),
+          buildSnapshotRecord({
+            runtimeId: 'rt-3',
+            sessionName: 'charlie',
+            presenceState: 'dead',
+            presenceReason: 'pid_missing',
+            activityState: 'unknown',
+          }),
+        ],
+      }),
+    });
+
+    browser.render(120);
+
+    const dimmedText = vi
+      .mocked(fg)
+      .mock.calls.filter(([tone]) => tone === 'dim')
+      .map(([, text]) => text);
+
+    expect(dimmedText.some((text) => text.includes('◌ thinking  bravo'))).toBe(true);
+    expect(dimmedText.some((text) => text.includes('× unknown  charlie'))).toBe(true);
   });
 
   it('closes on q and escape', () => {
@@ -150,6 +274,8 @@ describe('SessionDeckBrowser', () => {
         records: [
           buildSnapshotRecord({
             runtimeId: 'rt-2',
+            pid: 202,
+            sessionId: 'session-2',
             sessionName: 'bravo',
             chips: ['queue 2'],
           }),
@@ -160,7 +286,14 @@ describe('SessionDeckBrowser', () => {
       requestRender,
       reload,
       initialView: buildSnapshot({
-        records: [buildSnapshotRecord({ runtimeId: 'rt-2', sessionName: 'alpha' })],
+        records: [
+          buildSnapshotRecord({
+            runtimeId: 'rt-2',
+            pid: 202,
+            sessionId: 'session-2',
+            sessionName: 'alpha',
+          }),
+        ],
       }),
     });
 
@@ -168,7 +301,7 @@ describe('SessionDeckBrowser', () => {
 
     await vi.waitFor(() => {
       expect(reload).toHaveBeenCalledTimes(1);
-      expect(renderText(browser)).toContain('  bravo');
+      expect(renderText(browser)).toContain('› ● waiting  bravo');
     });
 
     expect(requestRender).toHaveBeenCalled();
@@ -183,6 +316,7 @@ describe('SessionDeckBrowser', () => {
             runtimeId: 'rt-long',
             sessionName: 'a very long session name that should wrap cleanly in the detail pane',
             cwd: `${HOME}/really/long/path/that/should/be/truncated/for/the/list/but/wrapped/in/detail`,
+            branch: 'rh-pr21733-pr5-docs-config-fixture-hygiene-and-session-deck-cleanup',
             lastError: 'tool bash failed because the selected row is intentionally oversized',
             activityState: 'error',
           }),

@@ -18,6 +18,7 @@ export interface SessionDeckDiagnostic {
 
 export interface SessionDeckRecord {
   runtimeId: string;
+  pid: number | null;
   presenceState: PresenceState;
   presenceReason?: string;
   heartbeatAgeMs: number;

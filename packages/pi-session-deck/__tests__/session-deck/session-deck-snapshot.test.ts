@@ -130,6 +130,7 @@ describe('readSessionDeckSnapshot', () => {
     expect(snapshot.records).toEqual([
       {
         runtimeId: 'rt-1',
+        pid: 101,
         presenceState: 'live',
         presenceReason: 'fresh_heartbeat',
         heartbeatAgeMs: 5_000,
@@ -149,7 +150,6 @@ describe('readSessionDeckSnapshot', () => {
 
     const record = snapshot.records[0]!;
     for (const field of [
-      'pid',
       'startedAt',
       'sessionFile',
       'worktree',

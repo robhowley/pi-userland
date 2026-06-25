@@ -11,7 +11,8 @@ pi install npm:@robhowley/pi-session-deck
 ## Commands
 
 - `/session-deck` opens a read-only TUI browser in Pi TUI mode and falls back to the compact multi-line text view elsewhere.
-- The default session row/detail shape stays: short runtime id + activity + age, session name when set, repo/cwd + branch/PR, and joined chip text when present.
+- TUI rows are two-line scan rows: `sessionName ?? repo/cwd ?? runtimeId` on line 1 with a presence icon + activity token, then repo/branch/PR/age on line 2.
+- The selected TUI card is boxed/padded, keeps chips inside the card one-per-line, and shows `runtime` / `pid` debug details; `--identity` adds extra raw identity like `session: ...`.
 - TUI browser keys: `↑/↓` move selection, `enter` toggles detail, `r` refreshes, `q`/`esc` closes.
 - `/session-deck --all` includes dead and unknown presence records plus read diagnostics.
 - `/session-deck --reap` removes presence records older than the 24h reap threshold before the initial view loads.
@@ -30,7 +31,7 @@ pi install npm:@robhowley/pi-session-deck
 
 ## P4 chips — automatic setStatus mirroring
 
-`pi-session-deck` mirrors `ctx.ui.setStatus()` output into chip JSON sidecars on every session. `/session-deck` reads the joined snapshot and renders visible chip text on its own indented line without exposing raw chip metadata.
+`pi-session-deck` mirrors `ctx.ui.setStatus()` output into chip JSON sidecars on every session. `/session-deck` reads the joined snapshot and renders visible chip text without exposing raw chip metadata.
 
 ### How it works
 

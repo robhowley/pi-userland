@@ -71,6 +71,7 @@ export async function readSessionDeckSnapshot(
       const chipRecord = chipsByRuntimeId.get(record.runtimeId);
       return {
         runtimeId: record.runtimeId,
+        pid: record.pid,
         presenceState: record.presenceState as SessionDeckRecord['presenceState'],
         ...(record.presenceReason === undefined ? {} : { presenceReason: record.presenceReason }),
         heartbeatAgeMs: record.heartbeatAgeMs,
