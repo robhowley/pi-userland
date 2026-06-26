@@ -156,6 +156,30 @@ describe('SessionDeckBrowser', () => {
     expect(output).not.toContain('│   - merge-ready clean');
   });
 
+  it('shows up to 12 sessions in the top list window before paging', () => {
+    const browser = createBrowser({
+      initialView: buildSnapshot({
+        records: Array.from({ length: 13 }, (_, index) =>
+          buildSnapshotRecord({
+            runtimeId: `rt-${index + 1}`,
+            pid: 100 + index,
+            sessionId: `session-${index + 1}`,
+            sessionName: `session-${index + 1}`,
+            chips: [],
+            branch: null,
+            prUrl: null,
+          }),
+        ),
+      }),
+    });
+
+    const output = renderText(browser);
+
+    expect(output).toContain('Showing 1-12 of 13');
+    expect(output).toContain('session-12');
+    expect(output).not.toContain('session-13');
+  });
+
   it('uses session name, then repo name, then cwd basename, then runtime id in the list and card', () => {
     const browser = createBrowser({
       initialView: buildSnapshot({

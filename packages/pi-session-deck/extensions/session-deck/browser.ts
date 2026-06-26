@@ -11,7 +11,7 @@ import {
 import type { SessionDeckBrowserRow } from './browser-render.js';
 import type { SessionDeckRecord, SessionDeckSnapshot } from './types.js';
 
-const DEFAULT_MAX_VISIBLE_ROWS = 6;
+const DEFAULT_MAX_VISIBLE_ROWS = 12;
 
 export interface SessionDeckBrowserOptions {
   all: boolean;
