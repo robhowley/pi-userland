@@ -1,6 +1,6 @@
 # pi-session-deck
 
-Pi runtime presence foundation plus session identity/activity sidecars. `/session-deck` now reads the joined snapshot and renders scannable multi-line rows, including joined chip text when chip sidecars are present.
+Pi runtime presence foundation plus session identity/activity sidecars. `/session-deck` now reads the joined snapshot and renders a compact top-pane dashboard with chip previews plus a selected inspector.
 
 ## Installation
 
@@ -10,9 +10,12 @@ pi install npm:@robhowley/pi-session-deck
 
 ## Commands
 
-- `/session-deck` shows live and stale Pi runtime rows in a compact multi-line shape: short runtime id + activity + age, session name when set, repo/cwd + branch/PR, and joined chip text when present.
+- `/session-deck` opens a read-only TUI browser in Pi TUI mode and falls back to the existing compact multi-line text view elsewhere. The TUI list shows up to 12 sessions before paging.
+- TUI rows are two-line dashboard rows: line 1 is `icon + activity + (sessionName ?? repoName ?? cwd basename ?? runtimeId) + repo/PR/age/branch`, and line 2 is chip preview only joined with `·` or dim `no chips` when empty.
+- The selected TUI inspector stays boxed but compact: title, `cwd`, inline `branch/pr`, inline `presence/activity/heartbeat`, optional blank spacer plus inline `chips: ...`, then `runtime/pid`; `--identity` adds `session: ...` and `--all` adds compact `diagnostics:`.
+- TUI browser keys: `↑/↓` move selection, `enter` toggles detail, `r` refreshes, `q`/`esc` closes.
 - `/session-deck --all` includes dead and unknown presence records plus read diagnostics.
-- `/session-deck --reap` removes presence records older than the 24h reap threshold.
+- `/session-deck --reap` removes presence records older than the 24h reap threshold before the initial view loads.
 - `/session-deck --identity` shows extra identity details for each runtime, including the full session id.
 - `/session-deck --all --reap --identity` combines all modes; flag order does not matter.
 
@@ -28,7 +31,7 @@ pi install npm:@robhowley/pi-session-deck
 
 ## P4 chips — automatic setStatus mirroring
 
-`pi-session-deck` mirrors `ctx.ui.setStatus()` output into chip JSON sidecars on every session. `/session-deck` reads the joined snapshot and renders visible chip text on its own indented line without exposing raw chip metadata.
+`pi-session-deck` mirrors `ctx.ui.setStatus()` output into chip JSON sidecars on every session. `/session-deck` reads the joined snapshot and renders visible chip text without exposing raw chip metadata.
 
 ### How it works
 

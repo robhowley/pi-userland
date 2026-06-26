@@ -1,3 +1,4 @@
+import { basename } from 'node:path';
 import { readSessionDeckView } from './activity/reader.js';
 import type { ActivityThresholds } from './activity/types.js';
 import { readSessionDeckChips } from './chips/reader.js';
@@ -71,11 +72,13 @@ export async function readSessionDeckSnapshot(
       const chipRecord = chipsByRuntimeId.get(record.runtimeId);
       return {
         runtimeId: record.runtimeId,
+        pid: record.pid,
         presenceState: record.presenceState as SessionDeckRecord['presenceState'],
         ...(record.presenceReason === undefined ? {} : { presenceReason: record.presenceReason }),
         heartbeatAgeMs: record.heartbeatAgeMs,
         sessionId: record.sessionId,
         sessionName: record.sessionName,
+        repoName: getRepoName(record.worktree),
         cwd: record.cwd,
         branch: record.branch,
         prUrl: record.prUrl,
@@ -107,6 +110,19 @@ function isSessionIdTrustedForChips(record: {
   }
 
   return !record.diagnostics.some((diagnostic) => diagnostic.code === 'session_mismatch');
+}
+
+function getRepoName(worktree: string | null): string | null {
+  if (worktree === null) {
+    return null;
+  }
+
+  const repoName = basename(worktree);
+  if (repoName.length === 0 || repoName === '/' || repoName === '.') {
+    return null;
+  }
+
+  return repoName;
 }
 
 function toSessionDeckDiagnostic(diagnostic: {

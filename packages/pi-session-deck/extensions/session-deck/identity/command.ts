@@ -1,13 +1,41 @@
-import { basename } from 'node:path';
+import type { Theme } from '@earendil-works/pi-coding-agent';
 import { readSessionDeckSnapshot, type ReadSessionDeckSnapshotOptions } from '../reader.js';
-import type { SessionDeckDiagnostic, SessionDeckRecord, SessionDeckSnapshot } from '../types.js';
+import { SessionDeckBrowser } from '../browser.js';
+import {
+  formatReapedRecord,
+  formatSessionDeckDiagnosticLine,
+  formatSessionDeckRecord,
+  getSessionDeckEmptyMessage,
+  getSessionDeckListHeading,
+} from '../browser-render.js';
+import type { SessionDeckSnapshot } from '../types.js';
 import { SESSION_DECK_COMMAND_NAME } from '../presence/constants.js';
 import { reapPresenceRecords, type ReapPresenceRecordsOptions } from '../presence/reap.js';
 import type { PresenceDiagnostic, PresenceState } from '../presence/types.js';
 
+interface SessionDeckCustomTui {
+  requestRender: () => void;
+}
+
+interface SessionDeckCustomComponent {
+  render: (width: number) => string[];
+  invalidate: () => void;
+  handleInput?: (data: string) => void;
+  dispose?: () => void;
+}
+
 export interface PresenceCommandContext {
+  mode?: string;
   ui: {
     notify: (message: string, level: 'info' | 'warning' | 'error') => void;
+    custom?: <T>(
+      factory: (
+        tui: SessionDeckCustomTui,
+        theme: Theme,
+        keybindings: unknown,
+        done: (result: T) => void,
+      ) => SessionDeckCustomComponent,
+    ) => Promise<T>;
   };
 }
 
@@ -44,6 +72,13 @@ export type ParsedSessionDeckCommandArgs =
       message: string;
     };
 
+interface LoadedSessionDeckView {
+  all: boolean;
+  showIdentity: boolean;
+  reapResult: { removed: string[]; diagnostics: PresenceDiagnostic[] } | null;
+  view: SessionDeckSnapshot;
+}
+
 const SHOW_ALL_FLAG = '--all';
 const REAP_FLAG = '--reap';
 const IDENTITY_FLAG = '--identity';
@@ -68,33 +103,20 @@ export function registerSessionDeckCommand(
         return;
       }
 
-      const reapResult = parsedArgs.reap ? await reapPresence(getReapOptions(options)) : null;
-      const sessionDeckSnapshot = await readSnapshot(getReadSessionDeckSnapshotOptions(options));
+      const loadedView = await loadSessionDeckView(parsedArgs, {
+        options,
+        readSnapshot,
+        reapPresence,
+      });
 
-      const visibleRecords = parsedArgs.all
-        ? sessionDeckSnapshot.records
-        : sessionDeckSnapshot.records.filter((record) =>
-            DEFAULT_VISIBLE_STATES.includes(record.presenceState),
-          );
-      const visibleView: SessionDeckSnapshot = {
-        generatedAt: sessionDeckSnapshot.generatedAt,
-        records: visibleRecords,
-        diagnostics: parsedArgs.all ? sessionDeckSnapshot.diagnostics : [],
-      };
+      if (ctx.mode === 'tui' && ctx.ui.custom !== undefined) {
+        await openSessionDeckBrowser(ctx, loadedView, async () =>
+          readVisibleSessionDeckView(parsedArgs.all, readSnapshot, options),
+        );
+        return;
+      }
 
-      const message =
-        reapResult === null
-          ? renderSessionDeckView(visibleView, {
-              all: parsedArgs.all,
-              showIdentity: parsedArgs.identity,
-            })
-          : renderSessionDeckCommandResult(visibleView, {
-              all: parsedArgs.all,
-              showIdentity: parsedArgs.identity,
-              reapResult,
-            });
-
-      ctx.ui.notify(message, 'info');
+      ctx.ui.notify(renderSessionDeckText(loadedView), 'info');
     },
   });
 }
@@ -147,9 +169,9 @@ export function renderSessionDeckView(
   const lines: string[] = [];
 
   if (view.records.length === 0) {
-    lines.push(options.all ? 'No session records found.' : 'No live or stale Pi sessions found.');
+    lines.push(getSessionDeckEmptyMessage(options.all));
   } else {
-    lines.push(options.all ? 'Pi sessions (all records)' : 'Pi sessions (live + stale)');
+    lines.push(getSessionDeckListHeading(options.all));
     for (const [index, record] of view.records.entries()) {
       if (index > 0) {
         lines.push('');
@@ -164,11 +186,24 @@ export function renderSessionDeckView(
     }
     lines.push('Diagnostics:');
     for (const diagnostic of view.diagnostics) {
-      lines.push(formatSessionDeckDiagnostic(diagnostic));
+      lines.push(formatSessionDeckDiagnosticLine(diagnostic));
     }
   }
 
   return lines.join('\n');
+}
+
+function renderSessionDeckText(loadedView: LoadedSessionDeckView): string {
+  return loadedView.reapResult === null
+    ? renderSessionDeckView(loadedView.view, {
+        all: loadedView.all,
+        showIdentity: loadedView.showIdentity,
+      })
+    : renderSessionDeckCommandResult(loadedView.view, {
+        all: loadedView.all,
+        showIdentity: loadedView.showIdentity,
+        reapResult: loadedView.reapResult,
+      });
 }
 
 function renderSessionDeckCommandResult(
@@ -209,6 +244,84 @@ function renderJoinedReapResult(result: {
   return lines;
 }
 
+async function loadSessionDeckView(
+  parsedArgs: Extract<ParsedSessionDeckCommandArgs, { ok: true }>,
+  dependencies: {
+    options: RegisterSessionDeckCommandOptions;
+    readSnapshot: typeof readSessionDeckSnapshot;
+    reapPresence: typeof reapPresenceRecords;
+  },
+): Promise<LoadedSessionDeckView> {
+  const reapResult = parsedArgs.reap
+    ? await dependencies.reapPresence(getReapOptions(dependencies.options))
+    : null;
+
+  return {
+    all: parsedArgs.all,
+    showIdentity: parsedArgs.identity,
+    reapResult,
+    view: await readVisibleSessionDeckView(
+      parsedArgs.all,
+      dependencies.readSnapshot,
+      dependencies.options,
+    ),
+  };
+}
+
+async function readVisibleSessionDeckView(
+  all: boolean,
+  readSnapshot: typeof readSessionDeckSnapshot,
+  options: RegisterSessionDeckCommandOptions,
+): Promise<SessionDeckSnapshot> {
+  return filterVisibleSessionDeckView(
+    await readSnapshot(getReadSessionDeckSnapshotOptions(options)),
+    all,
+  );
+}
+
+function filterVisibleSessionDeckView(
+  sessionDeckSnapshot: SessionDeckSnapshot,
+  all: boolean,
+): SessionDeckSnapshot {
+  if (all) {
+    return sessionDeckSnapshot;
+  }
+
+  return {
+    generatedAt: sessionDeckSnapshot.generatedAt,
+    records: sessionDeckSnapshot.records.filter((record) =>
+      DEFAULT_VISIBLE_STATES.includes(record.presenceState),
+    ),
+    diagnostics: [],
+  };
+}
+
+async function openSessionDeckBrowser(
+  ctx: PresenceCommandContext,
+  loadedView: LoadedSessionDeckView,
+  reload: () => Promise<SessionDeckSnapshot>,
+): Promise<void> {
+  if (ctx.ui.custom === undefined) {
+    return;
+  }
+
+  await ctx.ui.custom<void>(
+    (tui, theme, _keybindings, done) =>
+      new SessionDeckBrowser({
+        all: loadedView.all,
+        showIdentity: loadedView.showIdentity,
+        initialView: loadedView.view,
+        onClose: () => done(undefined),
+        reload,
+        requestRender: () => tui.requestRender(),
+        ...(loadedView.reapResult === null
+          ? {}
+          : { reapLines: renderJoinedReapResult(loadedView.reapResult) }),
+        theme,
+      }),
+  );
+}
+
 function formatReapSummary(removedCount: number): string {
   return `Reap complete: removed ${removedCount} expired presence ${pluralize(
     removedCount,
@@ -216,178 +329,9 @@ function formatReapSummary(removedCount: number): string {
   )}.`;
 }
 
-function formatReapedRecord(filePath: string): string {
-  const runtimeId = basename(filePath, '.json');
-  return runtimeId.length > 0 ? runtimeId : filePath;
-}
-
 function formatPresenceDiagnostic(diagnostic: PresenceDiagnostic): string {
   const location = diagnostic.filePath === undefined ? '' : ` (${diagnostic.filePath})`;
   return `- ${diagnostic.code}${location}: ${diagnostic.message}`;
-}
-
-function formatSessionDeckDiagnostic(diagnostic: SessionDeckDiagnostic): string {
-  const location =
-    diagnostic.runtimeId !== undefined
-      ? ` runtime=${diagnostic.runtimeId}`
-      : diagnostic.filePath !== undefined
-        ? ` (${diagnostic.filePath})`
-        : '';
-  return `- ${diagnostic.code}${location}: ${diagnostic.message}`;
-}
-
-function formatSessionDeckRecord(
-  record: SessionDeckRecord,
-  options: { all: boolean; showIdentity: boolean },
-): string {
-  const lines = [
-    [
-      formatShortId(record.runtimeId),
-      formatActivitySummary(record),
-      formatDuration(record.heartbeatAgeMs),
-      ...formatPresenceDetails(record),
-    ].join('  '),
-  ];
-
-  if (record.sessionName !== null) {
-    lines.push(`  ${record.sessionName}`);
-  }
-
-  const contextLine = formatRecordContext(record);
-  if (contextLine !== null) {
-    lines.push(`  ${contextLine}`);
-  }
-
-  if (record.chips.length > 0) {
-    lines.push(`  ${formatChips(record.chips)}`);
-  }
-
-  const identityLine = options.showIdentity ? formatIdentityDetails(record) : null;
-  if (identityLine !== null) {
-    lines.push(`  ${identityLine}`);
-  }
-
-  const diagnosticsLine = options.all ? formatRecordDiagnostics(record.diagnostics) : null;
-  if (diagnosticsLine !== null) {
-    lines.push(`  ${diagnosticsLine}`);
-  }
-
-  return lines.join('\n');
-}
-
-function formatPresenceDetails(record: SessionDeckRecord): string[] {
-  const details: string[] = [];
-
-  if (record.presenceState !== 'live') {
-    details.push(record.presenceState);
-  }
-
-  if (record.presenceReason !== undefined && record.presenceReason !== 'fresh_heartbeat') {
-    details.push(`reason=${record.presenceReason}`);
-  }
-
-  return details;
-}
-
-function formatRecordContext(record: SessionDeckRecord): string | null {
-  const parts = [
-    formatRepoOrCwd(record.cwd, record.branch !== null || record.prUrl !== null),
-    record.branch,
-    formatPr(record.prUrl),
-  ].filter((part): part is string => part !== null);
-
-  return parts.length > 0 ? parts.join('  ') : null;
-}
-
-function formatRepoOrCwd(cwd: string | null, preferBasename: boolean): string | null {
-  if (cwd === null) {
-    return null;
-  }
-
-  const shortenedCwd = shortenHomePath(cwd);
-  if (!preferBasename) {
-    return shortenedCwd;
-  }
-
-  const repoName = basename(cwd);
-  return repoName.length > 0 && repoName !== '/' && repoName !== '.' ? repoName : shortenedCwd;
-}
-
-function formatPr(prUrl: string | null): string | null {
-  if (prUrl === null) {
-    return null;
-  }
-
-  const prMatch = prUrl.match(/\/pull\/(\d+)$/);
-  return prMatch ? `#${prMatch[1]}` : prUrl;
-}
-
-function formatIdentityDetails(record: SessionDeckRecord): string | null {
-  return record.sessionId !== null ? `session=${record.sessionId}` : null;
-}
-
-function formatRecordDiagnostics(diagnostics: SessionDeckDiagnostic[]): string | null {
-  if (diagnostics.length === 0) {
-    return null;
-  }
-
-  return `diagnostics: ${[...new Set(diagnostics.map((diagnostic) => diagnostic.code))].join(' | ')}`;
-}
-
-function formatShortId(id: string): string {
-  return id.length <= 8 ? id : id.slice(0, 8);
-}
-
-function formatActivitySummary(record: SessionDeckRecord): string {
-  switch (record.activityState) {
-    case 'waiting':
-      return 'waiting';
-    case 'thinking':
-      return record.activityAgeMs === null
-        ? 'thinking'
-        : `thinking ${formatDuration(record.activityAgeMs)}`;
-    case 'tool-running': {
-      const toolName = record.currentToolName === null ? '' : `: ${record.currentToolName}`;
-      const age = record.activityAgeMs === null ? '' : ` ${formatDuration(record.activityAgeMs)}`;
-      return `tool-running${toolName}${age}`;
-    }
-    case 'error':
-      return record.lastError === null ? 'error' : `error: ${record.lastError}`;
-    case 'unknown':
-      return 'unknown';
-  }
-}
-
-function formatChips(chips: string[]): string {
-  return chips.join(' | ');
-}
-
-function shortenHomePath(cwd: string): string {
-  const home = process.env['HOME'] ?? process.env['USERPROFILE'] ?? '';
-  if (home.length > 0 && cwd.startsWith(home)) {
-    return `~${cwd.slice(home.length)}`;
-  }
-  return cwd;
-}
-
-function formatDuration(durationMs: number): string {
-  if (!Number.isFinite(durationMs) || durationMs < 0) {
-    return 'n/a';
-  }
-
-  if (durationMs < 1_000) {
-    return `${durationMs}ms`;
-  }
-
-  if (durationMs < 60_000) {
-    return `${Math.round(durationMs / 1_000)}s`;
-  }
-
-  if (durationMs < 60 * 60_000) {
-    return `${Math.round(durationMs / 60_000)}m`;
-  }
-
-  return `${Math.round(durationMs / (60 * 60_000))}h`;
 }
 
 function pluralize(count: number, singular: string): string {
