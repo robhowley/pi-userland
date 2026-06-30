@@ -120,6 +120,11 @@ export function formatSessionDeckBrowserCardLines(
   const title = getDisplayTitle(record);
   const lines = [title.text];
 
+  const repoLine = formatCardRepoLine(record, title.text);
+  if (repoLine !== null) {
+    lines.push(repoLine);
+  }
+
   if (record.cwd !== null) {
     lines.push(`cwd: ${shortenHomePath(record.cwd)}`);
   }
@@ -286,6 +291,19 @@ function formatRecordContext(record: SessionDeckRecord): string | null {
   ].filter((part): part is string => part !== null);
 
   return parts.length > 0 ? parts.join('  ') : null;
+}
+
+function formatCardRepoLine(record: SessionDeckRecord, title: string): string | null {
+  const repo = record.qualifiedRepoName ?? record.repoName;
+  if (repo === null) {
+    return null;
+  }
+
+  if (record.qualifiedRepoName === null && repo === title) {
+    return null;
+  }
+
+  return `repo: ${repo}`;
 }
 
 function formatCardCheckoutLine(record: SessionDeckRecord): string | null {

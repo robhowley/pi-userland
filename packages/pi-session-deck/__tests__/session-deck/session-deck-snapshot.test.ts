@@ -34,6 +34,8 @@ function buildIdentityRecord(
     sessionName: 'alpha',
     cwd: '/tmp/project',
     worktree: '/tmp/project',
+    repoName: 'repo',
+    qualifiedRepoName: 'owner/repo',
     branch: 'main',
     prUrl: 'https://github.com/owner/repo/pull/42',
     isLinkedWorktree: false,
@@ -138,7 +140,8 @@ describe('readSessionDeckSnapshot', () => {
         heartbeatAgeMs: 5_000,
         sessionId: 'session-1',
         sessionName: 'alpha',
-        repoName: 'project',
+        repoName: 'repo',
+        qualifiedRepoName: 'owner/repo',
         cwd: '/tmp/project',
         branch: 'main',
         prUrl: 'https://github.com/owner/repo/pull/42',
@@ -175,7 +178,7 @@ describe('readSessionDeckSnapshot', () => {
     }
   });
 
-  it('projects repoName from the identity worktree basename and falls back to null without one', async () => {
+  it('prefers persisted repo fields even when worktree metadata is incomplete', async () => {
     const directories = await createSnapshotDirectories();
 
     await writePresenceRecord(buildPresenceRecord(), { directory: directories.presenceDirectory });
@@ -193,9 +196,32 @@ describe('readSessionDeckSnapshot', () => {
       inspectPid: vi.fn().mockResolvedValue({ status: 'matches' }),
     });
 
-    expect(snapshot.records[0]?.repoName).toBeNull();
+    expect(snapshot.records[0]?.repoName).toBe('repo');
+    expect(snapshot.records[0]?.qualifiedRepoName).toBe('owner/repo');
     expect(snapshot.records[0]).not.toHaveProperty('worktree');
     expect(snapshot.records[0]).not.toHaveProperty('gitRoot');
+  });
+
+  it('falls back to the worktree basename for legacy identity records without repo fields', async () => {
+    const directories = await createSnapshotDirectories();
+
+    await writePresenceRecord(buildPresenceRecord(), { directory: directories.presenceDirectory });
+    await writeIdentityRecord(buildIdentityRecord({ repoName: null, qualifiedRepoName: null }), {
+      directory: directories.identityDirectory,
+    });
+    await writeActivityRecord(buildActivityRecord(), { directory: directories.activityDirectory });
+
+    const snapshot = await readSessionDeckSnapshot({
+      directory: directories.presenceDirectory,
+      identityDirectory: directories.identityDirectory,
+      activityDirectory: directories.activityDirectory,
+      chipsDirectory: directories.chipsDirectory,
+      now: new Date('2026-06-23T12:10:00.000Z'),
+      inspectPid: vi.fn().mockResolvedValue({ status: 'matches' }),
+    });
+
+    expect(snapshot.records[0]?.repoName).toBe('project');
+    expect(snapshot.records[0]?.qualifiedRepoName).toBeNull();
   });
 
   it('projects linked-worktree display fields without exposing raw git paths', async () => {

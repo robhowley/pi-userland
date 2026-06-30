@@ -11,8 +11,8 @@ pi install npm:@robhowley/pi-session-deck
 ## Commands
 
 - `/session-deck` opens a read-only TUI browser in Pi TUI mode and falls back to the existing compact multi-line text view elsewhere. The TUI list shows up to 12 sessions before paging and auto-refreshes every 15s while open.
-- TUI rows are two-line dashboard rows: line 1 is `icon + activity + (sessionName ?? repoName ?? cwd basename ?? runtimeId) + repo/PR/age/branch`, and line 2 is chip preview only joined with `·` or dim `no chips` when empty.
-- The selected TUI inspector stays boxed but compact: title, `cwd`, optional `checkout: linked worktree` (and best-effort `worktree: <label>` when available), inline `branch/pr`, inline `presence/activity/heartbeat`, optional blank spacer plus inline `chips: ...`, then `runtime/pid`; `--identity` adds `session: ...` and `--all` adds compact `diagnostics:`. The non-TUI text fallback stays unchanged.
+- TUI rows are two-line dashboard rows: line 1 is `icon + activity + (sessionName ?? repoName ?? cwd basename ?? runtimeId) + repo/PR/age/branch`, and line 2 is chip preview only joined with `·` or dim `no chips` when empty. The top row keeps the short `repoName` token when it is not already the title.
+- The selected TUI inspector stays boxed but compact: title, optional `repo: <qualifiedRepoName ?? repoName>`, `cwd`, optional `checkout: linked worktree` (and best-effort `worktree: <label>` when available), inline `branch/pr`, inline `presence/activity/heartbeat`, optional blank spacer plus inline `chips: ...`, then `runtime/pid`; `--identity` adds `session: ...` and `--all` adds compact `diagnostics:`. The non-TUI text fallback stays unchanged.
 - TUI browser keys: `↑/↓` move selection, `enter` toggles detail, `r` refreshes, `q`/`esc` closes.
 - `/session-deck --all` includes dead and unknown presence records plus read diagnostics.
 - `/session-deck --reap` removes presence records older than the 24h reap threshold before the initial view loads.

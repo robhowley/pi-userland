@@ -51,6 +51,8 @@ describe('identity collector', () => {
     expect(record.sessionName).toBe('Focused session');
     expect(record.cwd).toBe('/home/user/project');
     expect(record.worktree).toBe('/home/user/project');
+    expect(record.repoName).toBe('repo');
+    expect(record.qualifiedRepoName).toBe('owner/repo');
     expect(record.branch).toBe('main');
     expect(record.gitRemote).toBe('https://github.com/owner/repo.git');
     expect(record.isLinkedWorktree).toBe(false);
@@ -90,6 +92,8 @@ describe('identity collector', () => {
       now: () => new Date('2026-06-17T12:00:00.000Z'),
     });
 
+    expect(record.repoName).toBe('repo');
+    expect(record.qualifiedRepoName).toBe('owner/repo');
     expect(record.isLinkedWorktree).toBe(true);
     expect(record.worktreeLabel).toBe('project-feature');
     expect(record.gitRoot).toBe('/home/user/project/.git/worktrees/project-feature');

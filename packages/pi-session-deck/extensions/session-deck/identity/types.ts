@@ -26,6 +26,8 @@ export interface SessionIdentityRecord {
   sessionName?: string;
   cwd: string | null;
   worktree: string | null;
+  repoName: string | null;
+  qualifiedRepoName: string | null;
   branch: string | null;
   prUrl: string | null;
   isLinkedWorktree: boolean | null;
@@ -92,6 +94,8 @@ export interface JoinedSessionRecord {
   sessionName: string | null;
   cwd: string | null;
   worktree: string | null;
+  repoName: string | null;
+  qualifiedRepoName: string | null;
   branch: string | null;
   prUrl: string | null;
   isLinkedWorktree: boolean | null;
@@ -122,6 +126,8 @@ export interface GitResolvedInfo {
   branch: string | null;
   remote: string | null;
   root: string | null;
+  repoName: string | null;
+  qualifiedRepoName: string | null;
   isLinkedWorktree: boolean | null;
   worktreeLabel: string | null;
 }

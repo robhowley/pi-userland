@@ -121,6 +121,8 @@ export async function collectSessionIdentity(
     ...(sessionName === undefined ? {} : { sessionName }),
     cwd,
     worktree: gitInfo.worktree,
+    repoName: gitInfo.repoName,
+    qualifiedRepoName: gitInfo.qualifiedRepoName,
     branch: gitInfo.branch,
     prUrl,
     isLinkedWorktree: gitInfo.isLinkedWorktree,

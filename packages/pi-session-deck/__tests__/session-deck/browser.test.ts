@@ -52,6 +52,7 @@ function buildSnapshotRecord(overrides: Partial<SessionDeckRecord> = {}): Sessio
     sessionId: 'session-abc',
     sessionName: 'alpha',
     repoName: 'project',
+    qualifiedRepoName: 'owner/project',
     cwd: `${HOME}/project`,
     branch: 'main',
     prUrl: 'https://github.com/owner/repo/pull/42',
@@ -161,6 +162,7 @@ describe('SessionDeckBrowser', () => {
     expect(output).not.toContain('Selected session');
     expect(output).toContain('┌');
     expect(output).toContain('│ alpha');
+    expect(output).toContain('│ repo: owner/project');
     expect(output).toContain('│ cwd: ~/project');
     expect(output).toContain('│ checkout: linked worktree · worktree: feature-sandbox');
     expect(output).toContain('│ branch: main · pr: #42');
@@ -169,7 +171,6 @@ describe('SessionDeckBrowser', () => {
     expect(output).toContain('│ runtime: 922f7ac8deadbeef · pid: 101');
     expect(output).toContain('│ session: session-abc');
     expect(output).toContain('│ diagnostics: activity_stale');
-    expect(output).not.toContain('│ repo:');
     expect(output).not.toContain('│   - merge-ready clean');
   });
 
@@ -180,6 +181,33 @@ describe('SessionDeckBrowser', () => {
     });
 
     expect(renderText(browser)).not.toContain('checkout: linked worktree');
+  });
+
+  it('falls back to repoName in the inspector and omits the repo line when no repo is known', () => {
+    const browser = createBrowser({
+      initialView: buildSnapshot({
+        records: [
+          buildSnapshotRecord({ qualifiedRepoName: null }),
+          buildSnapshotRecord({
+            runtimeId: 'rt-2',
+            sessionName: null,
+            repoName: null,
+            qualifiedRepoName: null,
+            cwd: `${HOME}/scratch/worker`,
+            branch: null,
+            prUrl: null,
+          }),
+        ],
+      }),
+    });
+
+    expect(renderText(browser)).toContain('│ repo: project');
+
+    browser.handleInput('down');
+
+    const output = renderText(browser);
+    expect(output).toContain('│ worker');
+    expect(output).not.toContain('│ repo:');
   });
 
   it('shows up to 12 sessions in the top list window before paging', () => {
@@ -213,6 +241,7 @@ describe('SessionDeckBrowser', () => {
           buildSnapshotRecord({
             sessionName: null,
             repoName: 'repo-one',
+            qualifiedRepoName: 'owner/repo-one',
             cwd: `${HOME}/repo-one/packages/cli`,
             branch: null,
             prUrl: null,
@@ -221,6 +250,7 @@ describe('SessionDeckBrowser', () => {
             runtimeId: 'rt-2',
             sessionName: null,
             repoName: null,
+            qualifiedRepoName: null,
             cwd: `${HOME}/scratch/worker`,
             branch: null,
             prUrl: null,
@@ -230,6 +260,7 @@ describe('SessionDeckBrowser', () => {
             pid: 303,
             sessionName: null,
             repoName: null,
+            qualifiedRepoName: null,
             cwd: null,
             branch: null,
             prUrl: null,
@@ -240,6 +271,7 @@ describe('SessionDeckBrowser', () => {
 
     expect(renderText(browser)).toContain('› ● waiting  repo-one  5s');
     expect(renderText(browser)).toContain('│ repo-one');
+    expect(renderText(browser)).toContain('│ repo: owner/repo-one');
     expect(renderText(browser)).toContain('│ cwd: ~/repo-one/packages/cli');
 
     browser.handleInput('down');
@@ -287,6 +319,7 @@ describe('SessionDeckBrowser', () => {
     expect(requestRender).toHaveBeenCalledTimes(1);
     const selectedOutput = renderText(browser);
     expect(selectedOutput).toContain('› ◌ thinking  bravo  project · #42 · 4m · main');
+    expect(selectedOutput).toContain('│ repo: owner/project');
     expect(selectedOutput).toContain('  │ no chips');
     expect(selectedOutput).toContain(
       '│ presence: ◌ stale · activity: thinking · 3m · heartbeat: 4m ago · heartbeat expired',

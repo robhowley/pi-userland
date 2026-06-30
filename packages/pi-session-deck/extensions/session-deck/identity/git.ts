@@ -13,6 +13,23 @@ export interface ResolvePrUrlOptions {
   timeoutMs?: number;
 }
 
+interface GitCheckoutInfo extends Pick<
+  GitResolvedInfo,
+  'root' | 'isLinkedWorktree' | 'worktreeLabel'
+> {
+  commonGitDir: string | null;
+}
+
+interface ParsedFetchRemote {
+  name: string;
+  url: string;
+}
+
+interface ParsedRemoteRepo {
+  repoName: string;
+  qualifiedRepoName: string;
+}
+
 const defaultExecGit: GitExec = async (cwd, ...args) => {
   const result = await new Promise<{ stdout: string; stderr: string; exitCode: number }>(
     (resolve) => {
@@ -89,22 +106,33 @@ export async function resolveGitInfo(
       branch: null,
       remote: null,
       root: null,
+      repoName: null,
+      qualifiedRepoName: null,
       isLinkedWorktree: null,
       worktreeLabel: null,
     };
   }
 
-  const [branch, remote, checkoutInfo] = await Promise.all([
+  const [branch, remote, remotes, checkoutInfo] = await Promise.all([
     gitRevParseAbbrevRefHead(worktree, execGit),
     gitRemoteGetUrl(worktree, execGit),
+    gitRemoteVerbose(worktree, execGit),
     resolveGitCheckoutInfo(worktree, execGit),
   ]);
+
+  const remoteRepo = resolveRemoteRepoIdentity(remote, remotes);
+  const repoName =
+    remoteRepo?.repoName ??
+    deriveRepoNameFromCommonGitDir(checkoutInfo.commonGitDir) ??
+    getPathBasename(worktree);
 
   return {
     worktree,
     branch,
     remote,
     root: checkoutInfo.root,
+    repoName,
+    qualifiedRepoName: remoteRepo?.qualifiedRepoName ?? null,
     isLinkedWorktree: checkoutInfo.isLinkedWorktree,
     worktreeLabel: checkoutInfo.worktreeLabel,
   };
@@ -201,9 +229,13 @@ async function gitRevParseAbbrevRefHead(
   }
 }
 
-async function gitRemoteGetUrl(worktree: string, execGit: GitExec): Promise<string | null> {
+async function gitRemoteGetUrl(
+  worktree: string,
+  execGit: GitExec,
+  remoteName = 'origin',
+): Promise<string | null> {
   try {
-    const { stdout, exitCode } = await execGit(worktree, 'remote', 'get-url', 'origin');
+    const { stdout, exitCode } = await execGit(worktree, 'remote', 'get-url', remoteName);
     if (exitCode !== 0) {
       return null;
     }
@@ -214,19 +246,176 @@ async function gitRemoteGetUrl(worktree: string, execGit: GitExec): Promise<stri
   }
 }
 
+async function gitRemoteVerbose(worktree: string, execGit: GitExec): Promise<string | null> {
+  try {
+    const { stdout, exitCode } = await execGit(worktree, 'remote', '-v');
+    if (exitCode !== 0) {
+      return null;
+    }
+    const trimmed = stdout.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveRemoteRepoIdentity(
+  originRemote: string | null,
+  remoteList: string | null,
+): ParsedRemoteRepo | null {
+  const originRepo = parseRemoteRepo(originRemote);
+  if (originRepo !== null) {
+    return originRepo;
+  }
+
+  const fallbackRemote = getFirstNonOriginFetchRemote(remoteList);
+  if (fallbackRemote === null) {
+    return null;
+  }
+
+  return parseRemoteRepo(fallbackRemote.url);
+}
+
+function getFirstNonOriginFetchRemote(remoteList: string | null): ParsedFetchRemote | null {
+  if (remoteList === null) {
+    return null;
+  }
+
+  for (const line of remoteList.split(/\r?\n/)) {
+    const match = line.trim().match(/^(\S+)\s+(\S+)\s+\((fetch|push)\)$/);
+    if (match === null) {
+      continue;
+    }
+
+    const name = match[1] ?? null;
+    const url = match[2] ?? null;
+    const direction = match[3] ?? null;
+    if (direction === 'fetch' && name !== null && name !== 'origin' && url !== null) {
+      return { name, url };
+    }
+  }
+
+  return null;
+}
+
+function parseRemoteRepo(remoteUrl: string | null): ParsedRemoteRepo | null {
+  if (remoteUrl === null) {
+    return null;
+  }
+
+  const qualifiedRepoName = extractQualifiedRepoName(remoteUrl.trim());
+  if (qualifiedRepoName === null) {
+    return null;
+  }
+
+  const separatorIndex = qualifiedRepoName.lastIndexOf('/');
+  const repoName = separatorIndex === -1 ? null : qualifiedRepoName.slice(separatorIndex + 1);
+  if (repoName === null || repoName.length === 0) {
+    return null;
+  }
+
+  return { repoName, qualifiedRepoName };
+}
+
+function extractQualifiedRepoName(remoteUrl: string): string | null {
+  if (remoteUrl.length === 0) {
+    return null;
+  }
+
+  if (remoteUrl.includes('://')) {
+    try {
+      const parsedUrl = new URL(remoteUrl);
+      if (parsedUrl.protocol === 'file:') {
+        return null;
+      }
+
+      return extractQualifiedRepoNameFromPath(parsedUrl.pathname);
+    } catch {
+      return null;
+    }
+  }
+
+  const scpLikeMatch = remoteUrl.match(/^(?:[^@\s]+@)?[^:/\s]+:(.+)$/);
+  const scpLikePath = scpLikeMatch?.[1] ?? null;
+  if (scpLikePath !== null) {
+    return extractQualifiedRepoNameFromPath(scpLikePath);
+  }
+
+  return null;
+}
+
+function extractQualifiedRepoNameFromPath(pathValue: string): string | null {
+  const segments = splitPathSegments(pathValue);
+  if (segments.length < 2) {
+    return null;
+  }
+
+  const owner = segments[segments.length - 2] ?? null;
+  const repoName = stripGitSuffix(segments[segments.length - 1] ?? '');
+  if (owner === null || owner.length === 0 || repoName.length === 0) {
+    return null;
+  }
+
+  return `${owner}/${repoName}`;
+}
+
+function deriveRepoNameFromCommonGitDir(commonGitDir: string | null): string | null {
+  if (commonGitDir === null) {
+    return null;
+  }
+
+  const segments = splitPathSegments(commonGitDir);
+  if (segments.length === 0) {
+    return null;
+  }
+
+  const lastSegment = segments[segments.length - 1] ?? null;
+  if (lastSegment === null) {
+    return null;
+  }
+
+  if (lastSegment === '.git') {
+    return segments[segments.length - 2] ?? null;
+  }
+
+  const repoName = stripGitSuffix(lastSegment);
+  return repoName.length > 0 ? repoName : null;
+}
+
+function getPathBasename(pathValue: string | null): string | null {
+  if (pathValue === null) {
+    return null;
+  }
+
+  const segments = splitPathSegments(pathValue);
+  return segments[segments.length - 1] ?? null;
+}
+
+function stripGitSuffix(value: string): string {
+  return value.endsWith('.git') ? value.slice(0, -4) : value;
+}
+
+function splitPathSegments(pathValue: string): string[] {
+  return pathValue
+    .replace(/[\\/]+$/, '')
+    .split(/[\\/]+/)
+    .filter((segment) => segment.length > 0 && segment !== '.');
+}
+
 async function resolveGitCheckoutInfo(
   worktree: string,
   execGit: GitExec,
-): Promise<Pick<GitResolvedInfo, 'root' | 'isLinkedWorktree' | 'worktreeLabel'>> {
+): Promise<GitCheckoutInfo> {
   const absoluteGitDir = await gitRevParseAbsoluteGitDir(worktree, execGit);
   if (absoluteGitDir === null) {
-    return { root: null, isLinkedWorktree: null, worktreeLabel: null };
+    return { root: null, commonGitDir: null, isLinkedWorktree: null, worktreeLabel: null };
   }
 
   const commonGitDir = await gitRevParseAbsoluteCommonGitDir(worktree, execGit);
   if (commonGitDir === null) {
     return {
       root: absoluteGitDir,
+      commonGitDir: null,
       isLinkedWorktree: null,
       worktreeLabel: null,
     };
@@ -235,6 +424,7 @@ async function resolveGitCheckoutInfo(
   const linkedWorktree = deriveLinkedWorktreeInfo(absoluteGitDir, commonGitDir);
   return {
     root: absoluteGitDir,
+    commonGitDir,
     isLinkedWorktree: linkedWorktree.isLinkedWorktree,
     worktreeLabel: linkedWorktree.worktreeLabel,
   };

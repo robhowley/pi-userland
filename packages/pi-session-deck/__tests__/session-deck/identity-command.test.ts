@@ -71,6 +71,7 @@ function buildSnapshotRecord(overrides: Partial<SessionDeckRecord> = {}): Sessio
     sessionId: 'session-abc',
     sessionName: null,
     repoName: 'project',
+    qualifiedRepoName: 'owner/project',
     cwd: `${HOME}/project`,
     branch: 'main',
     prUrl: 'https://github.com/owner/repo/pull/42',
@@ -222,6 +223,7 @@ describe('session-deck joined command', () => {
     expect(defaultMessage).not.toContain('chips=');
     expect(defaultMessage).not.toContain('scope=');
     expect(defaultMessage).not.toContain('updatedAt=');
+    expect(defaultMessage).not.toContain('repo:');
 
     vi.mocked(ctx.ui.notify).mockClear();
     await handler?.('--all', ctx);
@@ -318,6 +320,7 @@ describe('session-deck joined command', () => {
               pid: 202,
               sessionName: null,
               repoName: null,
+              qualifiedRepoName: null,
               cwd: null,
               branch: null,
               prUrl: null,
@@ -362,13 +365,13 @@ describe('session-deck joined command', () => {
         expect(initialRender).toContain('  │ merge-ready clean · queue 2');
         expect(initialRender).toContain('  × unknown  rt-dead  5s');
         expect(initialRender).not.toContain('Selected session');
+        expect(initialRender).toContain('repo: owner/project');
         expect(initialRender).toContain('cwd: ~/project');
         expect(initialRender).toContain('branch: main · pr: #42');
         expect(initialRender).toContain('presence: ● live · activity: waiting · heartbeat: 5s ago');
         expect(initialRender).toContain('chips: merge-ready clean · queue 2');
         expect(initialRender).toContain('runtime: 922f7ac8deadbeef · pid: 101');
         expect(initialRender).toContain('session: session-abc');
-        expect(initialRender).not.toContain('repo: project');
 
         component.handleInput?.('r');
 

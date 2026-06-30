@@ -25,6 +25,7 @@ export interface SessionDeckRecord {
   sessionId: string | null;
   sessionName: string | null;
   repoName: string | null;
+  qualifiedRepoName: string | null;
   cwd: string | null;
   branch: string | null;
   prUrl: string | null;

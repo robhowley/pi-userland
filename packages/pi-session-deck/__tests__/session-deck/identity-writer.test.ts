@@ -13,6 +13,8 @@ describe('identity writer', () => {
       sessionName: 'Focused session',
       cwd: '/home/user/project',
       worktree: '/home/user/project',
+      repoName: 'repo',
+      qualifiedRepoName: 'owner/repo',
       branch: 'main',
       prUrl: 'https://github.com/owner/repo/pull/42',
       isLinkedWorktree: false,
@@ -28,6 +30,8 @@ describe('identity writer', () => {
     const parsed = JSON.parse(json);
     expect(parsed.runtimeId).toBe('rt-1');
     expect(parsed.sessionName).toBe('Focused session');
+    expect(parsed.repoName).toBe('repo');
+    expect(parsed.qualifiedRepoName).toBe('owner/repo');
     expect(parsed.branch).toBe('main');
     expect(parsed.prUrl).toBe('https://github.com/owner/repo/pull/42');
     expect(parsed.identitySource).toBe('startup');
@@ -43,6 +47,8 @@ describe('identity writer', () => {
       sessionFile: null,
       cwd: null,
       worktree: null,
+      repoName: null,
+      qualifiedRepoName: null,
       branch: null,
       prUrl: null,
       isLinkedWorktree: null,
@@ -80,6 +86,8 @@ describe('identity writer', () => {
       sessionFile: null,
       cwd: null,
       worktree: null,
+      repoName: null,
+      qualifiedRepoName: null,
       branch: null,
       prUrl: null,
       isLinkedWorktree: null,
@@ -117,6 +125,8 @@ describe('identity writer', () => {
       sessionFile: null,
       cwd: null,
       worktree: null,
+      repoName: null,
+      qualifiedRepoName: null,
       branch: null,
       prUrl: null,
       isLinkedWorktree: null,
