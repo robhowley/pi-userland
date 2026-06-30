@@ -226,7 +226,7 @@ describe('SessionDeckBrowser', () => {
     expect(output).not.toContain('│ repo:');
   });
 
-  it('shows up to 12 sessions in the top list window before paging', () => {
+  it('shows up to 8 sessions in the top list window before paging', () => {
     const browser = createBrowser({
       initialView: buildSnapshot({
         records: Array.from({ length: 13 }, (_, index) =>
@@ -245,9 +245,9 @@ describe('SessionDeckBrowser', () => {
 
     const output = renderText(browser);
 
-    expect(output).toContain('Showing 1-12 of 13');
-    expect(output).toContain('session-12');
-    expect(output).not.toContain('session-13');
+    expect(output).toContain('Showing 1-8 of 13');
+    expect(output).toContain('session-8');
+    expect(output).not.toContain('session-9');
   });
 
   it('uses session name, then repo name, then cwd basename, then runtime id in the list and card', () => {

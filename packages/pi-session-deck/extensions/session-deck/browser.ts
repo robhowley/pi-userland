@@ -11,7 +11,7 @@ import {
 import type { SessionDeckBrowserRow } from './browser-render.js';
 import type { SessionDeckRecord, SessionDeckSnapshot } from './types.js';
 
-const DEFAULT_MAX_VISIBLE_ROWS = 12;
+const DEFAULT_MAX_VISIBLE_ROWS = 8;
 const AUTO_REFRESH_INTERVAL_MS = 15_000;
 
 type SessionDeckRefreshMode = 'manual' | 'auto';
