@@ -20,6 +20,8 @@ function buildJoinedView(overrides: Partial<JoinedSessionView> = {}): JoinedSess
         worktree: '/tmp/project',
         branch: 'main',
         prUrl: 'https://github.com/owner/repo/pull/42',
+        isLinkedWorktree: false,
+        worktreeLabel: null,
         identityUpdatedAt: '2026-06-17T12:09:00.000Z',
         identityFreshness: 'fresh',
         diagnostics: [],
@@ -77,6 +79,8 @@ describe('activity reader', () => {
             worktree: null,
             branch: null,
             prUrl: null,
+            isLinkedWorktree: null,
+            worktreeLabel: null,
             identityUpdatedAt: null,
             identityFreshness: 'missing',
             diagnostics: [

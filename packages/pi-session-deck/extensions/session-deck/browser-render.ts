@@ -124,6 +124,11 @@ export function formatSessionDeckBrowserCardLines(
     lines.push(`cwd: ${shortenHomePath(record.cwd)}`);
   }
 
+  const checkoutLine = formatCardCheckoutLine(record);
+  if (checkoutLine !== null) {
+    lines.push(checkoutLine);
+  }
+
   const branchAndPrLine = formatCardBranchAndPrLine(record);
   if (branchAndPrLine !== null) {
     lines.push(branchAndPrLine);
@@ -281,6 +286,17 @@ function formatRecordContext(record: SessionDeckRecord): string | null {
   ].filter((part): part is string => part !== null);
 
   return parts.length > 0 ? parts.join('  ') : null;
+}
+
+function formatCardCheckoutLine(record: SessionDeckRecord): string | null {
+  if (record.isLinkedWorktree !== true) {
+    return null;
+  }
+
+  return joinDisplayParts(
+    'checkout: linked worktree',
+    record.worktreeLabel === null ? null : `worktree: ${record.worktreeLabel}`,
+  );
 }
 
 function formatCardBranchAndPrLine(record: SessionDeckRecord): string | null {

@@ -82,6 +82,8 @@ export async function readSessionDeckSnapshot(
         cwd: record.cwd,
         branch: record.branch,
         prUrl: record.prUrl,
+        isLinkedWorktree: record.isLinkedWorktree,
+        worktreeLabel: record.worktreeLabel,
         activityState: record.activityState,
         activityAgeMs: record.activityAgeMs,
         currentToolName: record.currentToolName,

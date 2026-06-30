@@ -28,6 +28,8 @@ export interface SessionDeckRecord {
   cwd: string | null;
   branch: string | null;
   prUrl: string | null;
+  isLinkedWorktree: boolean | null;
+  worktreeLabel: string | null;
   activityState: ActivityState;
   activityAgeMs: number | null;
   currentToolName: string | null;

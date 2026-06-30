@@ -21,7 +21,11 @@ describe('identity collector', () => {
       'rev-parse --show-toplevel': { stdout: '/home/user/project\n', exitCode: 0 },
       'rev-parse --abbrev-ref HEAD': { stdout: 'main\n', exitCode: 0 },
       'remote get-url origin': { stdout: 'https://github.com/owner/repo.git\n', exitCode: 0 },
-      'rev-parse --git-dir': { stdout: '/home/user/project/.git\n', exitCode: 0 },
+      'rev-parse --absolute-git-dir': { stdout: '/home/user/project/.git\n', exitCode: 0 },
+      'rev-parse --path-format=absolute --git-common-dir': {
+        stdout: '/home/user/project/.git\n',
+        exitCode: 0,
+      },
     });
 
     const mockSessionManager = {
@@ -49,8 +53,46 @@ describe('identity collector', () => {
     expect(record.worktree).toBe('/home/user/project');
     expect(record.branch).toBe('main');
     expect(record.gitRemote).toBe('https://github.com/owner/repo.git');
+    expect(record.isLinkedWorktree).toBe(false);
+    expect(record.worktreeLabel).toBeNull();
     expect(record.identitySource).toBe('startup');
     expect(execGit).toHaveBeenCalledWith('/home/user/project', 'rev-parse', '--show-toplevel');
+  });
+
+  it('persists linked-worktree metadata as derived fields only', async () => {
+    const { collectSessionIdentity } =
+      await import('../../extensions/session-deck/identity/collector.js');
+
+    const execGit = makeExecGit({
+      'rev-parse --show-toplevel': { stdout: '/home/user/project-feature\n', exitCode: 0 },
+      'rev-parse --abbrev-ref HEAD': { stdout: 'feature-x\n', exitCode: 0 },
+      'remote get-url origin': { stdout: 'https://github.com/owner/repo.git\n', exitCode: 0 },
+      'rev-parse --absolute-git-dir': {
+        stdout: '/home/user/project/.git/worktrees/project-feature\n',
+        exitCode: 0,
+      },
+      'rev-parse --path-format=absolute --git-common-dir': {
+        stdout: '/home/user/project/.git\n',
+        exitCode: 0,
+      },
+    });
+
+    const record = await collectSessionIdentity('rt-1', {
+      runtimeId: 'rt-1',
+      sessionManager: {
+        getSessionId: () => 'session-123',
+        getSessionFile: () => '/tmp/session-123.json',
+        getCwd: () => '/home/user/project-feature',
+      },
+      execGit,
+      execGhCli: null,
+      identitySource: 'startup',
+      now: () => new Date('2026-06-17T12:00:00.000Z'),
+    });
+
+    expect(record.isLinkedWorktree).toBe(true);
+    expect(record.worktreeLabel).toBe('project-feature');
+    expect(record.gitRoot).toBe('/home/user/project/.git/worktrees/project-feature');
   });
 
   it('falls back to explicit cwd when session-owned cwd is unavailable', async () => {
@@ -263,7 +305,11 @@ describe('identity collector', () => {
       'rev-parse --show-toplevel': { stdout: '/home/user/project\n', exitCode: 0 },
       'rev-parse --abbrev-ref HEAD': { stdout: 'HEAD\n', exitCode: 0 },
       'remote get-url origin': { stdout: 'https://github.com/owner/repo.git\n', exitCode: 0 },
-      'rev-parse --git-dir': { stdout: '/home/user/project/.git\n', exitCode: 0 },
+      'rev-parse --absolute-git-dir': { stdout: '/home/user/project/.git\n', exitCode: 0 },
+      'rev-parse --path-format=absolute --git-common-dir': {
+        stdout: '/home/user/project/.git\n',
+        exitCode: 0,
+      },
     });
 
     const diagnostics: unknown[] = [];

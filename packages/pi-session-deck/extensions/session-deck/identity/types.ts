@@ -28,6 +28,8 @@ export interface SessionIdentityRecord {
   worktree: string | null;
   branch: string | null;
   prUrl: string | null;
+  isLinkedWorktree: boolean | null;
+  worktreeLabel: string | null;
   identityUpdatedAt: string;
   sessionStartedAt: string;
   gitRemote: string | null;
@@ -92,6 +94,8 @@ export interface JoinedSessionRecord {
   worktree: string | null;
   branch: string | null;
   prUrl: string | null;
+  isLinkedWorktree: boolean | null;
+  worktreeLabel: string | null;
   identityUpdatedAt: string | null;
   identityFreshness: IdentityFreshness;
 
@@ -118,6 +122,8 @@ export interface GitResolvedInfo {
   branch: string | null;
   remote: string | null;
   root: string | null;
+  isLinkedWorktree: boolean | null;
+  worktreeLabel: string | null;
 }
 
 export interface PrLookupResult {

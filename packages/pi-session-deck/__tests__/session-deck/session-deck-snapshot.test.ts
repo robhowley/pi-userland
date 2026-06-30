@@ -36,6 +36,8 @@ function buildIdentityRecord(
     worktree: '/tmp/project',
     branch: 'main',
     prUrl: 'https://github.com/owner/repo/pull/42',
+    isLinkedWorktree: false,
+    worktreeLabel: null,
     identityUpdatedAt: '2026-06-23T12:09:50.000Z',
     sessionStartedAt: '2026-06-23T12:00:00.000Z',
     gitRemote: 'git@github.com:owner/repo.git',
@@ -140,6 +142,8 @@ describe('readSessionDeckSnapshot', () => {
         cwd: '/tmp/project',
         branch: 'main',
         prUrl: 'https://github.com/owner/repo/pull/42',
+        isLinkedWorktree: false,
+        worktreeLabel: null,
         activityState: 'waiting',
         activityAgeMs: null,
         currentToolName: null,
@@ -190,6 +194,35 @@ describe('readSessionDeckSnapshot', () => {
     });
 
     expect(snapshot.records[0]?.repoName).toBeNull();
+    expect(snapshot.records[0]).not.toHaveProperty('worktree');
+    expect(snapshot.records[0]).not.toHaveProperty('gitRoot');
+  });
+
+  it('projects linked-worktree display fields without exposing raw git paths', async () => {
+    const directories = await createSnapshotDirectories();
+
+    await writePresenceRecord(buildPresenceRecord(), { directory: directories.presenceDirectory });
+    await writeIdentityRecord(
+      buildIdentityRecord({
+        isLinkedWorktree: true,
+        worktreeLabel: 'feature-sandbox',
+        gitRoot: '/tmp/project/.git/worktrees/feature-sandbox',
+      }),
+      { directory: directories.identityDirectory },
+    );
+    await writeActivityRecord(buildActivityRecord(), { directory: directories.activityDirectory });
+
+    const snapshot = await readSessionDeckSnapshot({
+      directory: directories.presenceDirectory,
+      identityDirectory: directories.identityDirectory,
+      activityDirectory: directories.activityDirectory,
+      chipsDirectory: directories.chipsDirectory,
+      now: new Date('2026-06-23T12:10:00.000Z'),
+      inspectPid: vi.fn().mockResolvedValue({ status: 'matches' }),
+    });
+
+    expect(snapshot.records[0]?.isLinkedWorktree).toBe(true);
+    expect(snapshot.records[0]?.worktreeLabel).toBe('feature-sandbox');
     expect(snapshot.records[0]).not.toHaveProperty('worktree');
     expect(snapshot.records[0]).not.toHaveProperty('gitRoot');
   });

@@ -74,6 +74,8 @@ function buildSnapshotRecord(overrides: Partial<SessionDeckRecord> = {}): Sessio
     cwd: `${HOME}/project`,
     branch: 'main',
     prUrl: 'https://github.com/owner/repo/pull/42',
+    isLinkedWorktree: false,
+    worktreeLabel: null,
     activityState: 'waiting',
     activityAgeMs: null,
     currentToolName: null,
@@ -236,7 +238,15 @@ describe('session-deck joined command', () => {
 
     registerSessionDeckCommand(api, {
       readSessionDeckSnapshot: vi.fn(async () =>
-        buildSnapshot({ records: [buildSnapshotRecord({ sessionName: 'alpha' })] }),
+        buildSnapshot({
+          records: [
+            buildSnapshotRecord({
+              sessionName: 'alpha',
+              isLinkedWorktree: true,
+              worktreeLabel: 'feature-sandbox',
+            }),
+          ],
+        }),
       ),
     });
 
@@ -248,6 +258,7 @@ describe('session-deck joined command', () => {
     expect(defaultMessage).toContain('  alpha');
     expect(defaultMessage).not.toContain('session=session-');
     expect(defaultMessage).not.toContain('name=alpha');
+    expect(defaultMessage).not.toContain('checkout: linked worktree');
 
     vi.mocked(ctx.ui.notify).mockClear();
     await handler?.('--identity', ctx);
@@ -255,6 +266,7 @@ describe('session-deck joined command', () => {
     expect(identityMessage).toContain('  alpha');
     expect(identityMessage).toContain('session=session-');
     expect(identityMessage).not.toContain('name=alpha');
+    expect(identityMessage).not.toContain('checkout: linked worktree');
   });
 
   it('preserves reap output while reading the joined snapshot', async () => {

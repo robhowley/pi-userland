@@ -55,6 +55,8 @@ function buildSnapshotRecord(overrides: Partial<SessionDeckRecord> = {}): Sessio
     cwd: `${HOME}/project`,
     branch: 'main',
     prUrl: 'https://github.com/owner/repo/pull/42',
+    isLinkedWorktree: false,
+    worktreeLabel: null,
     activityState: 'waiting',
     activityAgeMs: null,
     currentToolName: null,
@@ -129,6 +131,8 @@ describe('SessionDeckBrowser', () => {
         records: [
           buildSnapshotRecord({
             chips: ['merge-ready clean', 'queue 2'],
+            isLinkedWorktree: true,
+            worktreeLabel: 'feature-sandbox',
             diagnostics: [{ code: 'activity_stale', message: 'Activity record is stale' }],
           }),
           buildSnapshotRecord({
@@ -158,6 +162,7 @@ describe('SessionDeckBrowser', () => {
     expect(output).toContain('┌');
     expect(output).toContain('│ alpha');
     expect(output).toContain('│ cwd: ~/project');
+    expect(output).toContain('│ checkout: linked worktree · worktree: feature-sandbox');
     expect(output).toContain('│ branch: main · pr: #42');
     expect(output).toContain('│ presence: ● live · activity: waiting · heartbeat: 5s ago');
     expect(output).toContain('│ chips: merge-ready clean · queue 2');
@@ -166,6 +171,15 @@ describe('SessionDeckBrowser', () => {
     expect(output).toContain('│ diagnostics: activity_stale');
     expect(output).not.toContain('│ repo:');
     expect(output).not.toContain('│   - merge-ready clean');
+  });
+
+  it('omits the checkout line for non-linked checkouts', () => {
+    const browser = createBrowser({
+      showIdentity: true,
+      initialView: buildSnapshot({ records: [buildSnapshotRecord()] }),
+    });
+
+    expect(renderText(browser)).not.toContain('checkout: linked worktree');
   });
 
   it('shows up to 12 sessions in the top list window before paging', () => {

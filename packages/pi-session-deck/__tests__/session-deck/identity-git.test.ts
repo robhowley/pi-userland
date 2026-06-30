@@ -13,14 +13,18 @@ function makeExecGit(results: Record<string, { stdout: string; exitCode: number 
 }
 
 describe('identity git resolution', () => {
-  it('resolves worktree, branch, remote, and root for a normal repo', async () => {
+  it('resolves worktree, branch, remote, root, and primary-checkout status for a normal repo', async () => {
     const { resolveGitInfo } = await import('../../extensions/session-deck/identity/git.js');
 
     const execGit = makeExecGit({
       'rev-parse --show-toplevel': { stdout: '/home/user/project\n', exitCode: 0 },
       'rev-parse --abbrev-ref HEAD': { stdout: 'main\n', exitCode: 0 },
       'remote get-url origin': { stdout: 'https://github.com/owner/repo.git\n', exitCode: 0 },
-      'rev-parse --git-dir': { stdout: '/home/user/project/.git\n', exitCode: 0 },
+      'rev-parse --absolute-git-dir': { stdout: '/home/user/project/.git\n', exitCode: 0 },
+      'rev-parse --path-format=absolute --git-common-dir': {
+        stdout: '/home/user/project/.git\n',
+        exitCode: 0,
+      },
     });
 
     const info = await resolveGitInfo('/home/user/project', { execGit });
@@ -29,6 +33,8 @@ describe('identity git resolution', () => {
     expect(info.branch).toBe('main');
     expect(info.remote).toBe('https://github.com/owner/repo.git');
     expect(info.root).toBe('/home/user/project/.git');
+    expect(info.isLinkedWorktree).toBe(false);
+    expect(info.worktreeLabel).toBeNull();
   });
 
   it('returns null fields when not in a git repo', async () => {
@@ -44,6 +50,8 @@ describe('identity git resolution', () => {
     expect(info.branch).toBeNull();
     expect(info.remote).toBeNull();
     expect(info.root).toBeNull();
+    expect(info.isLinkedWorktree).toBeNull();
+    expect(info.worktreeLabel).toBeNull();
   });
 
   it('returns null branch on detached HEAD', async () => {
@@ -53,7 +61,11 @@ describe('identity git resolution', () => {
       'rev-parse --show-toplevel': { stdout: '/home/user/project\n', exitCode: 0 },
       'rev-parse --abbrev-ref HEAD': { stdout: 'HEAD\n', exitCode: 0 },
       'remote get-url origin': { stdout: 'https://github.com/owner/repo.git\n', exitCode: 0 },
-      'rev-parse --git-dir': { stdout: '/home/user/project/.git\n', exitCode: 0 },
+      'rev-parse --absolute-git-dir': { stdout: '/home/user/project/.git\n', exitCode: 0 },
+      'rev-parse --path-format=absolute --git-common-dir': {
+        stdout: '/home/user/project/.git\n',
+        exitCode: 0,
+      },
     });
 
     const info = await resolveGitInfo('/home/user/project', { execGit });
@@ -61,6 +73,51 @@ describe('identity git resolution', () => {
     expect(info.worktree).toBe('/home/user/project');
     expect(info.branch).toBeNull();
     expect(info.remote).toBe('https://github.com/owner/repo.git');
+    expect(info.isLinkedWorktree).toBe(false);
+    expect(info.worktreeLabel).toBeNull();
+  });
+
+  it('detects linked worktrees and derives a best-effort label from the admin git dir', async () => {
+    const { resolveGitInfo } = await import('../../extensions/session-deck/identity/git.js');
+
+    const execGit = makeExecGit({
+      'rev-parse --show-toplevel': { stdout: '/home/user/project-feature\n', exitCode: 0 },
+      'rev-parse --abbrev-ref HEAD': { stdout: 'feature-x\n', exitCode: 0 },
+      'remote get-url origin': { stdout: 'https://github.com/owner/repo.git\n', exitCode: 0 },
+      'rev-parse --absolute-git-dir': {
+        stdout: '/home/user/project/.git/worktrees/project-feature\n',
+        exitCode: 0,
+      },
+      'rev-parse --path-format=absolute --git-common-dir': {
+        stdout: '/home/user/project/.git\n',
+        exitCode: 0,
+      },
+    });
+
+    const info = await resolveGitInfo('/home/user/project-feature', { execGit });
+
+    expect(info.worktree).toBe('/home/user/project-feature');
+    expect(info.root).toBe('/home/user/project/.git/worktrees/project-feature');
+    expect(info.isLinkedWorktree).toBe(true);
+    expect(info.worktreeLabel).toBe('project-feature');
+  });
+
+  it('keeps linked-worktree status unknown when absolute/common git-dir comparison cannot be completed', async () => {
+    const { resolveGitInfo } = await import('../../extensions/session-deck/identity/git.js');
+
+    const execGit = makeExecGit({
+      'rev-parse --show-toplevel': { stdout: '/home/user/project\n', exitCode: 0 },
+      'rev-parse --abbrev-ref HEAD': { stdout: 'main\n', exitCode: 0 },
+      'remote get-url origin': { stdout: 'https://github.com/owner/repo.git\n', exitCode: 0 },
+      'rev-parse --absolute-git-dir': { stdout: '/home/user/project/.git\n', exitCode: 0 },
+      'rev-parse --path-format=absolute --git-common-dir': { stdout: '', exitCode: 128 },
+    });
+
+    const info = await resolveGitInfo('/home/user/project', { execGit });
+
+    expect(info.root).toBe('/home/user/project/.git');
+    expect(info.isLinkedWorktree).toBeNull();
+    expect(info.worktreeLabel).toBeNull();
   });
 
   it('uses gh CLI for PR URL when available', async () => {

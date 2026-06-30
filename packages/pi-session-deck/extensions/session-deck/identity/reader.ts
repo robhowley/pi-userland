@@ -205,6 +205,8 @@ function joinRecord(
     worktree: identity?.worktree ?? null,
     branch: identity?.branch ?? null,
     prUrl: identity?.prUrl ?? null,
+    isLinkedWorktree: identity?.isLinkedWorktree ?? null,
+    worktreeLabel: identity?.worktreeLabel ?? null,
     identityUpdatedAt: identity?.identityUpdatedAt ?? null,
     identityFreshness: computeIdentityFreshness(identity, nowMs, thresholds),
 
@@ -271,6 +273,8 @@ function normalizeIdentityRecord(candidate: unknown): SessionIdentityRecord | nu
     worktree: normalizeStringField(candidate['worktree']),
     branch: normalizeStringField(candidate['branch']),
     prUrl: normalizeStringField(candidate['prUrl']),
+    isLinkedWorktree: normalizeBooleanOrNullField(candidate['isLinkedWorktree']),
+    worktreeLabel: normalizeStringField(candidate['worktreeLabel']),
     identityUpdatedAt,
     sessionStartedAt: ensureString(candidate['sessionStartedAt']),
     gitRemote: normalizeStringField(candidate['gitRemote']),
@@ -315,6 +319,18 @@ function normalizeStringField(value: unknown): string | null {
   if (typeof value === 'string' && value.length > 0) {
     return value;
   }
+  return null;
+}
+
+function normalizeBooleanOrNullField(value: unknown): boolean | null {
+  if (value === true) {
+    return true;
+  }
+
+  if (value === false) {
+    return false;
+  }
+
   return null;
 }
 

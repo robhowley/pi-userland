@@ -123,6 +123,8 @@ export async function collectSessionIdentity(
     worktree: gitInfo.worktree,
     branch: gitInfo.branch,
     prUrl,
+    isLinkedWorktree: gitInfo.isLinkedWorktree,
+    worktreeLabel: gitInfo.worktreeLabel,
     identityUpdatedAt: nowIso,
     sessionStartedAt,
     gitRemote: gitInfo.remote,

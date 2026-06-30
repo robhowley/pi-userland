@@ -1,4 +1,5 @@
 import { execFile as nodeExecFile } from 'node:child_process';
+import { relative } from 'node:path';
 import type { GhExec, GitExec, GitResolvedInfo, PrLookupResult } from './types.js';
 
 export interface ResolveGitInfoOptions {
@@ -83,16 +84,30 @@ export async function resolveGitInfo(
 
   const worktree = await gitRevParseShowToplevel(cwd, execGit);
   if (worktree === null) {
-    return { worktree: null, branch: null, remote: null, root: null };
+    return {
+      worktree: null,
+      branch: null,
+      remote: null,
+      root: null,
+      isLinkedWorktree: null,
+      worktreeLabel: null,
+    };
   }
 
-  const [branch, remote, root] = await Promise.all([
+  const [branch, remote, checkoutInfo] = await Promise.all([
     gitRevParseAbbrevRefHead(worktree, execGit),
     gitRemoteGetUrl(worktree, execGit),
-    gitRevParseGitDir(worktree, execGit),
+    resolveGitCheckoutInfo(worktree, execGit),
   ]);
 
-  return { worktree, branch, remote, root };
+  return {
+    worktree,
+    branch,
+    remote,
+    root: checkoutInfo.root,
+    isLinkedWorktree: checkoutInfo.isLinkedWorktree,
+    worktreeLabel: checkoutInfo.worktreeLabel,
+  };
 }
 
 export async function resolvePrUrl(
@@ -199,9 +214,38 @@ async function gitRemoteGetUrl(worktree: string, execGit: GitExec): Promise<stri
   }
 }
 
-async function gitRevParseGitDir(worktree: string, execGit: GitExec): Promise<string | null> {
+async function resolveGitCheckoutInfo(
+  worktree: string,
+  execGit: GitExec,
+): Promise<Pick<GitResolvedInfo, 'root' | 'isLinkedWorktree' | 'worktreeLabel'>> {
+  const absoluteGitDir = await gitRevParseAbsoluteGitDir(worktree, execGit);
+  if (absoluteGitDir === null) {
+    return { root: null, isLinkedWorktree: null, worktreeLabel: null };
+  }
+
+  const commonGitDir = await gitRevParseAbsoluteCommonGitDir(worktree, execGit);
+  if (commonGitDir === null) {
+    return {
+      root: absoluteGitDir,
+      isLinkedWorktree: null,
+      worktreeLabel: null,
+    };
+  }
+
+  const linkedWorktree = deriveLinkedWorktreeInfo(absoluteGitDir, commonGitDir);
+  return {
+    root: absoluteGitDir,
+    isLinkedWorktree: linkedWorktree.isLinkedWorktree,
+    worktreeLabel: linkedWorktree.worktreeLabel,
+  };
+}
+
+async function gitRevParseAbsoluteGitDir(
+  worktree: string,
+  execGit: GitExec,
+): Promise<string | null> {
   try {
-    const { stdout, exitCode } = await execGit(worktree, 'rev-parse', '--git-dir');
+    const { stdout, exitCode } = await execGit(worktree, 'rev-parse', '--absolute-git-dir');
     if (exitCode !== 0) {
       return null;
     }
@@ -210,4 +254,43 @@ async function gitRevParseGitDir(worktree: string, execGit: GitExec): Promise<st
   } catch {
     return null;
   }
+}
+
+async function gitRevParseAbsoluteCommonGitDir(
+  worktree: string,
+  execGit: GitExec,
+): Promise<string | null> {
+  try {
+    const { stdout, exitCode } = await execGit(
+      worktree,
+      'rev-parse',
+      '--path-format=absolute',
+      '--git-common-dir',
+    );
+    if (exitCode !== 0) {
+      return null;
+    }
+    const line = stdout.trim();
+    return line.length > 0 ? line : null;
+  } catch {
+    return null;
+  }
+}
+
+function deriveLinkedWorktreeInfo(
+  absoluteGitDir: string,
+  commonGitDir: string,
+): Pick<GitResolvedInfo, 'isLinkedWorktree' | 'worktreeLabel'> {
+  const segments = relative(commonGitDir, absoluteGitDir)
+    .split(/[\\/]+/)
+    .filter((segment) => segment.length > 0);
+
+  if (segments[0] !== 'worktrees') {
+    return { isLinkedWorktree: false, worktreeLabel: null };
+  }
+
+  return {
+    isLinkedWorktree: true,
+    worktreeLabel: segments[1] ?? null,
+  };
 }
