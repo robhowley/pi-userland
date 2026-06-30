@@ -159,6 +159,9 @@ describe('SessionDeckBrowser', () => {
     expect(output).toContain('  │ merge-ready clean · queue 2');
     expect(output).toContain('  ◌ thinking  bravo  project · #42 · 4m · main');
     expect(output).toContain('    no chips');
+    expect(output).toContain(
+      '  │ merge-ready clean · queue 2\n\n  ◌ thinking  bravo  project · #42 · 4m · main',
+    );
     expect(output).not.toContain('Selected session');
     expect(output).toContain('┌');
     expect(output).toContain('│ alpha');

@@ -151,6 +151,10 @@ export class SessionDeckBrowser {
 
         lines.push(renderRowLine1(this.theme, record, row, isSelected, width));
         lines.push(renderRowLine2(this.theme, record, row, isSelected, width));
+
+        if (index < windowed.end - 1) {
+          lines.push('');
+        }
       }
 
       if (windowed.end - windowed.start < this.view.records.length) {
