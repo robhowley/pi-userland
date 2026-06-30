@@ -164,7 +164,7 @@ describe('SessionDeckBrowser', () => {
     expect(output).toContain('│ alpha');
     expect(output).toContain('│ repo: owner/project');
     expect(output).toContain('│ cwd: ~/project');
-    expect(output).toContain('│ checkout: linked worktree · worktree: feature-sandbox');
+    expect(output).toContain('│ checkout: worktree · feature-sandbox');
     expect(output).toContain('│ branch: main · pr: #42');
     expect(output).toContain('│ presence: ● live · activity: waiting · heartbeat: 5s ago');
     expect(output).toContain('│ chips: merge-ready clean · queue 2');
@@ -180,7 +180,20 @@ describe('SessionDeckBrowser', () => {
       initialView: buildSnapshot({ records: [buildSnapshotRecord()] }),
     });
 
-    expect(renderText(browser)).not.toContain('checkout: linked worktree');
+    expect(renderText(browser)).not.toContain('checkout: worktree');
+  });
+
+  it('falls back to a generic checkout line when the linked-worktree label is unavailable', () => {
+    const browser = createBrowser({
+      initialView: buildSnapshot({
+        records: [buildSnapshotRecord({ isLinkedWorktree: true, worktreeLabel: null })],
+      }),
+    });
+
+    const output = renderText(browser);
+
+    expect(output).toContain('│ checkout: worktree');
+    expect(output).not.toContain('│ checkout: worktree ·');
   });
 
   it('falls back to repoName in the inspector and omits the repo line when no repo is known', () => {

@@ -260,7 +260,7 @@ describe('session-deck joined command', () => {
     expect(defaultMessage).toContain('  alpha');
     expect(defaultMessage).not.toContain('session=session-');
     expect(defaultMessage).not.toContain('name=alpha');
-    expect(defaultMessage).not.toContain('checkout: linked worktree');
+    expect(defaultMessage).not.toContain('checkout: worktree');
 
     vi.mocked(ctx.ui.notify).mockClear();
     await handler?.('--identity', ctx);
@@ -268,7 +268,7 @@ describe('session-deck joined command', () => {
     expect(identityMessage).toContain('  alpha');
     expect(identityMessage).toContain('session=session-');
     expect(identityMessage).not.toContain('name=alpha');
-    expect(identityMessage).not.toContain('checkout: linked worktree');
+    expect(identityMessage).not.toContain('checkout: worktree');
   });
 
   it('preserves reap output while reading the joined snapshot', async () => {

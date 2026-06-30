@@ -311,10 +311,7 @@ function formatCardCheckoutLine(record: SessionDeckRecord): string | null {
     return null;
   }
 
-  return joinDisplayParts(
-    'checkout: linked worktree',
-    record.worktreeLabel === null ? null : `worktree: ${record.worktreeLabel}`,
-  );
+  return joinDisplayParts('checkout: worktree', record.worktreeLabel);
 }
 
 function formatCardBranchAndPrLine(record: SessionDeckRecord): string | null {
