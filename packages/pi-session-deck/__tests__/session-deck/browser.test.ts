@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { visibleWidth } from '@mariozechner/pi-tui';
 import type { Theme } from '@earendil-works/pi-coding-agent';
 
@@ -24,6 +24,15 @@ import type {
 } from '../../extensions/session-deck/types.js';
 
 const HOME = process.env['HOME'] ?? '/home/user';
+const openBrowsers: SessionDeckBrowser[] = [];
+
+afterEach(() => {
+  for (const browser of openBrowsers) {
+    browser.dispose();
+  }
+  openBrowsers.length = 0;
+  vi.useRealTimers();
+});
 
 function createTheme(overrides: Partial<Theme> = {}): Theme {
   return {
@@ -88,7 +97,7 @@ function createBrowser(
     theme: Theme;
   }> = {},
 ): SessionDeckBrowser {
-  return new SessionDeckBrowser({
+  const browser = new SessionDeckBrowser({
     all: overrides.all ?? false,
     showIdentity: overrides.showIdentity ?? false,
     initialView: overrides.initialView ?? buildSnapshot(),
@@ -98,6 +107,9 @@ function createBrowser(
     ...(overrides.reapLines === undefined ? {} : { reapLines: overrides.reapLines }),
     theme: overrides.theme ?? createTheme(),
   });
+
+  openBrowsers.push(browser);
+  return browser;
 }
 
 describe('SessionDeckBrowser', () => {
@@ -344,23 +356,30 @@ describe('SessionDeckBrowser', () => {
   it('closes on q and escape', () => {
     const onClose = vi.fn();
     const browser = createBrowser({ onClose });
+    const otherBrowser = createBrowser({ onClose });
 
     browser.handleInput('q');
-    browser.handleInput('escape');
+    otherBrowser.handleInput('escape');
 
     expect(onClose).toHaveBeenCalledTimes(2);
   });
 
-  it('refreshes in place without losing selection', async () => {
+  it('manual refreshes in place and preserves selection by runtime id', async () => {
     const requestRender = vi.fn();
     const reload = vi.fn<() => Promise<SessionDeckSnapshot>>().mockResolvedValue(
       buildSnapshot({
         records: [
           buildSnapshotRecord({
+            runtimeId: 'rt-3',
+            pid: 303,
+            sessionId: 'session-3',
+            sessionName: 'charlie',
+          }),
+          buildSnapshotRecord({
             runtimeId: 'rt-2',
             pid: 202,
             sessionId: 'session-2',
-            sessionName: 'bravo',
+            sessionName: 'beta',
             chips: ['queue 2'],
           }),
         ],
@@ -371,24 +390,153 @@ describe('SessionDeckBrowser', () => {
       reload,
       initialView: buildSnapshot({
         records: [
+          buildSnapshotRecord({ sessionName: 'alpha' }),
           buildSnapshotRecord({
             runtimeId: 'rt-2',
             pid: 202,
             sessionId: 'session-2',
-            sessionName: 'alpha',
+            sessionName: 'bravo',
+            chips: [],
           }),
         ],
       }),
     });
 
+    browser.handleInput('down');
     browser.handleInput('r');
 
     await vi.waitFor(() => {
       expect(reload).toHaveBeenCalledTimes(1);
-      expect(renderText(browser)).toContain('› ● waiting  bravo  project · #42 · 5s · main');
+      const output = renderText(browser);
+      expect(output).toContain('  ● waiting  charlie  project · #42 · 5s · main');
+      expect(output).toContain('› ● waiting  beta  project · #42 · 5s · main');
     });
 
     expect(requestRender).toHaveBeenCalled();
+  });
+
+  it('auto-refreshes every 15s, stays silent on success, and preserves selection by runtime id', async () => {
+    vi.useFakeTimers();
+
+    const requestRender = vi.fn();
+    const reload = vi.fn<() => Promise<SessionDeckSnapshot>>().mockResolvedValue(
+      buildSnapshot({
+        records: [
+          buildSnapshotRecord({
+            runtimeId: 'rt-3',
+            pid: 303,
+            sessionId: 'session-3',
+            sessionName: 'charlie',
+          }),
+          buildSnapshotRecord({
+            runtimeId: 'rt-2',
+            pid: 202,
+            sessionId: 'session-2',
+            sessionName: 'beta',
+            chips: ['queue 2'],
+          }),
+        ],
+      }),
+    );
+    const browser = createBrowser({
+      requestRender,
+      reload,
+      initialView: buildSnapshot({
+        records: [
+          buildSnapshotRecord({ sessionName: 'alpha' }),
+          buildSnapshotRecord({
+            runtimeId: 'rt-2',
+            pid: 202,
+            sessionId: 'session-2',
+            sessionName: 'bravo',
+            chips: [],
+          }),
+        ],
+      }),
+    });
+
+    browser.handleInput('down');
+    requestRender.mockClear();
+
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(reload).toHaveBeenCalledTimes(1);
+    const output = renderText(browser);
+    expect(output).toContain('  ● waiting  charlie  project · #42 · 5s · main');
+    expect(output).toContain('› ● waiting  beta  project · #42 · 5s · main');
+    expect(output).not.toContain('Refreshing session deck…');
+    expect(output).not.toContain('Auto refresh failed:');
+    expect(requestRender).toHaveBeenCalled();
+  });
+
+  it('coalesces overlapping auto-refresh ticks', async () => {
+    vi.useFakeTimers();
+
+    const requestRender = vi.fn();
+    const reload = vi.fn(
+      () =>
+        new Promise<SessionDeckSnapshot>((resolve) => {
+          setTimeout(() => {
+            resolve(
+              buildSnapshot({
+                records: [buildSnapshotRecord({ sessionName: 'beta', chips: ['queue 2'] })],
+              }),
+            );
+          }, 20_000);
+        }),
+    );
+    const browser = createBrowser({ requestRender, reload });
+
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(renderText(browser)).not.toContain('Refreshing session deck…');
+
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(reload).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(renderText(browser)).toContain('› ● waiting  beta  project · #42 · 5s · main');
+    expect(requestRender).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps auto-refresh failure UI muted', async () => {
+    vi.useFakeTimers();
+
+    const fg = vi.fn((_tone: string, text: string) => text);
+    const browser = createBrowser({
+      theme: createTheme({ fg }),
+      reload: vi.fn(async () => {
+        throw new Error('network down');
+      }),
+    });
+
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    const output = renderText(browser);
+    expect(output).toContain('Auto refresh failed: network down');
+    expect(output).not.toContain('Refreshing session deck…');
+    expect(
+      vi
+        .mocked(fg)
+        .mock.calls.some(
+          ([tone, text]) => tone === 'muted' && text === 'Auto refresh failed: network down',
+        ),
+    ).toBe(true);
+  });
+
+  it('stops auto-refresh after dispose', async () => {
+    vi.useFakeTimers();
+
+    const reload = vi.fn(async () => buildSnapshot({ records: [buildSnapshotRecord()] }));
+    const browser = createBrowser({ reload });
+
+    browser.dispose();
+    await vi.advanceTimersByTimeAsync(45_000);
+
+    expect(reload).not.toHaveBeenCalled();
   });
 
   it('clips branch first on narrow top-pane line 1 and width-truncates the joined chip preview', () => {

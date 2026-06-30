@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   parseSessionDeckCommandArgs,
   registerSessionDeckCommand,
@@ -16,6 +16,10 @@ import type {
 } from '../../extensions/session-deck/types.js';
 
 const HOME = process.env['HOME'] ?? '/home/user';
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function createMockAPI(): {
   api: PresenceCommandAPI;
@@ -280,7 +284,9 @@ describe('session-deck joined command', () => {
     expect(message).toContain('No live or stale Pi sessions found.');
   });
 
-  it('dispatches to a custom browser in tui mode and refresh does not rerun reap', async () => {
+  it('dispatches to a custom browser in tui mode; manual and auto refresh never rerun reap', async () => {
+    vi.useFakeTimers();
+
     const { api, getHandler } = createMockAPI();
     const reapPresence = vi.fn(async () => ({
       removed: ['/tmp/rt-expired.json'],
@@ -314,6 +320,11 @@ describe('session-deck joined command', () => {
         buildSnapshot({
           records: [buildSnapshotRecord({ sessionName: 'beta' })],
         }),
+      )
+      .mockResolvedValueOnce(
+        buildSnapshot({
+          records: [buildSnapshotRecord({ sessionName: 'gamma' })],
+        }),
       );
 
     registerSessionDeckCommand(api, {
@@ -331,29 +342,40 @@ describe('session-deck joined command', () => {
         () => undefined,
       );
 
-      const initialRender = component.render(120).join('\n');
-      expect(initialRender).toContain('Reap complete: removed 1 expired presence record.');
-      expect(initialRender).toContain('Pi sessions · 1 live · 0 stale · 1 dead · 0 unknown');
-      expect(initialRender).toContain('› ● waiting  alpha  project · #42 · 5s · main');
-      expect(initialRender).toContain('  │ merge-ready clean · queue 2');
-      expect(initialRender).toContain('  × unknown  rt-dead  5s');
-      expect(initialRender).not.toContain('Selected session');
-      expect(initialRender).toContain('cwd: ~/project');
-      expect(initialRender).toContain('branch: main · pr: #42');
-      expect(initialRender).toContain('presence: ● live · activity: waiting · heartbeat: 5s ago');
-      expect(initialRender).toContain('chips: merge-ready clean · queue 2');
-      expect(initialRender).toContain('runtime: 922f7ac8deadbeef · pid: 101');
-      expect(initialRender).toContain('session: session-abc');
-      expect(initialRender).not.toContain('repo: project');
+      try {
+        const initialRender = component.render(120).join('\n');
+        expect(initialRender).toContain('Reap complete: removed 1 expired presence record.');
+        expect(initialRender).toContain('Pi sessions · 1 live · 0 stale · 1 dead · 0 unknown');
+        expect(initialRender).toContain('› ● waiting  alpha  project · #42 · 5s · main');
+        expect(initialRender).toContain('  │ merge-ready clean · queue 2');
+        expect(initialRender).toContain('  × unknown  rt-dead  5s');
+        expect(initialRender).not.toContain('Selected session');
+        expect(initialRender).toContain('cwd: ~/project');
+        expect(initialRender).toContain('branch: main · pr: #42');
+        expect(initialRender).toContain('presence: ● live · activity: waiting · heartbeat: 5s ago');
+        expect(initialRender).toContain('chips: merge-ready clean · queue 2');
+        expect(initialRender).toContain('runtime: 922f7ac8deadbeef · pid: 101');
+        expect(initialRender).toContain('session: session-abc');
+        expect(initialRender).not.toContain('repo: project');
 
-      component.handleInput?.('r');
+        component.handleInput?.('r');
 
-      await vi.waitFor(() => {
-        expect(readSessionDeckSnapshot).toHaveBeenCalledTimes(2);
+        await vi.waitFor(() => {
+          expect(readSessionDeckSnapshot).toHaveBeenCalledTimes(2);
+          expect(component.render(120).join('\n')).toContain(
+            '› ● waiting  beta  project · #42 · 5s · main',
+          );
+        });
+
+        await vi.advanceTimersByTimeAsync(15_000);
+
+        expect(readSessionDeckSnapshot).toHaveBeenCalledTimes(3);
         expect(component.render(120).join('\n')).toContain(
-          '› ● waiting  beta  project · #42 · 5s · main',
+          '› ● waiting  gamma  project · #42 · 5s · main',
         );
-      });
+      } finally {
+        component.dispose?.();
+      }
     });
     const ctx = createCommandContext({
       mode: 'tui',

@@ -12,6 +12,9 @@ import type { SessionDeckBrowserRow } from './browser-render.js';
 import type { SessionDeckRecord, SessionDeckSnapshot } from './types.js';
 
 const DEFAULT_MAX_VISIBLE_ROWS = 12;
+const AUTO_REFRESH_INTERVAL_MS = 15_000;
+
+type SessionDeckRefreshMode = 'manual' | 'auto';
 
 export interface SessionDeckBrowserOptions {
   all: boolean;
@@ -36,9 +39,11 @@ export class SessionDeckBrowser {
   private view: SessionDeckSnapshot;
   private selectedIndex = 0;
   private detailVisible = true;
-  private refreshError: string | null = null;
+  private refreshStatus: { message: string; tone: 'muted' | 'warning' } | null = null;
   private refreshPending: Promise<void> | null = null;
   private isRefreshing = false;
+  private autoRefreshInterval: ReturnType<typeof setInterval> | null = null;
+  private disposed = false;
   private cachedWidth: number | undefined;
   private cachedLines: string[] | undefined;
 
@@ -52,17 +57,23 @@ export class SessionDeckBrowser {
     this.theme = options.theme;
     this.view = options.initialView;
     this.selectedIndex = clampIndex(0, this.view.records.length);
+    this.startAutoRefresh();
   }
 
   handleInput(data: string): void {
+    if (this.disposed) {
+      return;
+    }
+
     if (matchesKey(data, 'escape') || matchesKey(data, 'ctrl+c') || data === 'q') {
+      this.dispose();
       this.onClose();
       return;
     }
 
     if (matchesKey(data, 'enter') || matchesKey(data, 'return')) {
       this.detailVisible = !this.detailVisible;
-      this.refreshError = null;
+      this.refreshStatus = null;
       this.bump();
       return;
     }
@@ -78,14 +89,14 @@ export class SessionDeckBrowser {
 
     if (matchesKey(data, 'up')) {
       this.selectedIndex = Math.max(0, this.selectedIndex - 1);
-      this.refreshError = null;
+      this.refreshStatus = null;
       this.bump();
       return;
     }
 
     if (matchesKey(data, 'down')) {
       this.selectedIndex = Math.min(this.view.records.length - 1, this.selectedIndex + 1);
-      this.refreshError = null;
+      this.refreshStatus = null;
       this.bump();
     }
   }
@@ -107,10 +118,10 @@ export class SessionDeckBrowser {
 
     if (this.isRefreshing) {
       pushWrappedLine(lines, this.theme.fg('muted', 'Refreshing session deck…'), width);
-    } else if (this.refreshError !== null) {
+    } else if (this.refreshStatus !== null) {
       pushWrappedLine(
         lines,
-        this.theme.fg('warning', `Refresh failed: ${this.refreshError}`),
+        this.theme.fg(this.refreshStatus.tone, this.refreshStatus.message),
         width,
       );
     }
@@ -192,22 +203,49 @@ export class SessionDeckBrowser {
     this.cachedLines = undefined;
   }
 
-  private async refresh(): Promise<void> {
+  dispose(): void {
+    this.disposed = true;
+    if (this.autoRefreshInterval !== null) {
+      clearInterval(this.autoRefreshInterval);
+      this.autoRefreshInterval = null;
+    }
+  }
+
+  private async refresh(mode: SessionDeckRefreshMode = 'manual'): Promise<void> {
+    if (this.disposed) {
+      return;
+    }
+
     if (this.refreshPending !== null) {
       return this.refreshPending;
     }
 
-    const selectedRuntimeId = this.view.records[this.selectedIndex]?.runtimeId ?? null;
-    this.isRefreshing = true;
-    this.refreshError = null;
-    this.bump();
+    if (mode === 'manual') {
+      this.isRefreshing = true;
+      this.refreshStatus = null;
+      this.bump();
+    }
 
     this.refreshPending = (async () => {
       try {
-        this.view = await this.reload();
+        const nextView = await this.reload();
+        if (this.disposed) {
+          return;
+        }
+
+        const selectedRuntimeId = this.view.records[this.selectedIndex]?.runtimeId ?? null;
+        this.view = nextView;
         this.selectedIndex = findSelectedIndex(this.view, selectedRuntimeId);
+        this.refreshStatus = null;
       } catch (error) {
-        this.refreshError = getErrorMessage(error);
+        if (this.disposed) {
+          return;
+        }
+
+        this.refreshStatus =
+          mode === 'manual'
+            ? { message: `Refresh failed: ${getErrorMessage(error)}`, tone: 'warning' }
+            : { message: `Auto refresh failed: ${getErrorMessage(error)}`, tone: 'muted' };
       } finally {
         this.isRefreshing = false;
         this.refreshPending = null;
@@ -218,7 +256,18 @@ export class SessionDeckBrowser {
     return this.refreshPending;
   }
 
+  private startAutoRefresh(): void {
+    this.autoRefreshInterval = setInterval(() => {
+      void this.refresh('auto');
+    }, AUTO_REFRESH_INTERVAL_MS);
+    this.autoRefreshInterval.unref?.();
+  }
+
   private bump(): void {
+    if (this.disposed) {
+      return;
+    }
+
     this.invalidate();
     this.requestRender();
   }
