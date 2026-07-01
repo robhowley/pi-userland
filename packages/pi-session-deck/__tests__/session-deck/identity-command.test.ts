@@ -298,7 +298,7 @@ describe('session-deck joined command', () => {
     expect(message).toContain('No live or stale Pi sessions found.');
   });
 
-  it('dispatches to a custom browser in tui mode and keeps refresh/reap wiring stable', async () => {
+  it('dispatches to a custom browser in tui mode, shows session ids by default, and keeps refresh/reap wiring stable', async () => {
     vi.useFakeTimers();
 
     const { api, getHandler } = createMockAPI();
@@ -362,6 +362,9 @@ describe('session-deck joined command', () => {
 
         expect(renderText()).toContain('Reap complete: removed 1 expired presence record.');
         expect(renderText()).toContain('alpha');
+        expect(renderText()).toContain('session: session-abc · pid: 101');
+        expect(renderText()).toContain('runtime: 922f7ac8deadbeef');
+        expect(renderText()).not.toContain('runtime: 922f7ac8deadbeef · pid: 101');
         expect(renderText()).toContain('rt-dead');
 
         component.handleInput?.('r');
@@ -387,7 +390,7 @@ describe('session-deck joined command', () => {
       },
     });
 
-    await handler?.('--all --identity --reap', ctx);
+    await handler?.('--all --reap', ctx);
 
     expect(reapPresence).toHaveBeenCalledTimes(1);
     expect(custom).toHaveBeenCalledTimes(1);

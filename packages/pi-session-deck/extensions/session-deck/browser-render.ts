@@ -146,12 +146,11 @@ export function formatSessionDeckBrowserCardLines(
     lines.push(`chips: ${formatChipPreview(record.chips)}`);
   }
 
-  lines.push(formatRuntimeLine(record));
-
-  const identityLine = options.showIdentity ? formatCardIdentityDetails(record) : null;
-  if (identityLine !== null) {
-    lines.push(identityLine);
+  const sessionAndPidLine = formatSessionAndPidLine(record);
+  if (sessionAndPidLine !== null) {
+    lines.push(sessionAndPidLine);
   }
+  lines.push(formatRuntimeLine(record));
 
   const diagnosticsLine = options.all ? formatRecordDiagnostics(record.diagnostics) : null;
   if (diagnosticsLine !== null) {
@@ -362,10 +361,20 @@ function formatCardHeartbeat(record: SessionDeckRecord): string {
   return `${formatDuration(record.heartbeatAgeMs)} ago${formatPresenceReasonSuffix(record)}`;
 }
 
-function formatRuntimeLine(record: SessionDeckRecord): string {
+function formatSessionAndPidLine(record: SessionDeckRecord): string | null {
+  if (record.sessionId === null) {
+    return null;
+  }
+
   return record.pid === null
-    ? `runtime: ${record.runtimeId}`
-    : `runtime: ${record.runtimeId} · pid: ${record.pid}`;
+    ? `session: ${record.sessionId}`
+    : `session: ${record.sessionId} · pid: ${record.pid}`;
+}
+
+function formatRuntimeLine(record: SessionDeckRecord): string {
+  return record.sessionId === null && record.pid !== null
+    ? `runtime: ${record.runtimeId} · pid: ${record.pid}`
+    : `runtime: ${record.runtimeId}`;
 }
 
 function formatRepoOrCwd(cwd: string | null, preferBasename: boolean): string | null {
@@ -406,10 +415,6 @@ function formatPr(prUrl: string | null): string | null {
 
 function formatTextIdentityDetails(record: SessionDeckRecord): string | null {
   return record.sessionId !== null ? `session=${record.sessionId}` : null;
-}
-
-function formatCardIdentityDetails(record: SessionDeckRecord): string | null {
-  return record.sessionId !== null ? `session: ${record.sessionId}` : null;
 }
 
 function formatRecordDiagnostics(diagnostics: SessionDeckDiagnostic[]): string | null {

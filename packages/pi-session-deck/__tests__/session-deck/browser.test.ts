@@ -137,10 +137,9 @@ describe('SessionDeckBrowser', () => {
     expect(output).toContain('› ● waiting  alpha  project · #42 · 5s · main');
   });
 
-  it('keeps the top-pane dashboard unchanged and compacts only the selected card', () => {
+  it('keeps the top-pane dashboard unchanged and shows session ids by default only in the selected card', () => {
     const browser = createBrowser({
       all: true,
-      showIdentity: true,
       initialView: buildSnapshot({
         records: [
           buildSnapshotRecord({
@@ -184,10 +183,30 @@ describe('SessionDeckBrowser', () => {
     expect(output).toContain('│ branch: main · pr: #42');
     expect(output).toContain('│ presence: ● live · activity: waiting · heartbeat: 5s ago');
     expect(output).toContain('│ chips: merge-ready clean · queue 2');
-    expect(output).toContain('│ runtime: 922f7ac8deadbeef · pid: 101');
-    expect(output).toContain('│ session: session-abc');
+    expect(output).toContain('│ session: session-abc · pid: 101');
+    expect(output).toContain('│ runtime: 922f7ac8deadbeef');
+    expect(output.indexOf('│ session: session-abc · pid: 101')).toBeLessThan(
+      output.indexOf('│ runtime: 922f7ac8deadbeef'),
+    );
+    expect(output).not.toContain('│ runtime: 922f7ac8deadbeef · pid: 101');
     expect(output).toContain('│ diagnostics: activity_stale');
     expect(output).not.toContain('│   - merge-ready clean');
+  });
+
+  it('shows the session id without inventing a pid when the selected runtime has none', () => {
+    const browser = createBrowser({
+      initialView: buildSnapshot({ records: [buildSnapshotRecord({ pid: null })] }),
+    });
+
+    const output = renderText(browser);
+
+    expect(output).toContain('│ session: session-abc');
+    expect(output).toContain('│ runtime: 922f7ac8deadbeef');
+    expect(output.indexOf('│ session: session-abc')).toBeLessThan(
+      output.indexOf('│ runtime: 922f7ac8deadbeef'),
+    );
+    expect(output).not.toContain('│ session: session-abc · pid:');
+    expect(output).not.toContain('│ runtime: 922f7ac8deadbeef · pid:');
   });
 
   it('omits the checkout line for non-linked checkouts', () => {
@@ -287,6 +306,7 @@ describe('SessionDeckBrowser', () => {
           buildSnapshotRecord({
             runtimeId: 'abcdef1234567890',
             pid: 303,
+            sessionId: null,
             sessionName: null,
             repoName: null,
             qualifiedRepoName: null,
@@ -316,13 +336,13 @@ describe('SessionDeckBrowser', () => {
     expect(output).toContain('› ● waiting  abcdef12  5s');
     expect(output).toContain('│ abcdef12');
     expect(output).toContain('│ runtime: abcdef1234567890 · pid: 303');
+    expect(output).not.toContain('│ session:');
   });
 
   it('moves selection and toggles the detail pane', () => {
     const requestRender = vi.fn();
     const browser = createBrowser({
       requestRender,
-      showIdentity: true,
       initialView: buildSnapshot({
         records: [
           buildSnapshotRecord(),
@@ -353,7 +373,12 @@ describe('SessionDeckBrowser', () => {
     expect(selectedOutput).toContain(
       '│ presence: ◌ stale · activity: thinking · 3m · heartbeat: 4m ago · heartbeat expired',
     );
-    expect(selectedOutput).toContain('│ session: session-2');
+    expect(selectedOutput).toContain('│ session: session-2 · pid: 202');
+    expect(selectedOutput).toContain('│ runtime: rt-2');
+    expect(selectedOutput.indexOf('│ session: session-2 · pid: 202')).toBeLessThan(
+      selectedOutput.indexOf('│ runtime: rt-2'),
+    );
+    expect(selectedOutput).not.toContain('│ runtime: rt-2 · pid: 202');
     expect(selectedOutput).not.toContain('│ chips:');
     expect(selectedOutput).not.toContain('│ diagnostics:');
 
