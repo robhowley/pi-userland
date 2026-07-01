@@ -12,6 +12,7 @@ import {
   CURRENT_BRANCH_TARGET,
   GH_GRAPHQL_REVIEW_THREADS_QUERY,
   GH_PR_VIEW_JSON_FIELDS,
+  REQUESTED_REVIEWER_SCENARIO,
   buildConversationsPayload as buildOptionalConversationsPayload,
   buildPullRequestPayload,
   createConversationsSuccessCall,
@@ -1069,14 +1070,7 @@ describe('getMergeReadyStatus', () => {
     const { exec, assertDone } = createFakeExec([
       ...createGitDiscoveryCalls(),
       createPullRequestViewSuccessCall(
-        buildPullRequestPayload({
-          reviews: [],
-          reviewDecision: 'REVIEW_REQUIRED',
-          reviewRequests: [
-            { __typename: 'User', login: 'alice' },
-            { __typename: 'Team', slug: 'core-reviewers' },
-          ],
-        }),
+        buildPullRequestPayload(REQUESTED_REVIEWER_SCENARIO.pullRequestOverrides),
       ),
       createConversationsSuccessCall(buildConversationsPayload()),
     ]);
@@ -1095,7 +1089,7 @@ describe('getMergeReadyStatus', () => {
       {
         id: 'review_pending',
         summary: 'Waiting for review',
-        details: [{ label: '@alice' }, { label: 'team/core-reviewers' }],
+        details: REQUESTED_REVIEWER_SCENARIO.openItemDetails,
       },
     ]);
     expect(status.signals.review).toBe('pending');

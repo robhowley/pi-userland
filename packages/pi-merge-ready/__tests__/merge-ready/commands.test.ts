@@ -21,6 +21,7 @@ import mergeReadyExtension, {
 import {
   CURRENT_BRANCH_TARGET,
   GH_PR_VIEW_JSON_FIELDS,
+  REQUESTED_REVIEWER_SCENARIO,
   buildConversationsPayload,
   buildPullRequestPayload,
   createConversationsSuccessCall,
@@ -461,14 +462,7 @@ describe('merge-ready command', () => {
     const { api, assertDone, getCommand } = createMockAPI([
       ...createGitDiscoveryCalls({ timeout: MERGE_READY_COMMAND_TIMEOUT_MS }),
       createPullRequestViewSuccessCall(
-        buildPullRequestPayload({
-          reviews: [],
-          reviewDecision: 'REVIEW_REQUIRED',
-          reviewRequests: [
-            { __typename: 'User', login: 'alice' },
-            { __typename: 'Team', slug: 'core-reviewers' },
-          ],
-        }),
+        buildPullRequestPayload(REQUESTED_REVIEWER_SCENARIO.pullRequestOverrides),
         { timeout: MERGE_READY_COMMAND_TIMEOUT_MS },
       ),
       createConversationsSuccessCall(buildConversationsPayload(), {

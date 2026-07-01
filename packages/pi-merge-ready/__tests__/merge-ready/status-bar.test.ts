@@ -16,6 +16,7 @@ import {
 } from '../../extensions/merge-ready/index.js';
 import {
   GH_PR_VIEW_JSON_FIELDS,
+  REQUESTED_REVIEWER_SCENARIO,
   buildConversationsPayload,
   buildPullRequestPayload,
   createConversationsSuccessCall,
@@ -225,7 +226,7 @@ describe('merge-ready status bar', () => {
         {
           id: 'review_pending',
           summary: 'Waiting for review',
-          details: [{ label: '@alice' }, { label: 'team/core-reviewers' }],
+          details: REQUESTED_REVIEWER_SCENARIO.openItemDetails,
         },
       ],
       signals: {

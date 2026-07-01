@@ -294,6 +294,18 @@ export function buildPullRequestPayload(overrides: Record<string, unknown> = {})
   };
 }
 
+export const REQUESTED_REVIEWER_SCENARIO = {
+  pullRequestOverrides: {
+    reviews: [],
+    reviewDecision: 'REVIEW_REQUIRED',
+    reviewRequests: [
+      { __typename: 'User', login: 'alice' },
+      { __typename: 'Team', slug: 'core-reviewers' },
+    ],
+  } satisfies Record<string, unknown>,
+  openItemDetails: [{ label: '@alice' }, { label: 'team/core-reviewers' }],
+};
+
 export function buildConversationsPayload(pullRequestOverrides: Record<string, unknown> = {}) {
   return {
     data: {
