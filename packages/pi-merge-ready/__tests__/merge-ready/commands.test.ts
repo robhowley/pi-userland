@@ -426,6 +426,48 @@ describe('merge-ready command', () => {
     );
   });
 
+  it('renders requested reviewers under pending review output', async () => {
+    const { api, assertDone, getCommand } = createMockAPI([
+      ...createGitDiscoveryCalls({ timeout: MERGE_READY_COMMAND_TIMEOUT_MS }),
+      createPullRequestViewSuccessCall(
+        buildPullRequestPayload({
+          reviews: [],
+          reviewDecision: 'REVIEW_REQUIRED',
+          reviewRequests: [
+            { __typename: 'User', login: 'alice' },
+            { __typename: 'Team', slug: 'core-reviewers' },
+          ],
+        }),
+        { timeout: MERGE_READY_COMMAND_TIMEOUT_MS },
+      ),
+      createConversationsSuccessCall(buildConversationsPayload(), {
+        timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+      }),
+    ]);
+
+    mergeReadyExtension(api);
+    const handler = getCommand(MERGE_READY_COMMAND_NAME);
+    const ctx = createCommandContext();
+
+    await handler?.('', ctx);
+
+    assertDone();
+    expect(ctx.ui.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '👀 Review pending');
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      [
+        '👀 Waiting for review',
+        'Target: current branch feat/merge-ready (robhowley/pi-userland)',
+        'PR: #42 — Compose merge-ready status boundary',
+        'State: pending',
+        'Open items:',
+        '- Waiting for review',
+        '  - @alice',
+        '  - team/core-reviewers',
+      ].join('\n'),
+      'warning',
+    );
+  });
+
   it('syncs the ambient status bar cache from the command status without an extra fetch', async () => {
     const { api, assertDone, getCommand } = createMockAPI([
       ...createGitDiscoveryCalls({ timeout: MERGE_READY_COMMAND_TIMEOUT_MS }),
@@ -761,7 +803,8 @@ describe('merge-ready command', () => {
     });
 
     try {
-      const { registerMergeReadyCommand } = await import('../../extensions/merge-ready/commands.js');
+      const { registerMergeReadyCommand } =
+        await import('../../extensions/merge-ready/commands.js');
       const { api, getCommand } = createMockAPI();
       const getThinkingLevel = vi.fn(() => 'high' as const);
       const runtimeApi = { ...api, getThinkingLevel };
@@ -838,7 +881,8 @@ describe('merge-ready command', () => {
     });
 
     try {
-      const { registerMergeReadyCommand } = await import('../../extensions/merge-ready/commands.js');
+      const { registerMergeReadyCommand } =
+        await import('../../extensions/merge-ready/commands.js');
       const { api, getCommand } = createMockAPI();
 
       registerMergeReadyCommand(api);
@@ -1128,7 +1172,8 @@ describe('merge-ready command', () => {
     expect(watchCtx.compact).toBeTypeOf('function');
 
     const wrappedCompact = watchCtx.compact?.({
-      customInstructions: 'Compaction triggered after successful merge-ready repair loop completion',
+      customInstructions:
+        'Compaction triggered after successful merge-ready repair loop completion',
     });
     await flushMicrotasks();
 

@@ -16,6 +16,7 @@ import type {
   MergeReadyBooleanSignal,
   MergeReadyCurrentBranchTarget,
   MergeReadyOpenItem,
+  MergeReadyOpenItemDetail,
   MergeReadyPullRequest,
   MergeReadyReviewSignal,
   MergeReadySignalsInput,
@@ -204,7 +205,10 @@ async function createMergeReadyStatusFromPullRequest(
     forceStatusAmbiguous: conversations.kind !== 'known',
   });
 
-  return attachConversationOpenItemDetails(status, conversations);
+  return attachConversationOpenItemDetails(
+    attachReviewPendingOpenItemDetails(status, options.pullRequest),
+    conversations,
+  );
 }
 
 function resolveGeneratedAt(options: GetMergeReadyStatusOptions): string | Date {
@@ -269,6 +273,46 @@ function normalizeConversationSignals(
   };
 }
 
+function attachReviewPendingOpenItemDetails(
+  status: MergeReadyStatus,
+  pullRequest: MergeReadyGitHubPullRequest,
+): MergeReadyStatus {
+  return appendOpenItemDetails(
+    status,
+    'review_pending',
+    createReviewPendingOpenItemDetails(pullRequest),
+  );
+}
+
+function createReviewPendingOpenItemDetails(
+  pullRequest: MergeReadyGitHubPullRequest,
+): MergeReadyOpenItemDetail[] {
+  if (
+    pullRequest.reviewRequests.kind !== 'known' ||
+    pullRequest.reviewRequests.requests.length === 0
+  ) {
+    return [];
+  }
+
+  return pullRequest.reviewRequests.requests.map((request) => ({
+    label: formatReviewRequestLabel(request),
+  }));
+}
+
+function formatReviewRequestLabel(
+  request: MergeReadyGitHubPullRequest['reviewRequests']['requests'][number],
+): string {
+  if (request.type === 'user') {
+    return `@${request.name}`;
+  }
+
+  if (request.type === 'team') {
+    return `team/${request.name}`;
+  }
+
+  return request.name;
+}
+
 function attachConversationOpenItemDetails(
   status: MergeReadyStatus,
   conversations: MergeReadyPullRequestConversations,
@@ -280,10 +324,29 @@ function attachConversationOpenItemDetails(
     return status;
   }
 
+  return appendOpenItemDetails(
+    appendOpenItemDetails(
+      status,
+      'changes_requested',
+      conversations.openItemDetails.changes_requested,
+    ),
+    'unresolved_conversations',
+    conversations.openItemDetails.unresolved_conversations,
+  );
+}
+
+function appendOpenItemDetails(
+  status: MergeReadyStatus,
+  openItemId: MergeReadyOpenItem['id'],
+  additionalDetails: MergeReadyOpenItemDetail[] | undefined,
+): MergeReadyStatus {
+  if (!additionalDetails || additionalDetails.length === 0) {
+    return status;
+  }
+
   let didChange = false;
   const openItems = status.openItems.map((openItem) => {
-    const additionalDetails = getConversationOpenItemDetails(conversations, openItem.id);
-    if (!additionalDetails || additionalDetails.length === 0) {
+    if (openItem.id !== openItemId) {
       return openItem;
     }
 
@@ -298,21 +361,6 @@ function attachConversationOpenItemDetails(
   });
 
   return didChange ? { ...status, openItems } : status;
-}
-
-function getConversationOpenItemDetails(
-  conversations: Extract<MergeReadyPullRequestConversations, { kind: 'known' | 'partial' }>,
-  openItemId: MergeReadyOpenItem['id'],
-) {
-  if (openItemId === 'changes_requested') {
-    return conversations.openItemDetails?.changes_requested;
-  }
-
-  if (openItemId === 'unresolved_conversations') {
-    return conversations.openItemDetails?.unresolved_conversations;
-  }
-
-  return undefined;
 }
 
 function normalizeReviewSignal(pullRequest: MergeReadyGitHubPullRequest): MergeReadyReviewSignal {

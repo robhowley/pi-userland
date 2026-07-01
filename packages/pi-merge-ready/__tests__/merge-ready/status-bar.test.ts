@@ -217,6 +217,30 @@ describe('merge-ready status bar', () => {
     expect(renderMergeReadyStatusBar(status)).toBe(expected);
   });
 
+  it('keeps review-pending status text when reviewer details are attached', () => {
+    const status = createMergeReadyStatus({
+      generatedAt: '2026-05-27T00:00:00.000Z',
+      pr: buildOpenPr(),
+      openItems: [
+        {
+          id: 'review_pending',
+          summary: 'Waiting for review',
+          details: [{ label: '@alice' }, { label: 'team/core-reviewers' }],
+        },
+      ],
+      signals: {
+        draft: false,
+        mergeability: 'mergeable',
+        checks: 'passing',
+        review: 'pending',
+        unresolvedConversations: false,
+        unresolvedConversationRequirement: 'optional',
+      },
+    });
+
+    expect(renderMergeReadyStatusBar(status)).toBe('👀 Review pending');
+  });
+
   it('renders required unresolved conversations as the top blocker', () => {
     const status = createMergeReadyStatus({
       generatedAt: '2026-05-27T00:00:00.000Z',

@@ -1065,6 +1065,43 @@ describe('getMergeReadyStatus', () => {
     ]);
   });
 
+  it('surfaces requested reviewers when required review is still pending', async () => {
+    const { exec, assertDone } = createFakeExec([
+      ...createGitDiscoveryCalls(),
+      createPullRequestViewSuccessCall(
+        buildPullRequestPayload({
+          reviews: [],
+          reviewDecision: 'REVIEW_REQUIRED',
+          reviewRequests: [
+            { __typename: 'User', login: 'alice' },
+            { __typename: 'Team', slug: 'core-reviewers' },
+          ],
+        }),
+      ),
+      createConversationsSuccessCall(buildConversationsPayload()),
+    ]);
+
+    const status = await getMergeReadyStatus({
+      exec,
+      cwd: '/repo',
+      now: () => new Date(GENERATED_AT),
+    });
+
+    assertDone();
+
+    expect(status.state).toBe('pending');
+    expect(status.summary).toBe('Waiting for review');
+    expect(status.openItems).toEqual([
+      {
+        id: 'review_pending',
+        summary: 'Waiting for review',
+        details: [{ label: '@alice' }, { label: 'team/core-reviewers' }],
+      },
+    ]);
+    expect(status.signals.review).toBe('pending');
+    expect(selectMergeReadyBadgeId(status)).toBe('review_pending');
+  });
+
   it('does not emit review_pending when review is not required', async () => {
     const { exec, assertDone } = createFakeExec([
       ...createGitDiscoveryCalls(),

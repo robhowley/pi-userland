@@ -33,11 +33,14 @@ Examples:
 
 ```text
 ✅ Ready
+👀 Review pending
 ❌ Checks failing
 🔄 Out of date
 ❌ 💬 2 unresolved
 ❔ No PR
 ```
+
+`✅ Ready` means there is no current merge-readiness review blocker. If GitHub still requires review, Pi shows `👀 Review pending` instead.
 
 Optional unresolved conversations are not blockers, but they can still appear as context:
 
