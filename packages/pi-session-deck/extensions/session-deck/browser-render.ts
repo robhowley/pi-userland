@@ -231,41 +231,67 @@ function formatPresenceIcon(state: SessionDeckRecord['presenceState']): string {
   }
 }
 
+interface SessionDeckActivityDisplay {
+  label: string;
+  detail: string | null;
+  cardAgeLabel: string | null;
+  summaryAgeLabel: string | null;
+  summaryDetailSeparator: ': ' | null;
+}
+
 function formatListActivity(record: SessionDeckRecord): string {
-  switch (record.activityState) {
-    case 'waiting':
-      return 'waiting';
-    case 'thinking':
-      return 'thinking';
-    case 'tool-running':
-      return 'tool-running';
-    case 'error':
-      return 'error';
-    case 'unknown':
-      return 'unknown';
-  }
+  return getActivityDisplay(record).label;
 }
 
 function formatSelectedActivity(record: SessionDeckRecord): string {
+  const activity = getActivityDisplay(record);
+  return joinDisplayParts(activity.label, activity.detail, activity.cardAgeLabel);
+}
+
+function getActivityDisplay(record: SessionDeckRecord): SessionDeckActivityDisplay {
+  const ageLabel = formatOptionalDuration(record.activityAgeMs);
+
   switch (record.activityState) {
     case 'waiting':
-      return 'waiting';
+      return {
+        label: 'waiting',
+        detail: null,
+        cardAgeLabel: null,
+        summaryAgeLabel: null,
+        summaryDetailSeparator: null,
+      };
     case 'thinking':
-      return joinDisplayParts('thinking', formatOptionalDuration(record.activityAgeMs));
+      return {
+        label: 'thinking',
+        detail: null,
+        cardAgeLabel: ageLabel,
+        summaryAgeLabel: ageLabel,
+        summaryDetailSeparator: null,
+      };
     case 'tool-running':
-      return joinDisplayParts(
-        'tool-running',
-        record.currentToolName,
-        formatOptionalDuration(record.activityAgeMs),
-      );
+      return {
+        label: 'tool-running',
+        detail: record.currentToolName,
+        cardAgeLabel: ageLabel,
+        summaryAgeLabel: ageLabel,
+        summaryDetailSeparator: ': ',
+      };
     case 'error':
-      return joinDisplayParts(
-        'error',
-        record.lastError,
-        formatOptionalDuration(record.activityAgeMs),
-      );
+      return {
+        label: 'error',
+        detail: record.lastError,
+        cardAgeLabel: ageLabel,
+        summaryAgeLabel: null,
+        summaryDetailSeparator: ': ',
+      };
     case 'unknown':
-      return joinDisplayParts('unknown', formatOptionalDuration(record.activityAgeMs));
+      return {
+        label: 'unknown',
+        detail: null,
+        cardAgeLabel: ageLabel,
+        summaryAgeLabel: null,
+        summaryDetailSeparator: null,
+      };
   }
 }
 
@@ -399,23 +425,13 @@ function formatShortId(id: string): string {
 }
 
 function formatActivitySummary(record: SessionDeckRecord): string {
-  switch (record.activityState) {
-    case 'waiting':
-      return 'waiting';
-    case 'thinking':
-      return record.activityAgeMs === null
-        ? 'thinking'
-        : `thinking ${formatDuration(record.activityAgeMs)}`;
-    case 'tool-running': {
-      const toolName = record.currentToolName === null ? '' : `: ${record.currentToolName}`;
-      const age = record.activityAgeMs === null ? '' : ` ${formatDuration(record.activityAgeMs)}`;
-      return `tool-running${toolName}${age}`;
-    }
-    case 'error':
-      return record.lastError === null ? 'error' : `error: ${record.lastError}`;
-    case 'unknown':
-      return 'unknown';
-  }
+  const activity = getActivityDisplay(record);
+  const lead =
+    activity.detail === null || activity.summaryDetailSeparator === null
+      ? activity.label
+      : `${activity.label}${activity.summaryDetailSeparator}${activity.detail}`;
+
+  return joinSpaceParts(lead, activity.summaryAgeLabel);
 }
 
 function formatTextChipSummary(chips: string[]): string {
@@ -511,6 +527,10 @@ function truncateMiddle(value: string, maxLength: number): string {
   const prefixLength = Math.ceil((maxLength - 1) / 2);
   const suffixLength = Math.floor((maxLength - 1) / 2);
   return `${value.slice(0, prefixLength)}…${value.slice(value.length - suffixLength)}`;
+}
+
+function joinSpaceParts(...parts: Array<string | null>): string {
+  return parts.filter((part): part is string => part !== null && part.length > 0).join(' ');
 }
 
 function joinDisplayParts(...parts: Array<string | null>): string {

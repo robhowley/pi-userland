@@ -160,7 +160,7 @@ describe('identity git resolution', () => {
     expect(info.worktreeLabel).toBeNull();
   });
 
-  it('falls back to the worktree basename when common git-dir lookup is unavailable', async () => {
+  it('derives linked-worktree identity from absolute git-dir when common git-dir lookup is unavailable', async () => {
     const { resolveGitInfo } = await import('../../extensions/session-deck/identity/git.js');
 
     const execGit = makeExecGit({
@@ -183,7 +183,33 @@ describe('identity git resolution', () => {
     const info = await resolveGitInfo('/home/user/worktrees/pr-123', { execGit });
 
     expect(info.root).toBe('/home/user/project/.git/worktrees/pr-123');
-    expect(info.repoName).toBe('pr-123');
+    expect(info.repoName).toBe('project');
+    expect(info.qualifiedRepoName).toBeNull();
+    expect(info.isLinkedWorktree).toBe(true);
+    expect(info.worktreeLabel).toBe('pr-123');
+  });
+
+  it('keeps the basename fallback when absolute git-dir is not a linked-worktree path', async () => {
+    const { resolveGitInfo } = await import('../../extensions/session-deck/identity/git.js');
+
+    const execGit = makeExecGit({
+      'rev-parse --show-toplevel': { stdout: '/home/user/project\n', exitCode: 0 },
+      'rev-parse --abbrev-ref HEAD': { stdout: 'feature-x\n', exitCode: 0 },
+      'remote get-url origin': { stdout: 'file:///srv/git/project.git\n', exitCode: 0 },
+      'remote -v': {
+        stdout:
+          'origin\tfile:///srv/git/project.git (fetch)\n' +
+          'origin\tfile:///srv/git/project.git (push)\n',
+        exitCode: 0,
+      },
+      'rev-parse --absolute-git-dir': { stdout: '/home/user/project/.git\n', exitCode: 0 },
+      'rev-parse --path-format=absolute --git-common-dir': { stdout: '', exitCode: 128 },
+    });
+
+    const info = await resolveGitInfo('/home/user/project', { execGit });
+
+    expect(info.root).toBe('/home/user/project/.git');
+    expect(info.repoName).toBe('project');
     expect(info.qualifiedRepoName).toBeNull();
     expect(info.isLinkedWorktree).toBeNull();
     expect(info.worktreeLabel).toBeNull();

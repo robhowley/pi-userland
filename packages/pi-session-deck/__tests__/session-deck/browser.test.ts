@@ -124,6 +124,19 @@ describe('SessionDeckBrowser', () => {
     expect(renderText(browser)).toContain('No live or stale Pi sessions found.');
   });
 
+  it('renders reap summary lines above the browser list when provided', () => {
+    const browser = createBrowser({
+      reapLines: ['Reap complete: removed 1 expired presence record.', 'Removed:', '- rt-expired'],
+    });
+
+    const output = renderText(browser);
+
+    expect(output).toContain('Reap complete: removed 1 expired presence record.');
+    expect(output).toContain('Removed:');
+    expect(output).toContain('- rt-expired');
+    expect(output).toContain('› ● waiting  alpha  project · #42 · 5s · main');
+  });
+
   it('keeps the top-pane dashboard unchanged and compacts only the selected card', () => {
     const browser = createBrowser({
       all: true,

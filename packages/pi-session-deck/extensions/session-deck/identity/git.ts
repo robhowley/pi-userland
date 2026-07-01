@@ -17,8 +17,10 @@ interface GitCheckoutInfo extends Pick<
   GitResolvedInfo,
   'root' | 'isLinkedWorktree' | 'worktreeLabel'
 > {
-  commonGitDir: string | null;
+  repoName: string | null;
 }
+
+const DEFAULT_EXEC_TIMEOUT_MS = 5_000;
 
 interface ParsedFetchRemote {
   name: string;
@@ -30,68 +32,33 @@ interface ParsedRemoteRepo {
   qualifiedRepoName: string;
 }
 
-const defaultExecGit: GitExec = async (cwd, ...args) => {
-  const result = await new Promise<{ stdout: string; stderr: string; exitCode: number }>(
-    (resolve) => {
-      const child = nodeExecFile(
-        'git',
-        args,
-        { cwd, encoding: 'utf8', windowsHide: true },
-        (error, stdout, stderr) => {
-          if (error === null) {
-            resolve({ stdout, stderr, exitCode: 0 });
-            return;
-          }
+async function execCliWithTimeout(
+  file: string,
+  cwd: string,
+  args: string[],
+): Promise<{ stdout: string; exitCode: number }> {
+  return await new Promise((resolve) => {
+    const child = nodeExecFile(
+      file,
+      args,
+      { cwd, encoding: 'utf8', windowsHide: true },
+      (error, stdout) => {
+        resolve({ stdout, exitCode: error === null ? 0 : 1 });
+      },
+    );
 
-          resolve({ stdout, stderr, exitCode: 1 });
-        },
-      );
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM');
+    }, DEFAULT_EXEC_TIMEOUT_MS);
+    child.on('close', () => {
+      clearTimeout(timer);
+    });
+  });
+}
 
-      const timeout = 5_000;
-      const timer = setTimeout(() => {
-        child.kill('SIGTERM');
-      }, timeout);
-      child.on('close', () => {
-        clearTimeout(timer);
-      });
-    },
-  );
+const defaultExecGit: GitExec = async (cwd, ...args) => await execCliWithTimeout('git', cwd, args);
 
-  return { stdout: result.stdout, exitCode: result.exitCode };
-};
-
-const defaultExecGhCli: GhExec = async (
-  cwd,
-  args,
-): Promise<{ stdout: string; exitCode: number }> => {
-  const result = await new Promise<{ stdout: string; stderr: string; exitCode: number }>(
-    (resolve) => {
-      const child = nodeExecFile(
-        'gh',
-        args,
-        { cwd, encoding: 'utf8', windowsHide: true },
-        (error, stdout, stderr) => {
-          if (error === null) {
-            resolve({ stdout, stderr, exitCode: 0 });
-            return;
-          }
-
-          resolve({ stdout, stderr, exitCode: 1 });
-        },
-      );
-
-      const timeout = 5_000;
-      const timer = setTimeout(() => {
-        child.kill('SIGTERM');
-      }, timeout);
-      child.on('close', () => {
-        clearTimeout(timer);
-      });
-    },
-  );
-
-  return { stdout: result.stdout, exitCode: result.exitCode };
-};
+const defaultExecGhCli: GhExec = async (cwd, args) => await execCliWithTimeout('gh', cwd, args);
 
 export async function resolveGitInfo(
   cwd: string,
@@ -121,10 +88,7 @@ export async function resolveGitInfo(
   ]);
 
   const remoteRepo = resolveRemoteRepoIdentity(remote, remotes);
-  const repoName =
-    remoteRepo?.repoName ??
-    deriveRepoNameFromCommonGitDir(checkoutInfo.commonGitDir) ??
-    getPathBasename(worktree);
+  const repoName = remoteRepo?.repoName ?? checkoutInfo.repoName ?? getPathBasename(worktree);
 
   return {
     worktree,
@@ -408,25 +372,35 @@ async function resolveGitCheckoutInfo(
 ): Promise<GitCheckoutInfo> {
   const absoluteGitDir = await gitRevParseAbsoluteGitDir(worktree, execGit);
   if (absoluteGitDir === null) {
-    return { root: null, commonGitDir: null, isLinkedWorktree: null, worktreeLabel: null };
+    return { root: null, repoName: null, isLinkedWorktree: null, worktreeLabel: null };
   }
 
   const commonGitDir = await gitRevParseAbsoluteCommonGitDir(worktree, execGit);
-  if (commonGitDir === null) {
+  if (commonGitDir !== null) {
+    const linkedWorktree = deriveLinkedWorktreeInfo(absoluteGitDir, commonGitDir);
     return {
       root: absoluteGitDir,
-      commonGitDir: null,
-      isLinkedWorktree: null,
-      worktreeLabel: null,
+      repoName: deriveRepoNameFromCommonGitDir(commonGitDir),
+      isLinkedWorktree: linkedWorktree.isLinkedWorktree,
+      worktreeLabel: linkedWorktree.worktreeLabel,
     };
   }
 
-  const linkedWorktree = deriveLinkedWorktreeInfo(absoluteGitDir, commonGitDir);
+  const linkedWorktreeFallback = deriveLinkedWorktreeFallbackFromAbsoluteGitDir(absoluteGitDir);
+  if (linkedWorktreeFallback !== null) {
+    return {
+      root: absoluteGitDir,
+      repoName: linkedWorktreeFallback.repoName,
+      isLinkedWorktree: linkedWorktreeFallback.isLinkedWorktree,
+      worktreeLabel: linkedWorktreeFallback.worktreeLabel,
+    };
+  }
+
   return {
     root: absoluteGitDir,
-    commonGitDir,
-    isLinkedWorktree: linkedWorktree.isLinkedWorktree,
-    worktreeLabel: linkedWorktree.worktreeLabel,
+    repoName: null,
+    isLinkedWorktree: null,
+    worktreeLabel: null,
   };
 }
 
@@ -482,5 +456,24 @@ function deriveLinkedWorktreeInfo(
   return {
     isLinkedWorktree: true,
     worktreeLabel: segments[1] ?? null,
+  };
+}
+
+function deriveLinkedWorktreeFallbackFromAbsoluteGitDir(
+  absoluteGitDir: string,
+):
+  | (Pick<GitResolvedInfo, 'isLinkedWorktree' | 'worktreeLabel'> & { repoName: string | null })
+  | null {
+  const match = absoluteGitDir.match(/^(.*[\\/]\.git)[\\/]worktrees[\\/]([^\\/]+)$/);
+  const commonGitDir = match?.[1] ?? null;
+  const worktreeLabel = match?.[2] ?? null;
+  if (commonGitDir === null || commonGitDir.length === 0 || worktreeLabel === null) {
+    return null;
+  }
+
+  return {
+    repoName: deriveRepoNameFromCommonGitDir(commonGitDir),
+    isLinkedWorktree: true,
+    worktreeLabel,
   };
 }
