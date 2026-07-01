@@ -55,7 +55,7 @@ function buildActivityRecord(
   return {
     runtimeId: 'rt-1',
     sessionId: 'session-1',
-    activityState: 'waiting',
+    activityState: 'idle',
     idle: true,
     busy: false,
     currentTurnStartedAt: null,
@@ -147,7 +147,7 @@ describe('readSessionDeckSnapshot', () => {
         prUrl: 'https://github.com/owner/repo/pull/42',
         isLinkedWorktree: false,
         worktreeLabel: null,
-        activityState: 'waiting',
+        activityState: 'idle',
         activityAgeMs: null,
         currentToolName: null,
         lastError: null,

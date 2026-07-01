@@ -40,7 +40,7 @@ describe('activity writer', () => {
       serializeActivityRecord(
         buildRecord({
           sessionId: null,
-          activityState: 'waiting',
+          activityState: 'idle',
           idle: true,
           busy: false,
           currentTurnStartedAt: null,
@@ -55,7 +55,7 @@ describe('activity writer', () => {
     expect(parsed.sessionId).toBeNull();
     expect(parsed.currentTurnStartedAt).toBeNull();
     expect(parsed.currentToolName).toBeNull();
-    expect(parsed.activityState).toBe('waiting');
+    expect(parsed.activityState).toBe('idle');
     expect(parsed.activitySource).toBe('new');
   });
 

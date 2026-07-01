@@ -58,7 +58,7 @@ function buildSnapshotRecord(overrides: Partial<SessionDeckRecord> = {}): Sessio
     prUrl: 'https://github.com/owner/repo/pull/42',
     isLinkedWorktree: false,
     worktreeLabel: null,
-    activityState: 'waiting',
+    activityState: 'idle',
     activityAgeMs: null,
     currentToolName: null,
     lastError: null,
@@ -134,7 +134,7 @@ describe('SessionDeckBrowser', () => {
     expect(output).toContain('Reap complete: removed 1 expired presence record.');
     expect(output).toContain('Removed:');
     expect(output).toContain('- rt-expired');
-    expect(output).toContain('› ● waiting  alpha  project · #42 · 5s · main');
+    expect(output).toContain('› ● idle  alpha  project · #42 · 5s · main');
   });
 
   it('keeps the top-pane dashboard unchanged and shows session ids by default only in the selected card', () => {
@@ -167,7 +167,7 @@ describe('SessionDeckBrowser', () => {
     const output = renderText(browser);
 
     expect(output).toContain('Pi sessions · 1 live · 1 stale · 0 dead · 0 unknown');
-    expect(output).toContain('› ● waiting  alpha  project · #42 · 5s · main');
+    expect(output).toContain('› ● idle  alpha  project · #42 · 5s · main');
     expect(output).toContain('  │ merge-ready clean · queue 2');
     expect(output).toContain('  ◌ thinking  bravo  project · #42 · 4m · main');
     expect(output).toContain('    no chips');
@@ -181,7 +181,7 @@ describe('SessionDeckBrowser', () => {
     expect(output).toContain('│ cwd: ~/project');
     expect(output).toContain('│ checkout: worktree · feature-sandbox');
     expect(output).toContain('│ branch: main · pr: #42');
-    expect(output).toContain('│ presence: ● live · activity: waiting · heartbeat: 5s ago');
+    expect(output).toContain('│ presence: ● live · activity: idle · heartbeat: 5s ago');
     expect(output).toContain('│ chips: merge-ready clean · queue 2');
     expect(output).toContain('│ session: session-abc · pid: 101');
     expect(output).toContain('│ runtime: 922f7ac8deadbeef');
@@ -318,7 +318,7 @@ describe('SessionDeckBrowser', () => {
       }),
     });
 
-    expect(renderText(browser)).toContain('› ● waiting  repo-one  5s');
+    expect(renderText(browser)).toContain('› ● idle  repo-one  5s');
     expect(renderText(browser)).toContain('│ repo-one');
     expect(renderText(browser)).toContain('│ repo: owner/repo-one');
     expect(renderText(browser)).toContain('│ cwd: ~/repo-one/packages/cli');
@@ -326,14 +326,14 @@ describe('SessionDeckBrowser', () => {
     browser.handleInput('down');
 
     let output = renderText(browser);
-    expect(output).toContain('› ● waiting  worker  5s');
+    expect(output).toContain('› ● idle  worker  5s');
     expect(output).toContain('│ worker');
     expect(output).toContain('│ cwd: ~/scratch/worker');
 
     browser.handleInput('down');
 
     output = renderText(browser);
-    expect(output).toContain('› ● waiting  abcdef12  5s');
+    expect(output).toContain('› ● idle  abcdef12  5s');
     expect(output).toContain('│ abcdef12');
     expect(output).toContain('│ runtime: abcdef1234567890 · pid: 303');
     expect(output).not.toContain('│ session:');
@@ -449,7 +449,7 @@ describe('SessionDeckBrowser', () => {
       .mock.calls.filter(([tone]) => tone === 'accent')
       .map(([, text]) => text);
 
-    expect(accentText.some((text) => text.includes('› ● waiting  alpha'))).toBe(true);
+    expect(accentText.some((text) => text.includes('› ● idle  alpha'))).toBe(true);
     expect(accentText.some((text) => text === '  │ ')).toBe(true);
     expect(accentText.some((text) => text.includes('merge-ready clean · queue 2'))).toBe(false);
   });
@@ -509,8 +509,8 @@ describe('SessionDeckBrowser', () => {
     await vi.waitFor(() => {
       expect(reload).toHaveBeenCalledTimes(1);
       const output = renderText(browser);
-      expect(output).toContain('  ● waiting  charlie  project · #42 · 5s · main');
-      expect(output).toContain('› ● waiting  beta  project · #42 · 5s · main');
+      expect(output).toContain('  ● idle  charlie  project · #42 · 5s · main');
+      expect(output).toContain('› ● idle  beta  project · #42 · 5s · main');
     });
 
     expect(requestRender).toHaveBeenCalled();
@@ -563,8 +563,8 @@ describe('SessionDeckBrowser', () => {
 
     expect(reload).toHaveBeenCalledTimes(1);
     const output = renderText(browser);
-    expect(output).toContain('  ● waiting  charlie  project · #42 · 5s · main');
-    expect(output).toContain('› ● waiting  beta  project · #42 · 5s · main');
+    expect(output).toContain('  ● idle  charlie  project · #42 · 5s · main');
+    expect(output).toContain('› ● idle  beta  project · #42 · 5s · main');
     expect(output).not.toContain('Refreshing session deck…');
     expect(output).not.toContain('Auto refresh failed:');
     expect(requestRender).toHaveBeenCalled();
@@ -599,7 +599,7 @@ describe('SessionDeckBrowser', () => {
 
     await vi.advanceTimersByTimeAsync(5_000);
 
-    expect(renderText(browser)).toContain('› ● waiting  beta  project · #42 · 5s · main');
+    expect(renderText(browser)).toContain('› ● idle  beta  project · #42 · 5s · main');
     expect(requestRender).toHaveBeenCalledTimes(1);
   });
 
@@ -655,7 +655,7 @@ describe('SessionDeckBrowser', () => {
     browser.handleInput('enter');
     const output = renderText(browser, 44);
 
-    expect(output).toContain('› ● waiting  alpha  project · #42 · 5s');
+    expect(output).toContain('› ● idle  alpha  project · #42 · 5s');
     expect(output).not.toContain('session-deck-cleanup');
     expect(output).toContain('merge-ready clean · queue 2');
     expect(output).not.toContain('needs-review soon');

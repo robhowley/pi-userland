@@ -251,9 +251,9 @@ function getActivityDisplay(record: SessionDeckRecord): SessionDeckActivityDispl
   const ageLabel = formatOptionalDuration(record.activityAgeMs);
 
   switch (record.activityState) {
-    case 'waiting':
+    case 'idle':
       return {
-        label: 'waiting',
+        label: 'idle',
         detail: null,
         cardAgeLabel: null,
         summaryAgeLabel: null,

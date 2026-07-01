@@ -90,7 +90,7 @@ describe('activity runtime lifecycle', () => {
 
     expect(controller.getActivity()?.runtimeId).toBe('rt-1');
     expect(controller.getActivity()?.sessionId).toBe('session-new');
-    expect(controller.getActivity()?.activityState).toBe('waiting');
+    expect(controller.getActivity()?.activityState).toBe('idle');
     expect(controller.getActivity()?.currentToolName).toBeNull();
     expect(controller.getActivity()?.lastError).toBeNull();
   });
@@ -132,13 +132,13 @@ describe('activity runtime lifecycle', () => {
       getSessionFile: () => '/tmp/session-abc.json',
     });
     const initial = controller.getActivity();
-    expect(initial?.activityState).toBe('waiting');
+    expect(initial?.activityState).toBe('idle');
     expect(initial?.activitySource).toBe('startup');
 
     await vi.advanceTimersByTimeAsync(30_000);
 
     const refreshed = controller.getActivity();
-    expect(refreshed?.activityState).toBe('waiting');
+    expect(refreshed?.activityState).toBe('idle');
     expect(refreshed?.activitySource).toBe('periodic');
     expect(refreshed?.lastEventAt).toBe('2026-06-17T12:00:00.000Z');
     expect(refreshed?.activityUpdatedAt).toBe('2026-06-17T12:00:30.000Z');
@@ -155,7 +155,7 @@ describe('activity runtime lifecycle', () => {
       getSessionFile: () => '/tmp/session-abc.json',
     });
 
-    expect(controller.getActivity()?.activityState).toBe('waiting');
+    expect(controller.getActivity()?.activityState).toBe('idle');
     expect(getActivityRuntimeDiagnostics().map((diagnostic) => diagnostic.code)).toContain(
       'activity_write_error',
     );

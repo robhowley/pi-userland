@@ -8,7 +8,7 @@ function buildRecord(overrides: Partial<SessionActivityRecord> = {}): SessionAct
   return {
     runtimeId: 'rt-1',
     sessionId: 'session-abc',
-    activityState: 'waiting',
+    activityState: 'idle',
     idle: true,
     busy: false,
     currentTurnStartedAt: null,
@@ -22,8 +22,8 @@ function buildRecord(overrides: Partial<SessionActivityRecord> = {}): SessionAct
 }
 
 describe('deriveActivity', () => {
-  it('derives waiting, thinking, tool-running, and error states from trusted records', () => {
-    const waiting = deriveActivity({
+  it('derives idle, thinking, tool-running, and error states from trusted records', () => {
+    const idle = deriveActivity({
       activity: buildRecord({
         lastEventAt: '2026-06-17T11:50:00.000Z',
         activityUpdatedAt: '2026-06-17T12:09:30.000Z',
@@ -31,7 +31,7 @@ describe('deriveActivity', () => {
       sessionId: 'session-abc',
       now: NOW,
     });
-    expect(waiting.activityState).toBe('waiting');
+    expect(idle.activityState).toBe('idle');
 
     const thinking = deriveActivity({
       activity: buildRecord({
@@ -84,7 +84,7 @@ describe('deriveActivity', () => {
     expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(['activity_missing']);
   });
 
-  it('marks stale waiting snapshots unknown when activityUpdatedAt expires', () => {
+  it('marks stale idle snapshots unknown when activityUpdatedAt expires', () => {
     const result = deriveActivity({
       activity: buildRecord({
         lastEventAt: '2026-06-17T12:06:30.000Z',

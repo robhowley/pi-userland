@@ -77,7 +77,7 @@ function buildSnapshotRecord(overrides: Partial<SessionDeckRecord> = {}): Sessio
     prUrl: 'https://github.com/owner/repo/pull/42',
     isLinkedWorktree: false,
     worktreeLabel: null,
-    activityState: 'waiting',
+    activityState: 'idle',
     activityAgeMs: null,
     currentToolName: null,
     lastError: null,
@@ -208,7 +208,7 @@ describe('session-deck joined command', () => {
     await handler?.('', ctx);
     const [defaultMessage] = vi.mocked(ctx.ui.notify).mock.calls[0] ?? [];
     expect(defaultMessage).toContain('Pi sessions (live + stale)');
-    expect(defaultMessage).toContain('922f7ac8  waiting  5s');
+    expect(defaultMessage).toContain('922f7ac8  idle  5s');
     expect(defaultMessage).toContain('  alpha');
     expect(defaultMessage).toContain('  project  main  #42');
     expect(defaultMessage).toContain('  merge-ready clean');

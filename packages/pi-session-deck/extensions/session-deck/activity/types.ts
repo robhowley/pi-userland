@@ -5,7 +5,7 @@ import type {
   SessionManagerLike,
 } from '../identity/types.js';
 
-export type ActivityState = 'waiting' | 'thinking' | 'tool-running' | 'error' | 'unknown';
+export type ActivityState = 'idle' | 'thinking' | 'tool-running' | 'error' | 'unknown';
 
 export type ActivitySource =
   | 'startup'

@@ -27,7 +27,7 @@ pi install npm:@robhowley/pi-session-deck
 
 - Heartbeat-backed session presence.
 - Session names from `/name` or `--name`.
-- Current activity such as `waiting`, `thinking`, `tool-running`, and `error`.
+- Current activity such as `idle`, `thinking`, `tool-running`, and `error`.
 - Repo, PR, and linked-worktree context in the dashboard.
 - Short status chips in `/session-deck`.
 - `/new` resets activity for the new session while keeping the same runtime.
