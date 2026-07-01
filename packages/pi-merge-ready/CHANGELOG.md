@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/robhowley/pi-userland/compare/pi-merge-ready-v0.8.0...pi-merge-ready-v0.9.0) (2026-07-01)
+
+
+### Features
+
+* **pi-merge-ready:** surface pending review requests ([#103](https://github.com/robhowley/pi-userland/issues/103)) ([b7fa00a](https://github.com/robhowley/pi-userland/commit/b7fa00a9806e30728054d4a74d3d9b049f409b3f))
+
 ## [0.8.0](https://github.com/robhowley/pi-userland/compare/pi-merge-ready-v0.7.0...pi-merge-ready-v0.8.0) (2026-06-13)
 
 

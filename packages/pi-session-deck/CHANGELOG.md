@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/robhowley/pi-userland/compare/pi-session-deck-v0.5.0...pi-session-deck-v0.6.0) (2026-07-01)
+
+
+### Features
+
+* **pi-session-deck:** add /session-deck TUI browser ([#101](https://github.com/robhowley/pi-userland/issues/101)) ([087130a](https://github.com/robhowley/pi-userland/commit/087130a0fb193c4810b233eebdc44d8484ceb801))
+
 ## [0.5.0](https://github.com/robhowley/pi-userland/compare/pi-session-deck-v0.4.0...pi-session-deck-v0.5.0) (2026-06-24)
 
 
