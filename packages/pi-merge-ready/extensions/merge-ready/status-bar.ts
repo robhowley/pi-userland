@@ -79,7 +79,7 @@ const BADGE_PRESENTATION: Record<MergeReadyBadgeId, { icon: string; text: string
   ci_running: { icon: '⏳', text: 'Checks running' },
   review_pending: { icon: '👀', text: 'Review pending' },
   ready: { icon: '✅', text: 'Ready' },
-  merged: { icon: '✅', text: 'Merged' },
+  merged: { icon: '🎉', text: 'Merged' },
   closed: { icon: '⛔', text: 'Closed' },
   unknown: { icon: '❔', text: 'Unknown' },
 };

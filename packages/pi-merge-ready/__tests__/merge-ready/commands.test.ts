@@ -426,6 +426,37 @@ describe('merge-ready command', () => {
     );
   });
 
+  it('renders merged lifecycle output distinctly from ready', async () => {
+    const { api, assertDone, getCommand } = createMockAPI([
+      ...createGitDiscoveryCalls({ timeout: MERGE_READY_COMMAND_TIMEOUT_MS }),
+      createPullRequestViewSuccessCall(
+        buildPullRequestPayload({
+          state: 'MERGED',
+        }),
+        { timeout: MERGE_READY_COMMAND_TIMEOUT_MS },
+      ),
+    ]);
+
+    mergeReadyExtension(api);
+    const handler = getCommand(MERGE_READY_COMMAND_NAME);
+    const ctx = createCommandContext();
+
+    await handler?.('', ctx);
+
+    assertDone();
+    expect(ctx.ui.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '🎉 Merged');
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      [
+        '🎉 PR is already merged',
+        'Target: current branch feat/merge-ready (robhowley/pi-userland)',
+        'PR: #42 — Compose merge-ready status boundary',
+        'State: unknown',
+        'Open items: none',
+      ].join('\n'),
+      'info',
+    );
+  });
+
   it('renders requested reviewers under pending review output', async () => {
     const { api, assertDone, getCommand } = createMockAPI([
       ...createGitDiscoveryCalls({ timeout: MERGE_READY_COMMAND_TIMEOUT_MS }),

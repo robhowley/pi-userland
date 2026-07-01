@@ -211,7 +211,7 @@ describe('merge-ready status bar', () => {
           unresolvedConversationRequirement: 'optional',
         },
       }),
-      expected: '✅ Merged',
+      expected: '🎉 Merged',
     },
   ])('renders $name with mergeability-aware status text', ({ status, expected }) => {
     expect(renderMergeReadyStatusBar(status)).toBe(expected);

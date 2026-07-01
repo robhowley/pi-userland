@@ -115,7 +115,7 @@ const BADGE_PRESENTATION: Record<
   ci_running: { icon: '⏳', level: 'warning' },
   review_pending: { icon: '👀', level: 'warning' },
   ready: { icon: '✅', level: 'info' },
-  merged: { icon: '✅', level: 'info' },
+  merged: { icon: '🎉', level: 'info' },
   closed: { icon: '⛔', level: 'warning' },
   unknown: { icon: '❔', level: 'warning' },
 };
