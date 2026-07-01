@@ -2,7 +2,7 @@
   "name": "@robhowley/pi-session-deck",
   "version": "0.5.0",
   "type": "module",
-  "description": "Pi runtime presence foundation: heartbeat-backed presence records with live/stale views, optional --all diagnostics, and --reap cleanup.",
+  "description": "A TUI dashboard for Pi sessions: live windows, worktrees, PRs, activity, and statuses in one place.",
   "files": [
     "extensions",
     "README.md",
@@ -38,7 +38,8 @@
   "license": "MIT",
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*"
   },
   "devDependencies": {
     "@types/node": "^22.15.17"

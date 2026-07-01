@@ -18,14 +18,19 @@ export interface SessionDeckDiagnostic {
 
 export interface SessionDeckRecord {
   runtimeId: string;
+  pid: number | null;
   presenceState: PresenceState;
   presenceReason?: string;
   heartbeatAgeMs: number;
   sessionId: string | null;
   sessionName: string | null;
+  repoName: string | null;
+  qualifiedRepoName: string | null;
   cwd: string | null;
   branch: string | null;
   prUrl: string | null;
+  isLinkedWorktree: boolean | null;
+  worktreeLabel: string | null;
   activityState: ActivityState;
   activityAgeMs: number | null;
   currentToolName: string | null;

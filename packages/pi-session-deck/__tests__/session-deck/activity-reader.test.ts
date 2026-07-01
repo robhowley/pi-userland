@@ -18,8 +18,12 @@ function buildJoinedView(overrides: Partial<JoinedSessionView> = {}): JoinedSess
         sessionName: null,
         cwd: '/tmp/project',
         worktree: '/tmp/project',
+        repoName: 'repo',
+        qualifiedRepoName: 'owner/repo',
         branch: 'main',
         prUrl: 'https://github.com/owner/repo/pull/42',
+        isLinkedWorktree: false,
+        worktreeLabel: null,
         identityUpdatedAt: '2026-06-17T12:09:00.000Z',
         identityFreshness: 'fresh',
         diagnostics: [],
@@ -55,7 +59,7 @@ describe('activity reader', () => {
       JSON.stringify({
         runtimeId: 'rt-1',
         sessionId: null,
-        activityState: 'waiting',
+        activityState: 'idle',
         idle: true,
         busy: false,
         currentTurnStartedAt: null,
@@ -75,8 +79,12 @@ describe('activity reader', () => {
             sessionFile: null,
             cwd: null,
             worktree: null,
+            repoName: null,
+            qualifiedRepoName: null,
             branch: null,
             prUrl: null,
+            isLinkedWorktree: null,
+            worktreeLabel: null,
             identityUpdatedAt: null,
             identityFreshness: 'missing',
             diagnostics: [
@@ -132,6 +140,38 @@ describe('activity reader', () => {
     expect(view.records[0]?.activityAgeMs).toBe(42_000);
   });
 
+  it('derives idle from unrecognized quiescent activityState values when idle/busy flags stay authoritative', async () => {
+    const unrecognizedQuiescentState = 'quiescent-state';
+    const readdir = vi
+      .fn()
+      .mockResolvedValue([{ name: 'rt-1.json', isFile: () => true } as unknown as Dirent]);
+    const readFile = vi.fn().mockResolvedValue(
+      JSON.stringify({
+        runtimeId: 'rt-1',
+        sessionId: 'session-abc',
+        activityState: unrecognizedQuiescentState,
+        idle: true,
+        busy: false,
+        currentTurnStartedAt: null,
+        currentToolName: null,
+        lastEventAt: '2026-06-17T12:09:18.000Z',
+        lastError: null,
+        activityUpdatedAt: '2026-06-17T12:09:18.000Z',
+      }),
+    );
+
+    const view = await readSessionDeckView({
+      joinedView: buildJoinedView(),
+      now: new Date('2026-06-17T12:10:00.000Z'),
+      readdir,
+      readFile,
+    });
+
+    expect(view.records[0]?.activityState).toBe('idle');
+    expect(view.records[0]?.idle).toBe(true);
+    expect(view.records[0]?.busy).toBe(false);
+  });
+
   it('ignores old-session activity and reports session_mismatch', async () => {
     const readdir = vi
       .fn()
@@ -173,7 +213,7 @@ describe('activity reader', () => {
       JSON.stringify({
         runtimeId: 'rt-1',
         sessionId: null,
-        activityState: 'waiting',
+        activityState: 'idle',
         idle: true,
         busy: false,
         currentTurnStartedAt: null,
@@ -200,7 +240,7 @@ describe('activity reader', () => {
       readFile,
     });
 
-    expect(view.records[0]?.activityState).toBe('waiting');
+    expect(view.records[0]?.activityState).toBe('idle');
     expect(view.records[0]?.idle).toBe(true);
   });
 

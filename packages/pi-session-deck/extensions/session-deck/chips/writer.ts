@@ -19,11 +19,7 @@ import {
   resolveChipId,
   resolveChipScope,
 } from './store.js';
-import type {
-  ChipDiagnosticSink,
-  ClearSessionDeckChipKey,
-  SessionDeckChipRecord,
-} from './types.js';
+import type { ChipDiagnosticSink, ChipScope, SessionDeckChipRecord } from './types.js';
 
 export function serializeChipRecord(record: SessionDeckChipRecord): string {
   return `${JSON.stringify(record, null, 2)}\n`;
@@ -42,6 +38,14 @@ export interface WriteChipRecordOptions {
     directory: string,
   ) => string;
   onDiagnostic?: ChipDiagnosticSink;
+}
+
+interface ClearChipRecordKey {
+  source: string;
+  chipId?: string;
+  scope?: ChipScope;
+  runtimeId?: string;
+  sessionId?: string | null;
 }
 
 export interface ClearChipRecordOptions {
@@ -140,7 +144,7 @@ export async function writeChipRecord(
 }
 
 export async function clearChipRecord(
-  key: ClearSessionDeckChipKey,
+  key: ClearChipRecordKey,
   options: ClearChipRecordOptions = {},
 ): Promise<boolean> {
   const emit = options.onDiagnostic ?? noopDiagnostic;

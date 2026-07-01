@@ -13,14 +13,24 @@ function makeExecGit(results: Record<string, { stdout: string; exitCode: number 
 }
 
 describe('identity git resolution', () => {
-  it('resolves worktree, branch, remote, and root for a normal repo', async () => {
+  it('resolves repo identity from origin before checkout metadata fallbacks', async () => {
     const { resolveGitInfo } = await import('../../extensions/session-deck/identity/git.js');
 
     const execGit = makeExecGit({
       'rev-parse --show-toplevel': { stdout: '/home/user/project\n', exitCode: 0 },
       'rev-parse --abbrev-ref HEAD': { stdout: 'main\n', exitCode: 0 },
       'remote get-url origin': { stdout: 'https://github.com/owner/repo.git\n', exitCode: 0 },
-      'rev-parse --git-dir': { stdout: '/home/user/project/.git\n', exitCode: 0 },
+      'remote -v': {
+        stdout:
+          'origin\thttps://github.com/owner/repo.git (fetch)\n' +
+          'origin\thttps://github.com/owner/repo.git (push)\n',
+        exitCode: 0,
+      },
+      'rev-parse --absolute-git-dir': { stdout: '/home/user/project/.git\n', exitCode: 0 },
+      'rev-parse --path-format=absolute --git-common-dir': {
+        stdout: '/home/user/project/.git\n',
+        exitCode: 0,
+      },
     });
 
     const info = await resolveGitInfo('/home/user/project', { execGit });
@@ -29,9 +39,13 @@ describe('identity git resolution', () => {
     expect(info.branch).toBe('main');
     expect(info.remote).toBe('https://github.com/owner/repo.git');
     expect(info.root).toBe('/home/user/project/.git');
+    expect(info.repoName).toBe('repo');
+    expect(info.qualifiedRepoName).toBe('owner/repo');
+    expect(info.isLinkedWorktree).toBe(false);
+    expect(info.worktreeLabel).toBeNull();
   });
 
-  it('returns null fields when not in a git repo', async () => {
+  it('returns null repo fields when not in a git repo', async () => {
     const { resolveGitInfo } = await import('../../extensions/session-deck/identity/git.js');
 
     const execGit = makeExecGit({
@@ -44,16 +58,30 @@ describe('identity git resolution', () => {
     expect(info.branch).toBeNull();
     expect(info.remote).toBeNull();
     expect(info.root).toBeNull();
+    expect(info.repoName).toBeNull();
+    expect(info.qualifiedRepoName).toBeNull();
+    expect(info.isLinkedWorktree).toBeNull();
+    expect(info.worktreeLabel).toBeNull();
   });
 
-  it('returns null branch on detached HEAD', async () => {
+  it('returns null branch on detached HEAD while keeping repo identity', async () => {
     const { resolveGitInfo } = await import('../../extensions/session-deck/identity/git.js');
 
     const execGit = makeExecGit({
       'rev-parse --show-toplevel': { stdout: '/home/user/project\n', exitCode: 0 },
       'rev-parse --abbrev-ref HEAD': { stdout: 'HEAD\n', exitCode: 0 },
       'remote get-url origin': { stdout: 'https://github.com/owner/repo.git\n', exitCode: 0 },
-      'rev-parse --git-dir': { stdout: '/home/user/project/.git\n', exitCode: 0 },
+      'remote -v': {
+        stdout:
+          'origin\thttps://github.com/owner/repo.git (fetch)\n' +
+          'origin\thttps://github.com/owner/repo.git (push)\n',
+        exitCode: 0,
+      },
+      'rev-parse --absolute-git-dir': { stdout: '/home/user/project/.git\n', exitCode: 0 },
+      'rev-parse --path-format=absolute --git-common-dir': {
+        stdout: '/home/user/project/.git\n',
+        exitCode: 0,
+      },
     });
 
     const info = await resolveGitInfo('/home/user/project', { execGit });
@@ -61,6 +89,130 @@ describe('identity git resolution', () => {
     expect(info.worktree).toBe('/home/user/project');
     expect(info.branch).toBeNull();
     expect(info.remote).toBe('https://github.com/owner/repo.git');
+    expect(info.repoName).toBe('repo');
+    expect(info.qualifiedRepoName).toBe('owner/repo');
+    expect(info.isLinkedWorktree).toBe(false);
+    expect(info.worktreeLabel).toBeNull();
+  });
+
+  it('falls back to the first non-origin fetch remote for qualified repo identity', async () => {
+    const { resolveGitInfo } = await import('../../extensions/session-deck/identity/git.js');
+
+    const execGit = makeExecGit({
+      'rev-parse --show-toplevel': { stdout: '/home/user/worktrees/pr-123\n', exitCode: 0 },
+      'rev-parse --abbrev-ref HEAD': { stdout: 'feature-x\n', exitCode: 0 },
+      'remote get-url origin': { stdout: '', exitCode: 128 },
+      'remote -v': {
+        stdout:
+          'upstream\tgit@github.com:Shopify/shop-ml.git (fetch)\n' +
+          'upstream\tgit@github.com:Shopify/shop-ml.git (push)\n' +
+          'fork\tgit@github.com:someone/other.git (fetch)\n',
+        exitCode: 0,
+      },
+      'rev-parse --absolute-git-dir': {
+        stdout: '/home/user/project/.git/worktrees/pr-123\n',
+        exitCode: 0,
+      },
+      'rev-parse --path-format=absolute --git-common-dir': {
+        stdout: '/home/user/project/.git\n',
+        exitCode: 0,
+      },
+    });
+
+    const info = await resolveGitInfo('/home/user/worktrees/pr-123', { execGit });
+
+    expect(info.remote).toBeNull();
+    expect(info.repoName).toBe('shop-ml');
+    expect(info.qualifiedRepoName).toBe('Shopify/shop-ml');
+    expect(info.isLinkedWorktree).toBe(true);
+    expect(info.worktreeLabel).toBe('pr-123');
+  });
+
+  it('falls back to the normalized common git dir when no remote can be parsed', async () => {
+    const { resolveGitInfo } = await import('../../extensions/session-deck/identity/git.js');
+
+    const execGit = makeExecGit({
+      'rev-parse --show-toplevel': { stdout: '/home/user/worktrees/pr-123\n', exitCode: 0 },
+      'rev-parse --abbrev-ref HEAD': { stdout: 'feature-x\n', exitCode: 0 },
+      'remote get-url origin': { stdout: 'file:///srv/git/shop-ml.git\n', exitCode: 0 },
+      'remote -v': {
+        stdout:
+          'origin\tfile:///srv/git/shop-ml.git (fetch)\n' +
+          'origin\tfile:///srv/git/shop-ml.git (push)\n' +
+          'fork\tfile:///srv/git/fork.git (fetch)\n',
+        exitCode: 0,
+      },
+      'rev-parse --absolute-git-dir': {
+        stdout: '/home/user/project/.git/worktrees/pr-123\n',
+        exitCode: 0,
+      },
+      'rev-parse --path-format=absolute --git-common-dir': {
+        stdout: '/home/user/shop-ml/.git\n',
+        exitCode: 0,
+      },
+    });
+
+    const info = await resolveGitInfo('/home/user/worktrees/pr-123', { execGit });
+
+    expect(info.repoName).toBe('shop-ml');
+    expect(info.qualifiedRepoName).toBeNull();
+    expect(info.isLinkedWorktree).toBe(false);
+    expect(info.worktreeLabel).toBeNull();
+  });
+
+  it('derives linked-worktree identity from absolute git-dir when common git-dir lookup is unavailable', async () => {
+    const { resolveGitInfo } = await import('../../extensions/session-deck/identity/git.js');
+
+    const execGit = makeExecGit({
+      'rev-parse --show-toplevel': { stdout: '/home/user/worktrees/pr-123\n', exitCode: 0 },
+      'rev-parse --abbrev-ref HEAD': { stdout: 'feature-x\n', exitCode: 0 },
+      'remote get-url origin': { stdout: 'file:///srv/git/shop-ml.git\n', exitCode: 0 },
+      'remote -v': {
+        stdout:
+          'origin\tfile:///srv/git/shop-ml.git (fetch)\n' +
+          'origin\tfile:///srv/git/shop-ml.git (push)\n',
+        exitCode: 0,
+      },
+      'rev-parse --absolute-git-dir': {
+        stdout: '/home/user/project/.git/worktrees/pr-123\n',
+        exitCode: 0,
+      },
+      'rev-parse --path-format=absolute --git-common-dir': { stdout: '', exitCode: 128 },
+    });
+
+    const info = await resolveGitInfo('/home/user/worktrees/pr-123', { execGit });
+
+    expect(info.root).toBe('/home/user/project/.git/worktrees/pr-123');
+    expect(info.repoName).toBe('project');
+    expect(info.qualifiedRepoName).toBeNull();
+    expect(info.isLinkedWorktree).toBe(true);
+    expect(info.worktreeLabel).toBe('pr-123');
+  });
+
+  it('keeps the basename fallback when absolute git-dir is not a linked-worktree path', async () => {
+    const { resolveGitInfo } = await import('../../extensions/session-deck/identity/git.js');
+
+    const execGit = makeExecGit({
+      'rev-parse --show-toplevel': { stdout: '/home/user/project\n', exitCode: 0 },
+      'rev-parse --abbrev-ref HEAD': { stdout: 'feature-x\n', exitCode: 0 },
+      'remote get-url origin': { stdout: 'file:///srv/git/project.git\n', exitCode: 0 },
+      'remote -v': {
+        stdout:
+          'origin\tfile:///srv/git/project.git (fetch)\n' +
+          'origin\tfile:///srv/git/project.git (push)\n',
+        exitCode: 0,
+      },
+      'rev-parse --absolute-git-dir': { stdout: '/home/user/project/.git\n', exitCode: 0 },
+      'rev-parse --path-format=absolute --git-common-dir': { stdout: '', exitCode: 128 },
+    });
+
+    const info = await resolveGitInfo('/home/user/project', { execGit });
+
+    expect(info.root).toBe('/home/user/project/.git');
+    expect(info.repoName).toBe('project');
+    expect(info.qualifiedRepoName).toBeNull();
+    expect(info.isLinkedWorktree).toBeNull();
+    expect(info.worktreeLabel).toBeNull();
   });
 
   it('uses gh CLI for PR URL when available', async () => {
@@ -101,7 +253,6 @@ describe('identity git resolution', () => {
       execGit,
     });
 
-    // Cannot construct exact PR URL from branch alone without gh CLI
     expect(result.prUrl).toBeNull();
     expect(result.strategy).toBe('gh_cli_unavailable');
     expect(result.diagnostic).toBe('pr_ambiguous');

@@ -13,8 +13,12 @@ describe('identity writer', () => {
       sessionName: 'Focused session',
       cwd: '/home/user/project',
       worktree: '/home/user/project',
+      repoName: 'repo',
+      qualifiedRepoName: 'owner/repo',
       branch: 'main',
       prUrl: 'https://github.com/owner/repo/pull/42',
+      isLinkedWorktree: false,
+      worktreeLabel: null,
       identityUpdatedAt: '2026-06-17T12:00:00.000Z',
       sessionStartedAt: '2026-06-17T11:00:00.000Z',
       gitRemote: 'https://github.com/owner/repo.git',
@@ -26,6 +30,8 @@ describe('identity writer', () => {
     const parsed = JSON.parse(json);
     expect(parsed.runtimeId).toBe('rt-1');
     expect(parsed.sessionName).toBe('Focused session');
+    expect(parsed.repoName).toBe('repo');
+    expect(parsed.qualifiedRepoName).toBe('owner/repo');
     expect(parsed.branch).toBe('main');
     expect(parsed.prUrl).toBe('https://github.com/owner/repo/pull/42');
     expect(parsed.identitySource).toBe('startup');
@@ -41,8 +47,12 @@ describe('identity writer', () => {
       sessionFile: null,
       cwd: null,
       worktree: null,
+      repoName: null,
+      qualifiedRepoName: null,
       branch: null,
       prUrl: null,
+      isLinkedWorktree: null,
+      worktreeLabel: null,
       identityUpdatedAt: '2026-06-17T12:00:00.000Z',
       sessionStartedAt: '2026-06-17T12:00:00.000Z',
       gitRemote: null,
@@ -76,8 +86,12 @@ describe('identity writer', () => {
       sessionFile: null,
       cwd: null,
       worktree: null,
+      repoName: null,
+      qualifiedRepoName: null,
       branch: null,
       prUrl: null,
+      isLinkedWorktree: null,
+      worktreeLabel: null,
       identityUpdatedAt: '2026-06-17T12:00:00.000Z',
       sessionStartedAt: '2026-06-17T12:00:00.000Z',
       gitRemote: null,
@@ -111,8 +125,12 @@ describe('identity writer', () => {
       sessionFile: null,
       cwd: null,
       worktree: null,
+      repoName: null,
+      qualifiedRepoName: null,
       branch: null,
       prUrl: null,
+      isLinkedWorktree: null,
+      worktreeLabel: null,
       identityUpdatedAt: '2026-06-17T12:00:00.000Z',
       sessionStartedAt: '2026-06-17T12:00:00.000Z',
       gitRemote: null,

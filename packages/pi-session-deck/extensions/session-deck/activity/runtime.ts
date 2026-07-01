@@ -104,7 +104,7 @@ export async function ensureActivityRuntimeStarted(
           await writeSnapshot(
             state,
             config,
-            createWaitingActivityRecord(
+            createIdleActivityRecord(
               getRequiredRuntimeId(state),
               sessionId,
               getNowIso(config),
@@ -115,7 +115,7 @@ export async function ensureActivityRuntimeStarted(
       recordMessageEnd: async (message: ActivityMessageLike) =>
         runSerialized(state, async () => {
           const nowIso = getNowIso(config);
-          const current = getCurrentOrWaitingRecord(state, nowIso);
+          const current = getCurrentOrIdleRecord(state, nowIso);
 
           if (message.role === 'user') {
             await writeSnapshot(state, config, {
@@ -166,7 +166,7 @@ export async function ensureActivityRuntimeStarted(
           state.hasActiveTurnError = false;
           const nowIso = getNowIso(config);
           await writeSnapshot(state, config, {
-            ...getCurrentOrWaitingRecord(state, nowIso),
+            ...getCurrentOrIdleRecord(state, nowIso),
             activityState: 'thinking',
             idle: false,
             busy: true,
@@ -182,7 +182,7 @@ export async function ensureActivityRuntimeStarted(
           const nowIso = getNowIso(config);
           state.activeToolCalls.set(toolCallId, { toolName, startedAt: nowIso });
 
-          const current = getCurrentOrWaitingRecord(state, nowIso);
+          const current = getCurrentOrIdleRecord(state, nowIso);
           await writeSnapshot(state, config, {
             ...current,
             activityState: 'tool-running',
@@ -201,14 +201,14 @@ export async function ensureActivityRuntimeStarted(
           const nowIso = getNowIso(config);
           state.activeToolCalls.delete(toolCallId);
 
-          const current = getCurrentOrWaitingRecord(state, nowIso);
+          const current = getCurrentOrIdleRecord(state, nowIso);
           const nextToolName = getMostRecentToolName(state.activeToolCalls);
           const hasActiveTurn = current.currentTurnStartedAt !== null;
 
           await writeSnapshot(state, config, {
             ...current,
             activityState:
-              nextToolName !== null ? 'tool-running' : hasActiveTurn ? 'thinking' : 'waiting',
+              nextToolName !== null ? 'tool-running' : hasActiveTurn ? 'thinking' : 'idle',
             idle: !hasActiveTurn,
             busy: hasActiveTurn,
             currentToolName: nextToolName,
@@ -225,10 +225,10 @@ export async function ensureActivityRuntimeStarted(
           const nowIso = getNowIso(config);
           state.activeToolCalls.clear();
 
-          const current = getCurrentOrWaitingRecord(state, nowIso);
+          const current = getCurrentOrIdleRecord(state, nowIso);
           await writeSnapshot(state, config, {
             ...current,
-            activityState: state.hasActiveTurnError ? 'error' : 'waiting',
+            activityState: state.hasActiveTurnError ? 'error' : 'idle',
             idle: !state.hasActiveTurnError,
             busy: false,
             currentTurnStartedAt: null,
@@ -259,12 +259,12 @@ export async function ensureActivityRuntimeStarted(
             await writeSnapshot(
               state,
               config,
-              createWaitingActivityRecord(runtimeId, sessionId, nowIso, 'new'),
+              createIdleActivityRecord(runtimeId, sessionId, nowIso, 'new'),
             );
             return;
           }
 
-          const current = getCurrentOrWaitingRecord(state, nowIso);
+          const current = getCurrentOrIdleRecord(state, nowIso);
           await writeSnapshot(state, config, {
             ...current,
             activityUpdatedAt: nowIso,
@@ -310,7 +310,7 @@ export async function resetActivityRuntimeForTests(): Promise<void> {
   state.cachedActivity = null;
 }
 
-function createWaitingActivityRecord(
+function createIdleActivityRecord(
   runtimeId: string,
   sessionId: string | null,
   nowIso: string,
@@ -319,7 +319,7 @@ function createWaitingActivityRecord(
   return {
     runtimeId,
     sessionId,
-    activityState: 'waiting',
+    activityState: 'idle',
     idle: true,
     busy: false,
     currentTurnStartedAt: null,
@@ -331,7 +331,7 @@ function createWaitingActivityRecord(
   };
 }
 
-function getCurrentOrWaitingRecord(
+function getCurrentOrIdleRecord(
   state: ActivityRuntimeState,
   nowIso: string,
 ): SessionActivityRecord {
@@ -346,7 +346,7 @@ function getCurrentOrWaitingRecord(
   state.lastSeenSessionId = sessionId;
   state.activeToolCalls.clear();
   state.hasActiveTurnError = false;
-  return createWaitingActivityRecord(runtimeId, sessionId, nowIso, 'new');
+  return createIdleActivityRecord(runtimeId, sessionId, nowIso, 'new');
 }
 
 function getCurrentSessionId(state: ActivityRuntimeState): string | null {

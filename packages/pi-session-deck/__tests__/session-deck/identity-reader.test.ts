@@ -23,8 +23,12 @@ describe('identity reader — join', () => {
         sessionName: 'Focused session',
         cwd: '/home/user/project',
         worktree: '/home/user/project',
+        repoName: 'repo',
+        qualifiedRepoName: 'owner/repo',
         branch: 'main',
         prUrl: 'https://github.com/owner/repo/pull/42',
+        isLinkedWorktree: true,
+        worktreeLabel: 'project-feature',
         identityUpdatedAt: new Date().toISOString(),
         sessionStartedAt: new Date().toISOString(),
         gitRemote: null,
@@ -66,9 +70,13 @@ describe('identity reader — join', () => {
     expect(record.runtimeId).toBe('rt-1');
     expect(record.sessionId).toBe('session-abc');
     expect(record.sessionName).toBe('Focused session');
+    expect(record.repoName).toBe('repo');
+    expect(record.qualifiedRepoName).toBe('owner/repo');
     expect(record.branch).toBe('main');
     expect(record.cwd).toBe('/home/user/project');
     expect(record.prUrl).toBe('https://github.com/owner/repo/pull/42');
+    expect(record.isLinkedWorktree).toBe(true);
+    expect(record.worktreeLabel).toBe('project-feature');
     expect(record.identityFreshness).toBe('fresh');
     expect(view.diagnostics).toHaveLength(0);
   });
@@ -102,12 +110,14 @@ describe('identity reader — join', () => {
     const record = view.records[0]!;
     expect(record.sessionId).toBeNull();
     expect(record.cwd).toBeNull();
+    expect(record.repoName).toBeNull();
+    expect(record.qualifiedRepoName).toBeNull();
     expect(record.branch).toBeNull();
     expect(record.prUrl).toBeNull();
     expect(record.identityFreshness).toBe('missing');
   });
 
-  it('normalizes missing sessionName from stored identity records to null', async () => {
+  it('normalizes missing sessionName and linked-worktree fields from stored identity records to null', async () => {
     const { readJoinedSessionView } =
       await import('../../extensions/session-deck/identity/reader.js');
 
@@ -151,6 +161,10 @@ describe('identity reader — join', () => {
     });
 
     expect(view.records[0]?.sessionName).toBeNull();
+    expect(view.records[0]?.repoName).toBeNull();
+    expect(view.records[0]?.qualifiedRepoName).toBeNull();
+    expect(view.records[0]?.isLinkedWorktree).toBeNull();
+    expect(view.records[0]?.worktreeLabel).toBeNull();
   });
 
   it('surfaces persisted identity diagnostics in record and top-level diagnostics', async () => {
@@ -167,6 +181,8 @@ describe('identity reader — join', () => {
       sessionFile: null,
       cwd: '/tmp',
       worktree: null,
+      repoName: null,
+      qualifiedRepoName: null,
       branch: null,
       prUrl: null,
       identityUpdatedAt: new Date().toISOString(),
@@ -223,6 +239,8 @@ describe('identity reader — join', () => {
       sessionFile: null,
       cwd: null,
       worktree: null,
+      repoName: null,
+      qualifiedRepoName: null,
       branch: null,
       prUrl: null,
       identityUpdatedAt: new Date().toISOString(),
@@ -299,6 +317,8 @@ describe('identity reader — join', () => {
         sessionFile: '/tmp/session-abc.md',
         cwd: '/tmp/project',
         worktree: '/tmp/project',
+        repoName: null,
+        qualifiedRepoName: null,
         branch: 'main',
         prUrl: null,
         identityUpdatedAt: new Date().toISOString(),
@@ -349,8 +369,12 @@ describe('identity reader — join', () => {
       sessionFile: null,
       cwd: null,
       worktree: null,
+      repoName: null,
+      qualifiedRepoName: null,
       branch: null,
       prUrl: null,
+      isLinkedWorktree: null,
+      worktreeLabel: null,
       identityUpdatedAt: new Date('2026-06-17T11:59:00.000Z').toISOString(),
       sessionStartedAt: '2026-06-17T11:00:00.000Z',
       gitRemote: null,

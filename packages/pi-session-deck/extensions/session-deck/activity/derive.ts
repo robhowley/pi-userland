@@ -169,7 +169,7 @@ export function deriveActivity(options: DeriveActivityOptions): DerivedActivity 
   if (activity.idle && !activity.busy) {
     return {
       ...trustedFields,
-      activityState: 'waiting',
+      activityState: 'idle',
       activityAgeMs: null,
       diagnostics,
     };

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   parseSessionDeckCommandArgs,
   registerSessionDeckCommand,
@@ -17,6 +17,10 @@ import type {
 
 const HOME = process.env['HOME'] ?? '/home/user';
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 function createMockAPI(): {
   api: PresenceCommandAPI;
   getHandler: () => ((args: string, ctx: PresenceCommandContext) => Promise<void>) | undefined;
@@ -33,10 +37,26 @@ function createMockAPI(): {
   };
 }
 
-function createCommandContext(): PresenceCommandContext {
+function createTheme() {
   return {
+    bold: (text: string) => text,
+    fg: (_tone: string, text: string) => text,
+  };
+}
+
+function createCommandContext(
+  overrides: Partial<PresenceCommandContext> = {},
+): PresenceCommandContext {
+  const custom = vi.fn() as NonNullable<PresenceCommandContext['ui']['custom']>;
+  const overrideUi = overrides.ui ?? {};
+
+  return {
+    ...(overrides.mode === undefined ? {} : { mode: overrides.mode }),
+    ...overrides,
     ui: {
       notify: vi.fn(),
+      custom,
+      ...overrideUi,
     },
   };
 }
@@ -44,15 +64,20 @@ function createCommandContext(): PresenceCommandContext {
 function buildSnapshotRecord(overrides: Partial<SessionDeckRecord> = {}): SessionDeckRecord {
   return {
     runtimeId: '922f7ac8deadbeef',
+    pid: 101,
     presenceState: 'live',
     presenceReason: 'fresh_heartbeat',
     heartbeatAgeMs: 5_000,
     sessionId: 'session-abc',
     sessionName: null,
+    repoName: 'project',
+    qualifiedRepoName: 'owner/project',
     cwd: `${HOME}/project`,
     branch: 'main',
     prUrl: 'https://github.com/owner/repo/pull/42',
-    activityState: 'waiting',
+    isLinkedWorktree: false,
+    worktreeLabel: null,
+    activityState: 'idle',
     activityAgeMs: null,
     currentToolName: null,
     lastError: null,
@@ -178,12 +203,12 @@ describe('session-deck joined command', () => {
     });
 
     const handler = getHandler();
-    const ctx = createCommandContext();
+    const ctx = createCommandContext({ mode: 'rpc' });
 
     await handler?.('', ctx);
     const [defaultMessage] = vi.mocked(ctx.ui.notify).mock.calls[0] ?? [];
     expect(defaultMessage).toContain('Pi sessions (live + stale)');
-    expect(defaultMessage).toContain('922f7ac8  waiting  5s');
+    expect(defaultMessage).toContain('922f7ac8  idle  5s');
     expect(defaultMessage).toContain('  alpha');
     expect(defaultMessage).toContain('  project  main  #42');
     expect(defaultMessage).toContain('  merge-ready clean');
@@ -198,6 +223,7 @@ describe('session-deck joined command', () => {
     expect(defaultMessage).not.toContain('chips=');
     expect(defaultMessage).not.toContain('scope=');
     expect(defaultMessage).not.toContain('updatedAt=');
+    expect(defaultMessage).not.toContain('repo:');
 
     vi.mocked(ctx.ui.notify).mockClear();
     await handler?.('--all', ctx);
@@ -214,18 +240,27 @@ describe('session-deck joined command', () => {
 
     registerSessionDeckCommand(api, {
       readSessionDeckSnapshot: vi.fn(async () =>
-        buildSnapshot({ records: [buildSnapshotRecord({ sessionName: 'alpha' })] }),
+        buildSnapshot({
+          records: [
+            buildSnapshotRecord({
+              sessionName: 'alpha',
+              isLinkedWorktree: true,
+              worktreeLabel: 'feature-sandbox',
+            }),
+          ],
+        }),
       ),
     });
 
     const handler = getHandler();
-    const ctx = createCommandContext();
+    const ctx = createCommandContext({ mode: 'rpc' });
 
     await handler?.('', ctx);
     const [defaultMessage] = vi.mocked(ctx.ui.notify).mock.calls[0] ?? [];
     expect(defaultMessage).toContain('  alpha');
     expect(defaultMessage).not.toContain('session=session-');
     expect(defaultMessage).not.toContain('name=alpha');
+    expect(defaultMessage).not.toContain('checkout: worktree');
 
     vi.mocked(ctx.ui.notify).mockClear();
     await handler?.('--identity', ctx);
@@ -233,6 +268,7 @@ describe('session-deck joined command', () => {
     expect(identityMessage).toContain('  alpha');
     expect(identityMessage).toContain('session=session-');
     expect(identityMessage).not.toContain('name=alpha');
+    expect(identityMessage).not.toContain('checkout: worktree');
   });
 
   it('preserves reap output while reading the joined snapshot', async () => {
@@ -249,7 +285,7 @@ describe('session-deck joined command', () => {
     });
 
     const handler = getHandler();
-    const ctx = createCommandContext();
+    const ctx = createCommandContext({ mode: 'rpc' });
 
     await handler?.('--reap', ctx);
 
@@ -260,6 +296,132 @@ describe('session-deck joined command', () => {
     expect(message).toContain('Removed:');
     expect(message).toContain('- rt-expired');
     expect(message).toContain('No live or stale Pi sessions found.');
+  });
+
+  it('dispatches to a custom browser in tui mode, shows session ids by default, and keeps refresh/reap wiring stable', async () => {
+    vi.useFakeTimers();
+
+    const { api, getHandler } = createMockAPI();
+    const reapPresence = vi.fn(async () => ({
+      removed: ['/tmp/rt-expired.json'],
+      diagnostics: [],
+    }));
+    const readSessionDeckSnapshot = vi
+      .fn<() => Promise<SessionDeckSnapshot>>()
+      .mockResolvedValueOnce(
+        buildSnapshot({
+          records: [
+            buildSnapshotRecord({
+              sessionName: 'alpha',
+              chips: ['merge-ready clean', 'queue 2'],
+            }),
+            buildSnapshotRecord({
+              runtimeId: 'rt-dead',
+              pid: 202,
+              sessionName: null,
+              repoName: null,
+              qualifiedRepoName: null,
+              cwd: null,
+              branch: null,
+              prUrl: null,
+              presenceState: 'dead',
+              presenceReason: 'pid_missing',
+              activityState: 'unknown',
+            }),
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        buildSnapshot({
+          records: [buildSnapshotRecord({ sessionName: 'beta' })],
+        }),
+      )
+      .mockResolvedValueOnce(
+        buildSnapshot({
+          records: [buildSnapshotRecord({ sessionName: 'gamma' })],
+        }),
+      );
+
+    registerSessionDeckCommand(api, {
+      readSessionDeckSnapshot,
+      reapPresenceRecords: reapPresence,
+    });
+
+    const handler = getHandler();
+    const requestRender = vi.fn();
+    const custom = vi.fn(async (factory) => {
+      const component = factory(
+        { requestRender },
+        createTheme() as never,
+        undefined,
+        () => undefined,
+      );
+
+      try {
+        const renderText = () => component.render(120).join('\n');
+
+        expect(renderText()).toContain('Reap complete: removed 1 expired presence record.');
+        expect(renderText()).toContain('alpha');
+        expect(renderText()).toContain('session: session-abc · pid: 101');
+        expect(renderText()).toContain('runtime: 922f7ac8deadbeef');
+        expect(renderText()).not.toContain('runtime: 922f7ac8deadbeef · pid: 101');
+        expect(renderText()).toContain('rt-dead');
+
+        component.handleInput?.('r');
+
+        await vi.waitFor(() => {
+          expect(readSessionDeckSnapshot).toHaveBeenCalledTimes(2);
+          expect(renderText()).toContain('beta');
+        });
+
+        await vi.advanceTimersByTimeAsync(15_000);
+
+        expect(readSessionDeckSnapshot).toHaveBeenCalledTimes(3);
+        expect(renderText()).toContain('gamma');
+      } finally {
+        component.dispose?.();
+      }
+    });
+    const ctx = createCommandContext({
+      mode: 'tui',
+      ui: {
+        notify: vi.fn(),
+        custom: custom as NonNullable<PresenceCommandContext['ui']['custom']>,
+      },
+    });
+
+    await handler?.('--all --reap', ctx);
+
+    expect(reapPresence).toHaveBeenCalledTimes(1);
+    expect(custom).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(ctx.ui.notify)).not.toHaveBeenCalled();
+    expect(requestRender).toHaveBeenCalled();
+  });
+
+  it('falls back to notify outside tui mode', async () => {
+    const { api, getHandler } = createMockAPI();
+
+    registerSessionDeckCommand(api, {
+      readSessionDeckSnapshot: vi.fn(async () => buildSnapshot({ records: [] })),
+    });
+
+    const handler = getHandler();
+    const custom = vi.fn();
+    const ctx = createCommandContext({
+      mode: 'rpc',
+      ui: {
+        notify: vi.fn(),
+        custom: custom as NonNullable<PresenceCommandContext['ui']['custom']>,
+      },
+    });
+
+    await handler?.('', ctx);
+
+    expect(custom).not.toHaveBeenCalled();
+    expect(vi.mocked(ctx.ui.notify)).toHaveBeenCalledWith(
+      expect.stringContaining('No live or stale Pi sessions found.'),
+      'info',
+    );
   });
 
   it('registers the expected slash command name', () => {

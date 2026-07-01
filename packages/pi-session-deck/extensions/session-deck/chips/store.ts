@@ -10,7 +10,6 @@ import { CHIPS_PATH_SEGMENTS } from './constants.js';
 
 export {
   resolveChipId,
-  resolveChipLevel,
   resolveChipScope,
   validateChipIdSlug,
   validateChipScope,

@@ -228,7 +228,7 @@ function normalizeActivityRecord(candidate: unknown): SessionActivityRecord | nu
 
 function normalizeActivityState(value: unknown): SessionActivityRecord['activityState'] {
   switch (value) {
-    case 'waiting':
+    case 'idle':
     case 'thinking':
     case 'tool-running':
     case 'error':
