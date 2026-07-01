@@ -12,6 +12,7 @@ import {
   CURRENT_BRANCH_TARGET,
   GH_GRAPHQL_REVIEW_THREADS_QUERY,
   GH_PR_VIEW_JSON_FIELDS,
+  REQUESTED_REVIEWER_SCENARIO,
   buildConversationsPayload as buildOptionalConversationsPayload,
   buildPullRequestPayload,
   createConversationsSuccessCall,
@@ -1063,6 +1064,36 @@ describe('getMergeReadyStatus', () => {
         ],
       },
     ]);
+  });
+
+  it('surfaces requested reviewers when required review is still pending', async () => {
+    const { exec, assertDone } = createFakeExec([
+      ...createGitDiscoveryCalls(),
+      createPullRequestViewSuccessCall(
+        buildPullRequestPayload(REQUESTED_REVIEWER_SCENARIO.pullRequestOverrides),
+      ),
+      createConversationsSuccessCall(buildConversationsPayload()),
+    ]);
+
+    const status = await getMergeReadyStatus({
+      exec,
+      cwd: '/repo',
+      now: () => new Date(GENERATED_AT),
+    });
+
+    assertDone();
+
+    expect(status.state).toBe('pending');
+    expect(status.summary).toBe('Waiting for review');
+    expect(status.openItems).toEqual([
+      {
+        id: 'review_pending',
+        summary: 'Waiting for review',
+        details: REQUESTED_REVIEWER_SCENARIO.openItemDetails,
+      },
+    ]);
+    expect(status.signals.review).toBe('pending');
+    expect(selectMergeReadyBadgeId(status)).toBe('review_pending');
   });
 
   it('does not emit review_pending when review is not required', async () => {

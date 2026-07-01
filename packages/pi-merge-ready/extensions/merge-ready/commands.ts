@@ -4,6 +4,7 @@ import type {
   WatchUiRuntimeModelRegistry,
   WatchUiThinkingLevel,
 } from './watch-ui/runtime-snapshot.js';
+import { BADGE_ICON_BY_ID } from './badge-icon.js';
 import { getMergeReadyStatus } from './merge-ready.js';
 import { syncMergeReadyStatusBar } from './status-bar.js';
 import { selectMergeReadyBadgeId } from './status.js';
@@ -98,27 +99,21 @@ export const MERGE_READY_COMMAND_WATCH_USAGE = `Usage: /${MERGE_READY_COMMAND_NA
 export const MERGE_READY_COMMAND_WATCH_UI_USAGE = `Usage: /${MERGE_READY_COMMAND_NAME} ${WATCH_UI_SUBCOMMAND} [${WATCH_UI_STOP_SUBCOMMAND}]`;
 export const MERGE_READY_COMMAND_USAGE = `${MERGE_READY_COMMAND_STATUS_USAGE}\n${MERGE_READY_COMMAND_WATCH_USAGE}\n${MERGE_READY_COMMAND_WATCH_UI_USAGE}`;
 
-const BADGE_PRESENTATION: Record<
-  MergeReadyBadgeId,
-  {
-    icon: string;
-    level: MergeReadyCommandNotificationLevel;
-  }
-> = {
-  draft: { icon: '📝', level: 'warning' },
-  merge_conflicts: { icon: '⚠️', level: 'error' },
-  branch_out_of_date: { icon: '🔄', level: 'warning' },
-  merge_blocked: { icon: '⛔', level: 'error' },
-  ci_failing: { icon: '❌', level: 'error' },
-  changes_requested: { icon: '🔁', level: 'error' },
-  unresolved_conversations: { icon: '💬', level: 'error' },
-  ci_running: { icon: '⏳', level: 'warning' },
-  review_pending: { icon: '👀', level: 'warning' },
-  ready: { icon: '✅', level: 'info' },
-  merged: { icon: '✅', level: 'info' },
-  closed: { icon: '⛔', level: 'warning' },
-  unknown: { icon: '❔', level: 'warning' },
-};
+const BADGE_LEVEL_BY_ID = {
+  draft: 'warning',
+  merge_conflicts: 'error',
+  branch_out_of_date: 'warning',
+  merge_blocked: 'error',
+  ci_failing: 'error',
+  changes_requested: 'error',
+  unresolved_conversations: 'error',
+  ci_running: 'warning',
+  review_pending: 'warning',
+  ready: 'info',
+  merged: 'info',
+  closed: 'warning',
+  unknown: 'warning',
+} as const satisfies Record<MergeReadyBadgeId, MergeReadyCommandNotificationLevel>;
 
 type MergeReadyCommandWatchRuntimeAPI = MergeReadyCommandAPI & {
   getThinkingLevel?: () => WatchUiThinkingLevel | undefined;
@@ -249,8 +244,10 @@ export function renderMergeReadyStatus(status: MergeReadyStatus): {
   level: MergeReadyCommandNotificationLevel;
 } {
   const badgeId = selectMergeReadyBadgeId(status);
-  const badge = BADGE_PRESENTATION[badgeId];
-  const lines = [`${badge.icon} ${status.summary}`, `Target: ${formatTarget(status.target)}`];
+  const lines = [
+    `${BADGE_ICON_BY_ID[badgeId]} ${status.summary}`,
+    `Target: ${formatTarget(status.target)}`,
+  ];
 
   if (status.pr) {
     lines.push(formatPullRequestIdentity(status.pr));
@@ -272,7 +269,7 @@ export function renderMergeReadyStatus(status: MergeReadyStatus): {
 
   return {
     message: lines.join('\n'),
-    level: badge.level,
+    level: BADGE_LEVEL_BY_ID[badgeId],
   };
 }
 

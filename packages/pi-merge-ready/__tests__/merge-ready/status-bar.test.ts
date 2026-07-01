@@ -16,6 +16,7 @@ import {
 } from '../../extensions/merge-ready/index.js';
 import {
   GH_PR_VIEW_JSON_FIELDS,
+  REQUESTED_REVIEWER_SCENARIO,
   buildConversationsPayload,
   buildPullRequestPayload,
   createConversationsSuccessCall,
@@ -211,10 +212,34 @@ describe('merge-ready status bar', () => {
           unresolvedConversationRequirement: 'optional',
         },
       }),
-      expected: '✅ Merged',
+      expected: '🎉 Merged',
     },
   ])('renders $name with mergeability-aware status text', ({ status, expected }) => {
     expect(renderMergeReadyStatusBar(status)).toBe(expected);
+  });
+
+  it('keeps review-pending status text when reviewer details are attached', () => {
+    const status = createMergeReadyStatus({
+      generatedAt: '2026-05-27T00:00:00.000Z',
+      pr: buildOpenPr(),
+      openItems: [
+        {
+          id: 'review_pending',
+          summary: 'Waiting for review',
+          details: REQUESTED_REVIEWER_SCENARIO.openItemDetails,
+        },
+      ],
+      signals: {
+        draft: false,
+        mergeability: 'mergeable',
+        checks: 'passing',
+        review: 'pending',
+        unresolvedConversations: false,
+        unresolvedConversationRequirement: 'optional',
+      },
+    });
+
+    expect(renderMergeReadyStatusBar(status)).toBe('👀 Review pending');
   });
 
   it('renders required unresolved conversations as the top blocker', () => {
