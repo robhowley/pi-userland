@@ -7,7 +7,6 @@ import {
   getChipsDirectory,
   isChipRecordFile,
   resolveChipId,
-  resolveChipLevel,
   resolveChipScope,
   validateChipIdSlug,
   validateChipScope,
@@ -121,27 +120,5 @@ describe('resolveChipScope', () => {
 
   it('passes through valid scope', () => {
     expect(resolveChipScope('runtime')).toBe('runtime');
-  });
-});
-
-describe('resolveChipLevel', () => {
-  it('defaults unknown for undefined level', () => {
-    expect(resolveChipLevel(undefined)).toBe('unknown');
-  });
-
-  it('coerces invalid levels to unknown', () => {
-    expect(resolveChipLevel('invalid')).toBe('unknown');
-  });
-
-  it('passes through valid levels', () => {
-    expect(resolveChipLevel('ok')).toBe('ok');
-    expect(resolveChipLevel('warn')).toBe('warn');
-    expect(resolveChipLevel('error')).toBe('error');
-    expect(resolveChipLevel('unknown')).toBe('unknown');
-  });
-
-  it('normalises mixed case', () => {
-    expect(resolveChipLevel('OK')).toBe('ok');
-    expect(resolveChipLevel('WARN')).toBe('warn');
   });
 });

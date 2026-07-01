@@ -2,7 +2,7 @@
  * Chips backend constants for pi-session-deck.
  *
  * Defines path segments, schema version, default values, validation helpers,
- * and the shared diagnostic code namespace for chip publish/write/clear paths.
+ * and the shared diagnostic code namespace for chip read/write paths.
  */
 
 import type { ChipDiagnosticCode, ChipLevel, ChipScope } from './types.js';
@@ -113,22 +113,10 @@ export function validateChipLevel(level: string): ChipValidationResult<ChipLevel
   return { valid: true, value: level };
 }
 
-export function resolveChipLevel(candidate: string | undefined): ChipLevel {
-  if (candidate === undefined) {
-    return DEFAULT_CHIP_LEVEL;
-  }
-
-  const normalized = candidate.trim().toLowerCase();
-  return isChipLevel(normalized) ? normalized : DEFAULT_CHIP_LEVEL;
-}
-
 export const CHIP_DIAGNOSTIC_CODES = {
   CHIP_SOURCE_INVALID: 'chip_source_invalid',
   CHIP_ID_INVALID: 'chip_id_invalid',
   CHIP_LEVEL_INVALID: 'chip_level_invalid',
-  CHIP_TEXT_EMPTY: 'chip_text_empty',
-  CHIP_UPDATED_AT_MISSING: 'chip_updated_at_missing',
-  CHIP_UPDATED_AT_FUTURE: 'chip_updated_at_future',
   CHIP_WRITE_ERROR: 'chip_write_error',
   CHIP_CLEAR_ERROR: 'chip_clear_error',
   CHIP_SCOPE_INVALID: 'chip_scope_invalid',

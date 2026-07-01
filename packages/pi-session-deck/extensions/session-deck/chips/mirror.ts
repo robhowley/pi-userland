@@ -6,13 +6,14 @@
 import { stripVTControlCharacters } from 'node:util';
 import {
   CHIP_DIAGNOSTIC_CODES,
+  CHIPS_SCHEMA_VERSION,
   DEFAULT_CHIP_ID,
   DEFAULT_CHIP_LEVEL,
   DEFAULT_CHIP_SCOPE,
   validateSourceSlug,
 } from './constants.js';
 import type { ChipDiagnosticSink } from './types.js';
-import { clearSessionDeckChip, publishSessionDeckChip } from './publisher.js';
+import { clearChipRecord, writeChipRecord } from './writer.js';
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -228,8 +229,9 @@ export function createSetStatusMirror(options: StatusMirrorOptions = {}): SetSta
       return;
     }
 
-    const result = await publishSessionDeckChip(
+    const result = await writeChipRecord(
       {
+        schemaVersion: CHIPS_SCHEMA_VERSION,
         source,
         text: sanitized,
         updatedAt: new Date().toISOString(),
@@ -275,7 +277,7 @@ export function createSetStatusMirror(options: StatusMirrorOptions = {}): SetSta
   }
 
   async function clearSourceChip(snapshot: ResolvedStatusContext, source: string): Promise<void> {
-    await clearSessionDeckChip(
+    await clearChipRecord(
       {
         source,
         chipId: DEFAULT_CHIP_ID,

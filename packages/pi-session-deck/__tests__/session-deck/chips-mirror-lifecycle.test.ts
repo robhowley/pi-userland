@@ -21,13 +21,13 @@ describe('createSetStatusMirror lifecycle ordering', () => {
     const publishCalls: Record<string, unknown>[] = [];
     const clearCalls: Record<string, unknown>[] = [];
 
-    vi.doMock('../../extensions/session-deck/chips/publisher.js', () => ({
-      publishSessionDeckChip: vi.fn(async (input: Record<string, unknown>) => {
+    vi.doMock('../../extensions/session-deck/chips/writer.js', () => ({
+      writeChipRecord: vi.fn(async (input: Record<string, unknown>) => {
         publishCalls.push(input);
         await publishGate.promise;
         return '/tmp/source-a.default.session.json';
       }),
-      clearSessionDeckChip: vi.fn(async (input: Record<string, unknown>) => {
+      clearChipRecord: vi.fn(async (input: Record<string, unknown>) => {
         clearCalls.push(input);
         return true;
       }),
@@ -57,6 +57,7 @@ describe('createSetStatusMirror lifecycle ordering', () => {
     expect(originalSetStatus).toHaveBeenCalledWith('source-a', 'hello');
     expect(publishCalls).toEqual([
       expect.objectContaining({
+        schemaVersion: 1,
         source: 'source-a',
         text: 'hello',
         runtimeId: 'runtime-1',

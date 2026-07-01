@@ -37,20 +37,8 @@ pi install npm:@robhowley/pi-session-deck
 `pi-session-deck` can mirror visible `ctx.ui.setStatus()` text into lightweight per-session chips so `/session-deck` can show short status labels.
 
 - Mirrors visible `setStatus()` text automatically.
-- Supports manual publish/clear helpers for package-owned chips.
 - Persists sanitized visible text only.
 - Never stores prompts, transcript content, tool args, or tool outputs in chips.
-
-## Manual chip publishing
-
-Use these helpers when you want to publish or clear chips directly:
-
-```ts
-import {
-  publishSessionDeckChip,
-  clearSessionDeckChip,
-} from '@robhowley/pi-session-deck/extensions/session-deck/chips/publisher.js';
-```
 
 ## Privacy limits
 
