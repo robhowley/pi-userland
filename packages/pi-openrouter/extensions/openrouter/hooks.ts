@@ -16,12 +16,15 @@ import {
   setActiveCatalogState,
 } from './models/sync.js';
 import { loadOpenRouterStatusBar } from './status-bar.js';
+import { isStatusEnabled } from './config.js';
 
 let sessionState: SessionState | null = null;
 let sessionTrackingInstalled = false;
 let openRouterStatusRolloverTimer: ReturnType<typeof setTimeout> | null = null;
 
-type StatusContext = Pick<ExtensionContext, 'hasUI' | 'ui'>;
+type StatusContext = Pick<ExtensionContext, 'cwd' | 'hasUI' | 'ui'> & {
+  isProjectTrusted?: () => boolean;
+};
 
 export interface StartupCacheState {
   info?: {
@@ -213,8 +216,29 @@ function captureLocalUsage(event: unknown, ctx: ExtensionContext): void {
   }
 }
 
+function getProjectTrusted(ctx: StatusContext): boolean {
+  try {
+    return ctx.isProjectTrusted?.() ?? true;
+  } catch {
+    return true;
+  }
+}
+
+function isOpenRouterStatusEnabled(ctx: StatusContext): boolean {
+  try {
+    return isStatusEnabled(ctx.cwd, getProjectTrusted(ctx));
+  } catch {
+    return true;
+  }
+}
+
 async function refreshOpenRouterUsageStatus(ctx: StatusContext): Promise<void> {
   if (!ctx.hasUI) return;
+
+  if (!isOpenRouterStatusEnabled(ctx)) {
+    ctx.ui.setStatus('openrouter', undefined);
+    return;
+  }
 
   try {
     const statusResult = await loadOpenRouterStatusBar();
@@ -258,7 +282,7 @@ function getMillisecondsUntilNextUtcMidnight(now: Date = new Date()): number {
 function scheduleOpenRouterStatusRollover(ctx: StatusContext): void {
   clearOpenRouterStatusRolloverTimer();
 
-  if (!ctx.hasUI) {
+  if (!ctx.hasUI || !isOpenRouterStatusEnabled(ctx)) {
     return;
   }
 

@@ -168,6 +168,18 @@ The extension logs completed OpenRouter turns to local JSONL files in `~/.pi/ope
 
 When positive local spend exists in the last 30 UTC days, the footer/status bar shows local-only Today spend and a 30-day average multiplier, for example `OR $2.14 today · 1.3x 30d avg`.
 
+To hide only the footer/status bar, set `pi-openrouter.statusEnabled` to `false` in either `~/.pi/agent/settings.json` or `.pi/settings.json`:
+
+```json
+{
+  "pi-openrouter": {
+    "statusEnabled": false
+  }
+}
+```
+
+The default is enabled. Setting `false` hides only the footer/status bar; `/openrouter usage`, `/openrouter models-status`, model sync, and local usage tracking remain available.
+
 Model count and cache health remain available through `/openrouter models-status`.
 
 **Retention:** Local usage files are automatically cleaned up after 90 days.
