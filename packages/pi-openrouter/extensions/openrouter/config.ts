@@ -12,50 +12,31 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function getOpenRouterSettings(settings: Record<string, unknown>): unknown {
-  return settings['pi-openrouter'];
+function getOpenRouterSettings(settings: unknown): unknown {
+  return isRecord(settings) ? settings['pi-openrouter'] : undefined;
 }
 
-function mergeScopedOpenRouterSettings(
-  globalSettings: Record<string, unknown>,
-  projectSettings: Record<string, unknown>,
-): unknown {
-  const globalOpenRouterSettings = getOpenRouterSettings(globalSettings);
-  const projectOpenRouterSettings = getOpenRouterSettings(projectSettings);
-
-  if (isRecord(globalOpenRouterSettings) && isRecord(projectOpenRouterSettings)) {
-    return {
-      ...globalOpenRouterSettings,
-      ...projectOpenRouterSettings,
-    };
-  }
-
-  return projectOpenRouterSettings === undefined
-    ? globalOpenRouterSettings
-    : projectOpenRouterSettings;
-}
-
-function parseOpenRouterConfig(rawConfig: unknown): OpenRouterConfig {
+function getStatusEnabled(rawConfig: unknown): boolean | undefined {
   if (!isRecord(rawConfig)) {
-    return DEFAULT_OPENROUTER_CONFIG;
+    return undefined;
   }
 
-  return {
-    statusEnabled:
-      typeof rawConfig['statusEnabled'] === 'boolean'
-        ? rawConfig['statusEnabled']
-        : DEFAULT_OPENROUTER_CONFIG.statusEnabled,
-  };
+  return typeof rawConfig['statusEnabled'] === 'boolean' ? rawConfig['statusEnabled'] : undefined;
 }
 
 export function loadOpenRouterConfig(cwd: string, projectTrusted = true): OpenRouterConfig {
   const settingsManager = SettingsManager.create(cwd);
-  const globalSettings = settingsManager.getGlobalSettings() as Record<string, unknown>;
-  const projectSettings = projectTrusted
-    ? (settingsManager.getProjectSettings() as Record<string, unknown>)
-    : {};
+  const globalStatusEnabled = getStatusEnabled(
+    getOpenRouterSettings(settingsManager.getGlobalSettings()),
+  );
+  const projectStatusEnabled = projectTrusted
+    ? getStatusEnabled(getOpenRouterSettings(settingsManager.getProjectSettings()))
+    : undefined;
 
-  return parseOpenRouterConfig(mergeScopedOpenRouterSettings(globalSettings, projectSettings));
+  return {
+    statusEnabled:
+      projectStatusEnabled ?? globalStatusEnabled ?? DEFAULT_OPENROUTER_CONFIG.statusEnabled,
+  };
 }
 
 export function isStatusEnabled(cwd: string, projectTrusted = true): boolean {

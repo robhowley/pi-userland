@@ -96,7 +96,7 @@ describe.sequential('openrouter config', () => {
     });
   });
 
-  it('defaults invalid or unset values to true', () => {
+  it('keeps a global false when trusted project-local settings are malformed', () => {
     writeGlobalSettings({
       'pi-openrouter': {
         statusEnabled: false,
@@ -109,12 +109,43 @@ describe.sequential('openrouter config', () => {
     });
 
     expect(loadOpenRouterConfig(cwd)).toEqual({
+      statusEnabled: false,
+    });
+
+    writeProjectSettings({
+      'pi-openrouter': 'invalid',
+    });
+
+    expect(loadOpenRouterConfig(cwd)).toEqual({
+      statusEnabled: false,
+    });
+  });
+
+  it('defaults invalid or unset values to true when neither scope has a valid boolean', () => {
+    writeGlobalSettings({
+      'pi-openrouter': {
+        statusEnabled: 'invalid',
+      },
+    });
+
+    expect(loadOpenRouterConfig(cwd)).toEqual({
       statusEnabled: true,
     });
 
-    writeProjectSettings({});
     writeGlobalSettings({
       'pi-openrouter': 'invalid',
+    });
+    writeProjectSettings({});
+
+    expect(loadOpenRouterConfig(cwd)).toEqual({
+      statusEnabled: true,
+    });
+
+    writeGlobalSettings({});
+    writeProjectSettings({
+      'pi-openrouter': {
+        statusEnabled: 'invalid',
+      },
     });
 
     expect(loadOpenRouterConfig(cwd)).toEqual({

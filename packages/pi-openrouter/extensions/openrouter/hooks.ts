@@ -218,9 +218,9 @@ function captureLocalUsage(event: unknown, ctx: ExtensionContext): void {
 
 function getProjectTrusted(ctx: StatusContext): boolean {
   try {
-    return ctx.isProjectTrusted?.() ?? true;
+    return ctx.isProjectTrusted?.() === true;
   } catch {
-    return true;
+    return false;
   }
 }
 

@@ -313,6 +313,22 @@ describe('openrouter hooks', () => {
     expect(ctx.ui.setStatus).toHaveBeenCalledWith('openrouter', undefined);
   });
 
+  it('uses the conservative global-only path when trust state is unavailable from context', async () => {
+    const { handlers, pi } = createMockPi();
+    const ctx = createMockContext();
+    const { initializeSessionState, installOpenRouterHooks } = await loadHooksModule();
+
+    mocks.isStatusEnabled.mockReturnValue(false);
+
+    initializeSessionState();
+    installOpenRouterHooks(pi as any, {});
+
+    await handlers.get('session_start')({ reason: 'startup' }, ctx);
+
+    expect(mocks.isStatusEnabled).toHaveBeenCalledWith('/repo', false);
+    expect(mocks.loadOpenRouterStatusBar).not.toHaveBeenCalled();
+  });
+
   it('clears stale startup status asynchronously when cached models exist but local spend is empty', async () => {
     const { handlers, pi } = createMockPi();
     const ctx = createMockContext();

@@ -180,6 +180,8 @@ To hide only the footer/status bar, set `pi-openrouter.statusEnabled` to `false`
 
 The default is enabled. Setting `false` hides only the footer/status bar; `/openrouter usage`, `/openrouter models-status`, model sync, and local usage tracking remain available.
 
+Project-local `.pi/settings.json` only overrides the global setting when Pi treats the project as trusted. If trust state is unavailable, `pi-openrouter` falls back to the global setting.
+
 Model count and cache health remain available through `/openrouter models-status`.
 
 **Retention:** Local usage files are automatically cleaned up after 90 days.
