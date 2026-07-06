@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createOpenRouterRequest, createSessionCtx, THROW_SESSION_ID } from './fixtures.js';
 
 const mocks = vi.hoisted(() => ({
   stopBackgroundRefresh: vi.fn(),
@@ -129,6 +130,123 @@ describe('openrouter hooks', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  describe('addSessionIdToOpenRouterRequest', () => {
+    it('adds session_id to OpenRouter requests', async () => {
+      const { addSessionIdToOpenRouterRequest } = await loadHooksModule();
+
+      const result = addSessionIdToOpenRouterRequest(
+        createOpenRouterRequest(),
+        createSessionCtx('stable-session-123'),
+      );
+
+      expect(result).toEqual({
+        model: 'openrouter/anthropic/claude-sonnet-4',
+        messages: [],
+        session_id: 'pi:stable-session-123',
+      });
+    });
+
+    it('returns same session_id for multiple OpenRouter requests in same session', async () => {
+      const { addSessionIdToOpenRouterRequest } = await loadHooksModule();
+      const ctx = createSessionCtx('stable-session-123');
+
+      const result1 = addSessionIdToOpenRouterRequest(
+        createOpenRouterRequest({
+          payload: { model: 'openrouter/model-1', messages: [] },
+        }),
+        ctx,
+      );
+      const result2 = addSessionIdToOpenRouterRequest(
+        createOpenRouterRequest({
+          payload: { model: 'openrouter/model-2', messages: [] },
+        }),
+        ctx,
+      );
+
+      expect(result1?.['session_id']).toBe('pi:stable-session-123');
+      expect(result2?.['session_id']).toBe('pi:stable-session-123');
+      expect(result1?.['session_id']).toBe(result2?.['session_id']);
+    });
+
+    it('does not overwrite existing session_id in payload', async () => {
+      const { addSessionIdToOpenRouterRequest } = await loadHooksModule();
+      const event = createOpenRouterRequest({
+        payload: {
+          model: 'openrouter/anthropic/claude-sonnet-4',
+          messages: [],
+          session_id: 'existing-session-id',
+        },
+      });
+
+      const result = addSessionIdToOpenRouterRequest(event, createSessionCtx('new-session'));
+
+      expect(result).toBeUndefined();
+      expect(event.payload?.['session_id']).toBe('existing-session-id');
+    });
+
+    it('does not tag non-OpenRouter requests', async () => {
+      mocks.isOpenRouterRequest.mockReturnValue(false);
+      const { addSessionIdToOpenRouterRequest } = await loadHooksModule();
+
+      const result = addSessionIdToOpenRouterRequest(
+        createOpenRouterRequest({
+          provider: 'anthropic',
+          payload: {
+            model: 'claude-sonnet-4',
+            messages: [],
+          },
+        }),
+        createSessionCtx('my-session'),
+      );
+
+      expect(result).toBeUndefined();
+    });
+
+    it('fails open when payload is missing', async () => {
+      const { addSessionIdToOpenRouterRequest } = await loadHooksModule();
+      const event = createOpenRouterRequest();
+      delete event.payload;
+
+      const result = addSessionIdToOpenRouterRequest(event, createSessionCtx('my-session'));
+
+      expect(result).toBeUndefined();
+    });
+
+    it('generates fallback UUID when session manager throws', async () => {
+      const { addSessionIdToOpenRouterRequest } = await loadHooksModule();
+
+      const result = addSessionIdToOpenRouterRequest(
+        createOpenRouterRequest({
+          payload: {
+            model: 'openrouter/model',
+            messages: [],
+          },
+        }),
+        createSessionCtx(THROW_SESSION_ID),
+      );
+
+      expect(result?.['session_id']).toMatch(
+        /^pi:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+      );
+    });
+
+    it('fails open when payload getter throws', async () => {
+      const { addSessionIdToOpenRouterRequest } = await loadHooksModule();
+
+      const result = addSessionIdToOpenRouterRequest(
+        {
+          provider: 'openrouter',
+          get payload() {
+            throw new Error('Payload getter error');
+          },
+        },
+        createSessionCtx('my-session'),
+      );
+
+      expect(result).toBeUndefined();
+    });
   });
 
   it('loads cached startup models, respects cached mode, and seeds active catalog state', async () => {
