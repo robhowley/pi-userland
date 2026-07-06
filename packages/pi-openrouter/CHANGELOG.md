@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.12.1...pi-openrouter-v0.13.0) (2026-07-06)
+
+
+### Features
+
+* **pi-openrouter:** add statusEnabled setting ([#104](https://github.com/robhowley/pi-userland/issues/104)) ([f840c1d](https://github.com/robhowley/pi-userland/commit/f840c1de5d464140545b6c6e0799f0dc1137e1d1))
+
 ## [0.12.1](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.12.0...pi-openrouter-v0.12.1) (2026-06-17)
 
 
