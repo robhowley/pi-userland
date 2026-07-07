@@ -414,7 +414,7 @@ describe('merge-ready command', () => {
     await handler?.('', ctx);
 
     assertDone();
-    expect(ctx.ui.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ Ready');
+    expect(ctx.ui.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ #42 Ready');
     expect(ctx.ui.notify).toHaveBeenCalledWith(
       [
         '✅ Ready to merge',
@@ -445,7 +445,7 @@ describe('merge-ready command', () => {
     await handler?.('', ctx);
 
     assertDone();
-    expect(ctx.ui.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '🎉 Merged');
+    expect(ctx.ui.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '🎉 #42 Merged');
     expect(ctx.ui.notify).toHaveBeenCalledWith(
       [
         '🎉 PR is already merged',
@@ -477,7 +477,7 @@ describe('merge-ready command', () => {
     await handler?.('', ctx);
 
     assertDone();
-    expect(ctx.ui.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '👀 Review pending');
+    expect(ctx.ui.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '👀 #42 Review pending');
     expect(ctx.ui.notify).toHaveBeenCalledWith(
       [
         '👀 Waiting for review',
@@ -530,8 +530,8 @@ describe('merge-ready command', () => {
     });
 
     assertDone();
-    expect(refreshed).toEqual({ text: '✅ Ready', cached: true });
-    expect(refreshCtx.ui.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ Ready');
+    expect(refreshed).toEqual({ text: '✅ #42 Ready', cached: true });
+    expect(refreshCtx.ui.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ #42 Ready');
   });
 
   it('does not sync URL-targeted command results into the ambient status bar cache', async () => {

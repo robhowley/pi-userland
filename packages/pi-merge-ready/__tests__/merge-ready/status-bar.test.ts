@@ -146,7 +146,7 @@ describe('merge-ready status bar', () => {
     await getHandler('session_start')?.({ reason: 'startup' }, ctx);
 
     assertDone();
-    expect(ctx.ui?.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ Ready');
+    expect(ctx.ui?.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ #42 Ready');
   });
 
   it.each([
@@ -164,7 +164,7 @@ describe('merge-ready status bar', () => {
           unresolvedConversationRequirement: 'optional',
         },
       }),
-      expected: '⚠️ Conflicts',
+      expected: '⚠️ #42 Conflicts',
     },
     {
       name: 'branch out of date',
@@ -180,7 +180,7 @@ describe('merge-ready status bar', () => {
           unresolvedConversationRequirement: 'optional',
         },
       }),
-      expected: '🔄 Out of date',
+      expected: '🔄 #42 Out of date',
     },
     {
       name: 'generic merge blocked',
@@ -196,7 +196,7 @@ describe('merge-ready status bar', () => {
           unresolvedConversationRequirement: 'optional',
         },
       }),
-      expected: '⛔ Merge blocked',
+      expected: '⛔ #42 Merge blocked',
     },
     {
       name: 'merged lifecycle',
@@ -212,7 +212,7 @@ describe('merge-ready status bar', () => {
           unresolvedConversationRequirement: 'optional',
         },
       }),
-      expected: '🎉 Merged',
+      expected: '🎉 #42 Merged',
     },
   ])('renders $name with mergeability-aware status text', ({ status, expected }) => {
     expect(renderMergeReadyStatusBar(status)).toBe(expected);
@@ -239,7 +239,7 @@ describe('merge-ready status bar', () => {
       },
     });
 
-    expect(renderMergeReadyStatusBar(status)).toBe('👀 Review pending');
+    expect(renderMergeReadyStatusBar(status)).toBe('👀 #42 Review pending');
   });
 
   it('renders required unresolved conversations as the top blocker', () => {
@@ -257,7 +257,7 @@ describe('merge-ready status bar', () => {
       },
     });
 
-    expect(renderMergeReadyStatusBar(status)).toBe('❌ 💬 2 unresolved');
+    expect(renderMergeReadyStatusBar(status)).toBe('❌ #42 💬 2 unresolved');
   });
 
   it('renders optional unresolved comments on an otherwise ready PR', () => {
@@ -275,7 +275,7 @@ describe('merge-ready status bar', () => {
       },
     });
 
-    expect(renderMergeReadyStatusBar(status)).toBe('✅ Mergeable · 💬 2 comments');
+    expect(renderMergeReadyStatusBar(status)).toBe('✅ #42 Mergeable · 💬 2 comments');
   });
 
   it('syncs a provided ambient status into the footer and TTL cache', async () => {
@@ -304,8 +304,8 @@ describe('merge-ready status bar', () => {
       now: 1_000 + MERGE_READY_STATUS_BAR_TTL_MS - 1,
     });
 
-    expect(synced).toEqual({ text: '✅ Ready', cached: false });
-    expect(refreshed).toEqual({ text: '✅ Ready', cached: true });
+    expect(synced).toEqual({ text: '✅ #42 Ready', cached: false });
+    expect(refreshed).toEqual({ text: '✅ #42 Ready', cached: true });
     expect(ctx.ui?.setStatus).toHaveBeenCalledTimes(2);
   });
 
@@ -364,9 +364,9 @@ describe('merge-ready status bar', () => {
       now: 1_000 + MERGE_READY_STATUS_BAR_TTL_MS - 1,
     });
 
-    expect(targeted).toEqual({ text: '✅ Ready', cached: false });
+    expect(targeted).toEqual({ text: '✅ #64 Ready', cached: false });
     expect(targetedCtx.ui?.setStatus).not.toHaveBeenCalled();
-    expect(refreshed).toEqual({ text: '✅ Ready', cached: true });
+    expect(refreshed).toEqual({ text: '✅ #42 Ready', cached: true });
   });
 
   it('suppresses cached ambient refreshes while suspended until resumed', async () => {
@@ -399,14 +399,14 @@ describe('merge-ready status bar', () => {
       now: 1_000 + MERGE_READY_STATUS_BAR_TTL_MS - 1,
     });
 
-    expect(hiddenRefresh).toEqual({ text: '✅ Ready', cached: true });
+    expect(hiddenRefresh).toEqual({ text: '✅ #42 Ready', cached: true });
     expect(setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, undefined);
-    expect(setStatus).not.toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ Ready');
+    expect(setStatus).not.toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ #42 Ready');
 
     setStatus.mockClear();
     resume();
     expect(isMergeReadyStatusBarSuspended()).toBe(false);
-    expect(setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ Ready');
+    expect(setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ #42 Ready');
 
     setStatus.mockClear();
     const visibleRefresh = await refreshMergeReadyStatusBar({
@@ -415,8 +415,8 @@ describe('merge-ready status bar', () => {
       now: 1_000 + MERGE_READY_STATUS_BAR_TTL_MS - 1,
     });
 
-    expect(visibleRefresh).toEqual({ text: '✅ Ready', cached: true });
-    expect(setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ Ready');
+    expect(visibleRefresh).toEqual({ text: '✅ #42 Ready', cached: true });
+    expect(setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ #42 Ready');
   });
 
   it('keeps fresh ambient refreshes hidden while suspended', async () => {
@@ -448,14 +448,14 @@ describe('merge-ready status bar', () => {
     });
 
     assertDone();
-    expect(hiddenRefresh).toEqual({ text: '✅ Ready', cached: false });
+    expect(hiddenRefresh).toEqual({ text: '✅ #42 Ready', cached: false });
     expect(setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, undefined);
-    expect(setStatus).not.toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ Ready');
+    expect(setStatus).not.toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ #42 Ready');
 
     setStatus.mockClear();
     resume();
     expect(isMergeReadyStatusBarSuspended()).toBe(false);
-    expect(setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ Ready');
+    expect(setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ #42 Ready');
 
     setStatus.mockClear();
     const visibleRefresh = await refreshMergeReadyStatusBar({
@@ -464,8 +464,8 @@ describe('merge-ready status bar', () => {
       now: 2_000 + MERGE_READY_STATUS_BAR_TTL_MS - 1,
     });
 
-    expect(visibleRefresh).toEqual({ text: '✅ Ready', cached: true });
-    expect(setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ Ready');
+    expect(visibleRefresh).toEqual({ text: '✅ #42 Ready', cached: true });
+    expect(setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ #42 Ready');
   });
 
   it('keeps ambient status suspended until the last cleanup runs', () => {
@@ -517,7 +517,7 @@ describe('merge-ready status bar', () => {
     assertDone();
     expect(ctx.ui?.setStatus).toHaveBeenCalledWith(
       MERGE_READY_STATUS_BAR_KEY,
-      '❌ 💬 2 unresolved',
+      '❌ #42 💬 2 unresolved',
     );
   });
 
@@ -555,7 +555,7 @@ describe('merge-ready status bar', () => {
     await getHandler('turn_end')?.({}, ctx);
 
     assertDone();
-    expect(ctx.ui?.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '❌ Checks failing');
+    expect(ctx.ui?.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '❌ #42 Checks failing');
   });
 
   it('renders an unknown-looking status when no pull request is found', async () => {
@@ -612,8 +612,8 @@ describe('merge-ready status bar', () => {
     });
 
     assertDone();
-    expect(first).toEqual({ text: '✅ Ready', cached: false });
-    expect(second).toEqual({ text: '✅ Ready', cached: true });
+    expect(first).toEqual({ text: '✅ #42 Ready', cached: false });
+    expect(second).toEqual({ text: '✅ #42 Ready', cached: true });
     expect(ctx.ui?.setStatus).toHaveBeenCalledTimes(2);
   });
 
@@ -662,8 +662,8 @@ describe('merge-ready status bar', () => {
     });
 
     assertDone();
-    expect(first).toEqual({ text: '✅ Ready', cached: false });
-    expect(second).toEqual({ text: '✅ Ready', cached: false });
+    expect(first).toEqual({ text: '✅ #42 Ready', cached: false });
+    expect(second).toEqual({ text: '✅ #42 Ready', cached: false });
   });
 
   it('degrades exec failures to an unknown-looking status instead of throwing through the hook', async () => {

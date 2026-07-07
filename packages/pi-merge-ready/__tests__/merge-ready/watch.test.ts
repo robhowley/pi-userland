@@ -1893,7 +1893,7 @@ describe('merge-ready watch loop', () => {
     expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, undefined);
     expect(vi.mocked(ctx.ui.setStatus)).not.toHaveBeenCalledWith(
       MERGE_READY_STATUS_BAR_KEY,
-      '✅ Ready',
+      '✅ #42 Ready',
     );
 
     const hiddenWhileRepairQueued = await refreshMergeReadyStatusBar({

@@ -174,20 +174,24 @@ export function syncMergeReadyStatusBar(
 }
 
 export function renderMergeReadyStatusBar(status: MergeReadyStatus): string {
-  const specialCase = renderStatusBarSpecialCase(status);
-  if (specialCase) {
-    return specialCase;
-  }
-
   const badgeId = selectMergeReadyBadgeId(status);
-  return `${BADGE_ICON_BY_ID[badgeId]} ${renderStatusBarText(status, badgeId)}`;
+  const specialCase = renderStatusBarSpecialCase(status, badgeId);
+  const icon = specialCase?.icon ?? BADGE_ICON_BY_ID[badgeId];
+  const caption = specialCase?.caption ?? renderStatusBarText(status, badgeId);
+  const prPrefix = status.pr ? `#${String(status.pr.number)} ` : '';
+
+  return `${icon} ${prPrefix}${caption}`;
 }
 
-function renderStatusBarSpecialCase(status: MergeReadyStatus): string | null {
-  const badgeId = selectMergeReadyBadgeId(status);
-
+function renderStatusBarSpecialCase(
+  status: MergeReadyStatus,
+  badgeId: MergeReadyBadgeId,
+): { icon: string; caption: string } | null {
   if (badgeId === 'unresolved_conversations') {
-    return `❌ 💬 ${formatRequiredUnresolvedConversationText(status)}`;
+    return {
+      icon: '❌',
+      caption: `💬 ${formatRequiredUnresolvedConversationText(status)}`,
+    };
   }
 
   if (
@@ -195,7 +199,10 @@ function renderStatusBarSpecialCase(status: MergeReadyStatus): string | null {
     status.signals.unresolvedConversations &&
     status.signals.unresolvedConversationRequirement === 'optional'
   ) {
-    return `✅ Mergeable · 💬 ${formatOptionalUnresolvedConversationText(status)}`;
+    return {
+      icon: BADGE_ICON_BY_ID.ready,
+      caption: `Mergeable · 💬 ${formatOptionalUnresolvedConversationText(status)}`,
+    };
   }
 
   return null;
