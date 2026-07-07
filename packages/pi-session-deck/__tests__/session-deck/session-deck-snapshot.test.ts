@@ -45,6 +45,18 @@ function buildIdentityRecord(
     gitRemote: 'git@github.com:owner/repo.git',
     gitRoot: '/tmp/project',
     identitySource: 'startup',
+    sessionStart: {
+      reason: 'resume',
+      previousSessionFile: '/tmp/session-0.json',
+      mode: 'rpc',
+      hasUI: false,
+    },
+    sessionHeader: {
+      id: 'session-1',
+      timestamp: '2026-06-23T12:00:00.000Z',
+      cwd: '/tmp/project',
+      parentSession: '/tmp/session-0.json',
+    },
     ...overrides,
   };
 }
@@ -167,6 +179,10 @@ describe('readSessionDeckSnapshot', () => {
       'currentTurnStartedAt',
       'lastEventAt',
       'activityUpdatedAt',
+      'sessionStart',
+      'sessionHeader',
+      'previousSessionFile',
+      'parentSession',
       'schemaVersion',
       'chipId',
       'scope',

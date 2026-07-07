@@ -2,11 +2,31 @@ import type { PresenceDiagnosticCode } from '../presence/types.js';
 
 // ─── Session manager ────────────────────────────────────────────────
 
+export type SessionStartReason = 'startup' | 'reload' | 'new' | 'resume' | 'fork';
+
+export type SessionStartMode = 'tui' | 'rpc' | 'json' | 'print';
+
+export interface SessionStartMetadata {
+  reason: SessionStartReason;
+  previousSessionFile?: string;
+  mode?: SessionStartMode;
+  hasUI?: boolean;
+}
+
+export interface SessionHeaderMetadata {
+  id: string;
+  timestamp: string;
+  cwd: string;
+  parentSession?: string;
+}
+
 export interface SessionManagerLike {
   getSessionId: () => string | null;
   getSessionFile: () => string | null;
   getSessionName?: () => string | null | undefined;
   getCwd?: () => string | null | undefined;
+  getSessionStart?: () => SessionStartMetadata | undefined;
+  getHeader?: () => SessionHeaderMetadata | null | undefined;
 }
 
 // ─── Identity runtime controller ─────────────────────────────────────
@@ -37,6 +57,8 @@ export interface SessionIdentityRecord {
   gitRemote: string | null;
   gitRoot: string | null;
   identitySource: string;
+  sessionStart?: SessionStartMetadata;
+  sessionHeader?: SessionHeaderMetadata;
   diagnostics?: IdentityDiagnostic[];
 }
 
@@ -102,6 +124,8 @@ export interface JoinedSessionRecord {
   worktreeLabel: string | null;
   identityUpdatedAt: string | null;
   identityFreshness: IdentityFreshness;
+  sessionStart?: SessionStartMetadata;
+  sessionHeader?: SessionHeaderMetadata;
 
   // Combined diagnostics
   diagnostics: JoinedDiagnostic[];

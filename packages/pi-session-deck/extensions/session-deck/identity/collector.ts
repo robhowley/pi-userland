@@ -1,4 +1,5 @@
 import { resolveGitInfo, resolvePrUrl } from './git.js';
+import { normalizeSessionHeaderMetadata, normalizeSessionStartMetadata } from './metadata.js';
 import type {
   GhExec,
   GitExec,
@@ -40,6 +41,13 @@ export async function collectSessionIdentity(
   const sessionName = normalizeOptionalStringField(
     safeCall(() => options.sessionManager?.getSessionName?.(), null),
   );
+  const sessionStart =
+    normalizeSessionStartMetadata(
+      safeCall(() => options.sessionManager?.getSessionStart?.(), null),
+    ) ?? options.existingRecord?.sessionStart;
+  const sessionHeader =
+    normalizeSessionHeaderMetadata(safeCall(() => options.sessionManager?.getHeader?.(), null)) ??
+    options.existingRecord?.sessionHeader;
 
   // Emit diagnostics for missing session fields
   if (sessionId === null) {
@@ -132,6 +140,8 @@ export async function collectSessionIdentity(
     gitRemote: gitInfo.remote,
     gitRoot: gitInfo.root,
     identitySource: options.identitySource,
+    ...(sessionStart === undefined ? {} : { sessionStart }),
+    ...(sessionHeader === undefined ? {} : { sessionHeader }),
     diagnostics,
   };
 }

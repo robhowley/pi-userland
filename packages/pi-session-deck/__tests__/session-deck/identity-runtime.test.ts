@@ -67,14 +67,44 @@ describe('identity runtime lifecycle', () => {
     const mockSessionManager = {
       getSessionId: () => 'session-abc',
       getSessionFile: () => '/tmp/session-abc.json',
+      getSessionStart: () => ({
+        reason: 'startup' as const,
+        mode: 'tui' as const,
+        hasUI: true,
+      }),
+      getHeader: () => ({
+        id: 'session-abc',
+        timestamp: '2026-06-17T11:59:00.000Z',
+        cwd: '/tmp/project',
+      }),
     };
 
     await controller.refreshIdentity('startup', mockSessionManager);
     expect(controller.getIdentity()?.sessionId).toBe('session-abc');
+    expect(controller.getIdentity()?.sessionStart).toEqual({
+      reason: 'startup',
+      mode: 'tui',
+      hasUI: true,
+    });
+    expect(controller.getIdentity()?.sessionHeader).toEqual({
+      id: 'session-abc',
+      timestamp: '2026-06-17T11:59:00.000Z',
+      cwd: '/tmp/project',
+    });
 
     await controller.refreshIdentity('periodic');
     expect(controller.getIdentity()?.sessionId).toBe('session-abc');
     expect(controller.getIdentity()?.identitySource).toBe('periodic');
+    expect(controller.getIdentity()?.sessionStart).toEqual({
+      reason: 'startup',
+      mode: 'tui',
+      hasUI: true,
+    });
+    expect(controller.getIdentity()?.sessionHeader).toEqual({
+      id: 'session-abc',
+      timestamp: '2026-06-17T11:59:00.000Z',
+      cwd: '/tmp/project',
+    });
   });
 
   it('preserves sessionStartedAt across periodic refreshes', async () => {
@@ -111,6 +141,16 @@ describe('identity runtime lifecycle', () => {
     const sessionManager1 = {
       getSessionId: () => 'session-old',
       getSessionFile: () => '/tmp/session-old.json',
+      getSessionStart: () => ({
+        reason: 'startup' as const,
+        mode: 'tui' as const,
+        hasUI: true,
+      }),
+      getHeader: () => ({
+        id: 'session-old',
+        timestamp: '2026-06-17T12:00:00.000Z',
+        cwd: '/tmp/session-old',
+      }),
     };
 
     await controller.refreshIdentity('startup', sessionManager1);
@@ -120,12 +160,36 @@ describe('identity runtime lifecycle', () => {
     const sessionManager2 = {
       getSessionId: () => 'session-new',
       getSessionFile: () => '/tmp/session-new.json',
+      getSessionStart: () => ({
+        reason: 'new' as const,
+        previousSessionFile: '/tmp/session-old.json',
+        mode: 'tui' as const,
+        hasUI: true,
+      }),
+      getHeader: () => ({
+        id: 'session-new',
+        timestamp: '2026-06-17T12:00:00.000Z',
+        cwd: '/tmp/session-new',
+        parentSession: '/tmp/session-old.json',
+      }),
     };
 
     await controller.refreshIdentity('new', sessionManager2);
     expect(controller.getIdentity()?.runtimeId).toBe('rt-1');
     expect(controller.getIdentity()?.sessionId).toBe('session-new');
     expect(controller.getIdentity()?.identitySource).toBe('new');
+    expect(controller.getIdentity()?.sessionStart).toEqual({
+      reason: 'new',
+      previousSessionFile: '/tmp/session-old.json',
+      mode: 'tui',
+      hasUI: true,
+    });
+    expect(controller.getIdentity()?.sessionHeader).toEqual({
+      id: 'session-new',
+      timestamp: '2026-06-17T12:00:00.000Z',
+      cwd: '/tmp/session-new',
+      parentSession: '/tmp/session-old.json',
+    });
   });
 
   it('does not crash when refreshIdentity is called with no runtimeId', async () => {

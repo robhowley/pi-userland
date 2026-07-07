@@ -33,6 +33,18 @@ describe('identity collector', () => {
       getSessionFile: () => '/tmp/session-123.json',
       getSessionName: () => 'Focused session',
       getCwd: () => '/home/user/project',
+      getSessionStart: () => ({
+        reason: 'reload' as const,
+        previousSessionFile: '/tmp/session-122.json',
+        mode: 'rpc' as const,
+        hasUI: true,
+      }),
+      getHeader: () => ({
+        id: 'session-123',
+        timestamp: '2026-06-17T11:59:00.000Z',
+        cwd: '/home/user/project',
+        parentSession: '/tmp/session-parent.json',
+      }),
     };
 
     const record = await collectSessionIdentity('rt-1', {
@@ -58,6 +70,18 @@ describe('identity collector', () => {
     expect(record.isLinkedWorktree).toBe(false);
     expect(record.worktreeLabel).toBeNull();
     expect(record.identitySource).toBe('startup');
+    expect(record.sessionStart).toEqual({
+      reason: 'reload',
+      previousSessionFile: '/tmp/session-122.json',
+      mode: 'rpc',
+      hasUI: true,
+    });
+    expect(record.sessionHeader).toEqual({
+      id: 'session-123',
+      timestamp: '2026-06-17T11:59:00.000Z',
+      cwd: '/home/user/project',
+      parentSession: '/tmp/session-parent.json',
+    });
     expect(execGit).toHaveBeenCalledWith('/home/user/project', 'rev-parse', '--show-toplevel');
   });
 
@@ -246,6 +270,57 @@ describe('identity collector', () => {
 
     expect(secondRecord.sessionStartedAt).toBe('2026-06-17T12:00:00.000Z');
     expect(secondRecord.identityUpdatedAt).toBe('2026-06-17T12:05:00.000Z');
+  });
+
+  it('preserves raw session metadata from existingRecord when later refreshes omit it', async () => {
+    const { collectSessionIdentity } =
+      await import('../../extensions/session-deck/identity/collector.js');
+
+    const execGit = makeExecGit({
+      'rev-parse --show-toplevel': { stdout: '', exitCode: 128 },
+    });
+
+    const firstRecord = await collectSessionIdentity('rt-1', {
+      runtimeId: 'rt-1',
+      sessionManager: {
+        getSessionId: () => 'session-456',
+        getSessionFile: () => '/tmp/session-456.json',
+        getSessionStart: () => ({
+          reason: 'fork',
+          previousSessionFile: '/tmp/session-123.json',
+          mode: 'json',
+          hasUI: false,
+        }),
+        getHeader: () => ({
+          id: 'session-456',
+          timestamp: '2026-06-17T12:00:00.000Z',
+          cwd: '/tmp',
+          parentSession: '/tmp/session-123.json',
+        }),
+      },
+      execGit,
+      execGhCli: null,
+      identitySource: 'fork',
+      cwd: '/tmp',
+      now: () => new Date('2026-06-17T12:00:00.000Z'),
+    });
+
+    const secondRecord = await collectSessionIdentity('rt-1', {
+      runtimeId: 'rt-1',
+      sessionManager: {
+        getSessionId: () => 'session-456',
+        getSessionFile: () => '/tmp/session-456.json',
+      },
+      execGit,
+      execGhCli: null,
+      identitySource: 'periodic',
+      cwd: '/tmp',
+      existingRecord: firstRecord,
+      now: () => new Date('2026-06-17T12:05:00.000Z'),
+    });
+
+    expect(secondRecord.sessionStart).toEqual(firstRecord.sessionStart);
+    expect(secondRecord.sessionHeader).toEqual(firstRecord.sessionHeader);
   });
 
   it('emits diagnostics for missing session fields', async () => {

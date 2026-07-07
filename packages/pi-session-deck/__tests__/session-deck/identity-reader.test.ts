@@ -34,6 +34,18 @@ describe('identity reader — join', () => {
         gitRemote: null,
         gitRoot: null,
         identitySource: 'startup',
+        sessionStart: {
+          reason: 'resume',
+          previousSessionFile: '/tmp/session-prev.md',
+          mode: 'rpc',
+          hasUI: true,
+        },
+        sessionHeader: {
+          id: 'session-abc',
+          timestamp: '2026-06-17T11:59:00.000Z',
+          cwd: '/home/user/project',
+          parentSession: '/tmp/session-parent.md',
+        },
       },
     };
 
@@ -78,6 +90,18 @@ describe('identity reader — join', () => {
     expect(record.isLinkedWorktree).toBe(true);
     expect(record.worktreeLabel).toBe('project-feature');
     expect(record.identityFreshness).toBe('fresh');
+    expect(record.sessionStart).toEqual({
+      reason: 'resume',
+      previousSessionFile: '/tmp/session-prev.md',
+      mode: 'rpc',
+      hasUI: true,
+    });
+    expect(record.sessionHeader).toEqual({
+      id: 'session-abc',
+      timestamp: '2026-06-17T11:59:00.000Z',
+      cwd: '/home/user/project',
+      parentSession: '/tmp/session-parent.md',
+    });
     expect(view.diagnostics).toHaveLength(0);
   });
 
@@ -117,7 +141,7 @@ describe('identity reader — join', () => {
     expect(record.identityFreshness).toBe('missing');
   });
 
-  it('normalizes missing sessionName and linked-worktree fields from stored identity records to null', async () => {
+  it('normalizes missing sessionName, linked-worktree fields, and null raw session metadata', async () => {
     const { readJoinedSessionView } =
       await import('../../extensions/session-deck/identity/reader.js');
 
@@ -138,6 +162,8 @@ describe('identity reader — join', () => {
       gitRemote: null,
       gitRoot: null,
       identitySource: 'startup',
+      sessionStart: null,
+      sessionHeader: null,
     };
 
     const readFileImpl = vi.fn().mockResolvedValue(JSON.stringify(legacyRecord));
@@ -165,6 +191,8 @@ describe('identity reader — join', () => {
     expect(view.records[0]?.qualifiedRepoName).toBeNull();
     expect(view.records[0]?.isLinkedWorktree).toBeNull();
     expect(view.records[0]?.worktreeLabel).toBeNull();
+    expect(view.records[0]).not.toHaveProperty('sessionStart');
+    expect(view.records[0]).not.toHaveProperty('sessionHeader');
   });
 
   it('surfaces persisted identity diagnostics in record and top-level diagnostics', async () => {

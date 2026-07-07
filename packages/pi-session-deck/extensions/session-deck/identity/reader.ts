@@ -5,6 +5,7 @@ import {
   DEFAULT_IDENTITY_FRESHNESS_THRESHOLDS,
   resolveIdentityFreshnessThresholds,
 } from './constants.js';
+import { normalizeSessionHeaderMetadata, normalizeSessionStartMetadata } from './metadata.js';
 import { getDefaultIdentityDirectory, isIdentityRecordFile } from './store.js';
 import type {
   IdentityDiagnostic,
@@ -211,6 +212,8 @@ function joinRecord(
     worktreeLabel: identity?.worktreeLabel ?? null,
     identityUpdatedAt: identity?.identityUpdatedAt ?? null,
     identityFreshness: computeIdentityFreshness(identity, nowMs, thresholds),
+    ...(identity?.sessionStart === undefined ? {} : { sessionStart: identity.sessionStart }),
+    ...(identity?.sessionHeader === undefined ? {} : { sessionHeader: identity.sessionHeader }),
 
     diagnostics: recordDiagnostics,
   };
@@ -265,6 +268,8 @@ function normalizeIdentityRecord(candidate: unknown): SessionIdentityRecord | nu
 
   const diagnostics = normalizeDiagnostics(candidate['diagnostics']);
   const sessionName = normalizeStringField(candidate['sessionName']);
+  const sessionStart = normalizeSessionStartMetadata(candidate['sessionStart']);
+  const sessionHeader = normalizeSessionHeaderMetadata(candidate['sessionHeader']);
 
   return {
     runtimeId,
@@ -284,6 +289,8 @@ function normalizeIdentityRecord(candidate: unknown): SessionIdentityRecord | nu
     gitRemote: normalizeStringField(candidate['gitRemote']),
     gitRoot: normalizeStringField(candidate['gitRoot']),
     identitySource: ensureString(candidate['identitySource']),
+    ...(sessionStart === undefined ? {} : { sessionStart }),
+    ...(sessionHeader === undefined ? {} : { sessionHeader }),
     ...(diagnostics === undefined ? {} : { diagnostics }),
   };
 }
