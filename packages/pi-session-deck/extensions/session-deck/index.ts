@@ -12,10 +12,10 @@ import {
   normalizeSessionHeaderMetadata,
   normalizeSessionStartMetadata,
 } from './identity/metadata.js';
-import type { SessionManagerLike, SessionStartMode, SessionStartReason } from './identity/types.js';
+import type { SessionManagerLike } from './identity/types.js';
 
 interface SessionStartContext {
-  mode?: SessionStartMode;
+  mode?: string;
   hasUI?: boolean;
   cwd?: string;
   model?: {
@@ -59,7 +59,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   on(
     'session_start',
     async (
-      event: { reason: SessionStartReason; previousSessionFile?: string },
+      event: { reason: string; previousSessionFile?: string },
       ctx: SessionStartContext,
     ) => {
       const presenceRuntime = await ensurePresenceRuntimeStarted();
@@ -135,7 +135,7 @@ async function ensureActivityRuntime(
 
 function createSessionManager(
   ctx: SessionStartContext,
-  event: { reason: SessionStartReason; previousSessionFile?: string },
+  event: { reason: string; previousSessionFile?: string },
 ): SessionManagerLike {
   const sessionStart = normalizeSessionStartMetadata({
     reason: event.reason,

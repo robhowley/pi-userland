@@ -1,9 +1,4 @@
-import type {
-  SessionHeaderMetadata,
-  SessionStartMetadata,
-  SessionStartMode,
-  SessionStartReason,
-} from './types.js';
+import type { SessionHeaderMetadata, SessionStartMetadata } from './types.js';
 
 export function normalizeSessionStartMetadata(
   candidate: unknown,
@@ -12,13 +7,13 @@ export function normalizeSessionStartMetadata(
     return undefined;
   }
 
-  const reason = normalizeSessionStartReason(candidate['reason']);
+  const reason = normalizeOptionalStringField(candidate['reason']);
   if (reason === undefined) {
     return undefined;
   }
 
   const previousSessionFile = normalizeOptionalStringField(candidate['previousSessionFile']);
-  const mode = normalizeSessionStartMode(candidate['mode']);
+  const mode = normalizeOptionalStringField(candidate['mode']);
   const hasUI = normalizeBooleanField(candidate['hasUI']);
 
   return {
@@ -50,31 +45,6 @@ export function normalizeSessionHeaderMetadata(
     cwd,
     ...(parentSession === undefined ? {} : { parentSession }),
   };
-}
-
-function normalizeSessionStartReason(value: unknown): SessionStartReason | undefined {
-  switch (value) {
-    case 'startup':
-    case 'reload':
-    case 'new':
-    case 'resume':
-    case 'fork':
-      return value;
-    default:
-      return undefined;
-  }
-}
-
-function normalizeSessionStartMode(value: unknown): SessionStartMode | undefined {
-  switch (value) {
-    case 'tui':
-    case 'rpc':
-    case 'json':
-    case 'print':
-      return value;
-    default:
-      return undefined;
-  }
 }
 
 function normalizeOptionalStringField(value: unknown): string | undefined {

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SessionIdentityRecord } from '../../extensions/session-deck/identity/types.js';
 
 describe('identity writer', () => {
-  it('serializes a complete identity record to JSON', async () => {
+  it('serializes a complete identity record to JSON without allowlisting raw sessionStart strings', async () => {
     const { serializeIdentityRecord } =
       await import('../../extensions/session-deck/identity/writer.js');
 
@@ -25,9 +25,9 @@ describe('identity writer', () => {
       gitRoot: '/home/user/project/.git',
       identitySource: 'startup',
       sessionStart: {
-        reason: 'resume',
+        reason: 'resume_from_handoff',
         previousSessionFile: '/tmp/session-prev.md',
-        mode: 'json',
+        mode: 'json-stream',
         hasUI: false,
       },
       sessionHeader: {
@@ -48,9 +48,9 @@ describe('identity writer', () => {
     expect(parsed.prUrl).toBe('https://github.com/owner/repo/pull/42');
     expect(parsed.identitySource).toBe('startup');
     expect(parsed.sessionStart).toEqual({
-      reason: 'resume',
+      reason: 'resume_from_handoff',
       previousSessionFile: '/tmp/session-prev.md',
-      mode: 'json',
+      mode: 'json-stream',
       hasUI: false,
     });
     expect(parsed.sessionHeader).toEqual({

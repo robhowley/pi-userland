@@ -13,7 +13,7 @@ function makeExecGit(results: Record<string, { stdout: string; exitCode: number 
 }
 
 describe('identity collector', () => {
-  it('collects session identity with session-owned cwd and Git info', async () => {
+  it('collects session identity with session-owned cwd, Git info, and future raw sessionStart strings', async () => {
     const { collectSessionIdentity } =
       await import('../../extensions/session-deck/identity/collector.js');
 
@@ -34,9 +34,9 @@ describe('identity collector', () => {
       getSessionName: () => 'Focused session',
       getCwd: () => '/home/user/project',
       getSessionStart: () => ({
-        reason: 'reload' as const,
+        reason: 'reload_from_reconnect',
         previousSessionFile: '/tmp/session-122.json',
-        mode: 'rpc' as const,
+        mode: 'rpc-stream',
         hasUI: true,
       }),
       getHeader: () => ({
@@ -71,9 +71,9 @@ describe('identity collector', () => {
     expect(record.worktreeLabel).toBeNull();
     expect(record.identitySource).toBe('startup');
     expect(record.sessionStart).toEqual({
-      reason: 'reload',
+      reason: 'reload_from_reconnect',
       previousSessionFile: '/tmp/session-122.json',
-      mode: 'rpc',
+      mode: 'rpc-stream',
       hasUI: true,
     });
     expect(record.sessionHeader).toEqual({

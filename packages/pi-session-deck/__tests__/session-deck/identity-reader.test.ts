@@ -11,7 +11,7 @@ function makePresenceView(overrides?: Partial<PresenceView>): PresenceView {
 }
 
 describe('identity reader — join', () => {
-  it('joins presence records with matching identity records', async () => {
+  it('joins presence records with matching identity records and preserves future raw sessionStart strings', async () => {
     const { readJoinedSessionView } =
       await import('../../extensions/session-deck/identity/reader.js');
 
@@ -35,9 +35,9 @@ describe('identity reader — join', () => {
         gitRoot: null,
         identitySource: 'startup',
         sessionStart: {
-          reason: 'resume',
+          reason: 'resume_from_handoff',
           previousSessionFile: '/tmp/session-prev.md',
-          mode: 'rpc',
+          mode: 'rpc-stream',
           hasUI: true,
         },
         sessionHeader: {
@@ -91,9 +91,9 @@ describe('identity reader — join', () => {
     expect(record.worktreeLabel).toBe('project-feature');
     expect(record.identityFreshness).toBe('fresh');
     expect(record.sessionStart).toEqual({
-      reason: 'resume',
+      reason: 'resume_from_handoff',
       previousSessionFile: '/tmp/session-prev.md',
-      mode: 'rpc',
+      mode: 'rpc-stream',
       hasUI: true,
     });
     expect(record.sessionHeader).toEqual({

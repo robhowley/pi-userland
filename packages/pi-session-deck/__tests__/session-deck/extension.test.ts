@@ -164,12 +164,12 @@ describe('pi-session-deck extension', () => {
     },
   );
 
-  it('captures raw session metadata for identity refresh, including headless mode', async () => {
-    const { refreshIdentity } = setupMocks();
+  it('captures future raw session metadata for identity refresh, including headless mode', async () => {
+    const { refreshIdentity, refreshActivity } = setupMocks();
     const { handlers } = await installExtension();
 
     const ctx = makeCtx({
-      mode: 'json',
+      mode: 'json-stream',
       hasUI: false,
       sessionManager: {
         getSessionId: () => 'session-1',
@@ -187,15 +187,18 @@ describe('pi-session-deck extension', () => {
     });
 
     await handlers.get('session_start')?.(
-      { reason: 'resume', previousSessionFile: '/tmp/session-previous.md' },
+      { reason: 'resume_from_handoff', previousSessionFile: '/tmp/session-previous.md' },
       ctx,
     );
 
+    expect(refreshIdentity).toHaveBeenCalledWith('resume_from_handoff', expect.any(Object));
+    expect(refreshActivity).toHaveBeenCalledWith('startup', expect.any(Object));
+
     const sessionManager = refreshIdentity.mock.calls[0]?.[1];
     expect(sessionManager.getSessionStart()).toEqual({
-      reason: 'resume',
+      reason: 'resume_from_handoff',
       previousSessionFile: '/tmp/session-previous.md',
-      mode: 'json',
+      mode: 'json-stream',
       hasUI: false,
     });
     expect(sessionManager.getHeader()).toEqual({

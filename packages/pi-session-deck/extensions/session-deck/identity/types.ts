@@ -2,9 +2,11 @@ import type { PresenceDiagnosticCode } from '../presence/types.js';
 
 // ─── Session manager ────────────────────────────────────────────────
 
-export type SessionStartReason = 'startup' | 'reload' | 'new' | 'resume' | 'fork';
+// Raw session_start fields are Pi-owned. Preserve any non-empty string so
+// newer Pi reason/mode values round-trip through session-deck unchanged.
+export type SessionStartReason = string;
 
-export type SessionStartMode = 'tui' | 'rpc' | 'json' | 'print';
+export type SessionStartMode = string;
 
 export interface SessionStartMetadata {
   reason: SessionStartReason;
