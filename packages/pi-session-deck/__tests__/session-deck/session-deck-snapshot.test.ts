@@ -174,6 +174,7 @@ describe('readSessionDeckSnapshot', () => {
       'sessionFile',
       'worktree',
       'identityFreshness',
+      'derivedFacets',
       'idle',
       'busy',
       'currentTurnStartedAt',

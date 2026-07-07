@@ -101,6 +101,36 @@ export interface IdentityFreshnessThresholds {
   staleAfterMs: number;
 }
 
+// ─── Derived session facets (internal-only) ────────────────────────
+
+export type SessionPersistenceFacet = 'in_memory' | 'file_backed' | 'unknown';
+
+export type SessionInteractivityFacet = 'interactive' | 'headless' | 'unknown';
+
+export type SessionStartCauseFacet =
+  | 'startup'
+  | 'reload'
+  | 'new'
+  | 'resume'
+  | 'fork'
+  | 'other'
+  | 'unknown';
+
+export type SessionParentageFacet = 'child' | 'root' | 'unknown';
+
+export type SessionIdentityStrengthFacet = 'strong' | 'weak' | 'missing' | 'conflicted';
+
+export type SessionHeaderConsistencyFacet = 'consistent' | 'mismatch' | 'unavailable';
+
+export interface SessionDerivedFacets {
+  persistence: SessionPersistenceFacet;
+  interactivity: SessionInteractivityFacet;
+  startCause: SessionStartCauseFacet;
+  parentage: SessionParentageFacet;
+  identityStrength: SessionIdentityStrengthFacet;
+  headerConsistency: SessionHeaderConsistencyFacet;
+}
+
 // ─── Joined session records ─────────────────────────────────────────
 
 export interface JoinedSessionRecord {
@@ -126,6 +156,7 @@ export interface JoinedSessionRecord {
   worktreeLabel: string | null;
   identityUpdatedAt: string | null;
   identityFreshness: IdentityFreshness;
+  derivedFacets?: SessionDerivedFacets;
   sessionStart?: SessionStartMetadata;
   sessionHeader?: SessionHeaderMetadata;
 

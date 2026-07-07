@@ -15,7 +15,10 @@ import type {
   JoinedDiagnostic,
   JoinedSessionRecord,
   JoinedSessionView,
+  SessionDerivedFacets,
+  SessionHeaderMetadata,
   SessionIdentityRecord,
+  SessionStartMetadata,
 } from './types.js';
 import type { PresenceDiagnosticCode, PresenceSummary, PresenceView } from '../presence/types.js';
 
@@ -190,6 +193,12 @@ function joinRecord(
     }
   }
 
+  const sessionId = identity?.sessionId ?? null;
+  const sessionFile = identity?.sessionFile ?? null;
+  const cwd = identity?.cwd ?? null;
+  const sessionStart = identity?.sessionStart;
+  const sessionHeader = identity?.sessionHeader;
+
   const joinedRecord: JoinedSessionRecord = {
     runtimeId: presence.runtimeId,
     pid: presence.pid,
@@ -199,10 +208,10 @@ function joinRecord(
     startedAt: presence.startedAt,
 
     // Identity fields
-    sessionId: identity?.sessionId ?? null,
-    sessionFile: identity?.sessionFile ?? null,
+    sessionId,
+    sessionFile,
     sessionName: identity?.sessionName ?? null,
-    cwd: identity?.cwd ?? null,
+    cwd,
     worktree: identity?.worktree ?? null,
     repoName: identity?.repoName ?? null,
     qualifiedRepoName: identity?.qualifiedRepoName ?? null,
@@ -212,8 +221,16 @@ function joinRecord(
     worktreeLabel: identity?.worktreeLabel ?? null,
     identityUpdatedAt: identity?.identityUpdatedAt ?? null,
     identityFreshness: computeIdentityFreshness(identity, nowMs, thresholds),
-    ...(identity?.sessionStart === undefined ? {} : { sessionStart: identity.sessionStart }),
-    ...(identity?.sessionHeader === undefined ? {} : { sessionHeader: identity.sessionHeader }),
+    derivedFacets: deriveSessionDerivedFacets({
+      hasIdentity: identity !== undefined,
+      sessionId,
+      sessionFile,
+      cwd,
+      sessionStart,
+      sessionHeader,
+    }),
+    ...(sessionStart === undefined ? {} : { sessionStart }),
+    ...(sessionHeader === undefined ? {} : { sessionHeader }),
 
     diagnostics: recordDiagnostics,
   };
@@ -223,6 +240,122 @@ function joinRecord(
   }
 
   return joinedRecord;
+}
+
+interface DerivedFacetInput {
+  hasIdentity: boolean;
+  sessionId: string | null;
+  sessionFile: string | null;
+  cwd: string | null;
+  sessionStart: SessionStartMetadata | undefined;
+  sessionHeader: SessionHeaderMetadata | undefined;
+}
+
+function deriveSessionDerivedFacets(input: DerivedFacetInput): SessionDerivedFacets {
+  return {
+    persistence: derivePersistenceFacet(input),
+    interactivity: deriveInteractivityFacet(input.sessionStart),
+    startCause: deriveStartCauseFacet(input.sessionStart),
+    parentage: deriveParentageFacet(input.sessionHeader),
+    identityStrength: deriveIdentityStrengthFacet(input),
+    headerConsistency: deriveHeaderConsistencyFacet(input),
+  };
+}
+
+function derivePersistenceFacet(input: DerivedFacetInput): SessionDerivedFacets['persistence'] {
+  if (input.sessionFile !== null) {
+    return 'file_backed';
+  }
+
+  return input.hasIdentity ? 'in_memory' : 'unknown';
+}
+
+function deriveInteractivityFacet(
+  sessionStart: SessionStartMetadata | undefined,
+): SessionDerivedFacets['interactivity'] {
+  if (sessionStart?.hasUI === true) {
+    return 'interactive';
+  }
+
+  if (sessionStart?.hasUI === false) {
+    return 'headless';
+  }
+
+  switch (sessionStart?.mode) {
+    case 'tui':
+    case 'rpc':
+      return 'interactive';
+    case 'json':
+    case 'print':
+      return 'headless';
+    default:
+      return 'unknown';
+  }
+}
+
+function deriveStartCauseFacet(
+  sessionStart: SessionStartMetadata | undefined,
+): SessionDerivedFacets['startCause'] {
+  switch (sessionStart?.reason) {
+    case 'startup':
+    case 'reload':
+    case 'new':
+    case 'resume':
+    case 'fork':
+      return sessionStart.reason;
+    case undefined:
+      return 'unknown';
+    default:
+      return 'other';
+  }
+}
+
+function deriveParentageFacet(
+  sessionHeader: SessionHeaderMetadata | undefined,
+): SessionDerivedFacets['parentage'] {
+  if (sessionHeader === undefined) {
+    return 'unknown';
+  }
+
+  return sessionHeader.parentSession === undefined ? 'root' : 'child';
+}
+
+function deriveIdentityStrengthFacet(
+  input: DerivedFacetInput,
+): SessionDerivedFacets['identityStrength'] {
+  if (input.sessionId !== null && input.sessionHeader?.id !== undefined) {
+    if (input.sessionHeader.id !== input.sessionId) {
+      return 'conflicted';
+    }
+  }
+
+  if (input.sessionId !== null && input.sessionFile !== null) {
+    return 'strong';
+  }
+
+  if (input.sessionId !== null || input.sessionFile !== null || input.sessionHeader !== undefined) {
+    return 'weak';
+  }
+
+  return 'missing';
+}
+
+function deriveHeaderConsistencyFacet(
+  input: DerivedFacetInput,
+): SessionDerivedFacets['headerConsistency'] {
+  if (input.sessionHeader === undefined) {
+    return 'unavailable';
+  }
+
+  if (input.sessionId !== null && input.sessionHeader.id !== input.sessionId) {
+    return 'mismatch';
+  }
+
+  if (input.cwd !== null && input.sessionHeader.cwd !== input.cwd) {
+    return 'mismatch';
+  }
+
+  return 'consistent';
 }
 
 export function computeIdentityFreshness(
