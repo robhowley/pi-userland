@@ -13,7 +13,7 @@ export const MERGE_READY_STATUS_BAR_KEY = 'merge-ready';
 export const MERGE_READY_STATUS_BAR_TIMEOUT_MS = 8_000;
 export const MERGE_READY_STATUS_BAR_TTL_MS = 60_000;
 
-export type MergeReadyStatusBarEventName = 'session_start' | 'turn_end';
+export type MergeReadyStatusBarEventName = 'session_start' | 'turn_end' | 'session_shutdown';
 
 export type MergeReadyStatusBarContext = {
   cwd: string;
@@ -69,6 +69,31 @@ type MergeReadyStatusBarCacheEntry = {
   refreshedAtMs: number;
 };
 
+type MergeReadyStatusBarAmbientSnapshot = {
+  cwd: string;
+  hasUI?: boolean;
+  setStatus?: (key: string, status?: string) => void;
+  theme?: {
+    fg: (color: string, text: string) => string;
+  };
+};
+
+type MergeReadyStatusBarAmbientOwnership = {
+  generation: number;
+};
+
+type MergeReadyStatusBarRuntime = {
+  exec: MergeReadyExec | null;
+  ctx: MergeReadyStatusBarAmbientSnapshot | null;
+  timer: ReturnType<typeof setTimeout> | null;
+  dueAtMs: number | null;
+  generation: number;
+};
+
+type MergeReadyStatusBarInternalRefreshOptions = MergeReadyStatusBarRefreshOptions & {
+  ownership?: MergeReadyStatusBarAmbientOwnership;
+};
+
 const BADGE_TEXT_BY_ID = {
   draft: 'Draft',
   merge_conflicts: 'Conflicts',
@@ -91,9 +116,16 @@ const STATUS_BAR_TEXT_OVERRIDE_BY_OPEN_ITEM_ID: Partial<Record<MergeReadyOpenIte
 
 let statusBarCache: MergeReadyStatusBarCacheEntry | null = null;
 let statusBarSuspensionCount = 0;
+let statusBarRuntime: MergeReadyStatusBarRuntime = createMergeReadyStatusBarRuntime();
 
 export function registerMergeReadyStatusBar(pi: MergeReadyStatusBarAPI): void {
+  pi.on('session_shutdown', () => {
+    invalidateMergeReadyStatusBarRuntime();
+  });
+
   pi.on('session_start', async (_event, ctx) => {
+    invalidateMergeReadyStatusBarRuntime();
+
     await refreshMergeReadyStatusBar({
       exec: createStatusBarExec(pi, ctx),
       ctx,
@@ -116,41 +148,11 @@ export async function refreshMergeReadyStatusBar(
     return null;
   }
 
-  const nowMs = resolveNowMs(options.now);
-  const timeout = options.timeout ?? MERGE_READY_STATUS_BAR_TIMEOUT_MS;
-  const cachedEntry = await getReusableMergeReadyStatusBarCacheEntry({
-    exec: options.exec,
-    cwd: options.ctx.cwd,
-    force: options.force,
-    nowMs,
-    timeout,
+  const ownership = rememberMergeReadyStatusBarRefreshOwner(options);
+  return refreshMergeReadyStatusBarInternal({
+    ...options,
+    ownership,
   });
-
-  if (cachedEntry) {
-    renderMergeReadyStatusBarKey(options.ctx, cachedEntry.text);
-    return {
-      text: cachedEntry.text,
-      cached: true,
-    };
-  }
-
-  const entry = await loadMergeReadyStatusBarEntry({
-    exec: options.exec,
-    cwd: options.ctx.cwd,
-    timeout,
-  });
-
-  applyMergeReadyStatusBarText({
-    ctx: options.ctx,
-    text: entry.text,
-    branchIdentity: entry.branchIdentity,
-    now: nowMs,
-  });
-
-  return {
-    text: entry.text,
-    cached: false,
-  };
 }
 
 export function syncMergeReadyStatusBar(
@@ -165,6 +167,7 @@ export function syncMergeReadyStatusBar(
     };
   }
 
+  rememberMergeReadyStatusBarSyncContext(options.ctx);
   applyMergeReadyStatusBarText({
     ctx: options.ctx,
     text,
@@ -262,8 +265,10 @@ export function isMergeReadyStatusBarSuspended(): boolean {
 }
 
 export function resetMergeReadyStatusBarCache(): void {
+  clearMergeReadyStatusBarTimer();
   statusBarCache = null;
   statusBarSuspensionCount = 0;
+  statusBarRuntime = createMergeReadyStatusBarRuntime();
 }
 
 function applyMergeReadyStatusBarText(options: {
@@ -272,14 +277,17 @@ function applyMergeReadyStatusBarText(options: {
   branchIdentity: string | null;
   now?: number | Date | undefined;
 }): void {
+  const refreshedAtMs = resolveNowMs(options.now);
+
   statusBarCache = {
     cwd: options.ctx.cwd,
     text: options.text,
     branchIdentity: options.branchIdentity,
-    refreshedAtMs: resolveNowMs(options.now),
+    refreshedAtMs,
   };
 
   renderMergeReadyStatusBarKey(options.ctx, options.text);
+  rearmMergeReadyStatusBarTimer();
 }
 
 function renderMergeReadyStatusBarKey(ctx: MergeReadyStatusBarSyncContext, text?: string): void {
@@ -292,6 +300,54 @@ function renderMergeReadyStatusBarKey(ctx: MergeReadyStatusBarSyncContext, text?
     MERGE_READY_STATUS_BAR_KEY,
     text === undefined ? undefined : (ctx.ui?.theme?.fg('dim', text) ?? text),
   );
+}
+
+async function refreshMergeReadyStatusBarInternal(
+  options: MergeReadyStatusBarInternalRefreshOptions,
+): Promise<MergeReadyStatusBarRefreshResult | null> {
+  const nowMs = resolveNowMs(options.now);
+  const timeout = options.timeout ?? MERGE_READY_STATUS_BAR_TIMEOUT_MS;
+  const cachedEntry = await getReusableMergeReadyStatusBarCacheEntry({
+    exec: options.exec,
+    cwd: options.ctx.cwd,
+    force: options.force,
+    nowMs,
+    timeout,
+  });
+
+  if (cachedEntry) {
+    if (!isMergeReadyStatusBarOwnershipCurrent(options.ownership)) {
+      return null;
+    }
+
+    renderMergeReadyStatusBarKey(options.ctx, cachedEntry.text);
+    return {
+      text: cachedEntry.text,
+      cached: true,
+    };
+  }
+
+  const entry = await loadMergeReadyStatusBarEntry({
+    exec: options.exec,
+    cwd: options.ctx.cwd,
+    timeout,
+  });
+
+  if (!isMergeReadyStatusBarOwnershipCurrent(options.ownership)) {
+    return null;
+  }
+
+  applyMergeReadyStatusBarText({
+    ctx: options.ctx,
+    text: entry.text,
+    branchIdentity: entry.branchIdentity,
+    now: nowMs,
+  });
+
+  return {
+    text: entry.text,
+    cached: false,
+  };
 }
 
 async function loadMergeReadyStatusBarEntry(options: {
@@ -405,4 +461,130 @@ function resolveNowMs(value: number | Date | undefined): number {
   }
 
   return value?.getTime() ?? Date.now();
+}
+
+function createMergeReadyStatusBarRuntime(): MergeReadyStatusBarRuntime {
+  return {
+    exec: null,
+    ctx: null,
+    timer: null,
+    dueAtMs: null,
+    generation: 0,
+  };
+}
+
+function invalidateMergeReadyStatusBarRuntime(): void {
+  clearMergeReadyStatusBarTimer();
+  statusBarRuntime.exec = null;
+  statusBarRuntime.ctx = null;
+  statusBarRuntime.dueAtMs = null;
+  statusBarRuntime.generation += 1;
+}
+
+function clearMergeReadyStatusBarTimer(): void {
+  if (statusBarRuntime.timer !== null) {
+    clearTimeout(statusBarRuntime.timer);
+    statusBarRuntime.timer = null;
+  }
+}
+
+function rememberMergeReadyStatusBarRefreshOwner(
+  options: Pick<MergeReadyStatusBarRefreshOptions, 'exec' | 'ctx'>,
+): MergeReadyStatusBarAmbientOwnership {
+  statusBarRuntime.exec = options.exec;
+  statusBarRuntime.ctx = createMergeReadyStatusBarAmbientSnapshot(options.ctx);
+
+  return {
+    generation: statusBarRuntime.generation,
+  };
+}
+
+function rememberMergeReadyStatusBarSyncContext(ctx: MergeReadyStatusBarSyncContext): void {
+  const nextSnapshot = createMergeReadyStatusBarAmbientSnapshot(ctx);
+
+  statusBarRuntime.ctx = {
+    cwd: nextSnapshot.cwd,
+    ...(statusBarRuntime.ctx?.hasUI === undefined ? {} : { hasUI: statusBarRuntime.ctx.hasUI }),
+    ...(nextSnapshot.setStatus === undefined
+      ? statusBarRuntime.ctx?.setStatus === undefined
+        ? {}
+        : { setStatus: statusBarRuntime.ctx.setStatus }
+      : { setStatus: nextSnapshot.setStatus }),
+    ...(nextSnapshot.theme === undefined
+      ? statusBarRuntime.ctx?.theme === undefined
+        ? {}
+        : { theme: statusBarRuntime.ctx.theme }
+      : { theme: nextSnapshot.theme }),
+  };
+}
+
+function createMergeReadyStatusBarAmbientSnapshot(
+  ctx: MergeReadyStatusBarContext | MergeReadyStatusBarSyncContext,
+): MergeReadyStatusBarAmbientSnapshot {
+  return {
+    cwd: ctx.cwd,
+    ...('hasUI' in ctx && ctx.hasUI !== undefined ? { hasUI: ctx.hasUI } : {}),
+    ...(ctx.ui?.setStatus === undefined ? {} : { setStatus: ctx.ui.setStatus }),
+    ...(ctx.ui?.theme === undefined ? {} : { theme: { fg: ctx.ui.theme.fg } }),
+  };
+}
+
+function isMergeReadyStatusBarOwnershipCurrent(
+  ownership: MergeReadyStatusBarAmbientOwnership | undefined,
+): boolean {
+  return ownership === undefined || ownership.generation === statusBarRuntime.generation;
+}
+
+function rearmMergeReadyStatusBarTimer(): void {
+  const cachedEntry = statusBarCache;
+  if (!cachedEntry || statusBarRuntime.exec === null || statusBarRuntime.ctx === null) {
+    return;
+  }
+
+  const dueAtMs = cachedEntry.refreshedAtMs + MERGE_READY_STATUS_BAR_TTL_MS;
+  const delayMs = Math.max(0, dueAtMs - resolveNowMs(undefined));
+  const generation = statusBarRuntime.generation;
+
+  clearMergeReadyStatusBarTimer();
+  statusBarRuntime.dueAtMs = dueAtMs;
+  const timer = setTimeout(() => {
+    const snapshot = statusBarRuntime.ctx;
+    const exec = statusBarRuntime.exec;
+
+    if (
+      snapshot === null ||
+      exec === null ||
+      statusBarRuntime.timer !== timer ||
+      statusBarRuntime.generation !== generation ||
+      statusBarRuntime.dueAtMs !== dueAtMs
+    ) {
+      return;
+    }
+
+    statusBarRuntime.timer = null;
+    void refreshMergeReadyStatusBar({
+      exec,
+      ctx: createMergeReadyStatusBarContext(snapshot),
+      force: true,
+    }).catch(() => {});
+  }, delayMs);
+  statusBarRuntime.timer = timer;
+  timer.unref?.();
+}
+
+function createMergeReadyStatusBarContext(
+  snapshot: MergeReadyStatusBarAmbientSnapshot,
+): MergeReadyStatusBarContext {
+  return {
+    cwd: snapshot.cwd,
+    ...(snapshot.hasUI === undefined ? {} : { hasUI: snapshot.hasUI }),
+    ...(snapshot.setStatus === undefined
+      ? {}
+      : {
+          ui: {
+            setStatus: snapshot.setStatus,
+            ...(snapshot.theme === undefined ? {} : { theme: snapshot.theme }),
+          },
+        }),
+  };
 }

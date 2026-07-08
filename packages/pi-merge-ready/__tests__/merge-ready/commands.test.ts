@@ -368,7 +368,7 @@ describe('merge-ready command', () => {
 
     mergeReadyExtension(api as Parameters<typeof mergeReadyExtension>[0]);
 
-    expect(api.on).toHaveBeenCalledTimes(4);
+    expect(api.on).toHaveBeenCalledTimes(5);
     expect(api.on).toHaveBeenCalledWith('session_start', expect.any(Function));
     expect(api.on).toHaveBeenCalledWith('turn_end', expect.any(Function));
     expect(api.on).toHaveBeenCalledWith('session_shutdown', expect.any(Function));
@@ -479,7 +479,10 @@ describe('merge-ready command', () => {
     await handler?.('', ctx);
 
     assertDone();
-    expect(ctx.ui.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '👀 #42 Review pending');
+    expect(ctx.ui.setStatus).toHaveBeenCalledWith(
+      MERGE_READY_STATUS_BAR_KEY,
+      '👀 #42 Review pending',
+    );
     expect(ctx.ui.notify).toHaveBeenCalledWith(
       [
         '👀 Waiting for review',
@@ -534,7 +537,10 @@ describe('merge-ready command', () => {
 
     assertDone();
     expect(refreshed).toEqual({ text: '✅ #42 Ready', cached: true });
-    expect(refreshCtx.ui.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ #42 Ready');
+    expect(refreshCtx.ui.setStatus).toHaveBeenCalledWith(
+      MERGE_READY_STATUS_BAR_KEY,
+      '✅ #42 Ready',
+    );
   });
 
   it('does not sync URL-targeted command results into the ambient status bar cache', async () => {
