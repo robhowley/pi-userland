@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/robhowley/pi-userland/compare/pi-merge-ready-v0.9.0...pi-merge-ready-v0.10.0) (2026-07-08)
+
+
+### Features
+
+* **pi-merge-ready:** add PR number to status bar ([#107](https://github.com/robhowley/pi-userland/issues/107)) ([b53eb54](https://github.com/robhowley/pi-userland/commit/b53eb54c0f0658716cd98f98ab32055344211444))
+
 ## [0.9.0](https://github.com/robhowley/pi-userland/compare/pi-merge-ready-v0.8.0...pi-merge-ready-v0.9.0) (2026-07-01)
 
 

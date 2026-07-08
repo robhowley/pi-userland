@@ -1,5 +1,5 @@
 {
-  "packages/pi-merge-ready": "0.9.0",
+  "packages/pi-merge-ready": "0.10.0",
   "packages/pi-openrouter": "0.13.0",
   "packages/pi-session-deck": "0.6.0",
   "packages/pi-session-hygiene": "0.2.2",
