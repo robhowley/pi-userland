@@ -5,6 +5,7 @@ import mergeReadyExtension, {
   MERGE_READY_COMMAND_TIMEOUT_MS,
   MERGE_READY_COMMAND_USAGE,
   MERGE_READY_STATUS_BAR_KEY,
+  MERGE_READY_STATUS_BAR_TIMEOUT_MS,
   MERGE_READY_STATUS_BAR_TTL_MS,
   MERGE_READY_WATCH_STATUS_KEY,
   MERGE_READY_WATCH_STOP_SHORTCUT,
@@ -25,6 +26,7 @@ import {
   buildConversationsPayload,
   buildPullRequestPayload,
   createConversationsSuccessCall,
+  createCurrentBranchProbeCall,
   createGitDiscoveryCalls,
   createPullRequestViewSuccessCall,
   type ExpectedExecCall,
@@ -508,6 +510,7 @@ describe('merge-ready command', () => {
         }),
         { timeout: MERGE_READY_COMMAND_TIMEOUT_MS },
       ),
+      createCurrentBranchProbeCall({ timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS }),
     ]);
 
     mergeReadyExtension(api);
@@ -561,6 +564,13 @@ describe('merge-ready command', () => {
         repositoryName: 'pi',
         pullRequestNumber: 64,
       }),
+      ...createGitDiscoveryCalls({ timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS }),
+      createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+        timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+      }),
+      createConversationsSuccessCall(buildConversationsPayload(), {
+        timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+      }),
     ]);
 
     mergeReadyExtension(api);
@@ -585,7 +595,7 @@ describe('merge-ready command', () => {
       MERGE_READY_STATUS_BAR_KEY,
       expect.anything(),
     );
-    expect(refreshed?.cached).toBe(false);
+    expect(refreshed).toEqual({ text: '✅ #42 Ready', cached: false });
   });
 
   it('keeps optional unresolved comments out of human blocker output', async () => {
@@ -1321,10 +1331,12 @@ describe('merge-ready command', () => {
     expect(prompt).toContain('Do not assume any specific subagent framework.');
     expect(prompt).toContain('Do not mutate the ambient checkout.');
     expect(prompt).toContain("Use the snapshot's pr.headRepository and pr.headRefName");
-    expect(ctx.ui.setStatus).not.toHaveBeenCalledWith(
-      MERGE_READY_STATUS_BAR_KEY,
-      expect.anything(),
-    );
+    expect(
+      vi
+        .mocked(ctx.ui.setStatus!)
+        .mock.calls.filter(([key]) => key === MERGE_READY_STATUS_BAR_KEY)
+        .every(([, value]) => value === undefined || !String(value).includes('#64')),
+    ).toBe(true);
     expect(ctx.ui.setStatus).toHaveBeenCalledWith(
       MERGE_READY_WATCH_STATUS_KEY,
       expect.stringContaining('Repair queued #64 · ci_failing'),

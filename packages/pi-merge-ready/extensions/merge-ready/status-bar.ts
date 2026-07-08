@@ -65,6 +65,7 @@ export type MergeReadyStatusBarSyncOptions = {
 type MergeReadyStatusBarCacheEntry = {
   cwd: string;
   text: string;
+  branchIdentity: string | null;
   refreshedAtMs: number;
 };
 
@@ -116,14 +117,16 @@ export async function refreshMergeReadyStatusBar(
   }
 
   const nowMs = resolveNowMs(options.now);
-  const cachedEntry = statusBarCache;
+  const timeout = options.timeout ?? MERGE_READY_STATUS_BAR_TIMEOUT_MS;
+  const cachedEntry = await getReusableMergeReadyStatusBarCacheEntry({
+    exec: options.exec,
+    cwd: options.ctx.cwd,
+    force: options.force,
+    nowMs,
+    timeout,
+  });
 
-  if (
-    !options.force &&
-    cachedEntry &&
-    cachedEntry.cwd === options.ctx.cwd &&
-    nowMs - cachedEntry.refreshedAtMs < MERGE_READY_STATUS_BAR_TTL_MS
-  ) {
+  if (cachedEntry) {
     renderMergeReadyStatusBarKey(options.ctx, cachedEntry.text);
     return {
       text: cachedEntry.text,
@@ -131,20 +134,21 @@ export async function refreshMergeReadyStatusBar(
     };
   }
 
-  const text = await loadMergeReadyStatusBarText({
+  const entry = await loadMergeReadyStatusBarEntry({
     exec: options.exec,
     cwd: options.ctx.cwd,
-    timeout: options.timeout ?? MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+    timeout,
   });
 
   applyMergeReadyStatusBarText({
     ctx: options.ctx,
-    text,
+    text: entry.text,
+    branchIdentity: entry.branchIdentity,
     now: nowMs,
   });
 
   return {
-    text,
+    text: entry.text,
     cached: false,
   };
 }
@@ -164,6 +168,7 @@ export function syncMergeReadyStatusBar(
   applyMergeReadyStatusBarText({
     ctx: options.ctx,
     text,
+    branchIdentity: resolveAmbientBranchIdentity(options.status),
     now: options.now,
   });
 
@@ -249,15 +254,6 @@ export function suspendMergeReadyStatusBar(ctx: MergeReadyStatusBarSyncContext):
 
     resumed = true;
     statusBarSuspensionCount = Math.max(0, statusBarSuspensionCount - 1);
-
-    if (statusBarSuspensionCount > 0) {
-      return;
-    }
-
-    const cachedEntry = statusBarCache;
-    if (cachedEntry?.cwd === ctx.cwd) {
-      renderMergeReadyStatusBarKey(ctx, cachedEntry.text);
-    }
   };
 }
 
@@ -273,11 +269,13 @@ export function resetMergeReadyStatusBarCache(): void {
 function applyMergeReadyStatusBarText(options: {
   ctx: MergeReadyStatusBarSyncContext;
   text: string;
+  branchIdentity: string | null;
   now?: number | Date | undefined;
 }): void {
   statusBarCache = {
     cwd: options.ctx.cwd,
     text: options.text,
+    branchIdentity: options.branchIdentity,
     refreshedAtMs: resolveNowMs(options.now),
   };
 
@@ -296,11 +294,11 @@ function renderMergeReadyStatusBarKey(ctx: MergeReadyStatusBarSyncContext, text?
   );
 }
 
-async function loadMergeReadyStatusBarText(options: {
+async function loadMergeReadyStatusBarEntry(options: {
   exec: MergeReadyExec;
   cwd: string;
   timeout: number;
-}): Promise<string> {
+}): Promise<{ text: string; branchIdentity: string | null }> {
   try {
     const status = await getMergeReadyStatus({
       exec: options.exec,
@@ -308,9 +306,75 @@ async function loadMergeReadyStatusBarText(options: {
       timeout: options.timeout,
     });
 
-    return renderMergeReadyStatusBar(status);
+    return {
+      text: renderMergeReadyStatusBar(status),
+      branchIdentity: resolveAmbientBranchIdentity(status),
+    };
   } catch {
-    return UNKNOWN_STATUS_BAR_TEXT;
+    return {
+      text: UNKNOWN_STATUS_BAR_TEXT,
+      branchIdentity: null,
+    };
+  }
+}
+
+async function getReusableMergeReadyStatusBarCacheEntry(options: {
+  exec: MergeReadyExec;
+  cwd: string;
+  force: boolean | undefined;
+  nowMs: number;
+  timeout: number;
+}): Promise<MergeReadyStatusBarCacheEntry | null> {
+  const cachedEntry = statusBarCache;
+
+  if (
+    options.force ||
+    !cachedEntry ||
+    cachedEntry.cwd !== options.cwd ||
+    cachedEntry.branchIdentity === null ||
+    options.nowMs - cachedEntry.refreshedAtMs >= MERGE_READY_STATUS_BAR_TTL_MS
+  ) {
+    return null;
+  }
+
+  const currentBranchIdentity = await probeCurrentBranchIdentity({
+    exec: options.exec,
+    cwd: options.cwd,
+    timeout: options.timeout,
+  });
+
+  return currentBranchIdentity === cachedEntry.branchIdentity ? cachedEntry : null;
+}
+
+function resolveAmbientBranchIdentity(status: MergeReadyStatus): string | null {
+  if (status.target.mode === 'url') {
+    return null;
+  }
+
+  const targetBranch = status.target.branch?.trim();
+  if (targetBranch) {
+    return targetBranch;
+  }
+
+  const prHeadBranch = status.pr?.headRefName.trim();
+  return prHeadBranch ? prHeadBranch : null;
+}
+
+async function probeCurrentBranchIdentity(options: {
+  exec: MergeReadyExec;
+  cwd: string;
+  timeout: number;
+}): Promise<string | null> {
+  try {
+    const result = await options.exec('git', ['branch', '--show-current'], {
+      cwd: options.cwd,
+      timeout: options.timeout,
+    });
+    const branch = result.stdout?.trim();
+
+    return branch ? branch : null;
+  } catch {
+    return null;
   }
 }
 

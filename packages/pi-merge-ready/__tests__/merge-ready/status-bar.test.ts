@@ -20,7 +20,10 @@ import {
   buildConversationsPayload,
   buildPullRequestPayload,
   createConversationsSuccessCall,
+  createCurrentBranchProbeCall,
+  createFakeExec,
   createGitDiscoveryCalls,
+  createPullRequestViewFailureCall,
   createPullRequestViewSuccessCall,
   type ExpectedExecCall,
 } from './test-fixtures.js';
@@ -292,6 +295,9 @@ describe('merge-ready status bar', () => {
       },
     });
     const ctx = createStatusContext();
+    const { exec, assertDone } = createFakeExec([
+      createCurrentBranchProbeCall({ timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS }),
+    ]);
 
     const synced = syncMergeReadyStatusBar({
       ctx,
@@ -299,11 +305,12 @@ describe('merge-ready status bar', () => {
       now: 1_000,
     });
     const refreshed = await refreshMergeReadyStatusBar({
-      exec: vi.fn(),
+      exec,
       ctx,
       now: 1_000 + MERGE_READY_STATUS_BAR_TTL_MS - 1,
     });
 
+    assertDone();
     expect(synced).toEqual({ text: '✅ #42 Ready', cached: false });
     expect(refreshed).toEqual({ text: '✅ #42 Ready', cached: true });
     expect(ctx.ui?.setStatus).toHaveBeenCalledTimes(2);
@@ -352,6 +359,9 @@ describe('merge-ready status bar', () => {
 
     syncMergeReadyStatusBar({ ctx: ambientCtx, status: ambientStatus, now: 1_000 });
     const targetedCtx = createStatusContext();
+    const { exec, assertDone } = createFakeExec([
+      createCurrentBranchProbeCall({ timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS }),
+    ]);
 
     const targeted = syncMergeReadyStatusBar({
       ctx: targetedCtx,
@@ -359,11 +369,12 @@ describe('merge-ready status bar', () => {
       now: 2_000,
     });
     const refreshed = await refreshMergeReadyStatusBar({
-      exec: vi.fn(),
+      exec,
       ctx: createStatusContext(),
       now: 1_000 + MERGE_READY_STATUS_BAR_TTL_MS - 1,
     });
 
+    assertDone();
     expect(targeted).toEqual({ text: '✅ #64 Ready', cached: false });
     expect(targetedCtx.ui?.setStatus).not.toHaveBeenCalled();
     expect(refreshed).toEqual({ text: '✅ #42 Ready', cached: true });
@@ -389,12 +400,16 @@ describe('merge-ready status bar', () => {
     setStatus.mockClear();
 
     const resume = suspendMergeReadyStatusBar(ctx);
+    const { exec, assertDone } = createFakeExec([
+      createCurrentBranchProbeCall({ timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS }),
+      createCurrentBranchProbeCall({ timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS }),
+    ]);
     expect(isMergeReadyStatusBarSuspended()).toBe(true);
     expect(setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, undefined);
 
     setStatus.mockClear();
     const hiddenRefresh = await refreshMergeReadyStatusBar({
-      exec: vi.fn(),
+      exec,
       ctx,
       now: 1_000 + MERGE_READY_STATUS_BAR_TTL_MS - 1,
     });
@@ -406,15 +421,15 @@ describe('merge-ready status bar', () => {
     setStatus.mockClear();
     resume();
     expect(isMergeReadyStatusBarSuspended()).toBe(false);
-    expect(setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ #42 Ready');
+    expect(setStatus).not.toHaveBeenCalled();
 
-    setStatus.mockClear();
     const visibleRefresh = await refreshMergeReadyStatusBar({
-      exec: vi.fn(),
+      exec,
       ctx,
       now: 1_000 + MERGE_READY_STATUS_BAR_TTL_MS - 1,
     });
 
+    assertDone();
     expect(visibleRefresh).toEqual({ text: '✅ #42 Ready', cached: true });
     expect(setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ #42 Ready');
   });
@@ -434,6 +449,7 @@ describe('merge-ready status bar', () => {
         }),
         { timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS },
       ),
+      createCurrentBranchProbeCall({ timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS }),
     ]);
     const ctx = createStatusContext();
     const setStatus = vi.mocked(ctx.ui!.setStatus);
@@ -447,7 +463,6 @@ describe('merge-ready status bar', () => {
       now: 2_000,
     });
 
-    assertDone();
     expect(hiddenRefresh).toEqual({ text: '✅ #42 Ready', cached: false });
     expect(setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, undefined);
     expect(setStatus).not.toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ #42 Ready');
@@ -455,15 +470,15 @@ describe('merge-ready status bar', () => {
     setStatus.mockClear();
     resume();
     expect(isMergeReadyStatusBarSuspended()).toBe(false);
-    expect(setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ #42 Ready');
+    expect(setStatus).not.toHaveBeenCalled();
 
-    setStatus.mockClear();
     const visibleRefresh = await refreshMergeReadyStatusBar({
-      exec: vi.fn(),
+      exec: api.exec,
       ctx,
       now: 2_000 + MERGE_READY_STATUS_BAR_TTL_MS - 1,
     });
 
+    assertDone();
     expect(visibleRefresh).toEqual({ text: '✅ #42 Ready', cached: true });
     expect(setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ #42 Ready');
   });
@@ -597,6 +612,7 @@ describe('merge-ready status bar', () => {
         }),
         { timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS },
       ),
+      createCurrentBranchProbeCall({ timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS }),
     ]);
     const ctx = createStatusContext();
 
@@ -615,6 +631,117 @@ describe('merge-ready status bar', () => {
     expect(first).toEqual({ text: '✅ #42 Ready', cached: false });
     expect(second).toEqual({ text: '✅ #42 Ready', cached: true });
     expect(ctx.ui?.setStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it('misses the TTL cache after a branch switch in the same checkout', async () => {
+    const { api, assertDone } = createMockAPI([
+      ...createGitDiscoveryCalls({ timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS }),
+      createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+        timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+      }),
+      createConversationsSuccessCall(
+        buildConversationsPayload({
+          reviewThreads: {
+            nodes: [{ isResolved: true }],
+            pageInfo: { hasNextPage: false },
+          },
+        }),
+        { timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS },
+      ),
+      createCurrentBranchProbeCall({
+        timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+        branch: 'feat/status-bar-identity',
+      }),
+      ...createGitDiscoveryCalls({
+        timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+        branch: 'feat/status-bar-identity',
+      }),
+      createPullRequestViewSuccessCall(
+        buildPullRequestPayload({
+          number: 64,
+          title: 'Use branch identity for status-bar cache reuse',
+          url: 'https://github.com/robhowley/pi-userland/pull/64',
+          headRefName: 'feat/status-bar-identity',
+        }),
+        {
+          timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+        },
+      ),
+      createConversationsSuccessCall(
+        buildConversationsPayload({
+          reviewThreads: {
+            nodes: [{ isResolved: true }],
+            pageInfo: { hasNextPage: false },
+          },
+        }),
+        {
+          timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          pullRequestNumber: 64,
+        },
+      ),
+    ]);
+    const ctx = createStatusContext();
+
+    const first = await refreshMergeReadyStatusBar({
+      exec: api.exec,
+      ctx,
+      now: 3_000,
+    });
+    const second = await refreshMergeReadyStatusBar({
+      exec: api.exec,
+      ctx,
+      now: 3_000 + MERGE_READY_STATUS_BAR_TTL_MS - 1,
+    });
+
+    assertDone();
+    expect(first).toEqual({ text: '✅ #42 Ready', cached: false });
+    expect(second).toEqual({ text: '✅ #64 Ready', cached: false });
+  });
+
+  it('does not treat an unknown current branch as a cache hit', async () => {
+    const { api, assertDone } = createMockAPI([
+      ...createGitDiscoveryCalls({ timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS }),
+      createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+        timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+      }),
+      createConversationsSuccessCall(
+        buildConversationsPayload({
+          reviewThreads: {
+            nodes: [{ isResolved: true }],
+            pageInfo: { hasNextPage: false },
+          },
+        }),
+        { timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS },
+      ),
+      createCurrentBranchProbeCall({
+        timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+        branch: '',
+      }),
+      ...createGitDiscoveryCalls({ timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS, branch: '' }),
+      createPullRequestViewFailureCall(
+        {
+          code: 1,
+          stderr: 'no pull requests found for detached HEAD\n',
+        },
+        { timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS },
+      ),
+    ]);
+    const ctx = createStatusContext();
+
+    const first = await refreshMergeReadyStatusBar({
+      exec: api.exec,
+      ctx,
+      now: 4_000,
+    });
+    const second = await refreshMergeReadyStatusBar({
+      exec: api.exec,
+      ctx,
+      now: 4_000 + MERGE_READY_STATUS_BAR_TTL_MS - 1,
+    });
+
+    assertDone();
+    expect(first).toEqual({ text: '✅ #42 Ready', cached: false });
+    expect(second).toEqual({ text: '❔ No PR', cached: false });
   });
 
   it('bypasses the TTL when refresh is forced', async () => {
