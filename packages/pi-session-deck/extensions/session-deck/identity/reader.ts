@@ -327,8 +327,8 @@ function deriveLineage({
 }): SessionDerivedFacets['lineage'] {
   if (!hadEnoughData) return 'unknown';
 
-  const hasPrevious = previousSessionFile != null;
-  const hasParent = parentSession != null;
+  const hasPrevious = previousSessionFile !== undefined && previousSessionFile !== null;
+  const hasParent = parentSession !== undefined && parentSession !== null;
 
   if (hasPrevious && hasParent) return 'previous_and_parent';
   if (hasPrevious) return 'previous';
