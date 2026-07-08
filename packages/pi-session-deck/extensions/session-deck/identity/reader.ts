@@ -343,16 +343,29 @@ function deriveIdentityStrengthFacet(
 function deriveHeaderConsistencyFacet(
   input: DerivedFacetInput,
 ): SessionDerivedFacets['headerConsistency'] {
-  if (input.sessionHeader === undefined) {
+  const header = input.sessionHeader;
+  if (header === undefined) {
     return 'unavailable';
   }
 
-  if (input.sessionId !== null && input.sessionHeader.id !== input.sessionId) {
+  const comparisons: Array<{ headerValue: string; identityValue: string }> = [];
+
+  if (input.sessionId !== null) {
+    comparisons.push({ headerValue: header.id, identityValue: input.sessionId });
+  }
+
+  if (input.cwd !== null) {
+    comparisons.push({ headerValue: header.cwd, identityValue: input.cwd });
+  }
+
+  const hasFullBasis = comparisons.length === 2;
+
+  if (comparisons.some(({ headerValue, identityValue }) => headerValue !== identityValue)) {
     return 'mismatch';
   }
 
-  if (input.cwd !== null && input.sessionHeader.cwd !== input.cwd) {
-    return 'mismatch';
+  if (!hasFullBasis) {
+    return 'indeterminate';
   }
 
   return 'consistent';

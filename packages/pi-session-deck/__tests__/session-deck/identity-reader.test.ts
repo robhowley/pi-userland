@@ -347,6 +347,50 @@ describe('identity reader — join', () => {
     });
   });
 
+  it.each([
+    {
+      name: 'sessionId null + matching cwd',
+      overrides: {
+        sessionId: null,
+        sessionHeader: {
+          id: 'session-abc',
+          timestamp: '2026-06-17T11:59:00.000Z',
+          cwd: '/home/user/project',
+        },
+      },
+    },
+    {
+      name: 'matching sessionId + cwd null',
+      overrides: {
+        cwd: null,
+        sessionHeader: {
+          id: 'session-abc',
+          timestamp: '2026-06-17T11:59:00.000Z',
+          cwd: '/home/user/project',
+        },
+      },
+    },
+    {
+      name: 'sessionId null + cwd null',
+      overrides: {
+        sessionId: null,
+        cwd: null,
+        sessionHeader: {
+          id: 'session-abc',
+          timestamp: '2026-06-17T11:59:00.000Z',
+          cwd: '/home/user/project',
+        },
+      },
+    },
+  ])(
+    'marks header consistency indeterminate when header exists with partial basis: $name',
+    async ({ overrides }) => {
+      const record = await readSingleJoinedRecord(buildIdentityRecord(overrides));
+
+      expect(record.derivedFacets?.headerConsistency).toBe('indeterminate');
+    },
+  );
+
   it('distinguishes header id conflicts from cwd mismatches', async () => {
     const conflictingId = await readSingleJoinedRecord(
       buildIdentityRecord({

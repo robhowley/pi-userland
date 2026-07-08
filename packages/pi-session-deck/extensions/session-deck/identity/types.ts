@@ -120,7 +120,11 @@ export type SessionParentageFacet = 'child' | 'root' | 'unknown';
 
 export type SessionIdentityStrengthFacet = 'strong' | 'weak' | 'missing' | 'conflicted';
 
-export type SessionHeaderConsistencyFacet = 'consistent' | 'mismatch' | 'unavailable';
+export type SessionHeaderConsistencyFacet =
+  | 'consistent'
+  | 'indeterminate'
+  | 'mismatch'
+  | 'unavailable';
 
 export interface SessionDerivedFacets {
   persistence: SessionPersistenceFacet;
