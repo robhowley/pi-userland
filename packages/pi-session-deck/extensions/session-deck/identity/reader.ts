@@ -228,6 +228,7 @@ function joinRecord(
       cwd,
       sessionStart,
       sessionHeader,
+      previousSessionFile: sessionStart?.previousSessionFile,
     }),
     ...(sessionStart === undefined ? {} : { sessionStart }),
     ...(sessionHeader === undefined ? {} : { sessionHeader }),
@@ -249,14 +250,19 @@ interface DerivedFacetInput {
   cwd: string | null;
   sessionStart: SessionStartMetadata | undefined;
   sessionHeader: SessionHeaderMetadata | undefined;
+  previousSessionFile: string | null | undefined;
 }
 
 function deriveSessionDerivedFacets(input: DerivedFacetInput): SessionDerivedFacets {
   return {
     persistence: derivePersistenceFacet(input),
     interactivity: deriveInteractivityFacet(input.sessionStart),
-    startCause: deriveStartCauseFacet(input.sessionStart),
-    parentage: deriveParentageFacet(input.sessionHeader),
+    lifecycle: deriveLifecycleFacet(input.sessionStart),
+    lineage: deriveLineage({
+      previousSessionFile: input.previousSessionFile,
+      parentSession: input.sessionHeader?.parentSession,
+      hadEnoughData: input.hasIdentity,
+    }),
     identityStrength: deriveIdentityStrengthFacet(input),
     headerConsistency: deriveHeaderConsistencyFacet(input),
   };
@@ -293,9 +299,9 @@ function deriveInteractivityFacet(
   }
 }
 
-function deriveStartCauseFacet(
+function deriveLifecycleFacet(
   sessionStart: SessionStartMetadata | undefined,
-): SessionDerivedFacets['startCause'] {
+): SessionDerivedFacets['lifecycle'] {
   switch (sessionStart?.reason) {
     case 'startup':
     case 'reload':
@@ -310,14 +316,24 @@ function deriveStartCauseFacet(
   }
 }
 
-function deriveParentageFacet(
-  sessionHeader: SessionHeaderMetadata | undefined,
-): SessionDerivedFacets['parentage'] {
-  if (sessionHeader === undefined) {
-    return 'unknown';
-  }
+function deriveLineage({
+  previousSessionFile,
+  parentSession,
+  hadEnoughData,
+}: {
+  previousSessionFile?: string | null | undefined;
+  parentSession?: string | null | undefined;
+  hadEnoughData: boolean;
+}): SessionDerivedFacets['lineage'] {
+  if (!hadEnoughData) return 'unknown';
 
-  return sessionHeader.parentSession === undefined ? 'root' : 'child';
+  const hasPrevious = previousSessionFile != null;
+  const hasParent = parentSession != null;
+
+  if (hasPrevious && hasParent) return 'previous_and_parent';
+  if (hasPrevious) return 'previous';
+  if (hasParent) return 'parent';
+  return 'root';
 }
 
 function deriveIdentityStrengthFacet(

@@ -153,8 +153,8 @@ describe('identity reader — join', () => {
     expect(record.derivedFacets).toEqual({
       persistence: 'file_backed',
       interactivity: 'interactive',
-      startCause: 'other',
-      parentage: 'child',
+      lifecycle: 'other',
+      lineage: 'previous_and_parent',
       identityStrength: 'strong',
       headerConsistency: 'consistent',
     });
@@ -210,8 +210,8 @@ describe('identity reader — join', () => {
     expect(record.derivedFacets).toEqual({
       persistence: 'unknown',
       interactivity: 'unknown',
-      startCause: 'unknown',
-      parentage: 'unknown',
+      lifecycle: 'unknown',
+      lineage: 'unknown',
       identityStrength: 'missing',
       headerConsistency: 'unavailable',
     });
@@ -270,8 +270,8 @@ describe('identity reader — join', () => {
     expect(view.records[0]?.derivedFacets).toEqual({
       persistence: 'file_backed',
       interactivity: 'unknown',
-      startCause: 'unknown',
-      parentage: 'unknown',
+      lifecycle: 'unknown',
+      lineage: 'root',
       identityStrength: 'strong',
       headerConsistency: 'unavailable',
     });
@@ -279,7 +279,7 @@ describe('identity reader — join', () => {
     expect(view.records[0]).not.toHaveProperty('sessionHeader');
   });
 
-  it('keeps previousSessionFile separate from durable parentage', async () => {
+  it('keeps previousSessionFile separate from durable lineage', async () => {
     const record = await readSingleJoinedRecord(
       buildIdentityRecord({
         sessionStart: {
@@ -310,8 +310,8 @@ describe('identity reader — join', () => {
     expect(record.derivedFacets).toEqual({
       persistence: 'file_backed',
       interactivity: 'interactive',
-      startCause: 'resume',
-      parentage: 'root',
+      lifecycle: 'resume',
+      lineage: 'previous',
       identityStrength: 'strong',
       headerConsistency: 'consistent',
     });
@@ -340,8 +340,8 @@ describe('identity reader — join', () => {
     expect(record.derivedFacets).toEqual({
       persistence: 'in_memory',
       interactivity: 'unknown',
-      startCause: 'other',
-      parentage: 'root',
+      lifecycle: 'other',
+      lineage: 'root',
       identityStrength: 'weak',
       headerConsistency: 'consistent',
     });

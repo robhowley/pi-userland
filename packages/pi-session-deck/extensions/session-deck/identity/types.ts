@@ -101,13 +101,13 @@ export interface IdentityFreshnessThresholds {
   staleAfterMs: number;
 }
 
-// ─── Derived session facets (internal-only) ────────────────────────
+// ─── Derived session facets ───────────────────────────────────────
 
 export type SessionPersistenceFacet = 'in_memory' | 'file_backed' | 'unknown';
 
 export type SessionInteractivityFacet = 'interactive' | 'headless' | 'unknown';
 
-export type SessionStartCauseFacet =
+export type SessionLifecycleFacet =
   | 'startup'
   | 'reload'
   | 'new'
@@ -116,7 +116,7 @@ export type SessionStartCauseFacet =
   | 'other'
   | 'unknown';
 
-export type SessionParentageFacet = 'child' | 'root' | 'unknown';
+export type SessionLineageFacet = 'root' | 'previous' | 'parent' | 'previous_and_parent' | 'unknown';
 
 export type SessionIdentityStrengthFacet = 'strong' | 'weak' | 'missing' | 'conflicted';
 
@@ -129,8 +129,8 @@ export type SessionHeaderConsistencyFacet =
 export interface SessionDerivedFacets {
   persistence: SessionPersistenceFacet;
   interactivity: SessionInteractivityFacet;
-  startCause: SessionStartCauseFacet;
-  parentage: SessionParentageFacet;
+  lifecycle: SessionLifecycleFacet;
+  lineage: SessionLineageFacet;
   identityStrength: SessionIdentityStrengthFacet;
   headerConsistency: SessionHeaderConsistencyFacet;
 }
