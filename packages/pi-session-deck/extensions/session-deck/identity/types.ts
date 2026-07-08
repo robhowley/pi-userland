@@ -116,7 +116,12 @@ export type SessionLifecycleFacet =
   | 'other'
   | 'unknown';
 
-export type SessionLineageFacet = 'root' | 'previous' | 'parent' | 'previous_and_parent' | 'unknown';
+export type SessionLineageFacet =
+  | 'root'
+  | 'previous'
+  | 'parent'
+  | 'previous_and_parent'
+  | 'unknown';
 
 export type SessionIdentityStrengthFacet = 'strong' | 'weak' | 'missing' | 'conflicted';
 
