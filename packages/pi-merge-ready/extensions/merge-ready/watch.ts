@@ -1,7 +1,12 @@
 import { getErrorMessage, runNormalizedExecCommand } from './internal.js';
 import { loadMergeReadyConfigAsync, type MergeReadyConfig } from './config.js';
 import { getMergeReadyStatus } from './merge-ready.js';
-import { suspendMergeReadyStatusBar, syncMergeReadyStatusBar } from './status-bar.js';
+import {
+  isMergeReadyStatusBarSuspended,
+  refreshMergeReadyStatusBar,
+  suspendMergeReadyStatusBar,
+  syncMergeReadyStatusBar,
+} from './status-bar.js';
 import {
   publishMergeReadyWatchStatus,
   type MergeReadyWatchLifecycleState,
@@ -775,7 +780,7 @@ export function startMergeReadyWatch(
       options.ctx.ui.notify(`${failureMessage} for ${watcher.targetLabel}.`, 'error');
       return { kind: 'stopped', reason: 'error' } satisfies MergeReadyWatchResult;
     })
-    .finally(() => {
+    .finally(async () => {
       if (lastPublishedLifecycle !== 'stopped' && lastPublishedLifecycle !== 'error') {
         publishStatus({
           lifecycle: 'stopped',
@@ -801,6 +806,10 @@ export function startMergeReadyWatch(
       }
 
       resumeMergeReadyStatusBar();
+      await restoreAmbientMergeReadyStatusBar({
+        exec: options.exec,
+        ctx: options.ctx,
+      });
     });
 
   watcher.promise = promise;
@@ -1613,6 +1622,47 @@ function describeMergeReadyWatchRepairTarget(
   }
 
   return 'the current branch PR';
+}
+
+async function restoreAmbientMergeReadyStatusBar(options: {
+  exec: MergeReadyExec;
+  ctx: Pick<MergeReadyWatchContext, 'cwd' | 'ui'>;
+}): Promise<void> {
+  if (isMergeReadyStatusBarSuspended()) {
+    return;
+  }
+
+  const setStatus = options.ctx.ui.setStatus;
+  if (typeof setStatus !== 'function') {
+    return;
+  }
+
+  const theme = resolveMergeReadyWatchStatusBarTheme(options.ctx);
+
+  try {
+    await refreshMergeReadyStatusBar({
+      exec: options.exec,
+      ctx: {
+        cwd: options.ctx.cwd,
+        ui: {
+          setStatus,
+          ...(theme === undefined ? {} : { theme }),
+        },
+      },
+    });
+  } catch {
+    // Ignore best-effort ambient status-bar restore failures during watch teardown.
+  }
+}
+
+function resolveMergeReadyWatchStatusBarTheme(
+  ctx: Pick<MergeReadyWatchContext, 'ui'>,
+): MergeReadyWatchContext['ui']['theme'] | undefined {
+  try {
+    return ctx.ui.theme;
+  } catch {
+    return undefined;
+  }
 }
 
 function setMergeReadyWatchStatus(ctx: MergeReadyWatchContext, text?: string): void {

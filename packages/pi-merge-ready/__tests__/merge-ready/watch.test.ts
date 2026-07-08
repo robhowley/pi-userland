@@ -3,6 +3,7 @@ import {
   createMergeReadyStatus,
   isMergeReadyStatusBarSuspended,
   MERGE_READY_STATUS_BAR_KEY,
+  MERGE_READY_STATUS_BAR_TIMEOUT_MS,
   MERGE_READY_STATUS_BAR_TTL_MS,
   MERGE_READY_WATCH_DEFAULT_INTERVAL_SECONDS,
   MERGE_READY_WATCH_MAX_INTERVAL_SECONDS,
@@ -32,7 +33,11 @@ import {
   type MergeReadyTarget,
   type MergeReadyWatchShortcutContext,
 } from '../../extensions/merge-ready/index.js';
-import { CURRENT_BRANCH_TARGET } from './test-fixtures.js';
+import {
+  createCurrentBranchProbeCall,
+  createFakeExec,
+  CURRENT_BRANCH_TARGET,
+} from './test-fixtures.js';
 
 const GENERATED_AT = '2026-06-05T00:00:00.000Z';
 
@@ -1864,12 +1869,32 @@ describe('merge-ready watch loop', () => {
         setStatus: vi.fn(),
       },
     };
+    const refreshExec = createFakeExec([
+      createCurrentBranchProbeCall({
+        branch: 'feat/merge-ready',
+        timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+      }),
+      createCurrentBranchProbeCall({
+        branch: 'feat/merge-ready',
+        timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+      }),
+      createCurrentBranchProbeCall({
+        branch: 'feat/merge-ready',
+        timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+      }),
+    ]);
+    const watchExec = createFakeExec([
+      createCurrentBranchProbeCall({
+        branch: 'feat/merge-ready',
+        timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+      }),
+    ]);
 
     const abortController = new AbortController();
     const start = startMergeReadyWatch({
       api,
       ctx,
-      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
+      exec: watchExec.exec,
       intervalSeconds: 45,
       signal: abortController.signal,
       url: RUNTIME_URL_TARGET.url,
@@ -1893,11 +1918,11 @@ describe('merge-ready watch loop', () => {
     expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, undefined);
     expect(vi.mocked(ctx.ui.setStatus)).not.toHaveBeenCalledWith(
       MERGE_READY_STATUS_BAR_KEY,
-      '✅ Ready',
+      '✅ #42 Ready',
     );
 
     const hiddenWhileRepairQueued = await refreshMergeReadyStatusBar({
-      exec: vi.fn(),
+      exec: refreshExec.exec,
       ctx: refreshCtx,
       now: 1_000 + MERGE_READY_STATUS_BAR_TTL_MS - 1,
     });
@@ -1924,7 +1949,7 @@ describe('merge-ready watch loop', () => {
 
     vi.mocked(refreshCtx.ui.setStatus).mockClear();
     const hiddenAfterAgentEnd = await refreshMergeReadyStatusBar({
-      exec: vi.fn(),
+      exec: refreshExec.exec,
       ctx: refreshCtx,
       now: 2_000,
     });
@@ -1934,6 +1959,7 @@ describe('merge-ready watch loop', () => {
 
     abortController.abort();
     await expect(start.promise).resolves.toEqual({ kind: 'aborted', reason: 'aborted' });
+    watchExec.assertDone();
     expect(isMergeReadyStatusBarSuspended()).toBe(false);
     expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(
       MERGE_READY_WATCH_STATUS_KEY,
@@ -1946,12 +1972,13 @@ describe('merge-ready watch loop', () => {
 
     vi.mocked(refreshCtx.ui.setStatus).mockClear();
     const visibleAfterStop = await refreshMergeReadyStatusBar({
-      exec: vi.fn(),
+      exec: refreshExec.exec,
       ctx: refreshCtx,
       now: 3_000,
     });
 
-    expect(visibleAfterStop).toEqual({ text: '❔ No PR', cached: true });
+    refreshExec.assertDone();
+    expect(visibleAfterStop?.text).toBe('❔ No PR');
     expect(refreshCtx.ui.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '❔ No PR');
   });
 
@@ -2156,6 +2183,91 @@ describe('merge-ready watch loop', () => {
 
     expect(createMergeReadyWatchBlockerSignature(first, first.openItems)).toBe(
       createMergeReadyWatchBlockerSignature(second, second.openItems),
+    );
+  });
+});
+
+describe('merge-ready watch teardown restore', () => {
+  afterEach(() => {
+    vi.doUnmock('../../extensions/merge-ready/status-bar.js');
+    vi.resetModules();
+  });
+
+  it('restores the ambient footer via refresh after suspension is released', async () => {
+    type MockStatusBarCtx = {
+      cwd: string;
+      ui?: {
+        setStatus?: (key: string, status?: string) => void;
+      };
+    };
+
+    let suspended = false;
+    const refreshCalls: Array<{ suspended: boolean; cwd: string }> = [];
+    const refreshMergeReadyStatusBar = vi.fn(async (options: { ctx: MockStatusBarCtx }) => {
+      refreshCalls.push({ suspended, cwd: options.ctx.cwd });
+      options.ctx.ui?.setStatus?.(MERGE_READY_STATUS_BAR_KEY, '✅ #42 Ready');
+      return { text: '✅ #42 Ready', cached: false };
+    });
+    const suspendMergeReadyStatusBar = vi.fn((ctx: MockStatusBarCtx) => {
+      suspended = true;
+      ctx.ui?.setStatus?.(MERGE_READY_STATUS_BAR_KEY, undefined);
+      return () => {
+        suspended = false;
+      };
+    });
+
+    vi.resetModules();
+    vi.doMock('../../extensions/merge-ready/status-bar.js', () => ({
+      isMergeReadyStatusBarSuspended: () => suspended,
+      refreshMergeReadyStatusBar,
+      suspendMergeReadyStatusBar,
+      syncMergeReadyStatusBar: vi.fn(),
+    }));
+
+    const watchModule = await import('../../extensions/merge-ready/watch.js');
+    const ctx = createWatchContext();
+    const start = watchModule.startMergeReadyWatch({
+      api: {
+        sendUserMessage: vi.fn(
+          async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) =>
+            undefined,
+        ),
+      },
+      ctx,
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
+      intervalSeconds: 30,
+      dependencies: {
+        getStatus: createStatusSequence([createReadyStatus()]),
+        sleep: createAbortableSleep(),
+        syncStatusBar: vi.fn(),
+        checkDirtyWorkingTree: vi.fn(async () => ({ ok: true as const, dirty: false })),
+      },
+    });
+
+    expect(start.ok).toBe(true);
+    if (!start.ok) {
+      return;
+    }
+
+    await flushMicrotasks();
+    expect(suspended).toBe(true);
+
+    expect(watchModule.stopActiveMergeReadyWatch()).toEqual({
+      stopped: true,
+      targetLabel: 'current branch PR',
+      phase: 'watching',
+    });
+    await expect(start.promise).resolves.toEqual({ kind: 'aborted', reason: 'aborted' });
+    await watchModule.resetMergeReadyWatchState();
+
+    expect(suspendMergeReadyStatusBar).toHaveBeenCalledTimes(1);
+    expect(refreshMergeReadyStatusBar).toHaveBeenCalledTimes(1);
+    expect(refreshCalls).toEqual([{ suspended: false, cwd: '/repo' }]);
+    expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, undefined);
+    expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(MERGE_READY_WATCH_STATUS_KEY, undefined);
+    expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(
+      MERGE_READY_STATUS_BAR_KEY,
+      '✅ #42 Ready',
     );
   });
 });

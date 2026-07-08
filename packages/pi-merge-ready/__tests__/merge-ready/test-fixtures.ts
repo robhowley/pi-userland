@@ -101,10 +101,12 @@ export function createGitDiscoveryCalls(
     cwd?: string;
     timeout?: number;
     repositoryRoot?: string;
+    branch?: string;
   } = {},
 ): ExpectedExecCall[] {
   const cwd = options.cwd ?? '/repo';
   const repositoryRoot = options.repositoryRoot ?? cwd;
+  const branch = options.branch ?? 'feat/merge-ready';
 
   return [
     {
@@ -119,7 +121,7 @@ export function createGitDiscoveryCalls(
       args: ['branch', '--show-current'],
       cwd: repositoryRoot,
       timeout: options.timeout,
-      result: { stdout: 'feat/merge-ready\n' },
+      result: { stdout: `${branch}\n` },
     },
     {
       command: 'git',
@@ -164,6 +166,26 @@ export function createGitDiscoveryCalls(
       result: { stdout: '' },
     },
   ];
+}
+
+export function createCurrentBranchProbeCall(
+  options: {
+    cwd?: string;
+    timeout?: number;
+    branch?: string;
+  } = {},
+): ExpectedExecCall {
+  const branch = options.branch ?? 'feat/merge-ready';
+
+  return {
+    command: 'git',
+    args: ['branch', '--show-current'],
+    cwd: options.cwd ?? '/repo',
+    timeout: options.timeout,
+    result: {
+      stdout: `${branch}\n`,
+    },
+  };
 }
 
 type ObservedExecCall = {

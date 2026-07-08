@@ -27,25 +27,25 @@ The package is fail-closed: if GitHub data is missing, truncated, or ambiguous, 
 
 ### Status bar
 
-The Pi status bar shows the current branch PR's top merge-readiness state.
+The Pi status bar shows the current branch PR's top merge-readiness state and PR number.
 
 Examples:
 
 ```text
-✅ Ready
-👀 Review pending
-❌ Checks failing
-🔄 Out of date
-❌ 💬 2 unresolved
+✅ #64 Ready
+👀 #64 Review pending
+❌ #64 Checks failing
+🔄 #64 Out of date
+❌ #64 💬 2 unresolved
 ❔ No PR
 ```
 
-`✅ Ready` means there is no current merge-readiness review blocker. If GitHub still requires review, Pi shows `👀 Review pending` instead.
+`✅ #64 Ready` means there is no current merge-readiness review blocker. If GitHub still requires review, Pi shows `👀 #64 Review pending` instead.
 
 Optional unresolved conversations are not blockers, but they can still appear as context:
 
 ```text
-✅ Mergeable · 💬 2 unresolved
+✅ #64 Mergeable · 💬 2 comments
 ```
 
 ### Slash command
