@@ -58,10 +58,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 
   on(
     'session_start',
-    async (
-      event: { reason: string; previousSessionFile?: string },
-      ctx: SessionStartContext,
-    ) => {
+    async (event: { reason: string; previousSessionFile?: string }, ctx: SessionStartContext) => {
       const presenceRuntime = await ensurePresenceRuntimeStarted();
       const sessionManager = createSessionManager(ctx, event);
 
