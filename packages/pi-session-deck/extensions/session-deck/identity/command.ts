@@ -8,7 +8,7 @@ import {
   getSessionDeckEmptyMessage,
   getSessionDeckListHeading,
 } from '../browser-render.js';
-import type { SessionDeckSnapshot } from '../types.js';
+import type { SessionDeckDiagnostic, SessionDeckRecord, SessionDeckSnapshot } from '../types.js';
 import { SESSION_DECK_COMMAND_NAME } from '../presence/constants.js';
 import { reapPresenceRecords, type ReapPresenceRecordsOptions } from '../presence/reap.js';
 import type { PresenceDiagnostic, PresenceState } from '../presence/types.js';
@@ -66,6 +66,16 @@ export type ParsedSessionDeckCommandArgs =
       all: boolean;
       reap: boolean;
       identity: boolean;
+      json: false;
+      sessionId: null;
+    }
+  | {
+      ok: true;
+      all: boolean;
+      reap: boolean;
+      identity: boolean;
+      json: true;
+      sessionId: string;
     }
   | {
       ok: false;
@@ -82,9 +92,16 @@ interface LoadedSessionDeckView {
 const SHOW_ALL_FLAG = '--all';
 const REAP_FLAG = '--reap';
 const IDENTITY_FLAG = '--identity';
-const USAGE = `Usage: /${SESSION_DECK_COMMAND_NAME} [${SHOW_ALL_FLAG}] [${REAP_FLAG}] [${IDENTITY_FLAG}]`;
+const JSON_FLAG = '--json';
+const SESSION_ID_FLAG = '--session-id';
 const DEFAULT_VISIBLE_STATES: PresenceState[] = ['live', 'stale'];
-const COMMAND_FLAGS = [SHOW_ALL_FLAG, REAP_FLAG, IDENTITY_FLAG] as const;
+const COMMAND_FLAGS = [
+  SHOW_ALL_FLAG,
+  REAP_FLAG,
+  IDENTITY_FLAG,
+  JSON_FLAG,
+  SESSION_ID_FLAG,
+] as const;
 
 export function registerSessionDeckCommand(
   pi: PresenceCommandAPI,
@@ -109,6 +126,12 @@ export function registerSessionDeckCommand(
         reapPresence,
       });
 
+      if (parsedArgs.json) {
+        const jsonResult = renderSessionDeckJsonLookup(loadedView.view, parsedArgs.sessionId);
+        ctx.ui.notify(jsonResult.message, jsonResult.level);
+        return;
+      }
+
       if (ctx.mode === 'tui' && ctx.ui.custom !== undefined) {
         await openSessionDeckBrowser(ctx, loadedView, async () =>
           readVisibleSessionDeckView(parsedArgs.all, readSnapshot, options),
@@ -130,11 +153,15 @@ export function parseSessionDeckCommandArgs(args: string): ParsedSessionDeckComm
   let all = false;
   let reap = false;
   let identity = false;
+  let json = false;
+  let sessionId: string | null = null;
 
-  for (const token of tokens) {
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]!;
+
     if (token === SHOW_ALL_FLAG) {
       if (all) {
-        return { ok: false, message: USAGE };
+        return { ok: false, message: `Duplicate flag: ${SHOW_ALL_FLAG}` };
       }
       all = true;
       continue;
@@ -142,7 +169,7 @@ export function parseSessionDeckCommandArgs(args: string): ParsedSessionDeckComm
 
     if (token === REAP_FLAG) {
       if (reap) {
-        return { ok: false, message: USAGE };
+        return { ok: false, message: `Duplicate flag: ${REAP_FLAG}` };
       }
       reap = true;
       continue;
@@ -150,16 +177,49 @@ export function parseSessionDeckCommandArgs(args: string): ParsedSessionDeckComm
 
     if (token === IDENTITY_FLAG) {
       if (identity) {
-        return { ok: false, message: USAGE };
+        return { ok: false, message: `Duplicate flag: ${IDENTITY_FLAG}` };
       }
       identity = true;
       continue;
     }
 
-    return { ok: false, message: USAGE };
+    if (token === JSON_FLAG) {
+      if (json) {
+        return { ok: false, message: `Duplicate flag: ${JSON_FLAG}` };
+      }
+      json = true;
+      continue;
+    }
+
+    if (token === SESSION_ID_FLAG) {
+      if (sessionId !== null) {
+        return { ok: false, message: `Duplicate flag: ${SESSION_ID_FLAG}` };
+      }
+
+      const value = tokens[index + 1];
+      if (value === undefined || value.startsWith('--')) {
+        return { ok: false, message: `Missing value for ${SESSION_ID_FLAG}` };
+      }
+
+      sessionId = value;
+      index += 1;
+      continue;
+    }
+
+    return { ok: false, message: `Unsupported argument: ${token}` };
   }
 
-  return { ok: true, all, reap, identity };
+  if (json && sessionId === null) {
+    return { ok: false, message: `${JSON_FLAG} requires ${SESSION_ID_FLAG} <id>` };
+  }
+
+  if (!json && sessionId !== null) {
+    return { ok: false, message: `${SESSION_ID_FLAG} requires ${JSON_FLAG}` };
+  }
+
+  return json
+    ? { ok: true, all, reap, identity, json: true, sessionId: sessionId! }
+    : { ok: true, all, reap, identity, json: false, sessionId: null };
 }
 
 export function renderSessionDeckView(
@@ -191,6 +251,78 @@ export function renderSessionDeckView(
   }
 
   return lines.join('\n');
+}
+
+function renderSessionDeckJsonLookup(
+  view: SessionDeckSnapshot,
+  sessionId: string,
+): { level: 'info' | 'error'; message: string } {
+  const matches = view.records.filter((record) => record.sessionId === sessionId);
+
+  if (matches.length === 0) {
+    return {
+      level: 'error',
+      message: `No matching session found for session id "${sessionId}".`,
+    };
+  }
+
+  if (matches.length > 1) {
+    return {
+      level: 'error',
+      message: `Ambiguous session id "${sessionId}": matched ${matches.length} sessions.`,
+    };
+  }
+
+  return {
+    level: 'info',
+    message: JSON.stringify(toPublicSessionDeckRecord(matches[0]!), null, 2),
+  };
+}
+
+function toPublicSessionDeckRecord(record: SessionDeckRecord): SessionDeckRecord {
+  return {
+    runtimeId: record.runtimeId,
+    pid: record.pid,
+    presenceState: record.presenceState,
+    ...(record.presenceReason === undefined ? {} : { presenceReason: record.presenceReason }),
+    heartbeatAgeMs: record.heartbeatAgeMs,
+    sessionId: record.sessionId,
+    sessionName: record.sessionName,
+    repoName: record.repoName,
+    qualifiedRepoName: record.qualifiedRepoName,
+    cwd: record.cwd,
+    branch: record.branch,
+    prUrl: record.prUrl,
+    isLinkedWorktree: record.isLinkedWorktree,
+    worktreeLabel: record.worktreeLabel,
+    ...(record.derivedFacets === undefined
+      ? {}
+      : {
+          derivedFacets: {
+            persistence: record.derivedFacets.persistence,
+            interactivity: record.derivedFacets.interactivity,
+            lifecycle: record.derivedFacets.lifecycle,
+            lineage: record.derivedFacets.lineage,
+            identityStrength: record.derivedFacets.identityStrength,
+            headerConsistency: record.derivedFacets.headerConsistency,
+          },
+        }),
+    activityState: record.activityState,
+    activityAgeMs: record.activityAgeMs,
+    currentToolName: record.currentToolName,
+    lastError: record.lastError,
+    chips: [...record.chips],
+    diagnostics: record.diagnostics.map(toPublicSessionDeckDiagnostic),
+  };
+}
+
+function toPublicSessionDeckDiagnostic(diagnostic: SessionDeckDiagnostic): SessionDeckDiagnostic {
+  return {
+    code: diagnostic.code,
+    message: diagnostic.message,
+    ...(diagnostic.runtimeId === undefined ? {} : { runtimeId: diagnostic.runtimeId }),
+    ...(diagnostic.filePath === undefined ? {} : { filePath: diagnostic.filePath }),
+  };
 }
 
 function renderSessionDeckText(loadedView: LoadedSessionDeckView): string {
