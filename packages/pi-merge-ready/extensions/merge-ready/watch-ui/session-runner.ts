@@ -138,7 +138,6 @@ type MergeReadyWatchStartResultHookPayload = {
   message: string;
 };
 
-
 export class MergeReadyWatchSessionRunner {
   private readonly agentDir: string;
   private readonly createAuthStorage: NonNullable<
