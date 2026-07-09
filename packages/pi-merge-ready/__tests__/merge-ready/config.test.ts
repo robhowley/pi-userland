@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { loadMergeReadyConfigAsync } from '../../extensions/merge-ready/config.js';
 
+const MERGE_READY_STATUS_BAR_DIAGNOSTICS_ENV = 'PI_MERGE_READY_STATUS_BAR_DIAGNOSTICS';
+
 function writeJsonFile(path: string, value: unknown) {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(value, null, 2), 'utf-8');
@@ -11,12 +13,15 @@ function writeJsonFile(path: string, value: unknown) {
 
 describe.sequential('loadMergeReadyConfigAsync', () => {
   let originalAgentDir: string | undefined;
+  let originalStatusBarDiagnosticsEnv: string | undefined;
   let testRoot: string;
   let cwd: string;
   let agentDir: string;
 
   beforeEach(() => {
     originalAgentDir = process.env['PI_CODING_AGENT_DIR'];
+    originalStatusBarDiagnosticsEnv = process.env[MERGE_READY_STATUS_BAR_DIAGNOSTICS_ENV];
+    delete process.env[MERGE_READY_STATUS_BAR_DIAGNOSTICS_ENV];
     testRoot = mkdtempSync(join(tmpdir(), 'pi-merge-ready-config-'));
     cwd = join(testRoot, 'repo');
     agentDir = join(testRoot, 'agent');
@@ -29,6 +34,12 @@ describe.sequential('loadMergeReadyConfigAsync', () => {
       delete process.env['PI_CODING_AGENT_DIR'];
     } else {
       process.env['PI_CODING_AGENT_DIR'] = originalAgentDir;
+    }
+
+    if (originalStatusBarDiagnosticsEnv === undefined) {
+      delete process.env[MERGE_READY_STATUS_BAR_DIAGNOSTICS_ENV];
+    } else {
+      process.env[MERGE_READY_STATUS_BAR_DIAGNOSTICS_ENV] = originalStatusBarDiagnosticsEnv;
     }
 
     rmSync(testRoot, { recursive: true, force: true });
@@ -47,18 +58,21 @@ describe.sequential('loadMergeReadyConfigAsync', () => {
       'pi-merge-ready': {
         autoCompactRepair: true,
         cacheTTLSeconds: 90,
+        enableStatusBarDiagnostics: false,
       },
     });
     writeProjectSettings({
       'pi-merge-ready': {
         autoCompactRepair: false,
         cacheTTLSeconds: 5,
+        enableStatusBarDiagnostics: true,
       },
     });
 
     await expect(loadMergeReadyConfigAsync(cwd, true)).resolves.toEqual({
       autoCompactRepair: false,
       cacheTTLSeconds: 5,
+      enableStatusBarDiagnostics: true,
     });
   });
 
@@ -66,6 +80,7 @@ describe.sequential('loadMergeReadyConfigAsync', () => {
     await expect(loadMergeReadyConfigAsync(cwd)).resolves.toEqual({
       autoCompactRepair: true,
       cacheTTLSeconds: 60,
+      enableStatusBarDiagnostics: false,
     });
   });
 
@@ -74,18 +89,21 @@ describe.sequential('loadMergeReadyConfigAsync', () => {
       'pi-merge-ready': {
         autoCompactRepair: false,
         cacheTTLSeconds: 45,
+        enableStatusBarDiagnostics: false,
       },
     });
     writeProjectSettings({
       'pi-merge-ready': {
         autoCompactRepair: 'invalid',
         cacheTTLSeconds: 0,
+        enableStatusBarDiagnostics: 'invalid',
       },
     });
 
     await expect(loadMergeReadyConfigAsync(cwd, true)).resolves.toEqual({
       autoCompactRepair: false,
       cacheTTLSeconds: 45,
+      enableStatusBarDiagnostics: false,
     });
   });
 
@@ -94,18 +112,48 @@ describe.sequential('loadMergeReadyConfigAsync', () => {
       'pi-merge-ready': {
         autoCompactRepair: false,
         cacheTTLSeconds: 30,
+        enableStatusBarDiagnostics: false,
       },
     });
     writeProjectSettings({
       'pi-merge-ready': {
         autoCompactRepair: true,
         cacheTTLSeconds: 5,
+        enableStatusBarDiagnostics: true,
       },
     });
 
     await expect(loadMergeReadyConfigAsync(cwd, false)).resolves.toEqual({
       autoCompactRepair: false,
       cacheTTLSeconds: 30,
+      enableStatusBarDiagnostics: false,
+    });
+  });
+
+  it('lets env override diagnostics settings', async () => {
+    writeGlobalSettings({
+      'pi-merge-ready': {
+        enableStatusBarDiagnostics: false,
+      },
+    });
+    writeProjectSettings({
+      'pi-merge-ready': {
+        enableStatusBarDiagnostics: true,
+      },
+    });
+
+    process.env[MERGE_READY_STATUS_BAR_DIAGNOSTICS_ENV] = '0';
+    await expect(loadMergeReadyConfigAsync(cwd, true)).resolves.toEqual({
+      autoCompactRepair: true,
+      cacheTTLSeconds: 60,
+      enableStatusBarDiagnostics: false,
+    });
+
+    process.env[MERGE_READY_STATUS_BAR_DIAGNOSTICS_ENV] = '1';
+    await expect(loadMergeReadyConfigAsync(cwd, true)).resolves.toEqual({
+      autoCompactRepair: true,
+      cacheTTLSeconds: 60,
+      enableStatusBarDiagnostics: true,
     });
   });
 });

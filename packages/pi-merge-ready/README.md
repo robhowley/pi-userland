@@ -135,15 +135,19 @@ Watch behavior and the current-branch status bar cache TTL can be configured in 
 {
   "pi-merge-ready": {
     "autoCompactRepair": true,
-    "cacheTTLSeconds": 60
+    "cacheTTLSeconds": 60,
+    "enableStatusBarDiagnostics": false
   }
 }
 ```
 
-| Option              | Default | Description                                                                                                                                             |
-| ------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `autoCompactRepair` | `true`  | Trigger conversation compaction after successful repair loop completion. Compaction runs before the watch continues polling. Set to `false` to disable. |
-| `cacheTTLSeconds`   | `60`    | Current-branch status bar cache TTL in seconds. Accepts positive integers only. New values apply on the next fresh ambient status write.                |
+| Option                       | Default | Description                                                                                                                                                     |
+| ---------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `autoCompactRepair`          | `true`  | Trigger conversation compaction after successful repair loop completion. Compaction runs before the watch continues polling. Set to `false` to disable.         |
+| `cacheTTLSeconds`            | `60`    | Current-branch status bar cache TTL in seconds. Accepts positive integers only. New values apply on the next fresh ambient status write.                        |
+| `enableStatusBarDiagnostics` | `false` | Opt in to status-bar JSONL diagnostics (`timer_armed`, `timer_fired`, `refresh_result`, `caught_error`). Logs are off by default.                              |
+
+Set `PI_MERGE_READY_STATUS_BAR_DIAGNOSTICS=1` to override settings for the current process. When diagnostics are enabled, `PI_MERGE_READY_DEBUG_DIR` overrides the log destination.
 
 ### Watch UI
 

@@ -1682,7 +1682,13 @@ describe('merge-ready watch loop', () => {
         waitForAgentEnd,
         maxIterations: 2,
       },
-      loadConfig: vi.fn(async () => ({ autoCompactRepair: false, cacheTTLSeconds: 60 })),
+      loadConfig: vi.fn(
+        async () => ({
+          autoCompactRepair: false,
+          cacheTTLSeconds: 60,
+          enableStatusBarDiagnostics: false,
+        }),
+      ),
     });
     const onSettled = vi.fn();
     result.finally(onSettled);
@@ -2018,7 +2024,13 @@ describe('merge-ready watch loop', () => {
       compact: vi.fn(() => compactResult.promise),
     };
     const sleep = vi.fn(async () => undefined);
-    const loadConfig = vi.fn(async () => ({ autoCompactRepair: true, cacheTTLSeconds: 60 }));
+    const loadConfig = vi.fn(
+      async () => ({
+        autoCompactRepair: true,
+        cacheTTLSeconds: 60,
+        enableStatusBarDiagnostics: false,
+      }),
+    );
 
     const result = runMergeReadyWatchLoop({
       exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
@@ -2109,7 +2121,13 @@ describe('merge-ready watch loop', () => {
         waitForAgentEnd: vi.fn(async () => undefined),
         maxIterations: 1,
       },
-      loadConfig: vi.fn(async () => ({ autoCompactRepair: true, cacheTTLSeconds: 60 })),
+      loadConfig: vi.fn(
+        async () => ({
+          autoCompactRepair: true,
+          cacheTTLSeconds: 60,
+          enableStatusBarDiagnostics: false,
+        }),
+      ),
     });
 
     expect(result).toMatchObject({
@@ -2165,7 +2183,13 @@ describe('merge-ready watch loop', () => {
         checkDirtyWorkingTree: vi.fn(async () => ({ ok: true as const, dirty: false })),
         waitForAgentEnd: vi.fn(async () => undefined),
       },
-      loadConfig: vi.fn(async () => ({ autoCompactRepair: true, cacheTTLSeconds: 60 })),
+      loadConfig: vi.fn(
+        async () => ({
+          autoCompactRepair: true,
+          cacheTTLSeconds: 60,
+          enableStatusBarDiagnostics: false,
+        }),
+      ),
     });
 
     await flushMicrotasks(12);
