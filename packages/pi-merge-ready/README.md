@@ -129,12 +129,13 @@ Watch safety:
 
 ### Configuration
 
-Watch behavior can be configured in Pi's `settings.json` (global: `~/.pi/agent/settings.json`, project-local: `.pi/settings.json`).
+Watch behavior and the current-branch status bar cache TTL can be configured in Pi's `settings.json` (global: `~/.pi/agent/settings.json`, project-local: `.pi/settings.json`). Project-local settings are only honored in trusted projects.
 
 ```json
 {
   "pi-merge-ready": {
-    "autoCompactRepair": true
+    "autoCompactRepair": true,
+    "cacheTTLSeconds": 60
   }
 }
 ```
@@ -142,6 +143,7 @@ Watch behavior can be configured in Pi's `settings.json` (global: `~/.pi/agent/s
 | Option              | Default | Description                                                                                                                                             |
 | ------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `autoCompactRepair` | `true`  | Trigger conversation compaction after successful repair loop completion. Compaction runs before the watch continues polling. Set to `false` to disable. |
+| `cacheTTLSeconds`   | `60`    | Current-branch status bar cache TTL in seconds. Accepts positive integers only. New values apply on the next fresh ambient status write.                |
 
 ### Watch UI
 

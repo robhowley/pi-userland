@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import mergeReadyExtension, {
   getActiveMergeReadyWatch,
   MERGE_READY_COMMAND_NAME,
@@ -140,21 +143,57 @@ function createMockAPI(expectedCalls: ExpectedExecCall[] = []): {
 
 function createCommandContext(
   options: {
+    cwd?: string;
     mode?: MergeReadyCommandContext['mode'];
     signal?: AbortSignal;
     compact?: MergeReadyCommandContext['compact'];
+    isProjectTrusted?: MergeReadyCommandContext['isProjectTrusted'];
   } = {},
 ): MergeReadyCommandContext {
   return {
-    cwd: '/repo',
+    cwd: options.cwd ?? '/repo',
     mode: options.mode ?? 'tui',
     isIdle: vi.fn(() => true),
     waitForIdle: vi.fn(async () => undefined),
     ...(options.signal === undefined ? {} : { signal: options.signal }),
     ...(options.compact === undefined ? {} : { compact: options.compact }),
+    ...(options.isProjectTrusted === undefined
+      ? {}
+      : { isProjectTrusted: options.isProjectTrusted }),
     ui: {
       notify: vi.fn(),
       setStatus: vi.fn(),
+    },
+  };
+}
+
+function createSettingsSandbox() {
+  const originalAgentDir = process.env['PI_CODING_AGENT_DIR'];
+  const root = mkdtempSync(join(tmpdir(), 'pi-merge-ready-command-'));
+  const cwd = join(root, 'repo');
+  const agentDir = join(root, 'agent');
+
+  mkdirSync(cwd, { recursive: true });
+  process.env['PI_CODING_AGENT_DIR'] = agentDir;
+
+  const writeJsonFile = (path: string, value: unknown) => {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify(value, null, 2), 'utf-8');
+  };
+
+  return {
+    cwd,
+    writeProjectSettings(settings: unknown) {
+      writeJsonFile(join(cwd, '.pi', 'settings.json'), settings);
+    },
+    cleanup() {
+      if (originalAgentDir === undefined) {
+        delete process.env['PI_CODING_AGENT_DIR'];
+      } else {
+        process.env['PI_CODING_AGENT_DIR'] = originalAgentDir;
+      }
+
+      rmSync(root, { recursive: true, force: true });
     },
   };
 }
@@ -541,6 +580,72 @@ describe('merge-ready command', () => {
       MERGE_READY_STATUS_BAR_KEY,
       '✅ #42 Ready',
     );
+  });
+
+  it('uses trusted project cache TTL settings when command status seeds the ambient cache', async () => {
+    const sandbox = createSettingsSandbox();
+
+    try {
+      sandbox.writeProjectSettings({
+        'pi-merge-ready': {
+          cacheTTLSeconds: 5,
+        },
+      });
+
+      const { api, assertDone, getCommand } = createMockAPI([
+        ...createGitDiscoveryCalls({
+          cwd: sandbox.cwd,
+          timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+        }),
+        createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+          cwd: sandbox.cwd,
+          timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+        }),
+        createConversationsSuccessCall(buildConversationsPayload(), {
+          cwd: sandbox.cwd,
+          timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+        }),
+        ...createGitDiscoveryCalls({
+          cwd: sandbox.cwd,
+          timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+        }),
+        createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+          cwd: sandbox.cwd,
+          timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+        }),
+        createConversationsSuccessCall(buildConversationsPayload(), {
+          cwd: sandbox.cwd,
+          timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+        }),
+      ]);
+
+      mergeReadyExtension(api);
+      const handler = getCommand(MERGE_READY_COMMAND_NAME);
+      const ctx = createCommandContext({
+        cwd: sandbox.cwd,
+        isProjectTrusted: () => true,
+      });
+
+      await handler?.('', ctx);
+
+      const refreshCtx = {
+        cwd: ctx.cwd,
+        hasUI: true,
+        ui: {
+          setStatus: vi.fn(),
+        },
+      };
+      const refreshed = await refreshMergeReadyStatusBar({
+        exec: api.exec,
+        ctx: refreshCtx,
+        now: new Date(GENERATED_AT).getTime() + 5_000,
+      });
+
+      assertDone();
+      expect(refreshed).toEqual({ text: '✅ #42 Ready', cached: false });
+    } finally {
+      sandbox.cleanup();
+    }
   });
 
   it('does not sync URL-targeted command results into the ambient status bar cache', async () => {

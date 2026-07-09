@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import {
   MERGE_READY_STATUS_BAR_KEY,
   MERGE_READY_STATUS_BAR_TIMEOUT_MS,
@@ -99,6 +102,40 @@ function createStatusContext(
     hasUI: true,
     ui: {
       setStatus: options.setStatus ?? vi.fn(),
+    },
+  };
+}
+
+function createSettingsSandbox() {
+  const originalAgentDir = process.env['PI_CODING_AGENT_DIR'];
+  const root = mkdtempSync(join(tmpdir(), 'pi-merge-ready-status-bar-'));
+  const cwd = join(root, 'repo');
+  const agentDir = join(root, 'agent');
+
+  mkdirSync(cwd, { recursive: true });
+  process.env['PI_CODING_AGENT_DIR'] = agentDir;
+
+  const writeJsonFile = (path: string, value: unknown) => {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify(value, null, 2), 'utf-8');
+  };
+
+  return {
+    cwd,
+    writeGlobalSettings(settings: unknown) {
+      writeJsonFile(join(agentDir, 'settings.json'), settings);
+    },
+    writeProjectSettings(settings: unknown) {
+      writeJsonFile(join(cwd, '.pi', 'settings.json'), settings);
+    },
+    cleanup() {
+      if (originalAgentDir === undefined) {
+        delete process.env['PI_CODING_AGENT_DIR'];
+      } else {
+        process.env['PI_CODING_AGENT_DIR'] = originalAgentDir;
+      }
+
+      rmSync(root, { recursive: true, force: true });
     },
   };
 }
@@ -321,6 +358,74 @@ describe('merge-ready status bar', () => {
     expect(synced).toEqual({ text: '✅ #42 Ready', cached: false });
     expect(refreshed).toEqual({ text: '✅ #42 Ready', cached: true });
     expect(ctx.ui?.setStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it('uses the stored configured TTL for sync-seeded cache expiry', async () => {
+    const sandbox = createSettingsSandbox();
+
+    try {
+      sandbox.writeProjectSettings({
+        'pi-merge-ready': {
+          cacheTTLSeconds: 5,
+        },
+      });
+
+      const status = createMergeReadyStatus({
+        generatedAt: '2026-05-27T00:00:00.000Z',
+        pr: buildOpenPr(),
+        signals: {
+          draft: false,
+          mergeability: 'mergeable',
+          checks: 'passing',
+          review: 'approved',
+          unresolvedConversations: false,
+          unresolvedConversationRequirement: 'optional',
+        },
+      });
+      const ctx = createStatusContext({ cwd: sandbox.cwd });
+      const { exec, assertDone } = createFakeExec([
+        createCurrentBranchProbeCall({
+          cwd: sandbox.cwd,
+          timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+        }),
+        ...createGitDiscoveryCalls({
+          cwd: sandbox.cwd,
+          timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+        }),
+        createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+          cwd: sandbox.cwd,
+          timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+        }),
+        createConversationsSuccessCall(buildConversationsPayload(), {
+          cwd: sandbox.cwd,
+          timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+        }),
+      ]);
+
+      syncMergeReadyStatusBar({
+        ctx,
+        status,
+        now: 1_000,
+        projectTrusted: true,
+      });
+
+      const cached = await refreshMergeReadyStatusBar({
+        exec,
+        ctx,
+        now: 5_999,
+      });
+      const expired = await refreshMergeReadyStatusBar({
+        exec,
+        ctx,
+        now: 6_000,
+      });
+
+      assertDone();
+      expect(cached).toEqual({ text: '✅ #42 Ready', cached: true });
+      expect(expired).toEqual({ text: '✅ #42 Ready', cached: false });
+    } finally {
+      sandbox.cleanup();
+    }
   });
 
   it('does not sync URL-targeted command results into the ambient cache', async () => {
@@ -879,6 +984,88 @@ describe('merge-ready status bar', () => {
         );
       },
     );
+
+    it('uses the stored configured TTL for background refresh and timer re-arm', async () => {
+      const sandbox = createSettingsSandbox();
+
+      try {
+        sandbox.writeProjectSettings({
+          'pi-merge-ready': {
+            cacheTTLSeconds: 5,
+          },
+        });
+
+        const ctx = createStatusContext({ cwd: sandbox.cwd });
+        const refreshExec = createFakeExec([
+          ...createGitDiscoveryCalls({
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          createConversationsSuccessCall(buildConversationsPayload(), {
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          ...createGitDiscoveryCalls({
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          createConversationsSuccessCall(buildConversationsPayload(), {
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          ...createGitDiscoveryCalls({
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          createConversationsSuccessCall(buildConversationsPayload(), {
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+        ]);
+
+        await refreshMergeReadyStatusBar({
+          exec: refreshExec.exec,
+          ctx,
+          projectTrusted: true,
+        });
+        vi.mocked(ctx.ui!.setStatus).mockClear();
+
+        sandbox.writeProjectSettings({
+          'pi-merge-ready': {
+            cacheTTLSeconds: 1,
+          },
+        });
+
+        await vi.advanceTimersByTimeAsync(5_000 - 1);
+        expect(ctx.ui?.setStatus).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(1);
+        expect(ctx.ui?.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ #42 Ready');
+
+        vi.mocked(ctx.ui!.setStatus).mockClear();
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(ctx.ui?.setStatus).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(4_000);
+
+        refreshExec.assertDone();
+        expect(ctx.ui?.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ #42 Ready');
+      } finally {
+        sandbox.cleanup();
+      }
+    });
 
     it('cached repaints swap the latest ctx without extending the original TTL', async () => {
       const initialCtx = createStatusContext();

@@ -1,4 +1,5 @@
 import { type MergeReadyCommandAPI } from './commands.js';
+import { loadMergeReadyConfig } from './config.js';
 import {
   type MergeReadyExec,
   type MergeReadyExecOptions,
@@ -18,6 +19,7 @@ export type MergeReadyStatusBarEventName = 'session_start' | 'turn_end' | 'sessi
 export type MergeReadyStatusBarContext = {
   cwd: string;
   hasUI?: boolean;
+  isProjectTrusted?: () => boolean;
   ui?: {
     setStatus: (key: string, status?: string) => void;
     theme?: {
@@ -39,6 +41,7 @@ export type MergeReadyStatusBarRefreshOptions = {
   force?: boolean;
   now?: number | Date;
   timeout?: number;
+  projectTrusted?: boolean;
 };
 
 export type MergeReadyStatusBarRefreshResult = {
@@ -60,6 +63,7 @@ export type MergeReadyStatusBarSyncOptions = {
   ctx: MergeReadyStatusBarSyncContext;
   status: MergeReadyStatus;
   now?: number | Date;
+  projectTrusted?: boolean;
 };
 
 type MergeReadyStatusBarCacheEntry = {
@@ -67,6 +71,7 @@ type MergeReadyStatusBarCacheEntry = {
   text: string;
   branchIdentity: string | null;
   refreshedAtMs: number;
+  ttlMs: number;
 };
 
 type MergeReadyStatusBarAmbientSnapshot = {
@@ -92,6 +97,7 @@ type MergeReadyStatusBarRuntime = {
 
 type MergeReadyStatusBarInternalRefreshOptions = MergeReadyStatusBarRefreshOptions & {
   ownership?: MergeReadyStatusBarAmbientOwnership;
+  ttlMs?: number;
 };
 
 const BADGE_TEXT_BY_ID = {
@@ -130,6 +136,7 @@ export function registerMergeReadyStatusBar(pi: MergeReadyStatusBarAPI): void {
       exec: createStatusBarExec(pi, ctx),
       ctx,
       force: true,
+      projectTrusted: ctx.isProjectTrusted?.() ?? false,
     });
   });
 
@@ -137,6 +144,7 @@ export function registerMergeReadyStatusBar(pi: MergeReadyStatusBarAPI): void {
     await refreshMergeReadyStatusBar({
       exec: createStatusBarExec(pi, ctx),
       ctx,
+      projectTrusted: ctx.isProjectTrusted?.() ?? false,
     });
   });
 }
@@ -167,12 +175,18 @@ export function syncMergeReadyStatusBar(
     };
   }
 
+  const ttlMs = resolveMergeReadyStatusBarTtlMs({
+    cwd: options.ctx.cwd,
+    ...(options.projectTrusted === undefined ? {} : { projectTrusted: options.projectTrusted }),
+  });
+
   rememberMergeReadyStatusBarSyncContext(options.ctx);
   applyMergeReadyStatusBarText({
     ctx: options.ctx,
     text,
     branchIdentity: resolveAmbientBranchIdentity(options.status),
     now: options.now,
+    ttlMs,
   });
 
   return {
@@ -276,6 +290,7 @@ function applyMergeReadyStatusBarText(options: {
   text: string;
   branchIdentity: string | null;
   now?: number | Date | undefined;
+  ttlMs: number;
 }): void {
   const refreshedAtMs = resolveNowMs(options.now);
 
@@ -284,6 +299,7 @@ function applyMergeReadyStatusBarText(options: {
     text: options.text,
     branchIdentity: options.branchIdentity,
     refreshedAtMs,
+    ttlMs: options.ttlMs,
   };
 
   renderMergeReadyStatusBarKey(options.ctx, options.text);
@@ -327,6 +343,12 @@ async function refreshMergeReadyStatusBarInternal(
     };
   }
 
+  const ttlMs =
+    options.ttlMs ??
+    resolveMergeReadyStatusBarTtlMs({
+      cwd: options.ctx.cwd,
+      ...(options.projectTrusted === undefined ? {} : { projectTrusted: options.projectTrusted }),
+    });
   const entry = await loadMergeReadyStatusBarEntry({
     exec: options.exec,
     cwd: options.ctx.cwd,
@@ -342,6 +364,7 @@ async function refreshMergeReadyStatusBarInternal(
     text: entry.text,
     branchIdentity: entry.branchIdentity,
     now: nowMs,
+    ttlMs,
   });
 
   return {
@@ -388,7 +411,7 @@ async function getReusableMergeReadyStatusBarCacheEntry(options: {
     !cachedEntry ||
     cachedEntry.cwd !== options.cwd ||
     cachedEntry.branchIdentity === null ||
-    options.nowMs - cachedEntry.refreshedAtMs >= MERGE_READY_STATUS_BAR_TTL_MS
+    options.nowMs - cachedEntry.refreshedAtMs >= cachedEntry.ttlMs
   ) {
     return null;
   }
@@ -453,6 +476,13 @@ function createStatusBarExec(
 
     return pi.exec(command, args, execOptions);
   };
+}
+
+function resolveMergeReadyStatusBarTtlMs(options: {
+  cwd: string;
+  projectTrusted?: boolean;
+}): number {
+  return loadMergeReadyConfig(options.cwd, options.projectTrusted ?? false).cacheTTLSeconds * 1_000;
 }
 
 function resolveNowMs(value: number | Date | undefined): number {
@@ -541,7 +571,8 @@ function rearmMergeReadyStatusBarTimer(): void {
     return;
   }
 
-  const dueAtMs = cachedEntry.refreshedAtMs + MERGE_READY_STATUS_BAR_TTL_MS;
+  const ttlMs = cachedEntry.ttlMs;
+  const dueAtMs = cachedEntry.refreshedAtMs + ttlMs;
   const delayMs = Math.max(0, dueAtMs - resolveNowMs(undefined));
   const generation = statusBarRuntime.generation;
 
@@ -562,10 +593,12 @@ function rearmMergeReadyStatusBarTimer(): void {
     }
 
     statusBarRuntime.timer = null;
-    void refreshMergeReadyStatusBar({
+    void refreshMergeReadyStatusBarInternal({
       exec,
       ctx: createMergeReadyStatusBarContext(snapshot),
       force: true,
+      ownership: { generation },
+      ttlMs,
     }).catch(() => {});
   }, delayMs);
   statusBarRuntime.timer = timer;

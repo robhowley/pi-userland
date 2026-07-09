@@ -2,69 +2,73 @@ import { SettingsManager } from '@earendil-works/pi-coding-agent';
 
 export type MergeReadyConfig = {
   autoCompactRepair: boolean;
+  cacheTTLSeconds: number;
 };
 
 export const DEFAULT_MERGE_READY_CONFIG: MergeReadyConfig = {
   autoCompactRepair: true,
+  cacheTTLSeconds: 60,
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function getMergeReadySettings(settings: Record<string, unknown>): unknown {
-  return settings['pi-merge-ready'];
+function getMergeReadySettings(settings: unknown): unknown {
+  return isRecord(settings) ? settings['pi-merge-ready'] : undefined;
 }
 
-function mergeScopedMergeReadySettings(
-  globalSettings: Record<string, unknown>,
-  projectSettings: Record<string, unknown>,
-): unknown {
-  const globalMergeReadySettings = getMergeReadySettings(globalSettings);
-  const projectMergeReadySettings = getMergeReadySettings(projectSettings);
-
-  if (isRecord(globalMergeReadySettings) && isRecord(projectMergeReadySettings)) {
-    return {
-      ...globalMergeReadySettings,
-      ...projectMergeReadySettings,
-    };
-  }
-
-  return projectMergeReadySettings === undefined
-    ? globalMergeReadySettings
-    : projectMergeReadySettings;
-}
-
-function parseMergeReadyConfig(rawConfig: unknown): MergeReadyConfig {
+function getAutoCompactRepair(rawConfig: unknown): boolean | undefined {
   if (!isRecord(rawConfig)) {
-    return DEFAULT_MERGE_READY_CONFIG;
+    return undefined;
   }
 
-  return {
-    autoCompactRepair:
-      typeof rawConfig['autoCompactRepair'] === 'boolean'
-        ? rawConfig['autoCompactRepair']
-        : DEFAULT_MERGE_READY_CONFIG.autoCompactRepair,
-  };
+  return typeof rawConfig['autoCompactRepair'] === 'boolean'
+    ? rawConfig['autoCompactRepair']
+    : undefined;
+}
+
+function getCacheTTLSeconds(rawConfig: unknown): number | undefined {
+  if (!isRecord(rawConfig)) {
+    return undefined;
+  }
+
+  const value = rawConfig['cacheTTLSeconds'];
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1 ? value : undefined;
 }
 
 /**
  * Load merge-ready configuration from Pi settings.json.
  * Uses SettingsManager global + project settings layering.
  */
-export function loadMergeReadyConfig(cwd: string): MergeReadyConfig {
+export function loadMergeReadyConfig(cwd: string, projectTrusted = true): MergeReadyConfig {
   const settingsManager = SettingsManager.create(cwd);
-  const mergedMergeReadySettings = mergeScopedMergeReadySettings(
-    settingsManager.getGlobalSettings() as Record<string, unknown>,
-    settingsManager.getProjectSettings() as Record<string, unknown>,
-  );
+  const globalMergeReadySettings = getMergeReadySettings(settingsManager.getGlobalSettings());
+  const projectMergeReadySettings = projectTrusted
+    ? getMergeReadySettings(settingsManager.getProjectSettings())
+    : undefined;
 
-  return parseMergeReadyConfig(mergedMergeReadySettings);
+  const globalAutoCompactRepair = getAutoCompactRepair(globalMergeReadySettings);
+  const projectAutoCompactRepair = getAutoCompactRepair(projectMergeReadySettings);
+  const globalCacheTTLSeconds = getCacheTTLSeconds(globalMergeReadySettings);
+  const projectCacheTTLSeconds = getCacheTTLSeconds(projectMergeReadySettings);
+
+  return {
+    autoCompactRepair:
+      projectAutoCompactRepair ??
+      globalAutoCompactRepair ??
+      DEFAULT_MERGE_READY_CONFIG.autoCompactRepair,
+    cacheTTLSeconds:
+      projectCacheTTLSeconds ?? globalCacheTTLSeconds ?? DEFAULT_MERGE_READY_CONFIG.cacheTTLSeconds,
+  };
 }
 
 /**
  * Async version for consistency with future async patterns.
  */
-export async function loadMergeReadyConfigAsync(cwd: string): Promise<MergeReadyConfig> {
-  return loadMergeReadyConfig(cwd);
+export async function loadMergeReadyConfigAsync(
+  cwd: string,
+  projectTrusted = true,
+): Promise<MergeReadyConfig> {
+  return loadMergeReadyConfig(cwd, projectTrusted);
 }

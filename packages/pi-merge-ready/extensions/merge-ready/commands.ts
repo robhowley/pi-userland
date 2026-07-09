@@ -44,6 +44,7 @@ export type MergeReadyCommandContext = {
   cwd: string;
   mode?: 'tui' | 'rpc' | 'json' | 'print';
   isIdle?: () => boolean;
+  isProjectTrusted?: () => boolean;
   model?: WatchUiRuntimeModel;
   modelRegistry?: WatchUiRuntimeModelRegistry;
   waitForIdle?: () => Promise<void>;
@@ -226,6 +227,7 @@ export function registerMergeReadyCommand(pi: MergeReadyCommandAPI): void {
           ui: ctx.ui,
         },
         status,
+        projectTrusted: ctx.isProjectTrusted?.() ?? false,
       });
 
       if (parsedArgs.json) {
@@ -479,6 +481,7 @@ function createMergeReadyWatchContext(ctx: MergeReadyCommandContext): MergeReady
     cwd: ctx.cwd,
     ...(ctx.mode === undefined ? {} : { mode: ctx.mode }),
     ...(ctx.isIdle === undefined ? {} : { isIdle: ctx.isIdle }),
+    projectTrusted: ctx.isProjectTrusted?.() ?? false,
     ...(ctx.waitForIdle === undefined ? {} : { waitForIdle: ctx.waitForIdle }),
     ...(ctx.sessionManager === undefined ? {} : { sessionManager: ctx.sessionManager }),
     ui: ctx.ui,

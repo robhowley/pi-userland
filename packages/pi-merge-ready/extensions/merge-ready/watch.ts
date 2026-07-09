@@ -95,6 +95,7 @@ export type MergeReadyWatchContext = {
   cwd: string;
   mode?: 'tui' | 'rpc' | 'json' | 'print';
   isIdle?: () => boolean;
+  projectTrusted?: boolean;
   waitForIdle?: () => Promise<void>;
   session?: MergeReadyWatchSessionRef;
   sessionManager?: MergeReadyWatchSessionManager;
@@ -206,7 +207,10 @@ export type RunMergeReadyWatchLoopOptions = {
   url?: string;
   dependencies?: MergeReadyWatchLoopDependencies;
   // Optional config loader for testing/mocking
-  loadConfig?: (cwd: string) => Promise<MergeReadyConfig> | MergeReadyConfig;
+  loadConfig?: (
+    cwd: string,
+    projectTrusted?: boolean,
+  ) => Promise<MergeReadyConfig> | MergeReadyConfig;
 };
 
 export type StartMergeReadyWatchOptions = {
@@ -1011,6 +1015,9 @@ export async function runMergeReadyWatchLoop(
           ui: options.ctx.ui,
         },
         status,
+        ...(options.ctx.projectTrusted === undefined
+          ? {}
+          : { projectTrusted: options.ctx.projectTrusted }),
       });
       publishStatus?.({ lifecycle: 'watching', status });
 
@@ -1158,6 +1165,9 @@ export async function runMergeReadyWatchLoop(
           ui: options.ctx.ui,
         },
         status: refreshedStatus,
+        ...(options.ctx.projectTrusted === undefined
+          ? {}
+          : { projectTrusted: options.ctx.projectTrusted }),
       });
       publishStatus?.({ lifecycle: 'watching', status: refreshedStatus });
 
@@ -1172,7 +1182,7 @@ export async function runMergeReadyWatchLoop(
       // After successful repair, trigger compaction if configured
       if (refreshedClassification.actionability === 'wait') {
         const loadConfigFn = options.loadConfig ?? loadMergeReadyConfigAsync;
-        const config = await loadConfigFn(options.ctx.cwd);
+        const config = await loadConfigFn(options.ctx.cwd, options.ctx.projectTrusted);
 
         if (config.autoCompactRepair && options.ctx.compact) {
           try {
@@ -1626,7 +1636,7 @@ function describeMergeReadyWatchRepairTarget(
 
 async function restoreAmbientMergeReadyStatusBar(options: {
   exec: MergeReadyExec;
-  ctx: Pick<MergeReadyWatchContext, 'cwd' | 'ui'>;
+  ctx: Pick<MergeReadyWatchContext, 'cwd' | 'projectTrusted' | 'ui'>;
 }): Promise<void> {
   if (isMergeReadyStatusBarSuspended()) {
     return;
@@ -1649,6 +1659,9 @@ async function restoreAmbientMergeReadyStatusBar(options: {
           ...(theme === undefined ? {} : { theme }),
         },
       },
+      ...(options.ctx.projectTrusted === undefined
+        ? {}
+        : { projectTrusted: options.ctx.projectTrusted }),
     });
   } catch {
     // Ignore best-effort ambient status-bar restore failures during watch teardown.
