@@ -363,7 +363,9 @@ async function refreshMergeReadyStatusBarInternal(
     options.ttlMs === undefined || options.diagnosticsEnabled === undefined
       ? resolveMergeReadyStatusBarRuntimeSettings({
           cwd: options.ctx.cwd,
-          ...(options.projectTrusted === undefined ? {} : { projectTrusted: options.projectTrusted }),
+          ...(options.projectTrusted === undefined
+            ? {}
+            : { projectTrusted: options.projectTrusted }),
         })
       : null;
   const ttlMs = options.ttlMs ?? runtimeSettings!.ttlMs;

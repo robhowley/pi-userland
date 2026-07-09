@@ -49,31 +49,6 @@ function getEnableStatusBarDiagnostics(rawConfig: unknown): boolean | undefined 
     : undefined;
 }
 
-function parseOptionalBoolean(value: unknown): boolean | undefined {
-  if (typeof value === 'boolean') {
-    return value;
-  }
-
-  if (typeof value !== 'string') {
-    return undefined;
-  }
-
-  const normalized = value.trim().toLowerCase();
-  if (normalized === '1' || normalized === 'true') {
-    return true;
-  }
-
-  if (normalized === '0' || normalized === 'false') {
-    return false;
-  }
-
-  return undefined;
-}
-
-function getStatusBarDiagnosticsEnvOverride(): boolean | undefined {
-  return parseOptionalBoolean(process.env['PI_MERGE_READY_STATUS_BAR_DIAGNOSTICS']);
-}
-
 /**
  * Load merge-ready configuration from Pi settings.json.
  * Uses SettingsManager global + project settings layering.
@@ -90,8 +65,8 @@ export function loadMergeReadyConfig(cwd: string, projectTrusted = true): MergeR
   const globalCacheTTLSeconds = getCacheTTLSeconds(globalMergeReadySettings);
   const projectCacheTTLSeconds = getCacheTTLSeconds(projectMergeReadySettings);
   const globalEnableStatusBarDiagnostics = getEnableStatusBarDiagnostics(globalMergeReadySettings);
-  const projectEnableStatusBarDiagnostics = getEnableStatusBarDiagnostics(projectMergeReadySettings);
-  const statusBarDiagnosticsEnvOverride = getStatusBarDiagnosticsEnvOverride();
+  const projectEnableStatusBarDiagnostics =
+    getEnableStatusBarDiagnostics(projectMergeReadySettings);
 
   return {
     autoCompactRepair:
@@ -101,7 +76,6 @@ export function loadMergeReadyConfig(cwd: string, projectTrusted = true): MergeR
     cacheTTLSeconds:
       projectCacheTTLSeconds ?? globalCacheTTLSeconds ?? DEFAULT_MERGE_READY_CONFIG.cacheTTLSeconds,
     enableStatusBarDiagnostics:
-      statusBarDiagnosticsEnvOverride ??
       projectEnableStatusBarDiagnostics ??
       globalEnableStatusBarDiagnostics ??
       DEFAULT_MERGE_READY_CONFIG.enableStatusBarDiagnostics,

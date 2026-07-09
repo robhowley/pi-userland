@@ -31,8 +31,6 @@ import {
   type ExpectedExecCall,
 } from './test-fixtures.js';
 
-const MERGE_READY_STATUS_BAR_DIAGNOSTICS_ENV = 'PI_MERGE_READY_STATUS_BAR_DIAGNOSTICS';
-
 function createMockAPI(expectedCalls: ExpectedExecCall[] = []): {
   api: MergeReadyStatusBarAPI;
   assertDone: () => void;
@@ -190,20 +188,8 @@ function buildOpenPr() {
 }
 
 describe('merge-ready status bar', () => {
-  let originalStatusBarDiagnosticsEnv: string | undefined;
-
   beforeEach(() => {
     resetMergeReadyStatusBarCache();
-    originalStatusBarDiagnosticsEnv = process.env[MERGE_READY_STATUS_BAR_DIAGNOSTICS_ENV];
-    delete process.env[MERGE_READY_STATUS_BAR_DIAGNOSTICS_ENV];
-  });
-
-  afterEach(() => {
-    if (originalStatusBarDiagnosticsEnv === undefined) {
-      delete process.env[MERGE_READY_STATUS_BAR_DIAGNOSTICS_ENV];
-    } else {
-      process.env[MERGE_READY_STATUS_BAR_DIAGNOSTICS_ENV] = originalStatusBarDiagnosticsEnv;
-    }
   });
 
   it('registers session_start, turn_end, and session_shutdown hooks', () => {
@@ -1369,26 +1355,41 @@ describe('merge-ready status bar', () => {
       }
     });
 
-    it('persists timer arm/fire/result diagnostics when env enabled', async () => {
+    it('persists timer arm/fire/result diagnostics when global settings enable it', async () => {
       const debugLog = createDebugLogSandbox();
+      const sandbox = createSettingsSandbox();
 
       try {
-        process.env[MERGE_READY_STATUS_BAR_DIAGNOSTICS_ENV] = '1';
+        sandbox.writeGlobalSettings({
+          'pi-merge-ready': {
+            enableStatusBarDiagnostics: true,
+          },
+        });
 
-        const ctx = createStatusContext();
+        const ctx = createStatusContext({ cwd: sandbox.cwd });
         const refreshExec = createFakeExec([
-          ...createGitDiscoveryCalls({ timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS }),
+          ...createGitDiscoveryCalls({
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
           createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+            cwd: sandbox.cwd,
             timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
           }),
           createConversationsSuccessCall(buildConversationsPayload(), {
+            cwd: sandbox.cwd,
             timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
           }),
-          ...createGitDiscoveryCalls({ timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS }),
+          ...createGitDiscoveryCalls({
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
           createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+            cwd: sandbox.cwd,
             timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
           }),
           createConversationsSuccessCall(buildConversationsPayload(), {
+            cwd: sandbox.cwd,
             timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
           }),
         ]);
@@ -1405,7 +1406,7 @@ describe('merge-ready status bar', () => {
           expect.arrayContaining([
             expect.objectContaining({
               event: 'timer_armed',
-              cwd: '/repo',
+              cwd: sandbox.cwd,
               generation: 0,
               dueAtMs: MERGE_READY_STATUS_BAR_TTL_MS,
               delayMs: MERGE_READY_STATUS_BAR_TTL_MS,
@@ -1413,14 +1414,14 @@ describe('merge-ready status bar', () => {
             }),
             expect.objectContaining({
               event: 'timer_fired',
-              cwd: '/repo',
+              cwd: sandbox.cwd,
               generation: 0,
               dueAtMs: MERGE_READY_STATUS_BAR_TTL_MS,
               firedAtMs: MERGE_READY_STATUS_BAR_TTL_MS,
             }),
             expect.objectContaining({
               event: 'refresh_result',
-              cwd: '/repo',
+              cwd: sandbox.cwd,
               generation: 0,
               dueAtMs: MERGE_READY_STATUS_BAR_TTL_MS,
               text: '✅ #42 Ready',
@@ -1429,6 +1430,7 @@ describe('merge-ready status bar', () => {
           ]),
         );
       } finally {
+        sandbox.cleanup();
         debugLog.cleanup();
       }
     });
@@ -1486,27 +1488,42 @@ describe('merge-ready status bar', () => {
       }
     });
 
-    it('persists caught timer refresh errors when env enabled', async () => {
+    it('persists caught timer refresh errors when trusted project settings enable diagnostics', async () => {
       const debugLog = createDebugLogSandbox();
+      const sandbox = createSettingsSandbox();
 
       try {
-        process.env[MERGE_READY_STATUS_BAR_DIAGNOSTICS_ENV] = '1';
+        sandbox.writeProjectSettings({
+          'pi-merge-ready': {
+            enableStatusBarDiagnostics: true,
+          },
+        });
 
-        const ctx = createStatusContext();
+        const ctx = createStatusContext({ cwd: sandbox.cwd });
         const setStatus = vi.mocked(ctx.ui!.setStatus);
         const refreshExec = createFakeExec([
-          ...createGitDiscoveryCalls({ timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS }),
+          ...createGitDiscoveryCalls({
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
           createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+            cwd: sandbox.cwd,
             timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
           }),
           createConversationsSuccessCall(buildConversationsPayload(), {
+            cwd: sandbox.cwd,
             timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
           }),
-          ...createGitDiscoveryCalls({ timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS }),
+          ...createGitDiscoveryCalls({
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
           createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+            cwd: sandbox.cwd,
             timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
           }),
           createConversationsSuccessCall(buildConversationsPayload(), {
+            cwd: sandbox.cwd,
             timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
           }),
         ]);
@@ -1514,6 +1531,7 @@ describe('merge-ready status bar', () => {
         await refreshMergeReadyStatusBar({
           exec: refreshExec.exec,
           ctx,
+          projectTrusted: true,
         });
         setStatus.mockImplementation(() => {
           throw new Error('status paint blew up');
@@ -1526,14 +1544,14 @@ describe('merge-ready status bar', () => {
           expect.arrayContaining([
             expect.objectContaining({
               event: 'timer_fired',
-              cwd: '/repo',
+              cwd: sandbox.cwd,
               generation: 0,
               dueAtMs: MERGE_READY_STATUS_BAR_TTL_MS,
             }),
             expect.objectContaining({
               event: 'caught_error',
               stage: 'timer_refresh',
-              cwd: '/repo',
+              cwd: sandbox.cwd,
               generation: 0,
               dueAtMs: MERGE_READY_STATUS_BAR_TTL_MS,
               errorName: 'Error',
@@ -1542,6 +1560,7 @@ describe('merge-ready status bar', () => {
           ]),
         );
       } finally {
+        sandbox.cleanup();
         debugLog.cleanup();
       }
     });

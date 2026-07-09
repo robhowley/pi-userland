@@ -145,9 +145,9 @@ Watch behavior and the current-branch status bar cache TTL can be configured in 
 | ---------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `autoCompactRepair`          | `true`  | Trigger conversation compaction after successful repair loop completion. Compaction runs before the watch continues polling. Set to `false` to disable.         |
 | `cacheTTLSeconds`            | `60`    | Current-branch status bar cache TTL in seconds. Accepts positive integers only. New values apply on the next fresh ambient status write.                        |
-| `enableStatusBarDiagnostics` | `false` | Opt in to status-bar JSONL diagnostics (`timer_armed`, `timer_fired`, `refresh_result`, `caught_error`). Logs are off by default.                              |
+| `enableStatusBarDiagnostics` | `false` | Opt in to status-bar JSONL diagnostics (`timer_armed`, `timer_fired`, `refresh_result`, `caught_error`). Logs stay off by default until this setting is enabled. |
 
-Set `PI_MERGE_READY_STATUS_BAR_DIAGNOSTICS=1` to override settings for the current process. When diagnostics are enabled, `PI_MERGE_READY_DEBUG_DIR` overrides the log destination.
+Status-bar diagnostics are controlled only by `pi-merge-ready.enableStatusBarDiagnostics`. When diagnostics are enabled, `PI_MERGE_READY_DEBUG_DIR` overrides the log destination for the current process.
 
 ### Watch UI
 
