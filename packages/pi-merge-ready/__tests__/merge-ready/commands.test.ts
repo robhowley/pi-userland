@@ -582,6 +582,173 @@ describe('merge-ready command', () => {
     );
   });
 
+  it('captures ambient ownership before current-branch status fetch and passes it into sync', async () => {
+    const status = createMergeReadyStatus({
+      generatedAt: GENERATED_AT,
+      target: CURRENT_BRANCH_TARGET,
+      pr: buildOpenPr(),
+      signals: {
+        draft: false,
+        mergeability: 'mergeable',
+        checks: 'passing',
+        review: 'approved',
+        unresolvedConversations: false,
+        unresolvedConversationRequirement: 'optional',
+      },
+    });
+    const ownership = { generation: 0, ownerSeq: 1 };
+    const events: string[] = [];
+    const claimMergeReadyStatusBarOwnership = vi.fn(() => {
+      events.push('claim');
+      return ownership;
+    });
+    const getMergeReadyStatus = vi.fn(async () => {
+      events.push('get');
+      return status;
+    });
+    const syncMergeReadyStatusBar = vi.fn(() => {
+      events.push('sync');
+      return { text: '✅ #42 Ready', cached: false };
+    });
+
+    try {
+      vi.resetModules();
+      vi.doMock('../../extensions/merge-ready/status-bar.js', () => ({
+        claimMergeReadyStatusBarOwnership,
+        syncMergeReadyStatusBar,
+      }));
+      vi.doMock('../../extensions/merge-ready/merge-ready.js', async () => {
+        const actual = await vi.importActual<typeof import('../../extensions/merge-ready/merge-ready.js')>(
+          '../../extensions/merge-ready/merge-ready.js',
+        );
+        return {
+          ...actual,
+          getMergeReadyStatus,
+        };
+      });
+
+      const { registerMergeReadyCommand } = await import('../../extensions/merge-ready/commands.js');
+      const { api, assertDone, getCommand } = createMockAPI();
+      registerMergeReadyCommand(api);
+      const handler = getCommand(MERGE_READY_COMMAND_NAME);
+      const ctx = createCommandContext();
+
+      expect(handler).toBeTypeOf('function');
+      if (!handler) {
+        return;
+      }
+
+      await handler('', ctx);
+
+      assertDone();
+      expect(events).toEqual(['claim', 'get', 'sync']);
+      expect(claimMergeReadyStatusBarOwnership).toHaveBeenCalledWith({
+        exec: expect.any(Function),
+        ctx: {
+          cwd: ctx.cwd,
+          ui: ctx.ui,
+        },
+      });
+      expect(syncMergeReadyStatusBar).toHaveBeenCalledWith({
+        ctx: {
+          cwd: ctx.cwd,
+          ui: ctx.ui,
+        },
+        status,
+        projectTrusted: false,
+        ownership,
+      });
+    } finally {
+      vi.doUnmock('../../extensions/merge-ready/status-bar.js');
+      vi.doUnmock('../../extensions/merge-ready/merge-ready.js');
+      vi.resetModules();
+    }
+  });
+
+  it('does not claim ambient ownership for explicit URL status commands', async () => {
+    const url = 'https://github.com/shopify/pi/pull/64';
+    const status = createMergeReadyStatus({
+      generatedAt: GENERATED_AT,
+      target: {
+        mode: 'url',
+        url,
+        owner: 'shopify',
+        repo: 'pi',
+        prNumber: 64,
+      },
+      pr: {
+        lifecycle: 'open',
+        number: 64,
+        title: 'Support explicit PR URL targets',
+        url,
+        headRefName: 'feat/explicit-pr-url',
+        baseRefName: 'main',
+      },
+      signals: {
+        draft: false,
+        mergeability: 'mergeable',
+        checks: 'passing',
+        review: 'approved',
+        unresolvedConversations: false,
+        unresolvedConversationRequirement: 'optional',
+      },
+    });
+    const events: string[] = [];
+    const claimMergeReadyStatusBarOwnership = vi.fn(() => {
+      events.push('claim');
+      return { generation: 0, ownerSeq: 1 };
+    });
+    const getMergeReadyStatus = vi.fn(async () => {
+      events.push('get');
+      return status;
+    });
+    const syncMergeReadyStatusBar = vi.fn((options: { ownership?: unknown }) => {
+      void options;
+      events.push('sync');
+      return { text: '✅ #64 Ready', cached: false };
+    });
+
+    try {
+      vi.resetModules();
+      vi.doMock('../../extensions/merge-ready/status-bar.js', () => ({
+        claimMergeReadyStatusBarOwnership,
+        syncMergeReadyStatusBar,
+      }));
+      vi.doMock('../../extensions/merge-ready/merge-ready.js', async () => {
+        const actual = await vi.importActual<typeof import('../../extensions/merge-ready/merge-ready.js')>(
+          '../../extensions/merge-ready/merge-ready.js',
+        );
+        return {
+          ...actual,
+          getMergeReadyStatus,
+        };
+      });
+
+      const { registerMergeReadyCommand } = await import('../../extensions/merge-ready/commands.js');
+      const { api, assertDone, getCommand } = createMockAPI();
+      registerMergeReadyCommand(api);
+      const handler = getCommand(MERGE_READY_COMMAND_NAME);
+      const ctx = createCommandContext();
+
+      expect(handler).toBeTypeOf('function');
+      if (!handler) {
+        return;
+      }
+
+      await handler(`--url ${url}`, ctx);
+
+      assertDone();
+      expect(events).toEqual(['get', 'sync']);
+      expect(claimMergeReadyStatusBarOwnership).not.toHaveBeenCalled();
+      expect(syncMergeReadyStatusBar).toHaveBeenCalledTimes(1);
+      expect(syncMergeReadyStatusBar.mock.calls[0]?.[0]).not.toHaveProperty('ownership');
+    } finally {
+      vi.doUnmock('../../extensions/merge-ready/status-bar.js');
+      vi.doUnmock('../../extensions/merge-ready/merge-ready.js');
+      vi.resetModules();
+    }
+  });
+
   it('uses trusted project cache TTL settings when command status seeds the ambient cache', async () => {
     const sandbox = createSettingsSandbox();
 

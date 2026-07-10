@@ -6,7 +6,7 @@ import type {
 } from './watch-ui/runtime-snapshot.js';
 import { BADGE_ICON_BY_ID } from './badge-icon.js';
 import { getMergeReadyStatus } from './merge-ready.js';
-import { syncMergeReadyStatusBar } from './status-bar.js';
+import { claimMergeReadyStatusBarOwnership, syncMergeReadyStatusBar } from './status-bar.js';
 import { selectMergeReadyBadgeId } from './status.js';
 import { MERGE_READY_PULL_REQUEST_URL_EXAMPLE, validateGitHubPullRequestUrl } from './target.js';
 import {
@@ -214,6 +214,16 @@ export function registerMergeReadyCommand(pi: MergeReadyCommandAPI): void {
         return;
       }
 
+      const ownership =
+        url === undefined
+          ? claimMergeReadyStatusBarOwnership({
+              exec,
+              ctx: {
+                cwd: ctx.cwd,
+                ui: ctx.ui,
+              },
+            })
+          : undefined;
       const status = await getMergeReadyStatus({
         exec,
         cwd: ctx.cwd,
@@ -228,6 +238,7 @@ export function registerMergeReadyCommand(pi: MergeReadyCommandAPI): void {
         },
         status,
         projectTrusted: ctx.isProjectTrusted?.() ?? false,
+        ...(ownership === undefined ? {} : { ownership }),
       });
 
       if (parsedArgs.json) {

@@ -73,6 +73,29 @@ describe.sequential('loadMergeReadyConfigAsync', () => {
     });
   });
 
+  it('defaults to ignoring project settings when trust is unspecified', async () => {
+    writeGlobalSettings({
+      'pi-merge-ready': {
+        autoCompactRepair: false,
+        cacheTTLSeconds: 30,
+        enableStatusBarDiagnostics: false,
+      },
+    });
+    writeProjectSettings({
+      'pi-merge-ready': {
+        autoCompactRepair: true,
+        cacheTTLSeconds: 5,
+        enableStatusBarDiagnostics: true,
+      },
+    });
+
+    await expect(loadMergeReadyConfigAsync(cwd)).resolves.toEqual({
+      autoCompactRepair: false,
+      cacheTTLSeconds: 30,
+      enableStatusBarDiagnostics: false,
+    });
+  });
+
   it('falls back per field when project values are invalid', async () => {
     writeGlobalSettings({
       'pi-merge-ready': {

@@ -67,6 +67,7 @@ export type MergeReadyStatusBarSyncOptions = {
   status: MergeReadyStatus;
   now?: number | Date;
   projectTrusted?: boolean;
+  ownership?: MergeReadyStatusBarAmbientOwnership;
 };
 
 type MergeReadyStatusBarCacheEntry = {
@@ -86,8 +87,9 @@ type MergeReadyStatusBarAmbientSnapshot = {
   };
 };
 
-type MergeReadyStatusBarAmbientOwnership = {
+export type MergeReadyStatusBarAmbientOwnership = {
   generation: number;
+  ownerSeq: number;
 };
 
 type MergeReadyStatusBarRuntime = {
@@ -96,6 +98,7 @@ type MergeReadyStatusBarRuntime = {
   timer: ReturnType<typeof setTimeout> | null;
   dueAtMs: number | null;
   generation: number;
+  ownerSeq: number;
   diagnosticsEnabled: boolean;
 };
 
@@ -169,11 +172,30 @@ export async function refreshMergeReadyStatusBar(
     return null;
   }
 
-  const ownership = rememberMergeReadyStatusBarRefreshOwner(options);
+  const ownership = claimMergeReadyStatusBarOwnership({
+    exec: options.exec,
+    ctx: options.ctx,
+  });
   return refreshMergeReadyStatusBarInternal({
     ...options,
     ownership,
   });
+}
+
+export function claimMergeReadyStatusBarOwnership(options: {
+  ctx: MergeReadyStatusBarContext | MergeReadyStatusBarSyncContext;
+  exec?: MergeReadyExec;
+}): MergeReadyStatusBarAmbientOwnership {
+  statusBarRuntime.ownerSeq += 1;
+  if (options.exec !== undefined) {
+    statusBarRuntime.exec = options.exec;
+  }
+  statusBarRuntime.ctx = createMergeReadyStatusBarAmbientSnapshot(options.ctx);
+
+  return {
+    generation: statusBarRuntime.generation,
+    ownerSeq: statusBarRuntime.ownerSeq,
+  };
 }
 
 export function syncMergeReadyStatusBar(
@@ -192,8 +214,19 @@ export function syncMergeReadyStatusBar(
     cwd: options.ctx.cwd,
     ...(options.projectTrusted === undefined ? {} : { projectTrusted: options.projectTrusted }),
   });
+  const ownership =
+    options.ownership ??
+    claimMergeReadyStatusBarOwnership({
+      ctx: options.ctx,
+    });
 
-  rememberMergeReadyStatusBarSyncContext(options.ctx);
+  if (!isMergeReadyStatusBarOwnershipCurrent(ownership)) {
+    return {
+      text,
+      cached: false,
+    };
+  }
+
   applyMergeReadyStatusBarText({
     ctx: options.ctx,
     text,
@@ -615,6 +648,7 @@ function createMergeReadyStatusBarRuntime(): MergeReadyStatusBarRuntime {
     timer: null,
     dueAtMs: null,
     generation: 0,
+    ownerSeq: 0,
     diagnosticsEnabled: false,
   };
 }
@@ -635,36 +669,6 @@ function clearMergeReadyStatusBarTimer(): void {
   }
 }
 
-function rememberMergeReadyStatusBarRefreshOwner(
-  options: Pick<MergeReadyStatusBarRefreshOptions, 'exec' | 'ctx'>,
-): MergeReadyStatusBarAmbientOwnership {
-  statusBarRuntime.exec = options.exec;
-  statusBarRuntime.ctx = createMergeReadyStatusBarAmbientSnapshot(options.ctx);
-
-  return {
-    generation: statusBarRuntime.generation,
-  };
-}
-
-function rememberMergeReadyStatusBarSyncContext(ctx: MergeReadyStatusBarSyncContext): void {
-  const nextSnapshot = createMergeReadyStatusBarAmbientSnapshot(ctx);
-
-  statusBarRuntime.ctx = {
-    cwd: nextSnapshot.cwd,
-    ...(statusBarRuntime.ctx?.hasUI === undefined ? {} : { hasUI: statusBarRuntime.ctx.hasUI }),
-    ...(nextSnapshot.setStatus === undefined
-      ? statusBarRuntime.ctx?.setStatus === undefined
-        ? {}
-        : { setStatus: statusBarRuntime.ctx.setStatus }
-      : { setStatus: nextSnapshot.setStatus }),
-    ...(nextSnapshot.theme === undefined
-      ? statusBarRuntime.ctx?.theme === undefined
-        ? {}
-        : { theme: statusBarRuntime.ctx.theme }
-      : { theme: nextSnapshot.theme }),
-  };
-}
-
 function createMergeReadyStatusBarAmbientSnapshot(
   ctx: MergeReadyStatusBarContext | MergeReadyStatusBarSyncContext,
 ): MergeReadyStatusBarAmbientSnapshot {
@@ -679,7 +683,11 @@ function createMergeReadyStatusBarAmbientSnapshot(
 function isMergeReadyStatusBarOwnershipCurrent(
   ownership: MergeReadyStatusBarAmbientOwnership | undefined,
 ): boolean {
-  return ownership === undefined || ownership.generation === statusBarRuntime.generation;
+  return (
+    ownership === undefined ||
+    (ownership.generation === statusBarRuntime.generation &&
+      ownership.ownerSeq === statusBarRuntime.ownerSeq)
+  );
 }
 
 function rearmMergeReadyStatusBarTimer(): void {
@@ -712,6 +720,11 @@ function rearmMergeReadyStatusBarTimer(): void {
     }
 
     statusBarRuntime.timer = null;
+    const ctx = createMergeReadyStatusBarContext(snapshot);
+    const ownership = claimMergeReadyStatusBarOwnership({
+      exec,
+      ctx,
+    });
     appendMergeReadyStatusBarDebugLogIfEnabled(diagnosticsEnabled, {
       event: 'timer_fired',
       cwd: snapshot.cwd,
@@ -721,9 +734,9 @@ function rearmMergeReadyStatusBarTimer(): void {
     });
     void refreshMergeReadyStatusBarInternal({
       exec,
-      ctx: createMergeReadyStatusBarContext(snapshot),
+      ctx,
       force: true,
-      ownership: { generation },
+      ownership,
       ttlMs,
       diagnosticsEnabled,
     })

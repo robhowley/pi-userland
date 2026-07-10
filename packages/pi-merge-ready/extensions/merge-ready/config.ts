@@ -53,7 +53,7 @@ function getEnableStatusBarDiagnostics(rawConfig: unknown): boolean | undefined 
  * Load merge-ready configuration from Pi settings.json.
  * Uses SettingsManager global + project settings layering.
  */
-export function loadMergeReadyConfig(cwd: string, projectTrusted = true): MergeReadyConfig {
+export function loadMergeReadyConfig(cwd: string, projectTrusted = false): MergeReadyConfig {
   const settingsManager = SettingsManager.create(cwd);
   const globalMergeReadySettings = getMergeReadySettings(settingsManager.getGlobalSettings());
   const projectMergeReadySettings = projectTrusted
@@ -87,7 +87,7 @@ export function loadMergeReadyConfig(cwd: string, projectTrusted = true): MergeR
  */
 export async function loadMergeReadyConfigAsync(
   cwd: string,
-  projectTrusted = true,
+  projectTrusted = false,
 ): Promise<MergeReadyConfig> {
   return loadMergeReadyConfig(cwd, projectTrusted);
 }

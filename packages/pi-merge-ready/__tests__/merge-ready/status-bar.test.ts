@@ -14,6 +14,7 @@ import {
   resetMergeReadyStatusBarCache,
   suspendMergeReadyStatusBar,
   syncMergeReadyStatusBar,
+  claimMergeReadyStatusBarOwnership,
   type MergeReadyStatusBarAPI,
   type MergeReadyStatusBarContext,
 } from '../../extensions/merge-ready/index.js';
@@ -106,6 +107,17 @@ function createStatusContext(
       ...(options.theme === undefined ? {} : { theme: options.theme }),
     },
   };
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+
+  return { promise, resolve, reject };
 }
 
 function createDebugLogSandbox() {
@@ -394,6 +406,167 @@ describe('merge-ready status bar', () => {
     expect(synced).toEqual({ text: '✅ #42 Ready', cached: false });
     expect(refreshed).toEqual({ text: '✅ #42 Ready', cached: true });
     expect(ctx.ui?.setStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops an older same-session refresh when a newer refresh already won', async () => {
+    const olderStatus = createMergeReadyStatus({
+      generatedAt: '2026-05-27T00:00:00.000Z',
+      pr: buildOpenPr(),
+      signals: {
+        draft: false,
+        mergeability: 'mergeable',
+        checks: 'running',
+        checkDetails: {
+          failing: [],
+          running: [{ label: 'ci / unit', status: 'running' }],
+          unknown: [],
+        },
+        review: 'approved',
+        unresolvedConversations: false,
+        unresolvedConversationRequirement: 'optional',
+      },
+    });
+    const newerStatus = createMergeReadyStatus({
+      generatedAt: '2026-05-27T00:00:01.000Z',
+      pr: buildOpenPr(),
+      signals: {
+        draft: false,
+        mergeability: 'mergeable',
+        checks: 'passing',
+        review: 'approved',
+        unresolvedConversations: false,
+        unresolvedConversationRequirement: 'optional',
+      },
+    });
+    const olderRefreshResult = createDeferred<typeof olderStatus>();
+    const newerRefreshResult = createDeferred<typeof newerStatus>();
+    const getMergeReadyStatus = vi
+      .fn()
+      .mockImplementationOnce(async () => olderRefreshResult.promise)
+      .mockImplementationOnce(async () => newerRefreshResult.promise);
+
+    try {
+      vi.resetModules();
+      vi.doMock('../../extensions/merge-ready/merge-ready.js', async () => {
+        const actual = await vi.importActual<typeof import('../../extensions/merge-ready/merge-ready.js')>(
+          '../../extensions/merge-ready/merge-ready.js',
+        );
+        return {
+          ...actual,
+          getMergeReadyStatus,
+        };
+      });
+
+      const statusBarModule = await import('../../extensions/merge-ready/status-bar.js');
+      statusBarModule.resetMergeReadyStatusBarCache();
+
+      const ctx = createStatusContext();
+      const exec = vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false }));
+      const olderRefresh = statusBarModule.refreshMergeReadyStatusBar({
+        exec,
+        ctx,
+        force: true,
+      });
+      const newerRefresh = statusBarModule.refreshMergeReadyStatusBar({
+        exec,
+        ctx,
+        force: true,
+      });
+
+      newerRefreshResult.resolve(newerStatus);
+      await expect(newerRefresh).resolves.toEqual({
+        text: statusBarModule.renderMergeReadyStatusBar(newerStatus),
+        cached: false,
+      });
+      expect(ctx.ui?.setStatus).toHaveBeenLastCalledWith(
+        statusBarModule.MERGE_READY_STATUS_BAR_KEY,
+        statusBarModule.renderMergeReadyStatusBar(newerStatus),
+      );
+
+      vi.mocked(ctx.ui!.setStatus).mockClear();
+      olderRefreshResult.resolve(olderStatus);
+      await expect(olderRefresh).resolves.toBeNull();
+
+      expect(getMergeReadyStatus).toHaveBeenCalledTimes(2);
+      expect(ctx.ui?.setStatus).not.toHaveBeenCalled();
+    } finally {
+      vi.doUnmock('../../extensions/merge-ready/merge-ready.js');
+      vi.resetModules();
+    }
+  });
+
+  it('does not apply ambient sync when its captured ownership was superseded', async () => {
+    const staleCtx = createStatusContext();
+    const latestCtx = createStatusContext();
+    const refreshCtx = createStatusContext();
+    const staleStatus = createMergeReadyStatus({
+      generatedAt: '2026-05-27T00:00:00.000Z',
+      pr: buildOpenPr(),
+      signals: {
+        draft: false,
+        mergeability: 'mergeable',
+        checks: 'running',
+        checkDetails: {
+          failing: [],
+          running: [{ label: 'ci / unit', status: 'running' }],
+          unknown: [],
+        },
+        review: 'approved',
+        unresolvedConversations: false,
+        unresolvedConversationRequirement: 'optional',
+      },
+    });
+    const latestStatus = createMergeReadyStatus({
+      generatedAt: '2026-05-27T00:00:01.000Z',
+      pr: buildOpenPr(),
+      signals: {
+        draft: false,
+        mergeability: 'mergeable',
+        checks: 'passing',
+        review: 'approved',
+        unresolvedConversations: false,
+        unresolvedConversationRequirement: 'optional',
+      },
+    });
+    const staleOwnership = claimMergeReadyStatusBarOwnership({ ctx: staleCtx });
+    const latestOwnership = claimMergeReadyStatusBarOwnership({ ctx: latestCtx });
+    const { exec, assertDone } = createFakeExec([
+      createCurrentBranchProbeCall({ timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS }),
+    ]);
+
+    syncMergeReadyStatusBar({
+      ctx: latestCtx,
+      status: latestStatus,
+      ownership: latestOwnership,
+      now: 1_000,
+    });
+    vi.mocked(latestCtx.ui!.setStatus).mockClear();
+    vi.mocked(staleCtx.ui!.setStatus).mockClear();
+
+    const staleSync = syncMergeReadyStatusBar({
+      ctx: staleCtx,
+      status: staleStatus,
+      ownership: staleOwnership,
+      now: 1_001,
+    });
+    const refreshed = await refreshMergeReadyStatusBar({
+      exec,
+      ctx: refreshCtx,
+      now: 1_000 + MERGE_READY_STATUS_BAR_TTL_MS - 1,
+    });
+
+    assertDone();
+    expect(staleSync).toEqual({
+      text: renderMergeReadyStatusBar(staleStatus),
+      cached: false,
+    });
+    expect(staleCtx.ui?.setStatus).not.toHaveBeenCalled();
+    expect(latestCtx.ui?.setStatus).not.toHaveBeenCalled();
+    expect(refreshed).toEqual({ text: '✅ #42 Ready', cached: true });
+    expect(refreshCtx.ui?.setStatus).toHaveBeenCalledWith(
+      MERGE_READY_STATUS_BAR_KEY,
+      '✅ #42 Ready',
+    );
   });
 
   it('uses the stored configured TTL for sync-seeded cache expiry', async () => {
