@@ -1,6 +1,6 @@
 {
   "name": "@robhowley/pi-session-deck",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "type": "module",
   "description": "A TUI dashboard for Pi sessions: live windows, worktrees, PRs, activity, and statuses in one place.",
   "files": [
