@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Session Deck</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="topbar">
+        <div>
+          <h1>Session Deck</h1>
+          <p id="summary" class="muted">Loading…</p>
+        </div>
+        <div class="controls">
+          <label class="toggle">
+            <input id="show-all" type="checkbox" />
+            <span>Show all</span>
+          </label>
+          <button id="refresh" type="button">Refresh</button>
+        </div>
+      </header>
+
+      <section id="banner" class="banner hidden"></section>
+
+      <div class="layout">
+        <section class="panel list-panel">
+          <div id="list" class="list" role="listbox" aria-label="Pi sessions"></div>
+          <p id="empty" class="empty hidden">No live or stale Pi sessions found.</p>
+        </section>
+
+        <section class="panel detail-panel">
+          <div id="detail" class="detail muted">Select a session.</div>
+        </section>
+      </div>
+
+      <section id="diagnostics-panel" class="panel hidden">
+        <h2>Diagnostics</h2>
+        <ul id="diagnostics" class="diagnostics"></ul>
+      </section>
+    </main>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

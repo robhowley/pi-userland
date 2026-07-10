@@ -189,7 +189,7 @@ describe('session-deck joined command', () => {
     });
   });
 
-  it('offers --all, --reap, --identity, --json, and --session-id completions', () => {
+  it('offers --all, --reap, --identity, --json, --session-id, and iterm2 completions', () => {
     const { api, getRegistration } = createMockAPI();
 
     registerSessionDeckCommand(api, {
@@ -202,7 +202,35 @@ describe('session-deck joined command', () => {
       { value: '--identity', label: '--identity' },
       { value: '--json', label: '--json' },
       { value: '--session-id', label: '--session-id' },
+      { value: 'iterm2', label: 'iterm2' },
     ]);
+    expect(getRegistration()?.getArgumentCompletions?.('iterm2 ')).toEqual([
+      { value: 'iterm2 install', label: 'install' },
+      { value: 'iterm2 uninstall', label: 'uninstall' },
+      { value: 'iterm2 doctor', label: 'doctor' },
+    ]);
+  });
+
+  it('routes /session-deck iterm2 ... through the dedicated installer flow before flag parsing', async () => {
+    const { api, getHandler } = createMockAPI();
+    const runSessionDeckIterm2Command = vi.fn(async () => ({
+      level: 'warning' as const,
+      message: 'doctor output',
+    }));
+
+    registerSessionDeckCommand(api, {
+      isSessionDeckIterm2Command: (args) => args.startsWith('iterm2'),
+      readSessionDeckSnapshot: vi.fn(async () => buildSnapshot()),
+      runSessionDeckIterm2Command,
+    });
+
+    const handler = getHandler();
+    const ctx = createCommandContext({ mode: 'rpc' });
+
+    await handler?.('iterm2 doctor', ctx);
+
+    expect(runSessionDeckIterm2Command).toHaveBeenCalledWith('iterm2 doctor');
+    expect(vi.mocked(ctx.ui.notify)).toHaveBeenCalledWith('doctor output', 'warning');
   });
 
   it('renders the scannable multi-line shape and keeps diagnostics in all mode', async () => {
