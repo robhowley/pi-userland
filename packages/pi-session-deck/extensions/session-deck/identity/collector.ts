@@ -71,7 +71,7 @@ export async function collectSessionIdentity(
     sessionId,
     sessionFile,
   )
-    ? options.existingRecord?.sessionStartedAt ?? null
+    ? (options.existingRecord?.sessionStartedAt ?? null)
     : null;
   const sessionStartedAt = existingSessionStartedAt ?? nowIso;
 
