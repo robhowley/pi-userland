@@ -119,7 +119,6 @@ function normalizeRecord(record) {
     prUrl: typeof record.prUrl === 'string' ? record.prUrl : null,
     isLinkedWorktree: record.isLinkedWorktree === true,
     worktreeLabel: typeof record.worktreeLabel === 'string' ? record.worktreeLabel : null,
-    derivedFacets: isObject(record.derivedFacets) ? record.derivedFacets : null,
     activityState: normalizeActivityState(record.activityState),
     activityAgeMs: typeof record.activityAgeMs === 'number' ? record.activityAgeMs : null,
     currentToolName: typeof record.currentToolName === 'string' ? record.currentToolName : null,
@@ -268,15 +267,11 @@ function renderList() {
         createText('span', getPresenceIcon(record.presenceState), 'status-icon'),
         createText('span', formatActivitySummary(record), 'muted'),
         createText('span', title.text, 'row-title'),
+        createText('span', formatDuration(getListAgeMs(record)), 'muted row-age'),
       ]),
       createLine(
         'row-line2',
-        [
-          getRepoLabel(record, title.source),
-          formatPr(record.prUrl),
-          formatDuration(getListAgeMs(record)),
-          record.branch,
-        ]
+        [getRepoLabel(record, title.source), formatPr(record.prUrl), record.branch]
           .filter((value) => typeof value === 'string' && value.length > 0)
           .map((value) => createText('span', value, 'muted')),
       ),
@@ -334,25 +329,6 @@ function createRecordDetail(record) {
     }
     chipSection.append(chips);
     detail.append(chipSection);
-  }
-
-  if (record.derivedFacets && Object.keys(record.derivedFacets).length > 0) {
-    const facetsSection = document.createElement('section');
-    facetsSection.className = 'detail-section';
-    facetsSection.append(createText('div', 'Derived facets', 'detail-section-title'));
-
-    const facets = document.createElement('div');
-    facets.className = 'chips';
-    for (const [key, value] of Object.entries(record.derivedFacets)) {
-      if (typeof value === 'string' && value.length > 0) {
-        facets.append(createChip(`${humanizeKey(key)}: ${value}`, 'chip chip-subtle'));
-      }
-    }
-
-    if (facets.childNodes.length > 0) {
-      facetsSection.append(facets);
-      detail.append(facetsSection);
-    }
   }
 
   if (record.diagnostics.length > 0) {
@@ -499,8 +475,7 @@ function formatSelectedActivity(record) {
 
 function formatActivitySummary(record) {
   const activity = getActivityDisplay(record);
-  const lead = activity.detail ? `${activity.label}: ${activity.detail}` : activity.label;
-  return [lead, activity.summaryAgeLabel].filter(Boolean).join(' ');
+  return activity.detail ? `${activity.label}: ${activity.detail}` : activity.label;
 }
 
 function getActivityDisplay(record) {
@@ -508,29 +483,26 @@ function getActivityDisplay(record) {
 
   switch (record.activityState) {
     case 'idle':
-      return { label: 'idle', detail: null, cardAgeLabel: null, summaryAgeLabel: null };
+      return { label: 'idle', detail: null, cardAgeLabel: null };
     case 'thinking':
-      return { label: 'thinking', detail: null, cardAgeLabel: ageLabel, summaryAgeLabel: ageLabel };
+      return { label: 'thinking', detail: null, cardAgeLabel: ageLabel };
     case 'tool-running':
       return {
         label: 'tool-running',
         detail: record.currentToolName,
         cardAgeLabel: ageLabel,
-        summaryAgeLabel: ageLabel,
       };
     case 'error':
       return {
         label: 'error',
         detail: record.lastError,
         cardAgeLabel: ageLabel,
-        summaryAgeLabel: null,
       };
     default:
       return {
         label: record.activityState,
         detail: null,
         cardAgeLabel: ageLabel,
-        summaryAgeLabel: null,
       };
   }
 }
@@ -635,12 +607,6 @@ function detectHomeDirectory() {
 
   const segments = cwd.split('/');
   return segments.length >= 4 ? segments.slice(0, 3).join('/') : null;
-}
-
-function humanizeKey(value) {
-  return value
-    .replace(/[A-Z]/gu, (match) => ` ${match.toLowerCase()}`)
-    .replace(/^./u, (match) => match.toUpperCase());
 }
 
 function createLine(className, children) {

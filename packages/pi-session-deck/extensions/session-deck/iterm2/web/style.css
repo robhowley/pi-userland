@@ -96,20 +96,9 @@ h2 {
 }
 
 .topbar-copy {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
-.topbar-heading {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px 12px;
-  flex-wrap: wrap;
-}
-
-.topbar-heading > h1 {
   min-width: 0;
 }
 
@@ -117,17 +106,22 @@ h2 {
   display: inline-flex;
   align-items: center;
   gap: 10px;
+  flex: 0 0 auto;
   flex-wrap: nowrap;
   margin-left: auto;
 }
 
 .toggle,
-#refresh {
+#refresh,
+#summary {
   font-size: 0.82rem;
 }
 
 #summary {
-  font-size: 0.74rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .toggle {
@@ -212,6 +206,15 @@ h2 {
 
 .row-line1 {
   align-items: center;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.row-line1 > .muted:not(.row-age) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .row-line2,
@@ -234,6 +237,20 @@ h2 {
 .row-title,
 .detail-title {
   font-weight: 600;
+}
+
+.row-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-age {
+  margin-left: auto;
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .status-icon {

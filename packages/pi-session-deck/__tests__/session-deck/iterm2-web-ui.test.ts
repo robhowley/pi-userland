@@ -420,6 +420,18 @@ function getCardToggle(card: FakeElement): FakeButtonElement {
   return toggle;
 }
 
+function getCardLine(card: FakeElement, className: 'row-line1' | 'row-line2'): FakeElement {
+  const line = findAllByClass(card, className)[0];
+  if (!line) {
+    throw new Error(`Expected ${className}.`);
+  }
+  return line;
+}
+
+function getChildTextContents(element: FakeElement): string[] {
+  return element.childNodes.map((child) => child.textContent);
+}
+
 function setShowAll(elements: HarnessElements, checked: boolean): void {
   elements.showAll.checked = checked;
   elements.showAll.dispatchEvent({ type: 'change' });
@@ -456,8 +468,9 @@ describe('Session Deck iTerm2 web UI', () => {
     getCardToggle(getCards(harness.elements.list)[0]!).click();
 
     expect(getExpandedCardTitles(harness.elements.list)).toEqual(['alpha']);
+    expect(getExpandedCards(harness.elements.list)[0]!.textContent).not.toContain('Derived facets');
     expect(findAllByClass(getExpandedCards(harness.elements.list)[0]!, 'chip-subtle')).toHaveLength(
-      6,
+      0,
     );
 
     getCardToggle(getCards(harness.elements.list)[1]!).click();
@@ -470,6 +483,52 @@ describe('Session Deck iTerm2 web UI', () => {
     getCardToggle(getCards(harness.elements.list)[1]!).click();
 
     expect(getExpandedCards(harness.elements.list)).toHaveLength(0);
+  });
+
+  it('renders the card age at the end of line 1 and keeps repo, PR, and branch on line 2', async () => {
+    const harness = await setupApp([
+      buildSnapshot({
+        records: [
+          buildRecord({
+            sessionName: 'gbt baseline',
+            repoName: 'shop-ml',
+            branch: 'rh-baseline-gbdt',
+            prUrl: 'https://github.com/owner/project/pull/22722',
+          }),
+        ],
+      }),
+    ]);
+
+    const card = getCards(harness.elements.list)[0]!;
+    const line1 = getCardLine(card, 'row-line1');
+    const line2 = getCardLine(card, 'row-line2');
+
+    expect(getChildTextContents(line1)).toEqual(['●', 'idle', 'gbt baseline', '5s']);
+    expect(findAllByClass(line1, 'row-age')[0]?.textContent).toBe('5s');
+    expect(getChildTextContents(line2)).toEqual(['shop-ml', '#22722', 'rh-baseline-gbdt']);
+  });
+
+  it('shows tool-running age once by keeping it out of the activity summary', async () => {
+    const harness = await setupApp([
+      buildSnapshot({
+        records: [
+          buildRecord({
+            activityState: 'tool-running',
+            activityAgeMs: 12_000,
+            heartbeatAgeMs: 4_000,
+            currentToolName: 'bash',
+          }),
+        ],
+      }),
+    ]);
+
+    const card = getCards(harness.elements.list)[0]!;
+    const line1 = getCardLine(card, 'row-line1');
+    const line2 = getCardLine(card, 'row-line2');
+
+    expect(getChildTextContents(line1)).toEqual(['●', 'tool-running: bash', 'alpha', '12s']);
+    expect(line1.textContent.match(/12s/gu) ?? []).toHaveLength(1);
+    expect(line2.textContent).not.toContain('12s');
   });
 
   it('keeps cards collapsed across refreshes before the user expands a row', async () => {
