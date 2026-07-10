@@ -466,6 +466,16 @@ function getCopyButtonLabels(root: FakeElement): string[] {
     .filter((label): label is string => label !== null);
 }
 
+function getCopyButtonTitles(root: FakeElement): string[] {
+  return findAllByClass(root, 'copy-button')
+    .map((button) => button.getAttribute('title'))
+    .filter((title): title is string => title !== null);
+}
+
+function getCopyButtonTexts(root: FakeElement): string[] {
+  return findAllByClass(root, 'copy-button').map((button) => button.textContent);
+}
+
 function getChildTextContents(element: FakeElement): string[] {
   return element.childNodes.map((child) => child.textContent);
 }
@@ -567,6 +577,13 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(getChildTextContents(line1)).toEqual(['●', 'tool-running: bash', 'alpha', '12s']);
     expect(line1.textContent.match(/12s/gu) ?? []).toHaveLength(1);
     expect(line2.textContent).not.toContain('12s');
+
+    getCardToggle(card).click();
+
+    const detail = getCardDetail(getExpandedCards(harness.elements.list)[0]!);
+    const status = getDetailSection(detail, 'STATUS');
+    expect(getDetailRowLabels(status)).toEqual(['Current tool']);
+    expect(getDetailRowValues(status)).toEqual(['bash']);
   });
 
   it('renders the expanded detail sections in order with workspace copy buttons and PR last', async () => {
@@ -612,6 +629,8 @@ describe('Session Deck iTerm2 web UI', () => {
       'Copy Runtime ID',
       'Copy PID',
     ]);
+    expect(getCopyButtonTitles(identity)).toEqual(['copy', 'copy', 'copy']);
+    expect(getCopyButtonTexts(identity)).toEqual(['⧉', '⧉', '⧉']);
 
     const workspace = getDetailSection(detail, 'WORKSPACE');
     expect(getDetailRowLabels(workspace)).toEqual(['CWD', 'Branch', 'Repo', 'Checkout', 'PR']);
@@ -629,11 +648,12 @@ describe('Session Deck iTerm2 web UI', () => {
       'Copy Checkout',
       'Copy PR',
     ]);
+    expect(getCopyButtonTitles(workspace)).toEqual(['copy', 'copy', 'copy', 'copy', 'copy']);
+    expect(getCopyButtonTexts(workspace)).toEqual(['⧉', '⧉', '⧉', '⧉', '⧉']);
 
     const status = getDetailSection(detail, 'STATUS');
     expect(status.textContent).toContain('#22623 Conflicts');
-    expect(status.textContent).toContain('Presence');
-    expect(status.textContent).toContain('Heartbeat');
+    expect(getDetailRowLabels(status)).toEqual([]);
 
     const diagnostics = getDetailSection(detail, 'Record diagnostics');
     expect(diagnostics.textContent).toContain('activity_stale');
@@ -661,7 +681,8 @@ describe('Session Deck iTerm2 web UI', () => {
     );
 
     const status = getDetailSection(detail, 'STATUS');
-    expect(getDetailRowValues(status)).toContain('heartbeat expired');
+    expect(getDetailRowLabels(status)).toEqual(['Presence reason']);
+    expect(getDetailRowValues(status)).toEqual(['heartbeat expired']);
     expect(findAllByClass(detail, 'detail-liveness')[0]?.textContent).not.toContain(
       'heartbeat expired',
     );

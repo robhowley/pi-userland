@@ -380,9 +380,6 @@ function createStatusSection(record) {
   }
 
   content.push(
-    createDetailRow('Presence', record.presenceState),
-    createDetailRow('Activity', formatSelectedActivity(record)),
-    createDetailRow('Heartbeat', `${formatDuration(record.heartbeatAgeMs)} ago`),
     createDetailRow('Presence reason', humanizePresenceReason(record.presenceReason)),
     createDetailRow('Current tool', record.currentToolName),
     createDetailRow('Last error', record.lastError),
@@ -434,7 +431,8 @@ function createCopyButton(label, value) {
   button.type = 'button';
   button.className = 'copy-button';
   button.setAttribute('aria-label', `Copy ${label}`);
-  button.textContent = 'Copy';
+  button.setAttribute('title', 'copy');
+  button.textContent = '⧉';
   button.addEventListener('click', () => {
     copyTextToClipboard(value);
   });

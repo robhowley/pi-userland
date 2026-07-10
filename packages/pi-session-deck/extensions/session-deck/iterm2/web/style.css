@@ -343,6 +343,7 @@ h2 {
   min-width: 0;
   justify-self: end;
   text-align: right;
+  font-size: 0.85rem;
   overflow-wrap: anywhere;
 }
 
