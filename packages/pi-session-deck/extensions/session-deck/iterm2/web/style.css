@@ -3,6 +3,7 @@
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   background: #111315;
   color: #eceff1;
+  line-height: 1.4;
 }
 
 * {
@@ -11,6 +12,7 @@
 
 body {
   margin: 0;
+  min-height: 100vh;
   background: #111315;
   color: #eceff1;
 }
@@ -22,15 +24,22 @@ input {
 
 button {
   cursor: pointer;
-  border: 1px solid #4a5568;
-  background: #1f2933;
+  border: 1px solid transparent;
+  background: transparent;
   color: inherit;
-  border-radius: 8px;
-  padding: 0.45rem 0.8rem;
+  border-radius: 7px;
+  padding: 0.35rem 0.65rem;
 }
 
 button:hover {
-  background: #2d3748;
+  background: #1b232c;
+  border-color: #27303a;
+}
+
+button:focus-visible,
+input:focus-visible {
+  outline: 1px solid #70c0ff;
+  outline-offset: 1px;
 }
 
 h1,
@@ -40,100 +49,135 @@ ul {
   margin: 0;
 }
 
+h1 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+h2 {
+  color: #9aa5b1;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
 .app {
-  display: grid;
-  gap: 12px;
   min-height: 100vh;
-  padding: 12px;
+  display: grid;
+  align-content: start;
 }
 
 .topbar {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
-  align-items: center;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid #27303a;
+  background: #14181b;
+}
+
+.topbar-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
 }
 
 .controls {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .toggle {
   display: inline-flex;
   gap: 6px;
   align-items: center;
+  color: #9aa5b1;
+  font-size: 0.85rem;
 }
 
-.layout {
-  display: grid;
-  gap: 12px;
-  min-height: 0;
+.banner {
+  margin: 8px 12px 0;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #3e2723;
+  border: 1px solid #7f1d1d;
+  color: #fecaca;
 }
 
-.panel {
-  background: #171a1d;
-  border: 1px solid #27303a;
-  border-radius: 12px;
-  padding: 12px;
-}
-
-.list-panel {
+.list-shell {
   min-height: 360px;
+  padding: 6px 0 12px;
 }
 
 .list {
   display: grid;
-  gap: 8px;
 }
 
 .card {
-  background: #111315;
-  border: 1px solid #27303a;
-  border-radius: 10px;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid #27303a;
+  border-radius: 0;
   overflow: hidden;
 }
 
+.card:first-child {
+  border-top: 1px solid #27303a;
+}
+
 .card.expanded {
-  border-color: #70c0ff;
-  box-shadow: 0 0 0 1px #70c0ff inset;
+  background: #14181b;
+  border-bottom-color: #39506a;
 }
 
 .card-toggle {
   width: 100%;
-  display: block;
+  display: grid;
+  gap: 6px;
   text-align: left;
   border: 0;
   border-radius: 0;
-  padding: 10px;
+  padding: 10px 12px;
   background: transparent;
 }
 
 .card-toggle:hover {
-  background: #16191d;
+  background: #161a1d;
+  border-color: transparent;
+}
+
+.card.expanded > .card-toggle {
+  background: #15191d;
 }
 
 .card.stale > .card-toggle,
 .card.dead > .card-toggle,
 .card.unknown > .card-toggle {
-  opacity: 0.75;
+  opacity: 0.78;
 }
 
 .card-detail {
   border-top: 1px solid #27303a;
-  padding: 10px;
+  padding: 10px 12px 12px;
+  background: #121518;
 }
 
 .row-line1,
 .row-line2,
-.meta-grid,
 .summary-line,
 .diag-line {
   display: flex;
   gap: 8px;
   align-items: baseline;
   flex-wrap: wrap;
+}
+
+.row-line1 {
+  align-items: center;
 }
 
 .row-line2,
@@ -144,13 +188,32 @@ ul {
   color: #9aa5b1;
 }
 
+.row-line2,
+.summary-line,
+.detail-section-title,
+.meta-label,
+.toggle,
+.diagnostics {
+  font-size: 0.85rem;
+}
+
 .row-title,
 .detail-title {
   font-weight: 600;
 }
 
 .status-icon {
-  min-width: 1rem;
+  min-width: 0.9rem;
+  color: #70c0ff;
+}
+
+.card.stale .status-icon {
+  color: #d4b26c;
+}
+
+.card.dead .status-icon,
+.card.unknown .status-icon {
+  color: #9aa5b1;
 }
 
 .chips {
@@ -164,7 +227,7 @@ ul {
   background: #243b53;
   color: #d9e2ec;
   padding: 2px 8px;
-  font-size: 0.85rem;
+  font-size: 0.8rem;
 }
 
 .chip-subtle {
@@ -184,7 +247,6 @@ ul {
 
 .detail-section-title {
   color: #9aa5b1;
-  font-size: 0.9rem;
 }
 
 .meta-grid {
@@ -194,29 +256,27 @@ ul {
 }
 
 .meta-card {
-  background: #111315;
+  background: #151a1e;
   border: 1px solid #27303a;
-  border-radius: 10px;
-  padding: 10px;
+  border-radius: 8px;
+  padding: 8px 10px;
   display: grid;
   gap: 4px;
 }
 
 .meta-label {
   color: #9aa5b1;
-  font-size: 0.85rem;
 }
 
 .meta-value {
   overflow-wrap: anywhere;
 }
 
-.banner {
-  border-radius: 10px;
-  padding: 10px 12px;
-  background: #3e2723;
-  border: 1px solid #7f1d1d;
-  color: #fecaca;
+.diagnostics-panel {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px 14px;
+  border-top: 1px solid #27303a;
 }
 
 .diagnostics {
@@ -224,7 +284,6 @@ ul {
   gap: 6px;
   list-style: none;
   padding: 0;
-  margin-top: 10px;
 }
 
 .hidden {
@@ -232,16 +291,20 @@ ul {
 }
 
 .chips-inline {
-  margin-top: 8px;
+  margin-top: 2px;
 }
 
 .empty {
-  padding: 12px 0;
+  padding: 12px;
 }
 
 @media (max-width: 900px) {
   .topbar {
-    align-items: flex-start;
     flex-direction: column;
+  }
+
+  .controls {
+    width: 100%;
+    justify-content: space-between;
   }
 }

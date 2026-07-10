@@ -9,7 +9,7 @@
   <body>
     <main class="app">
       <header class="topbar">
-        <div>
+        <div class="topbar-copy">
           <h1>Session Deck</h1>
           <p id="summary" class="muted">Loading…</p>
         </div>
@@ -24,14 +24,12 @@
 
       <section id="banner" class="banner hidden"></section>
 
-      <div class="layout">
-        <section class="panel list-panel">
-          <div id="list" class="list" role="list" aria-label="Pi sessions"></div>
-          <p id="empty" class="empty hidden">No live or stale Pi sessions found.</p>
-        </section>
-      </div>
+      <section class="list-shell">
+        <div id="list" class="list" role="list" aria-label="Pi sessions"></div>
+        <p id="empty" class="empty hidden">No live or stale Pi sessions found.</p>
+      </section>
 
-      <section id="diagnostics-panel" class="panel hidden">
+      <section id="diagnostics-panel" class="diagnostics-panel hidden">
         <h2>Diagnostics</h2>
         <ul id="diagnostics" class="diagnostics"></ul>
       </section>

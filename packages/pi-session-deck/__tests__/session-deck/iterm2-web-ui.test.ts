@@ -298,7 +298,7 @@ function buildElements(document: FakeDocument): HarnessElements {
   const empty = withId(document.createElement('p'), 'empty');
   empty.className = 'empty hidden';
   const diagnosticsPanel = withId(document.createElement('section'), 'diagnostics-panel');
-  diagnosticsPanel.className = 'panel hidden';
+  diagnosticsPanel.className = 'diagnostics-panel hidden';
   const diagnostics = withId(document.createElement('ul'), 'diagnostics');
   diagnosticsPanel.append(diagnostics);
 
