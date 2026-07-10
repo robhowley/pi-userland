@@ -69,7 +69,6 @@ ul {
 .layout {
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(240px, 360px) minmax(0, 1fr);
   min-height: 0;
 }
 
@@ -80,8 +79,7 @@ ul {
   padding: 12px;
 }
 
-.list-panel,
-.detail-panel {
+.list-panel {
   min-height: 360px;
 }
 
@@ -90,24 +88,41 @@ ul {
   gap: 8px;
 }
 
-.row {
-  width: 100%;
-  text-align: left;
+.card {
   background: #111315;
   border: 1px solid #27303a;
   border-radius: 10px;
-  padding: 10px;
+  overflow: hidden;
 }
 
-.row.selected {
+.card.expanded {
   border-color: #70c0ff;
   box-shadow: 0 0 0 1px #70c0ff inset;
 }
 
-.row.stale,
-.row.dead,
-.row.unknown {
+.card-toggle {
+  width: 100%;
+  display: block;
+  text-align: left;
+  border: 0;
+  border-radius: 0;
+  padding: 10px;
+  background: transparent;
+}
+
+.card-toggle:hover {
+  background: #16191d;
+}
+
+.card.stale > .card-toggle,
+.card.dead > .card-toggle,
+.card.unknown > .card-toggle {
   opacity: 0.75;
+}
+
+.card-detail {
+  border-top: 1px solid #27303a;
+  padding: 10px;
 }
 
 .row-line1,
@@ -150,6 +165,11 @@ ul {
   color: #d9e2ec;
   padding: 2px 8px;
   font-size: 0.85rem;
+}
+
+.chip-subtle {
+  background: #1b232c;
+  color: #9aa5b1;
 }
 
 .detail {
@@ -220,10 +240,6 @@ ul {
 }
 
 @media (max-width: 900px) {
-  .layout {
-    grid-template-columns: 1fr;
-  }
-
   .topbar {
     align-items: flex-start;
     flex-direction: column;

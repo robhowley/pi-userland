@@ -42,7 +42,7 @@ pi install npm:@robhowley/pi-session-deck
 
 Notes:
 
-- v1 is read-only: refresh, list/detail browsing, and a `Show all` diagnostics toggle only.
+- v1 is read-only: refresh, collapsible session-card browsing, and a `Show all` diagnostics toggle only.
 - The generated bridge binds to `127.0.0.1` and reads snapshots through the package-owned helper.
 - Local repo builds need `pnpm --dir packages/pi-session-deck run build` before install so the helper exists in `dist/`.
 

@@ -7,6 +7,7 @@ const HOME_PREFIXES = ['/Users/', '/home/'];
 const state = {
   snapshot: null,
   selectedRuntimeId: null,
+  detailVisible: true,
   showAll: false,
   loading: false,
   fetchError: null,
@@ -19,7 +20,6 @@ const elements = {
   banner: document.getElementById('banner'),
   list: document.getElementById('list'),
   empty: document.getElementById('empty'),
-  detail: document.getElementById('detail'),
   diagnosticsPanel: document.getElementById('diagnostics-panel'),
   diagnostics: document.getElementById('diagnostics'),
 };
@@ -193,7 +193,6 @@ function render() {
   renderSummary();
   renderBanner();
   renderList();
-  renderDetail();
   renderDiagnostics();
 }
 
@@ -240,17 +239,28 @@ function renderList() {
   elements.empty.classList.toggle('hidden', visibleRecords.length > 0);
 
   for (const record of visibleRecords) {
+    const isExpanded = state.detailVisible && record.runtimeId === state.selectedRuntimeId;
     const title = getDisplayTitle(record);
-    const row = document.createElement('button');
-    row.type = 'button';
-    row.className = `row ${record.presenceState}`;
-    row.classList.toggle('selected', record.runtimeId === state.selectedRuntimeId);
-    row.addEventListener('click', () => {
-      state.selectedRuntimeId = record.runtimeId;
+    const card = document.createElement('article');
+    card.className = `card ${record.presenceState}`;
+    card.classList.toggle('expanded', isExpanded);
+    card.setAttribute('role', 'listitem');
+
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'card-toggle';
+    toggle.setAttribute('aria-expanded', String(isExpanded));
+    toggle.addEventListener('click', () => {
+      if (isExpanded) {
+        state.detailVisible = false;
+      } else {
+        state.selectedRuntimeId = record.runtimeId;
+        state.detailVisible = true;
+      }
       render();
     });
 
-    row.append(
+    toggle.append(
       createLine('row-line1', [
         createText('span', getPresenceIcon(record.presenceState), 'status-icon'),
         createText('span', formatActivitySummary(record), 'muted'),
@@ -275,25 +285,21 @@ function renderList() {
       for (const chip of record.chips) {
         chips.append(createChip(chip));
       }
-      row.append(chips);
+      toggle.append(chips);
     }
 
-    elements.list.append(row);
+    card.append(toggle);
+    if (isExpanded) {
+      card.append(createRecordDetail(record));
+    }
+
+    elements.list.append(card);
   }
 }
 
-function renderDetail() {
-  const record = getVisibleRecords().find(
-    (candidate) => candidate.runtimeId === state.selectedRuntimeId,
-  );
-  if (!record) {
-    elements.detail.className = 'detail muted';
-    elements.detail.replaceChildren(document.createTextNode('Select a session.'));
-    return;
-  }
-
+function createRecordDetail(record) {
   const detail = document.createElement('div');
-  detail.className = 'detail';
+  detail.className = 'detail card-detail';
 
   const header = document.createElement('div');
   header.append(
@@ -336,7 +342,7 @@ function renderDetail() {
     facets.className = 'chips';
     for (const [key, value] of Object.entries(record.derivedFacets)) {
       if (typeof value === 'string' && value.length > 0) {
-        facets.append(createChip(`${humanizeKey(key)}: ${value}`));
+        facets.append(createChip(`${humanizeKey(key)}: ${value}`, 'chip chip-subtle'));
       }
     }
 
@@ -360,8 +366,7 @@ function renderDetail() {
     detail.append(diagnosticsSection);
   }
 
-  elements.detail.className = 'detail';
-  elements.detail.replaceChildren(detail);
+  return detail;
 }
 
 function createMetaGrid(record) {
@@ -651,8 +656,8 @@ function createText(tagName, text, className) {
   return element;
 }
 
-function createChip(text) {
-  return createText('span', text, 'chip');
+function createChip(text, className = 'chip') {
+  return createText('span', text, className);
 }
 
 function isObject(candidate) {
