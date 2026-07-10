@@ -426,7 +426,7 @@ function setShowAll(elements: HarnessElements, checked: boolean): void {
 }
 
 describe('Session Deck iTerm2 web UI', () => {
-  it('renders a single expanded card by default and toggles expansion inline', async () => {
+  it('renders cards collapsed by default and toggles expansion inline', async () => {
     const harness = await setupApp([
       buildSnapshot({
         records: [
@@ -445,6 +445,16 @@ describe('Session Deck iTerm2 web UI', () => {
       }),
     ]);
 
+    expect(getExpandedCards(harness.elements.list)).toHaveLength(0);
+    expect(getCardToggle(getCards(harness.elements.list)[0]!).getAttribute('aria-expanded')).toBe(
+      'false',
+    );
+    expect(getCardToggle(getCards(harness.elements.list)[1]!).getAttribute('aria-expanded')).toBe(
+      'false',
+    );
+
+    getCardToggle(getCards(harness.elements.list)[0]!).click();
+
     expect(getExpandedCardTitles(harness.elements.list)).toEqual(['alpha']);
     expect(findAllByClass(getExpandedCards(harness.elements.list)[0]!, 'chip-subtle')).toHaveLength(
       6,
@@ -460,6 +470,37 @@ describe('Session Deck iTerm2 web UI', () => {
     getCardToggle(getCards(harness.elements.list)[1]!).click();
 
     expect(getExpandedCards(harness.elements.list)).toHaveLength(0);
+  });
+
+  it('keeps cards collapsed across refreshes before the user expands a row', async () => {
+    const harness = await setupApp([
+      buildSnapshot({
+        records: [
+          buildRecord(),
+          buildRecord({ runtimeId: 'rt-2', sessionId: 'session-2', sessionName: 'bravo' }),
+        ],
+      }),
+    ]);
+
+    harness.pushSnapshot(
+      buildSnapshot({
+        records: [
+          buildRecord({ runtimeId: 'rt-3', sessionId: 'session-3', sessionName: 'charlie' }),
+          buildRecord({ runtimeId: 'rt-4', sessionId: 'session-4', sessionName: 'delta' }),
+        ],
+      }),
+    );
+
+    harness.elements.refresh.click();
+    await flushMicrotasks();
+
+    expect(getExpandedCards(harness.elements.list)).toHaveLength(0);
+    expect(getCardToggle(getCards(harness.elements.list)[0]!).getAttribute('aria-expanded')).toBe(
+      'false',
+    );
+    expect(getCardToggle(getCards(harness.elements.list)[1]!).getAttribute('aria-expanded')).toBe(
+      'false',
+    );
   });
 
   it('preserves the expanded runtime by runtimeId across refreshes', async () => {

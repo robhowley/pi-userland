@@ -7,7 +7,7 @@ const HOME_PREFIXES = ['/Users/', '/home/'];
 const state = {
   snapshot: null,
   selectedRuntimeId: null,
-  detailVisible: true,
+  detailVisible: false,
   showAll: false,
   loading: false,
   fetchError: null,
@@ -169,14 +169,17 @@ function reconcileSelection() {
     return;
   }
 
-  if (state.selectedRuntimeId === null) {
-    state.selectedRuntimeId = visibleRecords[0].runtimeId;
+  const stillVisible =
+    state.selectedRuntimeId !== null &&
+    visibleRecords.some((record) => record.runtimeId === state.selectedRuntimeId);
+
+  if (!state.detailVisible) {
+    if (!stillVisible) {
+      state.selectedRuntimeId = null;
+    }
     return;
   }
 
-  const stillVisible = visibleRecords.some(
-    (record) => record.runtimeId === state.selectedRuntimeId,
-  );
   if (!stillVisible) {
     state.selectedRuntimeId = visibleRecords[0].runtimeId;
   }
