@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import {
   MERGE_READY_STATUS_BAR_KEY,
   MERGE_READY_STATUS_BAR_TIMEOUT_MS,
@@ -11,6 +14,7 @@ import {
   resetMergeReadyStatusBarCache,
   suspendMergeReadyStatusBar,
   syncMergeReadyStatusBar,
+  claimMergeReadyStatusBarOwnership,
   type MergeReadyStatusBarAPI,
   type MergeReadyStatusBarContext,
 } from '../../extensions/merge-ready/index.js';
@@ -32,7 +36,7 @@ function createMockAPI(expectedCalls: ExpectedExecCall[] = []): {
   api: MergeReadyStatusBarAPI;
   assertDone: () => void;
   getHandler: (
-    event: 'session_start' | 'turn_end',
+    event: 'session_start' | 'turn_end' | 'session_shutdown',
   ) => ((event: unknown, ctx: MergeReadyStatusBarContext) => void | Promise<void>) | undefined;
 } {
   let index = 0;
@@ -88,12 +92,98 @@ function createMockAPI(expectedCalls: ExpectedExecCall[] = []): {
   };
 }
 
-function createStatusContext(): MergeReadyStatusBarContext {
+function createStatusContext(
+  options: {
+    cwd?: string;
+    setStatus?: NonNullable<MergeReadyStatusBarContext['ui']>['setStatus'];
+    theme?: NonNullable<NonNullable<MergeReadyStatusBarContext['ui']>['theme']>;
+  } = {},
+): MergeReadyStatusBarContext {
   return {
-    cwd: '/repo',
+    cwd: options.cwd ?? '/repo',
     hasUI: true,
     ui: {
-      setStatus: vi.fn(),
+      setStatus: options.setStatus ?? vi.fn(),
+      ...(options.theme === undefined ? {} : { theme: options.theme }),
+    },
+  };
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+
+  return { promise, resolve, reject };
+}
+
+function createDebugLogSandbox() {
+  const originalDebugDir = process.env['PI_MERGE_READY_DEBUG_DIR'];
+  const root = mkdtempSync(join(tmpdir(), 'pi-merge-ready-status-bar-debug-'));
+  const debugDir = join(root, 'merge-ready');
+  const logPath = join(debugDir, 'status-bar-debug.jsonl');
+
+  process.env['PI_MERGE_READY_DEBUG_DIR'] = debugDir;
+
+  return {
+    exists() {
+      return existsSync(logPath);
+    },
+    readEntries() {
+      if (!existsSync(logPath)) {
+        return [];
+      }
+
+      const content = readFileSync(logPath, 'utf-8').trim();
+      return content === ''
+        ? []
+        : content.split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
+    },
+    cleanup() {
+      if (originalDebugDir === undefined) {
+        delete process.env['PI_MERGE_READY_DEBUG_DIR'];
+      } else {
+        process.env['PI_MERGE_READY_DEBUG_DIR'] = originalDebugDir;
+      }
+
+      rmSync(root, { recursive: true, force: true });
+    },
+  };
+}
+
+function createSettingsSandbox() {
+  const originalAgentDir = process.env['PI_CODING_AGENT_DIR'];
+  const root = mkdtempSync(join(tmpdir(), 'pi-merge-ready-status-bar-'));
+  const cwd = join(root, 'repo');
+  const agentDir = join(root, 'agent');
+
+  mkdirSync(cwd, { recursive: true });
+  process.env['PI_CODING_AGENT_DIR'] = agentDir;
+
+  const writeJsonFile = (path: string, value: unknown) => {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify(value, null, 2), 'utf-8');
+  };
+
+  return {
+    cwd,
+    writeGlobalSettings(settings: unknown) {
+      writeJsonFile(join(agentDir, 'settings.json'), settings);
+    },
+    writeProjectSettings(settings: unknown) {
+      writeJsonFile(join(cwd, '.pi', 'settings.json'), settings);
+    },
+    cleanup() {
+      if (originalAgentDir === undefined) {
+        delete process.env['PI_CODING_AGENT_DIR'];
+      } else {
+        process.env['PI_CODING_AGENT_DIR'] = originalAgentDir;
+      }
+
+      rmSync(root, { recursive: true, force: true });
     },
   };
 }
@@ -114,16 +204,18 @@ describe('merge-ready status bar', () => {
     resetMergeReadyStatusBarCache();
   });
 
-  it('registers session_start and turn_end hooks', () => {
+  it('registers session_start, turn_end, and session_shutdown hooks', () => {
     const { api, getHandler } = createMockAPI();
 
     registerMergeReadyStatusBar(api);
 
-    expect(api.on).toHaveBeenCalledTimes(2);
+    expect(api.on).toHaveBeenCalledTimes(3);
     expect(api.on).toHaveBeenCalledWith('session_start', expect.any(Function));
     expect(api.on).toHaveBeenCalledWith('turn_end', expect.any(Function));
+    expect(api.on).toHaveBeenCalledWith('session_shutdown', expect.any(Function));
     expect(getHandler('session_start')).toBeTypeOf('function');
     expect(getHandler('turn_end')).toBeTypeOf('function');
+    expect(getHandler('session_shutdown')).toBeTypeOf('function');
   });
 
   it('renders a terse ready status on session start', async () => {
@@ -314,6 +406,235 @@ describe('merge-ready status bar', () => {
     expect(synced).toEqual({ text: '✅ #42 Ready', cached: false });
     expect(refreshed).toEqual({ text: '✅ #42 Ready', cached: true });
     expect(ctx.ui?.setStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops an older same-session refresh when a newer refresh already won', async () => {
+    const olderStatus = createMergeReadyStatus({
+      generatedAt: '2026-05-27T00:00:00.000Z',
+      pr: buildOpenPr(),
+      signals: {
+        draft: false,
+        mergeability: 'mergeable',
+        checks: 'running',
+        checkDetails: {
+          failing: [],
+          running: [{ label: 'ci / unit', status: 'running' }],
+          unknown: [],
+        },
+        review: 'approved',
+        unresolvedConversations: false,
+        unresolvedConversationRequirement: 'optional',
+      },
+    });
+    const newerStatus = createMergeReadyStatus({
+      generatedAt: '2026-05-27T00:00:01.000Z',
+      pr: buildOpenPr(),
+      signals: {
+        draft: false,
+        mergeability: 'mergeable',
+        checks: 'passing',
+        review: 'approved',
+        unresolvedConversations: false,
+        unresolvedConversationRequirement: 'optional',
+      },
+    });
+    const olderRefreshResult = createDeferred<typeof olderStatus>();
+    const newerRefreshResult = createDeferred<typeof newerStatus>();
+    const getMergeReadyStatus = vi
+      .fn()
+      .mockImplementationOnce(async () => olderRefreshResult.promise)
+      .mockImplementationOnce(async () => newerRefreshResult.promise);
+
+    try {
+      vi.resetModules();
+      vi.doMock('../../extensions/merge-ready/merge-ready.js', async () => {
+        const actual = await vi.importActual<typeof import('../../extensions/merge-ready/merge-ready.js')>(
+          '../../extensions/merge-ready/merge-ready.js',
+        );
+        return {
+          ...actual,
+          getMergeReadyStatus,
+        };
+      });
+
+      const statusBarModule = await import('../../extensions/merge-ready/status-bar.js');
+      statusBarModule.resetMergeReadyStatusBarCache();
+
+      const ctx = createStatusContext();
+      const exec = vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false }));
+      const olderRefresh = statusBarModule.refreshMergeReadyStatusBar({
+        exec,
+        ctx,
+        force: true,
+      });
+      const newerRefresh = statusBarModule.refreshMergeReadyStatusBar({
+        exec,
+        ctx,
+        force: true,
+      });
+
+      newerRefreshResult.resolve(newerStatus);
+      await expect(newerRefresh).resolves.toEqual({
+        text: statusBarModule.renderMergeReadyStatusBar(newerStatus),
+        cached: false,
+      });
+      expect(ctx.ui?.setStatus).toHaveBeenLastCalledWith(
+        statusBarModule.MERGE_READY_STATUS_BAR_KEY,
+        statusBarModule.renderMergeReadyStatusBar(newerStatus),
+      );
+
+      vi.mocked(ctx.ui!.setStatus).mockClear();
+      olderRefreshResult.resolve(olderStatus);
+      await expect(olderRefresh).resolves.toBeNull();
+
+      expect(getMergeReadyStatus).toHaveBeenCalledTimes(2);
+      expect(ctx.ui?.setStatus).not.toHaveBeenCalled();
+    } finally {
+      vi.doUnmock('../../extensions/merge-ready/merge-ready.js');
+      vi.resetModules();
+    }
+  });
+
+  it('does not apply ambient sync when its captured ownership was superseded', async () => {
+    const staleCtx = createStatusContext();
+    const latestCtx = createStatusContext();
+    const refreshCtx = createStatusContext();
+    const staleStatus = createMergeReadyStatus({
+      generatedAt: '2026-05-27T00:00:00.000Z',
+      pr: buildOpenPr(),
+      signals: {
+        draft: false,
+        mergeability: 'mergeable',
+        checks: 'running',
+        checkDetails: {
+          failing: [],
+          running: [{ label: 'ci / unit', status: 'running' }],
+          unknown: [],
+        },
+        review: 'approved',
+        unresolvedConversations: false,
+        unresolvedConversationRequirement: 'optional',
+      },
+    });
+    const latestStatus = createMergeReadyStatus({
+      generatedAt: '2026-05-27T00:00:01.000Z',
+      pr: buildOpenPr(),
+      signals: {
+        draft: false,
+        mergeability: 'mergeable',
+        checks: 'passing',
+        review: 'approved',
+        unresolvedConversations: false,
+        unresolvedConversationRequirement: 'optional',
+      },
+    });
+    const staleOwnership = claimMergeReadyStatusBarOwnership({ ctx: staleCtx });
+    const latestOwnership = claimMergeReadyStatusBarOwnership({ ctx: latestCtx });
+    const { exec, assertDone } = createFakeExec([
+      createCurrentBranchProbeCall({ timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS }),
+    ]);
+
+    syncMergeReadyStatusBar({
+      ctx: latestCtx,
+      status: latestStatus,
+      ownership: latestOwnership,
+      now: 1_000,
+    });
+    vi.mocked(latestCtx.ui!.setStatus).mockClear();
+    vi.mocked(staleCtx.ui!.setStatus).mockClear();
+
+    const staleSync = syncMergeReadyStatusBar({
+      ctx: staleCtx,
+      status: staleStatus,
+      ownership: staleOwnership,
+      now: 1_001,
+    });
+    const refreshed = await refreshMergeReadyStatusBar({
+      exec,
+      ctx: refreshCtx,
+      now: 1_000 + MERGE_READY_STATUS_BAR_TTL_MS - 1,
+    });
+
+    assertDone();
+    expect(staleSync).toEqual({
+      text: renderMergeReadyStatusBar(staleStatus),
+      cached: false,
+    });
+    expect(staleCtx.ui?.setStatus).not.toHaveBeenCalled();
+    expect(latestCtx.ui?.setStatus).not.toHaveBeenCalled();
+    expect(refreshed).toEqual({ text: '✅ #42 Ready', cached: true });
+    expect(refreshCtx.ui?.setStatus).toHaveBeenCalledWith(
+      MERGE_READY_STATUS_BAR_KEY,
+      '✅ #42 Ready',
+    );
+  });
+
+  it('uses the stored configured TTL for sync-seeded cache expiry', async () => {
+    const sandbox = createSettingsSandbox();
+
+    try {
+      sandbox.writeProjectSettings({
+        'pi-merge-ready': {
+          cacheTTLSeconds: 5,
+        },
+      });
+
+      const status = createMergeReadyStatus({
+        generatedAt: '2026-05-27T00:00:00.000Z',
+        pr: buildOpenPr(),
+        signals: {
+          draft: false,
+          mergeability: 'mergeable',
+          checks: 'passing',
+          review: 'approved',
+          unresolvedConversations: false,
+          unresolvedConversationRequirement: 'optional',
+        },
+      });
+      const ctx = createStatusContext({ cwd: sandbox.cwd });
+      const { exec, assertDone } = createFakeExec([
+        createCurrentBranchProbeCall({
+          cwd: sandbox.cwd,
+          timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+        }),
+        ...createGitDiscoveryCalls({
+          cwd: sandbox.cwd,
+          timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+        }),
+        createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+          cwd: sandbox.cwd,
+          timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+        }),
+        createConversationsSuccessCall(buildConversationsPayload(), {
+          cwd: sandbox.cwd,
+          timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+        }),
+      ]);
+
+      syncMergeReadyStatusBar({
+        ctx,
+        status,
+        now: 1_000,
+        projectTrusted: true,
+      });
+
+      const cached = await refreshMergeReadyStatusBar({
+        exec,
+        ctx,
+        now: 5_999,
+      });
+      const expired = await refreshMergeReadyStatusBar({
+        exec,
+        ctx,
+        now: 6_000,
+      });
+
+      assertDone();
+      expect(cached).toEqual({ text: '✅ #42 Ready', cached: true });
+      expect(expired).toEqual({ text: '✅ #42 Ready', cached: false });
+    } finally {
+      sandbox.cleanup();
+    }
   });
 
   it('does not sync URL-targeted command results into the ambient cache', async () => {
@@ -570,7 +891,10 @@ describe('merge-ready status bar', () => {
     await getHandler('turn_end')?.({}, ctx);
 
     assertDone();
-    expect(ctx.ui?.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '❌ #42 Checks failing');
+    expect(ctx.ui?.setStatus).toHaveBeenCalledWith(
+      MERGE_READY_STATUS_BAR_KEY,
+      '❌ #42 Checks failing',
+    );
   });
 
   it('renders an unknown-looking status when no pull request is found', async () => {
@@ -791,6 +1115,673 @@ describe('merge-ready status bar', () => {
     assertDone();
     expect(first).toEqual({ text: '✅ #42 Ready', cached: false });
     expect(second).toEqual({ text: '✅ #42 Ready', cached: false });
+  });
+
+  describe('background TTL refresh', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(0);
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it.each([
+      { reason: 'reload', shutdownBeforeRestart: true },
+      { reason: 'new', shutdownBeforeRestart: false },
+    ])(
+      'invalidates stale timers across $reason session transitions',
+      async ({ reason, shutdownBeforeRestart }) => {
+        const firstRuntime = createMockAPI([
+          ...createGitDiscoveryCalls({ timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS }),
+          createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          createConversationsSuccessCall(buildConversationsPayload(), {
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+        ]);
+        const secondRuntime = createMockAPI([
+          ...createGitDiscoveryCalls({ timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS }),
+          createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          createConversationsSuccessCall(buildConversationsPayload(), {
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          ...createGitDiscoveryCalls({ timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS }),
+          createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          createConversationsSuccessCall(buildConversationsPayload(), {
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+        ]);
+        const firstCtx = createStatusContext();
+        const secondCtx = createStatusContext();
+
+        registerMergeReadyStatusBar(firstRuntime.api);
+        registerMergeReadyStatusBar(secondRuntime.api);
+
+        await firstRuntime.getHandler('session_start')?.({ reason: 'startup' }, firstCtx);
+        vi.mocked(firstCtx.ui!.setStatus).mockClear();
+
+        await vi.advanceTimersByTimeAsync(10_000);
+        if (shutdownBeforeRestart) {
+          await firstRuntime.getHandler('session_shutdown')?.({}, firstCtx);
+        }
+        await secondRuntime.getHandler('session_start')?.({ reason }, secondCtx);
+        vi.mocked(secondCtx.ui!.setStatus).mockClear();
+
+        await vi.advanceTimersByTimeAsync(MERGE_READY_STATUS_BAR_TTL_MS - 10_000);
+        expect(firstCtx.ui?.setStatus).not.toHaveBeenCalled();
+        expect(secondCtx.ui?.setStatus).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(10_000 - 1);
+        expect(firstCtx.ui?.setStatus).not.toHaveBeenCalled();
+        expect(secondCtx.ui?.setStatus).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(1);
+
+        firstRuntime.assertDone();
+        secondRuntime.assertDone();
+        expect(firstCtx.ui?.setStatus).not.toHaveBeenCalled();
+        expect(secondCtx.ui?.setStatus).toHaveBeenCalledWith(
+          MERGE_READY_STATUS_BAR_KEY,
+          '✅ #42 Ready',
+        );
+      },
+    );
+
+    it('uses the stored configured TTL for background refresh and timer re-arm', async () => {
+      const sandbox = createSettingsSandbox();
+
+      try {
+        sandbox.writeProjectSettings({
+          'pi-merge-ready': {
+            cacheTTLSeconds: 5,
+          },
+        });
+
+        const ctx = createStatusContext({ cwd: sandbox.cwd });
+        const refreshExec = createFakeExec([
+          ...createGitDiscoveryCalls({
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          createConversationsSuccessCall(buildConversationsPayload(), {
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          ...createGitDiscoveryCalls({
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          createConversationsSuccessCall(buildConversationsPayload(), {
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          ...createGitDiscoveryCalls({
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          createConversationsSuccessCall(buildConversationsPayload(), {
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+        ]);
+
+        await refreshMergeReadyStatusBar({
+          exec: refreshExec.exec,
+          ctx,
+          projectTrusted: true,
+        });
+        vi.mocked(ctx.ui!.setStatus).mockClear();
+
+        sandbox.writeProjectSettings({
+          'pi-merge-ready': {
+            cacheTTLSeconds: 1,
+          },
+        });
+
+        await vi.advanceTimersByTimeAsync(5_000 - 1);
+        expect(ctx.ui?.setStatus).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(1);
+        expect(ctx.ui?.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ #42 Ready');
+
+        vi.mocked(ctx.ui!.setStatus).mockClear();
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(ctx.ui?.setStatus).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(4_000);
+
+        refreshExec.assertDone();
+        expect(ctx.ui?.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ #42 Ready');
+      } finally {
+        sandbox.cleanup();
+      }
+    });
+
+    it('cached repaints swap the latest ctx without extending the original TTL', async () => {
+      const initialCtx = createStatusContext();
+      const latestCtx = createStatusContext();
+      const initialRefresh = createFakeExec([
+        ...createGitDiscoveryCalls({ timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS }),
+        createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+          timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+        }),
+        createConversationsSuccessCall(buildConversationsPayload(), {
+          timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+        }),
+      ]);
+      const latestRefresh = createFakeExec([
+        createCurrentBranchProbeCall({ timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS }),
+        ...createGitDiscoveryCalls({ timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS }),
+        createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+          timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+        }),
+        createConversationsSuccessCall(buildConversationsPayload(), {
+          timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+        }),
+      ]);
+
+      await refreshMergeReadyStatusBar({
+        exec: initialRefresh.exec,
+        ctx: initialCtx,
+      });
+      vi.mocked(initialCtx.ui!.setStatus).mockClear();
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      const cached = await refreshMergeReadyStatusBar({
+        exec: latestRefresh.exec,
+        ctx: latestCtx,
+      });
+
+      expect(cached).toEqual({ text: '✅ #42 Ready', cached: true });
+      expect(latestCtx.ui?.setStatus).toHaveBeenCalledWith(
+        MERGE_READY_STATUS_BAR_KEY,
+        '✅ #42 Ready',
+      );
+      vi.mocked(latestCtx.ui!.setStatus).mockClear();
+
+      await vi.advanceTimersByTimeAsync(MERGE_READY_STATUS_BAR_TTL_MS - 10_000 - 1);
+      expect(initialCtx.ui?.setStatus).not.toHaveBeenCalled();
+      expect(latestCtx.ui?.setStatus).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      initialRefresh.assertDone();
+      latestRefresh.assertDone();
+      expect(initialCtx.ui?.setStatus).not.toHaveBeenCalled();
+      expect(latestCtx.ui?.setStatus).toHaveBeenCalledWith(
+        MERGE_READY_STATUS_BAR_KEY,
+        '✅ #42 Ready',
+      );
+    });
+
+    it('preserves theme fg binding across timer refresh snapshots', async () => {
+      const debugLog = createDebugLogSandbox();
+
+      try {
+        const theme = {
+          fgColors: new Map([['dim', '<dim>']]),
+          fg(this: { fgColors: Map<string, string> }, color: string, text: string): string {
+            const prefix = this.fgColors.get(color);
+            if (!prefix) {
+              throw new Error(`Unknown theme color: ${color}`);
+            }
+
+            return `${prefix}${text}`;
+          },
+        };
+        const ctx = createStatusContext({ theme });
+        const setStatus = vi.mocked(ctx.ui!.setStatus);
+        const refreshExec = createFakeExec([
+          ...createGitDiscoveryCalls({ timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS }),
+          createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          createConversationsSuccessCall(buildConversationsPayload(), {
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          ...createGitDiscoveryCalls({ timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS }),
+          createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          createConversationsSuccessCall(buildConversationsPayload(), {
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+        ]);
+
+        await refreshMergeReadyStatusBar({
+          exec: refreshExec.exec,
+          ctx,
+        });
+        expect(setStatus).toHaveBeenLastCalledWith(MERGE_READY_STATUS_BAR_KEY, '<dim>✅ #42 Ready');
+        setStatus.mockClear();
+
+        await vi.advanceTimersByTimeAsync(MERGE_READY_STATUS_BAR_TTL_MS);
+
+        refreshExec.assertDone();
+        expect(setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '<dim>✅ #42 Ready');
+        expect(
+          debugLog
+            .readEntries()
+            .some(
+              (entry) => entry['event'] === 'caught_error' && entry['stage'] === 'timer_refresh',
+            ),
+        ).toBe(false);
+      } finally {
+        debugLog.cleanup();
+      }
+    });
+
+    it('re-arms on ambient sync without letting URL-targeted sync move the ambient deadline', async () => {
+      const initialCtx = createStatusContext();
+      const ambientSyncCtx = createStatusContext();
+      const urlSyncCtx = createStatusContext();
+      const readyStatus = createMergeReadyStatus({
+        generatedAt: '2026-05-27T00:00:00.000Z',
+        pr: buildOpenPr(),
+        signals: {
+          draft: false,
+          mergeability: 'mergeable',
+          checks: 'passing',
+          review: 'approved',
+          unresolvedConversations: false,
+          unresolvedConversationRequirement: 'optional',
+        },
+      });
+      const urlStatus = createMergeReadyStatus({
+        generatedAt: '2026-05-27T00:00:00.000Z',
+        target: {
+          mode: 'url',
+          url: 'https://github.com/shopify/pi/pull/64',
+          owner: 'shopify',
+          repo: 'pi',
+          prNumber: 64,
+        },
+        pr: {
+          lifecycle: 'open',
+          number: 64,
+          title: 'Support explicit PR URL targets',
+          url: 'https://github.com/shopify/pi/pull/64',
+          headRefName: 'feat/explicit-pr-url',
+          baseRefName: 'main',
+        },
+        signals: {
+          draft: false,
+          mergeability: 'mergeable',
+          checks: 'passing',
+          review: 'approved',
+          unresolvedConversations: false,
+          unresolvedConversationRequirement: 'optional',
+        },
+      });
+      const refreshExec = createFakeExec([
+        ...createGitDiscoveryCalls({ timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS }),
+        createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+          timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+        }),
+        createConversationsSuccessCall(buildConversationsPayload(), {
+          timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+        }),
+        ...createGitDiscoveryCalls({ timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS }),
+        createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+          timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+        }),
+        createConversationsSuccessCall(buildConversationsPayload(), {
+          timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+        }),
+      ]);
+
+      await refreshMergeReadyStatusBar({
+        exec: refreshExec.exec,
+        ctx: initialCtx,
+      });
+      vi.mocked(initialCtx.ui!.setStatus).mockClear();
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      syncMergeReadyStatusBar({
+        ctx: ambientSyncCtx,
+        status: readyStatus,
+        now: new Date(Date.now()),
+      });
+      vi.mocked(ambientSyncCtx.ui!.setStatus).mockClear();
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      const targeted = syncMergeReadyStatusBar({
+        ctx: urlSyncCtx,
+        status: urlStatus,
+        now: new Date(Date.now()),
+      });
+
+      expect(targeted).toEqual({ text: '✅ #64 Ready', cached: false });
+      expect(urlSyncCtx.ui?.setStatus).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(MERGE_READY_STATUS_BAR_TTL_MS - 20_000);
+      expect(initialCtx.ui?.setStatus).not.toHaveBeenCalled();
+      expect(ambientSyncCtx.ui?.setStatus).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(10_000 - 1);
+      expect(initialCtx.ui?.setStatus).not.toHaveBeenCalled();
+      expect(ambientSyncCtx.ui?.setStatus).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      refreshExec.assertDone();
+      expect(initialCtx.ui?.setStatus).not.toHaveBeenCalled();
+      expect(ambientSyncCtx.ui?.setStatus).toHaveBeenCalledWith(
+        MERGE_READY_STATUS_BAR_KEY,
+        '✅ #42 Ready',
+      );
+      expect(urlSyncCtx.ui?.setStatus).not.toHaveBeenCalled();
+    });
+
+    it('does not create a diagnostics log by default', async () => {
+      const debugLog = createDebugLogSandbox();
+
+      try {
+        const ctx = createStatusContext();
+        const refreshExec = createFakeExec([
+          ...createGitDiscoveryCalls({ timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS }),
+          createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          createConversationsSuccessCall(buildConversationsPayload(), {
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          ...createGitDiscoveryCalls({ timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS }),
+          createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          createConversationsSuccessCall(buildConversationsPayload(), {
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+        ]);
+
+        await refreshMergeReadyStatusBar({
+          exec: refreshExec.exec,
+          ctx,
+        });
+        await vi.advanceTimersByTimeAsync(MERGE_READY_STATUS_BAR_TTL_MS);
+
+        refreshExec.assertDone();
+        expect(debugLog.exists()).toBe(false);
+        expect(debugLog.readEntries()).toEqual([]);
+      } finally {
+        debugLog.cleanup();
+      }
+    });
+
+    it('persists timer arm/fire/result diagnostics when global settings enable it', async () => {
+      const debugLog = createDebugLogSandbox();
+      const sandbox = createSettingsSandbox();
+
+      try {
+        sandbox.writeGlobalSettings({
+          'pi-merge-ready': {
+            enableStatusBarDiagnostics: true,
+          },
+        });
+
+        const ctx = createStatusContext({ cwd: sandbox.cwd });
+        const refreshExec = createFakeExec([
+          ...createGitDiscoveryCalls({
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          createConversationsSuccessCall(buildConversationsPayload(), {
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          ...createGitDiscoveryCalls({
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          createConversationsSuccessCall(buildConversationsPayload(), {
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+        ]);
+
+        await refreshMergeReadyStatusBar({
+          exec: refreshExec.exec,
+          ctx,
+        });
+        await vi.advanceTimersByTimeAsync(MERGE_READY_STATUS_BAR_TTL_MS);
+
+        refreshExec.assertDone();
+        expect(debugLog.exists()).toBe(true);
+        expect(debugLog.readEntries()).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              event: 'timer_armed',
+              cwd: sandbox.cwd,
+              generation: 0,
+              dueAtMs: MERGE_READY_STATUS_BAR_TTL_MS,
+              delayMs: MERGE_READY_STATUS_BAR_TTL_MS,
+              ttlMs: MERGE_READY_STATUS_BAR_TTL_MS,
+            }),
+            expect.objectContaining({
+              event: 'timer_fired',
+              cwd: sandbox.cwd,
+              generation: 0,
+              dueAtMs: MERGE_READY_STATUS_BAR_TTL_MS,
+              firedAtMs: MERGE_READY_STATUS_BAR_TTL_MS,
+            }),
+            expect.objectContaining({
+              event: 'refresh_result',
+              cwd: sandbox.cwd,
+              generation: 0,
+              dueAtMs: MERGE_READY_STATUS_BAR_TTL_MS,
+              text: '✅ #42 Ready',
+              cached: false,
+            }),
+          ]),
+        );
+      } finally {
+        sandbox.cleanup();
+        debugLog.cleanup();
+      }
+    });
+
+    it('creates a diagnostics log when trusted project settings enable it', async () => {
+      const debugLog = createDebugLogSandbox();
+      const sandbox = createSettingsSandbox();
+
+      try {
+        sandbox.writeProjectSettings({
+          'pi-merge-ready': {
+            enableStatusBarDiagnostics: true,
+          },
+        });
+
+        const ctx = createStatusContext({ cwd: sandbox.cwd });
+        const refreshExec = createFakeExec([
+          ...createGitDiscoveryCalls({
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          createConversationsSuccessCall(buildConversationsPayload(), {
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+        ]);
+
+        await refreshMergeReadyStatusBar({
+          exec: refreshExec.exec,
+          ctx,
+          projectTrusted: true,
+        });
+
+        refreshExec.assertDone();
+        expect(debugLog.exists()).toBe(true);
+        expect(debugLog.readEntries()).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              event: 'timer_armed',
+              cwd: sandbox.cwd,
+              generation: 0,
+              dueAtMs: MERGE_READY_STATUS_BAR_TTL_MS,
+              delayMs: MERGE_READY_STATUS_BAR_TTL_MS,
+              ttlMs: MERGE_READY_STATUS_BAR_TTL_MS,
+            }),
+          ]),
+        );
+      } finally {
+        sandbox.cleanup();
+        debugLog.cleanup();
+      }
+    });
+
+    it('persists caught timer refresh errors when trusted project settings enable diagnostics', async () => {
+      const debugLog = createDebugLogSandbox();
+      const sandbox = createSettingsSandbox();
+
+      try {
+        sandbox.writeProjectSettings({
+          'pi-merge-ready': {
+            enableStatusBarDiagnostics: true,
+          },
+        });
+
+        const ctx = createStatusContext({ cwd: sandbox.cwd });
+        const setStatus = vi.mocked(ctx.ui!.setStatus);
+        const refreshExec = createFakeExec([
+          ...createGitDiscoveryCalls({
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          createConversationsSuccessCall(buildConversationsPayload(), {
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          ...createGitDiscoveryCalls({
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+          createConversationsSuccessCall(buildConversationsPayload(), {
+            cwd: sandbox.cwd,
+            timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          }),
+        ]);
+
+        await refreshMergeReadyStatusBar({
+          exec: refreshExec.exec,
+          ctx,
+          projectTrusted: true,
+        });
+        setStatus.mockImplementation(() => {
+          throw new Error('status paint blew up');
+        });
+
+        await vi.advanceTimersByTimeAsync(MERGE_READY_STATUS_BAR_TTL_MS);
+
+        refreshExec.assertDone();
+        expect(debugLog.readEntries()).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              event: 'timer_fired',
+              cwd: sandbox.cwd,
+              generation: 0,
+              dueAtMs: MERGE_READY_STATUS_BAR_TTL_MS,
+            }),
+            expect.objectContaining({
+              event: 'caught_error',
+              stage: 'timer_refresh',
+              cwd: sandbox.cwd,
+              generation: 0,
+              dueAtMs: MERGE_READY_STATUS_BAR_TTL_MS,
+              errorName: 'Error',
+              errorMessage: 'status paint blew up',
+            }),
+          ]),
+        );
+      } finally {
+        sandbox.cleanup();
+        debugLog.cleanup();
+      }
+    });
+
+    it('keeps timer retries TTL-paced after a failed background refresh', async () => {
+      const ctx = createStatusContext();
+      const refreshExec = createFakeExec([
+        ...createGitDiscoveryCalls({ timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS }),
+        createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+          timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+        }),
+        createConversationsSuccessCall(buildConversationsPayload(), {
+          timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+        }),
+        {
+          command: 'git',
+          args: ['rev-parse', '--show-toplevel'],
+          cwd: '/repo',
+          timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+          error: new Error('spawn git EACCES'),
+        },
+        ...createGitDiscoveryCalls({ timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS }),
+        createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+          timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+        }),
+        createConversationsSuccessCall(buildConversationsPayload(), {
+          timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+        }),
+      ]);
+
+      await refreshMergeReadyStatusBar({
+        exec: refreshExec.exec,
+        ctx,
+      });
+      vi.mocked(ctx.ui!.setStatus).mockClear();
+
+      await vi.advanceTimersByTimeAsync(MERGE_READY_STATUS_BAR_TTL_MS);
+      expect(ctx.ui?.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '❔ No PR');
+
+      vi.mocked(ctx.ui!.setStatus).mockClear();
+      await vi.advanceTimersByTimeAsync(MERGE_READY_STATUS_BAR_TTL_MS - 1);
+      expect(ctx.ui?.setStatus).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      refreshExec.assertDone();
+      expect(ctx.ui?.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ #42 Ready');
+    });
   });
 
   it('degrades exec failures to an unknown-looking status instead of throwing through the hook', async () => {

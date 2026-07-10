@@ -42,60 +42,117 @@ describe.sequential('loadMergeReadyConfigAsync', () => {
     writeJsonFile(join(cwd, '.pi', 'settings.json'), settings);
   }
 
-  it('lets project false override global true', async () => {
+  it('lets trusted project settings override global settings per field', async () => {
     writeGlobalSettings({
       'pi-merge-ready': {
         autoCompactRepair: true,
+        cacheTTLSeconds: 90,
+        enableStatusBarDiagnostics: false,
       },
     });
     writeProjectSettings({
       'pi-merge-ready': {
         autoCompactRepair: false,
+        cacheTTLSeconds: 5,
+        enableStatusBarDiagnostics: true,
+      },
+    });
+
+    await expect(loadMergeReadyConfigAsync(cwd, true)).resolves.toEqual({
+      autoCompactRepair: false,
+      cacheTTLSeconds: 5,
+      enableStatusBarDiagnostics: true,
+    });
+  });
+
+  it('defaults when settings are absent', async () => {
+    await expect(loadMergeReadyConfigAsync(cwd)).resolves.toEqual({
+      autoCompactRepair: true,
+      cacheTTLSeconds: 60,
+      enableStatusBarDiagnostics: false,
+    });
+  });
+
+  it('defaults to ignoring project settings when trust is unspecified', async () => {
+    writeGlobalSettings({
+      'pi-merge-ready': {
+        autoCompactRepair: false,
+        cacheTTLSeconds: 30,
+        enableStatusBarDiagnostics: false,
+      },
+    });
+    writeProjectSettings({
+      'pi-merge-ready': {
+        autoCompactRepair: true,
+        cacheTTLSeconds: 5,
+        enableStatusBarDiagnostics: true,
       },
     });
 
     await expect(loadMergeReadyConfigAsync(cwd)).resolves.toEqual({
       autoCompactRepair: false,
+      cacheTTLSeconds: 30,
+      enableStatusBarDiagnostics: false,
     });
   });
 
-  it('lets project true override global false', async () => {
+  it('falls back per field when project values are invalid', async () => {
     writeGlobalSettings({
       'pi-merge-ready': {
         autoCompactRepair: false,
-      },
-    });
-    writeProjectSettings({
-      'pi-merge-ready': {
-        autoCompactRepair: true,
-      },
-    });
-
-    await expect(loadMergeReadyConfigAsync(cwd)).resolves.toEqual({
-      autoCompactRepair: true,
-    });
-  });
-
-  it('defaults to true when settings are absent', async () => {
-    await expect(loadMergeReadyConfigAsync(cwd)).resolves.toEqual({
-      autoCompactRepair: true,
-    });
-  });
-
-  it('defaults to true when the project setting is invalid', async () => {
-    writeGlobalSettings({
-      'pi-merge-ready': {
-        autoCompactRepair: false,
+        cacheTTLSeconds: 45,
+        enableStatusBarDiagnostics: false,
       },
     });
     writeProjectSettings({
       'pi-merge-ready': {
         autoCompactRepair: 'invalid',
+        cacheTTLSeconds: 0,
+        enableStatusBarDiagnostics: 'invalid',
       },
     });
 
-    await expect(loadMergeReadyConfigAsync(cwd)).resolves.toEqual({
+    await expect(loadMergeReadyConfigAsync(cwd, true)).resolves.toEqual({
+      autoCompactRepair: false,
+      cacheTTLSeconds: 45,
+      enableStatusBarDiagnostics: false,
+    });
+  });
+
+  it('ignores project settings when untrusted', async () => {
+    writeGlobalSettings({
+      'pi-merge-ready': {
+        autoCompactRepair: false,
+        cacheTTLSeconds: 30,
+        enableStatusBarDiagnostics: false,
+      },
+    });
+    writeProjectSettings({
+      'pi-merge-ready': {
+        autoCompactRepair: true,
+        cacheTTLSeconds: 5,
+        enableStatusBarDiagnostics: true,
+      },
+    });
+
+    await expect(loadMergeReadyConfigAsync(cwd, false)).resolves.toEqual({
+      autoCompactRepair: false,
+      cacheTTLSeconds: 30,
+      enableStatusBarDiagnostics: false,
+    });
+  });
+
+  it('enables diagnostics from settings without env overrides', async () => {
+    writeGlobalSettings({
+      'pi-merge-ready': {
+        enableStatusBarDiagnostics: true,
+      },
+    });
+
+    await expect(loadMergeReadyConfigAsync(cwd, true)).resolves.toEqual({
       autoCompactRepair: true,
+      cacheTTLSeconds: 60,
+      enableStatusBarDiagnostics: true,
     });
   });
 });

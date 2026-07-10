@@ -129,19 +129,25 @@ Watch safety:
 
 ### Configuration
 
-Watch behavior can be configured in Pi's `settings.json` (global: `~/.pi/agent/settings.json`, project-local: `.pi/settings.json`).
+Watch behavior and the current-branch status bar cache TTL can be configured in Pi's `settings.json` (global: `~/.pi/agent/settings.json`, project-local: `.pi/settings.json`). Project-local settings are only honored in trusted projects.
 
 ```json
 {
   "pi-merge-ready": {
-    "autoCompactRepair": true
+    "autoCompactRepair": true,
+    "cacheTTLSeconds": 60,
+    "enableStatusBarDiagnostics": false
   }
 }
 ```
 
-| Option              | Default | Description                                                                                                                                             |
-| ------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `autoCompactRepair` | `true`  | Trigger conversation compaction after successful repair loop completion. Compaction runs before the watch continues polling. Set to `false` to disable. |
+| Option                       | Default | Description                                                                                                                                                     |
+| ---------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `autoCompactRepair`          | `true`  | Trigger conversation compaction after successful repair loop completion. Compaction runs before the watch continues polling. Set to `false` to disable.         |
+| `cacheTTLSeconds`            | `60`    | Current-branch status bar cache TTL in seconds. Accepts positive integers only. New values apply on the next fresh ambient status write.                        |
+| `enableStatusBarDiagnostics` | `false` | Opt in to status-bar JSONL diagnostics (`timer_armed`, `timer_fired`, `refresh_result`, `caught_error`). Logs stay off by default until this setting is enabled. |
+
+Status-bar diagnostics are controlled only by `pi-merge-ready.enableStatusBarDiagnostics`. When diagnostics are enabled, `PI_MERGE_READY_DEBUG_DIR` overrides the log destination for the current process.
 
 ### Watch UI
 

@@ -1,4 +1,8 @@
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { type MergeReadyCommandAPI } from './commands.js';
+import { type MergeReadyConfig, loadMergeReadyConfig } from './config.js';
 import {
   type MergeReadyExec,
   type MergeReadyExecOptions,
@@ -13,11 +17,12 @@ export const MERGE_READY_STATUS_BAR_KEY = 'merge-ready';
 export const MERGE_READY_STATUS_BAR_TIMEOUT_MS = 8_000;
 export const MERGE_READY_STATUS_BAR_TTL_MS = 60_000;
 
-export type MergeReadyStatusBarEventName = 'session_start' | 'turn_end';
+export type MergeReadyStatusBarEventName = 'session_start' | 'turn_end' | 'session_shutdown';
 
 export type MergeReadyStatusBarContext = {
   cwd: string;
   hasUI?: boolean;
+  isProjectTrusted?: () => boolean;
   ui?: {
     setStatus: (key: string, status?: string) => void;
     theme?: {
@@ -39,6 +44,7 @@ export type MergeReadyStatusBarRefreshOptions = {
   force?: boolean;
   now?: number | Date;
   timeout?: number;
+  projectTrusted?: boolean;
 };
 
 export type MergeReadyStatusBarRefreshResult = {
@@ -60,6 +66,8 @@ export type MergeReadyStatusBarSyncOptions = {
   ctx: MergeReadyStatusBarSyncContext;
   status: MergeReadyStatus;
   now?: number | Date;
+  projectTrusted?: boolean;
+  ownership?: MergeReadyStatusBarAmbientOwnership;
 };
 
 type MergeReadyStatusBarCacheEntry = {
@@ -67,7 +75,46 @@ type MergeReadyStatusBarCacheEntry = {
   text: string;
   branchIdentity: string | null;
   refreshedAtMs: number;
+  ttlMs: number;
 };
+
+type MergeReadyStatusBarAmbientSnapshot = {
+  cwd: string;
+  hasUI?: boolean;
+  setStatus?: (key: string, status?: string) => void;
+  theme?: {
+    fg: (color: string, text: string) => string;
+  };
+};
+
+export type MergeReadyStatusBarAmbientOwnership = {
+  generation: number;
+  ownerSeq: number;
+};
+
+type MergeReadyStatusBarRuntime = {
+  exec: MergeReadyExec | null;
+  ctx: MergeReadyStatusBarAmbientSnapshot | null;
+  timer: ReturnType<typeof setTimeout> | null;
+  dueAtMs: number | null;
+  generation: number;
+  ownerSeq: number;
+  diagnosticsEnabled: boolean;
+};
+
+type MergeReadyStatusBarInternalRefreshOptions = MergeReadyStatusBarRefreshOptions & {
+  ownership?: MergeReadyStatusBarAmbientOwnership;
+  ttlMs?: number;
+  diagnosticsEnabled?: boolean;
+};
+
+type MergeReadyStatusBarRuntimeSettings = {
+  ttlMs: number;
+  diagnosticsEnabled: MergeReadyConfig['enableStatusBarDiagnostics'];
+};
+
+const MERGE_READY_STATUS_BAR_DEBUG_DIR_ENV = 'PI_MERGE_READY_DEBUG_DIR';
+const MERGE_READY_STATUS_BAR_DEBUG_FILE_NAME = 'status-bar-debug.jsonl';
 
 const BADGE_TEXT_BY_ID = {
   draft: 'Draft',
@@ -91,13 +138,21 @@ const STATUS_BAR_TEXT_OVERRIDE_BY_OPEN_ITEM_ID: Partial<Record<MergeReadyOpenIte
 
 let statusBarCache: MergeReadyStatusBarCacheEntry | null = null;
 let statusBarSuspensionCount = 0;
+let statusBarRuntime: MergeReadyStatusBarRuntime = createMergeReadyStatusBarRuntime();
 
 export function registerMergeReadyStatusBar(pi: MergeReadyStatusBarAPI): void {
+  pi.on('session_shutdown', () => {
+    invalidateMergeReadyStatusBarRuntime();
+  });
+
   pi.on('session_start', async (_event, ctx) => {
+    invalidateMergeReadyStatusBarRuntime();
+
     await refreshMergeReadyStatusBar({
       exec: createStatusBarExec(pi, ctx),
       ctx,
       force: true,
+      projectTrusted: ctx.isProjectTrusted?.() ?? false,
     });
   });
 
@@ -105,6 +160,7 @@ export function registerMergeReadyStatusBar(pi: MergeReadyStatusBarAPI): void {
     await refreshMergeReadyStatusBar({
       exec: createStatusBarExec(pi, ctx),
       ctx,
+      projectTrusted: ctx.isProjectTrusted?.() ?? false,
     });
   });
 }
@@ -116,40 +172,29 @@ export async function refreshMergeReadyStatusBar(
     return null;
   }
 
-  const nowMs = resolveNowMs(options.now);
-  const timeout = options.timeout ?? MERGE_READY_STATUS_BAR_TIMEOUT_MS;
-  const cachedEntry = await getReusableMergeReadyStatusBarCacheEntry({
+  const ownership = claimMergeReadyStatusBarOwnership({
     exec: options.exec,
-    cwd: options.ctx.cwd,
-    force: options.force,
-    nowMs,
-    timeout,
-  });
-
-  if (cachedEntry) {
-    renderMergeReadyStatusBarKey(options.ctx, cachedEntry.text);
-    return {
-      text: cachedEntry.text,
-      cached: true,
-    };
-  }
-
-  const entry = await loadMergeReadyStatusBarEntry({
-    exec: options.exec,
-    cwd: options.ctx.cwd,
-    timeout,
-  });
-
-  applyMergeReadyStatusBarText({
     ctx: options.ctx,
-    text: entry.text,
-    branchIdentity: entry.branchIdentity,
-    now: nowMs,
   });
+  return refreshMergeReadyStatusBarInternal({
+    ...options,
+    ownership,
+  });
+}
+
+export function claimMergeReadyStatusBarOwnership(options: {
+  ctx: MergeReadyStatusBarContext | MergeReadyStatusBarSyncContext;
+  exec?: MergeReadyExec;
+}): MergeReadyStatusBarAmbientOwnership {
+  statusBarRuntime.ownerSeq += 1;
+  if (options.exec !== undefined) {
+    statusBarRuntime.exec = options.exec;
+  }
+  statusBarRuntime.ctx = createMergeReadyStatusBarAmbientSnapshot(options.ctx);
 
   return {
-    text: entry.text,
-    cached: false,
+    generation: statusBarRuntime.generation,
+    ownerSeq: statusBarRuntime.ownerSeq,
   };
 }
 
@@ -165,11 +210,30 @@ export function syncMergeReadyStatusBar(
     };
   }
 
+  const { diagnosticsEnabled, ttlMs } = resolveMergeReadyStatusBarRuntimeSettings({
+    cwd: options.ctx.cwd,
+    ...(options.projectTrusted === undefined ? {} : { projectTrusted: options.projectTrusted }),
+  });
+  const ownership =
+    options.ownership ??
+    claimMergeReadyStatusBarOwnership({
+      ctx: options.ctx,
+    });
+
+  if (!isMergeReadyStatusBarOwnershipCurrent(ownership)) {
+    return {
+      text,
+      cached: false,
+    };
+  }
+
   applyMergeReadyStatusBarText({
     ctx: options.ctx,
     text,
     branchIdentity: resolveAmbientBranchIdentity(options.status),
     now: options.now,
+    ttlMs,
+    diagnosticsEnabled,
   });
 
   return {
@@ -262,8 +326,10 @@ export function isMergeReadyStatusBarSuspended(): boolean {
 }
 
 export function resetMergeReadyStatusBarCache(): void {
+  clearMergeReadyStatusBarTimer();
   statusBarCache = null;
   statusBarSuspensionCount = 0;
+  statusBarRuntime = createMergeReadyStatusBarRuntime();
 }
 
 function applyMergeReadyStatusBarText(options: {
@@ -271,15 +337,22 @@ function applyMergeReadyStatusBarText(options: {
   text: string;
   branchIdentity: string | null;
   now?: number | Date | undefined;
+  ttlMs: number;
+  diagnosticsEnabled: boolean;
 }): void {
+  const refreshedAtMs = resolveNowMs(options.now);
+
   statusBarCache = {
     cwd: options.ctx.cwd,
     text: options.text,
     branchIdentity: options.branchIdentity,
-    refreshedAtMs: resolveNowMs(options.now),
+    refreshedAtMs,
+    ttlMs: options.ttlMs,
   };
+  statusBarRuntime.diagnosticsEnabled = options.diagnosticsEnabled;
 
   renderMergeReadyStatusBarKey(options.ctx, options.text);
+  rearmMergeReadyStatusBarTimer();
 }
 
 function renderMergeReadyStatusBarKey(ctx: MergeReadyStatusBarSyncContext, text?: string): void {
@@ -294,10 +367,73 @@ function renderMergeReadyStatusBarKey(ctx: MergeReadyStatusBarSyncContext, text?
   );
 }
 
+async function refreshMergeReadyStatusBarInternal(
+  options: MergeReadyStatusBarInternalRefreshOptions,
+): Promise<MergeReadyStatusBarRefreshResult | null> {
+  const nowMs = resolveNowMs(options.now);
+  const timeout = options.timeout ?? MERGE_READY_STATUS_BAR_TIMEOUT_MS;
+  const cachedEntry = await getReusableMergeReadyStatusBarCacheEntry({
+    exec: options.exec,
+    cwd: options.ctx.cwd,
+    force: options.force,
+    nowMs,
+    timeout,
+  });
+
+  if (cachedEntry) {
+    if (!isMergeReadyStatusBarOwnershipCurrent(options.ownership)) {
+      return null;
+    }
+
+    renderMergeReadyStatusBarKey(options.ctx, cachedEntry.text);
+    return {
+      text: cachedEntry.text,
+      cached: true,
+    };
+  }
+
+  const runtimeSettings =
+    options.ttlMs === undefined || options.diagnosticsEnabled === undefined
+      ? resolveMergeReadyStatusBarRuntimeSettings({
+          cwd: options.ctx.cwd,
+          ...(options.projectTrusted === undefined
+            ? {}
+            : { projectTrusted: options.projectTrusted }),
+        })
+      : null;
+  const ttlMs = options.ttlMs ?? runtimeSettings!.ttlMs;
+  const diagnosticsEnabled = options.diagnosticsEnabled ?? runtimeSettings!.diagnosticsEnabled;
+  const entry = await loadMergeReadyStatusBarEntry({
+    exec: options.exec,
+    cwd: options.ctx.cwd,
+    timeout,
+    diagnosticsEnabled,
+  });
+
+  if (!isMergeReadyStatusBarOwnershipCurrent(options.ownership)) {
+    return null;
+  }
+
+  applyMergeReadyStatusBarText({
+    ctx: options.ctx,
+    text: entry.text,
+    branchIdentity: entry.branchIdentity,
+    now: nowMs,
+    ttlMs,
+    diagnosticsEnabled,
+  });
+
+  return {
+    text: entry.text,
+    cached: false,
+  };
+}
+
 async function loadMergeReadyStatusBarEntry(options: {
   exec: MergeReadyExec;
   cwd: string;
   timeout: number;
+  diagnosticsEnabled: boolean;
 }): Promise<{ text: string; branchIdentity: string | null }> {
   try {
     const status = await getMergeReadyStatus({
@@ -310,7 +446,13 @@ async function loadMergeReadyStatusBarEntry(options: {
       text: renderMergeReadyStatusBar(status),
       branchIdentity: resolveAmbientBranchIdentity(status),
     };
-  } catch {
+  } catch (error) {
+    logMergeReadyStatusBarCaughtError({
+      stage: 'load_merge_ready_status_bar_entry',
+      cwd: options.cwd,
+      error,
+      diagnosticsEnabled: options.diagnosticsEnabled,
+    });
     return {
       text: UNKNOWN_STATUS_BAR_TEXT,
       branchIdentity: null,
@@ -332,7 +474,7 @@ async function getReusableMergeReadyStatusBarCacheEntry(options: {
     !cachedEntry ||
     cachedEntry.cwd !== options.cwd ||
     cachedEntry.branchIdentity === null ||
-    options.nowMs - cachedEntry.refreshedAtMs >= MERGE_READY_STATUS_BAR_TTL_MS
+    options.nowMs - cachedEntry.refreshedAtMs >= cachedEntry.ttlMs
   ) {
     return null;
   }
@@ -399,10 +541,252 @@ function createStatusBarExec(
   };
 }
 
+function resolveMergeReadyStatusBarRuntimeSettings(options: {
+  cwd: string;
+  projectTrusted?: boolean;
+}): MergeReadyStatusBarRuntimeSettings {
+  const config = loadMergeReadyConfig(options.cwd, options.projectTrusted ?? false);
+
+  return {
+    ttlMs: config.cacheTTLSeconds * 1_000,
+    diagnosticsEnabled: config.enableStatusBarDiagnostics,
+  };
+}
+
 function resolveNowMs(value: number | Date | undefined): number {
   if (typeof value === 'number') {
     return value;
   }
 
   return value?.getTime() ?? Date.now();
+}
+
+function appendMergeReadyStatusBarDebugLogIfEnabled(
+  diagnosticsEnabled: boolean,
+  entry: { event: string } & Record<string, unknown>,
+): void {
+  if (!diagnosticsEnabled) {
+    return;
+  }
+
+  appendMergeReadyStatusBarDebugLog(entry);
+}
+
+function appendMergeReadyStatusBarDebugLog(
+  entry: { event: string } & Record<string, unknown>,
+): void {
+  const debugDir = resolveMergeReadyStatusBarDebugDir();
+  if (debugDir === null) {
+    return;
+  }
+
+  try {
+    mkdirSync(debugDir, { recursive: true, mode: 0o700 });
+    appendFileSync(
+      join(debugDir, MERGE_READY_STATUS_BAR_DEBUG_FILE_NAME),
+      `${JSON.stringify({
+        ts: new Date(resolveNowMs(undefined)).toISOString(),
+        pid: process.pid,
+        ...entry,
+      })}\n`,
+      'utf8',
+    );
+  } catch {
+    // Ignore best-effort diagnostics failures.
+  }
+}
+
+function resolveMergeReadyStatusBarDebugDir(): string | null {
+  const override = process.env[MERGE_READY_STATUS_BAR_DEBUG_DIR_ENV]?.trim();
+  if (override) {
+    return override;
+  }
+
+  if (process.env['VITEST'] === 'true' || process.env['NODE_ENV'] === 'test') {
+    return null;
+  }
+
+  return join(homedir(), '.pi', 'merge-ready');
+}
+
+function logMergeReadyStatusBarCaughtError(options: {
+  stage: string;
+  error: unknown;
+  cwd?: string;
+  generation?: number;
+  dueAtMs?: number | null;
+  diagnosticsEnabled: boolean;
+}): void {
+  appendMergeReadyStatusBarDebugLogIfEnabled(options.diagnosticsEnabled, {
+    event: 'caught_error',
+    stage: options.stage,
+    ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+    ...(options.generation === undefined ? {} : { generation: options.generation }),
+    ...(options.dueAtMs === undefined ? {} : { dueAtMs: options.dueAtMs }),
+    ...formatMergeReadyStatusBarDebugError(options.error),
+  });
+}
+
+function formatMergeReadyStatusBarDebugError(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    return {
+      errorName: error.name,
+      errorMessage: error.message,
+      ...(error.stack === undefined ? {} : { errorStack: error.stack }),
+    };
+  }
+
+  return {
+    errorMessage: typeof error === 'string' ? error : String(error),
+  };
+}
+
+function createMergeReadyStatusBarRuntime(): MergeReadyStatusBarRuntime {
+  return {
+    exec: null,
+    ctx: null,
+    timer: null,
+    dueAtMs: null,
+    generation: 0,
+    ownerSeq: 0,
+    diagnosticsEnabled: false,
+  };
+}
+
+function invalidateMergeReadyStatusBarRuntime(): void {
+  clearMergeReadyStatusBarTimer();
+  statusBarRuntime.exec = null;
+  statusBarRuntime.ctx = null;
+  statusBarRuntime.dueAtMs = null;
+  statusBarRuntime.diagnosticsEnabled = false;
+  statusBarRuntime.generation += 1;
+}
+
+function clearMergeReadyStatusBarTimer(): void {
+  if (statusBarRuntime.timer !== null) {
+    clearTimeout(statusBarRuntime.timer);
+    statusBarRuntime.timer = null;
+  }
+}
+
+function createMergeReadyStatusBarAmbientSnapshot(
+  ctx: MergeReadyStatusBarContext | MergeReadyStatusBarSyncContext,
+): MergeReadyStatusBarAmbientSnapshot {
+  return {
+    cwd: ctx.cwd,
+    ...('hasUI' in ctx && ctx.hasUI !== undefined ? { hasUI: ctx.hasUI } : {}),
+    ...(ctx.ui?.setStatus === undefined ? {} : { setStatus: ctx.ui.setStatus }),
+    ...(ctx.ui?.theme === undefined ? {} : { theme: { fg: ctx.ui.theme.fg.bind(ctx.ui.theme) } }),
+  };
+}
+
+function isMergeReadyStatusBarOwnershipCurrent(
+  ownership: MergeReadyStatusBarAmbientOwnership | undefined,
+): boolean {
+  return (
+    ownership === undefined ||
+    (ownership.generation === statusBarRuntime.generation &&
+      ownership.ownerSeq === statusBarRuntime.ownerSeq)
+  );
+}
+
+function rearmMergeReadyStatusBarTimer(): void {
+  const cachedEntry = statusBarCache;
+  if (!cachedEntry || statusBarRuntime.exec === null || statusBarRuntime.ctx === null) {
+    return;
+  }
+
+  const ttlMs = cachedEntry.ttlMs;
+  const diagnosticsEnabled = statusBarRuntime.diagnosticsEnabled;
+  const armedAtMs = resolveNowMs(undefined);
+  const dueAtMs = cachedEntry.refreshedAtMs + ttlMs;
+  const delayMs = Math.max(0, dueAtMs - armedAtMs);
+  const generation = statusBarRuntime.generation;
+
+  clearMergeReadyStatusBarTimer();
+  statusBarRuntime.dueAtMs = dueAtMs;
+  const timer = setTimeout(() => {
+    const snapshot = statusBarRuntime.ctx;
+    const exec = statusBarRuntime.exec;
+
+    if (
+      snapshot === null ||
+      exec === null ||
+      statusBarRuntime.timer !== timer ||
+      statusBarRuntime.generation !== generation ||
+      statusBarRuntime.dueAtMs !== dueAtMs
+    ) {
+      return;
+    }
+
+    statusBarRuntime.timer = null;
+    const ctx = createMergeReadyStatusBarContext(snapshot);
+    const ownership = claimMergeReadyStatusBarOwnership({
+      exec,
+      ctx,
+    });
+    appendMergeReadyStatusBarDebugLogIfEnabled(diagnosticsEnabled, {
+      event: 'timer_fired',
+      cwd: snapshot.cwd,
+      generation,
+      dueAtMs,
+      firedAtMs: resolveNowMs(undefined),
+    });
+    void refreshMergeReadyStatusBarInternal({
+      exec,
+      ctx,
+      force: true,
+      ownership,
+      ttlMs,
+      diagnosticsEnabled,
+    })
+      .then((result) => {
+        appendMergeReadyStatusBarDebugLogIfEnabled(diagnosticsEnabled, {
+          event: 'refresh_result',
+          cwd: snapshot.cwd,
+          generation,
+          dueAtMs,
+          text: result?.text ?? null,
+          cached: result?.cached ?? null,
+        });
+      })
+      .catch((error) => {
+        logMergeReadyStatusBarCaughtError({
+          stage: 'timer_refresh',
+          cwd: snapshot.cwd,
+          generation,
+          dueAtMs,
+          error,
+          diagnosticsEnabled,
+        });
+      });
+  }, delayMs);
+  statusBarRuntime.timer = timer;
+  timer.unref?.();
+  appendMergeReadyStatusBarDebugLogIfEnabled(diagnosticsEnabled, {
+    event: 'timer_armed',
+    cwd: cachedEntry.cwd,
+    generation,
+    armedAtMs,
+    dueAtMs,
+    delayMs,
+    ttlMs,
+  });
+}
+
+function createMergeReadyStatusBarContext(
+  snapshot: MergeReadyStatusBarAmbientSnapshot,
+): MergeReadyStatusBarContext {
+  return {
+    cwd: snapshot.cwd,
+    ...(snapshot.hasUI === undefined ? {} : { hasUI: snapshot.hasUI }),
+    ...(snapshot.setStatus === undefined
+      ? {}
+      : {
+          ui: {
+            setStatus: snapshot.setStatus,
+            ...(snapshot.theme === undefined ? {} : { theme: snapshot.theme }),
+          },
+        }),
+  };
 }

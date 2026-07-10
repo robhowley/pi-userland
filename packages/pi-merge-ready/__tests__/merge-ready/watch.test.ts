@@ -16,6 +16,7 @@ import {
   getActiveMergeReadyWatch,
   parseMergeReadyWatchIntervalSeconds,
   refreshMergeReadyStatusBar,
+  renderMergeReadyStatusBar,
   registerMergeReadyWatchLifecycle,
   registerMergeReadyWatchShortcut,
   resetMergeReadyStatusBarCache,
@@ -220,9 +221,7 @@ function createCiRunningStatus(overrides: Partial<MergeReadyStatus> = {}): Merge
   };
 }
 
-function createUrlCiFailingStatus(
-  target: RuntimeUrlTarget = RUNTIME_URL_TARGET,
-): MergeReadyStatus {
+function createUrlCiFailingStatus(target: RuntimeUrlTarget = RUNTIME_URL_TARGET): MergeReadyStatus {
   return createMergeReadyStatus({
     generatedAt: GENERATED_AT,
     target,
@@ -243,9 +242,7 @@ function createUrlCiFailingStatus(
   });
 }
 
-function createUrlCiRunningStatus(
-  target: RuntimeUrlTarget = RUNTIME_URL_TARGET,
-): MergeReadyStatus {
+function createUrlCiRunningStatus(target: RuntimeUrlTarget = RUNTIME_URL_TARGET): MergeReadyStatus {
   return createMergeReadyStatus({
     generatedAt: GENERATED_AT,
     target,
@@ -266,9 +263,7 @@ function createUrlCiRunningStatus(
   });
 }
 
-function createUrlReadyStatus(
-  target: RuntimeUrlTarget = RUNTIME_URL_TARGET,
-): MergeReadyStatus {
+function createUrlReadyStatus(target: RuntimeUrlTarget = RUNTIME_URL_TARGET): MergeReadyStatus {
   return createMergeReadyStatus({
     generatedAt: GENERATED_AT,
     target,
@@ -308,6 +303,7 @@ function createWatchContext(
   options: {
     sessionId?: string;
     sessionFile?: string;
+    projectTrusted?: boolean;
   } = {},
 ): MergeReadyWatchContext {
   const { sessionId, sessionFile } = options;
@@ -323,6 +319,7 @@ function createWatchContext(
     cwd: '/repo',
     isIdle: vi.fn(() => true),
     waitForIdle: vi.fn(async () => undefined),
+    ...(options.projectTrusted === undefined ? {} : { projectTrusted: options.projectTrusted }),
     ...(sessionManager === undefined ? {} : { sessionManager }),
     ui: {
       notify: vi.fn(),
@@ -377,6 +374,40 @@ function createDeferred<T>() {
   });
 
   return { promise, resolve, reject };
+}
+
+function createControlledAbortableSleep() {
+  const pending: Array<ReturnType<typeof createDeferred<void>>> = [];
+
+  const sleep = vi.fn((_ms: number, signal?: AbortSignal) => {
+    if (signal?.aborted) {
+      const error = new Error('Aborted');
+      error.name = 'AbortError';
+      return Promise.reject(error);
+    }
+
+    const deferred = createDeferred<void>();
+    const onAbort = () => {
+      const error = new Error('Aborted');
+      error.name = 'AbortError';
+      deferred.reject(error);
+    };
+
+    signal?.addEventListener('abort', onAbort, { once: true });
+    pending.push(deferred);
+
+    return deferred.promise.finally(() => {
+      signal?.removeEventListener('abort', onAbort);
+      const index = pending.indexOf(deferred);
+      if (index >= 0) pending.splice(index, 1);
+    });
+  });
+
+  return {
+    sleep,
+    resolveNext: () => pending.shift()?.resolve(),
+    rejectNext: (error?: unknown) => pending.shift()?.reject(error),
+  };
 }
 
 type WatchLifecycleEvent = 'session_shutdown' | 'agent_end';
@@ -1157,8 +1188,8 @@ describe('merge-ready watch loop', () => {
       sessionId: 'watch-session-b',
       sessionFile: '/tmp/watch-session-b.jsonl',
     });
-    const firstPollDelay = createDeferred<void>();
-    const secondPollDelay = createDeferred<void>();
+    const firstSleep = createControlledAbortableSleep();
+    const secondSleep = createControlledAbortableSleep();
     const { api: firstApi, getHandler: getFirstHandler } = createWatchLifecycleAPI(
       vi.fn(async () => undefined),
     );
@@ -1179,7 +1210,7 @@ describe('merge-ready watch loop', () => {
           createUrlCiFailingStatus(RUNTIME_URL_TARGET),
           createUrlCiRunningStatus(RUNTIME_URL_TARGET),
         ]),
-        sleep: vi.fn((_ms: number, _signal?: AbortSignal) => firstPollDelay.promise),
+        sleep: firstSleep.sleep,
         syncStatusBar: vi.fn(),
         checkDirtyWorkingTree: vi.fn(async () => ({ ok: true as const, dirty: false })),
         maxIterations: 1,
@@ -1196,7 +1227,7 @@ describe('merge-ready watch loop', () => {
           createUrlCiFailingStatus(SECOND_RUNTIME_URL_TARGET),
           createUrlCiRunningStatus(SECOND_RUNTIME_URL_TARGET),
         ]),
-        sleep: vi.fn((_ms: number, _signal?: AbortSignal) => secondPollDelay.promise),
+        sleep: secondSleep.sleep,
         syncStatusBar: vi.fn(),
         checkDirtyWorkingTree: vi.fn(async () => ({ ok: true as const, dirty: false })),
         maxIterations: 1,
@@ -1219,7 +1250,7 @@ describe('merge-ready watch loop', () => {
     expect(getActiveMergeReadyWatch(firstApi)?.phase).toBe('watching');
     expect(getActiveMergeReadyWatch(secondApi)?.phase).toBe('repair_queued');
 
-    firstPollDelay.resolve();
+    firstSleep.resolveNext();
     await expect(firstStart.promise).resolves.toMatchObject({
       kind: 'stopped',
       reason: 'max_iterations',
@@ -1230,7 +1261,7 @@ describe('merge-ready watch loop', () => {
 
     expect(getActiveMergeReadyWatch(secondApi)?.phase).toBe('watching');
 
-    secondPollDelay.resolve();
+    secondSleep.resolveNext();
     await expect(secondStart.promise).resolves.toMatchObject({
       kind: 'stopped',
       reason: 'max_iterations',
@@ -1422,8 +1453,7 @@ describe('merge-ready watch loop', () => {
   it('queues one follow-up repair for ci_failing, waits for agent_end, then refreshes once into polling', async () => {
     const ctx = createWatchContext();
     const getStatus = createStatusSequence([createCiFailingStatus(), createCiRunningStatus()]);
-    const pollDelay = createDeferred<void>();
-    const sleep = vi.fn((_ms: number, _signal?: AbortSignal) => pollDelay.promise);
+    const { sleep, resolveNext } = createControlledAbortableSleep();
     const sendUserMessage = vi.fn(
       async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
     );
@@ -1491,7 +1521,7 @@ describe('merge-ready watch loop', () => {
         .some(([, value]) => typeof value === 'string' && value.includes('next poll')),
     ).toBe(false);
 
-    pollDelay.resolve();
+    resolveNext();
     await expect(start.promise).resolves.toMatchObject({
       kind: 'stopped',
       reason: 'max_iterations',
@@ -1653,7 +1683,13 @@ describe('merge-ready watch loop', () => {
         waitForAgentEnd,
         maxIterations: 2,
       },
-      loadConfig: vi.fn(async () => ({ autoCompactRepair: false })),
+      loadConfig: vi.fn(
+        async () => ({
+          autoCompactRepair: false,
+          cacheTTLSeconds: 60,
+          enableStatusBarDiagnostics: false,
+        }),
+      ),
     });
     const onSettled = vi.fn();
     result.finally(onSettled);
@@ -1737,10 +1773,162 @@ describe('merge-ready watch loop', () => {
     ]);
   });
 
+  it('claims ambient ownership for each current-branch poll before syncing', async () => {
+    const ownerships = [
+      { generation: 0, ownerSeq: 1 },
+      { generation: 0, ownerSeq: 2 },
+    ];
+    let nextOwnershipIndex = 0;
+    const events: string[] = [];
+    const claimMergeReadyStatusBarOwnership = vi.fn(() => {
+      events.push('claim');
+      return ownerships[nextOwnershipIndex++]!;
+    });
+    const getStatus = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        events.push('get');
+        return createCiFailingStatus();
+      })
+      .mockImplementationOnce(async () => {
+        events.push('get');
+        return createCiRunningStatus();
+      });
+    const syncStatusBar = vi.fn((options: Parameters<typeof syncMergeReadyStatusBar>[0]) => {
+      events.push('sync');
+      return { text: renderMergeReadyStatusBar(options.status), cached: false };
+    });
+
+    try {
+      vi.resetModules();
+      vi.doMock('../../extensions/merge-ready/status-bar.js', () => ({
+        claimMergeReadyStatusBarOwnership,
+        isMergeReadyStatusBarSuspended: () => false,
+        refreshMergeReadyStatusBar: vi.fn(),
+        suspendMergeReadyStatusBar: vi.fn(() => () => undefined),
+        syncMergeReadyStatusBar: vi.fn(),
+      }));
+
+      const watchModule = await import('../../extensions/merge-ready/watch.js');
+      const result = await watchModule.runMergeReadyWatchLoop({
+        exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
+        api: {
+          sendUserMessage: vi.fn(
+            async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
+          ),
+        },
+        ctx: createWatchContext(),
+        intervalSeconds: 30,
+        signal: new AbortController().signal,
+        dependencies: {
+          getStatus,
+          sleep: vi.fn(async () => undefined),
+          syncStatusBar,
+          checkDirtyWorkingTree: vi.fn(async () => ({ ok: true as const, dirty: false })),
+          waitForAgentEnd: vi.fn(async () => undefined),
+          maxIterations: 1,
+        },
+      });
+
+      expect(result).toMatchObject({
+        kind: 'stopped',
+        reason: 'max_iterations',
+        status: createCiRunningStatus(),
+      });
+      expect(events).toEqual(['claim', 'get', 'sync', 'claim', 'get', 'sync']);
+      expect(claimMergeReadyStatusBarOwnership).toHaveBeenCalledTimes(2);
+      expect(syncStatusBar).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          status: createCiFailingStatus(),
+          ownership: ownerships[0],
+        }),
+      );
+      expect(syncStatusBar).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          status: createCiRunningStatus(),
+          ownership: ownerships[1],
+        }),
+      );
+    } finally {
+      vi.doUnmock('../../extensions/merge-ready/status-bar.js');
+      vi.resetModules();
+    }
+  });
+
+  it('does not claim ambient ownership for URL-targeted watch polls', async () => {
+    const events: string[] = [];
+    const claimMergeReadyStatusBarOwnership = vi.fn(() => {
+      events.push('claim');
+      return { generation: 0, ownerSeq: 1 };
+    });
+    const getStatus = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        events.push('get');
+        return createUrlCiFailingStatus();
+      })
+      .mockImplementationOnce(async () => {
+        events.push('get');
+        return createUrlCiRunningStatus();
+      });
+    const syncStatusBar = vi.fn((options: Parameters<typeof syncMergeReadyStatusBar>[0]) => {
+      events.push('sync');
+      return { text: renderMergeReadyStatusBar(options.status), cached: false };
+    });
+
+    try {
+      vi.resetModules();
+      vi.doMock('../../extensions/merge-ready/status-bar.js', () => ({
+        claimMergeReadyStatusBarOwnership,
+        isMergeReadyStatusBarSuspended: () => false,
+        refreshMergeReadyStatusBar: vi.fn(),
+        suspendMergeReadyStatusBar: vi.fn(() => () => undefined),
+        syncMergeReadyStatusBar: vi.fn(),
+      }));
+
+      const watchModule = await import('../../extensions/merge-ready/watch.js');
+      const result = await watchModule.runMergeReadyWatchLoop({
+        exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
+        api: {
+          sendUserMessage: vi.fn(
+            async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
+          ),
+        },
+        ctx: createWatchContext(),
+        intervalSeconds: 30,
+        signal: new AbortController().signal,
+        url: RUNTIME_URL_TARGET.url,
+        dependencies: {
+          getStatus,
+          sleep: vi.fn(async () => undefined),
+          syncStatusBar,
+          checkDirtyWorkingTree: vi.fn(async () => ({ ok: true as const, dirty: false })),
+          waitForAgentEnd: vi.fn(async () => undefined),
+          maxIterations: 1,
+        },
+      });
+
+      expect(result).toMatchObject({
+        kind: 'stopped',
+        reason: 'max_iterations',
+        status: createUrlCiRunningStatus(),
+      });
+      expect(events).toEqual(['get', 'sync', 'get', 'sync']);
+      expect(claimMergeReadyStatusBarOwnership).not.toHaveBeenCalled();
+      expect(syncStatusBar).toHaveBeenCalledTimes(2);
+      expect(syncStatusBar.mock.calls[0]?.[0]).not.toHaveProperty('ownership');
+      expect(syncStatusBar.mock.calls[1]?.[0]).not.toHaveProperty('ownership');
+    } finally {
+      vi.doUnmock('../../extensions/merge-ready/status-bar.js');
+      vi.resetModules();
+    }
+  });
+
   it('queues one URL-targeted follow-up repair without ambient dirty preflight and refreshes only after agent_end', async () => {
     const ctx = createWatchContext();
-    const pollDelay = createDeferred<void>();
-    const sleep = vi.fn((_ms: number, _signal?: AbortSignal) => pollDelay.promise);
+    const { sleep, resolveNext } = createControlledAbortableSleep();
     const sendUserMessage = vi.fn(
       async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
     );
@@ -1805,7 +1993,7 @@ describe('merge-ready watch loop', () => {
         .some(([, value]) => typeof value === 'string' && value.includes('next poll')),
     ).toBe(false);
 
-    pollDelay.resolve();
+    resolveNext();
     await expect(start.promise).resolves.toMatchObject({
       kind: 'stopped',
       reason: 'max_iterations',
@@ -1982,15 +2170,64 @@ describe('merge-ready watch loop', () => {
     expect(refreshCtx.ui.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '❔ No PR');
   });
 
+  it('defaults compaction config loading to untrusted when watch ctx omits projectTrusted', async () => {
+    const ctx: Parameters<typeof runMergeReadyWatchLoop>[0]['ctx'] = {
+      ...createWatchContext(),
+      compact: vi.fn(async () => undefined),
+    };
+    const loadConfig = vi.fn(
+      async () => ({
+        autoCompactRepair: false,
+        cacheTTLSeconds: 60,
+        enableStatusBarDiagnostics: false,
+      }),
+    );
+
+    const result = await runMergeReadyWatchLoop({
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
+      api: {
+        sendUserMessage: vi.fn(
+          async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
+        ),
+      },
+      ctx,
+      intervalSeconds: 30,
+      signal: new AbortController().signal,
+      dependencies: {
+        getStatus: createStatusSequence([createCiFailingStatus(), createReadyStatus()]),
+        sleep: vi.fn(async () => undefined),
+        syncStatusBar: vi.fn(),
+        checkDirtyWorkingTree: vi.fn(async () => ({ ok: true as const, dirty: false })),
+        waitForAgentEnd: vi.fn(async () => undefined),
+        maxIterations: 1,
+      },
+      loadConfig,
+    });
+
+    expect(result).toMatchObject({
+      kind: 'stopped',
+      reason: 'max_iterations',
+      status: createReadyStatus(),
+    });
+    expect(loadConfig).toHaveBeenCalledWith('/repo', false);
+    expect(ctx.compact).not.toHaveBeenCalled();
+  });
+
   it('awaits blocking compaction before resuming polling after a successful repair', async () => {
     const compactResult = createDeferred<void>();
     const waitForAgentEnd = createDeferred<void>();
     const ctx: Parameters<typeof runMergeReadyWatchLoop>[0]['ctx'] = {
-      ...createWatchContext(),
+      ...createWatchContext({ projectTrusted: true }),
       compact: vi.fn(() => compactResult.promise),
     };
     const sleep = vi.fn(async () => undefined);
-    const loadConfig = vi.fn(async () => ({ autoCompactRepair: true }));
+    const loadConfig = vi.fn(
+      async () => ({
+        autoCompactRepair: true,
+        cacheTTLSeconds: 60,
+        enableStatusBarDiagnostics: false,
+      }),
+    );
 
     const result = runMergeReadyWatchLoop({
       exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
@@ -2024,7 +2261,7 @@ describe('merge-ready watch loop', () => {
       customInstructions:
         'Compaction triggered after successful merge-ready repair loop completion',
     });
-    expect(loadConfig).toHaveBeenCalledWith('/repo');
+    expect(loadConfig).toHaveBeenCalledWith('/repo', true);
     expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(
       MERGE_READY_WATCH_STATUS_KEY,
       expect.stringContaining('Compacting after successful repair…'),
@@ -2081,7 +2318,13 @@ describe('merge-ready watch loop', () => {
         waitForAgentEnd: vi.fn(async () => undefined),
         maxIterations: 1,
       },
-      loadConfig: vi.fn(async () => ({ autoCompactRepair: true })),
+      loadConfig: vi.fn(
+        async () => ({
+          autoCompactRepair: true,
+          cacheTTLSeconds: 60,
+          enableStatusBarDiagnostics: false,
+        }),
+      ),
     });
 
     expect(result).toMatchObject({
@@ -2137,7 +2380,13 @@ describe('merge-ready watch loop', () => {
         checkDirtyWorkingTree: vi.fn(async () => ({ ok: true as const, dirty: false })),
         waitForAgentEnd: vi.fn(async () => undefined),
       },
-      loadConfig: vi.fn(async () => ({ autoCompactRepair: true })),
+      loadConfig: vi.fn(
+        async () => ({
+          autoCompactRepair: true,
+          cacheTTLSeconds: 60,
+          enableStatusBarDiagnostics: false,
+        }),
+      ),
     });
 
     await flushMicrotasks(12);
@@ -2193,6 +2442,81 @@ describe('merge-ready watch teardown restore', () => {
     vi.resetModules();
   });
 
+  it('does not restore the ambient footer when teardown was triggered by session_shutdown', async () => {
+    type MockStatusBarCtx = {
+      cwd: string;
+      ui?: {
+        setStatus?: (key: string, status?: string) => void;
+      };
+    };
+
+    let suspended = false;
+    const refreshMergeReadyStatusBar = vi.fn(async (options: { ctx: MockStatusBarCtx }) => {
+      options.ctx.ui?.setStatus?.(MERGE_READY_STATUS_BAR_KEY, '✅ #42 Ready');
+      return { text: '✅ #42 Ready', cached: false };
+    });
+    const suspendMergeReadyStatusBar = vi.fn((ctx: MockStatusBarCtx) => {
+      suspended = true;
+      ctx.ui?.setStatus?.(MERGE_READY_STATUS_BAR_KEY, undefined);
+      return () => {
+        suspended = false;
+      };
+    });
+
+    vi.resetModules();
+    vi.doMock('../../extensions/merge-ready/status-bar.js', () => ({
+      claimMergeReadyStatusBarOwnership: vi.fn(() => ({ generation: 0, ownerSeq: 1 })),
+      isMergeReadyStatusBarSuspended: () => suspended,
+      refreshMergeReadyStatusBar,
+      suspendMergeReadyStatusBar,
+      syncMergeReadyStatusBar: vi.fn(),
+    }));
+
+    const watchModule = await import('../../extensions/merge-ready/watch.js');
+    const { api, getHandler } = createWatchLifecycleAPI(
+      vi.fn(async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined),
+    );
+    watchModule.registerMergeReadyWatchLifecycle(api);
+    const ctx = createWatchContext();
+    const start = watchModule.startMergeReadyWatch({
+      api,
+      ctx,
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
+      intervalSeconds: 30,
+      dependencies: {
+        getStatus: createStatusSequence([createCiRunningStatus()]),
+        sleep: createAbortableSleep(),
+        syncStatusBar: vi.fn(),
+        checkDirtyWorkingTree: vi.fn(async () => ({ ok: true as const, dirty: false })),
+      },
+    });
+
+    expect(start.ok).toBe(true);
+    if (!start.ok) {
+      return;
+    }
+
+    await flushMicrotasks();
+    expect(suspended).toBe(true);
+
+    await getHandler('session_shutdown')?.({}, ctx);
+    await expect(start.promise).resolves.toEqual({ kind: 'aborted', reason: 'aborted' });
+    await watchModule.resetMergeReadyWatchState();
+
+    expect(suspendMergeReadyStatusBar).toHaveBeenCalledTimes(1);
+    expect(refreshMergeReadyStatusBar).not.toHaveBeenCalled();
+    expect(suspended).toBe(false);
+    expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, undefined);
+    expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(
+      MERGE_READY_WATCH_STATUS_KEY,
+      undefined,
+    );
+    expect(vi.mocked(ctx.ui.setStatus)).not.toHaveBeenCalledWith(
+      MERGE_READY_STATUS_BAR_KEY,
+      '✅ #42 Ready',
+    );
+  });
+
   it('restores the ambient footer via refresh after suspension is released', async () => {
     type MockStatusBarCtx = {
       cwd: string;
@@ -2218,6 +2542,7 @@ describe('merge-ready watch teardown restore', () => {
 
     vi.resetModules();
     vi.doMock('../../extensions/merge-ready/status-bar.js', () => ({
+      claimMergeReadyStatusBarOwnership: vi.fn(() => ({ generation: 0, ownerSeq: 1 })),
       isMergeReadyStatusBarSuspended: () => suspended,
       refreshMergeReadyStatusBar,
       suspendMergeReadyStatusBar,
@@ -2229,8 +2554,7 @@ describe('merge-ready watch teardown restore', () => {
     const start = watchModule.startMergeReadyWatch({
       api: {
         sendUserMessage: vi.fn(
-          async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) =>
-            undefined,
+          async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
         ),
       },
       ctx,
@@ -2264,7 +2588,10 @@ describe('merge-ready watch teardown restore', () => {
     expect(refreshMergeReadyStatusBar).toHaveBeenCalledTimes(1);
     expect(refreshCalls).toEqual([{ suspended: false, cwd: '/repo' }]);
     expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, undefined);
-    expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(MERGE_READY_WATCH_STATUS_KEY, undefined);
+    expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(
+      MERGE_READY_WATCH_STATUS_KEY,
+      undefined,
+    );
     expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(
       MERGE_READY_STATUS_BAR_KEY,
       '✅ #42 Ready',

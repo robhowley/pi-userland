@@ -2,6 +2,7 @@ import { getErrorMessage, runNormalizedExecCommand } from './internal.js';
 import { loadMergeReadyConfigAsync, type MergeReadyConfig } from './config.js';
 import { getMergeReadyStatus } from './merge-ready.js';
 import {
+  claimMergeReadyStatusBarOwnership,
   isMergeReadyStatusBarSuspended,
   refreshMergeReadyStatusBar,
   suspendMergeReadyStatusBar,
@@ -95,6 +96,7 @@ export type MergeReadyWatchContext = {
   cwd: string;
   mode?: 'tui' | 'rpc' | 'json' | 'print';
   isIdle?: () => boolean;
+  projectTrusted?: boolean;
   waitForIdle?: () => Promise<void>;
   session?: MergeReadyWatchSessionRef;
   sessionManager?: MergeReadyWatchSessionManager;
@@ -206,7 +208,10 @@ export type RunMergeReadyWatchLoopOptions = {
   url?: string;
   dependencies?: MergeReadyWatchLoopDependencies;
   // Optional config loader for testing/mocking
-  loadConfig?: (cwd: string) => Promise<MergeReadyConfig> | MergeReadyConfig;
+  loadConfig?: (
+    cwd: string,
+    projectTrusted?: boolean,
+  ) => Promise<MergeReadyConfig> | MergeReadyConfig;
 };
 
 export type StartMergeReadyWatchOptions = {
@@ -243,6 +248,7 @@ export type ActiveMergeReadyWatcher = {
   promise: Promise<MergeReadyWatchResult>;
   phase: MergeReadyWatchPhase;
   pendingRepairTurn: MergeReadyWatchDeferred<void> | null;
+  skipAmbientStatusBarRestoreOnTeardown: boolean;
 };
 
 export type StopActiveMergeReadyWatchResult =
@@ -303,9 +309,21 @@ const activeMergeReadyWatchRuntimeStates = new Set<MergeReadyWatchRuntimeState>(
 let nextWatcherId = 1;
 const pendingWatcherPromises = new Set<Promise<MergeReadyWatchResult>>();
 
+type StopActiveMergeReadyWatchOptions = {
+  skipAmbientStatusBarRestore?: boolean;
+};
+
 export function registerMergeReadyWatchLifecycle(api: MergeReadyWatchAPI): void {
   api.on?.('session_shutdown', (_event, eventCtx) => {
-    stopActiveMergeReadyWatch(api, toMergeReadyWatchRuntimeContext(eventCtx));
+    const runtimeContext = toMergeReadyWatchRuntimeContext(eventCtx);
+    const runtimeState = resolveActiveMergeReadyWatchRuntimeState({ owner: api, runtimeContext });
+    if (!runtimeState) {
+      return;
+    }
+
+    stopActiveMergeReadyWatchForState(runtimeState, {
+      skipAmbientStatusBarRestore: true,
+    });
   });
   api.on?.('agent_end', (_event, eventCtx) => {
     resolveActiveMergeReadyWatchAgentEnd(api, toMergeReadyWatchRuntimeContext(eventCtx));
@@ -707,6 +725,7 @@ export function startMergeReadyWatch(
     promise: Promise.resolve({ kind: 'aborted', reason: 'aborted' }),
     phase: 'watching',
     pendingRepairTurn: null,
+    skipAmbientStatusBarRestoreOnTeardown: false,
   };
   nextWatcherId += 1;
   runtimeState.activeWatcher = watcher;
@@ -806,10 +825,12 @@ export function startMergeReadyWatch(
       }
 
       resumeMergeReadyStatusBar();
-      await restoreAmbientMergeReadyStatusBar({
-        exec: options.exec,
-        ctx: options.ctx,
-      });
+      if (!watcher.skipAmbientStatusBarRestoreOnTeardown) {
+        await restoreAmbientMergeReadyStatusBar({
+          exec: options.exec,
+          ctx: options.ctx,
+        });
+      }
     });
 
   watcher.promise = promise;
@@ -835,12 +856,14 @@ export function stopActiveMergeReadyWatch(
 
 function stopActiveMergeReadyWatchForState(
   runtimeState: MergeReadyWatchRuntimeState,
+  options: StopActiveMergeReadyWatchOptions = {},
 ): StopActiveMergeReadyWatchResult {
   const watcher = runtimeState.activeWatcher;
   if (!watcher) {
     return { stopped: false };
   }
 
+  watcher.skipAmbientStatusBarRestoreOnTeardown ||= options.skipAmbientStatusBarRestore === true;
   runtimeState.activeWatcher = null;
   activeMergeReadyWatchRuntimeStates.delete(runtimeState);
   releaseMergeReadyWatchRuntimeState(runtimeState);
@@ -996,6 +1019,16 @@ export async function runMergeReadyWatchLoop(
       }
       iterations += 1;
 
+      const ownership =
+        options.url === undefined
+          ? claimMergeReadyStatusBarOwnership({
+              exec: options.exec,
+              ctx: {
+                cwd: options.ctx.cwd,
+                ui: options.ctx.ui,
+              },
+            })
+          : undefined;
       const status = await getStatus({
         exec: options.exec,
         cwd: options.ctx.cwd,
@@ -1011,6 +1044,10 @@ export async function runMergeReadyWatchLoop(
           ui: options.ctx.ui,
         },
         status,
+        ...(options.ctx.projectTrusted === undefined
+          ? {}
+          : { projectTrusted: options.ctx.projectTrusted }),
+        ...(ownership === undefined ? {} : { ownership }),
       });
       publishStatus?.({ lifecycle: 'watching', status });
 
@@ -1143,6 +1180,16 @@ export async function runMergeReadyWatchLoop(
       await Promise.race([agentEnd, repairDispatchFailure]);
       throwIfMergeReadyWatchAborted(options.signal);
 
+      const refreshedOwnership =
+        options.url === undefined
+          ? claimMergeReadyStatusBarOwnership({
+              exec: options.exec,
+              ctx: {
+                cwd: options.ctx.cwd,
+                ui: options.ctx.ui,
+              },
+            })
+          : undefined;
       const refreshedStatus = await getStatus({
         exec: options.exec,
         cwd: options.ctx.cwd,
@@ -1158,6 +1205,10 @@ export async function runMergeReadyWatchLoop(
           ui: options.ctx.ui,
         },
         status: refreshedStatus,
+        ...(options.ctx.projectTrusted === undefined
+          ? {}
+          : { projectTrusted: options.ctx.projectTrusted }),
+        ...(refreshedOwnership === undefined ? {} : { ownership: refreshedOwnership }),
       });
       publishStatus?.({ lifecycle: 'watching', status: refreshedStatus });
 
@@ -1172,7 +1223,7 @@ export async function runMergeReadyWatchLoop(
       // After successful repair, trigger compaction if configured
       if (refreshedClassification.actionability === 'wait') {
         const loadConfigFn = options.loadConfig ?? loadMergeReadyConfigAsync;
-        const config = await loadConfigFn(options.ctx.cwd);
+        const config = await loadConfigFn(options.ctx.cwd, options.ctx.projectTrusted ?? false);
 
         if (config.autoCompactRepair && options.ctx.compact) {
           try {
@@ -1626,7 +1677,7 @@ function describeMergeReadyWatchRepairTarget(
 
 async function restoreAmbientMergeReadyStatusBar(options: {
   exec: MergeReadyExec;
-  ctx: Pick<MergeReadyWatchContext, 'cwd' | 'ui'>;
+  ctx: Pick<MergeReadyWatchContext, 'cwd' | 'projectTrusted' | 'ui'>;
 }): Promise<void> {
   if (isMergeReadyStatusBarSuspended()) {
     return;
@@ -1649,6 +1700,9 @@ async function restoreAmbientMergeReadyStatusBar(options: {
           ...(theme === undefined ? {} : { theme }),
         },
       },
+      ...(options.ctx.projectTrusted === undefined
+        ? {}
+        : { projectTrusted: options.ctx.projectTrusted }),
     });
   } catch {
     // Ignore best-effort ambient status-bar restore failures during watch teardown.

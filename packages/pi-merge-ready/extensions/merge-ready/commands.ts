@@ -6,7 +6,7 @@ import type {
 } from './watch-ui/runtime-snapshot.js';
 import { BADGE_ICON_BY_ID } from './badge-icon.js';
 import { getMergeReadyStatus } from './merge-ready.js';
-import { syncMergeReadyStatusBar } from './status-bar.js';
+import { claimMergeReadyStatusBarOwnership, syncMergeReadyStatusBar } from './status-bar.js';
 import { selectMergeReadyBadgeId } from './status.js';
 import { MERGE_READY_PULL_REQUEST_URL_EXAMPLE, validateGitHubPullRequestUrl } from './target.js';
 import {
@@ -44,6 +44,7 @@ export type MergeReadyCommandContext = {
   cwd: string;
   mode?: 'tui' | 'rpc' | 'json' | 'print';
   isIdle?: () => boolean;
+  isProjectTrusted?: () => boolean;
   model?: WatchUiRuntimeModel;
   modelRegistry?: WatchUiRuntimeModelRegistry;
   waitForIdle?: () => Promise<void>;
@@ -213,6 +214,16 @@ export function registerMergeReadyCommand(pi: MergeReadyCommandAPI): void {
         return;
       }
 
+      const ownership =
+        url === undefined
+          ? claimMergeReadyStatusBarOwnership({
+              exec,
+              ctx: {
+                cwd: ctx.cwd,
+                ui: ctx.ui,
+              },
+            })
+          : undefined;
       const status = await getMergeReadyStatus({
         exec,
         cwd: ctx.cwd,
@@ -226,6 +237,8 @@ export function registerMergeReadyCommand(pi: MergeReadyCommandAPI): void {
           ui: ctx.ui,
         },
         status,
+        projectTrusted: ctx.isProjectTrusted?.() ?? false,
+        ...(ownership === undefined ? {} : { ownership }),
       });
 
       if (parsedArgs.json) {
@@ -479,6 +492,7 @@ function createMergeReadyWatchContext(ctx: MergeReadyCommandContext): MergeReady
     cwd: ctx.cwd,
     ...(ctx.mode === undefined ? {} : { mode: ctx.mode }),
     ...(ctx.isIdle === undefined ? {} : { isIdle: ctx.isIdle }),
+    projectTrusted: ctx.isProjectTrusted?.() ?? false,
     ...(ctx.waitForIdle === undefined ? {} : { waitForIdle: ctx.waitForIdle }),
     ...(ctx.sessionManager === undefined ? {} : { sessionManager: ctx.sessionManager }),
     ui: ctx.ui,

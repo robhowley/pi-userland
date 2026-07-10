@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import mergeReadyExtension, {
   getActiveMergeReadyWatch,
   MERGE_READY_COMMAND_NAME,
@@ -140,21 +143,57 @@ function createMockAPI(expectedCalls: ExpectedExecCall[] = []): {
 
 function createCommandContext(
   options: {
+    cwd?: string;
     mode?: MergeReadyCommandContext['mode'];
     signal?: AbortSignal;
     compact?: MergeReadyCommandContext['compact'];
+    isProjectTrusted?: MergeReadyCommandContext['isProjectTrusted'];
   } = {},
 ): MergeReadyCommandContext {
   return {
-    cwd: '/repo',
+    cwd: options.cwd ?? '/repo',
     mode: options.mode ?? 'tui',
     isIdle: vi.fn(() => true),
     waitForIdle: vi.fn(async () => undefined),
     ...(options.signal === undefined ? {} : { signal: options.signal }),
     ...(options.compact === undefined ? {} : { compact: options.compact }),
+    ...(options.isProjectTrusted === undefined
+      ? {}
+      : { isProjectTrusted: options.isProjectTrusted }),
     ui: {
       notify: vi.fn(),
       setStatus: vi.fn(),
+    },
+  };
+}
+
+function createSettingsSandbox() {
+  const originalAgentDir = process.env['PI_CODING_AGENT_DIR'];
+  const root = mkdtempSync(join(tmpdir(), 'pi-merge-ready-command-'));
+  const cwd = join(root, 'repo');
+  const agentDir = join(root, 'agent');
+
+  mkdirSync(cwd, { recursive: true });
+  process.env['PI_CODING_AGENT_DIR'] = agentDir;
+
+  const writeJsonFile = (path: string, value: unknown) => {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify(value, null, 2), 'utf-8');
+  };
+
+  return {
+    cwd,
+    writeProjectSettings(settings: unknown) {
+      writeJsonFile(join(cwd, '.pi', 'settings.json'), settings);
+    },
+    cleanup() {
+      if (originalAgentDir === undefined) {
+        delete process.env['PI_CODING_AGENT_DIR'];
+      } else {
+        process.env['PI_CODING_AGENT_DIR'] = originalAgentDir;
+      }
+
+      rmSync(root, { recursive: true, force: true });
     },
   };
 }
@@ -368,7 +407,7 @@ describe('merge-ready command', () => {
 
     mergeReadyExtension(api as Parameters<typeof mergeReadyExtension>[0]);
 
-    expect(api.on).toHaveBeenCalledTimes(4);
+    expect(api.on).toHaveBeenCalledTimes(5);
     expect(api.on).toHaveBeenCalledWith('session_start', expect.any(Function));
     expect(api.on).toHaveBeenCalledWith('turn_end', expect.any(Function));
     expect(api.on).toHaveBeenCalledWith('session_shutdown', expect.any(Function));
@@ -479,7 +518,10 @@ describe('merge-ready command', () => {
     await handler?.('', ctx);
 
     assertDone();
-    expect(ctx.ui.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '👀 #42 Review pending');
+    expect(ctx.ui.setStatus).toHaveBeenCalledWith(
+      MERGE_READY_STATUS_BAR_KEY,
+      '👀 #42 Review pending',
+    );
     expect(ctx.ui.notify).toHaveBeenCalledWith(
       [
         '👀 Waiting for review',
@@ -534,7 +576,243 @@ describe('merge-ready command', () => {
 
     assertDone();
     expect(refreshed).toEqual({ text: '✅ #42 Ready', cached: true });
-    expect(refreshCtx.ui.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '✅ #42 Ready');
+    expect(refreshCtx.ui.setStatus).toHaveBeenCalledWith(
+      MERGE_READY_STATUS_BAR_KEY,
+      '✅ #42 Ready',
+    );
+  });
+
+  it('captures ambient ownership before current-branch status fetch and passes it into sync', async () => {
+    const status = createMergeReadyStatus({
+      generatedAt: GENERATED_AT,
+      target: CURRENT_BRANCH_TARGET,
+      pr: buildOpenPr(),
+      signals: {
+        draft: false,
+        mergeability: 'mergeable',
+        checks: 'passing',
+        review: 'approved',
+        unresolvedConversations: false,
+        unresolvedConversationRequirement: 'optional',
+      },
+    });
+    const ownership = { generation: 0, ownerSeq: 1 };
+    const events: string[] = [];
+    const claimMergeReadyStatusBarOwnership = vi.fn(() => {
+      events.push('claim');
+      return ownership;
+    });
+    const getMergeReadyStatus = vi.fn(async () => {
+      events.push('get');
+      return status;
+    });
+    const syncMergeReadyStatusBar = vi.fn(() => {
+      events.push('sync');
+      return { text: '✅ #42 Ready', cached: false };
+    });
+
+    try {
+      vi.resetModules();
+      vi.doMock('../../extensions/merge-ready/status-bar.js', () => ({
+        claimMergeReadyStatusBarOwnership,
+        syncMergeReadyStatusBar,
+      }));
+      vi.doMock('../../extensions/merge-ready/merge-ready.js', async () => {
+        const actual = await vi.importActual<typeof import('../../extensions/merge-ready/merge-ready.js')>(
+          '../../extensions/merge-ready/merge-ready.js',
+        );
+        return {
+          ...actual,
+          getMergeReadyStatus,
+        };
+      });
+
+      const { registerMergeReadyCommand } = await import('../../extensions/merge-ready/commands.js');
+      const { api, assertDone, getCommand } = createMockAPI();
+      registerMergeReadyCommand(api);
+      const handler = getCommand(MERGE_READY_COMMAND_NAME);
+      const ctx = createCommandContext();
+
+      expect(handler).toBeTypeOf('function');
+      if (!handler) {
+        return;
+      }
+
+      await handler('', ctx);
+
+      assertDone();
+      expect(events).toEqual(['claim', 'get', 'sync']);
+      expect(claimMergeReadyStatusBarOwnership).toHaveBeenCalledWith({
+        exec: expect.any(Function),
+        ctx: {
+          cwd: ctx.cwd,
+          ui: ctx.ui,
+        },
+      });
+      expect(syncMergeReadyStatusBar).toHaveBeenCalledWith({
+        ctx: {
+          cwd: ctx.cwd,
+          ui: ctx.ui,
+        },
+        status,
+        projectTrusted: false,
+        ownership,
+      });
+    } finally {
+      vi.doUnmock('../../extensions/merge-ready/status-bar.js');
+      vi.doUnmock('../../extensions/merge-ready/merge-ready.js');
+      vi.resetModules();
+    }
+  });
+
+  it('does not claim ambient ownership for explicit URL status commands', async () => {
+    const url = 'https://github.com/shopify/pi/pull/64';
+    const status = createMergeReadyStatus({
+      generatedAt: GENERATED_AT,
+      target: {
+        mode: 'url',
+        url,
+        owner: 'shopify',
+        repo: 'pi',
+        prNumber: 64,
+      },
+      pr: {
+        lifecycle: 'open',
+        number: 64,
+        title: 'Support explicit PR URL targets',
+        url,
+        headRefName: 'feat/explicit-pr-url',
+        baseRefName: 'main',
+      },
+      signals: {
+        draft: false,
+        mergeability: 'mergeable',
+        checks: 'passing',
+        review: 'approved',
+        unresolvedConversations: false,
+        unresolvedConversationRequirement: 'optional',
+      },
+    });
+    const events: string[] = [];
+    const claimMergeReadyStatusBarOwnership = vi.fn(() => {
+      events.push('claim');
+      return { generation: 0, ownerSeq: 1 };
+    });
+    const getMergeReadyStatus = vi.fn(async () => {
+      events.push('get');
+      return status;
+    });
+    const syncMergeReadyStatusBar = vi.fn((options: { ownership?: unknown }) => {
+      void options;
+      events.push('sync');
+      return { text: '✅ #64 Ready', cached: false };
+    });
+
+    try {
+      vi.resetModules();
+      vi.doMock('../../extensions/merge-ready/status-bar.js', () => ({
+        claimMergeReadyStatusBarOwnership,
+        syncMergeReadyStatusBar,
+      }));
+      vi.doMock('../../extensions/merge-ready/merge-ready.js', async () => {
+        const actual = await vi.importActual<typeof import('../../extensions/merge-ready/merge-ready.js')>(
+          '../../extensions/merge-ready/merge-ready.js',
+        );
+        return {
+          ...actual,
+          getMergeReadyStatus,
+        };
+      });
+
+      const { registerMergeReadyCommand } = await import('../../extensions/merge-ready/commands.js');
+      const { api, assertDone, getCommand } = createMockAPI();
+      registerMergeReadyCommand(api);
+      const handler = getCommand(MERGE_READY_COMMAND_NAME);
+      const ctx = createCommandContext();
+
+      expect(handler).toBeTypeOf('function');
+      if (!handler) {
+        return;
+      }
+
+      await handler(`--url ${url}`, ctx);
+
+      assertDone();
+      expect(events).toEqual(['get', 'sync']);
+      expect(claimMergeReadyStatusBarOwnership).not.toHaveBeenCalled();
+      expect(syncMergeReadyStatusBar).toHaveBeenCalledTimes(1);
+      expect(syncMergeReadyStatusBar.mock.calls[0]?.[0]).not.toHaveProperty('ownership');
+    } finally {
+      vi.doUnmock('../../extensions/merge-ready/status-bar.js');
+      vi.doUnmock('../../extensions/merge-ready/merge-ready.js');
+      vi.resetModules();
+    }
+  });
+
+  it('uses trusted project cache TTL settings when command status seeds the ambient cache', async () => {
+    const sandbox = createSettingsSandbox();
+
+    try {
+      sandbox.writeProjectSettings({
+        'pi-merge-ready': {
+          cacheTTLSeconds: 5,
+        },
+      });
+
+      const { api, assertDone, getCommand } = createMockAPI([
+        ...createGitDiscoveryCalls({
+          cwd: sandbox.cwd,
+          timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+        }),
+        createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+          cwd: sandbox.cwd,
+          timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+        }),
+        createConversationsSuccessCall(buildConversationsPayload(), {
+          cwd: sandbox.cwd,
+          timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+        }),
+        ...createGitDiscoveryCalls({
+          cwd: sandbox.cwd,
+          timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+        }),
+        createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+          cwd: sandbox.cwd,
+          timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+        }),
+        createConversationsSuccessCall(buildConversationsPayload(), {
+          cwd: sandbox.cwd,
+          timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
+        }),
+      ]);
+
+      mergeReadyExtension(api);
+      const handler = getCommand(MERGE_READY_COMMAND_NAME);
+      const ctx = createCommandContext({
+        cwd: sandbox.cwd,
+        isProjectTrusted: () => true,
+      });
+
+      await handler?.('', ctx);
+
+      const refreshCtx = {
+        cwd: ctx.cwd,
+        hasUI: true,
+        ui: {
+          setStatus: vi.fn(),
+        },
+      };
+      const refreshed = await refreshMergeReadyStatusBar({
+        exec: api.exec,
+        ctx: refreshCtx,
+        now: new Date(GENERATED_AT).getTime() + 5_000,
+      });
+
+      assertDone();
+      expect(refreshed).toEqual({ text: '✅ #42 Ready', cached: false });
+    } finally {
+      sandbox.cleanup();
+    }
   });
 
   it('does not sync URL-targeted command results into the ambient status bar cache', async () => {
