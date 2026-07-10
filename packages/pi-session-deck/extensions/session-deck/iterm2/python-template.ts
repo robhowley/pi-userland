@@ -159,7 +159,7 @@ class SessionDeckToolbeltHandler(BaseHTTPRequestHandler):
         return
 
     def send_json(self, status_code: int, payload):
-        self.send_bytes(status_code, "application/json; charset=utf-8", (json.dumps(payload) + "\n").encode("utf-8"))
+        self.send_bytes(status_code, "application/json; charset=utf-8", (json.dumps(payload) + "\\n").encode("utf-8"))
 
     def send_text(self, status_code: int, text: str):
         self.send_bytes(status_code, "text/plain; charset=utf-8", text.encode("utf-8"))

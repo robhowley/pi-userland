@@ -31,6 +31,9 @@ describe('session-deck iterm2 python template', () => {
     expect(script).toContain('async_register_web_view_tool(');
     expect(script).toContain('iterm2.run_forever(main)');
     expect(script).toContain('SNAPSHOT_ERROR_CODE = "toolbelt_snapshot_unavailable"');
+    expect(script).toContain(
+      'self.send_bytes(status_code, "application/json; charset=utf-8", (json.dumps(payload) + "\\n").encode("utf-8"))',
+    );
     expect(script).not.toContain('do_POST');
     expect(script).not.toContain('requests.');
     expect(script).not.toContain('flask');
