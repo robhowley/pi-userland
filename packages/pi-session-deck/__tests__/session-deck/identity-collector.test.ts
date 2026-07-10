@@ -231,7 +231,7 @@ describe('identity collector', () => {
     expect(record.cwd).toBe(process.cwd());
   });
 
-  it('preserves sessionStartedAt across periodic refreshes via existingRecord', async () => {
+  it('preserves sessionStartedAt across periodic refreshes for the same session identity', async () => {
     const { collectSessionIdentity } =
       await import('../../extensions/session-deck/identity/collector.js');
 
@@ -269,6 +269,45 @@ describe('identity collector', () => {
     });
 
     expect(secondRecord.sessionStartedAt).toBe('2026-06-17T12:00:00.000Z');
+    expect(secondRecord.identityUpdatedAt).toBe('2026-06-17T12:05:00.000Z');
+  });
+
+  it('resets sessionStartedAt when existingRecord belongs to a different session identity', async () => {
+    const { collectSessionIdentity } =
+      await import('../../extensions/session-deck/identity/collector.js');
+
+    const execGit = makeExecGit({
+      'rev-parse --show-toplevel': { stdout: '', exitCode: 128 },
+    });
+
+    const firstRecord = await collectSessionIdentity('rt-1', {
+      runtimeId: 'rt-1',
+      sessionManager: {
+        getSessionId: () => 'session-old',
+        getSessionFile: () => '/tmp/session-old.json',
+      },
+      execGit,
+      execGhCli: null,
+      identitySource: 'startup',
+      cwd: '/tmp',
+      now: () => new Date('2026-06-17T12:00:00.000Z'),
+    });
+
+    const secondRecord = await collectSessionIdentity('rt-1', {
+      runtimeId: 'rt-1',
+      sessionManager: {
+        getSessionId: () => 'session-new',
+        getSessionFile: () => '/tmp/session-new.json',
+      },
+      execGit,
+      execGhCli: null,
+      identitySource: 'resume',
+      cwd: '/tmp',
+      existingRecord: firstRecord,
+      now: () => new Date('2026-06-17T12:05:00.000Z'),
+    });
+
+    expect(secondRecord.sessionStartedAt).toBe('2026-06-17T12:05:00.000Z');
     expect(secondRecord.identityUpdatedAt).toBe('2026-06-17T12:05:00.000Z');
   });
 

@@ -65,8 +65,14 @@ export async function collectSessionIdentity(
     });
   }
 
-  // Preserve sessionStartedAt from existing record, only set on first collection
-  const existingSessionStartedAt = options.existingRecord?.sessionStartedAt ?? null;
+  // Preserve sessionStartedAt only when the refreshed identity still belongs to the same session.
+  const existingSessionStartedAt = isSameSessionIdentity(
+    options.existingRecord,
+    sessionId,
+    sessionFile,
+  )
+    ? options.existingRecord?.sessionStartedAt ?? null
+    : null;
   const sessionStartedAt = existingSessionStartedAt ?? nowIso;
 
   // Resolve Git info
@@ -160,6 +166,26 @@ function normalizeOptionalStringField(value: unknown): string | undefined {
   }
 
   return undefined;
+}
+
+function isSameSessionIdentity(
+  existingRecord: SessionIdentityRecord | undefined,
+  sessionId: string | null,
+  sessionFile: string | null,
+): boolean {
+  if (existingRecord === undefined) {
+    return false;
+  }
+
+  if (sessionId !== null && existingRecord.sessionId !== sessionId) {
+    return false;
+  }
+
+  if (sessionFile !== null && existingRecord.sessionFile !== sessionFile) {
+    return false;
+  }
+
+  return sessionId !== null || sessionFile !== null;
 }
 
 function resolveCollectorCwd(options: IdentityCollectorOptions): string {
