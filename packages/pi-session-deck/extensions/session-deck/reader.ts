@@ -85,6 +85,7 @@ export async function readSessionDeckSnapshot(
         prUrl: record.prUrl,
         isLinkedWorktree: record.isLinkedWorktree,
         worktreeLabel: record.worktreeLabel,
+        ...(record.derivedFacets === undefined ? {} : { derivedFacets: record.derivedFacets }),
         activityState: record.activityState,
         activityAgeMs: record.activityAgeMs,
         currentToolName: record.currentToolName,

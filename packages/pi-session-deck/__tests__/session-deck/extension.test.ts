@@ -88,6 +88,7 @@ async function installExtension() {
 function makeCtx(overrides: Record<string, unknown> = {}) {
   return {
     mode: 'tui',
+    hasUI: true,
     cwd: '/repo',
     model: { id: 'gpt-5', provider: 'openai' },
     getContextUsage: () => ({ percent: 12.5, contextWindow: 200_000 }),
@@ -97,6 +98,11 @@ function makeCtx(overrides: Record<string, unknown> = {}) {
       getEntries: () => [],
       getSessionName: () => 'Focused session',
       getCwd: () => '/repo',
+      getHeader: () => ({
+        id: 'session-1',
+        timestamp: '2026-06-17T12:00:00.000Z',
+        cwd: '/repo',
+      }),
     },
     ui: { setStatus: vi.fn(), setFooter: vi.fn() },
     ...overrides,
@@ -140,6 +146,67 @@ describe('pi-session-deck extension', () => {
     expect(refreshActivity).toHaveBeenNthCalledWith(2, 'new', expect.any(Object));
 
     expect(vi.mocked(ctx.ui.setFooter)).not.toHaveBeenCalled();
+  });
+
+  it.each(['startup', 'reload', 'new', 'resume', 'fork'] as const)(
+    'preserves raw session_start reason %s when refreshing identity',
+    async (reason) => {
+      const { refreshIdentity, refreshActivity } = setupMocks();
+      const { handlers } = await installExtension();
+
+      await handlers.get('session_start')?.({ reason }, makeCtx());
+
+      expect(refreshIdentity).toHaveBeenCalledWith(reason, expect.any(Object));
+      expect(refreshActivity).toHaveBeenCalledWith(
+        reason === 'new' ? 'new' : 'startup',
+        expect.any(Object),
+      );
+    },
+  );
+
+  it('captures future raw session metadata for identity refresh, including headless mode', async () => {
+    const { refreshIdentity, refreshActivity } = setupMocks();
+    const { handlers } = await installExtension();
+
+    const ctx = makeCtx({
+      mode: 'json-stream',
+      hasUI: false,
+      sessionManager: {
+        getSessionId: () => 'session-1',
+        getSessionFile: () => '/tmp/session-1.md',
+        getEntries: () => [],
+        getSessionName: () => 'Focused session',
+        getCwd: () => '/repo',
+        getHeader: () => ({
+          id: 'session-1',
+          timestamp: '2026-06-17T12:00:00.000Z',
+          cwd: '/repo',
+          parentSession: '/tmp/session-parent.md',
+        }),
+      },
+    });
+
+    await handlers.get('session_start')?.(
+      { reason: 'resume_from_handoff', previousSessionFile: '/tmp/session-previous.md' },
+      ctx,
+    );
+
+    expect(refreshIdentity).toHaveBeenCalledWith('resume_from_handoff', expect.any(Object));
+    expect(refreshActivity).toHaveBeenCalledWith('startup', expect.any(Object));
+
+    const sessionManager = refreshIdentity.mock.calls[0]?.[1];
+    expect(sessionManager.getSessionStart()).toEqual({
+      reason: 'resume_from_handoff',
+      previousSessionFile: '/tmp/session-previous.md',
+      mode: 'json-stream',
+      hasUI: false,
+    });
+    expect(sessionManager.getHeader()).toEqual({
+      id: 'session-1',
+      timestamp: '2026-06-17T12:00:00.000Z',
+      cwd: '/repo',
+      parentSession: '/tmp/session-parent.md',
+    });
   });
 
   it('clears tracked entries on session_shutdown', async () => {

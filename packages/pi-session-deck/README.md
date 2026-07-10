@@ -14,6 +14,8 @@ pi install npm:@robhowley/pi-session-deck
 - `/session-deck --all` — include stale, dead, and unknown sessions, plus diagnostics.
 - `/session-deck --reap` — remove expired presence records before showing results.
 - `/session-deck --identity` — include full identity details such as the session id.
+- `/session-deck --json --session-id <id>` — print one visible `SessionDeckRecord` as pretty JSON and bypass the TUI browser.
+- In JSON mode, `--all` widens eligibility to dead/unknown sessions; `--identity` does not change the JSON payload.
 - Flags can be combined.
 
 ## TUI keys

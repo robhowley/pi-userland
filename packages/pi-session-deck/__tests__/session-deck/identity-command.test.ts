@@ -101,38 +101,95 @@ function buildSnapshot(
 }
 
 describe('session-deck joined command', () => {
-  it('parses strict flag combinations', () => {
+  it('parses strict flag combinations, including paired json lookup mode', () => {
     expect(parseSessionDeckCommandArgs('')).toEqual({
       ok: true,
       all: false,
       reap: false,
       identity: false,
+      json: false,
+      sessionId: null,
     });
     expect(parseSessionDeckCommandArgs('--all')).toEqual({
       ok: true,
       all: true,
       reap: false,
       identity: false,
+      json: false,
+      sessionId: null,
     });
     expect(parseSessionDeckCommandArgs('--reap --identity')).toEqual({
       ok: true,
       all: false,
       reap: true,
       identity: true,
+      json: false,
+      sessionId: null,
     });
     expect(parseSessionDeckCommandArgs('--all --reap --identity')).toEqual({
       ok: true,
       all: true,
       reap: true,
       identity: true,
+      json: false,
+      sessionId: null,
     });
-    expect(parseSessionDeckCommandArgs('--identity --identity')).toEqual({
-      ok: false,
-      message: 'Usage: /session-deck [--all] [--reap] [--identity]',
+    expect(parseSessionDeckCommandArgs('--json --session-id session-abc')).toEqual({
+      ok: true,
+      all: false,
+      reap: false,
+      identity: false,
+      json: true,
+      sessionId: 'session-abc',
+    });
+    expect(parseSessionDeckCommandArgs('--session-id session-abc --json --all')).toEqual({
+      ok: true,
+      all: true,
+      reap: false,
+      identity: false,
+      json: true,
+      sessionId: 'session-abc',
     });
   });
 
-  it('offers --all, --reap, and --identity completions', () => {
+  it('reports explicit parse errors for invalid flag shapes', () => {
+    expect(parseSessionDeckCommandArgs('--identity --identity')).toEqual({
+      ok: false,
+      message: 'Duplicate flag: --identity',
+    });
+    expect(parseSessionDeckCommandArgs('--json --json --session-id session-abc')).toEqual({
+      ok: false,
+      message: 'Duplicate flag: --json',
+    });
+    expect(
+      parseSessionDeckCommandArgs('--json --session-id session-abc --session-id other'),
+    ).toEqual({
+      ok: false,
+      message: 'Duplicate flag: --session-id',
+    });
+    expect(parseSessionDeckCommandArgs('--session-id')).toEqual({
+      ok: false,
+      message: 'Missing value for --session-id',
+    });
+    expect(parseSessionDeckCommandArgs('--session-id --json')).toEqual({
+      ok: false,
+      message: 'Missing value for --session-id',
+    });
+    expect(parseSessionDeckCommandArgs('--json')).toEqual({
+      ok: false,
+      message: '--json requires --session-id <id>',
+    });
+    expect(parseSessionDeckCommandArgs('--session-id session-abc')).toEqual({
+      ok: false,
+      message: '--session-id requires --json',
+    });
+    expect(parseSessionDeckCommandArgs('--wat')).toEqual({
+      ok: false,
+      message: 'Unsupported argument: --wat',
+    });
+  });
+
+  it('offers --all, --reap, --identity, --json, and --session-id completions', () => {
     const { api, getRegistration } = createMockAPI();
 
     registerSessionDeckCommand(api, {
@@ -143,6 +200,8 @@ describe('session-deck joined command', () => {
       { value: '--all', label: '--all' },
       { value: '--reap', label: '--reap' },
       { value: '--identity', label: '--identity' },
+      { value: '--json', label: '--json' },
+      { value: '--session-id', label: '--session-id' },
     ]);
   });
 
@@ -269,6 +328,190 @@ describe('session-deck joined command', () => {
     expect(identityMessage).toContain('session=session-');
     expect(identityMessage).not.toContain('name=alpha');
     expect(identityMessage).not.toContain('checkout: worktree');
+  });
+
+  it('emits one pretty-printed public record in json mode and keeps --identity presentation-only', async () => {
+    const { api, getHandler } = createMockAPI();
+    const publicRecord = buildSnapshotRecord({
+      sessionName: 'alpha',
+      derivedFacets: {
+        persistence: 'file_backed',
+        interactivity: 'interactive',
+        lifecycle: 'resume',
+        lineage: 'root',
+        identityStrength: 'strong',
+        headerConsistency: 'consistent',
+      },
+    });
+    const expectedJsonRecord: SessionDeckRecord = {
+      runtimeId: publicRecord.runtimeId,
+      pid: publicRecord.pid,
+      presenceState: publicRecord.presenceState,
+      ...(publicRecord.presenceReason === undefined
+        ? {}
+        : { presenceReason: publicRecord.presenceReason }),
+      heartbeatAgeMs: publicRecord.heartbeatAgeMs,
+      sessionId: publicRecord.sessionId,
+      sessionName: publicRecord.sessionName,
+      repoName: publicRecord.repoName,
+      qualifiedRepoName: publicRecord.qualifiedRepoName,
+      cwd: publicRecord.cwd,
+      branch: publicRecord.branch,
+      prUrl: publicRecord.prUrl,
+      isLinkedWorktree: publicRecord.isLinkedWorktree,
+      worktreeLabel: publicRecord.worktreeLabel,
+      ...(publicRecord.derivedFacets === undefined
+        ? {}
+        : { derivedFacets: publicRecord.derivedFacets }),
+      activityState: publicRecord.activityState,
+      activityAgeMs: publicRecord.activityAgeMs,
+      currentToolName: publicRecord.currentToolName,
+      lastError: publicRecord.lastError,
+      chips: publicRecord.chips,
+      diagnostics: publicRecord.diagnostics,
+    };
+    const leakyRecord = {
+      ...publicRecord,
+      sessionFile: '/tmp/private-session.json',
+      worktree: `${HOME}/project`,
+    } as SessionDeckRecord;
+
+    registerSessionDeckCommand(api, {
+      readSessionDeckSnapshot: vi.fn(async () => buildSnapshot({ records: [leakyRecord] })),
+    });
+
+    const handler = getHandler();
+    const ctx = createCommandContext({ mode: 'rpc' });
+
+    await handler?.('--json --session-id session-abc', ctx);
+
+    const [jsonMessage, jsonLevel] = vi.mocked(ctx.ui.notify).mock.calls[0] ?? [];
+    expect(jsonLevel).toBe('info');
+    expect(jsonMessage).toBe(JSON.stringify(expectedJsonRecord, null, 2));
+    expect(jsonMessage).not.toContain('sessionFile');
+    expect(jsonMessage).not.toContain('"worktree"');
+
+    vi.mocked(ctx.ui.notify).mockClear();
+    await handler?.('--json --session-id session-abc --identity', ctx);
+    const [identityJsonMessage, identityJsonLevel] = vi.mocked(ctx.ui.notify).mock.calls[0] ?? [];
+    expect(identityJsonLevel).toBe('info');
+    expect(identityJsonMessage).toBe(JSON.stringify(expectedJsonRecord, null, 2));
+  });
+
+  it('preserves visible-row semantics for json lookups and widens eligibility with --all', async () => {
+    const { api, getHandler } = createMockAPI();
+    const deadRecord = buildSnapshotRecord({
+      runtimeId: 'rt-dead',
+      sessionId: 'session-dead',
+      presenceState: 'dead',
+      presenceReason: 'pid_missing',
+      activityState: 'unknown',
+    });
+
+    registerSessionDeckCommand(api, {
+      readSessionDeckSnapshot: vi.fn(async () => buildSnapshot({ records: [deadRecord] })),
+    });
+
+    const handler = getHandler();
+    const ctx = createCommandContext({ mode: 'rpc' });
+
+    await handler?.('--json --session-id session-dead', ctx);
+    expect(vi.mocked(ctx.ui.notify)).toHaveBeenCalledWith(
+      'No matching session found for session id "session-dead".',
+      'error',
+    );
+
+    vi.mocked(ctx.ui.notify).mockClear();
+    await handler?.('--all --json --session-id session-dead', ctx);
+    expect(vi.mocked(ctx.ui.notify)).toHaveBeenCalledWith(
+      JSON.stringify(deadRecord, null, 2),
+      'info',
+    );
+  });
+
+  it('reports ambiguous json lookup errors instead of guessing', async () => {
+    const { api, getHandler } = createMockAPI();
+
+    registerSessionDeckCommand(api, {
+      readSessionDeckSnapshot: vi.fn(async () =>
+        buildSnapshot({
+          records: [
+            buildSnapshotRecord({ runtimeId: 'rt-1', sessionId: 'session-dup' }),
+            buildSnapshotRecord({ runtimeId: 'rt-2', sessionId: 'session-dup' }),
+          ],
+        }),
+      ),
+    });
+
+    const handler = getHandler();
+    const ctx = createCommandContext({ mode: 'rpc' });
+
+    await handler?.('--json --session-id session-dup', ctx);
+
+    expect(vi.mocked(ctx.ui.notify)).toHaveBeenCalledWith(
+      'Ambiguous session id "session-dup": matched 2 sessions.',
+      'error',
+    );
+  });
+
+  it('bypasses the tui browser for json lookups', async () => {
+    const { api, getHandler } = createMockAPI();
+
+    registerSessionDeckCommand(api, {
+      readSessionDeckSnapshot: vi.fn(async () => buildSnapshot()),
+    });
+
+    const handler = getHandler();
+    const custom = vi.fn();
+    const ctx = createCommandContext({
+      mode: 'tui',
+      ui: {
+        notify: vi.fn(),
+        custom: custom as NonNullable<PresenceCommandContext['ui']['custom']>,
+      },
+    });
+
+    await handler?.('--json --session-id session-abc', ctx);
+
+    expect(custom).not.toHaveBeenCalled();
+    expect(vi.mocked(ctx.ui.notify)).toHaveBeenCalledWith(
+      JSON.stringify(buildSnapshotRecord(), null, 2),
+      'info',
+    );
+  });
+
+  it('reaps before json lookup and returns json only', async () => {
+    const { api, getHandler } = createMockAPI();
+    const callOrder: string[] = [];
+    const reapPresence = vi.fn(async () => {
+      callOrder.push('reap');
+      return {
+        removed: ['/tmp/rt-expired.json'],
+        diagnostics: [],
+      };
+    });
+    const readSessionDeckSnapshot = vi.fn(async () => {
+      callOrder.push('read');
+      return buildSnapshot();
+    });
+
+    registerSessionDeckCommand(api, {
+      readSessionDeckSnapshot,
+      reapPresenceRecords: reapPresence,
+    });
+
+    const handler = getHandler();
+    const ctx = createCommandContext({ mode: 'rpc' });
+
+    await handler?.('--reap --json --session-id session-abc', ctx);
+
+    expect(reapPresence).toHaveBeenCalledTimes(1);
+    expect(readSessionDeckSnapshot).toHaveBeenCalledTimes(1);
+    expect(callOrder).toEqual(['reap', 'read']);
+    const [message, level] = vi.mocked(ctx.ui.notify).mock.calls[0] ?? [];
+    expect(level).toBe('info');
+    expect(message).toBe(JSON.stringify(buildSnapshotRecord(), null, 2));
+    expect(message).not.toContain('Reap complete');
   });
 
   it('preserves reap output while reading the joined snapshot', async () => {

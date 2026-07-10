@@ -1,4 +1,5 @@
 import { resolveGitInfo, resolvePrUrl } from './git.js';
+import { normalizeSessionHeaderMetadata, normalizeSessionStartMetadata } from './metadata.js';
 import type {
   GhExec,
   GitExec,
@@ -40,6 +41,13 @@ export async function collectSessionIdentity(
   const sessionName = normalizeOptionalStringField(
     safeCall(() => options.sessionManager?.getSessionName?.(), null),
   );
+  const sessionStart =
+    normalizeSessionStartMetadata(
+      safeCall(() => options.sessionManager?.getSessionStart?.(), null),
+    ) ?? options.existingRecord?.sessionStart;
+  const sessionHeader =
+    normalizeSessionHeaderMetadata(safeCall(() => options.sessionManager?.getHeader?.(), null)) ??
+    options.existingRecord?.sessionHeader;
 
   // Emit diagnostics for missing session fields
   if (sessionId === null) {
@@ -57,8 +65,14 @@ export async function collectSessionIdentity(
     });
   }
 
-  // Preserve sessionStartedAt from existing record, only set on first collection
-  const existingSessionStartedAt = options.existingRecord?.sessionStartedAt ?? null;
+  // Preserve sessionStartedAt only when the refreshed identity still belongs to the same session.
+  const existingSessionStartedAt = isSameSessionIdentity(
+    options.existingRecord,
+    sessionId,
+    sessionFile,
+  )
+    ? (options.existingRecord?.sessionStartedAt ?? null)
+    : null;
   const sessionStartedAt = existingSessionStartedAt ?? nowIso;
 
   // Resolve Git info
@@ -132,6 +146,8 @@ export async function collectSessionIdentity(
     gitRemote: gitInfo.remote,
     gitRoot: gitInfo.root,
     identitySource: options.identitySource,
+    ...(sessionStart === undefined ? {} : { sessionStart }),
+    ...(sessionHeader === undefined ? {} : { sessionHeader }),
     diagnostics,
   };
 }
@@ -150,6 +166,26 @@ function normalizeOptionalStringField(value: unknown): string | undefined {
   }
 
   return undefined;
+}
+
+function isSameSessionIdentity(
+  existingRecord: SessionIdentityRecord | undefined,
+  sessionId: string | null,
+  sessionFile: string | null,
+): boolean {
+  if (existingRecord === undefined) {
+    return false;
+  }
+
+  if (sessionId !== null && existingRecord.sessionId !== sessionId) {
+    return false;
+  }
+
+  if (sessionFile !== null && existingRecord.sessionFile !== sessionFile) {
+    return false;
+  }
+
+  return sessionId !== null || sessionFile !== null;
 }
 
 function resolveCollectorCwd(options: IdentityCollectorOptions): string {

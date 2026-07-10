@@ -1,6 +1,6 @@
 import type { ActivityDiagnosticCode, ActivityState } from './activity/types.js';
 import type { ChipDiagnosticCode } from './chips/types.js';
-import type { IdentityDiagnosticCode } from './identity/types.js';
+import type { IdentityDiagnosticCode, SessionDerivedFacets } from './identity/types.js';
 import type { PresenceDiagnosticCode, PresenceState } from './presence/types.js';
 
 export type SessionDeckDiagnosticCode =
@@ -31,6 +31,7 @@ export interface SessionDeckRecord {
   prUrl: string | null;
   isLinkedWorktree: boolean | null;
   worktreeLabel: string | null;
+  derivedFacets?: SessionDerivedFacets;
   activityState: ActivityState;
   activityAgeMs: number | null;
   currentToolName: string | null;

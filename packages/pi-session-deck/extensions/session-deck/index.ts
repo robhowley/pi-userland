@@ -8,12 +8,15 @@ import {
 } from './presence/runtime.js';
 import { ensureIdentityRuntimeStarted, stopIdentityRuntime } from './identity/runtime.js';
 import { createSetStatusMirror } from './chips/mirror.js';
+import {
+  normalizeSessionHeaderMetadata,
+  normalizeSessionStartMetadata,
+} from './identity/metadata.js';
 import type { SessionManagerLike } from './identity/types.js';
-
-type SessionStartReason = 'startup' | 'reload' | 'new' | 'resume' | 'fork';
 
 interface SessionStartContext {
   mode?: string;
+  hasUI?: boolean;
   cwd?: string;
   model?: {
     id?: string;
@@ -30,6 +33,7 @@ interface SessionStartContext {
     getEntries?: () => unknown[];
     getSessionName?: () => string | null;
     getCwd?: () => string;
+    getHeader?: () => unknown;
   };
   ui: {
     setStatus: (key: string, text: string | undefined) => void;
@@ -52,31 +56,31 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     )(event, handler);
   }
 
-  on('session_start', async (event: { reason: SessionStartReason }, ctx: SessionStartContext) => {
-    const presenceRuntime = await ensurePresenceRuntimeStarted();
-    const sessionManager = createSessionManager(ctx);
+  on(
+    'session_start',
+    async (event: { reason: string; previousSessionFile?: string }, ctx: SessionStartContext) => {
+      const presenceRuntime = await ensurePresenceRuntimeStarted();
+      const sessionManager = createSessionManager(ctx, event);
 
-    // Install setStatus wrapper before session-deck sets its own status
-    statusMirror.install(ctx.ui);
-    statusMirror.reconfigure({
-      runtimeId: presenceRuntime.runtime.runtimeId,
-      getSessionId: sessionManager.getSessionId,
-    });
+      // Install setStatus wrapper before session-deck sets its own status
+      statusMirror.install(ctx.ui);
+      statusMirror.reconfigure({
+        runtimeId: presenceRuntime.runtime.runtimeId,
+        getSessionId: sessionManager.getSessionId,
+      });
 
-    ctx.ui.setStatus(SESSION_DECK_COMMAND_NAME, getPresenceStartupStatus(presenceRuntime));
+      ctx.ui.setStatus(SESSION_DECK_COMMAND_NAME, getPresenceStartupStatus(presenceRuntime));
 
-    const identityRuntime = await ensureIdentityRuntimeStarted(presenceRuntime.runtime.runtimeId);
-    const activityRuntime = await ensureActivityRuntimeStarted(presenceRuntime.runtime.runtimeId);
+      const identityRuntime = await ensureIdentityRuntimeStarted(presenceRuntime.runtime.runtimeId);
+      const activityRuntime = await ensureActivityRuntimeStarted(presenceRuntime.runtime.runtimeId);
 
-    await identityRuntime.refreshIdentity(
-      event.reason === 'new' ? 'new' : 'startup',
-      sessionManager,
-    );
-    await activityRuntime.refreshActivity(
-      event.reason === 'new' ? 'new' : 'startup',
-      sessionManager,
-    );
-  });
+      await identityRuntime.refreshIdentity(event.reason, sessionManager);
+      await activityRuntime.refreshActivity(
+        event.reason === 'new' ? 'new' : 'startup',
+        sessionManager,
+      );
+    },
+  );
 
   on('message_end', async (event: { message?: unknown }) => {
     const activityRuntime = await ensureActivityRuntime();
@@ -126,12 +130,24 @@ async function ensureActivityRuntime(
   return ensureActivityRuntimeStarted(presenceRuntime.runtime.runtimeId, config);
 }
 
-function createSessionManager(ctx: SessionStartContext): SessionManagerLike {
+function createSessionManager(
+  ctx: SessionStartContext,
+  event: { reason: string; previousSessionFile?: string },
+): SessionManagerLike {
+  const sessionStart = normalizeSessionStartMetadata({
+    reason: event.reason,
+    previousSessionFile: event.previousSessionFile,
+    mode: ctx.mode,
+    hasUI: ctx.hasUI,
+  });
+
   return {
     getSessionId: () => ctx.sessionManager?.getSessionId() ?? null,
     getSessionFile: () => ctx.sessionManager?.getSessionFile() ?? null,
     getSessionName: () => ctx.sessionManager?.getSessionName?.(),
     getCwd: () => ctx.sessionManager?.getCwd?.() ?? ctx.cwd,
+    getSessionStart: () => sessionStart,
+    getHeader: () => normalizeSessionHeaderMetadata(ctx.sessionManager?.getHeader?.()) ?? null,
   };
 }
 

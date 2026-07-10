@@ -5,6 +5,7 @@ import {
   DEFAULT_IDENTITY_FRESHNESS_THRESHOLDS,
   resolveIdentityFreshnessThresholds,
 } from './constants.js';
+import { normalizeSessionHeaderMetadata, normalizeSessionStartMetadata } from './metadata.js';
 import { getDefaultIdentityDirectory, isIdentityRecordFile } from './store.js';
 import type {
   IdentityDiagnostic,
@@ -14,7 +15,10 @@ import type {
   JoinedDiagnostic,
   JoinedSessionRecord,
   JoinedSessionView,
+  SessionDerivedFacets,
+  SessionHeaderMetadata,
   SessionIdentityRecord,
+  SessionStartMetadata,
 } from './types.js';
 import type { PresenceDiagnosticCode, PresenceSummary, PresenceView } from '../presence/types.js';
 
@@ -189,6 +193,12 @@ function joinRecord(
     }
   }
 
+  const sessionId = identity?.sessionId ?? null;
+  const sessionFile = identity?.sessionFile ?? null;
+  const cwd = identity?.cwd ?? null;
+  const sessionStart = identity?.sessionStart;
+  const sessionHeader = identity?.sessionHeader;
+
   const joinedRecord: JoinedSessionRecord = {
     runtimeId: presence.runtimeId,
     pid: presence.pid,
@@ -198,10 +208,10 @@ function joinRecord(
     startedAt: presence.startedAt,
 
     // Identity fields
-    sessionId: identity?.sessionId ?? null,
-    sessionFile: identity?.sessionFile ?? null,
+    sessionId,
+    sessionFile,
     sessionName: identity?.sessionName ?? null,
-    cwd: identity?.cwd ?? null,
+    cwd,
     worktree: identity?.worktree ?? null,
     repoName: identity?.repoName ?? null,
     qualifiedRepoName: identity?.qualifiedRepoName ?? null,
@@ -211,6 +221,17 @@ function joinRecord(
     worktreeLabel: identity?.worktreeLabel ?? null,
     identityUpdatedAt: identity?.identityUpdatedAt ?? null,
     identityFreshness: computeIdentityFreshness(identity, nowMs, thresholds),
+    derivedFacets: deriveSessionDerivedFacets({
+      hasIdentity: identity !== undefined,
+      sessionId,
+      sessionFile,
+      cwd,
+      sessionStart,
+      sessionHeader,
+      previousSessionFile: sessionStart?.previousSessionFile,
+    }),
+    ...(sessionStart === undefined ? {} : { sessionStart }),
+    ...(sessionHeader === undefined ? {} : { sessionHeader }),
 
     diagnostics: recordDiagnostics,
   };
@@ -220,6 +241,150 @@ function joinRecord(
   }
 
   return joinedRecord;
+}
+
+interface DerivedFacetInput {
+  hasIdentity: boolean;
+  sessionId: string | null;
+  sessionFile: string | null;
+  cwd: string | null;
+  sessionStart: SessionStartMetadata | undefined;
+  sessionHeader: SessionHeaderMetadata | undefined;
+  previousSessionFile: string | null | undefined;
+}
+
+function deriveSessionDerivedFacets(input: DerivedFacetInput): SessionDerivedFacets {
+  return {
+    persistence: derivePersistenceFacet(input),
+    interactivity: deriveInteractivityFacet(input.sessionStart),
+    lifecycle: deriveLifecycleFacet(input.sessionStart),
+    lineage: deriveLineage({
+      previousSessionFile: input.previousSessionFile,
+      parentSession: input.sessionHeader?.parentSession,
+      hadEnoughData: input.hasIdentity,
+    }),
+    identityStrength: deriveIdentityStrengthFacet(input),
+    headerConsistency: deriveHeaderConsistencyFacet(input),
+  };
+}
+
+function derivePersistenceFacet(input: DerivedFacetInput): SessionDerivedFacets['persistence'] {
+  if (input.sessionFile !== null) {
+    return 'file_backed';
+  }
+
+  return input.hasIdentity ? 'in_memory' : 'unknown';
+}
+
+function deriveInteractivityFacet(
+  sessionStart: SessionStartMetadata | undefined,
+): SessionDerivedFacets['interactivity'] {
+  if (sessionStart?.hasUI === true) {
+    return 'interactive';
+  }
+
+  if (sessionStart?.hasUI === false) {
+    return 'headless';
+  }
+
+  switch (sessionStart?.mode) {
+    case 'tui':
+    case 'rpc':
+      return 'interactive';
+    case 'json':
+    case 'print':
+      return 'headless';
+    default:
+      return 'unknown';
+  }
+}
+
+function deriveLifecycleFacet(
+  sessionStart: SessionStartMetadata | undefined,
+): SessionDerivedFacets['lifecycle'] {
+  switch (sessionStart?.reason) {
+    case 'startup':
+    case 'reload':
+    case 'new':
+    case 'resume':
+    case 'fork':
+      return sessionStart.reason;
+    case undefined:
+      return 'unknown';
+    default:
+      return 'other';
+  }
+}
+
+function deriveLineage({
+  previousSessionFile,
+  parentSession,
+  hadEnoughData,
+}: {
+  previousSessionFile?: string | null | undefined;
+  parentSession?: string | null | undefined;
+  hadEnoughData: boolean;
+}): SessionDerivedFacets['lineage'] {
+  if (!hadEnoughData) return 'unknown';
+
+  const hasPrevious = previousSessionFile !== undefined && previousSessionFile !== null;
+  const hasParent = parentSession !== undefined && parentSession !== null;
+
+  if (hasPrevious && hasParent) return 'previous_and_parent';
+  if (hasPrevious) return 'previous';
+  if (hasParent) return 'parent';
+  return 'root';
+}
+
+function deriveIdentityStrengthFacet(
+  input: DerivedFacetInput,
+): SessionDerivedFacets['identityStrength'] {
+  if (input.sessionId !== null && input.sessionHeader?.id !== undefined) {
+    if (input.sessionHeader.id !== input.sessionId) {
+      return 'conflicted';
+    }
+  }
+
+  if (input.sessionId !== null && input.sessionFile !== null) {
+    return 'strong';
+  }
+
+  if (input.sessionId !== null || input.sessionFile !== null || input.sessionHeader !== undefined) {
+    return 'weak';
+  }
+
+  return 'missing';
+}
+
+function deriveHeaderConsistencyFacet(
+  input: DerivedFacetInput,
+): SessionDerivedFacets['headerConsistency'] {
+  const header = input.sessionHeader;
+  if (header === undefined) {
+    return 'unavailable';
+  }
+
+  const comparisons: Array<{ headerValue: string; identityValue: string }> = [];
+
+  if (input.sessionId !== null) {
+    comparisons.push({ headerValue: header.id, identityValue: input.sessionId });
+  }
+
+  if (input.cwd !== null) {
+    comparisons.push({ headerValue: header.cwd, identityValue: input.cwd });
+  }
+
+  const hasFullBasis = comparisons.length === 2;
+
+  if (comparisons.some(({ headerValue, identityValue }) => headerValue !== identityValue)) {
+    return 'mismatch';
+  }
+
+  if (!hasFullBasis) {
+    return 'indeterminate';
+  }
+
+  return 'consistent';
 }
 
 export function computeIdentityFreshness(
@@ -265,6 +430,8 @@ function normalizeIdentityRecord(candidate: unknown): SessionIdentityRecord | nu
 
   const diagnostics = normalizeDiagnostics(candidate['diagnostics']);
   const sessionName = normalizeStringField(candidate['sessionName']);
+  const sessionStart = normalizeSessionStartMetadata(candidate['sessionStart']);
+  const sessionHeader = normalizeSessionHeaderMetadata(candidate['sessionHeader']);
 
   return {
     runtimeId,
@@ -284,6 +451,8 @@ function normalizeIdentityRecord(candidate: unknown): SessionIdentityRecord | nu
     gitRemote: normalizeStringField(candidate['gitRemote']),
     gitRoot: normalizeStringField(candidate['gitRoot']),
     identitySource: ensureString(candidate['identitySource']),
+    ...(sessionStart === undefined ? {} : { sessionStart }),
+    ...(sessionHeader === undefined ? {} : { sessionHeader }),
     ...(diagnostics === undefined ? {} : { diagnostics }),
   };
 }

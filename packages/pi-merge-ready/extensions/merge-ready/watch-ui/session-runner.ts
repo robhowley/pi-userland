@@ -38,15 +38,19 @@ import {
 } from './supervisor-state.js';
 import { readMergeReadyTranscript, type MergeReadyTranscriptRow } from './transcript.js';
 
+type MergeReadyWatchCommandContextLike = {
+  onMergeReadyWatchStart?: (result: MergeReadyWatchStartResultHookPayload) => void;
+};
+
 type MergeReadyWatchRegisteredCommandLike = {
   name: string;
   invocationName: string;
-  handler: (...args: any[]) => Promise<void>;
+  handler(args: string, commandContext?: object): Promise<void> | void;
 };
 
 type MergeReadyWatchExtensionRunnerLike = {
-  createCommandContext: () => any;
-  getRegisteredCommands: () => MergeReadyWatchRegisteredCommandLike[];
+  createCommandContext(): object;
+  getRegisteredCommands(): MergeReadyWatchRegisteredCommandLike[];
 };
 
 export type MergeReadyWatchSessionLike = {
@@ -132,10 +136,6 @@ type MergeReadyWatchStartResultHookPayload = {
   ok: boolean;
   level: 'info' | 'warning' | 'error';
   message: string;
-};
-
-type MergeReadyWatchCommandContextLike = {
-  onMergeReadyWatchStart?: (result: MergeReadyWatchStartResultHookPayload) => void;
 };
 
 export class MergeReadyWatchSessionRunner {

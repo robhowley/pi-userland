@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SessionIdentityRecord } from '../../extensions/session-deck/identity/types.js';
 
 describe('identity writer', () => {
-  it('serializes a complete identity record to JSON', async () => {
+  it('serializes a complete identity record to JSON without allowlisting raw sessionStart strings', async () => {
     const { serializeIdentityRecord } =
       await import('../../extensions/session-deck/identity/writer.js');
 
@@ -24,6 +24,18 @@ describe('identity writer', () => {
       gitRemote: 'https://github.com/owner/repo.git',
       gitRoot: '/home/user/project/.git',
       identitySource: 'startup',
+      sessionStart: {
+        reason: 'resume_from_handoff',
+        previousSessionFile: '/tmp/session-prev.md',
+        mode: 'json-stream',
+        hasUI: false,
+      },
+      sessionHeader: {
+        id: 'session-abc',
+        timestamp: '2026-06-17T11:00:00.000Z',
+        cwd: '/home/user/project',
+        parentSession: '/tmp/session-parent.md',
+      },
     };
 
     const json = serializeIdentityRecord(record);
@@ -35,6 +47,18 @@ describe('identity writer', () => {
     expect(parsed.branch).toBe('main');
     expect(parsed.prUrl).toBe('https://github.com/owner/repo/pull/42');
     expect(parsed.identitySource).toBe('startup');
+    expect(parsed.sessionStart).toEqual({
+      reason: 'resume_from_handoff',
+      previousSessionFile: '/tmp/session-prev.md',
+      mode: 'json-stream',
+      hasUI: false,
+    });
+    expect(parsed.sessionHeader).toEqual({
+      id: 'session-abc',
+      timestamp: '2026-06-17T11:00:00.000Z',
+      cwd: '/home/user/project',
+      parentSession: '/tmp/session-parent.md',
+    });
   });
 
   it('serializes nullable fields correctly', async () => {

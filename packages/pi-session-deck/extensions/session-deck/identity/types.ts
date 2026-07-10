@@ -2,11 +2,33 @@ import type { PresenceDiagnosticCode } from '../presence/types.js';
 
 // ─── Session manager ────────────────────────────────────────────────
 
+// Raw session_start fields are Pi-owned. Preserve any non-empty string so
+// newer Pi reason/mode values round-trip through session-deck unchanged.
+export type SessionStartReason = string;
+
+export type SessionStartMode = string;
+
+export interface SessionStartMetadata {
+  reason: SessionStartReason;
+  previousSessionFile?: string;
+  mode?: SessionStartMode;
+  hasUI?: boolean;
+}
+
+export interface SessionHeaderMetadata {
+  id: string;
+  timestamp: string;
+  cwd: string;
+  parentSession?: string;
+}
+
 export interface SessionManagerLike {
   getSessionId: () => string | null;
   getSessionFile: () => string | null;
   getSessionName?: () => string | null | undefined;
   getCwd?: () => string | null | undefined;
+  getSessionStart?: () => SessionStartMetadata | undefined;
+  getHeader?: () => SessionHeaderMetadata | null | undefined;
 }
 
 // ─── Identity runtime controller ─────────────────────────────────────
@@ -37,6 +59,8 @@ export interface SessionIdentityRecord {
   gitRemote: string | null;
   gitRoot: string | null;
   identitySource: string;
+  sessionStart?: SessionStartMetadata;
+  sessionHeader?: SessionHeaderMetadata;
   diagnostics?: IdentityDiagnostic[];
 }
 
@@ -77,6 +101,45 @@ export interface IdentityFreshnessThresholds {
   staleAfterMs: number;
 }
 
+// ─── Derived session facets ───────────────────────────────────────
+
+export type SessionPersistenceFacet = 'in_memory' | 'file_backed' | 'unknown';
+
+export type SessionInteractivityFacet = 'interactive' | 'headless' | 'unknown';
+
+export type SessionLifecycleFacet =
+  | 'startup'
+  | 'reload'
+  | 'new'
+  | 'resume'
+  | 'fork'
+  | 'other'
+  | 'unknown';
+
+export type SessionLineageFacet =
+  | 'root'
+  | 'previous'
+  | 'parent'
+  | 'previous_and_parent'
+  | 'unknown';
+
+export type SessionIdentityStrengthFacet = 'strong' | 'weak' | 'missing' | 'conflicted';
+
+export type SessionHeaderConsistencyFacet =
+  | 'consistent'
+  | 'indeterminate'
+  | 'mismatch'
+  | 'unavailable';
+
+export interface SessionDerivedFacets {
+  persistence: SessionPersistenceFacet;
+  interactivity: SessionInteractivityFacet;
+  lifecycle: SessionLifecycleFacet;
+  lineage: SessionLineageFacet;
+  identityStrength: SessionIdentityStrengthFacet;
+  headerConsistency: SessionHeaderConsistencyFacet;
+}
+
 // ─── Joined session records ─────────────────────────────────────────
 
 export interface JoinedSessionRecord {
@@ -102,6 +165,9 @@ export interface JoinedSessionRecord {
   worktreeLabel: string | null;
   identityUpdatedAt: string | null;
   identityFreshness: IdentityFreshness;
+  derivedFacets?: SessionDerivedFacets;
+  sessionStart?: SessionStartMetadata;
+  sessionHeader?: SessionHeaderMetadata;
 
   // Combined diagnostics
   diagnostics: JoinedDiagnostic[];
