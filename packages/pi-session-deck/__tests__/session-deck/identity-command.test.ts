@@ -604,6 +604,7 @@ describe('session-deck joined command', () => {
         const renderText = () => component.render(120).join('\n');
 
         expect(renderText()).toContain('Reap complete: removed 1 expired presence record.');
+        expect(renderText()).toContain('←→ switch repo');
         expect(renderText()).toContain('alpha');
         expect(renderText()).toContain('session: session-abc · pid: 101');
         expect(renderText()).toContain('runtime: 922f7ac8deadbeef');
