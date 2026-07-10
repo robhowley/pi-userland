@@ -66,9 +66,11 @@ export async function readSessionDeckSnapshot(
 
   const chipsByRuntimeId = new Map(chipsView.records.map((record) => [record.runtimeId, record]));
 
+  const orderedRecords = [...activityView.records].sort(compareSessionDeckRecordsByStartedAt);
+
   return {
     generatedAt: now.toISOString(),
-    records: activityView.records.map((record) => {
+    records: orderedRecords.map((record) => {
       const chipRecord = chipsByRuntimeId.get(record.runtimeId);
       return {
         runtimeId: record.runtimeId,
@@ -102,6 +104,29 @@ export async function readSessionDeckSnapshot(
       ...chipsView.diagnostics.map(toSessionDeckDiagnostic),
     ],
   };
+}
+
+function compareSessionDeckRecordsByStartedAt(
+  left: { startedAt: string; heartbeatAt: string; runtimeId: string },
+  right: { startedAt: string; heartbeatAt: string; runtimeId: string },
+): number {
+  return (
+    parseTimestampForAscendingSort(left.startedAt) -
+      parseTimestampForAscendingSort(right.startedAt) ||
+    parseTimestampForDescendingSort(right.heartbeatAt) -
+      parseTimestampForDescendingSort(left.heartbeatAt) ||
+    left.runtimeId.localeCompare(right.runtimeId)
+  );
+}
+
+function parseTimestampForAscendingSort(value: string): number {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
+}
+
+function parseTimestampForDescendingSort(value: string): number {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
 }
 
 function isSessionIdTrustedForChips(record: {

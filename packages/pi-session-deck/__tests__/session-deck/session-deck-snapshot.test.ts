@@ -202,6 +202,40 @@ describe('readSessionDeckSnapshot', () => {
     }
   });
 
+  it('orders session-deck rows by startedAt ascending before projecting the slim snapshot', async () => {
+    const directories = await createSnapshotDirectories();
+
+    await writePresenceRecord(
+      buildPresenceRecord({
+        runtimeId: 'rt-older',
+        pid: 201,
+        startedAt: '2026-06-23T11:00:00.000Z',
+        heartbeatAt: '2026-06-23T12:09:40.000Z',
+      }),
+      { directory: directories.presenceDirectory },
+    );
+    await writePresenceRecord(
+      buildPresenceRecord({
+        runtimeId: 'rt-newer',
+        pid: 202,
+        startedAt: '2026-06-23T11:30:00.000Z',
+        heartbeatAt: '2026-06-23T12:09:55.000Z',
+      }),
+      { directory: directories.presenceDirectory },
+    );
+
+    const snapshot = await readSessionDeckSnapshot({
+      directory: directories.presenceDirectory,
+      identityDirectory: directories.identityDirectory,
+      activityDirectory: directories.activityDirectory,
+      chipsDirectory: directories.chipsDirectory,
+      now: new Date('2026-06-23T12:10:00.000Z'),
+      inspectPid: vi.fn().mockResolvedValue({ status: 'matches' }),
+    });
+
+    expect(snapshot.records.map((record) => record.runtimeId)).toEqual(['rt-older', 'rt-newer']);
+  });
+
   it('prefers persisted repo fields even when worktree metadata is incomplete', async () => {
     const directories = await createSnapshotDirectories();
 
