@@ -154,7 +154,7 @@ h2 {
 
 .list-shell {
   min-height: 360px;
-  padding: 6px 0 12px;
+  padding: 0 0 12px;
 }
 
 .list {
@@ -167,10 +167,6 @@ h2 {
   border-bottom: 1px solid var(--color-divider);
   border-radius: 0;
   overflow: hidden;
-}
-
-.card:first-child {
-  border-top: 1px solid var(--color-divider);
 }
 
 .card.expanded {
