@@ -100,7 +100,7 @@ export function formatSessionDeckBrowserRow(record: SessionDeckRecord): SessionD
   const title = getDisplayTitle(record);
 
   return {
-    icon: formatPresenceIcon(record.presenceState),
+    icon: formatActivityGlyph(record.activityState),
     activity: formatListActivity(record),
     title: title.text,
     titleSource: title.source,
@@ -227,6 +227,21 @@ function formatPresenceIcon(state: SessionDeckRecord['presenceState']): string {
       return '×';
     case 'unknown':
       return '◇';
+  }
+}
+
+function formatActivityGlyph(state: SessionDeckRecord['activityState']): string {
+  switch (state) {
+    case 'idle':
+      return '○';
+    case 'thinking':
+      return '◒';
+    case 'tool-running':
+      return '◆';
+    case 'error':
+      return '!';
+    case 'unknown':
+      return '?';
   }
 }
 
