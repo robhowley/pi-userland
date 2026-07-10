@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/robhowley/pi-userland/compare/pi-session-deck-v0.6.0...pi-session-deck-v0.7.0) (2026-07-10)
+
+
+### Features
+
+* **pi-session-deck:** persist raw session metadata ([#106](https://github.com/robhowley/pi-userland/issues/106)) ([4fa9956](https://github.com/robhowley/pi-userland/commit/4fa995639e4965dd049b587bb63e58a756a24888))
+
 ## [0.6.0](https://github.com/robhowley/pi-userland/compare/pi-session-deck-v0.5.0...pi-session-deck-v0.6.0) (2026-07-01)
 
 

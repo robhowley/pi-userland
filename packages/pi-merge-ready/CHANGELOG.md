@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.11.0](https://github.com/robhowley/pi-userland/compare/pi-merge-ready-v0.10.0...pi-merge-ready-v0.11.0) (2026-07-10)
+
+
+### Features
+
+* **pi-merge-ready:** refresh ambient status bar on ttl expiry ([#109](https://github.com/robhowley/pi-userland/issues/109)) ([21e3027](https://github.com/robhowley/pi-userland/commit/21e302731440b0196534f308dd7406af92b94d4d))
+* **pi-session-deck:** persist raw session metadata ([#106](https://github.com/robhowley/pi-userland/issues/106)) ([4fa9956](https://github.com/robhowley/pi-userland/commit/4fa995639e4965dd049b587bb63e58a756a24888))
+
 ## [0.10.0](https://github.com/robhowley/pi-userland/compare/pi-merge-ready-v0.9.0...pi-merge-ready-v0.10.0) (2026-07-08)
 
 
