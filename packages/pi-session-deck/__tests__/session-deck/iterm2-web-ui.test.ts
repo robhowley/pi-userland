@@ -428,6 +428,44 @@ function getCardLine(card: FakeElement, className: 'row-line1' | 'row-line2'): F
   return line;
 }
 
+function getCardDetail(card: FakeElement): FakeElement {
+  const detail = findAllByClass(card, 'card-detail')[0];
+  if (!detail) {
+    throw new Error('Expected card detail.');
+  }
+  return detail;
+}
+
+function getDetailSection(detail: FakeElement, title: string): FakeElement {
+  const section = findAllByClass(detail, 'detail-section').find(
+    (candidate) => findAllByClass(candidate, 'detail-section-title')[0]?.textContent === title,
+  );
+  if (!section) {
+    throw new Error(`Expected detail section ${title}.`);
+  }
+  return section;
+}
+
+function getDetailSectionTitles(detail: FakeElement): string[] {
+  return findAllByClass(detail, 'detail-section-title').map(
+    (sectionTitle) => sectionTitle.textContent,
+  );
+}
+
+function getDetailRowLabels(section: FakeElement): string[] {
+  return findAllByClass(section, 'detail-label').map((label) => label.textContent);
+}
+
+function getDetailRowValues(section: FakeElement): string[] {
+  return findAllByClass(section, 'detail-value').map((value) => value.textContent);
+}
+
+function getCopyButtonLabels(root: FakeElement): string[] {
+  return findAllByClass(root, 'copy-button')
+    .map((button) => button.getAttribute('aria-label'))
+    .filter((label): label is string => label !== null);
+}
+
 function getChildTextContents(element: FakeElement): string[] {
   return element.childNodes.map((child) => child.textContent);
 }
@@ -529,6 +567,104 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(getChildTextContents(line1)).toEqual(['●', 'tool-running: bash', 'alpha', '12s']);
     expect(line1.textContent.match(/12s/gu) ?? []).toHaveLength(1);
     expect(line2.textContent).not.toContain('12s');
+  });
+
+  it('renders the expanded detail sections in order with workspace copy buttons and PR last', async () => {
+    const harness = await setupApp([
+      buildSnapshot({
+        records: [
+          buildRecord({
+            sessionName: 'gbdt rankerspec',
+            repoName: 'shop-ml',
+            qualifiedRepoName: 'Shopify/shop-ml',
+            cwd: `${HOME}/src/github.com/Shopify/worktrees/shop-ml-pr22623-rankerspec-uses-pipeline`,
+            branch: 'rh-baseline-gbdt-rankerspec-uses-pipeline',
+            prUrl: 'https://github.com/owner/project/pull/22623',
+            isLinkedWorktree: true,
+            worktreeLabel: 'shop-ml-pr22623-rankerspec-uses-pipeline',
+            heartbeatAgeMs: 705,
+            chips: ['#22623 Conflicts'],
+            diagnostics: [{ code: 'activity_stale', message: 'Per-record diagnostic.' }],
+          }),
+        ],
+      }),
+    ]);
+
+    getCardToggle(getCards(harness.elements.list)[0]!).click();
+
+    const detail = getCardDetail(getExpandedCards(harness.elements.list)[0]!);
+    expect(findAllByClass(detail, 'detail-title')[0]?.textContent).toBe('gbdt rankerspec');
+    expect(findAllByClass(detail, 'summary-line')[0]?.textContent).toBe('Shopify/shop-ml · #22623');
+    expect(findAllByClass(detail, 'detail-liveness')[0]?.textContent).toBe(
+      '● live · idle · heartbeat 705ms ago',
+    );
+    expect(getDetailSectionTitles(detail)).toEqual([
+      'IDENTITY',
+      'WORKSPACE',
+      'STATUS',
+      'Record diagnostics',
+    ]);
+
+    const identity = getDetailSection(detail, 'IDENTITY');
+    expect(getDetailRowLabels(identity)).toEqual(['Session ID', 'Runtime ID', 'PID']);
+    expect(getCopyButtonLabels(identity)).toEqual([
+      'Copy Session ID',
+      'Copy Runtime ID',
+      'Copy PID',
+    ]);
+
+    const workspace = getDetailSection(detail, 'WORKSPACE');
+    expect(getDetailRowLabels(workspace)).toEqual(['CWD', 'Branch', 'Repo', 'Checkout', 'PR']);
+    expect(getDetailRowValues(workspace)).toEqual([
+      '~/src/github.com/Shopify/worktrees/shop-ml-pr22623-rankerspec-uses-pipeline',
+      'rh-baseline-gbdt-rankerspec-uses-pipeline',
+      'Shopify/shop-ml',
+      'worktree · shop-ml-pr22623-rankerspec-uses-pipeline',
+      '#22623',
+    ]);
+    expect(getCopyButtonLabels(workspace)).toEqual([
+      'Copy CWD',
+      'Copy Branch',
+      'Copy Repo',
+      'Copy Checkout',
+      'Copy PR',
+    ]);
+
+    const status = getDetailSection(detail, 'STATUS');
+    expect(status.textContent).toContain('#22623 Conflicts');
+    expect(status.textContent).toContain('Presence');
+    expect(status.textContent).toContain('Heartbeat');
+
+    const diagnostics = getDetailSection(detail, 'Record diagnostics');
+    expect(diagnostics.textContent).toContain('activity_stale');
+    expect(diagnostics.textContent).toContain('Per-record diagnostic.');
+  });
+
+  it('keeps the expanded liveness line simplified for non-fresh presence reasons', async () => {
+    const harness = await setupApp([
+      buildSnapshot({
+        records: [
+          buildRecord({
+            presenceState: 'stale',
+            presenceReason: 'heartbeat_expired',
+            heartbeatAgeMs: 65_000,
+          }),
+        ],
+      }),
+    ]);
+
+    getCardToggle(getCards(harness.elements.list)[0]!).click();
+
+    const detail = getCardDetail(getExpandedCards(harness.elements.list)[0]!);
+    expect(findAllByClass(detail, 'detail-liveness')[0]?.textContent).toBe(
+      '◌ stale · idle · heartbeat 1m ago',
+    );
+
+    const status = getDetailSection(detail, 'STATUS');
+    expect(getDetailRowValues(status)).toContain('heartbeat expired');
+    expect(findAllByClass(detail, 'detail-liveness')[0]?.textContent).not.toContain(
+      'heartbeat expired',
+    );
   });
 
   it('keeps cards collapsed across refreshes before the user expands a row', async () => {

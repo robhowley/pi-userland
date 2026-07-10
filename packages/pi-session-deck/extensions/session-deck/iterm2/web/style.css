@@ -228,9 +228,10 @@ h2 {
 .row-line2,
 .summary-line,
 .detail-section-title,
-.meta-label,
+.detail-label,
 .toggle,
-.diagnostics {
+.diagnostics,
+.detail-diagnostics {
   font-size: 0.85rem;
 }
 
@@ -293,39 +294,77 @@ h2 {
 
 .detail {
   display: grid;
-  gap: 10px;
+  gap: 12px;
+}
+
+.detail-summary {
+  display: grid;
+  gap: 6px;
+}
+
+.detail-liveness {
+  margin-top: 2px;
 }
 
 .detail-section {
   display: grid;
-  gap: 8px;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-divider);
 }
 
 .detail-section-title {
   color: var(--color-text-muted);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
-.meta-grid {
+.detail-section-body {
   display: grid;
-  gap: 8px;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 
-.meta-card {
-  background: var(--color-surface-raised);
-  border: 1px solid var(--color-divider);
-  border-radius: 8px;
-  padding: 8px 10px;
+.detail-row {
   display: grid;
-  gap: 4px;
+  grid-template-columns: minmax(92px, 110px) minmax(0, 1fr) auto;
+  gap: 10px 12px;
+  align-items: start;
+  padding: 10px 0;
 }
 
-.meta-label {
+.detail-row + .detail-row {
+  border-top: 1px solid var(--color-divider);
+}
+
+.detail-label {
   color: var(--color-text-muted);
 }
 
-.meta-value {
+.detail-value {
+  min-width: 0;
+  justify-self: end;
+  text-align: right;
   overflow-wrap: anywhere;
+}
+
+.detail-chips {
+  padding: 2px 0 10px;
+}
+
+.detail-chips + .detail-row {
+  border-top: 1px solid var(--color-divider);
+}
+
+.copy-button {
+  align-self: start;
+  padding: 0.15rem 0.45rem;
+  color: var(--color-text-muted);
+}
+
+.detail-diagnostics {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  padding: 2px 0 0;
 }
 
 .diagnostics-panel {

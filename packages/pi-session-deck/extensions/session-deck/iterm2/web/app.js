@@ -1,4 +1,4 @@
-/* global HTMLButtonElement, HTMLInputElement, document, fetch, window */
+/* global HTMLButtonElement, HTMLInputElement, document, fetch, navigator, window */
 
 const AUTO_REFRESH_INTERVAL_MS = 15_000;
 const DEFAULT_VISIBLE_STATES = new Set(['live', 'stale']);
@@ -299,87 +299,146 @@ function createRecordDetail(record) {
   const detail = document.createElement('div');
   detail.className = 'detail card-detail';
 
-  const header = document.createElement('div');
-  header.append(
+  const workspaceRepo = record.qualifiedRepoName ?? record.repoName;
+  const workspacePr = formatPr(record.prUrl);
+  const checkout = formatCheckout(record);
+  const summary = document.createElement('div');
+  summary.className = 'detail-summary';
+  summary.append(
     createText('div', getDisplayTitle(record).text, 'detail-title'),
     createText(
       'div',
-      [record.qualifiedRepoName ?? record.repoName, formatPr(record.prUrl)]
-        .filter(Boolean)
-        .join(' · ') || 'Session details',
+      [workspaceRepo, workspacePr].filter(Boolean).join(' · ') || 'Session details',
       'summary-line',
     ),
+    createText('div', formatStatusLine(record), 'summary-line detail-liveness'),
   );
-  detail.append(header);
 
   detail.append(
-    createText('div', formatStatusLine(record), 'summary-line'),
-    createMetaGrid(record),
+    summary,
+    createDetailSection('IDENTITY', [
+      createDetailRow('Session ID', record.sessionId, {
+        copyLabel: 'Session ID',
+        copyValue: record.sessionId,
+      }),
+      createDetailRow('Runtime ID', record.runtimeId, {
+        copyLabel: 'Runtime ID',
+        copyValue: record.runtimeId,
+      }),
+      createDetailRow('PID', record.pid === null ? null : String(record.pid), {
+        copyLabel: 'PID',
+        copyValue: record.pid === null ? null : String(record.pid),
+      }),
+    ]),
+    createDetailSection('WORKSPACE', [
+      createDetailRow('CWD', record.cwd === null ? null : shortenHomePath(record.cwd), {
+        copyLabel: 'CWD',
+        copyValue: record.cwd,
+      }),
+      createDetailRow('Branch', record.branch, {
+        copyLabel: 'Branch',
+        copyValue: record.branch,
+      }),
+      createDetailRow('Repo', workspaceRepo, {
+        copyLabel: 'Repo',
+        copyValue: workspaceRepo,
+      }),
+      createDetailRow('Checkout', checkout, {
+        copyLabel: 'Checkout',
+        copyValue: checkout,
+      }),
+      createDetailRow('PR', workspacePr, {
+        copyLabel: 'PR',
+        copyValue: record.prUrl ?? workspacePr,
+      }),
+    ]),
+    createStatusSection(record),
   );
 
-  if (record.chips.length > 0) {
-    const chipSection = document.createElement('section');
-    chipSection.className = 'detail-section';
-    chipSection.append(createText('div', 'Chips', 'detail-section-title'));
-
-    const chips = document.createElement('div');
-    chips.className = 'chips';
-    for (const chip of record.chips) {
-      chips.append(createChip(chip));
-    }
-    chipSection.append(chips);
-    detail.append(chipSection);
-  }
-
   if (record.diagnostics.length > 0) {
-    const diagnosticsSection = document.createElement('section');
-    diagnosticsSection.className = 'detail-section';
-    diagnosticsSection.append(createText('div', 'Record diagnostics', 'detail-section-title'));
-
     const list = document.createElement('ul');
-    list.className = 'diagnostics';
+    list.className = 'detail-diagnostics';
     for (const diagnostic of record.diagnostics) {
       list.append(createDiagnosticItem(diagnostic));
     }
-    diagnosticsSection.append(list);
-    detail.append(diagnosticsSection);
+    detail.append(createDetailSection('Record diagnostics', [list]));
   }
 
   return detail;
 }
 
-function createMetaGrid(record) {
-  const grid = document.createElement('div');
-  grid.className = 'meta-grid';
+function createStatusSection(record) {
+  const content = [];
 
-  const items = [
-    ['Session ID', record.sessionId],
-    ['Runtime ID', record.runtimeId],
-    ['PID', record.pid === null ? null : String(record.pid)],
-    ['CWD', record.cwd === null ? null : shortenHomePath(record.cwd)],
-    ['Branch', record.branch],
-    ['PR', formatPr(record.prUrl)],
-    ['Repo', record.qualifiedRepoName ?? record.repoName],
-    ['Checkout', formatCheckout(record)],
-    ['Current tool', record.currentToolName],
-    ['Last error', record.lastError],
-    ['Presence reason', humanizePresenceReason(record.presenceReason)],
-    ['Activity age', record.activityAgeMs === null ? null : formatDuration(record.activityAgeMs)],
-    ['Heartbeat age', formatDuration(record.heartbeatAgeMs)],
-  ];
-
-  for (const [label, value] of items) {
-    if (value === null || value === '') {
-      continue;
+  if (record.chips.length > 0) {
+    const chips = document.createElement('div');
+    chips.className = 'chips detail-chips';
+    for (const chip of record.chips) {
+      chips.append(createChip(chip));
     }
-
-    const card = document.createElement('div');
-    card.className = 'meta-card';
-    card.append(createText('div', label, 'meta-label'), createText('div', value, 'meta-value'));
-    grid.append(card);
+    content.push(chips);
   }
 
-  return grid;
+  content.push(
+    createDetailRow('Presence', record.presenceState),
+    createDetailRow('Activity', formatSelectedActivity(record)),
+    createDetailRow('Heartbeat', `${formatDuration(record.heartbeatAgeMs)} ago`),
+    createDetailRow('Presence reason', humanizePresenceReason(record.presenceReason)),
+    createDetailRow('Current tool', record.currentToolName),
+    createDetailRow('Last error', record.lastError),
+  );
+
+  return createDetailSection('STATUS', content);
+}
+
+function createDetailSection(title, children) {
+  const section = document.createElement('section');
+  section.className = 'detail-section';
+  section.append(createText('div', title, 'detail-section-title'));
+
+  const body = document.createElement('div');
+  body.className = 'detail-section-body';
+  for (const child of children) {
+    if (child) {
+      body.append(child);
+    }
+  }
+
+  section.append(body);
+  return section;
+}
+
+function createDetailRow(label, value, options = {}) {
+  if (value === null || value === '') {
+    return null;
+  }
+
+  const row = document.createElement('div');
+  row.className = 'detail-row';
+  row.append(createText('div', label, 'detail-label'), createText('div', value, 'detail-value'));
+
+  const copyButton = createCopyButton(options.copyLabel ?? label, options.copyValue ?? value);
+  if (copyButton) {
+    row.append(copyButton);
+  }
+
+  return row;
+}
+
+function createCopyButton(label, value) {
+  if (value === null || value === '') {
+    return null;
+  }
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'copy-button';
+  button.setAttribute('aria-label', `Copy ${label}`);
+  button.textContent = 'Copy';
+  button.addEventListener('click', () => {
+    copyTextToClipboard(value);
+  });
+  return button;
 }
 
 function renderDiagnostics() {
@@ -446,7 +505,7 @@ function getCwdBasename(cwd) {
 
 function formatCheckout(record) {
   if (!record.isLinkedWorktree) {
-    return null;
+    return 'primary';
   }
   return record.worktreeLabel ? `worktree · ${record.worktreeLabel}` : 'worktree';
 }
@@ -461,9 +520,9 @@ function formatPr(prUrl) {
 
 function formatStatusLine(record) {
   return [
-    `presence: ${getPresenceIcon(record.presenceState)} ${record.presenceState}`,
-    `activity: ${formatSelectedActivity(record)}`,
-    `heartbeat: ${formatDuration(record.heartbeatAgeMs)} ago${formatPresenceReasonSuffix(record)}`,
+    `${getPresenceIcon(record.presenceState)} ${record.presenceState}`,
+    formatSelectedActivity(record),
+    `heartbeat ${formatDuration(record.heartbeatAgeMs)} ago`,
   ].join(' · ');
 }
 
@@ -550,11 +609,6 @@ function getPresenceIcon(stateName) {
   }
 }
 
-function formatPresenceReasonSuffix(record) {
-  const reason = humanizePresenceReason(record.presenceReason);
-  return reason === null ? '' : ` · ${reason}`;
-}
-
 function humanizePresenceReason(reason) {
   if (!reason || reason === 'fresh_heartbeat') {
     return null;
@@ -607,6 +661,14 @@ function detectHomeDirectory() {
 
   const segments = cwd.split('/');
   return segments.length >= 4 ? segments.slice(0, 3).join('/') : null;
+}
+
+function copyTextToClipboard(text) {
+  if (typeof navigator === 'undefined' || typeof navigator.clipboard?.writeText !== 'function') {
+    return;
+  }
+
+  void navigator.clipboard.writeText(text).catch(() => {});
 }
 
 function createLine(className, children) {
