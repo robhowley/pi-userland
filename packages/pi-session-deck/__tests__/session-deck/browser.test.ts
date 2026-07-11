@@ -88,6 +88,61 @@ function renderText(browser: SessionDeckBrowser, width = 120): string {
   return renderLines(browser, width).join('\n');
 }
 
+function buildRepoRecord(
+  runtimeId: string,
+  sessionName: string,
+  repoName: string | null,
+  qualifiedRepoName: string | null,
+  overrides: Partial<SessionDeckRecord> = {},
+): SessionDeckRecord {
+  return buildSnapshotRecord({
+    runtimeId,
+    pid: overrides.pid ?? 100,
+    sessionId: overrides.sessionId ?? `session-${runtimeId}`,
+    sessionName,
+    repoName,
+    qualifiedRepoName,
+    cwd: repoName === null ? `${HOME}/scratch/${runtimeId}` : `${HOME}/${repoName}`,
+    branch: repoName === null ? null : 'main',
+    prUrl: repoName === null ? null : 'https://github.com/example/repo/pull/1',
+    chips: [],
+    ...overrides,
+  });
+}
+
+function findLineIndex(
+  lines: string[],
+  predicate: (line: string) => boolean,
+  description: string,
+): number {
+  const index = lines.findIndex(predicate);
+  expect(index, `expected ${description}`).toBeGreaterThanOrEqual(0);
+  return index;
+}
+
+function getRepoRow(lines: string[], labels: string[]): string {
+  const row = lines.find(
+    (line) => labels.filter((label) => line.includes(label)).length >= Math.min(2, labels.length),
+  );
+  expect(row, `expected repo row with labels: ${labels.join(', ')}`).toBeDefined();
+  return row!;
+}
+
+function expectLabelsInOrder(line: string, labels: string[]): void {
+  let previousIndex = -1;
+
+  for (const label of labels) {
+    const index = line.indexOf(label);
+    expect(index, `expected ${label} in ${line}`).toBeGreaterThanOrEqual(0);
+    expect(index).toBeGreaterThan(previousIndex);
+    previousIndex = index;
+  }
+}
+
+function countVisibleLabels(line: string, labels: string[]): number {
+  return labels.filter((label) => line.includes(label)).length;
+}
+
 function createBrowser(
   overrides: Partial<{
     all: boolean;
@@ -134,7 +189,327 @@ describe('SessionDeckBrowser', () => {
     expect(output).toContain('Reap complete: removed 1 expired presence record.');
     expect(output).toContain('Removed:');
     expect(output).toContain('- rt-expired');
-    expect(output).toContain('› ● idle  alpha  project · #42 · 5s · main');
+    expect(output).toContain('› ○ idle  alpha  project · #42 · 5s · main');
+  });
+
+  it('shows repo-switch help text and places the repo row between reap chrome and the list', () => {
+    const browser = createBrowser({
+      initialView: buildSnapshot({
+        records: [
+          buildRepoRecord('rt-alpha', 'alpha-session', 'alpha', 'org/alpha'),
+          buildRepoRecord('rt-none', 'scratch-worker', null, null),
+        ],
+      }),
+      reapLines: ['Reap complete: removed 1 expired presence record.'],
+    });
+
+    const lines = renderLines(browser);
+    const helpIndex = findLineIndex(
+      lines,
+      (line) => line.includes('↑↓ move · ←→ switch repo · enter details · r refresh · q close'),
+      'help line',
+    );
+    const reapIndex = findLineIndex(lines, (line) => line.includes('Reap complete:'), 'reap line');
+    const repoRowIndex = findLineIndex(
+      lines,
+      (line) => line.includes('all') && line.includes('alpha') && line.includes('N/A'),
+      'repo row',
+    );
+    const listIndex = findLineIndex(lines, (line) => line.startsWith('› '), 'selected list row');
+
+    expect(helpIndex).toBeLessThan(reapIndex);
+    expect(reapIndex).toBeLessThan(repoRowIndex);
+    expect(lines[repoRowIndex + 1]).toBe('');
+    expect(listIndex).toBe(repoRowIndex + 2);
+  });
+
+  it('sorts named repo filters alphabetically by short name', () => {
+    const browser = createBrowser({
+      initialView: buildSnapshot({
+        records: [
+          buildRepoRecord('rt-zeta', 'zeta-session', 'zeta', 'org/zeta'),
+          buildRepoRecord('rt-beta', 'beta-session', 'beta', 'org/beta'),
+          buildRepoRecord('rt-alpha', 'alpha-session', 'alpha', 'org/alpha'),
+        ],
+      }),
+    });
+
+    const repoRow = getRepoRow(renderLines(browser), ['all', 'alpha', 'beta', 'zeta']);
+
+    expectLabelsInOrder(repoRow, ['all', 'alpha', 'beta', 'zeta']);
+  });
+
+  it('uses qualified repo labels only for collided short-name filters', () => {
+    const browser = createBrowser({
+      initialView: buildSnapshot({
+        records: [
+          buildRepoRecord('rt-b', 'alpha-b', 'alpha', 'owner-b/alpha'),
+          buildRepoRecord('rt-g', 'gamma-session', 'gamma', 'org/gamma'),
+          buildRepoRecord('rt-a', 'alpha-a', 'alpha', 'owner-a/alpha'),
+        ],
+      }),
+    });
+
+    const repoRow = getRepoRow(renderLines(browser), [
+      'all',
+      'owner-a/alpha',
+      'owner-b/alpha',
+      'gamma',
+    ]);
+
+    expectLabelsInOrder(repoRow, ['all', 'owner-a/alpha', 'owner-b/alpha', 'gamma']);
+    expect(repoRow).not.toContain('org/gamma');
+  });
+
+  it('merges legacy and qualified records for the same short repo when only one qualified identity exists', () => {
+    const browser = createBrowser({
+      initialView: buildSnapshot({
+        records: [
+          buildRepoRecord('rt-alpha-legacy', 'alpha-legacy', 'alpha', null),
+          buildRepoRecord('rt-beta', 'beta-session', 'beta', 'org/beta'),
+          buildRepoRecord('rt-alpha-qualified', 'alpha-qualified', 'alpha', 'owner/alpha', {
+            pid: 202,
+            sessionId: 'session-alpha-qualified',
+          }),
+        ],
+      }),
+    });
+
+    const repoRow = getRepoRow(renderLines(browser), ['all', 'alpha', 'beta']);
+
+    expectLabelsInOrder(repoRow, ['all', 'alpha', 'beta']);
+    expect(repoRow).not.toContain('owner/alpha');
+
+    browser.handleInput('right');
+
+    const output = renderText(browser);
+    expect(output).toContain('› ○ idle  alpha-legacy  alpha · #1 · 5s · main');
+    expect(output).toContain('  ○ idle  alpha-qualified  alpha · #1 · 5s · main');
+    expect(output).toContain('│ alpha-legacy');
+    expect(output).not.toContain('beta-session');
+  });
+
+  it('uses a sliding four-label repo window with chevrons when there are more than four options', () => {
+    const browser = createBrowser({
+      initialView: buildSnapshot({
+        records: [
+          buildRepoRecord('rt-alpha', 'session-a', 'alpha', 'org/alpha'),
+          buildRepoRecord('rt-beta', 'session-b', 'beta', 'org/beta'),
+          buildRepoRecord('rt-charlie', 'session-c', 'charlie', 'org/charlie'),
+          buildRepoRecord('rt-delta', 'session-d', 'delta', 'org/delta'),
+          buildRepoRecord('rt-echo', 'session-e', 'echo', 'org/echo'),
+          buildRepoRecord('rt-foxtrot', 'session-f', 'foxtrot', 'org/foxtrot'),
+          buildRepoRecord('rt-none', 'session-n', null, null),
+        ],
+      }),
+    });
+
+    const labels = ['all', 'alpha', 'beta', 'charlie', 'delta', 'echo', 'foxtrot', 'N/A'];
+    const initialRow = getRepoRow(renderLines(browser), ['all', 'alpha', 'beta', 'charlie']);
+
+    expect(initialRow).toContain('‹');
+    expect(initialRow).toContain('›');
+    expect(countVisibleLabels(initialRow, labels)).toBe(4);
+    expect(initialRow).not.toContain('delta');
+
+    for (let index = 0; index < 7; index += 1) {
+      browser.handleInput('right');
+    }
+
+    const endRow = getRepoRow(renderLines(browser), ['delta', 'echo', 'foxtrot', 'N/A']);
+
+    expect(endRow).toContain('‹');
+    expect(endRow).toContain('›');
+    expect(countVisibleLabels(endRow, labels)).toBe(4);
+    expect(endRow).toContain('delta');
+    expect(endRow).toContain('echo');
+    expect(endRow).toContain('foxtrot');
+    expect(endRow).toContain('N/A');
+    expect(endRow).not.toContain('all');
+    expect(endRow).not.toContain('alpha');
+    expect(endRow).not.toContain('beta');
+    expect(endRow).not.toContain('charlie');
+  });
+
+  it('accents the selected repo label instead of rendering bracket literals', () => {
+    const fg = vi.fn((_tone: string, text: string) => text);
+    const browser = createBrowser({
+      theme: createTheme({ fg }),
+      initialView: buildSnapshot({
+        records: [
+          buildRepoRecord('rt-alpha', 'alpha-session', 'alpha', 'org/alpha'),
+          buildRepoRecord('rt-none', 'scratch-worker', null, null),
+        ],
+      }),
+    });
+
+    browser.handleInput('right');
+    browser.handleInput('right');
+
+    const output = renderText(browser);
+    const accentText = vi
+      .mocked(fg)
+      .mock.calls.filter(([tone]) => tone === 'accent')
+      .map(([, text]) => text);
+
+    expect(output).toContain('N/A');
+    expect(output).not.toContain('[N/A]');
+    expect(accentText.some((text) => text.includes('N/A'))).toBe(true);
+  });
+
+  it('switches repo filters and updates the visible rows and selected card', () => {
+    const browser = createBrowser({
+      initialView: buildSnapshot({
+        records: [
+          buildRepoRecord('rt-alpha', 'alpha-session', 'alpha', 'org/alpha'),
+          buildRepoRecord('rt-beta', 'beta-session', 'beta', 'org/beta'),
+        ],
+      }),
+    });
+
+    browser.handleInput('right');
+    browser.handleInput('right');
+
+    const output = renderText(browser);
+
+    expect(output).toContain('› ○ idle  beta-session  beta · #1 · 5s · main');
+    expect(output).toContain('│ beta-session');
+    expect(output).not.toContain('alpha-session  alpha');
+  });
+
+  it('preserves the selected runtime when switching repo filters if it remains visible', () => {
+    const browser = createBrowser({
+      initialView: buildSnapshot({
+        records: [
+          buildRepoRecord('rt-alpha-1', 'alpha-one', 'alpha', 'org/alpha'),
+          buildRepoRecord('rt-beta', 'beta-one', 'beta', 'org/beta'),
+          buildRepoRecord('rt-alpha-2', 'alpha-two', 'alpha', 'org/alpha'),
+        ],
+      }),
+    });
+
+    browser.handleInput('down');
+    browser.handleInput('down');
+    browser.handleInput('right');
+
+    const output = renderText(browser);
+
+    expect(output).toContain('  ○ idle  alpha-one  alpha · #1 · 5s · main');
+    expect(output).toContain('› ○ idle  alpha-two  alpha · #1 · 5s · main');
+    expect(output).toContain('│ alpha-two');
+    expect(output).not.toContain('beta-one');
+  });
+
+  it('resets to the first visible row when switching repo filters hides the selected runtime', () => {
+    const browser = createBrowser({
+      initialView: buildSnapshot({
+        records: [
+          buildRepoRecord('rt-alpha-1', 'alpha-one', 'alpha', 'org/alpha'),
+          buildRepoRecord('rt-beta', 'beta-one', 'beta', 'org/beta'),
+          buildRepoRecord('rt-alpha-2', 'alpha-two', 'alpha', 'org/alpha'),
+        ],
+      }),
+    });
+
+    browser.handleInput('down');
+    browser.handleInput('right');
+
+    const output = renderText(browser);
+
+    expect(output).toContain('› ○ idle  alpha-one  alpha · #1 · 5s · main');
+    expect(output).toContain('  ○ idle  alpha-two  alpha · #1 · 5s · main');
+    expect(output).toContain('│ alpha-one');
+    expect(output).not.toContain('beta-one');
+  });
+
+  it('adds N/A last only when no-repo sessions exist and filters those rows', () => {
+    const browser = createBrowser({
+      initialView: buildSnapshot({
+        records: [
+          buildRepoRecord('rt-alpha', 'alpha-session', 'alpha', 'org/alpha'),
+          buildRepoRecord('rt-beta', 'beta-session', 'beta', 'org/beta'),
+          buildRepoRecord('rt-none', 'scratch-worker', null, null, { cwd: null }),
+        ],
+      }),
+    });
+
+    const repoRow = getRepoRow(renderLines(browser), ['all', 'alpha', 'beta', 'N/A']);
+    expectLabelsInOrder(repoRow, ['all', 'alpha', 'beta', 'N/A']);
+
+    browser.handleInput('right');
+    browser.handleInput('right');
+    browser.handleInput('right');
+
+    const output = renderText(browser);
+
+    expect(output).toContain('› ○ idle  scratch-worker  5s');
+    expect(output).toContain('│ scratch-worker');
+    expect(output).not.toContain('alpha-session');
+    expect(output).not.toContain('beta-session');
+    expect(output).not.toContain('│ repo:');
+  });
+
+  it('omits the N/A repo filter when every visible session has repo identity', () => {
+    const browser = createBrowser({
+      initialView: buildSnapshot({
+        records: [
+          buildRepoRecord('rt-alpha', 'alpha-session', 'alpha', 'org/alpha'),
+          buildRepoRecord('rt-beta', 'beta-session', 'beta', 'org/beta'),
+        ],
+      }),
+    });
+
+    const repoRow = getRepoRow(renderLines(browser), ['all', 'alpha', 'beta']);
+
+    expect(repoRow).not.toContain('N/A');
+  });
+
+  it('keeps real __all__ and __no-repo__ repo names distinct from special filters', () => {
+    const browser = createBrowser({
+      initialView: buildSnapshot({
+        records: [
+          buildRepoRecord('rt-all-name', 'all-name-session', '__all__', null),
+          buildRepoRecord('rt-no-name', 'no-name-session', '__no-repo__', null, {
+            pid: 202,
+            sessionId: 'session-no-name',
+          }),
+          buildRepoRecord('rt-none', 'scratch-worker', null, null, {
+            pid: 303,
+            sessionId: 'session-none',
+            cwd: null,
+            branch: null,
+            prUrl: null,
+          }),
+        ],
+      }),
+    });
+
+    const repoRow = renderLines(browser).find(
+      (line) => line.includes('__all__') && line.includes('__no-repo__') && line.includes('N/A'),
+    );
+    expect(repoRow).toBeDefined();
+
+    browser.handleInput('right');
+
+    let output = renderText(browser);
+    expect(output).toContain('› ○ idle  all-name-session  __all__ · #1 · 5s · main');
+    expect(output).not.toContain('no-name-session');
+    expect(output).not.toContain('scratch-worker');
+
+    browser.handleInput('right');
+
+    output = renderText(browser);
+    expect(output).toContain('› ○ idle  no-name-session  __no-repo__ · #1 · 5s · main');
+    expect(output).not.toContain('all-name-session');
+    expect(output).not.toContain('scratch-worker');
+
+    browser.handleInput('right');
+
+    output = renderText(browser);
+    expect(output).toContain('› ○ idle  scratch-worker  5s');
+    expect(output).toContain('│ scratch-worker');
+    expect(output).not.toContain('all-name-session');
+    expect(output).not.toContain('no-name-session');
   });
 
   it('keeps the top-pane dashboard unchanged and shows session ids by default only in the selected card', () => {
@@ -167,12 +542,12 @@ describe('SessionDeckBrowser', () => {
     const output = renderText(browser);
 
     expect(output).toContain('Pi sessions · 1 live · 1 stale · 0 dead · 0 unknown');
-    expect(output).toContain('› ● idle  alpha  project · #42 · 5s · main');
+    expect(output).toContain('› ○ idle  alpha  project · #42 · 5s · main');
     expect(output).toContain('  │ merge-ready clean · queue 2');
-    expect(output).toContain('  ◌ thinking  bravo  project · #42 · 4m · main');
+    expect(output).toContain('  ◒ thinking  bravo  project · #42 · 4m · main');
     expect(output).toContain('    no chips');
     expect(output).toContain(
-      '  │ merge-ready clean · queue 2\n\n  ◌ thinking  bravo  project · #42 · 4m · main',
+      '  │ merge-ready clean · queue 2\n\n  ◒ thinking  bravo  project · #42 · 4m · main',
     );
     expect(output).not.toContain('Selected session');
     expect(output).toContain('┌');
@@ -191,6 +566,69 @@ describe('SessionDeckBrowser', () => {
     expect(output).not.toContain('│ runtime: 922f7ac8deadbeef · pid: 101');
     expect(output).toContain('│ diagnostics: activity_stale');
     expect(output).not.toContain('│   - merge-ready clean');
+  });
+
+  it('uses the approved activity glyphs in top-pane rows without changing card presence text', () => {
+    const browser = createBrowser({
+      all: true,
+      initialView: buildSnapshot({
+        records: [
+          buildSnapshotRecord({ sessionName: 'idle-row', chips: [] }),
+          buildSnapshotRecord({
+            runtimeId: 'rt-thinking',
+            pid: 202,
+            sessionId: 'session-thinking',
+            sessionName: 'thinking-row',
+            presenceState: 'stale',
+            presenceReason: 'heartbeat_expired',
+            heartbeatAgeMs: 240_000,
+            activityState: 'thinking',
+            activityAgeMs: 180_000,
+            chips: [],
+          }),
+          buildSnapshotRecord({
+            runtimeId: 'rt-tool',
+            pid: 303,
+            sessionId: 'session-tool',
+            sessionName: 'tool-row',
+            activityState: 'tool-running',
+            activityAgeMs: 12_000,
+            currentToolName: 'bash',
+            chips: [],
+          }),
+          buildSnapshotRecord({
+            runtimeId: 'rt-error',
+            pid: 404,
+            sessionId: 'session-error',
+            sessionName: 'error-row',
+            activityState: 'error',
+            activityAgeMs: 42_000,
+            lastError: 'boom',
+            chips: [],
+          }),
+          buildSnapshotRecord({
+            runtimeId: 'rt-unknown',
+            pid: 505,
+            sessionId: 'session-unknown',
+            sessionName: 'unknown-row',
+            presenceState: 'dead',
+            presenceReason: 'pid_missing',
+            heartbeatAgeMs: 540_000,
+            activityState: 'unknown',
+            chips: [],
+          }),
+        ],
+      }),
+    });
+
+    const output = renderText(browser);
+
+    expect(output).toContain('› ○ idle  idle-row  project · #42 · 5s · main');
+    expect(output).toContain('  ◒ thinking  thinking-row  project · #42 · 4m · main');
+    expect(output).toContain('  ◆ tool-running  tool-row  project · #42 · 12s · main');
+    expect(output).toContain('  ! error  error-row  project · #42 · 42s · main');
+    expect(output).toContain('  ? unknown  unknown-row  project · #42 · 9m · main');
+    expect(output).toContain('│ presence: ● live · activity: idle · heartbeat: 5s ago');
   });
 
   it('shows the session id without inventing a pid when the selected runtime has none', () => {
@@ -282,6 +720,32 @@ describe('SessionDeckBrowser', () => {
     expect(output).not.toContain('session-9');
   });
 
+  it('keeps the 8-row session paging inside the active repo filter', () => {
+    const alphaRecords = Array.from({ length: 10 }, (_, index) =>
+      buildRepoRecord(`rt-alpha-${index + 1}`, `alpha-${index + 1}`, 'alpha', 'org/alpha', {
+        pid: 200 + index,
+        sessionId: `session-alpha-${index + 1}`,
+      }),
+    );
+    const betaRecords = Array.from({ length: 3 }, (_, index) =>
+      buildRepoRecord(`rt-beta-${index + 1}`, `beta-${index + 1}`, 'beta', 'org/beta', {
+        pid: 400 + index,
+        sessionId: `session-beta-${index + 1}`,
+      }),
+    );
+    const browser = createBrowser({
+      initialView: buildSnapshot({ records: [...alphaRecords, ...betaRecords] }),
+    });
+
+    browser.handleInput('right');
+    const output = renderText(browser);
+
+    expect(output).toContain('Showing 1-8 of 10');
+    expect(output).toContain('alpha-8');
+    expect(output).not.toContain('alpha-9');
+    expect(output).not.toContain('beta-1');
+  });
+
   it('uses session name, then repo name, then cwd basename, then runtime id in the list and card', () => {
     const browser = createBrowser({
       initialView: buildSnapshot({
@@ -318,7 +782,7 @@ describe('SessionDeckBrowser', () => {
       }),
     });
 
-    expect(renderText(browser)).toContain('› ● idle  repo-one  5s');
+    expect(renderText(browser)).toContain('› ○ idle  repo-one  5s');
     expect(renderText(browser)).toContain('│ repo-one');
     expect(renderText(browser)).toContain('│ repo: owner/repo-one');
     expect(renderText(browser)).toContain('│ cwd: ~/repo-one/packages/cli');
@@ -326,14 +790,14 @@ describe('SessionDeckBrowser', () => {
     browser.handleInput('down');
 
     let output = renderText(browser);
-    expect(output).toContain('› ● idle  worker  5s');
+    expect(output).toContain('› ○ idle  worker  5s');
     expect(output).toContain('│ worker');
     expect(output).toContain('│ cwd: ~/scratch/worker');
 
     browser.handleInput('down');
 
     output = renderText(browser);
-    expect(output).toContain('› ● idle  abcdef12  5s');
+    expect(output).toContain('› ○ idle  abcdef12  5s');
     expect(output).toContain('│ abcdef12');
     expect(output).toContain('│ runtime: abcdef1234567890 · pid: 303');
     expect(output).not.toContain('│ session:');
@@ -367,7 +831,7 @@ describe('SessionDeckBrowser', () => {
 
     expect(requestRender).toHaveBeenCalledTimes(1);
     const selectedOutput = renderText(browser);
-    expect(selectedOutput).toContain('› ◌ thinking  bravo  project · #42 · 4m · main');
+    expect(selectedOutput).toContain('› ◒ thinking  bravo  project · #42 · 4m · main');
     expect(selectedOutput).toContain('│ repo: owner/project');
     expect(selectedOutput).toContain('  │ no chips');
     expect(selectedOutput).toContain(
@@ -425,10 +889,10 @@ describe('SessionDeckBrowser', () => {
       .map(([, text]) => text);
 
     expect(
-      dimmedText.some((text) => text.includes('◌ thinking  bravo  project · #42 · 4m · main')),
+      dimmedText.some((text) => text.includes('◒ thinking  bravo  project · #42 · 4m · main')),
     ).toBe(true);
     expect(
-      dimmedText.some((text) => text.includes('× unknown  charlie  project · #42 · 9m · main')),
+      dimmedText.some((text) => text.includes('? unknown  charlie  project · #42 · 9m · main')),
     ).toBe(true);
     expect(dimmedText.some((text) => text.includes('session warning'))).toBe(true);
   });
@@ -449,7 +913,7 @@ describe('SessionDeckBrowser', () => {
       .mock.calls.filter(([tone]) => tone === 'accent')
       .map(([, text]) => text);
 
-    expect(accentText.some((text) => text.includes('› ● idle  alpha'))).toBe(true);
+    expect(accentText.some((text) => text.includes('› ○ idle  alpha'))).toBe(true);
     expect(accentText.some((text) => text === '  │ ')).toBe(true);
     expect(accentText.some((text) => text.includes('merge-ready clean · queue 2'))).toBe(false);
   });
@@ -465,24 +929,18 @@ describe('SessionDeckBrowser', () => {
     expect(onClose).toHaveBeenCalledTimes(2);
   });
 
-  it('manual refreshes in place and preserves selection by runtime id', async () => {
+  it('manual refreshes in place and preserves repo selection plus row selection', async () => {
     const requestRender = vi.fn();
     const reload = vi.fn<() => Promise<SessionDeckSnapshot>>().mockResolvedValue(
       buildSnapshot({
         records: [
-          buildSnapshotRecord({
-            runtimeId: 'rt-3',
+          buildRepoRecord('rt-0', 'alpha-zero', 'alpha', 'org/alpha'),
+          buildRepoRecord('rt-3', 'alpha-two refreshed', 'alpha', 'org/alpha', {
             pid: 303,
             sessionId: 'session-3',
-            sessionName: 'charlie',
-          }),
-          buildSnapshotRecord({
-            runtimeId: 'rt-2',
-            pid: 202,
-            sessionId: 'session-2',
-            sessionName: 'beta',
             chips: ['queue 2'],
           }),
+          buildRepoRecord('rt-4', 'gamma-one', 'gamma', 'org/gamma'),
         ],
       }),
     );
@@ -491,51 +949,92 @@ describe('SessionDeckBrowser', () => {
       reload,
       initialView: buildSnapshot({
         records: [
-          buildSnapshotRecord({ sessionName: 'alpha' }),
-          buildSnapshotRecord({
-            runtimeId: 'rt-2',
+          buildRepoRecord('rt-1', 'alpha-one', 'alpha', 'org/alpha'),
+          buildRepoRecord('rt-2', 'beta-one', 'beta', 'org/beta', {
             pid: 202,
             sessionId: 'session-2',
-            sessionName: 'bravo',
-            chips: [],
+          }),
+          buildRepoRecord('rt-3', 'alpha-two', 'alpha', 'org/alpha', {
+            pid: 303,
+            sessionId: 'session-3',
           }),
         ],
       }),
     });
 
+    browser.handleInput('down');
+    browser.handleInput('down');
+    browser.handleInput('right');
+    browser.handleInput('r');
+
+    await vi.waitFor(() => {
+      expect(reload).toHaveBeenCalledTimes(1);
+      const output = renderText(browser);
+      expect(output).toContain('  ○ idle  alpha-zero  alpha · #1 · 5s · main');
+      expect(output).toContain('› ○ idle  alpha-two refreshed  alpha · #1 · 5s · main');
+      expect(output).toContain('│ alpha-two refreshed');
+      expect(output).not.toContain('beta-one');
+      expect(output).not.toContain('gamma-one');
+    });
+
+    expect(requestRender).toHaveBeenCalled();
+  });
+
+  it('preserves the active repo when refresh enriches it with a first qualified identity', async () => {
+    const reload = vi.fn<() => Promise<SessionDeckSnapshot>>().mockResolvedValue(
+      buildSnapshot({
+        records: [
+          buildRepoRecord('rt-alpha-1', 'alpha-one refreshed', 'alpha', 'owner/alpha'),
+          buildRepoRecord('rt-alpha-2', 'alpha-two refreshed', 'alpha', 'owner/alpha', {
+            pid: 202,
+            sessionId: 'session-alpha-2',
+          }),
+          buildRepoRecord('rt-beta', 'beta-one', 'beta', 'org/beta'),
+        ],
+      }),
+    );
+    const browser = createBrowser({
+      reload,
+      initialView: buildSnapshot({
+        records: [
+          buildRepoRecord('rt-alpha-1', 'alpha-one', 'alpha', null),
+          buildRepoRecord('rt-alpha-2', 'alpha-two', 'alpha', null, {
+            pid: 202,
+            sessionId: 'session-alpha-2',
+          }),
+          buildRepoRecord('rt-beta', 'beta-one', 'beta', 'org/beta'),
+        ],
+      }),
+    });
+
+    browser.handleInput('right');
     browser.handleInput('down');
     browser.handleInput('r');
 
     await vi.waitFor(() => {
       expect(reload).toHaveBeenCalledTimes(1);
       const output = renderText(browser);
-      expect(output).toContain('  ● idle  charlie  project · #42 · 5s · main');
-      expect(output).toContain('› ● idle  beta  project · #42 · 5s · main');
+      expect(output).toContain('  ○ idle  alpha-one refreshed  alpha · #1 · 5s · main');
+      expect(output).toContain('› ○ idle  alpha-two refreshed  alpha · #1 · 5s · main');
+      expect(output).toContain('│ alpha-two refreshed');
+      expect(output).not.toContain('beta-one');
     });
-
-    expect(requestRender).toHaveBeenCalled();
   });
 
-  it('auto-refreshes every 15s, stays silent on success, and preserves selection by runtime id', async () => {
+  it('auto-refreshes every 15s, stays silent on success, and preserves repo selection plus row selection', async () => {
     vi.useFakeTimers();
 
     const requestRender = vi.fn();
     const reload = vi.fn<() => Promise<SessionDeckSnapshot>>().mockResolvedValue(
       buildSnapshot({
         records: [
-          buildSnapshotRecord({
-            runtimeId: 'rt-3',
+          buildRepoRecord('rt-0', 'alpha-zero', 'alpha', 'org/alpha'),
+          buildRepoRecord('rt-3', 'alpha-two refreshed', 'alpha', 'org/alpha', {
             pid: 303,
             sessionId: 'session-3',
-            sessionName: 'charlie',
-          }),
-          buildSnapshotRecord({
-            runtimeId: 'rt-2',
-            pid: 202,
-            sessionId: 'session-2',
-            sessionName: 'beta',
             chips: ['queue 2'],
           }),
+          buildRepoRecord('rt-4', 'gamma-one', 'gamma', 'org/gamma'),
         ],
       }),
     );
@@ -544,30 +1043,72 @@ describe('SessionDeckBrowser', () => {
       reload,
       initialView: buildSnapshot({
         records: [
-          buildSnapshotRecord({ sessionName: 'alpha' }),
-          buildSnapshotRecord({
-            runtimeId: 'rt-2',
+          buildRepoRecord('rt-1', 'alpha-one', 'alpha', 'org/alpha'),
+          buildRepoRecord('rt-2', 'beta-one', 'beta', 'org/beta', {
             pid: 202,
             sessionId: 'session-2',
-            sessionName: 'bravo',
-            chips: [],
+          }),
+          buildRepoRecord('rt-3', 'alpha-two', 'alpha', 'org/alpha', {
+            pid: 303,
+            sessionId: 'session-3',
           }),
         ],
       }),
     });
 
     browser.handleInput('down');
+    browser.handleInput('down');
+    browser.handleInput('right');
     requestRender.mockClear();
 
     await vi.advanceTimersByTimeAsync(15_000);
 
     expect(reload).toHaveBeenCalledTimes(1);
     const output = renderText(browser);
-    expect(output).toContain('  ● idle  charlie  project · #42 · 5s · main');
-    expect(output).toContain('› ● idle  beta  project · #42 · 5s · main');
+    expect(output).toContain('  ○ idle  alpha-zero  alpha · #1 · 5s · main');
+    expect(output).toContain('› ○ idle  alpha-two refreshed  alpha · #1 · 5s · main');
+    expect(output).toContain('│ alpha-two refreshed');
+    expect(output).not.toContain('beta-one');
+    expect(output).not.toContain('gamma-one');
     expect(output).not.toContain('Refreshing session deck…');
     expect(output).not.toContain('Auto refresh failed:');
     expect(requestRender).toHaveBeenCalled();
+  });
+
+  it('falls back to all when the active repo disappears on refresh', async () => {
+    const reload = vi.fn<() => Promise<SessionDeckSnapshot>>().mockResolvedValue(
+      buildSnapshot({
+        records: [
+          buildRepoRecord('rt-0', 'alpha-zero', 'alpha', 'org/alpha'),
+          buildRepoRecord('rt-4', 'gamma-one', 'gamma', 'org/gamma'),
+        ],
+      }),
+    );
+    const browser = createBrowser({
+      reload,
+      initialView: buildSnapshot({
+        records: [
+          buildRepoRecord('rt-1', 'alpha-one', 'alpha', 'org/alpha'),
+          buildRepoRecord('rt-2', 'beta-one', 'beta', 'org/beta', {
+            pid: 202,
+            sessionId: 'session-2',
+          }),
+        ],
+      }),
+    });
+
+    browser.handleInput('right');
+    browser.handleInput('right');
+    browser.handleInput('r');
+
+    await vi.waitFor(() => {
+      expect(reload).toHaveBeenCalledTimes(1);
+      const output = renderText(browser);
+      expect(output).toContain('› ○ idle  alpha-zero  alpha · #1 · 5s · main');
+      expect(output).toContain('  ○ idle  gamma-one  gamma · #1 · 5s · main');
+      expect(output).toContain('│ alpha-zero');
+      expect(output).not.toContain('beta-one');
+    });
   });
 
   it('coalesces overlapping auto-refresh ticks', async () => {
@@ -599,8 +1140,67 @@ describe('SessionDeckBrowser', () => {
 
     await vi.advanceTimersByTimeAsync(5_000);
 
-    expect(renderText(browser)).toContain('› ● idle  beta  project · #42 · 5s · main');
+    expect(renderText(browser)).toContain('› ○ idle  beta  project · #42 · 5s · main');
     expect(requestRender).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the latest repo and row selection when refresh completes after in-flight navigation', async () => {
+    let resolveReload: ((snapshot: SessionDeckSnapshot) => void) | null = null;
+    const reload = vi.fn(
+      () =>
+        new Promise<SessionDeckSnapshot>((resolve) => {
+          resolveReload = resolve;
+        }),
+    );
+    const browser = createBrowser({
+      reload,
+      initialView: buildSnapshot({
+        records: [
+          buildRepoRecord('rt-alpha', 'alpha-one', 'alpha', 'org/alpha'),
+          buildRepoRecord('rt-beta-1', 'beta-one', 'beta', 'org/beta', {
+            pid: 202,
+            sessionId: 'session-beta-1',
+          }),
+          buildRepoRecord('rt-beta-2', 'beta-two', 'beta', 'org/beta', {
+            pid: 303,
+            sessionId: 'session-beta-2',
+          }),
+        ],
+      }),
+    });
+
+    browser.handleInput('r');
+    browser.handleInput('right');
+    browser.handleInput('right');
+    browser.handleInput('down');
+
+    expect(resolveReload).not.toBeNull();
+    resolveReload!(
+      buildSnapshot({
+        records: [
+          buildRepoRecord('rt-alpha', 'alpha-one refreshed', 'alpha', 'org/alpha'),
+          buildRepoRecord('rt-beta-1', 'beta-one refreshed', 'beta', 'org/beta', {
+            pid: 202,
+            sessionId: 'session-beta-1',
+          }),
+          buildRepoRecord('rt-beta-2', 'beta-two refreshed', 'beta', 'org/beta', {
+            pid: 303,
+            sessionId: 'session-beta-2',
+          }),
+          buildRepoRecord('rt-gamma', 'gamma-one', 'gamma', 'org/gamma'),
+        ],
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(reload).toHaveBeenCalledTimes(1);
+      const output = renderText(browser);
+      expect(output).toContain('  ○ idle  beta-one refreshed  beta · #1 · 5s · main');
+      expect(output).toContain('› ○ idle  beta-two refreshed  beta · #1 · 5s · main');
+      expect(output).toContain('│ beta-two refreshed');
+      expect(output).not.toContain('alpha-one refreshed');
+      expect(output).not.toContain('gamma-one');
+    });
   });
 
   it('keeps auto-refresh failure UI muted', async () => {
@@ -655,7 +1255,7 @@ describe('SessionDeckBrowser', () => {
     browser.handleInput('enter');
     const output = renderText(browser, 44);
 
-    expect(output).toContain('› ● idle  alpha  project · #42 · 5s');
+    expect(output).toContain('› ○ idle  alpha  project · #42 · 5s');
     expect(output).not.toContain('session-deck-cleanup');
     expect(output).toContain('merge-ready clean · queue 2');
     expect(output).not.toContain('needs-review soon');

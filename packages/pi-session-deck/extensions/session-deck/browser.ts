@@ -12,9 +12,51 @@ import type { SessionDeckBrowserRow } from './browser-render.js';
 import type { SessionDeckRecord, SessionDeckSnapshot } from './types.js';
 
 const DEFAULT_MAX_VISIBLE_ROWS = 8;
+const DEFAULT_MAX_VISIBLE_REPOS = 4;
 const AUTO_REFRESH_INTERVAL_MS = 15_000;
+const ALL_REPO_FILTER_KEY = Symbol('all-repo-filter');
+const NO_REPO_FILTER_KEY = Symbol('no-repo-filter');
 
 type SessionDeckRefreshMode = 'manual' | 'auto';
+type SessionDeckRepoKey = string | typeof ALL_REPO_FILTER_KEY | typeof NO_REPO_FILTER_KEY;
+type SessionDeckNamedRepoFilter = {
+  kind: 'named';
+  key: string;
+  shortLabel: string;
+  qualifiedLabel: string | null;
+};
+type SessionDeckRepoFilter = { kind: 'all' } | { kind: 'no-repo' } | SessionDeckNamedRepoFilter;
+
+interface SessionDeckRepoOption {
+  key: SessionDeckRepoKey;
+  label: string;
+  filter: SessionDeckRepoFilter;
+}
+
+interface SessionDeckRepoState {
+  options: SessionDeckRepoOption[];
+  recordsByKey: Map<SessionDeckRepoKey, SessionDeckRecord[]>;
+}
+
+interface SessionDeckNamedRepoBucket {
+  key: string;
+  shortLabel: string;
+  qualifiedLabel: string | null;
+  records: SessionDeckRecord[];
+}
+
+interface SessionDeckPendingRepoGroup {
+  shortLabel: string;
+  qualifiedLabels: Set<string>;
+  records: SessionDeckRecord[];
+}
+
+interface SessionDeckBrowserSelection {
+  repoState: SessionDeckRepoState;
+  repoIndex: number;
+  repoOption: SessionDeckRepoOption;
+  records: SessionDeckRecord[];
+}
 
 export interface SessionDeckBrowserOptions {
   all: boolean;
@@ -37,6 +79,7 @@ export class SessionDeckBrowser {
   private readonly theme: Theme;
 
   private view: SessionDeckSnapshot;
+  private selectedRepoKey: SessionDeckRepoKey = ALL_REPO_FILTER_KEY;
   private selectedIndex = 0;
   private detailVisible = true;
   private refreshStatus: { message: string; tone: 'muted' | 'warning' } | null = null;
@@ -87,6 +130,18 @@ export class SessionDeckBrowser {
       return;
     }
 
+    const selection = this.getSelection();
+
+    if (matchesKey(data, 'left')) {
+      this.switchRepo(-1, selection);
+      return;
+    }
+
+    if (matchesKey(data, 'right')) {
+      this.switchRepo(1, selection);
+      return;
+    }
+
     if (matchesKey(data, 'up')) {
       this.selectedIndex = Math.max(0, this.selectedIndex - 1);
       this.refreshStatus = null;
@@ -95,7 +150,7 @@ export class SessionDeckBrowser {
     }
 
     if (matchesKey(data, 'down')) {
-      this.selectedIndex = Math.min(this.view.records.length - 1, this.selectedIndex + 1);
+      this.selectedIndex = Math.min(selection.records.length - 1, this.selectedIndex + 1);
       this.refreshStatus = null;
       this.bump();
     }
@@ -106,12 +161,16 @@ export class SessionDeckBrowser {
       return this.cachedLines;
     }
 
+    const selection = this.getSelection();
     const lines: string[] = [];
     const title = this.theme.fg(
       'accent',
       this.theme.bold(getSessionDeckBrowserTitle(this.view, this.all)),
     );
-    const help = this.theme.fg('muted', '↑↓ move · enter details · r refresh · q close');
+    const help = this.theme.fg(
+      'muted',
+      '↑↓ move · ←→ switch repo · enter details · r refresh · q close',
+    );
 
     pushWrappedLine(lines, title, width);
     pushWrappedLine(lines, help, width);
@@ -133,19 +192,23 @@ export class SessionDeckBrowser {
       }
     }
 
-    lines.push('');
-
     if (this.view.records.length === 0) {
+      lines.push('');
       pushWrappedLine(lines, getSessionDeckEmptyMessage(this.all), width);
     } else {
+      lines.push(
+        renderRepoRow(this.theme, selection.repoState.options, selection.repoIndex, width),
+      );
+      lines.push('');
+
       const windowed = getVisibleWindow(
-        this.view.records.length,
+        selection.records.length,
         DEFAULT_MAX_VISIBLE_ROWS,
         this.selectedIndex,
       );
 
       for (let index = windowed.start; index < windowed.end; index += 1) {
-        const record = this.view.records[index]!;
+        const record = selection.records[index]!;
         const row = formatSessionDeckBrowserRow(record);
         const isSelected = index === this.selectedIndex;
 
@@ -157,12 +220,12 @@ export class SessionDeckBrowser {
         }
       }
 
-      if (windowed.end - windowed.start < this.view.records.length) {
+      if (windowed.end - windowed.start < selection.records.length) {
         pushWrappedLine(
           lines,
           this.theme.fg(
             'dim',
-            `Showing ${windowed.start + 1}-${windowed.end} of ${this.view.records.length}`,
+            `Showing ${windowed.start + 1}-${windowed.end} of ${selection.records.length}`,
           ),
           width,
         );
@@ -174,7 +237,7 @@ export class SessionDeckBrowser {
     if (!this.detailVisible) {
       pushWrappedLine(lines, this.theme.fg('dim', 'Details hidden · Enter to show.'), width);
     } else {
-      const selected = this.view.records[this.selectedIndex] ?? null;
+      const selected = selection.records[this.selectedIndex] ?? null;
       if (selected === null) {
         pushWrappedLine(lines, this.theme.fg('dim', 'No selected session.'), width);
       } else {
@@ -237,9 +300,17 @@ export class SessionDeckBrowser {
           return;
         }
 
-        const selectedRuntimeId = this.view.records[this.selectedIndex]?.runtimeId ?? null;
+        const selection = this.getSelection();
+        const selectedRuntimeId = selection.records[this.selectedIndex]?.runtimeId ?? null;
+        const nextRepoState = buildRepoState(nextView.records);
+        const nextRepoOption = getPreservedRepoOption(nextRepoState, selection.repoOption.filter);
+
         this.view = nextView;
-        this.selectedIndex = findSelectedIndex(this.view, selectedRuntimeId);
+        this.selectedRepoKey = nextRepoOption.key;
+        this.selectedIndex = findSelectedIndex(
+          getRepoRecords(nextRepoState.recordsByKey, nextRepoOption.key),
+          selectedRuntimeId,
+        );
         this.refreshStatus = null;
       } catch (error) {
         if (this.disposed) {
@@ -267,6 +338,34 @@ export class SessionDeckBrowser {
     this.autoRefreshInterval.unref?.();
   }
 
+  private switchRepo(direction: -1 | 1, selection: SessionDeckBrowserSelection): void {
+    const nextRepoIndex = clampIndex(
+      selection.repoIndex + direction,
+      selection.repoState.options.length,
+    );
+    if (nextRepoIndex === selection.repoIndex) {
+      return;
+    }
+
+    const selectedRuntimeId = selection.records[this.selectedIndex]?.runtimeId ?? null;
+    const nextRepoKey = selection.repoState.options[nextRepoIndex]?.key;
+    if (nextRepoKey === undefined) {
+      return;
+    }
+
+    this.selectedRepoKey = nextRepoKey;
+    this.selectedIndex = findSelectedIndex(
+      getRepoRecords(selection.repoState.recordsByKey, nextRepoKey),
+      selectedRuntimeId,
+    );
+    this.refreshStatus = null;
+    this.bump();
+  }
+
+  private getSelection(): SessionDeckBrowserSelection {
+    return getRepoSelection(buildRepoState(this.view.records), this.selectedRepoKey);
+  }
+
   private bump(): void {
     if (this.disposed) {
       return;
@@ -275,6 +374,51 @@ export class SessionDeckBrowser {
     this.invalidate();
     this.requestRender();
   }
+}
+
+function renderRepoRow(
+  theme: Theme,
+  options: SessionDeckRepoOption[],
+  selectedIndex: number,
+  width: number,
+): string {
+  if (options.length === 0) {
+    return '';
+  }
+
+  const windowed = getVisibleWindow(options.length, DEFAULT_MAX_VISIBLE_REPOS, selectedIndex);
+  const leftChevron = theme.fg(windowed.start === 0 ? 'dim' : 'muted', '‹');
+  const rightChevron = theme.fg(windowed.end >= options.length ? 'dim' : 'muted', '›');
+  const labels = options
+    .slice(windowed.start, windowed.end)
+    .map((option, index) =>
+      windowed.start + index === selectedIndex ? theme.fg('accent', option.label) : option.label,
+    );
+
+  return layoutRepoRow(leftChevron, labels.join('  '), rightChevron, width);
+}
+
+function layoutRepoRow(
+  leftChevron: string,
+  labelText: string,
+  rightChevron: string,
+  width: number,
+): string {
+  const narrowRow = `${leftChevron}${rightChevron}`;
+  if (width <= visibleWidth(narrowRow)) {
+    return truncateToWidth(narrowRow, width);
+  }
+
+  const compactRow = `${leftChevron} ${rightChevron}`;
+  if (width <= visibleWidth(compactRow)) {
+    return truncateToWidth(compactRow, width);
+  }
+
+  const lead = `${leftChevron} `;
+  const tail = ` ${rightChevron}`;
+  const availableLabelWidth = Math.max(0, width - visibleWidth(lead) - visibleWidth(tail));
+  const labels = availableLabelWidth === 0 ? '' : truncateToWidth(labelText, availableLabelWidth);
+  return truncateToWidth(`${lead}${labels}${tail}`, width);
 }
 
 function renderRowLine1(
@@ -460,13 +604,235 @@ function getVisibleWindow(
   };
 }
 
-function findSelectedIndex(view: SessionDeckSnapshot, runtimeId: string | null): number {
-  if (runtimeId === null) {
-    return clampIndex(0, view.records.length);
+function buildRepoState(records: SessionDeckRecord[]): SessionDeckRepoState {
+  const recordsByKey = new Map<SessionDeckRepoKey, SessionDeckRecord[]>([
+    [ALL_REPO_FILTER_KEY, records],
+  ]);
+  const repoGroups = new Map<string, SessionDeckPendingRepoGroup>();
+  let noRepoRecords: SessionDeckRecord[] | null = null;
+
+  for (const record of records) {
+    const shortLabel = getRecordShortRepoLabel(record);
+    if (shortLabel === null) {
+      noRepoRecords ??= [];
+      noRepoRecords.push(record);
+      continue;
+    }
+
+    let group = repoGroups.get(shortLabel);
+    if (group === undefined) {
+      group = {
+        shortLabel,
+        qualifiedLabels: new Set<string>(),
+        records: [],
+      };
+      repoGroups.set(shortLabel, group);
+    }
+
+    if (record.qualifiedRepoName !== null) {
+      group.qualifiedLabels.add(record.qualifiedRepoName);
+    }
+
+    group.records.push(record);
   }
 
-  const matchedIndex = view.records.findIndex((record) => record.runtimeId === runtimeId);
-  return matchedIndex === -1 ? clampIndex(0, view.records.length) : matchedIndex;
+  const namedBuckets = [...repoGroups.values()]
+    .flatMap(buildNamedRepoBuckets)
+    .sort(compareRepoBuckets);
+  const shortLabelCounts = countShortRepoLabels(namedBuckets);
+  const options: SessionDeckRepoOption[] = [
+    { key: ALL_REPO_FILTER_KEY, label: 'all', filter: { kind: 'all' } },
+  ];
+
+  for (const bucket of namedBuckets) {
+    const label =
+      (shortLabelCounts.get(bucket.shortLabel) ?? 0) > 1 && bucket.qualifiedLabel !== null
+        ? bucket.qualifiedLabel
+        : bucket.shortLabel;
+    recordsByKey.set(bucket.key, bucket.records);
+    options.push({
+      key: bucket.key,
+      label,
+      filter: {
+        kind: 'named',
+        key: bucket.key,
+        shortLabel: bucket.shortLabel,
+        qualifiedLabel: bucket.qualifiedLabel,
+      },
+    });
+  }
+
+  if (noRepoRecords !== null && noRepoRecords.length > 0) {
+    recordsByKey.set(NO_REPO_FILTER_KEY, noRepoRecords);
+    options.push({ key: NO_REPO_FILTER_KEY, label: 'N/A', filter: { kind: 'no-repo' } });
+  }
+
+  return { options, recordsByKey };
+}
+
+function buildNamedRepoBuckets(group: SessionDeckPendingRepoGroup): SessionDeckNamedRepoBucket[] {
+  if (group.qualifiedLabels.size <= 1) {
+    const qualifiedLabel = group.qualifiedLabels.values().next().value ?? null;
+    return [
+      {
+        key: group.shortLabel,
+        shortLabel: group.shortLabel,
+        qualifiedLabel,
+        records: group.records,
+      },
+    ];
+  }
+
+  const qualifiedBuckets = new Map<string, SessionDeckNamedRepoBucket>();
+  const unqualifiedRecords: SessionDeckRecord[] = [];
+
+  for (const record of group.records) {
+    if (record.qualifiedRepoName === null) {
+      unqualifiedRecords.push(record);
+      continue;
+    }
+
+    let bucket = qualifiedBuckets.get(record.qualifiedRepoName);
+    if (bucket === undefined) {
+      bucket = {
+        key: record.qualifiedRepoName,
+        shortLabel: group.shortLabel,
+        qualifiedLabel: record.qualifiedRepoName,
+        records: [],
+      };
+      qualifiedBuckets.set(record.qualifiedRepoName, bucket);
+    }
+
+    bucket.records.push(record);
+  }
+
+  return [
+    ...qualifiedBuckets.values(),
+    ...(unqualifiedRecords.length === 0
+      ? []
+      : [
+          {
+            key: group.shortLabel,
+            shortLabel: group.shortLabel,
+            qualifiedLabel: null,
+            records: unqualifiedRecords,
+          },
+        ]),
+  ];
+}
+
+function getRepoSelection(
+  repoState: SessionDeckRepoState,
+  selectedRepoKey: SessionDeckRepoKey,
+): SessionDeckBrowserSelection {
+  const repoIndex = repoState.options.findIndex((option) => option.key === selectedRepoKey);
+  const resolvedRepoIndex = repoIndex === -1 ? 0 : repoIndex;
+  const repoOption = repoState.options[resolvedRepoIndex] ?? {
+    key: ALL_REPO_FILTER_KEY,
+    label: 'all',
+    filter: { kind: 'all' } as const,
+  };
+
+  return {
+    repoState,
+    repoIndex: resolvedRepoIndex,
+    repoOption,
+    records: getRepoRecords(repoState.recordsByKey, repoOption.key),
+  };
+}
+
+function getRepoRecords(
+  recordsByKey: Map<SessionDeckRepoKey, SessionDeckRecord[]>,
+  repoKey: SessionDeckRepoKey,
+): SessionDeckRecord[] {
+  return recordsByKey.get(repoKey) ?? recordsByKey.get(ALL_REPO_FILTER_KEY) ?? [];
+}
+
+function countShortRepoLabels(buckets: Array<{ shortLabel: string }>): Map<string, number> {
+  return buckets.reduce<Map<string, number>>((counts, bucket) => {
+    counts.set(bucket.shortLabel, (counts.get(bucket.shortLabel) ?? 0) + 1);
+    return counts;
+  }, new Map());
+}
+
+function compareRepoBuckets(
+  left: { key: string; shortLabel: string },
+  right: { key: string; shortLabel: string },
+): number {
+  return (
+    left.shortLabel.localeCompare(right.shortLabel, undefined, { sensitivity: 'base' }) ||
+    left.key.localeCompare(right.key)
+  );
+}
+
+function getRecordShortRepoLabel(record: SessionDeckRecord): string | null {
+  if (record.repoName !== null) {
+    return record.repoName;
+  }
+
+  if (record.qualifiedRepoName !== null) {
+    return getShortRepoLabelFromKey(record.qualifiedRepoName);
+  }
+
+  return null;
+}
+
+function getShortRepoLabelFromKey(repoKey: string): string {
+  const separatorIndex = repoKey.lastIndexOf('/');
+  if (separatorIndex === -1 || separatorIndex === repoKey.length - 1) {
+    return repoKey;
+  }
+
+  return repoKey.slice(separatorIndex + 1);
+}
+
+function getPreservedRepoOption(
+  repoState: SessionDeckRepoState,
+  filter: SessionDeckRepoFilter,
+): SessionDeckRepoOption {
+  if (filter.kind === 'all') {
+    return repoState.options[0]!;
+  }
+
+  if (filter.kind === 'no-repo') {
+    return (
+      repoState.options.find((option) => option.key === NO_REPO_FILTER_KEY) ?? repoState.options[0]!
+    );
+  }
+
+  if (filter.qualifiedLabel !== null) {
+    const qualifiedMatch = repoState.options.find(
+      (option): option is SessionDeckRepoOption & { filter: SessionDeckNamedRepoFilter } =>
+        option.filter.kind === 'named' && option.filter.qualifiedLabel === filter.qualifiedLabel,
+    );
+    if (qualifiedMatch !== undefined) {
+      return qualifiedMatch;
+    }
+  }
+
+  const shortLabelMatches = repoState.options.filter(
+    (option): option is SessionDeckRepoOption & { filter: SessionDeckNamedRepoFilter } =>
+      option.filter.kind === 'named' && option.filter.shortLabel === filter.shortLabel,
+  );
+  if (shortLabelMatches.length === 1) {
+    return shortLabelMatches[0]!;
+  }
+
+  return (
+    repoState.options.find(
+      (option): option is SessionDeckRepoOption & { filter: SessionDeckNamedRepoFilter } =>
+        option.filter.kind === 'named' && option.filter.key === filter.key,
+    ) ?? repoState.options[0]!
+  );
+}
+
+function findSelectedIndex(records: SessionDeckRecord[], runtimeId: string | null): number {
+  if (runtimeId === null) {
+    return clampIndex(0, records.length);
+  }
+
+  const matchedIndex = records.findIndex((record) => record.runtimeId === runtimeId);
+  return matchedIndex === -1 ? clampIndex(0, records.length) : matchedIndex;
 }
 
 function clampIndex(index: number, length: number): number {

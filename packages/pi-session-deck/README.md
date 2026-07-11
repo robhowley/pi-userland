@@ -10,7 +10,7 @@ pi install npm:@robhowley/pi-session-deck
 
 ## Commands
 
-- `/session-deck` — browse current sessions. In TUI mode, it opens an interactive browser; elsewhere, it prints a compact snapshot.
+- `/session-deck` — browse current sessions. In TUI mode, it opens an interactive browser with a repo filter row above the session list; elsewhere, it prints a compact snapshot.
 - `/session-deck --all` — include stale, dead, and unknown sessions, plus diagnostics.
 - `/session-deck --reap` — remove expired presence records before showing results.
 - `/session-deck --identity` — include full identity details such as the session id.
@@ -21,6 +21,7 @@ pi install npm:@robhowley/pi-session-deck
 ## TUI keys
 
 - `↑/↓` move selection.
+- `←/→` switch repo filters in the row above the session list.
 - `enter` toggle details.
 - `r` refresh.
 - `q` / `esc` close.
