@@ -277,7 +277,7 @@ function renderList() {
       ),
     );
 
-    if (record.chips.length > 0) {
+    if (record.chips.length > 0 && !isExpanded) {
       const chips = document.createElement('div');
       chips.className = 'chips chips-inline';
       for (const chip of record.chips) {

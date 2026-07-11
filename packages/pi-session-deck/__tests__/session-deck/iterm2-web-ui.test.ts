@@ -506,6 +506,7 @@ describe('Session Deck iTerm2 web UI', () => {
     ]);
 
     expect(getExpandedCards(harness.elements.list)).toHaveLength(0);
+    expect(findAllByClass(getCards(harness.elements.list)[0]!, 'chips-inline')).toHaveLength(1);
     expect(getCardToggle(getCards(harness.elements.list)[0]!).getAttribute('aria-expanded')).toBe(
       'false',
     );
@@ -516,6 +517,13 @@ describe('Session Deck iTerm2 web UI', () => {
     getCardToggle(getCards(harness.elements.list)[0]!).click();
 
     expect(getExpandedCardTitles(harness.elements.list)).toEqual(['alpha']);
+    expect(
+      findAllByClass(getExpandedCards(harness.elements.list)[0]!, 'chips-inline'),
+    ).toHaveLength(0);
+    expect(
+      getDetailSection(getCardDetail(getExpandedCards(harness.elements.list)[0]!), 'STATUS')
+        .textContent,
+    ).toContain('merge-ready clean');
     expect(getExpandedCards(harness.elements.list)[0]!.textContent).not.toContain('Derived facets');
     expect(findAllByClass(getExpandedCards(harness.elements.list)[0]!, 'chip-subtle')).toHaveLength(
       0,
@@ -524,6 +532,7 @@ describe('Session Deck iTerm2 web UI', () => {
     getCardToggle(getCards(harness.elements.list)[1]!).click();
 
     expect(getExpandedCardTitles(harness.elements.list)).toEqual(['bravo']);
+    expect(findAllByClass(getCards(harness.elements.list)[0]!, 'chips-inline')).toHaveLength(1);
     expect(getCardToggle(getCards(harness.elements.list)[1]!).getAttribute('aria-expanded')).toBe(
       'true',
     );
@@ -531,6 +540,7 @@ describe('Session Deck iTerm2 web UI', () => {
     getCardToggle(getCards(harness.elements.list)[1]!).click();
 
     expect(getExpandedCards(harness.elements.list)).toHaveLength(0);
+    expect(findAllByClass(getCards(harness.elements.list)[1]!, 'chips-inline')).toHaveLength(1);
   });
 
   it('renders the card age at the end of line 1 and keeps repo, PR, and branch on line 2', async () => {
