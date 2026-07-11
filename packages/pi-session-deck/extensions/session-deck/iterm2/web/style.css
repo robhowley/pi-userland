@@ -189,8 +189,7 @@ h2 {
 }
 
 .card-detail {
-  border-top: 1px solid var(--color-divider);
-  padding: 10px 12px 12px;
+  padding: 8px 12px 10px;
   background: var(--color-surface);
 }
 
@@ -294,7 +293,6 @@ h2 {
 
 .detail {
   display: grid;
-  gap: 12px;
 }
 
 .detail-summary {
@@ -308,8 +306,12 @@ h2 {
 
 .detail-section {
   display: grid;
-  gap: 10px;
-  padding-top: 12px;
+  gap: 4px;
+}
+
+.detail-section + .detail-section {
+  margin-top: 6px;
+  padding-top: 6px;
   border-top: 1px solid var(--color-divider);
 }
 
@@ -326,13 +328,9 @@ h2 {
 .detail-row {
   display: grid;
   grid-template-columns: minmax(92px, 110px) minmax(0, 1fr) auto;
-  gap: 10px 12px;
+  gap: 6px 12px;
   align-items: start;
-  padding: 10px 0;
-}
-
-.detail-row + .detail-row {
-  border-top: 1px solid var(--color-divider);
+  padding: 2px 0;
 }
 
 .detail-label {
@@ -348,11 +346,7 @@ h2 {
 }
 
 .detail-chips {
-  padding: 2px 0 10px;
-}
-
-.detail-chips + .detail-row {
-  border-top: 1px solid var(--color-divider);
+  padding: 0 0 2px;
 }
 
 .copy-button {
@@ -363,9 +357,9 @@ h2 {
 
 .detail-diagnostics {
   display: grid;
-  gap: 6px;
+  gap: 4px;
   list-style: none;
-  padding: 2px 0 0;
+  padding: 0;
 }
 
 .diagnostics-panel {

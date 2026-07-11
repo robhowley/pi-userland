@@ -302,20 +302,8 @@ function createRecordDetail(record) {
   const workspaceRepo = record.qualifiedRepoName ?? record.repoName;
   const workspacePr = formatPr(record.prUrl);
   const checkout = formatCheckout(record);
-  const summary = document.createElement('div');
-  summary.className = 'detail-summary';
-  summary.append(
-    createText('div', getDisplayTitle(record).text, 'detail-title'),
-    createText(
-      'div',
-      [workspaceRepo, workspacePr].filter(Boolean).join(' · ') || 'Session details',
-      'summary-line',
-    ),
-    createText('div', formatStatusLine(record), 'summary-line detail-liveness'),
-  );
 
   detail.append(
-    summary,
     createDetailSection('IDENTITY', [
       createDetailRow('Session ID', record.sessionId, {
         copyLabel: 'Session ID',
@@ -514,20 +502,6 @@ function formatPr(prUrl) {
   }
   const match = prUrl.match(/\/pull\/(\d+)$/u);
   return match ? `#${match[1]}` : prUrl;
-}
-
-function formatStatusLine(record) {
-  return [
-    `${getPresenceIcon(record.presenceState)} ${record.presenceState}`,
-    formatSelectedActivity(record),
-    `heartbeat ${formatDuration(record.heartbeatAgeMs)} ago`,
-  ].join(' · ');
-}
-
-function formatSelectedActivity(record) {
-  const activity = getActivityDisplay(record);
-  const lead = activity.detail ? `${activity.label}: ${activity.detail}` : activity.label;
-  return [lead, activity.cardAgeLabel].filter(Boolean).join(' · ');
 }
 
 function formatActivitySummary(record) {

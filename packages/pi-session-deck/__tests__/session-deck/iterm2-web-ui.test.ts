@@ -586,7 +586,7 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(getDetailRowValues(status)).toEqual(['bash']);
   });
 
-  it('renders the expanded detail sections in order with workspace copy buttons and PR last', async () => {
+  it('starts expanded detail at IDENTITY and keeps workspace copy buttons with PR last', async () => {
     const harness = await setupApp([
       buildSnapshot({
         records: [
@@ -610,11 +610,10 @@ describe('Session Deck iTerm2 web UI', () => {
     getCardToggle(getCards(harness.elements.list)[0]!).click();
 
     const detail = getCardDetail(getExpandedCards(harness.elements.list)[0]!);
-    expect(findAllByClass(detail, 'detail-title')[0]?.textContent).toBe('gbdt rankerspec');
-    expect(findAllByClass(detail, 'summary-line')[0]?.textContent).toBe('Shopify/shop-ml · #22623');
-    expect(findAllByClass(detail, 'detail-liveness')[0]?.textContent).toBe(
-      '● live · idle · heartbeat 705ms ago',
-    );
+    expect(detail.textContent.startsWith('IDENTITY')).toBe(true);
+    expect(findAllByClass(detail, 'detail-title')).toHaveLength(0);
+    expect(findAllByClass(detail, 'summary-line')).toHaveLength(0);
+    expect(findAllByClass(detail, 'detail-liveness')).toHaveLength(0);
     expect(getDetailSectionTitles(detail)).toEqual([
       'IDENTITY',
       'WORKSPACE',
@@ -660,7 +659,7 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(diagnostics.textContent).toContain('Per-record diagnostic.');
   });
 
-  it('keeps the expanded liveness line simplified for non-fresh presence reasons', async () => {
+  it('keeps non-fresh presence reasons in STATUS without reintroducing the removed summary block', async () => {
     const harness = await setupApp([
       buildSnapshot({
         records: [
@@ -676,16 +675,11 @@ describe('Session Deck iTerm2 web UI', () => {
     getCardToggle(getCards(harness.elements.list)[0]!).click();
 
     const detail = getCardDetail(getExpandedCards(harness.elements.list)[0]!);
-    expect(findAllByClass(detail, 'detail-liveness')[0]?.textContent).toBe(
-      '◌ stale · idle · heartbeat 1m ago',
-    );
+    expect(findAllByClass(detail, 'detail-liveness')).toHaveLength(0);
 
     const status = getDetailSection(detail, 'STATUS');
     expect(getDetailRowLabels(status)).toEqual(['Presence reason']);
     expect(getDetailRowValues(status)).toEqual(['heartbeat expired']);
-    expect(findAllByClass(detail, 'detail-liveness')[0]?.textContent).not.toContain(
-      'heartbeat expired',
-    );
   });
 
   it('keeps cards collapsed across refreshes before the user expands a row', async () => {
