@@ -767,7 +767,7 @@ describe('merge-ready watch helpers', () => {
   });
 
   describe('createMergeReadyWatchRepairPrompt', () => {
-    it('builds a bounded merge-ready-loop prompt from the current snapshot', () => {
+    it('builds a bounded merge-ready-loop prompt from the current snapshot when no guidance matches', () => {
       const status = buildStatus({
         state: 'blocked',
         summary: 'Required checks are failing',
@@ -791,6 +791,7 @@ describe('merge-ready watch helpers', () => {
       expect(prompt).toContain('Do not assume any specific subagent framework.');
       expect(prompt).toContain('Work only from the openItems returned by merge_ready_status.');
       expect(prompt).toContain('Treat openItems[].details[] as supporting provenance only.');
+      expect(prompt).not.toContain('Configured repair guidance for the actionable item(s):');
       expect(prompt).toContain('Current snapshot:');
       expect(prompt).toContain('"id": "ci_failing"');
       expect(prompt).toContain(
@@ -802,6 +803,44 @@ describe('merge-ready watch helpers', () => {
       expect(prompt).not.toContain('isolated git worktree');
       expect(prompt).not.toContain('Do this URL-targeted repair');
       expect(prompt).toContain(`"generatedAt": "${GENERATED_AT}"`);
+    });
+
+    it('renders matching repair guidance in first-seen actionable order', () => {
+      const status = buildStatus({
+        state: 'blocked',
+        summary: 'Actionable blockers are present',
+        openItems: [
+          buildOpenItem('merge_conflicts', {
+            summary: 'Merge conflicts detected',
+          }),
+          buildOpenItem('ci_running', {
+            summary: 'Checks are still running',
+          }),
+          buildOpenItem('ci_failing', {
+            summary: 'Required checks are failing',
+          }),
+        ],
+      });
+      const prompt = createMergeReadyWatchRepairPrompt(
+        status,
+        [status.openItems[0]!, status.openItems[2]!, status.openItems[0]!],
+        {
+          merge_conflicts: 'Rebase onto main before touching unrelated files.',
+          ci_failing: 'Run the focused vitest file first.',
+          ci_running: 'This wait-only item should not appear.',
+          unresolved_conversations: 'This non-actionable item should not appear.',
+        },
+      );
+
+      expect(prompt).toContain('Configured repair guidance for the actionable item(s):');
+      expect(prompt).toContain(
+        '- merge_conflicts: Rebase onto main before touching unrelated files.',
+      );
+      expect(prompt).toContain('- ci_failing: Run the focused vitest file first.');
+      expect(prompt).not.toContain('ci_running:');
+      expect(prompt).not.toContain('unresolved_conversations:');
+      expect(prompt.indexOf('- merge_conflicts:')).toBeLessThan(prompt.indexOf('- ci_failing:'));
+      expect(prompt.match(/- merge_conflicts:/gu)).toHaveLength(1);
     });
 
     it('builds an isolated-worktree prompt for URL-targeted repair', () => {
@@ -846,6 +885,7 @@ describe('merge-ready watch helpers', () => {
       expect(prompt).toContain('Do not wait indefinitely for remote CI/review/GitHub to clear.');
       expect(prompt).toContain('Do not start another watch loop.');
       expect(prompt).toContain('"headRepository": {');
+      expect(prompt).not.toContain('Configured repair guidance for the actionable item(s):');
     });
   });
 
@@ -1537,6 +1577,84 @@ describe('merge-ready watch loop', () => {
     expect(prompt).toContain('Do not start another watch loop.');
   });
 
+  it('injects configured guidance only for actionable repair ids in queued prompts', async () => {
+    const ctx = createWatchContext();
+    const sendUserMessage = vi.fn(
+      async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
+    );
+    const actionableStatus = buildStatus({
+      state: 'blocked',
+      summary: 'Actionable blockers are present',
+      openItems: [
+        buildOpenItem('merge_conflicts', {
+          summary: 'Merge conflicts detected',
+        }),
+        buildOpenItem('ci_running', {
+          summary: 'Checks are still running',
+        }),
+        buildOpenItem('ci_failing', {
+          summary: 'Required checks are failing',
+        }),
+        buildOpenItem('review_pending', {
+          summary: 'Waiting for review',
+        }),
+      ],
+    });
+    const waitStatus = buildStatus({
+      state: 'pending',
+      summary: 'Checks are still running',
+      openItems: [
+        buildOpenItem('ci_running', {
+          summary: 'Checks are still running',
+        }),
+      ],
+    });
+    const loadConfig = vi.fn(async () => ({
+      autoCompactRepair: false,
+      cacheTTLSeconds: 60,
+      enableStatusBarDiagnostics: false,
+      repairGuidance: {
+        merge_conflicts: 'Rebase before touching unrelated files.',
+        ci_failing: 'Run the focused vitest file first.',
+        ci_running: 'This wait-only item should not appear.',
+        review_pending: 'This wait-only item should not appear either.',
+        unresolved_conversations: 'This non-actionable item should not appear.',
+      },
+    }));
+
+    const result = await runMergeReadyWatchLoop({
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
+      api: { sendUserMessage },
+      ctx,
+      intervalSeconds: 30,
+      signal: new AbortController().signal,
+      dependencies: {
+        getStatus: createStatusSequence([actionableStatus, waitStatus]),
+        sleep: vi.fn(async () => undefined),
+        syncStatusBar: vi.fn(),
+        checkDirtyWorkingTree: vi.fn(async () => ({ ok: true as const, dirty: false })),
+        waitForAgentEnd: vi.fn(async () => undefined),
+        maxIterations: 1,
+      },
+      loadConfig,
+    });
+
+    expect(result).toMatchObject({
+      kind: 'stopped',
+      reason: 'max_iterations',
+      status: waitStatus,
+    });
+    expect(loadConfig).toHaveBeenCalledWith('/repo', false);
+    expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    const prompt = vi.mocked(sendUserMessage).mock.calls[0]?.[0];
+    expect(prompt).toContain('Configured repair guidance for the actionable item(s):');
+    expect(prompt).toContain('- merge_conflicts: Rebase before touching unrelated files.');
+    expect(prompt).toContain('- ci_failing: Run the focused vitest file first.');
+    expect(prompt).not.toContain('ci_running:');
+    expect(prompt).not.toContain('review_pending:');
+    expect(prompt).not.toContain('unresolved_conversations:');
+  });
+
   it('stops immediately on status_ambiguous without sending repair work', async () => {
     const ctx = createWatchContext();
     const sendUserMessage = vi.fn(
@@ -1688,6 +1806,7 @@ describe('merge-ready watch loop', () => {
           autoCompactRepair: false,
           cacheTTLSeconds: 60,
           enableStatusBarDiagnostics: false,
+          repairGuidance: {},
         }),
       ),
     });
@@ -2180,6 +2299,7 @@ describe('merge-ready watch loop', () => {
         autoCompactRepair: false,
         cacheTTLSeconds: 60,
         enableStatusBarDiagnostics: false,
+        repairGuidance: {},
       }),
     );
 
@@ -2226,6 +2346,7 @@ describe('merge-ready watch loop', () => {
         autoCompactRepair: true,
         cacheTTLSeconds: 60,
         enableStatusBarDiagnostics: false,
+        repairGuidance: {},
       }),
     );
 
@@ -2323,6 +2444,7 @@ describe('merge-ready watch loop', () => {
           autoCompactRepair: true,
           cacheTTLSeconds: 60,
           enableStatusBarDiagnostics: false,
+          repairGuidance: {},
         }),
       ),
     });
@@ -2385,6 +2507,7 @@ describe('merge-ready watch loop', () => {
           autoCompactRepair: true,
           cacheTTLSeconds: 60,
           enableStatusBarDiagnostics: false,
+          repairGuidance: {},
         }),
       ),
     });

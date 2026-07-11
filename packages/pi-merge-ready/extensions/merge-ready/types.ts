@@ -104,18 +104,23 @@ export type MergeReadySignalsInput = {
   unresolvedConversationRequirement?: MergeReadyConversationRequirementSignal;
 };
 
-export type MergeReadyOpenItemId =
-  | 'no_pull_request'
-  | 'status_ambiguous'
-  | 'merge_conflicts'
-  | 'branch_out_of_date'
-  | 'merge_blocked'
-  | 'draft'
-  | 'ci_failing'
-  | 'changes_requested'
-  | 'unresolved_conversations'
-  | 'ci_running'
-  | 'review_pending';
+export const MERGE_READY_OPEN_ITEM_IDS = [
+  'no_pull_request',
+  'status_ambiguous',
+  'merge_conflicts',
+  'branch_out_of_date',
+  'merge_blocked',
+  'draft',
+  'ci_failing',
+  'changes_requested',
+  'unresolved_conversations',
+  'ci_running',
+  'review_pending',
+] as const;
+
+export type MergeReadyOpenItemId = (typeof MERGE_READY_OPEN_ITEM_IDS)[number];
+
+export type MergeReadyRepairGuidanceMap = Partial<Record<MergeReadyOpenItemId, string>>;
 
 export type MergeReadyOpenItem = {
   id: MergeReadyOpenItemId;

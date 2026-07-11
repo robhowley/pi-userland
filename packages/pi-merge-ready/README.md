@@ -105,6 +105,7 @@ It will:
 
 - keep polling while checks or required review are still pending
 - attempt to repair PR blockers for `branch_out_of_date`, `merge_conflicts`, or `ci_failing`
+- inject matching `repairGuidance` text into the queued repair handoff only for those actionable blocker ids
 - stop on non-repairable blockers or terminal PR states
 
 Repair model:
@@ -136,16 +137,23 @@ Watch behavior and the current-branch status bar cache TTL can be configured in 
   "pi-merge-ready": {
     "autoCompactRepair": true,
     "cacheTTLSeconds": 60,
-    "enableStatusBarDiagnostics": false
+    "enableStatusBarDiagnostics": false,
+    "repairGuidance": {
+      "ci_failing": "Start with pnpm --filter @robhowley/pi-merge-ready test -- __tests__/merge-ready/watch.test.ts",
+      "merge_conflicts": "Rebase onto main before touching unrelated files."
+    }
   }
 }
 ```
 
-| Option                       | Default | Description                                                                                                                                                     |
-| ---------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `autoCompactRepair`          | `true`  | Trigger conversation compaction after successful repair loop completion. Compaction runs before the watch continues polling. Set to `false` to disable.         |
-| `cacheTTLSeconds`            | `60`    | Current-branch status bar cache TTL in seconds. Accepts positive integers only. New values apply on the next fresh ambient status write.                        |
-| `enableStatusBarDiagnostics` | `false` | Opt in to status-bar JSONL diagnostics (`timer_armed`, `timer_fired`, `refresh_result`, `caught_error`). Logs stay off by default until this setting is enabled. |
+| Option                       | Default | Description                                                                                                                                                                                         |
+| ---------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `autoCompactRepair`          | `true`  | Trigger conversation compaction after successful repair loop completion. Compaction runs before the watch continues polling. Set to `false` to disable.                                           |
+| `cacheTTLSeconds`            | `60`    | Current-branch status bar cache TTL in seconds. Accepts positive integers only. New values apply on the next fresh ambient status write.                                                          |
+| `enableStatusBarDiagnostics` | `false` | Opt in to status-bar JSONL diagnostics (`timer_armed`, `timer_fired`, `refresh_result`, `caught_error`). Logs stay off by default until this setting is enabled.                                   |
+| `repairGuidance`             | `{}`    | Map canonical open-item ids to trimmed guidance strings. Watch injects only matching actionable ids in the queued repair turn: `branch_out_of_date`, `merge_conflicts`, and `ci_failing`.          |
+
+`repairGuidance` keys must match the canonical ids in [Open item ids](#open-item-ids) exactly. Aliases such as `checks_failing` or `unresolved_comments` are ignored. Stored guidance for other canonical ids such as `unresolved_conversations` is currently inert in watch mode until that id becomes actionable.
 
 Status-bar diagnostics are controlled only by `pi-merge-ready.enableStatusBarDiagnostics`. When diagnostics are enabled, `PI_MERGE_READY_DEBUG_DIR` overrides the log destination for the current process.
 

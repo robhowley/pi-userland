@@ -19,6 +19,7 @@ import type {
   MergeReadyOpenItemDetail,
   MergeReadyOpenItemId,
   MergeReadyPullRequest,
+  MergeReadyRepairGuidanceMap,
   MergeReadyStatus,
   MergeReadyTarget,
 } from './types.js';
@@ -1157,11 +1158,19 @@ export async function runMergeReadyWatchLoop(
         return { kind: 'stopped', reason: 'error', status };
       }
 
+      const loadConfigFn = options.loadConfig ?? loadMergeReadyConfigAsync;
+      const config = await loadConfigFn(options.ctx.cwd, options.ctx.projectTrusted ?? false);
+      throwIfMergeReadyWatchAborted(options.signal);
+
       const agentEnd = waitForAgentEnd(options.signal);
       let sendUserMessageResult: Promise<void> | void;
       try {
         sendUserMessageResult = options.api.sendUserMessage(
-          createMergeReadyWatchRepairPrompt(status, classification.repairItems),
+          createMergeReadyWatchRepairPrompt(
+            status,
+            classification.repairItems,
+            config.repairGuidance,
+          ),
           resolveSendUserMessageOptions(),
         );
       } catch (error) {
@@ -1220,30 +1229,29 @@ export async function runMergeReadyWatchLoop(
         attemptedSignatures.clear();
       }
 
-      // After successful repair, trigger compaction if configured
-      if (refreshedClassification.actionability === 'wait') {
-        const loadConfigFn = options.loadConfig ?? loadMergeReadyConfigAsync;
-        const config = await loadConfigFn(options.ctx.cwd, options.ctx.projectTrusted ?? false);
-
-        if (config.autoCompactRepair && options.ctx.compact) {
-          try {
-            setMergeReadyWatchStatus(options.ctx, 'Compacting after successful repair…');
-            await options.ctx.compact({
-              customInstructions:
-                'Compaction triggered after successful merge-ready repair loop completion',
-            });
-            throwIfMergeReadyWatchAborted(options.signal);
-          } catch (error) {
-            if (options.signal.aborted) {
-              throw createAbortError(options.signal.reason);
-            }
-
-            // Log error but don't fail the watch loop
-            options.ctx.ui.notify(
-              `Compaction failed after repair: ${getErrorMessage(error)}`,
-              'warning',
-            );
+      // After successful repair, trigger compaction if configured.
+      if (
+        refreshedClassification.actionability === 'wait' &&
+        config.autoCompactRepair &&
+        options.ctx.compact
+      ) {
+        try {
+          setMergeReadyWatchStatus(options.ctx, 'Compacting after successful repair…');
+          await options.ctx.compact({
+            customInstructions:
+              'Compaction triggered after successful merge-ready repair loop completion',
+          });
+          throwIfMergeReadyWatchAborted(options.signal);
+        } catch (error) {
+          if (options.signal.aborted) {
+            throw createAbortError(options.signal.reason);
           }
+
+          // Log error but don't fail the watch loop
+          options.ctx.ui.notify(
+            `Compaction failed after repair: ${getErrorMessage(error)}`,
+            'warning',
+          );
         }
       }
 
@@ -1328,14 +1336,51 @@ export function createMergeReadyWatchBlockerSignature(
   });
 }
 
+function resolveMergeReadyWatchRepairGuidanceLines(
+  actionableItems: ReadonlyArray<MergeReadyOpenItem>,
+  repairGuidance: MergeReadyRepairGuidanceMap | undefined,
+): string[] {
+  if (repairGuidance === undefined) {
+    return [];
+  }
+
+  const seen = new Set<MergeReadyOpenItemId>();
+  const guidanceLines: string[] = [];
+
+  for (const openItem of actionableItems) {
+    if (seen.has(openItem.id)) {
+      continue;
+    }
+    seen.add(openItem.id);
+
+    const guidance = repairGuidance[openItem.id];
+    if (typeof guidance !== 'string' || guidance.length === 0) {
+      continue;
+    }
+
+    guidanceLines.push(`- ${openItem.id}: ${guidance}`);
+  }
+
+  return guidanceLines;
+}
+
 export function createMergeReadyWatchRepairPrompt(
   status: Pick<
     MergeReadyStatus,
     'generatedAt' | 'openItems' | 'pr' | 'signals' | 'state' | 'summary' | 'target'
   >,
   actionableItems: ReadonlyArray<MergeReadyOpenItem>,
+  repairGuidance?: MergeReadyRepairGuidanceMap,
 ): string {
   const actionableIds = actionableItems.map((openItem) => openItem.id).join(', ');
+  const guidanceLines = resolveMergeReadyWatchRepairGuidanceLines(
+    actionableItems,
+    repairGuidance,
+  );
+  const guidanceSection =
+    guidanceLines.length === 0
+      ? []
+      : ['', 'Configured repair guidance for the actionable item(s):', ...guidanceLines, ''];
   const snapshot = JSON.stringify(
     {
       state: status.state,
@@ -1360,7 +1405,7 @@ export function createMergeReadyWatchRepairPrompt(
       "Use the snapshot's pr.headRepository and pr.headRefName to identify the editable head. If the head repository or branch is missing or cannot be fetched, stop and report the ambiguity.",
       '',
       'Work only from the openItems returned by merge_ready_status. Do not invent additional blockers. Treat openItems[].details[] as supporting provenance only.',
-      '',
+      ...guidanceSection,
       'Current snapshot:',
       snapshot,
       '',
@@ -1379,7 +1424,7 @@ export function createMergeReadyWatchRepairPrompt(
     'If your environment supports isolated worker/session/agent contexts, prefer using one for this bounded repair and return only a compact result to this coordinating watch turn. Do not assume any specific subagent framework.',
     '',
     'Work only from the openItems returned by merge_ready_status. Do not invent additional blockers. Treat openItems[].details[] as supporting provenance only.',
-    '',
+    ...guidanceSection,
     'Current snapshot:',
     snapshot,
     '',
