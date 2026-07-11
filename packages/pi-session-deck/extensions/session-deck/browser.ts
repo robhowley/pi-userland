@@ -14,25 +14,47 @@ import type { SessionDeckRecord, SessionDeckSnapshot } from './types.js';
 const DEFAULT_MAX_VISIBLE_ROWS = 8;
 const DEFAULT_MAX_VISIBLE_REPOS = 4;
 const AUTO_REFRESH_INTERVAL_MS = 15_000;
-const ALL_REPO_FILTER_KEY = '__all__';
-const NO_REPO_FILTER_KEY = '__no-repo__';
+const ALL_REPO_FILTER_KEY = Symbol('all-repo-filter');
+const NO_REPO_FILTER_KEY = Symbol('no-repo-filter');
 
 type SessionDeckRefreshMode = 'manual' | 'auto';
+type SessionDeckRepoKey = string | typeof ALL_REPO_FILTER_KEY | typeof NO_REPO_FILTER_KEY;
+type SessionDeckNamedRepoFilter = {
+  kind: 'named';
+  key: string;
+  shortLabel: string;
+  qualifiedLabel: string | null;
+};
+type SessionDeckRepoFilter = { kind: 'all' } | { kind: 'no-repo' } | SessionDeckNamedRepoFilter;
 
 interface SessionDeckRepoOption {
-  key: string;
+  key: SessionDeckRepoKey;
   label: string;
+  filter: SessionDeckRepoFilter;
 }
 
 interface SessionDeckRepoState {
   options: SessionDeckRepoOption[];
-  recordsByKey: Map<string, SessionDeckRecord[]>;
+  recordsByKey: Map<SessionDeckRepoKey, SessionDeckRecord[]>;
+}
+
+interface SessionDeckNamedRepoBucket {
+  key: string;
+  shortLabel: string;
+  qualifiedLabel: string | null;
+  records: SessionDeckRecord[];
+}
+
+interface SessionDeckPendingRepoGroup {
+  shortLabel: string;
+  qualifiedLabels: Set<string>;
+  records: SessionDeckRecord[];
 }
 
 interface SessionDeckBrowserSelection {
   repoState: SessionDeckRepoState;
   repoIndex: number;
-  repoKey: string;
+  repoOption: SessionDeckRepoOption;
   records: SessionDeckRecord[];
 }
 
@@ -57,7 +79,7 @@ export class SessionDeckBrowser {
   private readonly theme: Theme;
 
   private view: SessionDeckSnapshot;
-  private selectedRepoKey = ALL_REPO_FILTER_KEY;
+  private selectedRepoKey: SessionDeckRepoKey = ALL_REPO_FILTER_KEY;
   private selectedIndex = 0;
   private detailVisible = true;
   private refreshStatus: { message: string; tone: 'muted' | 'warning' } | null = null;
@@ -271,10 +293,6 @@ export class SessionDeckBrowser {
       this.bump();
     }
 
-    const selection = this.getSelection();
-    const selectedRuntimeId = selection.records[this.selectedIndex]?.runtimeId ?? null;
-    const selectedRepoKey = selection.repoKey;
-
     this.refreshPending = (async () => {
       try {
         const nextView = await this.reload();
@@ -282,15 +300,15 @@ export class SessionDeckBrowser {
           return;
         }
 
+        const selection = this.getSelection();
+        const selectedRuntimeId = selection.records[this.selectedIndex]?.runtimeId ?? null;
         const nextRepoState = buildRepoState(nextView.records);
-        const nextRepoKey = hasRepoOption(nextRepoState.options, selectedRepoKey)
-          ? selectedRepoKey
-          : ALL_REPO_FILTER_KEY;
+        const nextRepoOption = getPreservedRepoOption(nextRepoState, selection.repoOption.filter);
 
         this.view = nextView;
-        this.selectedRepoKey = nextRepoKey;
+        this.selectedRepoKey = nextRepoOption.key;
         this.selectedIndex = findSelectedIndex(
-          getRepoRecords(nextRepoState.recordsByKey, nextRepoKey),
+          getRepoRecords(nextRepoState.recordsByKey, nextRepoOption.key),
           selectedRuntimeId,
         );
         this.refreshStatus = null;
@@ -587,90 +605,145 @@ function getVisibleWindow(
 }
 
 function buildRepoState(records: SessionDeckRecord[]): SessionDeckRepoState {
-  const recordsByKey = new Map<string, SessionDeckRecord[]>([[ALL_REPO_FILTER_KEY, records]]);
-  const namedBuckets = new Map<
-    string,
-    {
-      key: string;
-      shortLabel: string;
-      qualifiedLabel: string | null;
-      records: SessionDeckRecord[];
-    }
-  >();
+  const recordsByKey = new Map<SessionDeckRepoKey, SessionDeckRecord[]>([
+    [ALL_REPO_FILTER_KEY, records],
+  ]);
+  const repoGroups = new Map<string, SessionDeckPendingRepoGroup>();
   let noRepoRecords: SessionDeckRecord[] | null = null;
 
   for (const record of records) {
-    const repoKey = getRecordRepoKey(record);
-    if (repoKey === null) {
+    const shortLabel = getRecordShortRepoLabel(record);
+    if (shortLabel === null) {
       noRepoRecords ??= [];
       noRepoRecords.push(record);
       continue;
     }
 
-    let bucket = namedBuckets.get(repoKey);
-    if (bucket === undefined) {
-      const bucketRecords: SessionDeckRecord[] = [];
-      bucket = {
-        key: repoKey,
-        shortLabel: getShortRepoLabel(record, repoKey),
-        qualifiedLabel: record.qualifiedRepoName,
-        records: bucketRecords,
+    let group = repoGroups.get(shortLabel);
+    if (group === undefined) {
+      group = {
+        shortLabel,
+        qualifiedLabels: new Set<string>(),
+        records: [],
       };
-      namedBuckets.set(repoKey, bucket);
-      recordsByKey.set(repoKey, bucketRecords);
+      repoGroups.set(shortLabel, group);
     }
 
-    bucket.records.push(record);
+    if (record.qualifiedRepoName !== null) {
+      group.qualifiedLabels.add(record.qualifiedRepoName);
+    }
+
+    group.records.push(record);
   }
 
-  const namedOptions = [...namedBuckets.values()].sort(compareRepoBuckets);
-  const shortLabelCounts = countShortRepoLabels(namedOptions);
-  const options: SessionDeckRepoOption[] = [{ key: ALL_REPO_FILTER_KEY, label: 'all' }];
+  const namedBuckets = [...repoGroups.values()]
+    .flatMap(buildNamedRepoBuckets)
+    .sort(compareRepoBuckets);
+  const shortLabelCounts = countShortRepoLabels(namedBuckets);
+  const options: SessionDeckRepoOption[] = [
+    { key: ALL_REPO_FILTER_KEY, label: 'all', filter: { kind: 'all' } },
+  ];
 
-  for (const option of namedOptions) {
+  for (const bucket of namedBuckets) {
     const label =
-      (shortLabelCounts.get(option.shortLabel) ?? 0) > 1 && option.qualifiedLabel !== null
-        ? option.qualifiedLabel
-        : option.shortLabel;
-    options.push({ key: option.key, label });
+      (shortLabelCounts.get(bucket.shortLabel) ?? 0) > 1 && bucket.qualifiedLabel !== null
+        ? bucket.qualifiedLabel
+        : bucket.shortLabel;
+    recordsByKey.set(bucket.key, bucket.records);
+    options.push({
+      key: bucket.key,
+      label,
+      filter: {
+        kind: 'named',
+        key: bucket.key,
+        shortLabel: bucket.shortLabel,
+        qualifiedLabel: bucket.qualifiedLabel,
+      },
+    });
   }
 
   if (noRepoRecords !== null && noRepoRecords.length > 0) {
     recordsByKey.set(NO_REPO_FILTER_KEY, noRepoRecords);
-    options.push({ key: NO_REPO_FILTER_KEY, label: 'N/A' });
+    options.push({ key: NO_REPO_FILTER_KEY, label: 'N/A', filter: { kind: 'no-repo' } });
   }
 
   return { options, recordsByKey };
 }
 
-function getRepoSelection(
-  repoState: SessionDeckRepoState,
-  selectedRepoKey: string,
-): SessionDeckBrowserSelection {
-  if (repoState.options.length === 0) {
-    return {
-      repoState,
-      repoIndex: 0,
-      repoKey: ALL_REPO_FILTER_KEY,
-      records: [],
-    };
+function buildNamedRepoBuckets(group: SessionDeckPendingRepoGroup): SessionDeckNamedRepoBucket[] {
+  if (group.qualifiedLabels.size <= 1) {
+    const qualifiedLabel = group.qualifiedLabels.values().next().value ?? null;
+    return [
+      {
+        key: group.shortLabel,
+        shortLabel: group.shortLabel,
+        qualifiedLabel,
+        records: group.records,
+      },
+    ];
   }
 
+  const qualifiedBuckets = new Map<string, SessionDeckNamedRepoBucket>();
+  const unqualifiedRecords: SessionDeckRecord[] = [];
+
+  for (const record of group.records) {
+    if (record.qualifiedRepoName === null) {
+      unqualifiedRecords.push(record);
+      continue;
+    }
+
+    let bucket = qualifiedBuckets.get(record.qualifiedRepoName);
+    if (bucket === undefined) {
+      bucket = {
+        key: record.qualifiedRepoName,
+        shortLabel: group.shortLabel,
+        qualifiedLabel: record.qualifiedRepoName,
+        records: [],
+      };
+      qualifiedBuckets.set(record.qualifiedRepoName, bucket);
+    }
+
+    bucket.records.push(record);
+  }
+
+  return [
+    ...qualifiedBuckets.values(),
+    ...(unqualifiedRecords.length === 0
+      ? []
+      : [
+          {
+            key: group.shortLabel,
+            shortLabel: group.shortLabel,
+            qualifiedLabel: null,
+            records: unqualifiedRecords,
+          },
+        ]),
+  ];
+}
+
+function getRepoSelection(
+  repoState: SessionDeckRepoState,
+  selectedRepoKey: SessionDeckRepoKey,
+): SessionDeckBrowserSelection {
   const repoIndex = repoState.options.findIndex((option) => option.key === selectedRepoKey);
   const resolvedRepoIndex = repoIndex === -1 ? 0 : repoIndex;
-  const repoKey = repoState.options[resolvedRepoIndex]?.key ?? ALL_REPO_FILTER_KEY;
+  const repoOption = repoState.options[resolvedRepoIndex] ?? {
+    key: ALL_REPO_FILTER_KEY,
+    label: 'all',
+    filter: { kind: 'all' } as const,
+  };
 
   return {
     repoState,
     repoIndex: resolvedRepoIndex,
-    repoKey,
-    records: getRepoRecords(repoState.recordsByKey, repoKey),
+    repoOption,
+    records: getRepoRecords(repoState.recordsByKey, repoOption.key),
   };
 }
 
 function getRepoRecords(
-  recordsByKey: Map<string, SessionDeckRecord[]>,
-  repoKey: string,
+  recordsByKey: Map<SessionDeckRepoKey, SessionDeckRecord[]>,
+  repoKey: SessionDeckRepoKey,
 ): SessionDeckRecord[] {
   return recordsByKey.get(repoKey) ?? recordsByKey.get(ALL_REPO_FILTER_KEY) ?? [];
 }
@@ -692,12 +765,16 @@ function compareRepoBuckets(
   );
 }
 
-function getRecordRepoKey(record: SessionDeckRecord): string | null {
-  return record.qualifiedRepoName ?? record.repoName;
-}
+function getRecordShortRepoLabel(record: SessionDeckRecord): string | null {
+  if (record.repoName !== null) {
+    return record.repoName;
+  }
 
-function getShortRepoLabel(record: SessionDeckRecord, repoKey: string): string {
-  return record.repoName ?? getShortRepoLabelFromKey(repoKey);
+  if (record.qualifiedRepoName !== null) {
+    return getShortRepoLabelFromKey(record.qualifiedRepoName);
+  }
+
+  return null;
 }
 
 function getShortRepoLabelFromKey(repoKey: string): string {
@@ -709,8 +786,44 @@ function getShortRepoLabelFromKey(repoKey: string): string {
   return repoKey.slice(separatorIndex + 1);
 }
 
-function hasRepoOption(options: SessionDeckRepoOption[], repoKey: string): boolean {
-  return options.some((option) => option.key === repoKey);
+function getPreservedRepoOption(
+  repoState: SessionDeckRepoState,
+  filter: SessionDeckRepoFilter,
+): SessionDeckRepoOption {
+  if (filter.kind === 'all') {
+    return repoState.options[0]!;
+  }
+
+  if (filter.kind === 'no-repo') {
+    return (
+      repoState.options.find((option) => option.key === NO_REPO_FILTER_KEY) ?? repoState.options[0]!
+    );
+  }
+
+  if (filter.qualifiedLabel !== null) {
+    const qualifiedMatch = repoState.options.find(
+      (option): option is SessionDeckRepoOption & { filter: SessionDeckNamedRepoFilter } =>
+        option.filter.kind === 'named' && option.filter.qualifiedLabel === filter.qualifiedLabel,
+    );
+    if (qualifiedMatch !== undefined) {
+      return qualifiedMatch;
+    }
+  }
+
+  const shortLabelMatches = repoState.options.filter(
+    (option): option is SessionDeckRepoOption & { filter: SessionDeckNamedRepoFilter } =>
+      option.filter.kind === 'named' && option.filter.shortLabel === filter.shortLabel,
+  );
+  if (shortLabelMatches.length === 1) {
+    return shortLabelMatches[0]!;
+  }
+
+  return (
+    repoState.options.find(
+      (option): option is SessionDeckRepoOption & { filter: SessionDeckNamedRepoFilter } =>
+        option.filter.kind === 'named' && option.filter.key === filter.key,
+    ) ?? repoState.options[0]!
+  );
 }
 
 function findSelectedIndex(records: SessionDeckRecord[], runtimeId: string | null): number {
