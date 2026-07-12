@@ -618,16 +618,17 @@ describe('merge-ready command', () => {
         syncMergeReadyStatusBar,
       }));
       vi.doMock('../../extensions/merge-ready/merge-ready.js', async () => {
-        const actual = await vi.importActual<typeof import('../../extensions/merge-ready/merge-ready.js')>(
-          '../../extensions/merge-ready/merge-ready.js',
-        );
+        const actual = await vi.importActual<
+          typeof import('../../extensions/merge-ready/merge-ready.js')
+        >('../../extensions/merge-ready/merge-ready.js');
         return {
           ...actual,
           getMergeReadyStatus,
         };
       });
 
-      const { registerMergeReadyCommand } = await import('../../extensions/merge-ready/commands.js');
+      const { registerMergeReadyCommand } =
+        await import('../../extensions/merge-ready/commands.js');
       const { api, assertDone, getCommand } = createMockAPI();
       registerMergeReadyCommand(api);
       const handler = getCommand(MERGE_READY_COMMAND_NAME);
@@ -715,16 +716,17 @@ describe('merge-ready command', () => {
         syncMergeReadyStatusBar,
       }));
       vi.doMock('../../extensions/merge-ready/merge-ready.js', async () => {
-        const actual = await vi.importActual<typeof import('../../extensions/merge-ready/merge-ready.js')>(
-          '../../extensions/merge-ready/merge-ready.js',
-        );
+        const actual = await vi.importActual<
+          typeof import('../../extensions/merge-ready/merge-ready.js')
+        >('../../extensions/merge-ready/merge-ready.js');
         return {
           ...actual,
           getMergeReadyStatus,
         };
       });
 
-      const { registerMergeReadyCommand } = await import('../../extensions/merge-ready/commands.js');
+      const { registerMergeReadyCommand } =
+        await import('../../extensions/merge-ready/commands.js');
       const { api, assertDone, getCommand } = createMockAPI();
       registerMergeReadyCommand(api);
       const handler = getCommand(MERGE_READY_COMMAND_NAME);

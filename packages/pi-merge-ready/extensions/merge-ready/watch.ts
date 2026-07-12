@@ -1373,10 +1373,7 @@ export function createMergeReadyWatchRepairPrompt(
   repairGuidance?: MergeReadyRepairGuidanceMap,
 ): string {
   const actionableIds = actionableItems.map((openItem) => openItem.id).join(', ');
-  const guidanceLines = resolveMergeReadyWatchRepairGuidanceLines(
-    actionableItems,
-    repairGuidance,
-  );
+  const guidanceLines = resolveMergeReadyWatchRepairGuidanceLines(actionableItems, repairGuidance);
   const guidanceSection =
     guidanceLines.length === 0
       ? []

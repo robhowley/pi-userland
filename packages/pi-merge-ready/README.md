@@ -146,12 +146,12 @@ Watch behavior and the current-branch status bar cache TTL can be configured in 
 }
 ```
 
-| Option                       | Default | Description                                                                                                                                                                                         |
-| ---------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `autoCompactRepair`          | `true`  | Trigger conversation compaction after successful repair loop completion. Compaction runs before the watch continues polling. Set to `false` to disable.                                           |
-| `cacheTTLSeconds`            | `60`    | Current-branch status bar cache TTL in seconds. Accepts positive integers only. New values apply on the next fresh ambient status write.                                                          |
-| `enableStatusBarDiagnostics` | `false` | Opt in to status-bar JSONL diagnostics (`timer_armed`, `timer_fired`, `refresh_result`, `caught_error`). Logs stay off by default until this setting is enabled.                                   |
-| `repairGuidance`             | `{}`    | Map canonical open-item ids to trimmed guidance strings. Watch injects only matching actionable ids in the queued repair turn: `branch_out_of_date`, `merge_conflicts`, and `ci_failing`.          |
+| Option                       | Default | Description                                                                                                                                                                               |
+| ---------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `autoCompactRepair`          | `true`  | Trigger conversation compaction after successful repair loop completion. Compaction runs before the watch continues polling. Set to `false` to disable.                                   |
+| `cacheTTLSeconds`            | `60`    | Current-branch status bar cache TTL in seconds. Accepts positive integers only. New values apply on the next fresh ambient status write.                                                  |
+| `enableStatusBarDiagnostics` | `false` | Opt in to status-bar JSONL diagnostics (`timer_armed`, `timer_fired`, `refresh_result`, `caught_error`). Logs stay off by default until this setting is enabled.                          |
+| `repairGuidance`             | `{}`    | Map canonical open-item ids to trimmed guidance strings. Watch injects only matching actionable ids in the queued repair turn: `branch_out_of_date`, `merge_conflicts`, and `ci_failing`. |
 
 `repairGuidance` keys must match the canonical ids in [Open item ids](#open-item-ids) exactly. Aliases such as `checks_failing` or `unresolved_comments` are ignored. Stored guidance for other canonical ids such as `unresolved_conversations` is currently inert in watch mode until that id becomes actionable.
 

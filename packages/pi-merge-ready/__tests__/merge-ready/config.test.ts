@@ -67,7 +67,8 @@ describe.sequential('loadMergeReadyConfigAsync', () => {
         cacheTTLSeconds: 5,
         enableStatusBarDiagnostics: true,
         repairGuidance: {
-          ci_failing: 'Start with pnpm --filter @robhowley/pi-merge-ready test -- __tests__/merge-ready/watch.test.ts',
+          ci_failing:
+            'Start with pnpm --filter @robhowley/pi-merge-ready test -- __tests__/merge-ready/watch.test.ts',
           merge_conflicts: 'Rebase onto main before touching unrelated files.',
         },
       },
