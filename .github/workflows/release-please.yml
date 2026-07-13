@@ -34,9 +34,10 @@ jobs:
           cache: 'pnpm'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Update npm
+      - name: Install npm 11
         if: steps.release.outputs.releases_created == 'true'
-        run: npm install -g npm@latest
+        # npm 12 requires Node 22.22+/24.15+; npm 11 keeps the Node 20 release job working.
+        run: npm install -g npm@11
 
       - name: Install dependencies
         if: steps.release.outputs.releases_created == 'true'
