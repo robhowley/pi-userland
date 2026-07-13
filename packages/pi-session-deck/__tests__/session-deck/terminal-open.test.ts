@@ -10,6 +10,7 @@ const TMUX_TARGET: TerminalFocusTarget = {
   kind: 'tmux-session',
   socketPath: '/tmp/tmux socket/default',
   sessionName: 'prod',
+  sessionTarget: '$1',
   attachCommand: "exec tmux -S '/tmp/tmux socket/default' attach-session -E -t '$1'",
 };
 
@@ -65,7 +66,7 @@ describe('openTerminalRevealUrl', () => {
 describe('openTerminalFocusTarget tmux support', () => {
   it('preflights tmux and uses the Python bridge as the auto-mode primary opener', async () => {
     const execFile = vi.fn(async () => ({ stdout: '', stderr: '' }));
-    const pythonBridgeClient = vi.fn(async () => ({
+    const pythonBridgeClient = vi.fn(async (_request: { attachCommand: string }) => ({
       ok: true as const,
       reason: 'requested' as const,
       message: 'Requested tmux attach in a new iTerm2 tab.',
@@ -85,11 +86,44 @@ describe('openTerminalFocusTarget tmux support', () => {
     expect(execFile).toHaveBeenCalledTimes(1);
     expect(execFile).toHaveBeenCalledWith(
       'tmux',
-      ['-S', '/tmp/tmux socket/default', 'has-session', '-t', '=prod'],
+      ['-S', '/tmp/tmux socket/default', 'has-session', '-t', '$1'],
       { timeout: 500 },
     );
     expect(pythonBridgeClient).toHaveBeenCalledWith({ attachCommand: TMUX_TARGET.attachCommand });
+    expect(Object.keys(pythonBridgeClient.mock.calls[0]?.[0] ?? {})).toEqual(['attachCommand']);
     expect(JSON.stringify(execFile.mock.calls)).not.toContain('new-session');
+  });
+
+  it('uses an exact session-name target for preflight and attach when tmux ids are unavailable', async () => {
+    const nameOnlyTarget: TerminalFocusTarget = {
+      kind: 'tmux-session',
+      socketName: 'managed',
+      sessionName: 'name with spaces',
+      sessionTarget: '=name with spaces',
+      attachCommand: "exec tmux -L managed attach-session -E -t '=name with spaces'",
+    };
+    const execFile = vi.fn(async () => ({ stdout: '', stderr: '' }));
+    const pythonBridgeClient = vi.fn(async () => ({
+      ok: true as const,
+      reason: 'requested' as const,
+      message: 'Requested tmux attach in a new iTerm2 tab.',
+    }));
+
+    const result = await openTerminalFocusTarget(nameOnlyTarget, {
+      platform: 'darwin',
+      execFile,
+      pythonBridgeClient,
+    });
+
+    expect(result).toMatchObject({ ok: true, reason: 'requested' });
+    expect(execFile).toHaveBeenCalledWith(
+      'tmux',
+      ['-L', 'managed', 'has-session', '-t', '=name with spaces'],
+      { timeout: 500 },
+    );
+    expect(pythonBridgeClient).toHaveBeenCalledWith({
+      attachCommand: nameOnlyTarget.attachCommand,
+    });
   });
 
   it('falls back to AppleScript in auto mode only when the Python bridge is unavailable', async () => {

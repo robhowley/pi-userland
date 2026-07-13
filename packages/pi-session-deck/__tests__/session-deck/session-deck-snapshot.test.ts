@@ -205,6 +205,7 @@ describe('readSessionDeckSnapshot', () => {
       'socketPath',
       'paneId',
       'attachCommand',
+      'sessionTarget',
       'previousSessionFile',
       'parentSession',
       'schemaVersion',

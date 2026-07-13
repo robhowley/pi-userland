@@ -960,6 +960,7 @@ describe('SessionDeckBrowser', () => {
     expect(output).toContain('│ open: new iTerm2 tab attaches to tmux');
     expect(output).not.toContain('/tmp/tmux');
     expect(output).not.toContain('attachCommand');
+    expect(output).not.toContain('sessionTarget');
   });
 
   it('keeps browser hint snapshots free of accidental raw terminal fields', async () => {
@@ -969,6 +970,7 @@ describe('SessionDeckBrowser', () => {
         kind: 'tmux',
         socketPath: '/tmp/tmux/default',
         sessionName: 'prod',
+        sessionTarget: '$1',
         paneId: '%12',
         attachCommand: 'exec tmux attach-session -t prod',
       },
@@ -981,6 +983,7 @@ describe('SessionDeckBrowser', () => {
       socketPath: '/tmp/tmux/default',
       paneId: '%12',
       attachCommand: 'exec tmux attach-session -t prod',
+      sessionTarget: '$1',
     } as SessionDeckRecord;
 
     const view = await withTerminalDisplayHints(buildSnapshot({ records: [leakyRecord] }), {
@@ -992,6 +995,7 @@ describe('SessionDeckBrowser', () => {
     expect(view.records[0]).not.toHaveProperty('socketPath');
     expect(view.records[0]).not.toHaveProperty('paneId');
     expect(view.records[0]).not.toHaveProperty('attachCommand');
+    expect(view.records[0]).not.toHaveProperty('sessionTarget');
   });
 
   it('requests iTerm2 focus for the selected public record with o and renders success as muted', async () => {

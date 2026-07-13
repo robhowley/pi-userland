@@ -85,6 +85,7 @@ describe('lookupIdentityTerminalFocusTarget', () => {
         kind: 'tmux-session',
         socketPath: '/tmp/tmux socket/default',
         sessionName: 'work; `echo nope`',
+        sessionTarget: '$session 1',
         attachCommand: "exec tmux -S '/tmp/tmux socket/default' attach-session -E -t '$session 1'",
       },
     });
@@ -114,6 +115,7 @@ describe('lookupIdentityTerminalFocusTarget', () => {
         kind: 'tmux-session',
         socketName: 'managed',
         sessionName: 'name with spaces',
+        sessionTarget: '=name with spaces',
         attachCommand: "exec tmux -L managed attach-session -E -t '=name with spaces'",
       },
     });

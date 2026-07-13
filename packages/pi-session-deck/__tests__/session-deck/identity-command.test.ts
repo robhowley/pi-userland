@@ -373,10 +373,12 @@ describe('session-deck joined command', () => {
     const leakyRecord = {
       ...publicRecord,
       sessionFile: '/tmp/private-session.json',
+      sessionTarget: '$1',
       terminal: {
         kind: 'tmux',
         socketPath: '/tmp/tmux/default',
         sessionName: 'prod',
+        sessionTarget: '$1',
         windowName: 'editor',
         paneId: '%12',
         attachCommand: 'exec tmux attach-session -t prod',
@@ -408,6 +410,7 @@ describe('session-deck joined command', () => {
     expect(jsonMessage).not.toContain('socketPath');
     expect(jsonMessage).not.toContain('paneId');
     expect(jsonMessage).not.toContain('attachCommand');
+    expect(jsonMessage).not.toContain('sessionTarget');
     expect(jsonMessage).not.toContain('"worktree"');
 
     vi.mocked(ctx.ui.notify).mockClear();

@@ -23,6 +23,7 @@ export type TerminalFocusTarget =
       socketName?: string;
       socketPath?: string;
       sessionName: string;
+      sessionTarget: string;
       attachCommand: string;
     };
 
@@ -141,7 +142,8 @@ export function toTerminalFocusTarget(
         revealUrl: terminal.revealUrl,
       };
     case 'tmux': {
-      const attachArgv = buildTmuxAttachArgv(terminal);
+      const sessionTarget = buildTmuxSessionTarget(terminal);
+      const attachArgv = buildTmuxAttachArgvForSessionTarget(terminal, sessionTarget);
       if (attachArgv === null) {
         return null;
       }
@@ -153,6 +155,7 @@ export function toTerminalFocusTarget(
           ? {}
           : { socketName: terminal.socketName }),
         sessionName: terminal.sessionName,
+        sessionTarget,
         attachCommand: formatPosixCommand(['exec', ...attachArgv]),
       };
     }
@@ -160,32 +163,36 @@ export function toTerminalFocusTarget(
 }
 
 export function buildTmuxAttachArgv(terminal: SessionTmuxTerminalMetadata): string[] | null {
-  const socketSelector = buildTmuxSocketSelector(terminal);
-  if (socketSelector === null) {
-    return null;
-  }
-
-  return [
-    'tmux',
-    ...socketSelector,
-    'attach-session',
-    '-E',
-    '-t',
-    terminal.sessionId ?? `=${terminal.sessionName}`,
-  ];
+  return buildTmuxAttachArgvForSessionTarget(terminal, buildTmuxSessionTarget(terminal));
 }
 
 export function buildTmuxHasSessionArgv(target: {
   socketName?: string;
   socketPath?: string;
-  sessionName: string;
+  sessionTarget: string;
 }): string[] | null {
   const socketSelector = buildTmuxSocketSelector(target);
   if (socketSelector === null) {
     return null;
   }
 
-  return ['tmux', ...socketSelector, 'has-session', '-t', `=${target.sessionName}`];
+  return ['tmux', ...socketSelector, 'has-session', '-t', target.sessionTarget];
+}
+
+function buildTmuxAttachArgvForSessionTarget(
+  target: { socketName?: string; socketPath?: string },
+  sessionTarget: string,
+): string[] | null {
+  const socketSelector = buildTmuxSocketSelector(target);
+  if (socketSelector === null) {
+    return null;
+  }
+
+  return ['tmux', ...socketSelector, 'attach-session', '-E', '-t', sessionTarget];
+}
+
+function buildTmuxSessionTarget(target: { sessionId?: string; sessionName: string }): string {
+  return target.sessionId ?? `=${target.sessionName}`;
 }
 
 export function formatPosixCommand(argv: readonly string[]): string {
