@@ -287,6 +287,50 @@ async function setupApp(snapshots: SessionDeckSnapshot[]): Promise<AppHarness> {
   };
 }
 
+async function setupPendingApp(): Promise<{
+  elements: HarnessElements;
+  resolveSnapshot: (snapshot: SessionDeckSnapshot) => Promise<void>;
+}> {
+  const document = new FakeDocument();
+  const elements = buildElements(document);
+  let resolveResponse:
+    | ((response: {
+        ok: boolean;
+        status: number;
+        json: () => Promise<SessionDeckSnapshot>;
+      }) => void)
+    | null = null;
+  const fetchMock = vi.fn(
+    () =>
+      new Promise<{ ok: boolean; status: number; json: () => Promise<SessionDeckSnapshot> }>(
+        (resolve) => {
+          resolveResponse = resolve;
+        },
+      ),
+  );
+  const setIntervalMock = vi.fn(() => 1);
+
+  cleanupGlobals = installBrowserGlobals({ document, fetchMock, setIntervalMock });
+
+  await importFreshApp();
+
+  return {
+    elements,
+    resolveSnapshot: async (snapshot) => {
+      if (!resolveResponse) {
+        throw new Error('Expected pending snapshot response.');
+      }
+
+      resolveResponse({
+        ok: true,
+        status: 200,
+        json: async () => snapshot,
+      });
+      await flushMicrotasks();
+    },
+  };
+}
+
 function buildElements(document: FakeDocument): HarnessElements {
   const summary = withId(document.createElement('p'), 'summary');
   const showAll = withId(document.createElement('input'), 'show-all');
@@ -476,6 +520,19 @@ function getCopyButtonTexts(root: FakeElement): string[] {
   return findAllByClass(root, 'copy-button').map((button) => button.textContent);
 }
 
+function getChipTexts(root: FakeNode): string[] {
+  return findAllByClass(root, 'chip').map((chip) => chip.textContent);
+}
+
+function getSummaryChipTexts(root: FakeNode): string[] {
+  return findAllByClass(root, 'summary-chip').map((chip) => chip.textContent);
+}
+
+function getInlineChipTexts(card: FakeElement): string[] {
+  const inlineChips = findAllByClass(card, 'chips-inline')[0];
+  return inlineChips ? getChipTexts(inlineChips) : [];
+}
+
 function getChildTextContents(element: FakeElement): string[] {
   return element.childNodes.map((child) => child.textContent);
 }
@@ -486,6 +543,78 @@ function setShowAll(elements: HarnessElements, checked: boolean): void {
 }
 
 describe('Session Deck iTerm2 web UI', () => {
+  it('keeps the loading summary fallback until the first snapshot resolves', async () => {
+    const harness = await setupPendingApp();
+
+    expect(harness.elements.summary.textContent).toBe('Loading…');
+    expect(harness.elements.summary.childNodes).toHaveLength(1);
+
+    await harness.resolveSnapshot(buildSnapshot());
+
+    expect(getSummaryChipTexts(harness.elements.summary)).toEqual(['1 live', '0 stale']);
+    expect(harness.elements.summary.childNodes.every((child) => child instanceof FakeElement)).toBe(
+      true,
+    );
+    expect(findAllByClass(harness.elements.summary, 'summary-meta')[0]?.textContent).toContain(
+      'updated ',
+    );
+  });
+
+  it('renders summary chips from DOM nodes and keeps updated meta visible', async () => {
+    const harness = await setupApp([
+      buildSnapshot({
+        records: [
+          buildRecord(),
+          buildRecord({
+            runtimeId: 'rt-stale',
+            sessionId: 'session-stale',
+            sessionName: 'stale-session',
+            presenceState: 'stale',
+            presenceReason: 'heartbeat_expired',
+            heartbeatAgeMs: 65_000,
+          }),
+          buildRecord({
+            runtimeId: 'rt-dead',
+            sessionId: 'session-dead',
+            sessionName: 'dead-session',
+            presenceState: 'dead',
+            presenceReason: 'process_exited',
+          }),
+          buildRecord({
+            runtimeId: 'rt-unknown',
+            sessionId: 'session-unknown',
+            sessionName: 'unknown-session',
+            presenceState: 'unknown',
+            presenceReason: 'presence_missing',
+          }),
+        ],
+      }),
+    ]);
+
+    expect(harness.elements.summary.childNodes.length).toBeGreaterThan(1);
+    expect(getSummaryChipTexts(harness.elements.summary)).toEqual(['1 live', '1 stale']);
+    expect(harness.elements.summary.childNodes.every((child) => child instanceof FakeElement)).toBe(
+      true,
+    );
+    expect(findAllByClass(harness.elements.summary, 'summary-meta')[0]?.textContent).toContain(
+      'updated ',
+    );
+    expect(getCards(harness.elements.list)).toHaveLength(2);
+
+    setShowAll(harness.elements, true);
+
+    expect(getSummaryChipTexts(harness.elements.summary)).toEqual([
+      '1 live',
+      '1 stale',
+      '1 dead',
+      '1 unknown',
+    ]);
+    expect(findAllByClass(harness.elements.summary, 'summary-meta')[0]?.textContent).toContain(
+      'updated ',
+    );
+    expect(getCards(harness.elements.list)).toHaveLength(4);
+  });
+
   it('renders cards collapsed by default and toggles expansion inline', async () => {
     const harness = await setupApp([
       buildSnapshot({
@@ -594,6 +723,58 @@ describe('Session Deck iTerm2 web UI', () => {
     const status = getDetailSection(detail, 'STATUS');
     expect(getDetailRowLabels(status)).toEqual(['Current tool']);
     expect(getDetailRowValues(status)).toEqual(['bash']);
+  });
+
+  it('clamps collapsed header chips and keeps the full upstream chip list in expanded STATUS', async () => {
+    const harness = await setupApp([
+      buildSnapshot({
+        records: [
+          buildRecord({
+            runtimeId: 'rt-0',
+            sessionId: 'session-0',
+            sessionName: 'zero',
+            chips: [],
+          }),
+          buildRecord({
+            runtimeId: 'rt-1b',
+            sessionId: 'session-1b',
+            sessionName: 'one',
+            chips: ['solo'],
+          }),
+          buildRecord({
+            runtimeId: 'rt-2',
+            sessionId: 'session-2',
+            sessionName: 'two',
+            chips: ['first', 'second'],
+          }),
+          buildRecord({
+            runtimeId: 'rt-3',
+            sessionId: 'session-3',
+            sessionName: 'many',
+            chips: ['gamma', 'alpha', 'beta', 'delta'],
+          }),
+        ],
+      }),
+    ]);
+
+    const [zeroCard, oneCard, twoCard, manyCard] = getCards(harness.elements.list);
+
+    expect(findAllByClass(zeroCard!, 'chips-inline')).toHaveLength(0);
+    expect(getInlineChipTexts(oneCard!)).toEqual(['solo']);
+    expect(getInlineChipTexts(twoCard!)).toEqual(['first', 'second']);
+    expect(getInlineChipTexts(manyCard!)).toEqual(['gamma', 'alpha', '+2']);
+    expect(findAllByClass(manyCard!, 'chip-subtle').map((chip) => chip.textContent)).toEqual([
+      '+2',
+    ]);
+
+    getCardToggle(manyCard!).click();
+
+    const expandedCard = getExpandedCards(harness.elements.list)[0]!;
+    expect(findAllByClass(expandedCard, 'chips-inline')).toHaveLength(0);
+
+    const status = getDetailSection(getCardDetail(expandedCard), 'STATUS');
+    expect(getChipTexts(status)).toEqual(['gamma', 'alpha', 'beta', 'delta']);
+    expect(findAllByClass(status, 'chip-subtle')).toHaveLength(0);
   });
 
   it('starts expanded detail at IDENTITY and keeps workspace copy buttons with PR last', async () => {

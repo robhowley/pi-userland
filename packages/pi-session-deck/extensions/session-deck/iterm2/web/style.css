@@ -90,6 +90,9 @@ h2 {
 }
 
 .topbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   padding: 10px 12px 8px;
   border-bottom: 1px solid var(--color-divider);
   background: var(--color-chrome);
@@ -97,7 +100,8 @@ h2 {
 
 .topbar-copy {
   display: flex;
-  align-items: center;
+  flex-wrap: wrap;
+  align-items: flex-start;
   gap: 8px 12px;
   min-width: 0;
 }
@@ -118,9 +122,31 @@ h2 {
 }
 
 #summary {
+  flex: 1 1 14rem;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.summary-chip {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--color-divider-strong);
+  border-radius: 999px;
+  background: var(--color-chip-subtle);
+  color: var(--color-text);
+  padding: 2px 8px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.summary-meta {
+  color: var(--color-text-muted);
   white-space: nowrap;
 }
 
@@ -166,17 +192,43 @@ h2 {
 .card.expanded {
   background: var(--color-surface);
   border-bottom-color: var(--color-divider-strong);
+  box-shadow: inset 3px 0 0 var(--color-accent);
 }
 
 .card-toggle {
+  position: relative;
   width: 100%;
   display: grid;
   gap: 6px;
   text-align: left;
   border: 0;
   border-radius: 0;
-  padding: 10px 12px;
+  padding: 10px 34px 10px 12px;
   background: transparent;
+}
+
+.card-toggle::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: 14px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--color-text-muted);
+  border-bottom: 2px solid var(--color-text-muted);
+  opacity: 0.8;
+  pointer-events: none;
+  transform: translateY(-50%) rotate(45deg);
+  transition:
+    transform 120ms ease,
+    border-color 120ms ease,
+    opacity 120ms ease;
+}
+
+button.card-toggle[aria-expanded='true']::after {
+  border-color: var(--color-accent);
+  opacity: 1;
+  transform: translateY(-50%) rotate(135deg);
 }
 
 .card-toggle:hover {
@@ -328,16 +380,19 @@ h2 {
 .detail-row {
   display: grid;
   grid-template-columns: minmax(92px, 110px) minmax(0, 1fr) auto;
+  grid-template-areas: 'label value copy';
   gap: 6px 12px;
   align-items: start;
   padding: 2px 0;
 }
 
 .detail-label {
+  grid-area: label;
   color: var(--color-text-muted);
 }
 
 .detail-value {
+  grid-area: value;
   min-width: 0;
   justify-self: end;
   text-align: right;
@@ -350,9 +405,29 @@ h2 {
 }
 
 .copy-button {
+  grid-area: copy;
+  justify-self: end;
   align-self: start;
   padding: 0.15rem 0.45rem;
   color: var(--color-text-muted);
+  border-color: transparent;
+  background: transparent;
+  opacity: 0.42;
+  transition:
+    opacity 120ms ease,
+    color 120ms ease,
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+.detail-row:hover .copy-button,
+.detail-row:focus-within .copy-button,
+.copy-button:hover,
+.copy-button:focus-visible {
+  opacity: 1;
+  color: var(--color-text);
+  border-color: var(--color-divider);
+  background: var(--color-surface-hover);
 }
 
 .detail-diagnostics {
@@ -383,6 +458,20 @@ h2 {
 
 .chips-inline {
   margin-top: 2px;
+}
+
+@media (max-width: 420px) {
+  .detail-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'label copy'
+      'value value';
+  }
+
+  .detail-value {
+    justify-self: stretch;
+    text-align: left;
+  }
 }
 
 .empty {

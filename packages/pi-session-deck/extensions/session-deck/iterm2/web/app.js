@@ -1,6 +1,7 @@
 /* global HTMLButtonElement, HTMLInputElement, document, fetch, navigator, window */
 
 const AUTO_REFRESH_INTERVAL_MS = 15_000;
+const COLLAPSED_CHIP_LIMIT = 2;
 const DEFAULT_VISIBLE_STATES = new Set(['live', 'stale']);
 const HOME_PREFIXES = ['/Users/', '/home/'];
 
@@ -206,14 +207,16 @@ function renderSummary() {
 
   const snapshot = state.snapshot ?? emptySnapshot('Snapshot unavailable.');
   const counts = countPresenceStates(snapshot.records);
-  const parts = [`${counts.live} live`, `${counts.stale} stale`];
+  const chipLabels = [`${counts.live} live`, `${counts.stale} stale`];
 
   if (state.showAll) {
-    parts.push(`${counts.dead} dead`, `${counts.unknown} unknown`);
+    chipLabels.push(`${counts.dead} dead`, `${counts.unknown} unknown`);
   }
 
-  parts.push(`updated ${formatTimestamp(snapshot.generatedAt)}`);
-  elements.summary.textContent = parts.join(' · ');
+  elements.summary.replaceChildren(
+    ...chipLabels.map((label) => createChip(label, 'summary-chip')),
+    createText('span', `updated ${formatTimestamp(snapshot.generatedAt)}`, 'summary-meta'),
+  );
 }
 
 function renderBanner() {
@@ -280,8 +283,12 @@ function renderList() {
     if (record.chips.length > 0 && !isExpanded) {
       const chips = document.createElement('div');
       chips.className = 'chips chips-inline';
-      for (const chip of record.chips) {
+      for (const chip of record.chips.slice(0, COLLAPSED_CHIP_LIMIT)) {
         chips.append(createChip(chip));
+      }
+      const hiddenChipCount = record.chips.length - COLLAPSED_CHIP_LIMIT;
+      if (hiddenChipCount > 0) {
+        chips.append(createChip(`+${hiddenChipCount}`, 'chip chip-subtle'));
       }
       toggle.append(chips);
     }
