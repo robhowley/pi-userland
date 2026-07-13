@@ -55,7 +55,7 @@ ln -sf "$(pwd)/extensions/session-deck/iterm2-python-bridge.py" \
   "$HOME/Library/Application Support/iTerm2/Scripts/AutoLaunch/pi-session-deck-bridge.py"
 ```
 
-Restart iTerm2 after installing. The bridge listens on a user-local Unix socket and accepts JSON-lines requests containing only `exec tmux ... attach-session ...` commands. Configure with:
+Restart iTerm2 after installing. The bridge listens on a user-local Unix socket and accepts JSON-lines requests containing a `tmuxAttachArgv` field with an exact tmux attach argv array, such as `["tmux","-S","...","attach-session","-E","-t","..."]`. It does not accept shell command strings. Configure with:
 
 - `PI_SESSION_DECK_TERMINAL_BRIDGE=auto` (default) — try the Python bridge, then AppleScript fallback if the bridge is unavailable.
 - `PI_SESSION_DECK_TERMINAL_BRIDGE=iterm2-python` — require the Python bridge.

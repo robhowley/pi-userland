@@ -6,12 +6,21 @@ import {
 import type { TerminalFocusTarget } from '../../extensions/session-deck/identity/terminal-focus.js';
 
 const REVEAL_URL = 'iterm2:///reveal?sessionid=w0t0p0%3Aabc';
+const TMUX_ATTACH_ARGV = [
+  'tmux',
+  '-S',
+  '/tmp/tmux socket/default',
+  'attach-session',
+  '-E',
+  '-t',
+  '$1',
+] as const;
+const TMUX_ATTACH_COMMAND = "exec tmux -S '/tmp/tmux socket/default' attach-session -E -t '$1'";
 const TMUX_TARGET: TerminalFocusTarget = {
   kind: 'tmux-session',
   socketPath: '/tmp/tmux socket/default',
   sessionName: 'prod',
   sessionTarget: '$1',
-  attachCommand: "exec tmux -S '/tmp/tmux socket/default' attach-session -E -t '$1'",
 };
 
 describe('openTerminalRevealUrl', () => {
@@ -66,7 +75,7 @@ describe('openTerminalRevealUrl', () => {
 describe('openTerminalFocusTarget tmux support', () => {
   it('preflights tmux and uses the Python bridge as the auto-mode primary opener', async () => {
     const execFile = vi.fn(async () => ({ stdout: '', stderr: '' }));
-    const pythonBridgeClient = vi.fn(async (_request: { attachCommand: string }) => ({
+    const pythonBridgeClient = vi.fn(async (_request: { tmuxAttachArgv: readonly string[] }) => ({
       ok: true as const,
       reason: 'requested' as const,
       message: 'Requested tmux attach in a new iTerm2 tab.',
@@ -89,8 +98,8 @@ describe('openTerminalFocusTarget tmux support', () => {
       ['-S', '/tmp/tmux socket/default', 'has-session', '-t', '$1'],
       { timeout: 500 },
     );
-    expect(pythonBridgeClient).toHaveBeenCalledWith({ attachCommand: TMUX_TARGET.attachCommand });
-    expect(Object.keys(pythonBridgeClient.mock.calls[0]?.[0] ?? {})).toEqual(['attachCommand']);
+    expect(pythonBridgeClient).toHaveBeenCalledWith({ tmuxAttachArgv: TMUX_ATTACH_ARGV });
+    expect(Object.keys(pythonBridgeClient.mock.calls[0]?.[0] ?? {})).toEqual(['tmuxAttachArgv']);
     expect(JSON.stringify(execFile.mock.calls)).not.toContain('new-session');
   });
 
@@ -100,7 +109,6 @@ describe('openTerminalFocusTarget tmux support', () => {
       socketName: 'managed',
       sessionName: 'name with spaces',
       sessionTarget: '=name with spaces',
-      attachCommand: "exec tmux -L managed attach-session -E -t '=name with spaces'",
     };
     const execFile = vi.fn(async () => ({ stdout: '', stderr: '' }));
     const pythonBridgeClient = vi.fn(async () => ({
@@ -122,16 +130,17 @@ describe('openTerminalFocusTarget tmux support', () => {
       { timeout: 500 },
     );
     expect(pythonBridgeClient).toHaveBeenCalledWith({
-      attachCommand: nameOnlyTarget.attachCommand,
+      tmuxAttachArgv: ['tmux', '-L', 'managed', 'attach-session', '-E', '-t', '=name with spaces'],
     });
   });
 
-  it('falls back to AppleScript in auto mode only when the Python bridge is unavailable', async () => {
+  it('falls back to AppleScript in auto mode only when the Python bridge fails before sending the request', async () => {
     const execFile = vi.fn(async () => ({ stdout: '', stderr: '' }));
     const pythonBridgeClient = vi.fn(async () => ({
       ok: false as const,
       reason: 'python-bridge-unavailable' as const,
       message: 'socket missing',
+      requestSent: false,
     }));
 
     const result = await openTerminalFocusTarget(TMUX_TARGET, {
@@ -145,10 +154,64 @@ describe('openTerminalFocusTarget tmux support', () => {
     expect(execFile).toHaveBeenNthCalledWith(2, '/usr/bin/osascript', [
       '-e',
       expect.stringContaining('create tab with default profile command commandText'),
-      TMUX_TARGET.attachCommand,
+      TMUX_ATTACH_COMMAND,
     ]);
     expect(JSON.stringify(execFile.mock.calls)).not.toContain('exec pi');
     expect(JSON.stringify(execFile.mock.calls)).not.toContain('new-session');
+  });
+
+  it('does not fall back to AppleScript when the Python bridge may have received the request', async () => {
+    const execFile = vi.fn(async (_file: string, _args: readonly string[], _options?: unknown) => ({
+      stdout: '',
+      stderr: '',
+    }));
+    const pythonBridgeClient = vi.fn(async () => ({
+      ok: false as const,
+      reason: 'python-bridge-unavailable' as const,
+      message: 'bridge closed after request',
+      requestSent: true,
+    }));
+
+    const result = await openTerminalFocusTarget(TMUX_TARGET, {
+      platform: 'darwin',
+      execFile,
+      pythonBridgeClient,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      reason: 'python-bridge-unavailable',
+      message: 'bridge closed after request',
+      requestSent: true,
+    });
+    expect(execFile).toHaveBeenCalledTimes(1);
+    expect(execFile.mock.calls[0]?.[0]).toBe('tmux');
+  });
+
+  it('does not fall back to AppleScript when Python bridge request state is unknown', async () => {
+    const execFile = vi.fn(async (_file: string, _args: readonly string[], _options?: unknown) => ({
+      stdout: '',
+      stderr: '',
+    }));
+    const pythonBridgeClient = vi.fn(async () => ({
+      ok: false as const,
+      reason: 'python-bridge-unavailable' as const,
+      message: 'legacy client did not report request state',
+    }));
+
+    const result = await openTerminalFocusTarget(TMUX_TARGET, {
+      platform: 'darwin',
+      execFile,
+      pythonBridgeClient,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      reason: 'python-bridge-unavailable',
+      message: 'legacy client did not report request state',
+    });
+    expect(execFile).toHaveBeenCalledTimes(1);
+    expect(execFile.mock.calls[0]?.[0]).toBe('tmux');
   });
 
   it('does not fall back to AppleScript in Python-required mode', async () => {
@@ -157,6 +220,7 @@ describe('openTerminalFocusTarget tmux support', () => {
       ok: false as const,
       reason: 'python-bridge-unavailable' as const,
       message: 'socket missing',
+      requestSent: false,
     }));
 
     const result = await openTerminalFocusTarget(TMUX_TARGET, {
@@ -170,6 +234,7 @@ describe('openTerminalFocusTarget tmux support', () => {
       ok: false,
       reason: 'python-bridge-unavailable',
       message: 'socket missing',
+      requestSent: false,
     });
     expect(execFile).toHaveBeenCalledTimes(1);
   });
@@ -218,7 +283,7 @@ describe('openTerminalFocusTarget tmux support', () => {
     expect(execFile).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects non-attach tmux commands before preflight or bridge opening', async () => {
+  it('rejects incomplete tmux targets before preflight or bridge opening', async () => {
     const execFile = vi.fn(async () => ({ stdout: '', stderr: '' }));
     const pythonBridgeClient = vi.fn(async () => ({
       ok: true as const,
@@ -227,7 +292,7 @@ describe('openTerminalFocusTarget tmux support', () => {
     }));
 
     const result = await openTerminalFocusTarget(
-      { ...TMUX_TARGET, attachCommand: 'exec tmux new-session -A -s prod' },
+      { kind: 'tmux-session', sessionName: 'prod', sessionTarget: '$1' },
       {
         platform: 'darwin',
         execFile,
@@ -235,7 +300,7 @@ describe('openTerminalFocusTarget tmux support', () => {
       },
     );
 
-    expect(result).toMatchObject({ ok: false, reason: 'open-failed' });
+    expect(result).toMatchObject({ ok: false, reason: 'tmux-preflight-failed' });
     expect(execFile).not.toHaveBeenCalled();
     expect(pythonBridgeClient).not.toHaveBeenCalled();
   });

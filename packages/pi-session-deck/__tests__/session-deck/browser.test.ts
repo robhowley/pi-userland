@@ -1,3 +1,4 @@
+import type { Dirent } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { visibleWidth } from '@mariozechner/pi-tui';
 import type { Theme } from '@earendil-works/pi-coding-agent';
@@ -961,6 +962,71 @@ describe('SessionDeckBrowser', () => {
     expect(output).not.toContain('/tmp/tmux');
     expect(output).not.toContain('attachCommand');
     expect(output).not.toContain('sessionTarget');
+  });
+
+  it('hydrates terminalDisplay from a matching tmux identity sidecar without leaking raw terminal metadata', async () => {
+    const runtimeId = 'rt-pr115-browser-hint';
+    const socketPath = '/tmp/tmux-pr115/default';
+    const attachCommand = `exec tmux -S ${socketPath} attach-session -t prod:editor`;
+    const readdir = vi
+      .fn()
+      .mockResolvedValue([{ name: `${runtimeId}.json`, isFile: () => true } as unknown as Dirent]);
+    const readFile = vi.fn().mockResolvedValue(
+      JSON.stringify({
+        runtimeId,
+        terminal: {
+          kind: 'tmux',
+          socketPath,
+          sessionName: 'prod',
+          sessionId: '$1',
+          windowName: 'editor',
+          paneId: '%12',
+          attachCommand,
+          sessionTarget: 'prod:editor',
+        },
+      }),
+    );
+
+    const view = await withTerminalDisplayHints(
+      buildSnapshot({
+        records: [
+          buildSnapshotRecord({
+            runtimeId,
+            sessionId: 'public-session',
+            sessionName: 'pi session',
+            chips: [],
+          }),
+        ],
+      }),
+      {
+        identityDirectory: '/fake/pi-session-deck/identity',
+        readdir,
+        readFile,
+      },
+    );
+
+    expect(readdir).toHaveBeenCalledWith('/fake/pi-session-deck/identity', { withFileTypes: true });
+    expect(readFile).toHaveBeenCalledWith(
+      `/fake/pi-session-deck/identity/${runtimeId}.json`,
+      'utf8',
+    );
+    const publicRecord = view.records[0];
+    expect(publicRecord?.terminalDisplay).toEqual({
+      kind: 'tmux',
+      title: 'editor',
+      detail: 'tmux prod:editor %12',
+      openLabel: 'new iTerm2 tab attaches to tmux',
+    });
+    expect(publicRecord?.sessionId).toBe('public-session');
+    expect(publicRecord).not.toHaveProperty('terminal');
+    expect(publicRecord).not.toHaveProperty('socketPath');
+    expect(publicRecord).not.toHaveProperty('paneId');
+    expect(publicRecord).not.toHaveProperty('attachCommand');
+    expect(publicRecord).not.toHaveProperty('sessionTarget');
+
+    const serialized = JSON.stringify(publicRecord ?? {});
+    expect(serialized).not.toContain(socketPath);
+    expect(serialized).not.toContain(attachCommand);
   });
 
   it('keeps browser hint snapshots free of accidental raw terminal fields', async () => {

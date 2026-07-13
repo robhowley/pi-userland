@@ -4,8 +4,8 @@
 Install by symlinking or copying this file into iTerm2's Scripts/AutoLaunch
 folder. The TypeScript side talks to a user-local Unix socket using JSON-lines:
 
-  {"command":"exec tmux ... attach-session ..."}\n
-Only ordinary tmux attach commands are accepted.
+  {"tmuxAttachArgv":["tmux","-S","...","attach-session","-E","-t","..."]}\n
+Only exact tmux attach argv arrays are accepted.
 """
 
 from __future__ import annotations
@@ -23,6 +23,9 @@ import iterm2
 
 SOCKET_ENV = "PI_SESSION_DECK_ITERM2_BRIDGE_SOCKET"
 REQUEST_TIMEOUT_SECONDS = 2.0
+INVALID_ATTACH_ARGV_MESSAGE = (
+    "Bridge only accepts exact tmux attach argv in 'tmuxAttachArgv'."
+)
 
 
 def default_socket_path() -> Path:
@@ -51,22 +54,33 @@ def response(ok: bool, **fields: Any) -> bytes:
     return (json.dumps({"ok": ok, **fields}, separators=(",", ":")) + "\n").encode("utf-8")
 
 
-def validate_command(command: Any) -> Optional[str]:
-    if not isinstance(command, str):
+def validate_tmux_attach_argv(candidate: Any) -> Optional[list[str]]:
+    if not isinstance(candidate, list) or len(candidate) != 7:
         return None
-    try:
-        argv = shlex.split(command)
-    except ValueError:
+    if any(not isinstance(arg, str) or len(arg.strip()) == 0 for arg in candidate):
         return None
-    if len(argv) < 3 or argv[0] != "exec" or argv[1] != "tmux":
+
+    program, selector_flag, selector, subcommand, preserve_env, target_flag, _target = candidate
+    if (
+        program != "tmux"
+        or selector_flag not in ("-S", "-L")
+        or subcommand != "attach-session"
+        or preserve_env != "-E"
+        or target_flag != "-t"
+    ):
         return None
-    tmux_args = argv[2:]
-    if "attach-session" not in tmux_args or "new-session" in tmux_args:
+    if selector_flag == "-L" and "/" in selector:
         return None
-    return command
+
+    return list(candidate)
 
 
-async def open_iterm2_tab(connection: iterm2.Connection, command: str) -> None:
+def format_iterm2_shell_command(tmux_attach_argv: list[str]) -> str:
+    return "exec " + " ".join(shlex.quote(arg) for arg in tmux_attach_argv)
+
+
+async def open_iterm2_tab(connection: iterm2.Connection, tmux_attach_argv: list[str]) -> None:
+    command = format_iterm2_shell_command(tmux_attach_argv)
     app = await iterm2.async_get_app(connection)
     window = app.current_terminal_window
 
@@ -97,19 +111,23 @@ async def handle_client(
     try:
         line = await asyncio.wait_for(reader.readline(), timeout=REQUEST_TIMEOUT_SECONDS)
         request = json.loads(line.decode("utf-8"))
-        command = validate_command(request.get("command"))
-        if command is None:
+        tmux_attach_argv = (
+            validate_tmux_attach_argv(request.get("tmuxAttachArgv"))
+            if isinstance(request, dict)
+            else None
+        )
+        if tmux_attach_argv is None:
             writer.write(
                 response(
                     False,
                     reason="open-failed",
-                    message="Bridge only accepts 'exec tmux ... attach-session ...' commands.",
+                    message=INVALID_ATTACH_ARGV_MESSAGE,
                 )
             )
             await writer.drain()
             return
 
-        await open_iterm2_tab(connection, command)
+        await open_iterm2_tab(connection, tmux_attach_argv)
         writer.write(response(True))
         await writer.drain()
     except asyncio.TimeoutError:
@@ -139,9 +157,7 @@ async def main(connection: iterm2.Connection) -> None:
     socket_path = default_socket_path()
     prepare_socket_path(socket_path)
 
-    server = await asyncio.start_unix_server(
-        lambda reader, writer: handle_client(connection, reader, writer), path=str(socket_path)
-    )
+    server = None
 
     def cleanup() -> None:
         try:
@@ -149,17 +165,30 @@ async def main(connection: iterm2.Connection) -> None:
         except FileNotFoundError:
             pass
 
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
-            asyncio.get_running_loop().add_signal_handler(sig, cleanup)
-        except (NotImplementedError, RuntimeError):
-            pass
+    try:
+        server = await asyncio.start_unix_server(
+            lambda reader, writer: handle_client(connection, reader, writer),
+            path=str(socket_path),
+        )
 
-    async with server:
-        try:
-            await server.serve_forever()
-        finally:
-            cleanup()
+        loop = asyncio.get_running_loop()
+        shutdown_requested = asyncio.Event()
+
+        def request_shutdown() -> None:
+            loop.call_soon_threadsafe(shutdown_requested.set)
+
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(sig, request_shutdown)
+            except (NotImplementedError, RuntimeError):
+                pass
+
+        await shutdown_requested.wait()
+    finally:
+        if server is not None:
+            server.close()
+            await server.wait_closed()
+        cleanup()
 
 
 iterm2.run_forever(main)

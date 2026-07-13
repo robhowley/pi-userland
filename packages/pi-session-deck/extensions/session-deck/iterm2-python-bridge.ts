@@ -11,10 +11,11 @@ export type Iterm2PythonBridgeOpenResult =
       ok: false;
       reason: 'python-bridge-unavailable' | 'automation-denied' | 'open-failed';
       message: string;
+      requestSent?: boolean;
     };
 
 export interface Iterm2PythonBridgeOpenRequest {
-  attachCommand: string;
+  tmuxAttachArgv: readonly string[];
 }
 
 type BridgeSocket = NodeJS.ReadWriteStream & {
@@ -35,11 +36,12 @@ export async function openWithIterm2PythonBridge(
   request: Iterm2PythonBridgeOpenRequest,
   options: Iterm2PythonBridgeClientOptions = {},
 ): Promise<Iterm2PythonBridgeOpenResult> {
-  if (!isTmuxAttachCommand(request.attachCommand)) {
+  if (!isValidTmuxAttachArgv(request.tmuxAttachArgv)) {
     return {
       ok: false,
       reason: 'open-failed',
-      message: 'Refusing to send a non-tmux attach command to the iTerm2 bridge.',
+      message: 'Refusing to send an invalid tmux attach argv to the iTerm2 bridge.',
+      requestSent: false,
     };
   }
 
@@ -59,11 +61,13 @@ export async function openWithIterm2PythonBridge(
         ok: false,
         reason: 'python-bridge-unavailable',
         message: `iTerm2 Python bridge is unavailable: ${getErrorMessage(error)}`,
+        requestSent: false,
       });
       return;
     }
 
     let settled = false;
+    let requestSent = false;
     let buffer = '';
 
     const finish = (result: Iterm2PythonBridgeOpenResult) => {
@@ -90,12 +94,23 @@ export async function openWithIterm2PythonBridge(
         ok: false,
         reason: 'python-bridge-unavailable',
         message: 'iTerm2 Python bridge did not respond before the timeout.',
+        requestSent,
       });
     }, timeoutMs);
 
     socket.setEncoding?.('utf8');
     socket.on('connect', () => {
-      socket.write(`${JSON.stringify({ command: request.attachCommand })}\n`);
+      try {
+        socket.write(`${JSON.stringify({ tmuxAttachArgv: request.tmuxAttachArgv })}\n`);
+        requestSent = true;
+      } catch (error) {
+        finish({
+          ok: false,
+          reason: 'python-bridge-unavailable',
+          message: `iTerm2 Python bridge could not send the request: ${getErrorMessage(error)}`,
+          requestSent: false,
+        });
+      }
     });
     socket.on('data', (chunk) => {
       buffer += String(chunk);
@@ -104,13 +119,14 @@ export async function openWithIterm2PythonBridge(
         return;
       }
       const line = buffer.slice(0, newlineIndex);
-      finish(parseBridgeResponse(line));
+      finish(parseBridgeResponse(line, requestSent));
     });
     socket.on('error', (error) => {
       finish({
         ok: false,
         reason: 'python-bridge-unavailable',
         message: `iTerm2 Python bridge is unavailable: ${getErrorMessage(error)}`,
+        requestSent,
       });
     });
     socket.on('close', () => {
@@ -118,6 +134,7 @@ export async function openWithIterm2PythonBridge(
         ok: false,
         reason: 'python-bridge-unavailable',
         message: 'iTerm2 Python bridge closed before returning a response.',
+        requestSent,
       });
     });
   });
@@ -133,7 +150,7 @@ export function getIterm2PythonBridgeSocketPath(env: NodeJS.ProcessEnv = process
   return join(tmpdir(), `pi-session-deck-${uid}`, 'iterm2-python-bridge.sock');
 }
 
-function parseBridgeResponse(line: string): Iterm2PythonBridgeOpenResult {
+function parseBridgeResponse(line: string, requestSent: boolean): Iterm2PythonBridgeOpenResult {
   let parsed: unknown;
   try {
     parsed = JSON.parse(line) as unknown;
@@ -142,6 +159,7 @@ function parseBridgeResponse(line: string): Iterm2PythonBridgeOpenResult {
       ok: false,
       reason: 'open-failed',
       message: `iTerm2 Python bridge returned malformed JSON: ${getErrorMessage(error)}`,
+      requestSent,
     };
   }
 
@@ -150,6 +168,7 @@ function parseBridgeResponse(line: string): Iterm2PythonBridgeOpenResult {
       ok: false,
       reason: 'open-failed',
       message: 'iTerm2 Python bridge returned a malformed response.',
+      requestSent,
     };
   }
 
@@ -169,6 +188,7 @@ function parseBridgeResponse(line: string): Iterm2PythonBridgeOpenResult {
       typeof parsed['message'] === 'string' && parsed['message'].length > 0
         ? parsed['message']
         : 'iTerm2 Python bridge failed to open the tmux attach tab.',
+    requestSent,
   };
 }
 
@@ -185,8 +205,30 @@ function normalizeBridgeFailureReason(
   }
 }
 
-function isTmuxAttachCommand(command: string): boolean {
-  return command.startsWith('exec tmux ') && command.includes(' attach-session ');
+function isValidTmuxAttachArgv(argv: unknown): argv is readonly string[] {
+  if (!Array.isArray(argv) || argv.length !== 7 || !argv.every(isNonBlankString)) {
+    return false;
+  }
+
+  const [command, selectorFlag, selectorValue, attachSession, keepEnvironment, targetFlag] =
+    argv as [string, string, string, string, string, string, string];
+  if (command !== 'tmux') {
+    return false;
+  }
+
+  if (selectorFlag === '-L' && selectorValue.includes('/')) {
+    return false;
+  }
+
+  if (selectorFlag !== '-S' && selectorFlag !== '-L') {
+    return false;
+  }
+
+  return attachSession === 'attach-session' && keepEnvironment === '-E' && targetFlag === '-t';
+}
+
+function isNonBlankString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
 }
 
 function trimNonEmpty(value: unknown): string | undefined {

@@ -58,7 +58,7 @@ describe('lookupIdentityTerminalFocusTarget', () => {
     });
   });
 
-  it('returns a bridge-neutral tmux target with a freshly quoted attach command', async () => {
+  it('returns a bridge-neutral tmux target without trusting stored attach commands', async () => {
     const result = await lookupIdentityTerminalFocusTarget(RUNTIME_ID, {
       identityDirectory: IDENTITY_DIRECTORY,
       readFile: createReadFile(
@@ -86,14 +86,13 @@ describe('lookupIdentityTerminalFocusTarget', () => {
         socketPath: '/tmp/tmux socket/default',
         sessionName: 'work; `echo nope`',
         sessionTarget: '$session 1',
-        attachCommand: "exec tmux -S '/tmp/tmux socket/default' attach-session -E -t '$session 1'",
       },
     });
     expect(JSON.stringify(result)).not.toContain('paneId');
-    expect(JSON.stringify(result)).not.toContain('attachCommand":"exec pi');
+    expect(JSON.stringify(result)).not.toContain('attachCommand');
   });
 
-  it('uses exact session-name attach when tmux session ids are unavailable', async () => {
+  it('uses exact session-name target when tmux session ids are unavailable', async () => {
     const result = await lookupIdentityTerminalFocusTarget(RUNTIME_ID, {
       identityDirectory: IDENTITY_DIRECTORY,
       readFile: createReadFile(
@@ -116,7 +115,6 @@ describe('lookupIdentityTerminalFocusTarget', () => {
         socketName: 'managed',
         sessionName: 'name with spaces',
         sessionTarget: '=name with spaces',
-        attachCommand: "exec tmux -L managed attach-session -E -t '=name with spaces'",
       },
     });
   });
@@ -219,7 +217,7 @@ describe('lookupIdentityTerminalFocusTarget', () => {
     },
   );
 
-  it('quotes POSIX argv values in exactly one place for attach commands', () => {
+  it('quotes POSIX argv values only when deriving shell commands', () => {
     expect(quotePosixArg('simple')).toBe('simple');
     expect(quotePosixArg("space quote ' dollar $ semi ; backtick `")).toBe(
       "'space quote '\\'' dollar $ semi ; backtick `'",

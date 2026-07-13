@@ -1,8 +1,14 @@
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
-import { buildTmuxHasSessionArgv, type TerminalFocusTarget } from './identity/terminal-focus.js';
+import {
+  buildTmuxAttachSessionArgv,
+  buildTmuxHasSessionArgv,
+  formatPosixCommand,
+  type TerminalFocusTarget,
+} from './identity/terminal-focus.js';
 import {
   openWithIterm2PythonBridge,
+  type Iterm2PythonBridgeOpenRequest,
   type Iterm2PythonBridgeOpenResult,
 } from './iterm2-python-bridge.js';
 
@@ -29,6 +35,7 @@ export type TerminalOpenResult =
       ok: false;
       reason: TerminalOpenFailureReason;
       message: string;
+      requestSent?: boolean;
     };
 
 export type TerminalRevealOpenResult = TerminalOpenResult;
@@ -41,9 +48,9 @@ export type TerminalOpenExecFile = (
 
 export type TerminalRevealExecFile = TerminalOpenExecFile;
 
-export type TerminalPythonBridgeClient = (request: {
-  attachCommand: string;
-}) => Promise<Iterm2PythonBridgeOpenResult>;
+export type TerminalPythonBridgeClient = (
+  request: Iterm2PythonBridgeOpenRequest,
+) => Promise<Iterm2PythonBridgeOpenResult>;
 
 export interface TerminalOpenOptions {
   platform?: NodeJS.Platform;
@@ -112,11 +119,12 @@ async function openTmuxTerminalTarget(
     };
   }
 
-  if (!isTmuxAttachCommand(target.attachCommand)) {
+  const tmuxAttachArgv = buildTmuxAttachSessionArgv(target);
+  if (tmuxAttachArgv === null) {
     return {
       ok: false,
-      reason: 'open-failed',
-      message: 'Refusing to open a non-tmux attach command.',
+      reason: 'tmux-preflight-failed',
+      message: 'Tmux terminal metadata is incomplete for the selected session.',
     };
   }
 
@@ -135,17 +143,17 @@ async function openTmuxTerminalTarget(
   }
 
   if (mode === 'auto' || mode === 'iterm2-python') {
-    const pythonResult = await openWithPythonBridge(target.attachCommand, options);
+    const pythonResult = await openWithPythonBridge(tmuxAttachArgv, options);
     if (pythonResult.ok || mode === 'iterm2-python') {
       return pythonResult;
     }
 
-    if (pythonResult.reason !== 'python-bridge-unavailable') {
+    if (pythonResult.reason !== 'python-bridge-unavailable' || pythonResult.requestSent !== false) {
       return pythonResult;
     }
   }
 
-  return openWithAppleScript(target.attachCommand, options);
+  return openWithAppleScript(formatPosixCommand(['exec', ...tmuxAttachArgv]), options);
 }
 
 async function preflightTmuxTarget(
@@ -187,17 +195,17 @@ async function preflightTmuxTarget(
 }
 
 async function openWithPythonBridge(
-  attachCommand: string,
+  tmuxAttachArgv: readonly string[],
   options: TerminalOpenOptions,
 ): Promise<TerminalOpenResult> {
   const bridgeClient =
     options.pythonBridgeClient ??
-    ((request: { attachCommand: string }) =>
+    ((request: Iterm2PythonBridgeOpenRequest) =>
       openWithIterm2PythonBridge(request, {
         ...(options.env === undefined ? {} : { env: options.env }),
       }));
 
-  return bridgeClient({ attachCommand });
+  return bridgeClient({ tmuxAttachArgv });
 }
 
 async function openWithAppleScript(
@@ -258,10 +266,6 @@ function resolveBridgeMode(options: TerminalOpenOptions): TerminalBridgeMode {
 const defaultExecFile: TerminalOpenExecFile = async (file, args, options) => {
   await execFile(file, [...args], options);
 };
-
-function isTmuxAttachCommand(command: string): boolean {
-  return command.startsWith('exec tmux ') && command.includes(' attach-session ');
-}
 
 function isNonZeroExit(error: unknown): boolean {
   return isObject(error) && typeof error['code'] === 'number';

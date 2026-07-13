@@ -24,7 +24,6 @@ export type TerminalFocusTarget =
       socketPath?: string;
       sessionName: string;
       sessionTarget: string;
-      attachCommand: string;
     };
 
 export type IdentityTerminalFocusLookupResult =
@@ -143,27 +142,42 @@ export function toTerminalFocusTarget(
       };
     case 'tmux': {
       const sessionTarget = buildTmuxSessionTarget(terminal);
-      const attachArgv = buildTmuxAttachArgvForSessionTarget(terminal, sessionTarget);
-      if (attachArgv === null) {
-        return null;
-      }
-
-      return {
-        kind: 'tmux-session',
+      const target = {
+        kind: 'tmux-session' as const,
         ...(terminal.socketPath === undefined ? {} : { socketPath: terminal.socketPath }),
         ...(terminal.socketPath !== undefined || terminal.socketName === undefined
           ? {}
           : { socketName: terminal.socketName }),
         sessionName: terminal.sessionName,
         sessionTarget,
-        attachCommand: formatPosixCommand(['exec', ...attachArgv]),
       };
+
+      return buildTmuxAttachSessionArgv(target) === null ? null : target;
     }
   }
 }
 
 export function buildTmuxAttachArgv(terminal: SessionTmuxTerminalMetadata): string[] | null {
-  return buildTmuxAttachArgvForSessionTarget(terminal, buildTmuxSessionTarget(terminal));
+  return buildTmuxAttachSessionArgv({
+    ...(terminal.socketPath === undefined ? {} : { socketPath: terminal.socketPath }),
+    ...(terminal.socketPath !== undefined || terminal.socketName === undefined
+      ? {}
+      : { socketName: terminal.socketName }),
+    sessionTarget: buildTmuxSessionTarget(terminal),
+  });
+}
+
+export function buildTmuxAttachSessionArgv(target: {
+  socketName?: string;
+  socketPath?: string;
+  sessionTarget: string;
+}): string[] | null {
+  const socketSelector = buildTmuxSocketSelector(target);
+  if (socketSelector === null || !isNonBlankString(target.sessionTarget)) {
+    return null;
+  }
+
+  return ['tmux', ...socketSelector, 'attach-session', '-E', '-t', target.sessionTarget];
 }
 
 export function buildTmuxHasSessionArgv(target: {
@@ -172,23 +186,11 @@ export function buildTmuxHasSessionArgv(target: {
   sessionTarget: string;
 }): string[] | null {
   const socketSelector = buildTmuxSocketSelector(target);
-  if (socketSelector === null) {
+  if (socketSelector === null || !isNonBlankString(target.sessionTarget)) {
     return null;
   }
 
   return ['tmux', ...socketSelector, 'has-session', '-t', target.sessionTarget];
-}
-
-function buildTmuxAttachArgvForSessionTarget(
-  target: { socketName?: string; socketPath?: string },
-  sessionTarget: string,
-): string[] | null {
-  const socketSelector = buildTmuxSocketSelector(target);
-  if (socketSelector === null) {
-    return null;
-  }
-
-  return ['tmux', ...socketSelector, 'attach-session', '-E', '-t', sessionTarget];
 }
 
 function buildTmuxSessionTarget(target: { sessionId?: string; sessionName: string }): string {
@@ -212,14 +214,20 @@ function buildTmuxSocketSelector(target: {
   socketPath?: string;
 }): string[] | null {
   if (target.socketPath !== undefined) {
-    return ['-S', target.socketPath];
+    return isNonBlankString(target.socketPath) ? ['-S', target.socketPath] : null;
   }
 
   if (target.socketName !== undefined) {
-    return ['-L', target.socketName];
+    return isNonBlankString(target.socketName) && !target.socketName.includes('/')
+      ? ['-L', target.socketName]
+      : null;
   }
 
   return null;
+}
+
+function isNonBlankString(value: string): boolean {
+  return value.trim().length > 0;
 }
 
 function isRecord(candidate: unknown): candidate is Record<string, unknown> {
