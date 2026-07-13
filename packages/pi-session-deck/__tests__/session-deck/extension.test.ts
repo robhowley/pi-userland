@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 afterEach(() => {
+  vi.doUnmock('../../extensions/session-deck/identity/terminal-collect.js');
   vi.restoreAllMocks();
   vi.resetModules();
 });
@@ -18,7 +19,9 @@ type TerminalEnvKey =
   | 'TERM_SESSION_ID'
   | 'TERM_PROGRAM'
   | 'LC_TERMINAL'
-  | 'LC_TERMINAL_VERSION';
+  | 'LC_TERMINAL_VERSION'
+  | 'TMUX'
+  | 'TMUX_PANE';
 
 const TERMINAL_ENV_KEYS: TerminalEnvKey[] = [
   'ITERM_SESSION_ID',
@@ -26,6 +29,8 @@ const TERMINAL_ENV_KEYS: TerminalEnvKey[] = [
   'TERM_PROGRAM',
   'LC_TERMINAL',
   'LC_TERMINAL_VERSION',
+  'TMUX',
+  'TMUX_PANE',
 ];
 
 async function withTerminalEnv(
@@ -258,6 +263,27 @@ describe('pi-session-deck extension', () => {
       cwd: '/repo',
       parentSession: '/tmp/session-parent.md',
     });
+  });
+
+  it('uses collected tmux terminal metadata for identity refresh when available', async () => {
+    const tmuxTerminal = {
+      kind: 'tmux' as const,
+      socketPath: '/tmp/tmux/default',
+      sessionName: 'prod',
+      paneId: '%12',
+    };
+    const collectSessionTerminalMetadata = vi.fn().mockResolvedValue(tmuxTerminal);
+    vi.doMock('../../extensions/session-deck/identity/terminal-collect.js', () => ({
+      collectSessionTerminalMetadata,
+    }));
+    const { refreshIdentity } = setupMocks();
+    const { handlers } = await installExtension();
+
+    await handlers.get('session_start')?.({ reason: 'startup' }, makeCtx());
+
+    const sessionManager = refreshIdentity.mock.calls[0]?.[1];
+    expect(sessionManager.getTerminal?.()).toEqual(tmuxTerminal);
+    expect(collectSessionTerminalMetadata).toHaveBeenCalledTimes(1);
   });
 
   it('captures iTerm2 terminal metadata for identity refresh when ITERM_SESSION_ID is set', async () => {

@@ -54,10 +54,23 @@ export function normalizeSessionHeaderMetadata(
 export function normalizeSessionTerminalMetadata(
   candidate: unknown,
 ): SessionTerminalMetadata | undefined {
-  if (!isObject(candidate) || candidate['kind'] !== 'iterm2') {
+  if (!isObject(candidate)) {
     return undefined;
   }
 
+  switch (candidate['kind']) {
+    case 'iterm2':
+      return normalizeIterm2TerminalMetadata(candidate);
+    case 'tmux':
+      return normalizeTmuxTerminalMetadata(candidate);
+    default:
+      return undefined;
+  }
+}
+
+function normalizeIterm2TerminalMetadata(
+  candidate: Record<string, unknown>,
+): SessionTerminalMetadata | undefined {
   const sessionId = normalizeTrimmedStringField(candidate['sessionId']);
   if (sessionId === undefined) {
     return undefined;
@@ -74,6 +87,43 @@ export function normalizeSessionTerminalMetadata(
     ...(termProgram === undefined ? {} : { termProgram }),
     ...(lcTerminal === undefined ? {} : { lcTerminal }),
     ...(lcTerminalVersion === undefined ? {} : { lcTerminalVersion }),
+  };
+}
+
+function normalizeTmuxTerminalMetadata(
+  candidate: Record<string, unknown>,
+): SessionTerminalMetadata | undefined {
+  const sessionName = normalizeTrimmedStringField(candidate['sessionName']);
+  if (sessionName === undefined) {
+    return undefined;
+  }
+
+  const socketPath = normalizeTrimmedStringField(candidate['socketPath']);
+  const socketName = normalizeTmuxSocketName(candidate['socketName']);
+  if (socketPath === undefined && socketName === undefined) {
+    return undefined;
+  }
+
+  const sessionId = normalizeTrimmedStringField(candidate['sessionId']);
+  const windowName = normalizeTrimmedStringField(candidate['windowName']);
+  const windowId = normalizeTrimmedStringField(candidate['windowId']);
+  const paneId = normalizeTrimmedStringField(candidate['paneId']);
+  const windowIndex = normalizeNonNegativeIntegerField(candidate['windowIndex']);
+  const paneIndex = normalizeNonNegativeIntegerField(candidate['paneIndex']);
+  const panePid = normalizeNonNegativeIntegerField(candidate['panePid']);
+
+  return {
+    kind: 'tmux',
+    sessionName,
+    ...(socketPath === undefined ? {} : { socketPath }),
+    ...(socketPath !== undefined || socketName === undefined ? {} : { socketName }),
+    ...(sessionId === undefined ? {} : { sessionId }),
+    ...(windowName === undefined ? {} : { windowName }),
+    ...(windowId === undefined ? {} : { windowId }),
+    ...(paneId === undefined ? {} : { paneId }),
+    ...(windowIndex === undefined ? {} : { windowIndex }),
+    ...(paneIndex === undefined ? {} : { paneIndex }),
+    ...(panePid === undefined ? {} : { panePid }),
   };
 }
 
@@ -104,6 +154,33 @@ function normalizeBooleanField(value: unknown): boolean | undefined {
   }
 
   return undefined;
+}
+
+function normalizeNonNegativeIntegerField(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isInteger(value) && value >= 0) {
+    return value;
+  }
+
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return undefined;
+  }
+
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
+function normalizeTmuxSocketName(value: unknown): string | undefined {
+  const socketName = normalizeTrimmedStringField(value);
+  if (socketName === undefined || socketName.includes('/')) {
+    return undefined;
+  }
+
+  return socketName;
 }
 
 function isObject(candidate: unknown): candidate is Record<string, unknown> {

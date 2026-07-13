@@ -11,8 +11,8 @@ import { createSetStatusMirror } from './chips/mirror.js';
 import {
   normalizeSessionHeaderMetadata,
   normalizeSessionStartMetadata,
-  normalizeSessionTerminalMetadata,
 } from './identity/metadata.js';
+import { collectSessionTerminalMetadata } from './identity/terminal-collect.js';
 import type { SessionManagerLike, SessionTerminalMetadata } from './identity/types.js';
 
 interface SessionStartContext {
@@ -61,7 +61,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     'session_start',
     async (event: { reason: string; previousSessionFile?: string }, ctx: SessionStartContext) => {
       const presenceRuntime = await ensurePresenceRuntimeStarted();
-      const sessionManager = createSessionManager(ctx, event);
+      const terminal = await collectSessionTerminalMetadata();
+      const sessionManager = createSessionManager(ctx, event, terminal);
 
       // Install setStatus wrapper before session-deck sets its own status
       statusMirror.install(ctx.ui);
@@ -134,6 +135,7 @@ async function ensureActivityRuntime(
 function createSessionManager(
   ctx: SessionStartContext,
   event: { reason: string; previousSessionFile?: string },
+  terminal: SessionTerminalMetadata | undefined,
 ): SessionManagerLike {
   const sessionStart = normalizeSessionStartMetadata({
     reason: event.reason,
@@ -141,8 +143,6 @@ function createSessionManager(
     mode: ctx.mode,
     hasUI: ctx.hasUI,
   });
-  const terminal = getIterm2TerminalMetadataFromEnv(process.env);
-
   return {
     getSessionId: () => ctx.sessionManager?.getSessionId() ?? null,
     getSessionFile: () => ctx.sessionManager?.getSessionFile() ?? null,
@@ -152,18 +152,6 @@ function createSessionManager(
     getHeader: () => normalizeSessionHeaderMetadata(ctx.sessionManager?.getHeader?.()) ?? null,
     getTerminal: () => terminal,
   };
-}
-
-function getIterm2TerminalMetadataFromEnv(
-  env: NodeJS.ProcessEnv,
-): SessionTerminalMetadata | undefined {
-  return normalizeSessionTerminalMetadata({
-    kind: 'iterm2',
-    sessionId: env['ITERM_SESSION_ID'],
-    termProgram: env['TERM_PROGRAM'],
-    lcTerminal: env['LC_TERMINAL'],
-    lcTerminalVersion: env['LC_TERMINAL_VERSION'],
-  });
 }
 
 function getActivityMessage(event: { message?: unknown }): {

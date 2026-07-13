@@ -126,9 +126,11 @@ describe('readSessionDeckSnapshot', () => {
     await writeIdentityRecord(
       buildIdentityRecord({
         terminal: {
-          kind: 'iterm2',
-          sessionId: 'w0t0p0:abc',
-          revealUrl: 'iterm2:///reveal?sessionid=w0t0p0%3Aabc',
+          kind: 'tmux',
+          socketPath: '/tmp/tmux/default',
+          sessionName: 'prod',
+          windowName: 'editor',
+          paneId: '%12',
         },
       }),
       { directory: directories.identityDirectory },
@@ -199,6 +201,10 @@ describe('readSessionDeckSnapshot', () => {
       'sessionStart',
       'sessionHeader',
       'terminal',
+      'terminalDisplay',
+      'socketPath',
+      'paneId',
+      'attachCommand',
       'previousSessionFile',
       'parentSession',
       'schemaVersion',

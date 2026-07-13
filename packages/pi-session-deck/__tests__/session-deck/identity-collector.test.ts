@@ -423,11 +423,36 @@ describe('identity collector', () => {
     });
   });
 
+  it('collects normalized tmux terminal metadata from the session manager', async () => {
+    const record = await collectGitlessIdentityWithTerminal({
+      kind: 'tmux',
+      socketPath: ' /tmp/tmux/default ',
+      sessionName: ' prod ',
+      sessionId: ' $1 ',
+      windowName: ' editor ',
+      paneId: ' %12 ',
+      panePid: '12345',
+      attachCommand: 'exec pi',
+    });
+
+    expect(record.terminal).toEqual({
+      kind: 'tmux',
+      socketPath: '/tmp/tmux/default',
+      sessionName: 'prod',
+      sessionId: '$1',
+      windowName: 'editor',
+      paneId: '%12',
+      panePid: 12345,
+    });
+  });
+
   it.each([
     ['non-object', 'w0t0p0'],
     ['wrong kind', { kind: 'terminal', sessionId: 'w0t0p0' }],
     ['empty sessionId', { kind: 'iterm2', sessionId: '' }],
     ['trimmed-empty sessionId', { kind: 'iterm2', sessionId: '   ' }],
+    ['tmux without sessionName', { kind: 'tmux', socketPath: '/tmp/tmux/default' }],
+    ['tmux without socket selector', { kind: 'tmux', sessionName: 'prod' }],
   ] as const)('omits malformed terminal metadata: %s', async (_name, terminal) => {
     const record = await collectGitlessIdentityWithTerminal(terminal);
 
@@ -448,7 +473,7 @@ describe('identity collector', () => {
     });
   });
 
-  it('preserves existing terminal metadata when later refreshes omit it', async () => {
+  it('preserves existing terminal metadata when later refreshes omit it for the same Pi session', async () => {
     const firstRecord = await collectGitlessIdentityWithTerminal(
       {
         kind: 'iterm2',
@@ -469,6 +494,29 @@ describe('identity collector', () => {
     });
 
     expect(secondRecord.terminal).toEqual(firstRecord.terminal);
+  });
+
+  it('does not preserve existing terminal metadata across different Pi sessions', async () => {
+    const firstRecord = await collectGitlessIdentityWithTerminal(
+      {
+        kind: 'tmux',
+        socketPath: '/tmp/tmux/default',
+        sessionName: 'prod',
+      },
+      {
+        sessionId: 'session-old',
+        sessionFile: '/tmp/session-old.json',
+      },
+    );
+
+    const secondRecord = await collectGitlessIdentityWithTerminal(undefined, {
+      sessionId: 'session-new',
+      sessionFile: '/tmp/session-new.json',
+      existingRecord: firstRecord,
+      now: '2026-06-17T12:05:00.000Z',
+    });
+
+    expect(secondRecord).not.toHaveProperty('terminal');
   });
 
   it('emits diagnostics for missing session fields', async () => {

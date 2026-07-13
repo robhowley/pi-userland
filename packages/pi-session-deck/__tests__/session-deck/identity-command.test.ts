@@ -374,9 +374,18 @@ describe('session-deck joined command', () => {
       ...publicRecord,
       sessionFile: '/tmp/private-session.json',
       terminal: {
-        kind: 'iterm2',
-        sessionId: 'w0t0p0:abc',
-        revealUrl: 'iterm2:///reveal?sessionid=w0t0p0%3Aabc',
+        kind: 'tmux',
+        socketPath: '/tmp/tmux/default',
+        sessionName: 'prod',
+        windowName: 'editor',
+        paneId: '%12',
+        attachCommand: 'exec tmux attach-session -t prod',
+      },
+      terminalDisplay: {
+        kind: 'tmux',
+        title: 'editor',
+        detail: 'tmux prod:editor %12',
+        openLabel: 'new iTerm2 tab attaches to tmux',
       },
       worktree: `${HOME}/project`,
     } as SessionDeckRecord;
@@ -395,6 +404,10 @@ describe('session-deck joined command', () => {
     expect(jsonMessage).toBe(JSON.stringify(expectedJsonRecord, null, 2));
     expect(jsonMessage).not.toContain('sessionFile');
     expect(jsonMessage).not.toContain('"terminal"');
+    expect(jsonMessage).not.toContain('terminalDisplay');
+    expect(jsonMessage).not.toContain('socketPath');
+    expect(jsonMessage).not.toContain('paneId');
+    expect(jsonMessage).not.toContain('attachCommand');
     expect(jsonMessage).not.toContain('"worktree"');
 
     vi.mocked(ctx.ui.notify).mockClear();
@@ -555,7 +568,7 @@ describe('session-deck joined command', () => {
 
   it('wires the TUI o key to the configured runtime opener', async () => {
     const { api, getHandler } = createMockAPI();
-    const openIterm2Terminal = vi.fn(async (_runtimeId: string) => ({
+    const openTerminal = vi.fn(async (_runtimeId: string) => ({
       ok: true,
       message: 'Requested iTerm2 focus for selected session.',
     }));
@@ -564,7 +577,7 @@ describe('session-deck joined command', () => {
       readSessionDeckSnapshot: vi.fn(async () =>
         buildSnapshot({ records: [buildSnapshotRecord({ runtimeId: 'rt-open' })] }),
       ),
-      openIterm2Terminal,
+      openTerminal,
     });
 
     const handler = getHandler();
@@ -580,9 +593,9 @@ describe('session-deck joined command', () => {
         component.handleInput?.('o');
 
         await vi.waitFor(() => {
-          expect(openIterm2Terminal).toHaveBeenCalledTimes(1);
+          expect(openTerminal).toHaveBeenCalledTimes(1);
         });
-        expect(openIterm2Terminal).toHaveBeenCalledWith('rt-open');
+        expect(openTerminal).toHaveBeenCalledWith('rt-open');
         await vi.waitFor(() => {
           expect(component.render(120).join('\n')).toContain(
             'Requested iTerm2 focus for selected session.',
@@ -670,6 +683,7 @@ describe('session-deck joined command', () => {
 
         expect(renderText()).toContain('Reap complete: removed 1 expired presence record.');
         expect(renderText()).toContain('←→ switch repo');
+        expect(renderText()).toContain('o open terminal');
         expect(renderText()).toContain('alpha');
         expect(renderText()).toContain('session: session-abc · pid: 101');
         expect(renderText()).toContain('runtime: 922f7ac8deadbeef');
@@ -685,8 +699,10 @@ describe('session-deck joined command', () => {
 
         await vi.advanceTimersByTimeAsync(15_000);
 
-        expect(readSessionDeckSnapshot).toHaveBeenCalledTimes(3);
-        expect(renderText()).toContain('gamma');
+        await vi.waitFor(() => {
+          expect(readSessionDeckSnapshot).toHaveBeenCalledTimes(3);
+          expect(renderText()).toContain('gamma');
+        });
       } finally {
         component.dispose?.();
       }

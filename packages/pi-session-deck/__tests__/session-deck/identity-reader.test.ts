@@ -93,12 +93,45 @@ describe('identity terminal metadata normalization', () => {
     });
   });
 
+  it('normalizes tmux metadata and ignores persisted attach commands', () => {
+    expect(
+      normalizeSessionTerminalMetadata({
+        kind: 'tmux',
+        socketPath: ' /tmp/tmux socket/default ',
+        socketName: 'ignored-when-socket-path-exists',
+        sessionName: ' prod ',
+        sessionId: ' $1 ',
+        windowName: ' editor ',
+        windowId: ' @2 ',
+        paneId: ' %12 ',
+        windowIndex: '3',
+        paneIndex: 4,
+        panePid: '12345',
+        attachCommand: 'exec pi',
+      }),
+    ).toEqual({
+      kind: 'tmux',
+      socketPath: '/tmp/tmux socket/default',
+      sessionName: 'prod',
+      sessionId: '$1',
+      windowName: 'editor',
+      windowId: '@2',
+      paneId: '%12',
+      windowIndex: 3,
+      paneIndex: 4,
+      panePid: 12345,
+    });
+  });
+
   it.each([
     ['missing', undefined],
     ['non-object', 'w0t0p0'],
     ['wrong kind', { kind: 'terminal', sessionId: 'w0t0p0' }],
     ['empty sessionId', { kind: 'iterm2', sessionId: '' }],
     ['trimmed-empty sessionId', { kind: 'iterm2', sessionId: '   ' }],
+    ['tmux without sessionName', { kind: 'tmux', socketPath: '/tmp/tmux/default' }],
+    ['tmux without socket selector', { kind: 'tmux', sessionName: 'prod' }],
+    ['tmux with unsafe socketName', { kind: 'tmux', socketName: 'bad/name', sessionName: 'prod' }],
   ] as const)('omits %s terminal metadata', (_name, candidate) => {
     expect(normalizeSessionTerminalMetadata(candidate)).toBeUndefined();
   });
@@ -229,6 +262,31 @@ describe('identity reader — join', () => {
       termProgram: 'iTerm.app',
       lcTerminal: 'iTerm2',
       lcTerminalVersion: '3.6.11',
+    });
+  });
+
+  it('normalizes persisted tmux metadata and joins it into internal records', async () => {
+    const record = await readSingleJoinedRecord(
+      buildIdentityRecord({
+        terminal: {
+          kind: 'tmux',
+          socketPath: '/tmp/tmux/default',
+          sessionName: 'prod',
+          sessionId: '$1',
+          windowName: 'editor',
+          paneId: '%12',
+          attachCommand: 'exec pi',
+        },
+      }),
+    );
+
+    expect(record.terminal).toEqual({
+      kind: 'tmux',
+      socketPath: '/tmp/tmux/default',
+      sessionName: 'prod',
+      sessionId: '$1',
+      windowName: 'editor',
+      paneId: '%12',
     });
   });
 

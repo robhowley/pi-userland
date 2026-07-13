@@ -71,6 +71,52 @@ describe('identity writer', () => {
     });
   });
 
+  it('serializes tmux metadata without persisting an attach command', async () => {
+    const { serializeIdentityRecord } =
+      await import('../../extensions/session-deck/identity/writer.js');
+
+    const record: SessionIdentityRecord = {
+      runtimeId: 'rt-tmux',
+      sessionId: 'session-abc',
+      sessionFile: '/tmp/session-abc.md',
+      cwd: '/tmp/project',
+      worktree: '/tmp/project',
+      repoName: null,
+      qualifiedRepoName: null,
+      branch: null,
+      prUrl: null,
+      isLinkedWorktree: null,
+      worktreeLabel: null,
+      identityUpdatedAt: '2026-06-17T12:00:00.000Z',
+      sessionStartedAt: '2026-06-17T11:00:00.000Z',
+      gitRemote: null,
+      gitRoot: null,
+      identitySource: 'startup',
+      terminal: {
+        kind: 'tmux',
+        socketPath: '/tmp/tmux/default',
+        socketName: 'ignored-when-socket-path-exists',
+        sessionName: 'prod',
+        sessionId: '$1',
+        windowName: 'editor',
+        paneId: '%12',
+        attachCommand: 'exec pi',
+      } as NonNullable<SessionIdentityRecord['terminal']>,
+    };
+
+    const parsed = JSON.parse(serializeIdentityRecord(record));
+
+    expect(parsed.terminal).toEqual({
+      kind: 'tmux',
+      socketPath: '/tmp/tmux/default',
+      sessionName: 'prod',
+      sessionId: '$1',
+      windowName: 'editor',
+      paneId: '%12',
+    });
+    expect(JSON.stringify(parsed)).not.toContain('attachCommand');
+  });
+
   it('serializes nullable fields correctly', async () => {
     const { serializeIdentityRecord } =
       await import('../../extensions/session-deck/identity/writer.js');

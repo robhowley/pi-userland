@@ -1,4 +1,5 @@
 import { mkdir, rename, writeFile } from 'node:fs/promises';
+import { normalizeSessionTerminalMetadata } from './metadata.js';
 import {
   createIdentityTempPath,
   getDefaultIdentityDirectory,
@@ -15,7 +16,11 @@ export interface WriteIdentityRecordOptions {
 }
 
 export function serializeIdentityRecord(record: SessionIdentityRecord): string {
-  return `${JSON.stringify(record, null, 2)}\n`;
+  const { terminal: rawTerminal, ...baseRecord } = record;
+  const terminal = normalizeSessionTerminalMetadata(rawTerminal);
+  const serializableRecord = terminal === undefined ? baseRecord : { ...baseRecord, terminal };
+
+  return `${JSON.stringify(serializableRecord, null, 2)}\n`;
 }
 
 export async function writeIdentityRecord(

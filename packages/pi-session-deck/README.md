@@ -23,7 +23,7 @@ pi install npm:@robhowley/pi-session-deck
 - `↑/↓` move selection.
 - `←/→` switch repo filters in the row above the session list.
 - `enter` toggle details.
-- `o` make a best-effort attempt to focus the selected iTerm2 tab/session on macOS when captured terminal metadata is available.
+- `o` open the selected terminal target on macOS when captured terminal metadata is available. iTerm2 sessions use the iTerm2 reveal URL; tmux sessions open a new iTerm2 tab that attaches to the existing tmux session.
 - `r` refresh.
 - `q` / `esc` close.
 
@@ -35,6 +35,7 @@ pi install npm:@robhowley/pi-session-deck
 - Repo, PR, and linked-worktree context in the dashboard.
 - Short status chips in `/session-deck`.
 - `/new` resets activity for the new session while keeping the same runtime.
+- Tmux-aware terminal identity: when Pi is running inside tmux, `/session-deck` validates the live tmux pane and stores private tmux facts so `o` can attach to that existing tmux session. It never starts Pi and never creates tmux sessions.
 
 ## Status chips
 
@@ -44,6 +45,26 @@ pi install npm:@robhowley/pi-session-deck
 - Persists sanitized visible text only.
 - Never stores prompts, transcript content, tool args, or tool outputs in chips.
 
+## Terminal opening and tmux
+
+Tmux-backed rows use an iTerm2 Python bridge by default. Install the packaged AutoLaunch script by symlinking or copying:
+
+```shell
+mkdir -p "$HOME/Library/Application Support/iTerm2/Scripts/AutoLaunch"
+ln -sf "$(pwd)/extensions/session-deck/iterm2-python-bridge.py" \
+  "$HOME/Library/Application Support/iTerm2/Scripts/AutoLaunch/pi-session-deck-bridge.py"
+```
+
+Restart iTerm2 after installing. The bridge listens on a user-local Unix socket and accepts JSON-lines requests containing only `exec tmux ... attach-session ...` commands. Configure with:
+
+- `PI_SESSION_DECK_TERMINAL_BRIDGE=auto` (default) — try the Python bridge, then AppleScript fallback if the bridge is unavailable.
+- `PI_SESSION_DECK_TERMINAL_BRIDGE=iterm2-python` — require the Python bridge.
+- `PI_SESSION_DECK_TERMINAL_BRIDGE=iterm2-applescript` — use AppleScript fallback directly.
+- `PI_SESSION_DECK_TERMINAL_BRIDGE=none` — disable tmux terminal opening.
+- `PI_SESSION_DECK_ITERM2_BRIDGE_SOCKET=/path/to/socket` — override the bridge socket path.
+
+Read-only `/session-deck` text and JSON modes do not require the bridge.
+
 ## Privacy limits
 
 - Activity capture is current-state only; there is no transcript/history reconstruction.
@@ -51,3 +72,4 @@ pi install npm:@robhowley/pi-session-deck
 - Tool failures are reduced to compact safe summaries like `tool bash failed`.
 - Assistant errors are sanitized/truncated before persistence.
 - Chip text must not contain prompts, messages, tool arguments, tool outputs, or secrets.
+- Public `/session-deck --json` records do not include raw terminal metadata, tmux socket paths, pane ids, or derived attach commands.

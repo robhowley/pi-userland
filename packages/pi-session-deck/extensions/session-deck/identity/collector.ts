@@ -45,17 +45,18 @@ export async function collectSessionIdentity(
   const sessionName = normalizeOptionalStringField(
     safeCall(() => options.sessionManager?.getSessionName?.(), null),
   );
+  const sameSessionIdentity = isSameSessionIdentity(options.existingRecord, sessionId, sessionFile);
   const sessionStart =
     normalizeSessionStartMetadata(
       safeCall(() => options.sessionManager?.getSessionStart?.(), null),
-    ) ?? options.existingRecord?.sessionStart;
+    ) ?? (sameSessionIdentity ? options.existingRecord?.sessionStart : undefined);
   const sessionHeader =
     normalizeSessionHeaderMetadata(safeCall(() => options.sessionManager?.getHeader?.(), null)) ??
-    options.existingRecord?.sessionHeader;
+    (sameSessionIdentity ? options.existingRecord?.sessionHeader : undefined);
   const terminal =
     normalizeSessionTerminalMetadata(
       safeCall(() => options.sessionManager?.getTerminal?.(), null),
-    ) ?? options.existingRecord?.terminal;
+    ) ?? (sameSessionIdentity ? options.existingRecord?.terminal : undefined);
 
   // Emit diagnostics for missing session fields
   if (sessionId === null) {
@@ -74,11 +75,7 @@ export async function collectSessionIdentity(
   }
 
   // Preserve sessionStartedAt only when the refreshed identity still belongs to the same session.
-  const existingSessionStartedAt = isSameSessionIdentity(
-    options.existingRecord,
-    sessionId,
-    sessionFile,
-  )
+  const existingSessionStartedAt = sameSessionIdentity
     ? (options.existingRecord?.sessionStartedAt ?? null)
     : null;
   const sessionStartedAt = existingSessionStartedAt ?? nowIso;
@@ -186,15 +183,18 @@ function isSameSessionIdentity(
     return false;
   }
 
-  if (sessionId !== null && existingRecord.sessionId !== sessionId) {
-    return false;
-  }
+  const sessionIdMatches = sessionId !== null && existingRecord.sessionId === sessionId;
+  const sessionFileMatches = sessionFile !== null && existingRecord.sessionFile === sessionFile;
+  const sessionIdConflicts =
+    sessionId !== null &&
+    existingRecord.sessionId !== null &&
+    existingRecord.sessionId !== sessionId;
+  const sessionFileConflicts =
+    sessionFile !== null &&
+    existingRecord.sessionFile !== null &&
+    existingRecord.sessionFile !== sessionFile;
 
-  if (sessionFile !== null && existingRecord.sessionFile !== sessionFile) {
-    return false;
-  }
-
-  return sessionId !== null || sessionFile !== null;
+  return (sessionIdMatches || sessionFileMatches) && !sessionIdConflicts && !sessionFileConflicts;
 }
 
 function resolveCollectorCwd(options: IdentityCollectorOptions): string {

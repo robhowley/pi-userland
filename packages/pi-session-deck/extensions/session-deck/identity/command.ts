@@ -2,15 +2,15 @@ import type { Theme } from '@earendil-works/pi-coding-agent';
 import { readSessionDeckSnapshot, type ReadSessionDeckSnapshotOptions } from '../reader.js';
 import { SessionDeckBrowser, type SessionDeckBrowserOpenSelectedResult } from '../browser.js';
 import {
-  openTerminalRevealUrl,
-  type TerminalRevealOpenOptions,
-  type TerminalRevealOpenResult,
+  openTerminalFocusTarget,
+  type TerminalOpenOptions,
+  type TerminalOpenResult,
 } from '../terminal-open.js';
 import {
-  lookupIdentityTerminalRevealUrl,
-  type IdentityTerminalRevealLookupOptions,
-  type IdentityTerminalRevealLookupResult,
-} from './terminal-reveal.js';
+  lookupIdentityTerminalFocusTarget,
+  type IdentityTerminalFocusLookupOptions,
+  type IdentityTerminalFocusLookupResult,
+} from './terminal-focus.js';
 import {
   formatReapedRecord,
   formatSessionDeckDiagnosticLine,
@@ -18,7 +18,13 @@ import {
   getSessionDeckEmptyMessage,
   getSessionDeckListHeading,
 } from '../browser-render.js';
-import type { SessionDeckDiagnostic, SessionDeckRecord, SessionDeckSnapshot } from '../types.js';
+import {
+  withTerminalDisplayHints,
+  type ReadSessionDeckBrowserSnapshotOptions,
+  type SessionDeckBrowserSnapshot,
+} from '../browser-view.js';
+import { toPublicSessionDeckRecord } from '../public-record.js';
+import type { SessionDeckSnapshot } from '../types.js';
 import { SESSION_DECK_COMMAND_NAME } from '../presence/constants.js';
 import { reapPresenceRecords, type ReapPresenceRecordsOptions } from '../presence/reap.js';
 import type { PresenceDiagnostic, PresenceState } from '../presence/types.js';
@@ -65,16 +71,19 @@ export interface PresenceCommandAPI {
 }
 
 export type SessionDeckOpenSelectedResult =
-  | TerminalRevealOpenResult
-  | Extract<IdentityTerminalRevealLookupResult, { ok: false }>;
+  | TerminalOpenResult
+  | Extract<IdentityTerminalFocusLookupResult, { ok: false }>;
 
-export type OpenIterm2TerminalForRuntimeOptions = IdentityTerminalRevealLookupOptions &
-  TerminalRevealOpenOptions;
+export type OpenTerminalForRuntimeOptions = IdentityTerminalFocusLookupOptions &
+  TerminalOpenOptions;
+
+export type OpenIterm2TerminalForRuntimeOptions = OpenTerminalForRuntimeOptions;
 
 export interface RegisterSessionDeckCommandOptions extends ReadSessionDeckSnapshotOptions {
   readSessionDeckSnapshot?: typeof readSessionDeckSnapshot;
   reapPresenceRecords?: typeof reapPresenceRecords;
   unlink?: ReapPresenceRecordsOptions['unlink'];
+  openTerminal?: (runtimeId: string) => Promise<SessionDeckBrowserOpenSelectedResult>;
   openIterm2Terminal?: (runtimeId: string) => Promise<SessionDeckBrowserOpenSelectedResult>;
 }
 
@@ -151,19 +160,18 @@ export function registerSessionDeckCommand(
       }
 
       if (ctx.mode === 'tui' && ctx.ui.custom !== undefined) {
-        const openIterm2Terminal =
+        const openTerminal =
+          options.openTerminal ??
           options.openIterm2Terminal ??
           ((runtimeId: string) =>
-            openIterm2TerminalForRuntime(
-              runtimeId,
-              getOpenIterm2TerminalForRuntimeOptions(options),
-            ));
+            openTerminalForRuntime(runtimeId, getOpenTerminalForRuntimeOptions(options)));
 
         await openSessionDeckBrowser(
           ctx,
           loadedView,
-          async () => readVisibleSessionDeckView(parsedArgs.all, readSnapshot, options),
-          openIterm2Terminal,
+          await withTerminalDisplayHints(loadedView.view, getTerminalDisplayHintOptions(options)),
+          async () => readVisibleSessionDeckBrowserView(parsedArgs.all, readSnapshot, options),
+          openTerminal,
         );
         return;
       }
@@ -251,11 +259,11 @@ export function parseSessionDeckCommandArgs(args: string): ParsedSessionDeckComm
     : { ok: true, all, reap, identity, json: false, sessionId: null };
 }
 
-export async function openIterm2TerminalForRuntime(
+export async function openTerminalForRuntime(
   runtimeId: string,
-  options: OpenIterm2TerminalForRuntimeOptions = {},
+  options: OpenTerminalForRuntimeOptions = {},
 ): Promise<SessionDeckOpenSelectedResult> {
-  const lookupResult = await lookupIdentityTerminalRevealUrl(runtimeId, {
+  const lookupResult = await lookupIdentityTerminalFocusTarget(runtimeId, {
     ...(options.identityDirectory === undefined
       ? {}
       : { identityDirectory: options.identityDirectory }),
@@ -265,10 +273,25 @@ export async function openIterm2TerminalForRuntime(
     return lookupResult;
   }
 
-  return openTerminalRevealUrl(lookupResult.revealUrl, {
+  return openTerminalFocusTarget(lookupResult.target, {
     ...(options.platform === undefined ? {} : { platform: options.platform }),
     ...(options.execFile === undefined ? {} : { execFile: options.execFile }),
+    ...(options.env === undefined ? {} : { env: options.env }),
+    ...(options.bridgeMode === undefined ? {} : { bridgeMode: options.bridgeMode }),
+    ...(options.pythonBridgeClient === undefined
+      ? {}
+      : { pythonBridgeClient: options.pythonBridgeClient }),
+    ...(options.tmuxPreflightTimeoutMs === undefined
+      ? {}
+      : { tmuxPreflightTimeoutMs: options.tmuxPreflightTimeoutMs }),
   });
+}
+
+export async function openIterm2TerminalForRuntime(
+  runtimeId: string,
+  options: OpenIterm2TerminalForRuntimeOptions = {},
+): Promise<SessionDeckOpenSelectedResult> {
+  return openTerminalForRuntime(runtimeId, options);
 }
 
 export function renderSessionDeckView(
@@ -325,52 +348,6 @@ function renderSessionDeckJsonLookup(
   return {
     level: 'info',
     message: JSON.stringify(toPublicSessionDeckRecord(matches[0]!), null, 2),
-  };
-}
-
-function toPublicSessionDeckRecord(record: SessionDeckRecord): SessionDeckRecord {
-  return {
-    runtimeId: record.runtimeId,
-    pid: record.pid,
-    presenceState: record.presenceState,
-    ...(record.presenceReason === undefined ? {} : { presenceReason: record.presenceReason }),
-    heartbeatAgeMs: record.heartbeatAgeMs,
-    sessionId: record.sessionId,
-    sessionName: record.sessionName,
-    repoName: record.repoName,
-    qualifiedRepoName: record.qualifiedRepoName,
-    cwd: record.cwd,
-    branch: record.branch,
-    prUrl: record.prUrl,
-    isLinkedWorktree: record.isLinkedWorktree,
-    worktreeLabel: record.worktreeLabel,
-    ...(record.derivedFacets === undefined
-      ? {}
-      : {
-          derivedFacets: {
-            persistence: record.derivedFacets.persistence,
-            interactivity: record.derivedFacets.interactivity,
-            lifecycle: record.derivedFacets.lifecycle,
-            lineage: record.derivedFacets.lineage,
-            identityStrength: record.derivedFacets.identityStrength,
-            headerConsistency: record.derivedFacets.headerConsistency,
-          },
-        }),
-    activityState: record.activityState,
-    activityAgeMs: record.activityAgeMs,
-    currentToolName: record.currentToolName,
-    lastError: record.lastError,
-    chips: [...record.chips],
-    diagnostics: record.diagnostics.map(toPublicSessionDeckDiagnostic),
-  };
-}
-
-function toPublicSessionDeckDiagnostic(diagnostic: SessionDeckDiagnostic): SessionDeckDiagnostic {
-  return {
-    code: diagnostic.code,
-    message: diagnostic.message,
-    ...(diagnostic.runtimeId === undefined ? {} : { runtimeId: diagnostic.runtimeId }),
-    ...(diagnostic.filePath === undefined ? {} : { filePath: diagnostic.filePath }),
   };
 }
 
@@ -460,6 +437,17 @@ async function readVisibleSessionDeckView(
   );
 }
 
+async function readVisibleSessionDeckBrowserView(
+  all: boolean,
+  readSnapshot: typeof readSessionDeckSnapshot,
+  options: RegisterSessionDeckCommandOptions,
+): Promise<SessionDeckBrowserSnapshot> {
+  return withTerminalDisplayHints(
+    await readVisibleSessionDeckView(all, readSnapshot, options),
+    getTerminalDisplayHintOptions(options),
+  );
+}
+
 function filterVisibleSessionDeckView(
   sessionDeckSnapshot: SessionDeckSnapshot,
   all: boolean,
@@ -480,8 +468,9 @@ function filterVisibleSessionDeckView(
 async function openSessionDeckBrowser(
   ctx: PresenceCommandContext,
   loadedView: LoadedSessionDeckView,
-  reload: () => Promise<SessionDeckSnapshot>,
-  openIterm2Terminal: (runtimeId: string) => Promise<SessionDeckBrowserOpenSelectedResult>,
+  initialView: SessionDeckBrowserSnapshot,
+  reload: () => Promise<SessionDeckBrowserSnapshot>,
+  openTerminal: (runtimeId: string) => Promise<SessionDeckBrowserOpenSelectedResult>,
 ): Promise<void> {
   if (ctx.ui.custom === undefined) {
     return;
@@ -492,9 +481,9 @@ async function openSessionDeckBrowser(
       new SessionDeckBrowser({
         all: loadedView.all,
         showIdentity: loadedView.showIdentity,
-        initialView: loadedView.view,
+        initialView,
         onClose: () => done(undefined),
-        openSelected: (record) => openIterm2Terminal(record.runtimeId),
+        openSelected: (record) => openTerminal(record.runtimeId),
         reload,
         requestRender: () => tui.requestRender(),
         ...(loadedView.reapResult === null
@@ -530,13 +519,25 @@ function getSessionDeckCommandCompletions(prefix: string) {
   return matches.length > 0 ? matches : null;
 }
 
-function getOpenIterm2TerminalForRuntimeOptions(
+function getOpenTerminalForRuntimeOptions(
   options: RegisterSessionDeckCommandOptions,
-): OpenIterm2TerminalForRuntimeOptions {
+): OpenTerminalForRuntimeOptions {
   return {
     ...(options.identityDirectory === undefined
       ? {}
       : { identityDirectory: options.identityDirectory }),
+    ...(options.readFile === undefined ? {} : { readFile: options.readFile }),
+  };
+}
+
+function getTerminalDisplayHintOptions(
+  options: RegisterSessionDeckCommandOptions,
+): Pick<ReadSessionDeckBrowserSnapshotOptions, 'identityDirectory' | 'readdir' | 'readFile'> {
+  return {
+    ...(options.identityDirectory === undefined
+      ? {}
+      : { identityDirectory: options.identityDirectory }),
+    ...(options.readdir === undefined ? {} : { readdir: options.readdir }),
     ...(options.readFile === undefined ? {} : { readFile: options.readFile }),
   };
 }

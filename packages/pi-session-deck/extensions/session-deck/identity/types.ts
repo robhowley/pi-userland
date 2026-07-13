@@ -22,7 +22,7 @@ export interface SessionHeaderMetadata {
   parentSession?: string;
 }
 
-export interface SessionTerminalMetadata {
+export interface SessionIterm2TerminalMetadata {
   kind: 'iterm2';
   sessionId: string;
   revealUrl: string;
@@ -30,6 +30,22 @@ export interface SessionTerminalMetadata {
   lcTerminal?: string;
   lcTerminalVersion?: string;
 }
+
+export interface SessionTmuxTerminalMetadata {
+  kind: 'tmux';
+  sessionName: string;
+  socketPath?: string;
+  socketName?: string;
+  sessionId?: string;
+  windowName?: string;
+  windowId?: string;
+  paneId?: string;
+  windowIndex?: number;
+  paneIndex?: number;
+  panePid?: number;
+}
+
+export type SessionTerminalMetadata = SessionIterm2TerminalMetadata | SessionTmuxTerminalMetadata;
 
 export interface SessionManagerLike {
   getSessionId: () => string | null;
