@@ -58,11 +58,21 @@ interface SessionDeckBrowserSelection {
   records: SessionDeckRecord[];
 }
 
+export interface SessionDeckBrowserOpenSelectedResult {
+  ok: boolean;
+  message: string;
+}
+
+export type SessionDeckBrowserOpenSelected = (
+  record: SessionDeckRecord,
+) => Promise<SessionDeckBrowserOpenSelectedResult>;
+
 export interface SessionDeckBrowserOptions {
   all: boolean;
   showIdentity: boolean;
   initialView: SessionDeckSnapshot;
   onClose: () => void;
+  openSelected?: SessionDeckBrowserOpenSelected;
   reload: () => Promise<SessionDeckSnapshot>;
   requestRender: () => void;
   reapLines?: string[];
@@ -73,6 +83,7 @@ export class SessionDeckBrowser {
   private readonly all: boolean;
   private readonly showIdentity: boolean;
   private readonly onClose: () => void;
+  private readonly openSelected: SessionDeckBrowserOpenSelected | null;
   private readonly reload: () => Promise<SessionDeckSnapshot>;
   private readonly requestRender: () => void;
   private readonly reapLines: string[];
@@ -83,7 +94,9 @@ export class SessionDeckBrowser {
   private selectedIndex = 0;
   private detailVisible = true;
   private refreshStatus: { message: string; tone: 'muted' | 'warning' } | null = null;
+  private openStatus: { message: string; tone: 'muted' | 'warning' } | null = null;
   private refreshPending: Promise<void> | null = null;
+  private openPending: Promise<void> | null = null;
   private isRefreshing = false;
   private autoRefreshInterval: ReturnType<typeof setInterval> | null = null;
   private disposed = false;
@@ -94,6 +107,7 @@ export class SessionDeckBrowser {
     this.all = options.all;
     this.showIdentity = options.showIdentity;
     this.onClose = options.onClose;
+    this.openSelected = options.openSelected ?? null;
     this.reload = options.reload;
     this.requestRender = options.requestRender;
     this.reapLines = options.reapLines ?? [];
@@ -116,7 +130,7 @@ export class SessionDeckBrowser {
 
     if (matchesKey(data, 'enter') || matchesKey(data, 'return')) {
       this.detailVisible = !this.detailVisible;
-      this.refreshStatus = null;
+      this.clearStatus();
       this.bump();
       return;
     }
@@ -131,6 +145,14 @@ export class SessionDeckBrowser {
     }
 
     const selection = this.getSelection();
+    const selectedRecord = selection.records[this.selectedIndex] ?? null;
+
+    if (matchesKey(data, 'o')) {
+      if (selectedRecord !== null) {
+        void this.openSelectedRecord(selectedRecord);
+      }
+      return;
+    }
 
     if (matchesKey(data, 'left')) {
       this.switchRepo(-1, selection);
@@ -144,14 +166,14 @@ export class SessionDeckBrowser {
 
     if (matchesKey(data, 'up')) {
       this.selectedIndex = Math.max(0, this.selectedIndex - 1);
-      this.refreshStatus = null;
+      this.clearStatus();
       this.bump();
       return;
     }
 
     if (matchesKey(data, 'down')) {
       this.selectedIndex = Math.min(selection.records.length - 1, this.selectedIndex + 1);
-      this.refreshStatus = null;
+      this.clearStatus();
       this.bump();
     }
   }
@@ -169,7 +191,7 @@ export class SessionDeckBrowser {
     );
     const help = this.theme.fg(
       'muted',
-      '↑↓ move · ←→ switch repo · enter details · r refresh · q close',
+      '↑↓ move · ←→ switch repo · enter details · o open · r refresh · q close',
     );
 
     pushWrappedLine(lines, title, width);
@@ -183,6 +205,10 @@ export class SessionDeckBrowser {
         this.theme.fg(this.refreshStatus.tone, this.refreshStatus.message),
         width,
       );
+    }
+
+    if (this.openStatus !== null) {
+      pushWrappedLine(lines, this.theme.fg(this.openStatus.tone, this.openStatus.message), width);
     }
 
     if (this.reapLines.length > 0) {
@@ -278,6 +304,59 @@ export class SessionDeckBrowser {
     }
   }
 
+  private async openSelectedRecord(record: SessionDeckRecord): Promise<void> {
+    if (this.disposed) {
+      return;
+    }
+
+    const openSelected = this.openSelected;
+    if (openSelected === null) {
+      this.openStatus = {
+        message: 'iTerm2 focus requests are unavailable in this context.',
+        tone: 'warning',
+      };
+      this.bump();
+      return;
+    }
+
+    if (this.openPending !== null) {
+      this.openStatus = { message: 'Already requesting iTerm2 focus…', tone: 'muted' };
+      this.bump();
+      return this.openPending;
+    }
+
+    this.openStatus = { message: 'Requesting iTerm2 focus…', tone: 'muted' };
+    this.bump();
+
+    this.openPending = (async () => {
+      try {
+        const result = await openSelected(record);
+        if (this.disposed) {
+          return;
+        }
+
+        this.openStatus = {
+          message: result.message,
+          tone: result.ok ? 'muted' : 'warning',
+        };
+      } catch (error) {
+        if (this.disposed) {
+          return;
+        }
+
+        this.openStatus = {
+          message: `Failed to request iTerm2 focus: ${getErrorMessage(error)}`,
+          tone: 'warning',
+        };
+      } finally {
+        this.openPending = null;
+        this.bump();
+      }
+    })();
+
+    return this.openPending;
+  }
+
   private async refresh(mode: SessionDeckRefreshMode = 'manual'): Promise<void> {
     if (this.disposed) {
       return;
@@ -358,12 +437,17 @@ export class SessionDeckBrowser {
       getRepoRecords(selection.repoState.recordsByKey, nextRepoKey),
       selectedRuntimeId,
     );
-    this.refreshStatus = null;
+    this.clearStatus();
     this.bump();
   }
 
   private getSelection(): SessionDeckBrowserSelection {
     return getRepoSelection(buildRepoState(this.view.records), this.selectedRepoKey);
+  }
+
+  private clearStatus(): void {
+    this.refreshStatus = null;
+    this.openStatus = null;
   }
 
   private bump(): void {

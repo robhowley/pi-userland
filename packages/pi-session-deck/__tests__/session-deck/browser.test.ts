@@ -153,6 +153,7 @@ function createBrowser(
     requestRender: () => void;
     reapLines: string[];
     theme: Theme;
+    openSelected: (record: SessionDeckRecord) => Promise<{ ok: boolean; message: string }>;
   }> = {},
 ): SessionDeckBrowser {
   const browser = new SessionDeckBrowser({
@@ -163,6 +164,7 @@ function createBrowser(
     reload: overrides.reload ?? (async () => overrides.initialView ?? buildSnapshot()),
     requestRender: overrides.requestRender ?? (() => {}),
     ...(overrides.reapLines === undefined ? {} : { reapLines: overrides.reapLines }),
+    ...(overrides.openSelected === undefined ? {} : { openSelected: overrides.openSelected }),
     theme: overrides.theme ?? createTheme(),
   });
 
@@ -206,7 +208,8 @@ describe('SessionDeckBrowser', () => {
     const lines = renderLines(browser);
     const helpIndex = findLineIndex(
       lines,
-      (line) => line.includes('↑↓ move · ←→ switch repo · enter details · r refresh · q close'),
+      (line) =>
+        line.includes('↑↓ move · ←→ switch repo · enter details · o open · r refresh · q close'),
       'help line',
     );
     const reapIndex = findLineIndex(lines, (line) => line.includes('Reap complete:'), 'reap line');
@@ -927,6 +930,161 @@ describe('SessionDeckBrowser', () => {
     otherBrowser.handleInput('escape');
 
     expect(onClose).toHaveBeenCalledTimes(2);
+  });
+
+  it('requests iTerm2 focus for the selected public record with o and renders success as muted', async () => {
+    const fg = vi.fn((_tone: string, text: string) => text);
+    const openSelected = vi.fn(async (_record: SessionDeckRecord) => ({
+      ok: true,
+      message: 'Requested iTerm2 focus for selected session.',
+    }));
+    const browser = createBrowser({
+      theme: createTheme({ fg }),
+      openSelected,
+      initialView: buildSnapshot({
+        records: [
+          buildSnapshotRecord({ runtimeId: 'rt-alpha', sessionName: 'alpha' }),
+          buildSnapshotRecord({ runtimeId: 'rt-bravo', sessionName: 'bravo' }),
+        ],
+      }),
+    });
+
+    browser.handleInput('down');
+    browser.handleInput('o');
+
+    await vi.waitFor(() => expect(openSelected).toHaveBeenCalledTimes(1));
+    const [openedRecord] = vi.mocked(openSelected).mock.calls[0] ?? [];
+    expect(openedRecord?.runtimeId).toBe('rt-bravo');
+    expect(openedRecord).not.toHaveProperty('terminal');
+
+    await vi.waitFor(() => {
+      expect(renderText(browser)).toContain('Requested iTerm2 focus for selected session.');
+    });
+    expect(
+      vi
+        .mocked(fg)
+        .mock.calls.some(
+          ([tone, text]) =>
+            tone === 'muted' && text === 'Requested iTerm2 focus for selected session.',
+        ),
+    ).toBe(true);
+  });
+
+  it('does not launch duplicate open requests while one is pending', async () => {
+    let resolveOpen: ((value: { ok: boolean; message: string }) => void) | null = null;
+    const openSelected = vi.fn(
+      async (_record: SessionDeckRecord) =>
+        new Promise<{ ok: boolean; message: string }>((resolve) => {
+          resolveOpen = resolve;
+        }),
+    );
+    const browser = createBrowser({ openSelected });
+
+    browser.handleInput('o');
+    browser.handleInput('o');
+
+    expect(openSelected).toHaveBeenCalledTimes(1);
+    expect(renderText(browser).toLowerCase()).toContain('requesting iterm2 focus');
+
+    expect(resolveOpen).not.toBeNull();
+    resolveOpen!({ ok: true, message: 'Requested iTerm2 focus for selected session.' });
+    await vi.waitFor(() => {
+      expect(renderText(browser)).toContain('Requested iTerm2 focus for selected session.');
+    });
+  });
+
+  it('renders soft open failures as warning statuses', async () => {
+    const fg = vi.fn((_tone: string, text: string) => text);
+    const openSelected = vi.fn(async (_record: SessionDeckRecord) => ({
+      ok: false,
+      message: 'Terminal metadata is unavailable for selected session.',
+    }));
+    const browser = createBrowser({
+      theme: createTheme({ fg }),
+      openSelected,
+    });
+
+    browser.handleInput('o');
+
+    await vi.waitFor(() => {
+      expect(renderText(browser)).toContain(
+        'Terminal metadata is unavailable for selected session.',
+      );
+    });
+    expect(
+      vi
+        .mocked(fg)
+        .mock.calls.some(
+          ([tone, text]) =>
+            tone === 'warning' && text === 'Terminal metadata is unavailable for selected session.',
+        ),
+    ).toBe(true);
+  });
+
+  it('converts thrown open callback errors into warning statuses', async () => {
+    const fg = vi.fn((_tone: string, text: string) => text);
+    const openSelected = vi.fn(async (_record: SessionDeckRecord) => {
+      throw new Error('activation bridge crashed');
+    });
+    const browser = createBrowser({
+      theme: createTheme({ fg }),
+      openSelected,
+    });
+
+    browser.handleInput('o');
+
+    await vi.waitFor(() => {
+      expect(renderText(browser)).toContain('activation bridge crashed');
+      expect(
+        vi
+          .mocked(fg)
+          .mock.calls.some(
+            ([tone, text]) => tone === 'warning' && text.includes('activation bridge crashed'),
+          ),
+      ).toBe(true);
+    });
+  });
+
+  it('does not call the opener for an empty session list', () => {
+    const openSelected = vi.fn(async (_record: SessionDeckRecord) => ({
+      ok: true,
+      message: 'Requested iTerm2 focus for selected session.',
+    }));
+    const browser = createBrowser({
+      openSelected,
+      initialView: buildSnapshot({ records: [] }),
+    });
+
+    browser.handleInput('o');
+
+    expect(openSelected).not.toHaveBeenCalled();
+  });
+
+  it('keeps auto-refresh running while an open request is pending', async () => {
+    vi.useFakeTimers();
+
+    let resolveOpen: ((value: { ok: boolean; message: string }) => void) | null = null;
+    const openSelected = vi.fn(
+      async (_record: SessionDeckRecord) =>
+        new Promise<{ ok: boolean; message: string }>((resolve) => {
+          resolveOpen = resolve;
+        }),
+    );
+    const reload = vi.fn(async () =>
+      buildSnapshot({ records: [buildSnapshotRecord({ sessionName: 'refreshed' })] }),
+    );
+    const browser = createBrowser({ openSelected, reload });
+
+    browser.handleInput('o');
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(openSelected).toHaveBeenCalledTimes(1);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(renderText(browser)).toContain('refreshed');
+
+    expect(resolveOpen).not.toBeNull();
+    resolveOpen!({ ok: true, message: 'Requested iTerm2 focus for selected session.' });
+    await Promise.resolve();
   });
 
   it('manual refreshes in place and preserves repo selection plus row selection', async () => {

@@ -373,6 +373,11 @@ describe('session-deck joined command', () => {
     const leakyRecord = {
       ...publicRecord,
       sessionFile: '/tmp/private-session.json',
+      terminal: {
+        kind: 'iterm2',
+        sessionId: 'w0t0p0:abc',
+        revealUrl: 'iterm2:///reveal?sessionid=w0t0p0%3Aabc',
+      },
       worktree: `${HOME}/project`,
     } as SessionDeckRecord;
 
@@ -389,6 +394,7 @@ describe('session-deck joined command', () => {
     expect(jsonLevel).toBe('info');
     expect(jsonMessage).toBe(JSON.stringify(expectedJsonRecord, null, 2));
     expect(jsonMessage).not.toContain('sessionFile');
+    expect(jsonMessage).not.toContain('"terminal"');
     expect(jsonMessage).not.toContain('"worktree"');
 
     vi.mocked(ctx.ui.notify).mockClear();
@@ -454,11 +460,16 @@ describe('session-deck joined command', () => {
     );
   });
 
-  it('bypasses the tui browser for json lookups', async () => {
+  it('bypasses the tui browser and opener for json lookups', async () => {
     const { api, getHandler } = createMockAPI();
+    const openIterm2Terminal = vi.fn(async (_runtimeId: string) => ({
+      ok: true,
+      message: 'Requested iTerm2 focus for selected session.',
+    }));
 
     registerSessionDeckCommand(api, {
       readSessionDeckSnapshot: vi.fn(async () => buildSnapshot()),
+      openIterm2Terminal,
     });
 
     const handler = getHandler();
@@ -474,6 +485,7 @@ describe('session-deck joined command', () => {
     await handler?.('--json --session-id session-abc', ctx);
 
     expect(custom).not.toHaveBeenCalled();
+    expect(openIterm2Terminal).not.toHaveBeenCalled();
     expect(vi.mocked(ctx.ui.notify)).toHaveBeenCalledWith(
       JSON.stringify(buildSnapshotRecord(), null, 2),
       'info',
@@ -539,6 +551,59 @@ describe('session-deck joined command', () => {
     expect(message).toContain('Removed:');
     expect(message).toContain('- rt-expired');
     expect(message).toContain('No live or stale Pi sessions found.');
+  });
+
+  it('wires the TUI o key to the configured runtime opener', async () => {
+    const { api, getHandler } = createMockAPI();
+    const openIterm2Terminal = vi.fn(async (_runtimeId: string) => ({
+      ok: true,
+      message: 'Requested iTerm2 focus for selected session.',
+    }));
+
+    registerSessionDeckCommand(api, {
+      readSessionDeckSnapshot: vi.fn(async () =>
+        buildSnapshot({ records: [buildSnapshotRecord({ runtimeId: 'rt-open' })] }),
+      ),
+      openIterm2Terminal,
+    });
+
+    const handler = getHandler();
+    const custom = vi.fn(async (factory) => {
+      const component = factory(
+        { requestRender: vi.fn() },
+        createTheme() as never,
+        undefined,
+        () => undefined,
+      );
+
+      try {
+        component.handleInput?.('o');
+
+        await vi.waitFor(() => {
+          expect(openIterm2Terminal).toHaveBeenCalledTimes(1);
+        });
+        expect(openIterm2Terminal).toHaveBeenCalledWith('rt-open');
+        await vi.waitFor(() => {
+          expect(component.render(120).join('\n')).toContain(
+            'Requested iTerm2 focus for selected session.',
+          );
+        });
+      } finally {
+        component.dispose?.();
+      }
+    });
+    const ctx = createCommandContext({
+      mode: 'tui',
+      ui: {
+        notify: vi.fn(),
+        custom: custom as NonNullable<PresenceCommandContext['ui']['custom']>,
+      },
+    });
+
+    await handler?.('', ctx);
+
+    expect(custom).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(ctx.ui.notify)).not.toHaveBeenCalled();
   });
 
   it('dispatches to a custom browser in tui mode, shows session ids by default, and keeps refresh/reap wiring stable', async () => {

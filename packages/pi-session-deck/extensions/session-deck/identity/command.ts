@@ -1,6 +1,16 @@
 import type { Theme } from '@earendil-works/pi-coding-agent';
 import { readSessionDeckSnapshot, type ReadSessionDeckSnapshotOptions } from '../reader.js';
-import { SessionDeckBrowser } from '../browser.js';
+import { SessionDeckBrowser, type SessionDeckBrowserOpenSelectedResult } from '../browser.js';
+import {
+  openTerminalRevealUrl,
+  type TerminalRevealOpenOptions,
+  type TerminalRevealOpenResult,
+} from '../terminal-open.js';
+import {
+  lookupIdentityTerminalRevealUrl,
+  type IdentityTerminalRevealLookupOptions,
+  type IdentityTerminalRevealLookupResult,
+} from './terminal-reveal.js';
 import {
   formatReapedRecord,
   formatSessionDeckDiagnosticLine,
@@ -54,10 +64,18 @@ export interface PresenceCommandAPI {
   registerCommand: (name: string, options: PresenceCommandRegistration) => void;
 }
 
+export type SessionDeckOpenSelectedResult =
+  | TerminalRevealOpenResult
+  | Extract<IdentityTerminalRevealLookupResult, { ok: false }>;
+
+export type OpenIterm2TerminalForRuntimeOptions = IdentityTerminalRevealLookupOptions &
+  TerminalRevealOpenOptions;
+
 export interface RegisterSessionDeckCommandOptions extends ReadSessionDeckSnapshotOptions {
   readSessionDeckSnapshot?: typeof readSessionDeckSnapshot;
   reapPresenceRecords?: typeof reapPresenceRecords;
   unlink?: ReapPresenceRecordsOptions['unlink'];
+  openIterm2Terminal?: (runtimeId: string) => Promise<SessionDeckBrowserOpenSelectedResult>;
 }
 
 export type ParsedSessionDeckCommandArgs =
@@ -133,8 +151,19 @@ export function registerSessionDeckCommand(
       }
 
       if (ctx.mode === 'tui' && ctx.ui.custom !== undefined) {
-        await openSessionDeckBrowser(ctx, loadedView, async () =>
-          readVisibleSessionDeckView(parsedArgs.all, readSnapshot, options),
+        const openIterm2Terminal =
+          options.openIterm2Terminal ??
+          ((runtimeId: string) =>
+            openIterm2TerminalForRuntime(
+              runtimeId,
+              getOpenIterm2TerminalForRuntimeOptions(options),
+            ));
+
+        await openSessionDeckBrowser(
+          ctx,
+          loadedView,
+          async () => readVisibleSessionDeckView(parsedArgs.all, readSnapshot, options),
+          openIterm2Terminal,
         );
         return;
       }
@@ -220,6 +249,26 @@ export function parseSessionDeckCommandArgs(args: string): ParsedSessionDeckComm
   return json
     ? { ok: true, all, reap, identity, json: true, sessionId: sessionId! }
     : { ok: true, all, reap, identity, json: false, sessionId: null };
+}
+
+export async function openIterm2TerminalForRuntime(
+  runtimeId: string,
+  options: OpenIterm2TerminalForRuntimeOptions = {},
+): Promise<SessionDeckOpenSelectedResult> {
+  const lookupResult = await lookupIdentityTerminalRevealUrl(runtimeId, {
+    ...(options.identityDirectory === undefined
+      ? {}
+      : { identityDirectory: options.identityDirectory }),
+    ...(options.readFile === undefined ? {} : { readFile: options.readFile }),
+  });
+  if (!lookupResult.ok) {
+    return lookupResult;
+  }
+
+  return openTerminalRevealUrl(lookupResult.revealUrl, {
+    ...(options.platform === undefined ? {} : { platform: options.platform }),
+    ...(options.execFile === undefined ? {} : { execFile: options.execFile }),
+  });
 }
 
 export function renderSessionDeckView(
@@ -432,6 +481,7 @@ async function openSessionDeckBrowser(
   ctx: PresenceCommandContext,
   loadedView: LoadedSessionDeckView,
   reload: () => Promise<SessionDeckSnapshot>,
+  openIterm2Terminal: (runtimeId: string) => Promise<SessionDeckBrowserOpenSelectedResult>,
 ): Promise<void> {
   if (ctx.ui.custom === undefined) {
     return;
@@ -444,6 +494,7 @@ async function openSessionDeckBrowser(
         showIdentity: loadedView.showIdentity,
         initialView: loadedView.view,
         onClose: () => done(undefined),
+        openSelected: (record) => openIterm2Terminal(record.runtimeId),
         reload,
         requestRender: () => tui.requestRender(),
         ...(loadedView.reapResult === null
@@ -477,6 +528,17 @@ function getSessionDeckCommandCompletions(prefix: string) {
   }));
 
   return matches.length > 0 ? matches : null;
+}
+
+function getOpenIterm2TerminalForRuntimeOptions(
+  options: RegisterSessionDeckCommandOptions,
+): OpenIterm2TerminalForRuntimeOptions {
+  return {
+    ...(options.identityDirectory === undefined
+      ? {}
+      : { identityDirectory: options.identityDirectory }),
+    ...(options.readFile === undefined ? {} : { readFile: options.readFile }),
+  };
 }
 
 function getReadSessionDeckSnapshotOptions(

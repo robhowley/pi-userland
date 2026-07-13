@@ -23,6 +23,7 @@ pi install npm:@robhowley/pi-session-deck
 - `↑/↓` move selection.
 - `←/→` switch repo filters in the row above the session list.
 - `enter` toggle details.
+- `o` make a best-effort attempt to focus the selected iTerm2 tab/session on macOS when captured terminal metadata is available.
 - `r` refresh.
 - `q` / `esc` close.
 
