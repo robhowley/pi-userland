@@ -1,4 +1,8 @@
-import type { SessionHeaderMetadata, SessionStartMetadata } from './types.js';
+import type {
+  SessionHeaderMetadata,
+  SessionStartMetadata,
+  SessionTerminalMetadata,
+} from './types.js';
 
 export function normalizeSessionStartMetadata(
   candidate: unknown,
@@ -47,12 +51,47 @@ export function normalizeSessionHeaderMetadata(
   };
 }
 
+export function normalizeSessionTerminalMetadata(
+  candidate: unknown,
+): SessionTerminalMetadata | undefined {
+  if (!isObject(candidate) || candidate['kind'] !== 'iterm2') {
+    return undefined;
+  }
+
+  const sessionId = normalizeTrimmedStringField(candidate['sessionId']);
+  if (sessionId === undefined) {
+    return undefined;
+  }
+
+  const termProgram = normalizeTrimmedStringField(candidate['termProgram']);
+  const lcTerminal = normalizeTrimmedStringField(candidate['lcTerminal']);
+  const lcTerminalVersion = normalizeTrimmedStringField(candidate['lcTerminalVersion']);
+
+  return {
+    kind: 'iterm2',
+    sessionId,
+    revealUrl: `iterm2:///reveal?sessionid=${encodeURIComponent(sessionId)}`,
+    ...(termProgram === undefined ? {} : { termProgram }),
+    ...(lcTerminal === undefined ? {} : { lcTerminal }),
+    ...(lcTerminalVersion === undefined ? {} : { lcTerminalVersion }),
+  };
+}
+
 function normalizeOptionalStringField(value: unknown): string | undefined {
   if (typeof value === 'string' && value.length > 0) {
     return value;
   }
 
   return undefined;
+}
+
+function normalizeTrimmedStringField(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 function normalizeBooleanField(value: unknown): boolean | undefined {

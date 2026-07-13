@@ -13,6 +13,57 @@ const MOCK_STATUS_MIRROR = {
   clearTracked: vi.fn().mockResolvedValue(undefined),
 };
 
+type TerminalEnvKey =
+  | 'ITERM_SESSION_ID'
+  | 'TERM_SESSION_ID'
+  | 'TERM_PROGRAM'
+  | 'LC_TERMINAL'
+  | 'LC_TERMINAL_VERSION';
+
+const TERMINAL_ENV_KEYS: TerminalEnvKey[] = [
+  'ITERM_SESSION_ID',
+  'TERM_SESSION_ID',
+  'TERM_PROGRAM',
+  'LC_TERMINAL',
+  'LC_TERMINAL_VERSION',
+];
+
+async function withTerminalEnv(
+  overrides: Partial<Record<TerminalEnvKey, string | undefined>>,
+  run: () => Promise<void>,
+): Promise<void> {
+  const previous = Object.fromEntries(
+    TERMINAL_ENV_KEYS.map((key) => [key, process.env[key]]),
+  ) as Partial<Record<TerminalEnvKey, string>>;
+
+  for (const key of TERMINAL_ENV_KEYS) {
+    delete process.env[key];
+  }
+
+  for (const [key, value] of Object.entries(overrides) as Array<
+    [TerminalEnvKey, string | undefined]
+  >) {
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+
+  try {
+    await run();
+  } finally {
+    for (const key of TERMINAL_ENV_KEYS) {
+      const value = previous[key];
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
 function setupMocks(presenceMock?: unknown, identityMock?: unknown, activityMock?: unknown) {
   const ensurePresenceRuntimeStarted =
     presenceMock ??
@@ -206,6 +257,75 @@ describe('pi-session-deck extension', () => {
       timestamp: '2026-06-17T12:00:00.000Z',
       cwd: '/repo',
       parentSession: '/tmp/session-parent.md',
+    });
+  });
+
+  it('captures iTerm2 terminal metadata for identity refresh when ITERM_SESSION_ID is set', async () => {
+    await withTerminalEnv(
+      {
+        ITERM_SESSION_ID: '  w0t0p0:abc/def?x=1  ',
+        TERM_PROGRAM: 'iTerm.app',
+        LC_TERMINAL: 'iTerm2',
+        LC_TERMINAL_VERSION: '3.6.11',
+      },
+      async () => {
+        const { refreshIdentity } = setupMocks();
+        const { handlers } = await installExtension();
+
+        await handlers.get('session_start')?.({ reason: 'startup' }, makeCtx());
+
+        const expectedTerminal = {
+          kind: 'iterm2',
+          sessionId: 'w0t0p0:abc/def?x=1',
+          revealUrl: 'iterm2:///reveal?sessionid=w0t0p0%3Aabc%2Fdef%3Fx%3D1',
+          termProgram: 'iTerm.app',
+          lcTerminal: 'iTerm2',
+          lcTerminalVersion: '3.6.11',
+        };
+        const sessionManager = refreshIdentity.mock.calls[0]?.[1];
+        expect(sessionManager.getTerminal?.()).toEqual(expectedTerminal);
+
+        process.env['ITERM_SESSION_ID'] = 'changed-after-session-start';
+        expect(sessionManager.getTerminal?.()).toEqual(expectedTerminal);
+      },
+    );
+  });
+
+  it.each([
+    ['missing ITERM_SESSION_ID', undefined],
+    ['blank ITERM_SESSION_ID', ''],
+    ['trimmed-empty ITERM_SESSION_ID', '   '],
+  ] as const)('omits terminal metadata for %s', async (_name, itermSessionId) => {
+    await withTerminalEnv(
+      {
+        ITERM_SESSION_ID: itermSessionId,
+        TERM_SESSION_ID: 'not-an-iterm-fallback',
+      },
+      async () => {
+        const { refreshIdentity } = setupMocks();
+        const { handlers } = await installExtension();
+
+        await handlers.get('session_start')?.({ reason: 'startup' }, makeCtx());
+
+        const sessionManager = refreshIdentity.mock.calls[0]?.[1];
+        expect(sessionManager.getTerminal?.()).toBeUndefined();
+      },
+    );
+  });
+
+  it('captures non-UUID iTerm2 session ids without regex validation', async () => {
+    await withTerminalEnv({ ITERM_SESSION_ID: 'definitely-not-a-uuid' }, async () => {
+      const { refreshIdentity } = setupMocks();
+      const { handlers } = await installExtension();
+
+      await handlers.get('session_start')?.({ reason: 'startup' }, makeCtx());
+
+      const sessionManager = refreshIdentity.mock.calls[0]?.[1];
+      expect(sessionManager.getTerminal?.()).toEqual({
+        kind: 'iterm2',
+        sessionId: 'definitely-not-a-uuid',
+        revealUrl: 'iterm2:///reveal?sessionid=definitely-not-a-uuid',
+      });
     });
   });
 

@@ -11,8 +11,9 @@ import { createSetStatusMirror } from './chips/mirror.js';
 import {
   normalizeSessionHeaderMetadata,
   normalizeSessionStartMetadata,
+  normalizeSessionTerminalMetadata,
 } from './identity/metadata.js';
-import type { SessionManagerLike } from './identity/types.js';
+import type { SessionManagerLike, SessionTerminalMetadata } from './identity/types.js';
 
 interface SessionStartContext {
   mode?: string;
@@ -140,6 +141,7 @@ function createSessionManager(
     mode: ctx.mode,
     hasUI: ctx.hasUI,
   });
+  const terminal = getIterm2TerminalMetadataFromEnv(process.env);
 
   return {
     getSessionId: () => ctx.sessionManager?.getSessionId() ?? null,
@@ -148,7 +150,20 @@ function createSessionManager(
     getCwd: () => ctx.sessionManager?.getCwd?.() ?? ctx.cwd,
     getSessionStart: () => sessionStart,
     getHeader: () => normalizeSessionHeaderMetadata(ctx.sessionManager?.getHeader?.()) ?? null,
+    getTerminal: () => terminal,
   };
+}
+
+function getIterm2TerminalMetadataFromEnv(
+  env: NodeJS.ProcessEnv,
+): SessionTerminalMetadata | undefined {
+  return normalizeSessionTerminalMetadata({
+    kind: 'iterm2',
+    sessionId: env['ITERM_SESSION_ID'],
+    termProgram: env['TERM_PROGRAM'],
+    lcTerminal: env['LC_TERMINAL'],
+    lcTerminalVersion: env['LC_TERMINAL_VERSION'],
+  });
 }
 
 function getActivityMessage(event: { message?: unknown }): {

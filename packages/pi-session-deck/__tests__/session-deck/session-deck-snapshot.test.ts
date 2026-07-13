@@ -123,7 +123,16 @@ describe('readSessionDeckSnapshot', () => {
     const directories = await createSnapshotDirectories();
 
     await writePresenceRecord(buildPresenceRecord(), { directory: directories.presenceDirectory });
-    await writeIdentityRecord(buildIdentityRecord(), { directory: directories.identityDirectory });
+    await writeIdentityRecord(
+      buildIdentityRecord({
+        terminal: {
+          kind: 'iterm2',
+          sessionId: 'w0t0p0:abc',
+          revealUrl: 'iterm2:///reveal?sessionid=w0t0p0%3Aabc',
+        },
+      }),
+      { directory: directories.identityDirectory },
+    );
     await writeActivityRecord(buildActivityRecord(), { directory: directories.activityDirectory });
     await writeChipRecord(buildChipRecord({ source: 'alpha', text: 'merge ready' }), {
       directory: directories.chipsDirectory,
@@ -189,6 +198,7 @@ describe('readSessionDeckSnapshot', () => {
       'activityUpdatedAt',
       'sessionStart',
       'sessionHeader',
+      'terminal',
       'previousSessionFile',
       'parentSession',
       'schemaVersion',

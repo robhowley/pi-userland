@@ -22,6 +22,15 @@ export interface SessionHeaderMetadata {
   parentSession?: string;
 }
 
+export interface SessionTerminalMetadata {
+  kind: 'iterm2';
+  sessionId: string;
+  revealUrl: string;
+  termProgram?: string;
+  lcTerminal?: string;
+  lcTerminalVersion?: string;
+}
+
 export interface SessionManagerLike {
   getSessionId: () => string | null;
   getSessionFile: () => string | null;
@@ -29,6 +38,7 @@ export interface SessionManagerLike {
   getCwd?: () => string | null | undefined;
   getSessionStart?: () => SessionStartMetadata | undefined;
   getHeader?: () => SessionHeaderMetadata | null | undefined;
+  getTerminal?: () => SessionTerminalMetadata | undefined;
 }
 
 // ─── Identity runtime controller ─────────────────────────────────────
@@ -61,6 +71,7 @@ export interface SessionIdentityRecord {
   identitySource: string;
   sessionStart?: SessionStartMetadata;
   sessionHeader?: SessionHeaderMetadata;
+  terminal?: SessionTerminalMetadata;
   diagnostics?: IdentityDiagnostic[];
 }
 
@@ -168,6 +179,7 @@ export interface JoinedSessionRecord {
   derivedFacets?: SessionDerivedFacets;
   sessionStart?: SessionStartMetadata;
   sessionHeader?: SessionHeaderMetadata;
+  terminal?: SessionTerminalMetadata;
 
   // Combined diagnostics
   diagnostics: JoinedDiagnostic[];

@@ -36,6 +36,11 @@ describe('identity writer', () => {
         cwd: '/home/user/project',
         parentSession: '/tmp/session-parent.md',
       },
+      terminal: {
+        kind: 'iterm2',
+        sessionId: 'w0t0p0:abc',
+        revealUrl: 'iterm2:///reveal?sessionid=w0t0p0%3Aabc',
+      },
     };
 
     const json = serializeIdentityRecord(record);
@@ -58,6 +63,11 @@ describe('identity writer', () => {
       timestamp: '2026-06-17T11:00:00.000Z',
       cwd: '/home/user/project',
       parentSession: '/tmp/session-parent.md',
+    });
+    expect(parsed.terminal).toEqual({
+      kind: 'iterm2',
+      sessionId: 'w0t0p0:abc',
+      revealUrl: 'iterm2:///reveal?sessionid=w0t0p0%3Aabc',
     });
   });
 
