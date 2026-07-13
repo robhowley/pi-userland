@@ -35,7 +35,7 @@ pi install npm:@robhowley/pi-session-deck
 - Repo, PR, and linked-worktree context in the dashboard.
 - Short status chips in `/session-deck`.
 - `/new` resets activity for the new session while keeping the same runtime.
-- Tmux-aware terminal identity: when Pi is running inside tmux, `/session-deck` validates the live tmux pane and stores private tmux facts so `o` can attach to that existing tmux session. It never starts Pi and never creates tmux sessions.
+- Tmux-aware terminal opening: when Pi is running inside tmux, `o` attaches to the existing tmux session after verifying the pane is live. It never starts Pi and never creates tmux sessions.
 
 ## Status chips
 
@@ -55,7 +55,7 @@ ln -sf "$(pwd)/extensions/session-deck/iterm2-python-bridge.py" \
   "$HOME/Library/Application Support/iTerm2/Scripts/AutoLaunch/pi-session-deck-bridge.py"
 ```
 
-Restart iTerm2 after installing. The bridge listens on a user-local Unix socket and accepts JSON-lines requests containing a `tmuxAttachArgv` field with an exact tmux attach argv array, such as `["tmux","-S","...","attach-session","-E","-t","..."]`. It does not accept shell command strings. Configure with:
+Restart iTerm2 after installing. The bridge is only needed for tmux-backed rows and only opens a new iTerm2 tab that attaches to an existing tmux session. Configure with:
 
 - `PI_SESSION_DECK_TERMINAL_BRIDGE=auto` (default) — try the Python bridge, then AppleScript fallback if the bridge is unavailable.
 - `PI_SESSION_DECK_TERMINAL_BRIDGE=iterm2-python` — require the Python bridge.
