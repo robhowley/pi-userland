@@ -9,7 +9,7 @@ import {
   shouldDimSessionDeckBrowserRow,
 } from './browser-render.js';
 import type { SessionDeckBrowserRow } from './browser-render.js';
-import type { SessionDeckRecord, SessionDeckSnapshot } from './types.js';
+import type { SessionDeckBrowserRecord, SessionDeckBrowserSnapshot } from './browser-view.js';
 
 const DEFAULT_MAX_VISIBLE_ROWS = 8;
 const DEFAULT_MAX_VISIBLE_REPOS = 4;
@@ -35,35 +35,45 @@ interface SessionDeckRepoOption {
 
 interface SessionDeckRepoState {
   options: SessionDeckRepoOption[];
-  recordsByKey: Map<SessionDeckRepoKey, SessionDeckRecord[]>;
+  recordsByKey: Map<SessionDeckRepoKey, SessionDeckBrowserRecord[]>;
 }
 
 interface SessionDeckNamedRepoBucket {
   key: string;
   shortLabel: string;
   qualifiedLabel: string | null;
-  records: SessionDeckRecord[];
+  records: SessionDeckBrowserRecord[];
 }
 
 interface SessionDeckPendingRepoGroup {
   shortLabel: string;
   qualifiedLabels: Set<string>;
-  records: SessionDeckRecord[];
+  records: SessionDeckBrowserRecord[];
 }
 
 interface SessionDeckBrowserSelection {
   repoState: SessionDeckRepoState;
   repoIndex: number;
   repoOption: SessionDeckRepoOption;
-  records: SessionDeckRecord[];
+  records: SessionDeckBrowserRecord[];
 }
+
+export interface SessionDeckBrowserOpenSelectedResult {
+  ok: boolean;
+  message: string;
+}
+
+export type SessionDeckBrowserOpenSelected = (
+  record: SessionDeckBrowserRecord,
+) => Promise<SessionDeckBrowserOpenSelectedResult>;
 
 export interface SessionDeckBrowserOptions {
   all: boolean;
   showIdentity: boolean;
-  initialView: SessionDeckSnapshot;
+  initialView: SessionDeckBrowserSnapshot;
   onClose: () => void;
-  reload: () => Promise<SessionDeckSnapshot>;
+  openSelected?: SessionDeckBrowserOpenSelected;
+  reload: () => Promise<SessionDeckBrowserSnapshot>;
   requestRender: () => void;
   reapLines?: string[];
   theme: Theme;
@@ -73,17 +83,20 @@ export class SessionDeckBrowser {
   private readonly all: boolean;
   private readonly showIdentity: boolean;
   private readonly onClose: () => void;
-  private readonly reload: () => Promise<SessionDeckSnapshot>;
+  private readonly openSelected: SessionDeckBrowserOpenSelected | null;
+  private readonly reload: () => Promise<SessionDeckBrowserSnapshot>;
   private readonly requestRender: () => void;
   private readonly reapLines: string[];
   private readonly theme: Theme;
 
-  private view: SessionDeckSnapshot;
+  private view: SessionDeckBrowserSnapshot;
   private selectedRepoKey: SessionDeckRepoKey = ALL_REPO_FILTER_KEY;
   private selectedIndex = 0;
   private detailVisible = true;
   private refreshStatus: { message: string; tone: 'muted' | 'warning' } | null = null;
+  private openStatus: { message: string; tone: 'muted' | 'warning' } | null = null;
   private refreshPending: Promise<void> | null = null;
+  private openPending: Promise<void> | null = null;
   private isRefreshing = false;
   private autoRefreshInterval: ReturnType<typeof setInterval> | null = null;
   private disposed = false;
@@ -94,6 +107,7 @@ export class SessionDeckBrowser {
     this.all = options.all;
     this.showIdentity = options.showIdentity;
     this.onClose = options.onClose;
+    this.openSelected = options.openSelected ?? null;
     this.reload = options.reload;
     this.requestRender = options.requestRender;
     this.reapLines = options.reapLines ?? [];
@@ -116,7 +130,7 @@ export class SessionDeckBrowser {
 
     if (matchesKey(data, 'enter') || matchesKey(data, 'return')) {
       this.detailVisible = !this.detailVisible;
-      this.refreshStatus = null;
+      this.clearStatus();
       this.bump();
       return;
     }
@@ -131,6 +145,14 @@ export class SessionDeckBrowser {
     }
 
     const selection = this.getSelection();
+    const selectedRecord = selection.records[this.selectedIndex] ?? null;
+
+    if (matchesKey(data, 'o')) {
+      if (selectedRecord !== null) {
+        void this.openSelectedRecord(selectedRecord);
+      }
+      return;
+    }
 
     if (matchesKey(data, 'left')) {
       this.switchRepo(-1, selection);
@@ -144,14 +166,14 @@ export class SessionDeckBrowser {
 
     if (matchesKey(data, 'up')) {
       this.selectedIndex = Math.max(0, this.selectedIndex - 1);
-      this.refreshStatus = null;
+      this.clearStatus();
       this.bump();
       return;
     }
 
     if (matchesKey(data, 'down')) {
       this.selectedIndex = Math.min(selection.records.length - 1, this.selectedIndex + 1);
-      this.refreshStatus = null;
+      this.clearStatus();
       this.bump();
     }
   }
@@ -169,7 +191,7 @@ export class SessionDeckBrowser {
     );
     const help = this.theme.fg(
       'muted',
-      '↑↓ move · ←→ switch repo · enter details · r refresh · q close',
+      '↑↓ move · ←→ switch repo · enter details · o open terminal · r refresh · q close',
     );
 
     pushWrappedLine(lines, title, width);
@@ -183,6 +205,10 @@ export class SessionDeckBrowser {
         this.theme.fg(this.refreshStatus.tone, this.refreshStatus.message),
         width,
       );
+    }
+
+    if (this.openStatus !== null) {
+      pushWrappedLine(lines, this.theme.fg(this.openStatus.tone, this.openStatus.message), width);
     }
 
     if (this.reapLines.length > 0) {
@@ -278,6 +304,59 @@ export class SessionDeckBrowser {
     }
   }
 
+  private async openSelectedRecord(record: SessionDeckBrowserRecord): Promise<void> {
+    if (this.disposed) {
+      return;
+    }
+
+    const openSelected = this.openSelected;
+    if (openSelected === null) {
+      this.openStatus = {
+        message: 'Terminal open requests are unavailable in this context.',
+        tone: 'warning',
+      };
+      this.bump();
+      return;
+    }
+
+    if (this.openPending !== null) {
+      this.openStatus = { message: 'Already opening terminal…', tone: 'muted' };
+      this.bump();
+      return this.openPending;
+    }
+
+    this.openStatus = { message: 'Opening terminal…', tone: 'muted' };
+    this.bump();
+
+    this.openPending = (async () => {
+      try {
+        const result = await openSelected(record);
+        if (this.disposed) {
+          return;
+        }
+
+        this.openStatus = {
+          message: result.message,
+          tone: result.ok ? 'muted' : 'warning',
+        };
+      } catch (error) {
+        if (this.disposed) {
+          return;
+        }
+
+        this.openStatus = {
+          message: `Failed to open terminal: ${getErrorMessage(error)}`,
+          tone: 'warning',
+        };
+      } finally {
+        this.openPending = null;
+        this.bump();
+      }
+    })();
+
+    return this.openPending;
+  }
+
   private async refresh(mode: SessionDeckRefreshMode = 'manual'): Promise<void> {
     if (this.disposed) {
       return;
@@ -358,12 +437,17 @@ export class SessionDeckBrowser {
       getRepoRecords(selection.repoState.recordsByKey, nextRepoKey),
       selectedRuntimeId,
     );
-    this.refreshStatus = null;
+    this.clearStatus();
     this.bump();
   }
 
   private getSelection(): SessionDeckBrowserSelection {
     return getRepoSelection(buildRepoState(this.view.records), this.selectedRepoKey);
+  }
+
+  private clearStatus(): void {
+    this.refreshStatus = null;
+    this.openStatus = null;
   }
 
   private bump(): void {
@@ -423,7 +507,7 @@ function layoutRepoRow(
 
 function renderRowLine1(
   theme: Theme,
-  record: SessionDeckRecord,
+  record: SessionDeckBrowserRecord,
   row: SessionDeckBrowserRow,
   isSelected: boolean,
   width: number,
@@ -444,19 +528,28 @@ function renderRowLine1(
 
 function renderRowLine2(
   theme: Theme,
-  record: SessionDeckRecord,
+  record: SessionDeckBrowserRecord,
   row: SessionDeckBrowserRow,
   isSelected: boolean,
   width: number,
 ): string {
   const prefix = isSelected ? theme.fg('accent', '  │ ') : '    ';
+  const rowDetail = formatRowLine2Detail(row);
   const chipText = row.hasChips
     ? isSelected || !shouldDimSessionDeckBrowserRow(record)
-      ? row.chipPreview
-      : theme.fg('dim', row.chipPreview)
-    : theme.fg('dim', 'no chips');
+      ? rowDetail
+      : theme.fg('dim', rowDetail)
+    : theme.fg('dim', rowDetail);
 
   return truncateToWidth(`${prefix}${chipText}`, width);
+}
+
+function formatRowLine2Detail(row: SessionDeckBrowserRow): string {
+  if (row.terminalLabel === null) {
+    return row.hasChips ? row.chipPreview : 'no chips';
+  }
+
+  return row.hasChips ? `${row.chipPreview} · ${row.terminalLabel}` : row.terminalLabel;
 }
 
 function formatRowLine1Metadata(row: SessionDeckBrowserRow, includeBranch: boolean): string {
@@ -484,7 +577,7 @@ function appendBranchMetadata(
 
 function styleRowTitle(
   theme: Theme,
-  record: SessionDeckRecord,
+  record: SessionDeckBrowserRecord,
   row: SessionDeckBrowserRow,
   isSelected: boolean,
 ): string {
@@ -498,7 +591,7 @@ function styleRowTitle(
 function styleRowLine1(
   theme: Theme,
   line: string,
-  record: SessionDeckRecord,
+  record: SessionDeckBrowserRecord,
   isSelected: boolean,
   width: number,
 ): string {
@@ -604,12 +697,12 @@ function getVisibleWindow(
   };
 }
 
-function buildRepoState(records: SessionDeckRecord[]): SessionDeckRepoState {
-  const recordsByKey = new Map<SessionDeckRepoKey, SessionDeckRecord[]>([
+function buildRepoState(records: SessionDeckBrowserRecord[]): SessionDeckRepoState {
+  const recordsByKey = new Map<SessionDeckRepoKey, SessionDeckBrowserRecord[]>([
     [ALL_REPO_FILTER_KEY, records],
   ]);
   const repoGroups = new Map<string, SessionDeckPendingRepoGroup>();
-  let noRepoRecords: SessionDeckRecord[] | null = null;
+  let noRepoRecords: SessionDeckBrowserRecord[] | null = null;
 
   for (const record of records) {
     const shortLabel = getRecordShortRepoLabel(record);
@@ -684,7 +777,7 @@ function buildNamedRepoBuckets(group: SessionDeckPendingRepoGroup): SessionDeckN
   }
 
   const qualifiedBuckets = new Map<string, SessionDeckNamedRepoBucket>();
-  const unqualifiedRecords: SessionDeckRecord[] = [];
+  const unqualifiedRecords: SessionDeckBrowserRecord[] = [];
 
   for (const record of group.records) {
     if (record.qualifiedRepoName === null) {
@@ -742,9 +835,9 @@ function getRepoSelection(
 }
 
 function getRepoRecords(
-  recordsByKey: Map<SessionDeckRepoKey, SessionDeckRecord[]>,
+  recordsByKey: Map<SessionDeckRepoKey, SessionDeckBrowserRecord[]>,
   repoKey: SessionDeckRepoKey,
-): SessionDeckRecord[] {
+): SessionDeckBrowserRecord[] {
   return recordsByKey.get(repoKey) ?? recordsByKey.get(ALL_REPO_FILTER_KEY) ?? [];
 }
 
@@ -765,7 +858,7 @@ function compareRepoBuckets(
   );
 }
 
-function getRecordShortRepoLabel(record: SessionDeckRecord): string | null {
+function getRecordShortRepoLabel(record: SessionDeckBrowserRecord): string | null {
   if (record.repoName !== null) {
     return record.repoName;
   }
@@ -826,7 +919,7 @@ function getPreservedRepoOption(
   );
 }
 
-function findSelectedIndex(records: SessionDeckRecord[], runtimeId: string | null): number {
+function findSelectedIndex(records: SessionDeckBrowserRecord[], runtimeId: string | null): number {
   if (runtimeId === null) {
     return clampIndex(0, records.length);
   }

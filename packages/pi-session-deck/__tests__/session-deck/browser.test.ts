@@ -1,3 +1,4 @@
+import type { Dirent } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { visibleWidth } from '@mariozechner/pi-tui';
 import type { Theme } from '@earendil-works/pi-coding-agent';
@@ -18,6 +19,7 @@ vi.mock('@mariozechner/pi-tui', async () => {
 });
 
 import { SessionDeckBrowser } from '../../extensions/session-deck/browser.js';
+import { withTerminalDisplayHints } from '../../extensions/session-deck/browser-view.js';
 import type {
   SessionDeckRecord,
   SessionDeckSnapshot,
@@ -153,6 +155,7 @@ function createBrowser(
     requestRender: () => void;
     reapLines: string[];
     theme: Theme;
+    openSelected: (record: SessionDeckRecord) => Promise<{ ok: boolean; message: string }>;
   }> = {},
 ): SessionDeckBrowser {
   const browser = new SessionDeckBrowser({
@@ -163,6 +166,7 @@ function createBrowser(
     reload: overrides.reload ?? (async () => overrides.initialView ?? buildSnapshot()),
     requestRender: overrides.requestRender ?? (() => {}),
     ...(overrides.reapLines === undefined ? {} : { reapLines: overrides.reapLines }),
+    ...(overrides.openSelected === undefined ? {} : { openSelected: overrides.openSelected }),
     theme: overrides.theme ?? createTheme(),
   });
 
@@ -206,7 +210,10 @@ describe('SessionDeckBrowser', () => {
     const lines = renderLines(browser);
     const helpIndex = findLineIndex(
       lines,
-      (line) => line.includes('↑↓ move · ←→ switch repo · enter details · r refresh · q close'),
+      (line) =>
+        line.includes(
+          '↑↓ move · ←→ switch repo · enter details · o open terminal · r refresh · q close',
+        ),
       'help line',
     );
     const reapIndex = findLineIndex(lines, (line) => line.includes('Reap complete:'), 'reap line');
@@ -927,6 +934,289 @@ describe('SessionDeckBrowser', () => {
     otherBrowser.handleInput('escape');
 
     expect(onClose).toHaveBeenCalledTimes(2);
+  });
+
+  it('renders browser-only tmux display hints without raw terminal data', () => {
+    const browser = createBrowser({
+      initialView: buildSnapshot({
+        records: [
+          {
+            ...buildSnapshotRecord({ sessionName: 'pi session', chips: [] }),
+            terminalDisplay: {
+              kind: 'tmux',
+              title: 'editor',
+              detail: 'tmux prod:editor %12',
+              openLabel: 'new iTerm2 tab attaches to tmux',
+            },
+          } as SessionDeckRecord,
+        ],
+      }),
+    });
+
+    const output = renderText(browser);
+
+    expect(output).toContain('› ○ idle  editor  project · #42 · 5s · main');
+    expect(output).toContain('  │ tmux prod:editor %12');
+    expect(output).toContain('│ terminal: tmux prod:editor %12');
+    expect(output).toContain('│ open: new iTerm2 tab attaches to tmux');
+    expect(output).not.toContain('/tmp/tmux');
+    expect(output).not.toContain('attachCommand');
+    expect(output).not.toContain('sessionTarget');
+  });
+
+  it('hydrates terminalDisplay from a matching tmux identity sidecar without leaking raw terminal metadata', async () => {
+    const runtimeId = 'rt-pr115-browser-hint';
+    const socketPath = '/tmp/tmux-pr115/default';
+    const attachCommand = `exec tmux -S ${socketPath} attach-session -t prod:editor`;
+    const readdir = vi
+      .fn()
+      .mockResolvedValue([{ name: `${runtimeId}.json`, isFile: () => true } as unknown as Dirent]);
+    const readFile = vi.fn().mockResolvedValue(
+      JSON.stringify({
+        runtimeId,
+        terminal: {
+          kind: 'tmux',
+          socketPath,
+          sessionName: 'prod',
+          sessionId: '$1',
+          windowName: 'editor',
+          paneId: '%12',
+          attachCommand,
+          sessionTarget: 'prod:editor',
+        },
+      }),
+    );
+
+    const view = await withTerminalDisplayHints(
+      buildSnapshot({
+        records: [
+          buildSnapshotRecord({
+            runtimeId,
+            sessionId: 'public-session',
+            sessionName: 'pi session',
+            chips: [],
+          }),
+        ],
+      }),
+      {
+        identityDirectory: '/fake/pi-session-deck/identity',
+        readdir,
+        readFile,
+      },
+    );
+
+    expect(readdir).toHaveBeenCalledWith('/fake/pi-session-deck/identity', { withFileTypes: true });
+    expect(readFile).toHaveBeenCalledWith(
+      `/fake/pi-session-deck/identity/${runtimeId}.json`,
+      'utf8',
+    );
+    const publicRecord = view.records[0];
+    expect(publicRecord?.terminalDisplay).toEqual({
+      kind: 'tmux',
+      title: 'editor',
+      detail: 'tmux prod:editor %12',
+      openLabel: 'new iTerm2 tab attaches to tmux',
+    });
+    expect(publicRecord?.sessionId).toBe('public-session');
+    expect(publicRecord).not.toHaveProperty('terminal');
+    expect(publicRecord).not.toHaveProperty('socketPath');
+    expect(publicRecord).not.toHaveProperty('paneId');
+    expect(publicRecord).not.toHaveProperty('attachCommand');
+    expect(publicRecord).not.toHaveProperty('sessionTarget');
+
+    const serialized = JSON.stringify(publicRecord ?? {});
+    expect(serialized).not.toContain(socketPath);
+    expect(serialized).not.toContain(attachCommand);
+  });
+
+  it('keeps browser hint snapshots free of accidental raw terminal fields', async () => {
+    const leakyRecord = {
+      ...buildSnapshotRecord({ sessionName: 'pi session', chips: [] }),
+      terminal: {
+        kind: 'tmux',
+        socketPath: '/tmp/tmux/default',
+        sessionName: 'prod',
+        sessionTarget: '$1',
+        paneId: '%12',
+        attachCommand: 'exec tmux attach-session -t prod',
+      },
+      terminalDisplay: {
+        kind: 'tmux',
+        title: 'stale-display',
+        detail: 'tmux stale %99',
+        openLabel: 'stale',
+      },
+      socketPath: '/tmp/tmux/default',
+      paneId: '%12',
+      attachCommand: 'exec tmux attach-session -t prod',
+      sessionTarget: '$1',
+    } as SessionDeckRecord;
+
+    const view = await withTerminalDisplayHints(buildSnapshot({ records: [leakyRecord] }), {
+      readdir: vi.fn().mockResolvedValue([]),
+    });
+
+    expect(view.records[0]).not.toHaveProperty('terminal');
+    expect(view.records[0]).not.toHaveProperty('terminalDisplay');
+    expect(view.records[0]).not.toHaveProperty('socketPath');
+    expect(view.records[0]).not.toHaveProperty('paneId');
+    expect(view.records[0]).not.toHaveProperty('attachCommand');
+    expect(view.records[0]).not.toHaveProperty('sessionTarget');
+  });
+
+  it('requests iTerm2 focus for the selected public record with o and renders success as muted', async () => {
+    const fg = vi.fn((_tone: string, text: string) => text);
+    const openSelected = vi.fn(async (_record: SessionDeckRecord) => ({
+      ok: true,
+      message: 'Requested iTerm2 focus for selected session.',
+    }));
+    const browser = createBrowser({
+      theme: createTheme({ fg }),
+      openSelected,
+      initialView: buildSnapshot({
+        records: [
+          buildSnapshotRecord({ runtimeId: 'rt-alpha', sessionName: 'alpha' }),
+          buildSnapshotRecord({ runtimeId: 'rt-bravo', sessionName: 'bravo' }),
+        ],
+      }),
+    });
+
+    browser.handleInput('down');
+    browser.handleInput('o');
+
+    await vi.waitFor(() => expect(openSelected).toHaveBeenCalledTimes(1));
+    const [openedRecord] = vi.mocked(openSelected).mock.calls[0] ?? [];
+    expect(openedRecord?.runtimeId).toBe('rt-bravo');
+    expect(openedRecord).not.toHaveProperty('terminal');
+
+    await vi.waitFor(() => {
+      expect(renderText(browser)).toContain('Requested iTerm2 focus for selected session.');
+    });
+    expect(
+      vi
+        .mocked(fg)
+        .mock.calls.some(
+          ([tone, text]) =>
+            tone === 'muted' && text === 'Requested iTerm2 focus for selected session.',
+        ),
+    ).toBe(true);
+  });
+
+  it('does not launch duplicate open requests while one is pending', async () => {
+    let resolveOpen: ((value: { ok: boolean; message: string }) => void) | null = null;
+    const openSelected = vi.fn(
+      async (_record: SessionDeckRecord) =>
+        new Promise<{ ok: boolean; message: string }>((resolve) => {
+          resolveOpen = resolve;
+        }),
+    );
+    const browser = createBrowser({ openSelected });
+
+    browser.handleInput('o');
+    browser.handleInput('o');
+
+    expect(openSelected).toHaveBeenCalledTimes(1);
+    expect(renderText(browser)).toContain('Already opening terminal…');
+
+    expect(resolveOpen).not.toBeNull();
+    resolveOpen!({ ok: true, message: 'Requested iTerm2 focus for selected session.' });
+    await vi.waitFor(() => {
+      expect(renderText(browser)).toContain('Requested iTerm2 focus for selected session.');
+    });
+  });
+
+  it('renders soft open failures as warning statuses', async () => {
+    const fg = vi.fn((_tone: string, text: string) => text);
+    const openSelected = vi.fn(async (_record: SessionDeckRecord) => ({
+      ok: false,
+      message: 'Terminal metadata is unavailable for selected session.',
+    }));
+    const browser = createBrowser({
+      theme: createTheme({ fg }),
+      openSelected,
+    });
+
+    browser.handleInput('o');
+
+    await vi.waitFor(() => {
+      expect(renderText(browser)).toContain(
+        'Terminal metadata is unavailable for selected session.',
+      );
+    });
+    expect(
+      vi
+        .mocked(fg)
+        .mock.calls.some(
+          ([tone, text]) =>
+            tone === 'warning' && text === 'Terminal metadata is unavailable for selected session.',
+        ),
+    ).toBe(true);
+  });
+
+  it('converts thrown open callback errors into warning statuses', async () => {
+    const fg = vi.fn((_tone: string, text: string) => text);
+    const openSelected = vi.fn(async (_record: SessionDeckRecord) => {
+      throw new Error('activation bridge crashed');
+    });
+    const browser = createBrowser({
+      theme: createTheme({ fg }),
+      openSelected,
+    });
+
+    browser.handleInput('o');
+
+    await vi.waitFor(() => {
+      expect(renderText(browser)).toContain('activation bridge crashed');
+      expect(
+        vi
+          .mocked(fg)
+          .mock.calls.some(
+            ([tone, text]) => tone === 'warning' && text.includes('activation bridge crashed'),
+          ),
+      ).toBe(true);
+    });
+  });
+
+  it('does not call the opener for an empty session list', () => {
+    const openSelected = vi.fn(async (_record: SessionDeckRecord) => ({
+      ok: true,
+      message: 'Requested iTerm2 focus for selected session.',
+    }));
+    const browser = createBrowser({
+      openSelected,
+      initialView: buildSnapshot({ records: [] }),
+    });
+
+    browser.handleInput('o');
+
+    expect(openSelected).not.toHaveBeenCalled();
+  });
+
+  it('keeps auto-refresh running while an open request is pending', async () => {
+    vi.useFakeTimers();
+
+    let resolveOpen: ((value: { ok: boolean; message: string }) => void) | null = null;
+    const openSelected = vi.fn(
+      async (_record: SessionDeckRecord) =>
+        new Promise<{ ok: boolean; message: string }>((resolve) => {
+          resolveOpen = resolve;
+        }),
+    );
+    const reload = vi.fn(async () =>
+      buildSnapshot({ records: [buildSnapshotRecord({ sessionName: 'refreshed' })] }),
+    );
+    const browser = createBrowser({ openSelected, reload });
+
+    browser.handleInput('o');
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(openSelected).toHaveBeenCalledTimes(1);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(renderText(browser)).toContain('refreshed');
+
+    expect(resolveOpen).not.toBeNull();
+    resolveOpen!({ ok: true, message: 'Requested iTerm2 focus for selected session.' });
+    await Promise.resolve();
   });
 
   it('manual refreshes in place and preserves repo selection plus row selection', async () => {

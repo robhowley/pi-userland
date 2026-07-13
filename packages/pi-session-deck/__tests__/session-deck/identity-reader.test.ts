@@ -1,5 +1,6 @@
 import type { Dirent } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
+import { normalizeSessionTerminalMetadata } from '../../extensions/session-deck/identity/metadata.js';
 import type { JoinedSessionRecord } from '../../extensions/session-deck/identity/types.js';
 import type { PresenceView } from '../../extensions/session-deck/presence/types.js';
 
@@ -69,6 +70,72 @@ async function readSingleJoinedRecord(
   expect(view.records).toHaveLength(1);
   return view.records[0]!;
 }
+
+describe('identity terminal metadata normalization', () => {
+  it('trims session ids, derives revealUrl, and preserves selected context fields', () => {
+    expect(
+      normalizeSessionTerminalMetadata({
+        kind: 'iterm2',
+        sessionId: '  w0t0p0:abc/def?x=1  ',
+        revealUrl: 'iterm2:///reveal?sessionid=ignored',
+        termProgram: ' iTerm.app ',
+        lcTerminal: ' iTerm2 ',
+        lcTerminalVersion: ' 3.6.11 ',
+        extra: 'ignored',
+      }),
+    ).toEqual({
+      kind: 'iterm2',
+      sessionId: 'w0t0p0:abc/def?x=1',
+      revealUrl: 'iterm2:///reveal?sessionid=w0t0p0%3Aabc%2Fdef%3Fx%3D1',
+      termProgram: 'iTerm.app',
+      lcTerminal: 'iTerm2',
+      lcTerminalVersion: '3.6.11',
+    });
+  });
+
+  it('normalizes tmux metadata and ignores persisted attach commands', () => {
+    expect(
+      normalizeSessionTerminalMetadata({
+        kind: 'tmux',
+        socketPath: ' /tmp/tmux socket/default ',
+        socketName: 'ignored-when-socket-path-exists',
+        sessionName: ' prod ',
+        sessionId: ' $1 ',
+        windowName: ' editor ',
+        windowId: ' @2 ',
+        paneId: ' %12 ',
+        windowIndex: '3',
+        paneIndex: 4,
+        panePid: '12345',
+        attachCommand: 'exec pi',
+      }),
+    ).toEqual({
+      kind: 'tmux',
+      socketPath: '/tmp/tmux socket/default',
+      sessionName: 'prod',
+      sessionId: '$1',
+      windowName: 'editor',
+      windowId: '@2',
+      paneId: '%12',
+      windowIndex: 3,
+      paneIndex: 4,
+      panePid: 12345,
+    });
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['non-object', 'w0t0p0'],
+    ['wrong kind', { kind: 'terminal', sessionId: 'w0t0p0' }],
+    ['empty sessionId', { kind: 'iterm2', sessionId: '' }],
+    ['trimmed-empty sessionId', { kind: 'iterm2', sessionId: '   ' }],
+    ['tmux without sessionName', { kind: 'tmux', socketPath: '/tmp/tmux/default' }],
+    ['tmux without socket selector', { kind: 'tmux', sessionName: 'prod' }],
+    ['tmux with unsafe socketName', { kind: 'tmux', socketName: 'bad/name', sessionName: 'prod' }],
+  ] as const)('omits %s terminal metadata', (_name, candidate) => {
+    expect(normalizeSessionTerminalMetadata(candidate)).toBeUndefined();
+  });
+});
 
 describe('identity reader — join', () => {
   it('joins presence records with matching identity records and preserves future raw sessionStart strings', async () => {
@@ -171,6 +238,56 @@ describe('identity reader — join', () => {
       parentSession: '/tmp/session-parent.md',
     });
     expect(view.diagnostics).toHaveLength(0);
+  });
+
+  it('normalizes persisted terminal metadata and joins it into internal records', async () => {
+    const record = await readSingleJoinedRecord(
+      buildIdentityRecord({
+        terminal: {
+          kind: 'iterm2',
+          sessionId: '  w0t0p0:abc/def?x=1  ',
+          revealUrl: 'iterm2:///reveal?sessionid=ignored',
+          termProgram: ' iTerm.app ',
+          lcTerminal: ' iTerm2 ',
+          lcTerminalVersion: ' 3.6.11 ',
+          extra: 'ignored',
+        },
+      }),
+    );
+
+    expect(record.terminal).toEqual({
+      kind: 'iterm2',
+      sessionId: 'w0t0p0:abc/def?x=1',
+      revealUrl: 'iterm2:///reveal?sessionid=w0t0p0%3Aabc%2Fdef%3Fx%3D1',
+      termProgram: 'iTerm.app',
+      lcTerminal: 'iTerm2',
+      lcTerminalVersion: '3.6.11',
+    });
+  });
+
+  it('normalizes persisted tmux metadata and joins it into internal records', async () => {
+    const record = await readSingleJoinedRecord(
+      buildIdentityRecord({
+        terminal: {
+          kind: 'tmux',
+          socketPath: '/tmp/tmux/default',
+          sessionName: 'prod',
+          sessionId: '$1',
+          windowName: 'editor',
+          paneId: '%12',
+          attachCommand: 'exec pi',
+        },
+      }),
+    );
+
+    expect(record.terminal).toEqual({
+      kind: 'tmux',
+      socketPath: '/tmp/tmux/default',
+      sessionName: 'prod',
+      sessionId: '$1',
+      windowName: 'editor',
+      paneId: '%12',
+    });
   });
 
   it('sets identity fields to null when identity record is missing', async () => {
@@ -277,6 +394,23 @@ describe('identity reader — join', () => {
     });
     expect(view.records[0]).not.toHaveProperty('sessionStart');
     expect(view.records[0]).not.toHaveProperty('sessionHeader');
+    expect(view.records[0]).not.toHaveProperty('terminal');
+  });
+
+  it('ignores malformed terminal metadata without treating the identity record as malformed', async () => {
+    const record = await readSingleJoinedRecord(
+      buildIdentityRecord({
+        terminal: {
+          kind: 'iterm2',
+          sessionId: '   ',
+          revealUrl: 'iterm2:///reveal?sessionid=ignored',
+        },
+      }),
+    );
+
+    expect(record.sessionId).toBe('session-abc');
+    expect(record).not.toHaveProperty('terminal');
+    expect(record.diagnostics).toEqual([]);
   });
 
   it('keeps previousSessionFile separate from durable lineage', async () => {

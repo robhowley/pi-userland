@@ -5,7 +5,11 @@ import {
   DEFAULT_IDENTITY_FRESHNESS_THRESHOLDS,
   resolveIdentityFreshnessThresholds,
 } from './constants.js';
-import { normalizeSessionHeaderMetadata, normalizeSessionStartMetadata } from './metadata.js';
+import {
+  normalizeSessionHeaderMetadata,
+  normalizeSessionStartMetadata,
+  normalizeSessionTerminalMetadata,
+} from './metadata.js';
 import { getDefaultIdentityDirectory, isIdentityRecordFile } from './store.js';
 import type {
   IdentityDiagnostic,
@@ -198,6 +202,7 @@ function joinRecord(
   const cwd = identity?.cwd ?? null;
   const sessionStart = identity?.sessionStart;
   const sessionHeader = identity?.sessionHeader;
+  const terminal = identity?.terminal;
 
   const joinedRecord: JoinedSessionRecord = {
     runtimeId: presence.runtimeId,
@@ -232,6 +237,7 @@ function joinRecord(
     }),
     ...(sessionStart === undefined ? {} : { sessionStart }),
     ...(sessionHeader === undefined ? {} : { sessionHeader }),
+    ...(terminal === undefined ? {} : { terminal }),
 
     diagnostics: recordDiagnostics,
   };
@@ -432,6 +438,7 @@ function normalizeIdentityRecord(candidate: unknown): SessionIdentityRecord | nu
   const sessionName = normalizeStringField(candidate['sessionName']);
   const sessionStart = normalizeSessionStartMetadata(candidate['sessionStart']);
   const sessionHeader = normalizeSessionHeaderMetadata(candidate['sessionHeader']);
+  const terminal = normalizeSessionTerminalMetadata(candidate['terminal']);
 
   return {
     runtimeId,
@@ -453,6 +460,7 @@ function normalizeIdentityRecord(candidate: unknown): SessionIdentityRecord | nu
     identitySource: ensureString(candidate['identitySource']),
     ...(sessionStart === undefined ? {} : { sessionStart }),
     ...(sessionHeader === undefined ? {} : { sessionHeader }),
+    ...(terminal === undefined ? {} : { terminal }),
     ...(diagnostics === undefined ? {} : { diagnostics }),
   };
 }

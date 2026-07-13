@@ -1,5 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { GitExec } from '../../extensions/session-deck/identity/types.js';
+import type {
+  GitExec,
+  SessionIdentityRecord,
+  SessionManagerLike,
+} from '../../extensions/session-deck/identity/types.js';
+
+type UnsafeSessionManager = Omit<SessionManagerLike, 'getTerminal'> & {
+  getTerminal?: () => unknown;
+};
 
 function makeExecGit(results: Record<string, { stdout: string; exitCode: number }>): GitExec {
   return vi.fn(async (_cwd: string, ...args: string[]) => {
@@ -10,6 +18,39 @@ function makeExecGit(results: Record<string, { stdout: string; exitCode: number 
     }
     return result;
   }) as unknown as GitExec;
+}
+
+async function collectGitlessIdentityWithTerminal(
+  terminal: unknown,
+  options: {
+    sessionId?: string;
+    sessionFile?: string;
+    existingRecord?: SessionIdentityRecord;
+    now?: string;
+  } = {},
+): Promise<SessionIdentityRecord> {
+  const { collectSessionIdentity } =
+    await import('../../extensions/session-deck/identity/collector.js');
+  const sessionId = options.sessionId ?? 'session-123';
+  const sessionFile = options.sessionFile ?? '/tmp/session-123.json';
+  const sessionManager: UnsafeSessionManager = {
+    getSessionId: () => sessionId,
+    getSessionFile: () => sessionFile,
+    getCwd: () => '/tmp',
+    ...(terminal === undefined ? {} : { getTerminal: () => terminal }),
+  };
+
+  return collectSessionIdentity('rt-1', {
+    runtimeId: 'rt-1',
+    sessionManager: sessionManager as SessionManagerLike,
+    execGit: makeExecGit({
+      'rev-parse --show-toplevel': { stdout: '', exitCode: 128 },
+    }),
+    execGhCli: null,
+    identitySource: options.existingRecord === undefined ? 'startup' : 'periodic',
+    ...(options.existingRecord === undefined ? {} : { existingRecord: options.existingRecord }),
+    now: () => new Date(options.now ?? '2026-06-17T12:00:00.000Z'),
+  });
 }
 
 describe('identity collector', () => {
@@ -360,6 +401,122 @@ describe('identity collector', () => {
 
     expect(secondRecord.sessionStart).toEqual(firstRecord.sessionStart);
     expect(secondRecord.sessionHeader).toEqual(firstRecord.sessionHeader);
+  });
+
+  it('collects normalized terminal metadata from the session manager', async () => {
+    const record = await collectGitlessIdentityWithTerminal({
+      kind: 'iterm2',
+      sessionId: '  session:weird/value?  ',
+      revealUrl: 'iterm2:///reveal?sessionid=ignored',
+      termProgram: 'iTerm.app',
+      lcTerminal: 'iTerm2',
+      lcTerminalVersion: '3.6.11',
+    });
+
+    expect(record.terminal).toEqual({
+      kind: 'iterm2',
+      sessionId: 'session:weird/value?',
+      revealUrl: 'iterm2:///reveal?sessionid=session%3Aweird%2Fvalue%3F',
+      termProgram: 'iTerm.app',
+      lcTerminal: 'iTerm2',
+      lcTerminalVersion: '3.6.11',
+    });
+  });
+
+  it('collects normalized tmux terminal metadata from the session manager', async () => {
+    const record = await collectGitlessIdentityWithTerminal({
+      kind: 'tmux',
+      socketPath: ' /tmp/tmux/default ',
+      sessionName: ' prod ',
+      sessionId: ' $1 ',
+      windowName: ' editor ',
+      paneId: ' %12 ',
+      panePid: '12345',
+      attachCommand: 'exec pi',
+    });
+
+    expect(record.terminal).toEqual({
+      kind: 'tmux',
+      socketPath: '/tmp/tmux/default',
+      sessionName: 'prod',
+      sessionId: '$1',
+      windowName: 'editor',
+      paneId: '%12',
+      panePid: 12345,
+    });
+  });
+
+  it.each([
+    ['non-object', 'w0t0p0'],
+    ['wrong kind', { kind: 'terminal', sessionId: 'w0t0p0' }],
+    ['empty sessionId', { kind: 'iterm2', sessionId: '' }],
+    ['trimmed-empty sessionId', { kind: 'iterm2', sessionId: '   ' }],
+    ['tmux without sessionName', { kind: 'tmux', socketPath: '/tmp/tmux/default' }],
+    ['tmux without socket selector', { kind: 'tmux', sessionName: 'prod' }],
+  ] as const)('omits malformed terminal metadata: %s', async (_name, terminal) => {
+    const record = await collectGitlessIdentityWithTerminal(terminal);
+
+    expect(record).not.toHaveProperty('terminal');
+  });
+
+  it('accepts non-empty terminal session ids without regex validation', async () => {
+    const record = await collectGitlessIdentityWithTerminal({
+      kind: 'iterm2',
+      sessionId: 'definitely-not-a-uuid',
+      revealUrl: 'ignored',
+    });
+
+    expect(record.terminal).toEqual({
+      kind: 'iterm2',
+      sessionId: 'definitely-not-a-uuid',
+      revealUrl: 'iterm2:///reveal?sessionid=definitely-not-a-uuid',
+    });
+  });
+
+  it('preserves existing terminal metadata when later refreshes omit it for the same Pi session', async () => {
+    const firstRecord = await collectGitlessIdentityWithTerminal(
+      {
+        kind: 'iterm2',
+        sessionId: 'w0t0p0:terminal',
+        revealUrl: 'ignored',
+      },
+      {
+        sessionId: 'session-456',
+        sessionFile: '/tmp/session-456.json',
+      },
+    );
+
+    const secondRecord = await collectGitlessIdentityWithTerminal(undefined, {
+      sessionId: 'session-456',
+      sessionFile: '/tmp/session-456.json',
+      existingRecord: firstRecord,
+      now: '2026-06-17T12:05:00.000Z',
+    });
+
+    expect(secondRecord.terminal).toEqual(firstRecord.terminal);
+  });
+
+  it('does not preserve existing terminal metadata across different Pi sessions', async () => {
+    const firstRecord = await collectGitlessIdentityWithTerminal(
+      {
+        kind: 'tmux',
+        socketPath: '/tmp/tmux/default',
+        sessionName: 'prod',
+      },
+      {
+        sessionId: 'session-old',
+        sessionFile: '/tmp/session-old.json',
+      },
+    );
+
+    const secondRecord = await collectGitlessIdentityWithTerminal(undefined, {
+      sessionId: 'session-new',
+      sessionFile: '/tmp/session-new.json',
+      existingRecord: firstRecord,
+      now: '2026-06-17T12:05:00.000Z',
+    });
+
+    expect(secondRecord).not.toHaveProperty('terminal');
   });
 
   it('emits diagnostics for missing session fields', async () => {

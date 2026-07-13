@@ -123,7 +123,18 @@ describe('readSessionDeckSnapshot', () => {
     const directories = await createSnapshotDirectories();
 
     await writePresenceRecord(buildPresenceRecord(), { directory: directories.presenceDirectory });
-    await writeIdentityRecord(buildIdentityRecord(), { directory: directories.identityDirectory });
+    await writeIdentityRecord(
+      buildIdentityRecord({
+        terminal: {
+          kind: 'tmux',
+          socketPath: '/tmp/tmux/default',
+          sessionName: 'prod',
+          windowName: 'editor',
+          paneId: '%12',
+        },
+      }),
+      { directory: directories.identityDirectory },
+    );
     await writeActivityRecord(buildActivityRecord(), { directory: directories.activityDirectory });
     await writeChipRecord(buildChipRecord({ source: 'alpha', text: 'merge ready' }), {
       directory: directories.chipsDirectory,
@@ -189,6 +200,12 @@ describe('readSessionDeckSnapshot', () => {
       'activityUpdatedAt',
       'sessionStart',
       'sessionHeader',
+      'terminal',
+      'terminalDisplay',
+      'socketPath',
+      'paneId',
+      'attachCommand',
+      'sessionTarget',
       'previousSessionFile',
       'parentSession',
       'schemaVersion',

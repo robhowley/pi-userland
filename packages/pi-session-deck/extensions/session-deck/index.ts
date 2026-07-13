@@ -12,7 +12,8 @@ import {
   normalizeSessionHeaderMetadata,
   normalizeSessionStartMetadata,
 } from './identity/metadata.js';
-import type { SessionManagerLike } from './identity/types.js';
+import { collectSessionTerminalMetadata } from './identity/terminal-collect.js';
+import type { SessionManagerLike, SessionTerminalMetadata } from './identity/types.js';
 
 interface SessionStartContext {
   mode?: string;
@@ -60,7 +61,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     'session_start',
     async (event: { reason: string; previousSessionFile?: string }, ctx: SessionStartContext) => {
       const presenceRuntime = await ensurePresenceRuntimeStarted();
-      const sessionManager = createSessionManager(ctx, event);
+      const terminal = await collectSessionTerminalMetadata();
+      const sessionManager = createSessionManager(ctx, event, terminal);
 
       // Install setStatus wrapper before session-deck sets its own status
       statusMirror.install(ctx.ui);
@@ -133,6 +135,7 @@ async function ensureActivityRuntime(
 function createSessionManager(
   ctx: SessionStartContext,
   event: { reason: string; previousSessionFile?: string },
+  terminal: SessionTerminalMetadata | undefined,
 ): SessionManagerLike {
   const sessionStart = normalizeSessionStartMetadata({
     reason: event.reason,
@@ -140,7 +143,6 @@ function createSessionManager(
     mode: ctx.mode,
     hasUI: ctx.hasUI,
   });
-
   return {
     getSessionId: () => ctx.sessionManager?.getSessionId() ?? null,
     getSessionFile: () => ctx.sessionManager?.getSessionFile() ?? null,
@@ -148,6 +150,7 @@ function createSessionManager(
     getCwd: () => ctx.sessionManager?.getCwd?.() ?? ctx.cwd,
     getSessionStart: () => sessionStart,
     getHeader: () => normalizeSessionHeaderMetadata(ctx.sessionManager?.getHeader?.()) ?? null,
+    getTerminal: () => terminal,
   };
 }
 

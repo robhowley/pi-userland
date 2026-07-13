@@ -1,4 +1,5 @@
 import { basename } from 'node:path';
+import type { SessionDeckBrowserRecord } from './browser-view.js';
 import type { SessionDeckDiagnostic, SessionDeckRecord, SessionDeckSnapshot } from './types.js';
 
 export interface SessionDeckRecordRenderOptions {
@@ -10,13 +11,15 @@ export interface SessionDeckBrowserRow {
   icon: string;
   activity: string;
   title: string;
-  titleSource: 'sessionName' | 'repoName' | 'cwd' | 'runtimeId';
+  titleSource: 'terminalDisplay' | 'sessionName' | 'repoName' | 'cwd' | 'runtimeId';
   repoLabel: string | null;
   prLabel: string | null;
   ageLabel: string;
   branchLabel: string | null;
   chipPreview: string;
   hasChips: boolean;
+  terminalLabel: string | null;
+  terminalOpenLabel: string | null;
 }
 
 export function getSessionDeckListHeading(all: boolean): string {
@@ -96,7 +99,9 @@ export function formatSessionDeckRecord(
   return formatSessionDeckRecordLines(record, options).join('\n');
 }
 
-export function formatSessionDeckBrowserRow(record: SessionDeckRecord): SessionDeckBrowserRow {
+export function formatSessionDeckBrowserRow(
+  record: SessionDeckBrowserRecord,
+): SessionDeckBrowserRow {
   const title = getDisplayTitle(record);
 
   return {
@@ -110,11 +115,13 @@ export function formatSessionDeckBrowserRow(record: SessionDeckRecord): SessionD
     branchLabel: formatListBranch(record.branch),
     chipPreview: formatChipPreview(record.chips),
     hasChips: record.chips.length > 0,
+    terminalLabel: record.terminalDisplay?.detail ?? null,
+    terminalOpenLabel: record.terminalDisplay?.openLabel ?? null,
   };
 }
 
 export function formatSessionDeckBrowserCardLines(
-  record: SessionDeckRecord,
+  record: SessionDeckBrowserRecord,
   options: SessionDeckRecordRenderOptions,
 ): string[] {
   const title = getDisplayTitle(record);
@@ -140,6 +147,11 @@ export function formatSessionDeckBrowserCardLines(
   }
 
   lines.push(formatCardStatusLine(record));
+
+  if (record.terminalDisplay !== undefined) {
+    lines.push(`terminal: ${record.terminalDisplay.detail}`);
+    lines.push(`open: ${record.terminalDisplay.openLabel}`);
+  }
 
   if (record.chips.length > 0) {
     lines.push('');
@@ -186,10 +198,14 @@ function countPresenceStates(
   );
 }
 
-function getDisplayTitle(record: SessionDeckRecord): {
+function getDisplayTitle(record: SessionDeckBrowserRecord): {
   text: string;
   source: SessionDeckBrowserRow['titleSource'];
 } {
+  if (record.terminalDisplay?.title !== undefined) {
+    return { text: record.terminalDisplay.title, source: 'terminalDisplay' };
+  }
+
   if (record.sessionName !== null) {
     return { text: record.sessionName, source: 'sessionName' };
   }
@@ -207,7 +223,7 @@ function getDisplayTitle(record: SessionDeckRecord): {
 }
 
 function getRepoLabel(
-  record: SessionDeckRecord,
+  record: SessionDeckBrowserRecord,
   titleSource: SessionDeckBrowserRow['titleSource'],
 ): string | null {
   if (titleSource === 'repoName' || titleSource === 'cwd') {

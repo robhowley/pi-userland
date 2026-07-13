@@ -23,6 +23,7 @@ pi install npm:@robhowley/pi-session-deck
 - `↑/↓` move selection.
 - `←/→` switch repo filters in the row above the session list.
 - `enter` toggle details.
+- `o` open the selected terminal target on macOS when captured terminal metadata is available. iTerm2 sessions use the iTerm2 reveal URL; tmux sessions open a new iTerm2 tab that attaches to the existing tmux session.
 - `r` refresh.
 - `q` / `esc` close.
 
@@ -34,6 +35,7 @@ pi install npm:@robhowley/pi-session-deck
 - Repo, PR, and linked-worktree context in the dashboard.
 - Short status chips in `/session-deck`.
 - `/new` resets activity for the new session while keeping the same runtime.
+- Tmux-aware terminal opening: when Pi is running inside tmux, `o` attaches to the existing tmux session after verifying the pane is live. It never starts Pi and never creates tmux sessions.
 
 ## Status chips
 
@@ -43,6 +45,18 @@ pi install npm:@robhowley/pi-session-deck
 - Persists sanitized visible text only.
 - Never stores prompts, transcript content, tool args, or tool outputs in chips.
 
+## iTerm2 setup
+
+After installing the package, run:
+
+```text
+/session-deck iterm2 install
+```
+
+Restart iTerm2, then choose **Scripts → AutoLaunch → `session_deck_toolbelt.py`** from the menu if it is not already running.
+
+Read-only `/session-deck` text and JSON modes do not require iTerm2 setup.
+
 ## Privacy limits
 
 - Activity capture is current-state only; there is no transcript/history reconstruction.
@@ -50,3 +64,4 @@ pi install npm:@robhowley/pi-session-deck
 - Tool failures are reduced to compact safe summaries like `tool bash failed`.
 - Assistant errors are sanitized/truncated before persistence.
 - Chip text must not contain prompts, messages, tool arguments, tool outputs, or secrets.
+- Public `/session-deck --json` records do not include raw terminal metadata, tmux socket paths, pane ids, or derived attach commands.
