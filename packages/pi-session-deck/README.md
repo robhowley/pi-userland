@@ -45,25 +45,17 @@ pi install npm:@robhowley/pi-session-deck
 - Persists sanitized visible text only.
 - Never stores prompts, transcript content, tool args, or tool outputs in chips.
 
-## Terminal opening and tmux
+## iTerm2 setup
 
-Tmux-backed rows use an iTerm2 Python bridge by default. Install the packaged AutoLaunch script by symlinking or copying:
+After installing the package, run:
 
-```shell
-mkdir -p "$HOME/Library/Application Support/iTerm2/Scripts/AutoLaunch"
-ln -sf "$(pwd)/extensions/session-deck/iterm2-python-bridge.py" \
-  "$HOME/Library/Application Support/iTerm2/Scripts/AutoLaunch/pi-session-deck-bridge.py"
+```text
+/session-deck iterm2 install
 ```
 
-Restart iTerm2 after installing. The bridge is only needed for tmux-backed rows and only opens a new iTerm2 tab that attaches to an existing tmux session. Configure with:
+Restart iTerm2, then choose **Scripts → AutoLaunch → `session_deck_toolbelt.py`** from the menu if it is not already running.
 
-- `PI_SESSION_DECK_TERMINAL_BRIDGE=auto` (default) — try the Python bridge, then AppleScript fallback if the bridge is unavailable.
-- `PI_SESSION_DECK_TERMINAL_BRIDGE=iterm2-python` — require the Python bridge.
-- `PI_SESSION_DECK_TERMINAL_BRIDGE=iterm2-applescript` — use AppleScript fallback directly.
-- `PI_SESSION_DECK_TERMINAL_BRIDGE=none` — disable tmux terminal opening.
-- `PI_SESSION_DECK_ITERM2_BRIDGE_SOCKET=/path/to/socket` — override the bridge socket path.
-
-Read-only `/session-deck` text and JSON modes do not require the bridge.
+Read-only `/session-deck` text and JSON modes do not require iTerm2 setup.
 
 ## Privacy limits
 
