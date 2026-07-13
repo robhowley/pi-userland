@@ -4,6 +4,8 @@ const AUTO_REFRESH_INTERVAL_MS = 15_000;
 const COLLAPSED_CHIP_LIMIT = 2;
 const DEFAULT_VISIBLE_STATES = new Set(['live', 'stale']);
 const HOME_PREFIXES = ['/Users/', '/home/'];
+const NO_REPO_GROUP_KEY = 'no-repo';
+const NO_REPO_LABEL = 'No repo';
 
 const state = {
   snapshot: null,
@@ -12,6 +14,7 @@ const state = {
   showAll: false,
   loading: false,
   fetchError: null,
+  expandedRepoKeys: new Set(),
 };
 
 const elements = {
@@ -37,6 +40,7 @@ function init() {
   elements.showAll.addEventListener('change', () => {
     state.showAll = elements.showAll.checked;
     reconcileSelection();
+    reconcileExpandedRepoKeys();
     render();
   });
 
@@ -72,11 +76,13 @@ async function refreshSnapshot({ source }) {
     state.snapshot = normalizeSnapshot(payload);
     state.fetchError = null;
     reconcileSelection();
+    reconcileExpandedRepoKeys();
   } catch (error) {
     state.fetchError = error instanceof Error ? error.message : String(error);
     if (source === 'startup') {
       state.snapshot = emptySnapshot(`Snapshot request failed: ${state.fetchError}`);
       reconcileSelection();
+      reconcileExpandedRepoKeys();
     }
   } finally {
     state.loading = false;
@@ -89,67 +95,83 @@ function normalizeSnapshot(payload) {
     return emptySnapshot('Snapshot root is not an object.');
   }
 
-  const generatedAt =
-    typeof payload.generatedAt === 'string' && payload.generatedAt.length > 0
-      ? payload.generatedAt
-      : new Date().toISOString();
-  const records = Array.isArray(payload.records)
-    ? payload.records.filter(isObject).map(normalizeRecord)
-    : [];
-  const diagnostics = Array.isArray(payload.diagnostics)
-    ? payload.diagnostics.filter(isObject).map(normalizeDiagnostic)
-    : [];
+  if (!isSessionDeckSnapshot(payload)) {
+    return emptySnapshot('Snapshot payload does not match SessionDeckSnapshot.');
+  }
 
-  return { generatedAt, records, diagnostics };
+  return payload;
 }
 
-function normalizeRecord(record) {
-  return {
-    runtimeId: typeof record.runtimeId === 'string' ? record.runtimeId : 'unknown-runtime',
-    pid: typeof record.pid === 'number' ? record.pid : null,
-    presenceState: normalizePresenceState(record.presenceState),
-    presenceReason: typeof record.presenceReason === 'string' ? record.presenceReason : null,
-    heartbeatAgeMs: typeof record.heartbeatAgeMs === 'number' ? record.heartbeatAgeMs : 0,
-    sessionId: typeof record.sessionId === 'string' ? record.sessionId : null,
-    sessionName: typeof record.sessionName === 'string' ? record.sessionName : null,
-    repoName: typeof record.repoName === 'string' ? record.repoName : null,
-    qualifiedRepoName:
-      typeof record.qualifiedRepoName === 'string' ? record.qualifiedRepoName : null,
-    cwd: typeof record.cwd === 'string' ? record.cwd : null,
-    branch: typeof record.branch === 'string' ? record.branch : null,
-    prUrl: typeof record.prUrl === 'string' ? record.prUrl : null,
-    isLinkedWorktree: record.isLinkedWorktree === true,
-    worktreeLabel: typeof record.worktreeLabel === 'string' ? record.worktreeLabel : null,
-    activityState: normalizeActivityState(record.activityState),
-    activityAgeMs: typeof record.activityAgeMs === 'number' ? record.activityAgeMs : null,
-    currentToolName: typeof record.currentToolName === 'string' ? record.currentToolName : null,
-    lastError: typeof record.lastError === 'string' ? record.lastError : null,
-    chips: Array.isArray(record.chips)
-      ? record.chips.filter((chip) => typeof chip === 'string')
-      : [],
-    diagnostics: Array.isArray(record.diagnostics)
-      ? record.diagnostics.filter(isObject).map(normalizeDiagnostic)
-      : [],
-  };
+function isSessionDeckSnapshot(candidate) {
+  return (
+    typeof candidate.generatedAt === 'string' &&
+    Array.isArray(candidate.records) &&
+    candidate.records.every(isSessionDeckRecord) &&
+    Array.isArray(candidate.diagnostics) &&
+    candidate.diagnostics.every(isSessionDeckDiagnostic)
+  );
 }
 
-function normalizeDiagnostic(diagnostic) {
-  return {
-    code: typeof diagnostic.code === 'string' ? diagnostic.code : 'unknown_diagnostic',
-    message: typeof diagnostic.message === 'string' ? diagnostic.message : 'Unknown diagnostic.',
-    runtimeId: typeof diagnostic.runtimeId === 'string' ? diagnostic.runtimeId : null,
-    filePath: typeof diagnostic.filePath === 'string' ? diagnostic.filePath : null,
-  };
+function isSessionDeckRecord(candidate) {
+  return (
+    isObject(candidate) &&
+    typeof candidate.runtimeId === 'string' &&
+    isNullableNumber(candidate.pid) &&
+    isPresenceState(candidate.presenceState) &&
+    isOptionalString(candidate.presenceReason) &&
+    typeof candidate.heartbeatAgeMs === 'number' &&
+    isNullableString(candidate.sessionId) &&
+    isNullableString(candidate.sessionName) &&
+    isNullableString(candidate.repoName) &&
+    isNullableString(candidate.qualifiedRepoName) &&
+    isNullableString(candidate.cwd) &&
+    isNullableString(candidate.branch) &&
+    isNullableString(candidate.prUrl) &&
+    isNullableBoolean(candidate.isLinkedWorktree) &&
+    isNullableString(candidate.worktreeLabel) &&
+    isActivityState(candidate.activityState) &&
+    isNullableNumber(candidate.activityAgeMs) &&
+    isNullableString(candidate.currentToolName) &&
+    isNullableString(candidate.lastError) &&
+    Array.isArray(candidate.chips) &&
+    candidate.chips.every((chip) => typeof chip === 'string') &&
+    Array.isArray(candidate.diagnostics) &&
+    candidate.diagnostics.every(isSessionDeckDiagnostic)
+  );
 }
 
-function normalizePresenceState(value) {
-  return ['live', 'stale', 'dead', 'unknown'].includes(value) ? value : 'unknown';
+function isSessionDeckDiagnostic(candidate) {
+  return (
+    isObject(candidate) &&
+    typeof candidate.code === 'string' &&
+    typeof candidate.message === 'string' &&
+    isOptionalString(candidate.runtimeId) &&
+    isOptionalString(candidate.filePath)
+  );
 }
 
-function normalizeActivityState(value) {
-  return ['idle', 'thinking', 'tool-running', 'error', 'unknown'].includes(value)
-    ? value
-    : 'unknown';
+function isPresenceState(value) {
+  return ['live', 'stale', 'dead', 'unknown'].includes(value);
+}
+
+function isActivityState(value) {
+  return ['idle', 'thinking', 'tool-running', 'error', 'unknown'].includes(value);
+}
+
+function isNullableString(value) {
+  return typeof value === 'string' || value === null;
+}
+
+function isOptionalString(value) {
+  return value === undefined || typeof value === 'string';
+}
+
+function isNullableNumber(value) {
+  return typeof value === 'number' || value === null;
+}
+
+function isNullableBoolean(value) {
+  return typeof value === 'boolean' || value === null;
 }
 
 function emptySnapshot(message) {
@@ -190,6 +212,184 @@ function getVisibleRecords() {
   return state.showAll
     ? records
     : records.filter((record) => DEFAULT_VISIBLE_STATES.has(record.presenceState));
+}
+
+function reconcileExpandedRepoKeys(repoGroups = createRepoGroups(getVisibleRecords())) {
+  const visibleRepoKeys = new Set(repoGroups.map((repoGroup) => repoGroup.key));
+  for (const expandedRepoKey of state.expandedRepoKeys) {
+    if (!visibleRepoKeys.has(expandedRepoKey)) {
+      state.expandedRepoKeys.delete(expandedRepoKey);
+    }
+  }
+}
+
+function createRepoGroups(records) {
+  const qualifiedGroups = new Map();
+  const qualifiedKeysByShortName = new Map();
+
+  for (const record of records) {
+    const qualifiedRepoName = getRepoIdentityValue(record.qualifiedRepoName);
+    if (!qualifiedRepoName) {
+      continue;
+    }
+
+    const key = getQualifiedRepoKey(qualifiedRepoName);
+    if (!qualifiedGroups.has(key)) {
+      const repoGroup = {
+        key,
+        label: qualifiedRepoName,
+        kind: 'qualified',
+        records: [],
+      };
+      qualifiedGroups.set(key, repoGroup);
+
+      const shortName = getRepoShortName(qualifiedRepoName);
+      const matchingKeys = qualifiedKeysByShortName.get(shortName) ?? new Set();
+      matchingKeys.add(key);
+      qualifiedKeysByShortName.set(shortName, matchingKeys);
+    }
+  }
+
+  const unqualifiedTargets = new Map();
+  for (const record of records) {
+    if (getRepoIdentityValue(record.qualifiedRepoName)) {
+      continue;
+    }
+
+    const repoName = getRepoIdentityValue(record.repoName);
+    if (!repoName || unqualifiedTargets.has(repoName)) {
+      continue;
+    }
+
+    const matchingQualifiedKeys = qualifiedKeysByShortName.get(repoName);
+    unqualifiedTargets.set(
+      repoName,
+      matchingQualifiedKeys?.size === 1
+        ? matchingQualifiedKeys.values().next().value
+        : getUnqualifiedRepoKey(repoName),
+    );
+  }
+
+  const groupsByKey = new Map();
+  for (const record of records) {
+    const qualifiedRepoName = getRepoIdentityValue(record.qualifiedRepoName);
+    if (qualifiedRepoName) {
+      getOrCreateRepoGroup(
+        groupsByKey,
+        getQualifiedRepoKey(qualifiedRepoName),
+        qualifiedRepoName,
+        'qualified',
+      ).records.push(record);
+      continue;
+    }
+
+    const repoName = getRepoIdentityValue(record.repoName);
+    if (repoName) {
+      const targetKey = unqualifiedTargets.get(repoName) ?? getUnqualifiedRepoKey(repoName);
+      const qualifiedGroup = qualifiedGroups.get(targetKey);
+      getOrCreateRepoGroup(
+        groupsByKey,
+        targetKey,
+        qualifiedGroup?.label ?? repoName,
+        qualifiedGroup?.kind ?? 'repo',
+      ).records.push(record);
+      continue;
+    }
+
+    getOrCreateRepoGroup(groupsByKey, NO_REPO_GROUP_KEY, NO_REPO_LABEL, 'no-repo').records.push(
+      record,
+    );
+  }
+
+  return [...groupsByKey.values()].sort(compareRepoGroups);
+}
+
+function getOrCreateRepoGroup(groupsByKey, key, label, kind) {
+  const existingGroup = groupsByKey.get(key);
+  if (existingGroup) {
+    return existingGroup;
+  }
+
+  const repoGroup = { key, label, kind, records: [] };
+  groupsByKey.set(key, repoGroup);
+  return repoGroup;
+}
+
+function compareRepoGroups(left, right) {
+  if (left.kind === 'no-repo' || right.kind === 'no-repo') {
+    return left.kind === right.kind ? 0 : left.kind === 'no-repo' ? 1 : -1;
+  }
+
+  const leftLabel = left.label.toLowerCase();
+  const rightLabel = right.label.toLowerCase();
+  const labelOrder = leftLabel.localeCompare(rightLabel);
+  return labelOrder === 0 ? left.key.localeCompare(right.key) : labelOrder;
+}
+
+function getRepoIdentityValue(value) {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function getQualifiedRepoKey(qualifiedRepoName) {
+  return `qualified:${qualifiedRepoName}`;
+}
+
+function getUnqualifiedRepoKey(repoName) {
+  return `repo:${repoName}`;
+}
+
+function getRepoShortName(qualifiedRepoName) {
+  const parts = qualifiedRepoName.split('/');
+  return parts[parts.length - 1] || qualifiedRepoName;
+}
+
+function getRepoGroupRecordsId(repoGroupKey) {
+  const encodedKey = [];
+  for (let index = 0; index < repoGroupKey.length; index += 1) {
+    encodedKey.push(repoGroupKey.charCodeAt(index).toString(16).padStart(4, '0'));
+  }
+  return `repo-group-records-${encodedKey.join('-')}`;
+}
+
+function formatRepoHeader(repoGroup) {
+  return `${repoGroup.label} · ${repoGroup.records.length}`;
+}
+
+function getRepoLabelParts(label) {
+  const separatorIndex = label.lastIndexOf('/');
+  if (separatorIndex <= 0 || separatorIndex === label.length - 1) {
+    return { owner: null, name: label };
+  }
+
+  return {
+    owner: label.slice(0, separatorIndex),
+    name: label.slice(separatorIndex + 1),
+  };
+}
+
+function createRepoHeaderLabel(repoGroup) {
+  const label = document.createElement('span');
+  const labelParts = getRepoLabelParts(repoGroup.label);
+  label.className = 'repo-header-label';
+
+  if (repoGroup.kind === 'no-repo') {
+    label.append(createText('span', repoGroup.label));
+  } else if (labelParts.owner) {
+    label.append(
+      createText('span', labelParts.owner, 'repo-owner'),
+      createText('span', '/', 'repo-owner repo-separator'),
+      createText('span', labelParts.name, 'repo-name'),
+    );
+  } else {
+    label.append(createText('span', repoGroup.label, 'repo-name'));
+  }
+
+  label.append(
+    createText('span', ' · ', 'repo-divider'),
+    createText('span', String(repoGroup.records.length), 'repo-count'),
+  );
+
+  return label;
 }
 
 function render() {
@@ -246,69 +446,116 @@ function renderBanner() {
 
 function renderList() {
   const visibleRecords = getVisibleRecords();
+  const repoGroups = createRepoGroups(visibleRecords);
+  reconcileExpandedRepoKeys(repoGroups);
   elements.list.replaceChildren();
   elements.empty.textContent = state.showAll
     ? 'No session records found.'
     : 'No live or stale Pi sessions found.';
   elements.empty.classList.toggle('hidden', visibleRecords.length > 0);
 
-  for (const record of visibleRecords) {
-    const isExpanded = state.detailVisible && record.runtimeId === state.selectedRuntimeId;
-    const title = getDisplayTitle(record);
-    const card = document.createElement('article');
-    card.className = `card ${record.presenceState}`;
-    card.classList.toggle('expanded', isExpanded);
-    card.setAttribute('role', 'listitem');
-
-    const toggle = document.createElement('button');
-    toggle.type = 'button';
-    toggle.className = 'card-toggle';
-    toggle.setAttribute('aria-expanded', String(isExpanded));
-    toggle.addEventListener('click', () => {
-      if (isExpanded) {
-        state.detailVisible = false;
-      } else {
-        state.selectedRuntimeId = record.runtimeId;
-        state.detailVisible = true;
-      }
-      render();
-    });
-
-    toggle.append(
-      createLine('row-line1', [
-        createText('span', getPresenceIcon(record.presenceState), 'status-icon'),
-        createText('span', formatActivitySummary(record), 'muted'),
-        createText('span', title.text, 'row-title'),
-        createText('span', formatDuration(getListAgeMs(record)), 'muted row-age'),
-      ]),
-      createLine(
-        'row-line2',
-        [getRepoLabel(record, title.source), formatPr(record.prUrl), record.branch]
-          .filter((value) => typeof value === 'string' && value.length > 0)
-          .map((value) => createText('span', value, 'muted')),
-      ),
-    );
-
-    if (record.chips.length > 0 && !isExpanded) {
-      const chips = document.createElement('div');
-      chips.className = 'chips chips-inline';
-      for (const chip of record.chips.slice(0, COLLAPSED_CHIP_LIMIT)) {
-        chips.append(createChip(chip));
-      }
-      const hiddenChipCount = record.chips.length - COLLAPSED_CHIP_LIMIT;
-      if (hiddenChipCount > 0) {
-        chips.append(createChip(`+${hiddenChipCount}`, 'chip chip-subtle'));
-      }
-      toggle.append(chips);
-    }
-
-    card.append(toggle);
-    if (isExpanded) {
-      card.append(createRecordDetail(record));
-    }
-
-    elements.list.append(card);
+  for (const repoGroup of repoGroups) {
+    elements.list.append(createRepoGroup(repoGroup));
   }
+}
+
+function createRepoGroup(repoGroup) {
+  const isExpanded = state.expandedRepoKeys.has(repoGroup.key);
+  const section = document.createElement('section');
+  section.className = 'repo-group';
+  section.setAttribute('role', 'listitem');
+
+  const header = document.createElement('button');
+  header.type = 'button';
+  header.className = 'repo-header';
+  header.setAttribute('aria-expanded', String(isExpanded));
+  header.setAttribute('aria-label', formatRepoHeader(repoGroup));
+  header.append(createRepoHeaderLabel(repoGroup));
+  header.addEventListener('click', () => {
+    if (isExpanded) {
+      state.expandedRepoKeys.delete(repoGroup.key);
+    } else {
+      state.expandedRepoKeys.add(repoGroup.key);
+    }
+    render();
+  });
+
+  section.append(header);
+
+  if (isExpanded) {
+    const records = document.createElement('div');
+    const recordsId = getRepoGroupRecordsId(repoGroup.key);
+    records.className = 'repo-group-records';
+    records.setAttribute('id', recordsId);
+    records.setAttribute('role', 'list');
+    records.setAttribute('aria-label', `${repoGroup.label} sessions`);
+    header.setAttribute('aria-controls', recordsId);
+
+    for (const record of repoGroup.records) {
+      records.append(createRecordCard(record));
+    }
+    section.append(records);
+  }
+
+  return section;
+}
+
+function createRecordCard(record) {
+  const isExpanded = state.detailVisible && record.runtimeId === state.selectedRuntimeId;
+  const title = getDisplayTitle(record);
+  const card = document.createElement('article');
+  card.className = `card ${record.presenceState}`;
+  card.classList.toggle('expanded', isExpanded);
+  card.setAttribute('role', 'listitem');
+
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'card-toggle';
+  toggle.setAttribute('aria-expanded', String(isExpanded));
+  toggle.addEventListener('click', () => {
+    if (isExpanded) {
+      state.detailVisible = false;
+    } else {
+      state.selectedRuntimeId = record.runtimeId;
+      state.detailVisible = true;
+    }
+    render();
+  });
+
+  toggle.append(
+    createLine('row-line1', [
+      createText('span', getPresenceIcon(record.presenceState), 'status-icon'),
+      createText('span', formatActivitySummary(record), 'muted'),
+      createText('span', title.text, 'row-title'),
+      createText('span', formatDuration(getListAgeMs(record)), 'muted row-age'),
+    ]),
+    createLine(
+      'row-line2',
+      [getRepoLabel(record, title.source), formatPr(record.prUrl), record.branch]
+        .filter((value) => typeof value === 'string' && value.length > 0)
+        .map((value) => createText('span', value, 'muted')),
+    ),
+  );
+
+  if (record.chips.length > 0 && !isExpanded) {
+    const chips = document.createElement('div');
+    chips.className = 'chips chips-inline';
+    for (const chip of record.chips.slice(0, COLLAPSED_CHIP_LIMIT)) {
+      chips.append(createChip(chip));
+    }
+    const hiddenChipCount = record.chips.length - COLLAPSED_CHIP_LIMIT;
+    if (hiddenChipCount > 0) {
+      chips.append(createChip(`+${hiddenChipCount}`, 'chip chip-subtle'));
+    }
+    toggle.append(chips);
+  }
+
+  card.append(toggle);
+  if (isExpanded) {
+    card.append(createRecordDetail(record));
+  }
+
+  return card;
 }
 
 function createRecordDetail(record) {

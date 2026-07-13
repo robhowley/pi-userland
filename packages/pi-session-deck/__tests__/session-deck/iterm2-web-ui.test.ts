@@ -214,7 +214,7 @@ interface HarnessElements {
 
 interface AppHarness {
   elements: HarnessElements;
-  pushSnapshot: (snapshot: SessionDeckSnapshot) => void;
+  pushSnapshot: (snapshot: unknown) => void;
   openMock: ReturnType<typeof vi.fn>;
 }
 
@@ -266,7 +266,7 @@ function buildSnapshot(
   };
 }
 
-async function setupApp(snapshots: SessionDeckSnapshot[]): Promise<AppHarness> {
+async function setupApp(snapshots: unknown[]): Promise<AppHarness> {
   const document = new FakeDocument();
   const elements = buildElements(document);
   const queue = [...snapshots];
@@ -301,24 +301,18 @@ async function setupApp(snapshots: SessionDeckSnapshot[]): Promise<AppHarness> {
 
 async function setupPendingApp(): Promise<{
   elements: HarnessElements;
-  resolveSnapshot: (snapshot: SessionDeckSnapshot) => Promise<void>;
+  resolveSnapshot: (snapshot: unknown) => Promise<void>;
 }> {
   const document = new FakeDocument();
   const elements = buildElements(document);
   let resolveResponse:
-    | ((response: {
-        ok: boolean;
-        status: number;
-        json: () => Promise<SessionDeckSnapshot>;
-      }) => void)
+    | ((response: { ok: boolean; status: number; json: () => Promise<unknown> }) => void)
     | null = null;
   const fetchMock = vi.fn(
     () =>
-      new Promise<{ ok: boolean; status: number; json: () => Promise<SessionDeckSnapshot> }>(
-        (resolve) => {
-          resolveResponse = resolve;
-        },
-      ),
+      new Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>((resolve) => {
+        resolveResponse = resolve;
+      }),
   );
   const setIntervalMock = vi.fn(() => 1);
   const openMock = vi.fn(() => null);
@@ -352,6 +346,7 @@ function buildElements(document: FakeDocument): HarnessElements {
   const banner = withId(document.createElement('section'), 'banner');
   banner.className = 'banner hidden';
   const list = withId(document.createElement('div'), 'list');
+  list.setAttribute('role', 'list');
   const empty = withId(document.createElement('p'), 'empty');
   empty.className = 'empty hidden';
   const diagnosticsPanel = withId(document.createElement('section'), 'diagnostics-panel');
@@ -457,8 +452,58 @@ function findAllByClass(node: FakeNode, className: string): FakeElement[] {
   return matches;
 }
 
-function getCards(list: FakeElement): FakeElement[] {
-  return list.childNodes.filter((child): child is FakeElement => child instanceof FakeElement);
+function getRepoGroups(list: FakeElement): FakeElement[] {
+  return list.childNodes.filter(
+    (child): child is FakeElement =>
+      child instanceof FakeElement && child.classList.contains('repo-group'),
+  );
+}
+
+function getRepoHeader(repoGroup: FakeElement): FakeButtonElement {
+  const header = repoGroup.childNodes[0];
+  if (!(header instanceof FakeButtonElement) || !header.classList.contains('repo-header')) {
+    throw new Error('Expected repo header button.');
+  }
+  return header;
+}
+
+function getRepoHeaders(list: FakeElement): FakeButtonElement[] {
+  return getRepoGroups(list).map(getRepoHeader);
+}
+
+function getRepoHeaderTexts(list: FakeElement): string[] {
+  return getRepoHeaders(list).map((header) => header.textContent);
+}
+
+function getRepoGroupByLabel(list: FakeElement, label: string): FakeElement {
+  const repoGroup = getRepoGroups(list).find((group) =>
+    getRepoHeader(group).textContent.startsWith(`${label} · `),
+  );
+  if (!repoGroup) {
+    throw new Error(`Expected repo group ${label}.`);
+  }
+  return repoGroup;
+}
+
+function getRepoHeaderByLabel(list: FakeElement, label: string): FakeButtonElement {
+  return getRepoHeader(getRepoGroupByLabel(list, label));
+}
+
+function expandRepoGroup(list: FakeElement, label: string): void {
+  const header = getRepoHeaderByLabel(list, label);
+  if (header.getAttribute('aria-expanded') !== 'true') {
+    header.click();
+  }
+}
+
+function expandAllRepoGroups(list: FakeElement): void {
+  for (const label of getRepoHeaderTexts(list).map((text) => text.split(' · ')[0] ?? text)) {
+    expandRepoGroup(list, label);
+  }
+}
+
+function getCards(root: FakeNode): FakeElement[] {
+  return findAllByClass(root, 'card');
 }
 
 function getExpandedCards(list: FakeElement): FakeElement[] {
@@ -593,8 +638,529 @@ describe('Session Deck iTerm2 web UI', () => {
     );
   });
 
+  it('rejects malformed snapshot objects instead of repairing missing record fields', async () => {
+    const harness = await setupApp([
+      {
+        generatedAt: '2026-07-10T20:15:00.000Z',
+        records: [{ runtimeId: 'rt-broken' }],
+        diagnostics: [],
+      },
+    ]);
+
+    expect(getSummaryCountTexts(harness.elements.summary)).toEqual(['0 live']);
+    expect(harness.elements.banner.classList.contains('hidden')).toBe(false);
+    expect(harness.elements.banner.textContent).toBe(
+      'Snapshot payload does not match SessionDeckSnapshot.',
+    );
+    expect(getCards(harness.elements.list)).toHaveLength(0);
+    expect(harness.elements.empty.classList.contains('hidden')).toBe(false);
+
+    setShowAll(harness.elements, true);
+
+    expect(harness.elements.diagnosticsPanel.classList.contains('hidden')).toBe(false);
+    expect(harness.elements.diagnostics.textContent).toContain('toolbelt_snapshot_unavailable');
+  });
+
+  it('renders repo headers collapsed by default with counts and valid list roles', async () => {
+    const harness = await setupApp([
+      buildSnapshot({
+        records: [
+          buildRecord({
+            runtimeId: 'rt-alpha-1',
+            sessionId: 'session-alpha-1',
+            sessionName: 'alpha 1',
+            repoName: 'alpha',
+            qualifiedRepoName: 'Owner/alpha',
+          }),
+          buildRecord({
+            runtimeId: 'rt-alpha-2',
+            sessionId: 'session-alpha-2',
+            sessionName: 'alpha 2',
+            repoName: 'alpha',
+            qualifiedRepoName: 'Owner/alpha',
+          }),
+          buildRecord({
+            runtimeId: 'rt-solo',
+            sessionId: 'session-solo',
+            sessionName: 'solo',
+            repoName: 'solo',
+            qualifiedRepoName: 'Owner/solo',
+          }),
+          buildRecord({
+            runtimeId: 'rt-cwd-only',
+            sessionId: 'session-cwd-only',
+            sessionName: 'cwd only',
+            repoName: null,
+            qualifiedRepoName: null,
+            cwd: `${HOME}/cwd-only`,
+          }),
+        ],
+      }),
+    ]);
+
+    expect(harness.elements.list.getAttribute('role')).toBe('list');
+    expect(getRepoHeaderTexts(harness.elements.list)).toEqual([
+      'Owner/alpha · 2',
+      'Owner/solo · 1',
+      'No repo · 1',
+    ]);
+
+    const alphaHeader = getRepoHeaderByLabel(harness.elements.list, 'Owner/alpha');
+    expect(alphaHeader.getAttribute('aria-label')).toBe('Owner/alpha · 2');
+    expect(findAllByClass(alphaHeader, 'repo-owner').map((part) => part.textContent)).toEqual([
+      'Owner',
+      '/',
+    ]);
+    expect(findAllByClass(alphaHeader, 'repo-name')[0]?.textContent).toBe('alpha');
+    expect(findAllByClass(alphaHeader, 'repo-count')[0]?.textContent).toBe('2');
+
+    const noRepoHeader = getRepoHeaderByLabel(harness.elements.list, 'No repo');
+    expect(findAllByClass(noRepoHeader, 'repo-owner')).toHaveLength(0);
+    expect(findAllByClass(noRepoHeader, 'repo-name')).toHaveLength(0);
+    expect(noRepoHeader.textContent).toBe('No repo · 1');
+    expect(getRepoHeaders(harness.elements.list).map((header) => header.tagName)).toEqual([
+      'BUTTON',
+      'BUTTON',
+      'BUTTON',
+    ]);
+    expect(
+      getRepoHeaders(harness.elements.list).map((header) => header.getAttribute('aria-expanded')),
+    ).toEqual(['false', 'false', 'false']);
+    expect(getRepoHeaders(harness.elements.list).map((header) => header.className)).toEqual([
+      'repo-header',
+      'repo-header',
+      'repo-header',
+    ]);
+    expect(getRepoGroups(harness.elements.list).map((group) => group.getAttribute('role'))).toEqual(
+      ['listitem', 'listitem', 'listitem'],
+    );
+    expect(findAllByClass(harness.elements.list, 'repo-group-records')).toHaveLength(0);
+    expect(getCards(harness.elements.list)).toHaveLength(0);
+  });
+
+  it('sorts named repo groups case-insensitively and keeps No repo last', async () => {
+    const harness = await setupApp([
+      buildSnapshot({
+        records: [
+          buildRecord({
+            runtimeId: 'rt-zeta',
+            sessionId: 'session-zeta',
+            sessionName: 'zeta',
+            repoName: 'repo-zeta',
+            qualifiedRepoName: 'zeta/repo',
+          }),
+          buildRecord({
+            runtimeId: 'rt-alpha',
+            sessionId: 'session-alpha',
+            sessionName: 'alpha',
+            repoName: 'repo-alpha',
+            qualifiedRepoName: 'Alpha/repo',
+          }),
+          buildRecord({
+            runtimeId: 'rt-middle',
+            sessionId: 'session-middle',
+            sessionName: 'middle',
+            repoName: 'middle',
+            qualifiedRepoName: null,
+          }),
+          buildRecord({
+            runtimeId: 'rt-no-repo',
+            sessionId: 'session-no-repo',
+            sessionName: 'no repo',
+            repoName: null,
+            qualifiedRepoName: null,
+          }),
+        ],
+      }),
+    ]);
+
+    expect(getRepoHeaderTexts(harness.elements.list)).toEqual([
+      'Alpha/repo · 1',
+      'middle · 1',
+      'zeta/repo · 1',
+      'No repo · 1',
+    ]);
+  });
+
+  it('groups by repo identity and only merges unqualified records into one matching short name', async () => {
+    const harness = await setupApp([
+      buildSnapshot({
+        records: [
+          buildRecord({
+            runtimeId: 'rt-shared-legacy',
+            sessionId: 'session-shared-legacy',
+            sessionName: 'legacy shared',
+            repoName: 'shared',
+            qualifiedRepoName: null,
+          }),
+          buildRecord({
+            runtimeId: 'rt-shared-qualified',
+            sessionId: 'session-shared-qualified',
+            sessionName: 'qualified shared',
+            repoName: 'shared',
+            qualifiedRepoName: 'owner/shared',
+          }),
+          buildRecord({
+            runtimeId: 'rt-ambiguous-a',
+            sessionId: 'session-ambiguous-a',
+            sessionName: 'qualified ambiguous a',
+            repoName: 'ambiguous',
+            qualifiedRepoName: 'owner-a/ambiguous',
+          }),
+          buildRecord({
+            runtimeId: 'rt-ambiguous-b',
+            sessionId: 'session-ambiguous-b',
+            sessionName: 'qualified ambiguous b',
+            repoName: 'ambiguous',
+            qualifiedRepoName: 'owner-b/ambiguous',
+          }),
+          buildRecord({
+            runtimeId: 'rt-ambiguous-legacy',
+            sessionId: 'session-ambiguous-legacy',
+            sessionName: 'legacy ambiguous',
+            repoName: 'ambiguous',
+            qualifiedRepoName: null,
+          }),
+        ],
+      }),
+    ]);
+
+    expect(getRepoHeaderTexts(harness.elements.list)).toEqual([
+      'ambiguous · 1',
+      'owner-a/ambiguous · 1',
+      'owner-b/ambiguous · 1',
+      'owner/shared · 2',
+    ]);
+
+    expandRepoGroup(harness.elements.list, 'owner/shared');
+    expect(
+      findAllByClass(getRepoGroupByLabel(harness.elements.list, 'owner/shared'), 'row-title').map(
+        (title) => title.textContent,
+      ),
+    ).toEqual(['legacy shared', 'qualified shared']);
+
+    expandRepoGroup(harness.elements.list, 'ambiguous');
+    expect(
+      findAllByClass(getRepoGroupByLabel(harness.elements.list, 'ambiguous'), 'row-title').map(
+        (title) => title.textContent,
+      ),
+    ).toEqual(['legacy ambiguous']);
+  });
+
+  it('expands repo disclosures independently with nested session lists', async () => {
+    const harness = await setupApp([
+      buildSnapshot({
+        records: [
+          buildRecord({
+            runtimeId: 'rt-a',
+            sessionId: 'session-a',
+            sessionName: 'alpha',
+            repoName: 'alpha',
+            qualifiedRepoName: 'owner/alpha',
+          }),
+          buildRecord({
+            runtimeId: 'rt-b',
+            sessionId: 'session-b',
+            sessionName: 'bravo',
+            repoName: 'bravo',
+            qualifiedRepoName: 'owner/bravo',
+          }),
+        ],
+      }),
+    ]);
+
+    expect(getCards(harness.elements.list)).toHaveLength(0);
+
+    expandRepoGroup(harness.elements.list, 'owner/alpha');
+
+    expect(
+      getRepoHeaderByLabel(harness.elements.list, 'owner/alpha').getAttribute('aria-expanded'),
+    ).toBe('true');
+    expect(
+      getRepoHeaderByLabel(harness.elements.list, 'owner/bravo').getAttribute('aria-expanded'),
+    ).toBe('false');
+    expect(getCards(getRepoGroupByLabel(harness.elements.list, 'owner/alpha'))).toHaveLength(1);
+    expect(getCards(getRepoGroupByLabel(harness.elements.list, 'owner/bravo'))).toHaveLength(0);
+    const alphaRecords = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'owner/alpha'),
+      'repo-group-records',
+    )[0]!;
+    expect(alphaRecords.getAttribute('role')).toBe('list');
+    expect(
+      getRepoHeaderByLabel(harness.elements.list, 'owner/alpha').getAttribute('aria-controls'),
+    ).toBe(alphaRecords.getAttribute('id'));
+
+    expandRepoGroup(harness.elements.list, 'owner/bravo');
+
+    expect(getCards(harness.elements.list)).toHaveLength(2);
+    expect(
+      getRepoHeaderByLabel(harness.elements.list, 'owner/alpha').getAttribute('aria-expanded'),
+    ).toBe('true');
+    expect(
+      getRepoHeaderByLabel(harness.elements.list, 'owner/bravo').getAttribute('aria-expanded'),
+    ).toBe('true');
+
+    getRepoHeaderByLabel(harness.elements.list, 'owner/alpha').click();
+
+    expect(
+      getRepoHeaderByLabel(harness.elements.list, 'owner/alpha').getAttribute('aria-expanded'),
+    ).toBe('false');
+    expect(
+      getRepoHeaderByLabel(harness.elements.list, 'owner/bravo').getAttribute('aria-expanded'),
+    ).toBe('true');
+    expect(getCards(harness.elements.list)).toHaveLength(1);
+    expect(getCardLine(getCards(harness.elements.list)[0]!, 'row-line1').textContent).toContain(
+      'bravo',
+    );
+  });
+
+  it('keeps repo disclosure aria-controls ids stable by repo key across reorder', async () => {
+    const harness = await setupApp([
+      buildSnapshot({
+        records: [
+          buildRecord({
+            runtimeId: 'rt-bravo',
+            sessionId: 'session-bravo',
+            sessionName: 'bravo',
+            repoName: 'bravo',
+            qualifiedRepoName: 'owner/bravo',
+          }),
+        ],
+      }),
+    ]);
+
+    expandRepoGroup(harness.elements.list, 'owner/bravo');
+    const initialBravoRecords = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'owner/bravo'),
+      'repo-group-records',
+    )[0]!;
+    const initialBravoId = getRepoHeaderByLabel(harness.elements.list, 'owner/bravo').getAttribute(
+      'aria-controls',
+    );
+    expect(initialBravoId).toBe(initialBravoRecords.getAttribute('id'));
+
+    harness.pushSnapshot(
+      buildSnapshot({
+        records: [
+          buildRecord({
+            runtimeId: 'rt-alpha',
+            sessionId: 'session-alpha',
+            sessionName: 'alpha',
+            repoName: 'alpha',
+            qualifiedRepoName: 'owner/alpha',
+          }),
+          buildRecord({
+            runtimeId: 'rt-bravo',
+            sessionId: 'session-bravo',
+            sessionName: 'bravo refreshed',
+            repoName: 'bravo',
+            qualifiedRepoName: 'owner/bravo',
+          }),
+        ],
+      }),
+    );
+
+    harness.elements.refresh.click();
+    await flushMicrotasks();
+
+    const refreshedBravoRecords = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'owner/bravo'),
+      'repo-group-records',
+    )[0]!;
+    const refreshedBravoId = getRepoHeaderByLabel(
+      harness.elements.list,
+      'owner/bravo',
+    ).getAttribute('aria-controls');
+    expect(refreshedBravoId).toBe(initialBravoId);
+    expect(refreshedBravoId).toBe(refreshedBravoRecords.getAttribute('id'));
+
+    expandRepoGroup(harness.elements.list, 'owner/alpha');
+    const alphaRecords = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'owner/alpha'),
+      'repo-group-records',
+    )[0]!;
+    const alphaId = getRepoHeaderByLabel(harness.elements.list, 'owner/alpha').getAttribute(
+      'aria-controls',
+    );
+    expect(alphaId).toBe(alphaRecords.getAttribute('id'));
+    expect(alphaId).not.toBe(refreshedBravoId);
+  });
+
+  it('counts only currently visible records and keeps newly visible repos collapsed', async () => {
+    const harness = await setupApp([
+      buildSnapshot({
+        records: [
+          buildRecord({
+            runtimeId: 'rt-live',
+            sessionId: 'session-live',
+            sessionName: 'live',
+            repoName: 'live',
+            qualifiedRepoName: 'owner/live',
+          }),
+          buildRecord({
+            runtimeId: 'rt-dead',
+            sessionId: 'session-dead',
+            sessionName: 'dead',
+            repoName: 'dead',
+            qualifiedRepoName: 'owner/dead',
+            presenceState: 'dead',
+          }),
+        ],
+      }),
+    ]);
+
+    expect(getRepoHeaderTexts(harness.elements.list)).toEqual(['owner/live · 1']);
+    expandRepoGroup(harness.elements.list, 'owner/live');
+
+    setShowAll(harness.elements, true);
+
+    expect(getRepoHeaderTexts(harness.elements.list)).toEqual(['owner/dead · 1', 'owner/live · 1']);
+    expect(
+      getRepoHeaderByLabel(harness.elements.list, 'owner/live').getAttribute('aria-expanded'),
+    ).toBe('true');
+    expect(
+      getRepoHeaderByLabel(harness.elements.list, 'owner/dead').getAttribute('aria-expanded'),
+    ).toBe('false');
+    expect(getCards(harness.elements.list)).toHaveLength(1);
+
+    setShowAll(harness.elements, false);
+
+    expect(getRepoHeaderTexts(harness.elements.list)).toEqual(['owner/live · 1']);
+    expect(
+      getRepoHeaderByLabel(harness.elements.list, 'owner/live').getAttribute('aria-expanded'),
+    ).toBe('true');
+  });
+
+  it('preserves and prunes expanded repo keys across refreshes', async () => {
+    const harness = await setupApp([
+      buildSnapshot({
+        records: [
+          buildRecord({
+            runtimeId: 'rt-keep',
+            sessionId: 'session-keep',
+            sessionName: 'keep',
+            repoName: 'keep',
+            qualifiedRepoName: 'owner/keep',
+          }),
+          buildRecord({
+            runtimeId: 'rt-drop',
+            sessionId: 'session-drop',
+            sessionName: 'drop',
+            repoName: 'drop',
+            qualifiedRepoName: 'owner/drop',
+          }),
+        ],
+      }),
+    ]);
+
+    expandRepoGroup(harness.elements.list, 'owner/keep');
+    expandRepoGroup(harness.elements.list, 'owner/drop');
+    harness.pushSnapshot(
+      buildSnapshot({
+        records: [
+          buildRecord({
+            runtimeId: 'rt-keep',
+            sessionId: 'session-keep',
+            sessionName: 'keep refreshed',
+            repoName: 'keep',
+            qualifiedRepoName: 'owner/keep',
+          }),
+          buildRecord({
+            runtimeId: 'rt-new',
+            sessionId: 'session-new',
+            sessionName: 'new',
+            repoName: 'new',
+            qualifiedRepoName: 'owner/new',
+          }),
+        ],
+      }),
+    );
+
+    harness.elements.refresh.click();
+    await flushMicrotasks();
+
+    expect(getRepoHeaderTexts(harness.elements.list)).toEqual(['owner/keep · 1', 'owner/new · 1']);
+    expect(
+      getRepoHeaderByLabel(harness.elements.list, 'owner/keep').getAttribute('aria-expanded'),
+    ).toBe('true');
+    expect(
+      getRepoHeaderByLabel(harness.elements.list, 'owner/new').getAttribute('aria-expanded'),
+    ).toBe('false');
+
+    harness.pushSnapshot(
+      buildSnapshot({
+        records: [
+          buildRecord({
+            runtimeId: 'rt-keep',
+            sessionId: 'session-keep',
+            sessionName: 'keep refreshed again',
+            repoName: 'keep',
+            qualifiedRepoName: 'owner/keep',
+          }),
+          buildRecord({
+            runtimeId: 'rt-drop',
+            sessionId: 'session-drop',
+            sessionName: 'drop returns',
+            repoName: 'drop',
+            qualifiedRepoName: 'owner/drop',
+          }),
+          buildRecord({
+            runtimeId: 'rt-new',
+            sessionId: 'session-new',
+            sessionName: 'new',
+            repoName: 'new',
+            qualifiedRepoName: 'owner/new',
+          }),
+        ],
+      }),
+    );
+
+    harness.elements.refresh.click();
+    await flushMicrotasks();
+
+    expect(
+      getRepoHeaderByLabel(harness.elements.list, 'owner/keep').getAttribute('aria-expanded'),
+    ).toBe('true');
+    expect(
+      getRepoHeaderByLabel(harness.elements.list, 'owner/drop').getAttribute('aria-expanded'),
+    ).toBe('false');
+    expect(
+      getRepoHeaderByLabel(harness.elements.list, 'owner/new').getAttribute('aria-expanded'),
+    ).toBe('false');
+  });
+
+  it('restores the selected card detail when a collapsed parent repo is reopened', async () => {
+    const harness = await setupApp([
+      buildSnapshot({
+        records: [
+          buildRecord(),
+          buildRecord({ runtimeId: 'rt-2', sessionId: 'session-2', sessionName: 'bravo' }),
+        ],
+      }),
+    ]);
+
+    expandRepoGroup(harness.elements.list, 'owner/project');
+    getCardToggle(getCards(harness.elements.list)[1]!).click();
+
+    expect(getExpandedCardTitles(harness.elements.list)).toEqual(['bravo']);
+
+    getRepoHeaderByLabel(harness.elements.list, 'owner/project').click();
+
+    expect(
+      getRepoHeaderByLabel(harness.elements.list, 'owner/project').getAttribute('aria-expanded'),
+    ).toBe('false');
+    expect(getCards(harness.elements.list)).toHaveLength(0);
+    expect(getExpandedCards(harness.elements.list)).toHaveLength(0);
+
+    expandRepoGroup(harness.elements.list, 'owner/project');
+
+    expect(getExpandedCardTitles(harness.elements.list)).toEqual(['bravo']);
+    expect(getExpandedCards(harness.elements.list)[0]!.textContent).toContain('rt-2');
+  });
+
   it('hides zero summary states in all mode', async () => {
     const harness = await setupApp([buildSnapshot()]);
+    expandAllRepoGroups(harness.elements.list);
 
     expect(getSummaryCountTexts(harness.elements.summary)).toEqual(['1 live']);
 
@@ -640,6 +1206,7 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(harness.elements.summary.childNodes.every((child) => child instanceof FakeElement)).toBe(
       true,
     );
+    expandAllRepoGroups(harness.elements.list);
     expect(findAllByClass(harness.elements.summary, 'summary-meta')[0]?.textContent).toContain(
       'updated ',
     );
@@ -659,7 +1226,7 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(getCards(harness.elements.list)).toHaveLength(4);
   });
 
-  it('renders cards collapsed by default and toggles expansion inline', async () => {
+  it('renders cards collapsed inside an expanded repo and toggles expansion inline', async () => {
     const harness = await setupApp([
       buildSnapshot({
         records: [
@@ -677,6 +1244,7 @@ describe('Session Deck iTerm2 web UI', () => {
         ],
       }),
     ]);
+    expandAllRepoGroups(harness.elements.list);
 
     expect(getExpandedCards(harness.elements.list)).toHaveLength(0);
     expect(findAllByClass(getCards(harness.elements.list)[0]!, 'chips-inline')).toHaveLength(1);
@@ -729,6 +1297,7 @@ describe('Session Deck iTerm2 web UI', () => {
         ],
       }),
     ]);
+    expandAllRepoGroups(harness.elements.list);
 
     const card = getCards(harness.elements.list)[0]!;
     const line1 = getCardLine(card, 'row-line1');
@@ -770,6 +1339,7 @@ describe('Session Deck iTerm2 web UI', () => {
         ],
       }),
     ]);
+    expandAllRepoGroups(harness.elements.list);
 
     expect(
       getCards(harness.elements.list).map(
@@ -791,6 +1361,7 @@ describe('Session Deck iTerm2 web UI', () => {
         ],
       }),
     ]);
+    expandAllRepoGroups(harness.elements.list);
 
     const card = getCards(harness.elements.list)[0]!;
     const line1 = getCardLine(card, 'row-line1');
@@ -839,6 +1410,7 @@ describe('Session Deck iTerm2 web UI', () => {
         ],
       }),
     ]);
+    expandAllRepoGroups(harness.elements.list);
 
     const [zeroCard, oneCard, twoCard, manyCard] = getCards(harness.elements.list);
 
@@ -880,6 +1452,7 @@ describe('Session Deck iTerm2 web UI', () => {
         ],
       }),
     ]);
+    expandAllRepoGroups(harness.elements.list);
 
     getCardToggle(getCards(harness.elements.list)[0]!).click();
 
@@ -957,6 +1530,7 @@ describe('Session Deck iTerm2 web UI', () => {
         ],
       }),
     ]);
+    expandAllRepoGroups(harness.elements.list);
 
     getCardToggle(getCards(harness.elements.list)[0]!).click();
 
@@ -977,6 +1551,7 @@ describe('Session Deck iTerm2 web UI', () => {
         ],
       }),
     ]);
+    expandAllRepoGroups(harness.elements.list);
 
     harness.pushSnapshot(
       buildSnapshot({
@@ -1008,6 +1583,7 @@ describe('Session Deck iTerm2 web UI', () => {
         ],
       }),
     ]);
+    expandAllRepoGroups(harness.elements.list);
 
     getCardToggle(getCards(harness.elements.list)[1]!).click();
     harness.pushSnapshot(
@@ -1035,6 +1611,7 @@ describe('Session Deck iTerm2 web UI', () => {
         ],
       }),
     ]);
+    expandAllRepoGroups(harness.elements.list);
 
     getCardToggle(getCards(harness.elements.list)[1]!).click();
     getCardToggle(getCards(harness.elements.list)[1]!).click();
@@ -1077,6 +1654,7 @@ describe('Session Deck iTerm2 web UI', () => {
     ]);
 
     setShowAll(harness.elements, true);
+    expandAllRepoGroups(harness.elements.list);
     expect(harness.elements.diagnosticsPanel.classList.contains('hidden')).toBe(false);
     expect(harness.elements.diagnostics.textContent).toContain('read_error');
 
@@ -1105,6 +1683,7 @@ describe('Session Deck iTerm2 web UI', () => {
     ]);
 
     setShowAll(harness.elements, true);
+    expandAllRepoGroups(harness.elements.list);
     getCardToggle(getCards(harness.elements.list)[1]!).click();
     getCardToggle(getCards(harness.elements.list)[1]!).click();
 
@@ -1130,6 +1709,7 @@ describe('Session Deck iTerm2 web UI', () => {
         ],
       }),
     ]);
+    expandAllRepoGroups(harness.elements.list);
 
     getCardToggle(getCards(harness.elements.list)[1]!).click();
     harness.pushSnapshot(

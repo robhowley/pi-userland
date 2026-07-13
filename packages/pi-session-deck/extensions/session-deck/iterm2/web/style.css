@@ -4,6 +4,9 @@
   --color-bg: #24252f;
   --color-chrome: #1b1b23;
   --color-surface: #2b2d38;
+  --color-repo-row: #303341;
+  --color-repo-rail: #4c566a;
+  --color-card-interactive: #353b49;
   --color-surface-raised: #303341;
   --color-surface-hover: #313744;
   --color-divider: #3b4252;
@@ -233,8 +236,51 @@ h2 {
   padding: 0 0 12px;
 }
 
-.list {
+.list,
+.repo-group,
+.repo-group-records {
   display: grid;
+}
+
+.repo-header,
+.card-toggle {
+  position: relative;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.repo-header {
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  padding: 10px 34px 10px 12px;
+  border-bottom: 1px solid var(--color-divider);
+  background: var(--color-repo-row);
+  color: var(--color-text);
+  white-space: nowrap;
+}
+
+.repo-header-label {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.repo-owner,
+.repo-divider {
+  color: var(--color-text-muted);
+}
+
+.repo-owner {
+  opacity: 0.86;
+}
+
+.repo-name {
+  font-weight: 600;
 }
 
 .card {
@@ -245,60 +291,67 @@ h2 {
   overflow: hidden;
 }
 
+.repo-group-records > .card:not(.expanded) {
+  box-shadow: inset 4px 0 0 var(--color-repo-rail);
+}
+
 .card.expanded {
   background: var(--color-surface);
   border-bottom-color: var(--color-divider-strong);
-  box-shadow: inset 3px 0 0 var(--color-accent);
+  box-shadow: inset 4px 0 0 var(--color-accent);
 }
 
 .card-toggle {
-  position: relative;
-  width: 100%;
   display: grid;
   gap: 6px;
-  text-align: left;
-  border: 0;
-  border-radius: 0;
   padding: 10px 34px 10px 12px;
-  background: transparent;
 }
 
+.repo-header::after,
 .card-toggle::after {
-  content: '';
+  content: '›';
   position: absolute;
   top: 50%;
   right: 14px;
-  width: 8px;
-  height: 8px;
-  border-right: 2px solid var(--color-text-muted);
-  border-bottom: 2px solid var(--color-text-muted);
-  opacity: 0.38;
+  color: var(--color-text-muted);
+  font-size: 1.2rem;
+  font-weight: 600;
+  line-height: 1;
+  opacity: 0.62;
   pointer-events: none;
-  transform: translateY(-50%) rotate(45deg);
+  transform: translateY(-50%);
   transition:
-    transform 120ms ease,
-    border-color 120ms ease,
+    color 120ms ease,
     opacity 120ms ease;
 }
 
+button.repo-header:hover::after,
+button.repo-header:focus::after,
 button.card-toggle:hover::after,
 button.card-toggle:focus::after {
   opacity: 0.9;
 }
 
+button.repo-header[aria-expanded='true']::after,
 button.card-toggle[aria-expanded='true']::after {
-  border-color: var(--color-accent);
+  content: '⌄';
+  color: var(--color-accent);
   opacity: 1;
-  transform: translateY(-50%) rotate(135deg);
 }
 
-.card-toggle:hover {
+.repo-header:hover {
   background: var(--color-surface-hover);
   border-color: transparent;
+  border-bottom-color: var(--color-divider);
+}
+
+.card-toggle:hover,
+.card-toggle:focus {
+  background: var(--color-card-interactive);
 }
 
 .card.expanded > .card-toggle {
-  background: var(--color-surface-raised);
+  background: var(--color-card-interactive);
 }
 
 .card-detail {

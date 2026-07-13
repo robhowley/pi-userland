@@ -1,6 +1,10 @@
 import { access, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { readSessionDeckIterm2Manifest, hashSessionDeckIterm2Template } from './manifest.js';
+import {
+  readSessionDeckIterm2Manifest,
+  hashSessionDeckIterm2Template,
+  type SessionDeckIterm2InstallManifest,
+} from './manifest.js';
 import {
   getDefaultSessionDeckIterm2ScriptsDir,
   getSessionDeckIterm2ManifestPath,
@@ -26,7 +30,13 @@ export async function doctorSessionDeckIterm2Install(
 ): Promise<SessionDeckIterm2CommandResult> {
   const homeDirectory = options.homeDirectory ?? homedir();
   const manifestPath = options.manifestPath ?? getSessionDeckIterm2ManifestPath(homeDirectory);
-  const manifest = await readSessionDeckIterm2Manifest(manifestPath);
+  let manifest: SessionDeckIterm2InstallManifest | null = null;
+  let manifestReadError: string | null = null;
+  try {
+    manifest = await readSessionDeckIterm2Manifest(manifestPath);
+  } catch (error) {
+    manifestReadError = getErrorMessage(error);
+  }
   const overrideScriptsDir =
     options.scriptsDir === undefined
       ? undefined
@@ -47,7 +57,9 @@ export async function doctorSessionDeckIterm2Install(
   }
 
   lines.push(`- scripts dir: ${scriptsDir}`);
-  lines.push(`- manifest: ${manifest === null ? 'missing' : manifestPath}`);
+  lines.push(
+    `- manifest: ${manifestReadError === null ? (manifest === null ? 'missing' : manifestPath) : `invalid (${manifestPath})`}`,
+  );
   lines.push(`- script: ${scriptPath}${(await pathExists(scriptPath)) ? '' : ' (missing)'}`);
 
   let runtimePaths: SessionDeckIterm2RuntimePaths | null = options.runtimePaths ?? null;
@@ -59,7 +71,12 @@ export async function doctorSessionDeckIterm2Install(
     }
   }
 
-  if (manifest === null) {
+  if (manifestReadError !== null) {
+    issues.push(`Install manifest at ${manifestPath} could not be read: ${manifestReadError}`);
+    issues.push(
+      'Manual recovery required: remove or repair the manifest, verify/remove any Session Deck AutoLaunch script manually, then rerun /session-deck iterm2 install.',
+    );
+  } else if (manifest === null) {
     issues.push(`Install manifest not found at ${manifestPath}. Run /session-deck iterm2 install.`);
   } else if (overrideScriptsDir !== undefined && overrideScriptsDir !== manifest.scriptsDir) {
     issues.push(
