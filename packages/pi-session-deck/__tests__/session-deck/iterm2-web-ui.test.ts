@@ -524,8 +524,8 @@ function getChipTexts(root: FakeNode): string[] {
   return findAllByClass(root, 'chip').map((chip) => chip.textContent);
 }
 
-function getSummaryChipTexts(root: FakeNode): string[] {
-  return findAllByClass(root, 'summary-chip').map((chip) => chip.textContent);
+function getSummaryCountTexts(root: FakeNode): string[] {
+  return findAllByClass(root, 'summary-count').map((count) => count.textContent);
 }
 
 function getInlineChipTexts(card: FakeElement): string[] {
@@ -551,7 +551,7 @@ describe('Session Deck iTerm2 web UI', () => {
 
     await harness.resolveSnapshot(buildSnapshot());
 
-    expect(getSummaryChipTexts(harness.elements.summary)).toEqual(['1 live', '0 stale']);
+    expect(getSummaryCountTexts(harness.elements.summary)).toEqual(['1 live']);
     expect(harness.elements.summary.childNodes.every((child) => child instanceof FakeElement)).toBe(
       true,
     );
@@ -560,7 +560,18 @@ describe('Session Deck iTerm2 web UI', () => {
     );
   });
 
-  it('renders summary chips from DOM nodes and keeps updated meta visible', async () => {
+  it('hides zero summary states in all mode', async () => {
+    const harness = await setupApp([buildSnapshot()]);
+
+    expect(getSummaryCountTexts(harness.elements.summary)).toEqual(['1 live']);
+
+    setShowAll(harness.elements, true);
+
+    expect(getSummaryCountTexts(harness.elements.summary)).toEqual(['1 live']);
+    expect(getCards(harness.elements.list)).toHaveLength(1);
+  });
+
+  it('renders summary counts from DOM nodes and keeps updated meta visible', async () => {
     const harness = await setupApp([
       buildSnapshot({
         records: [
@@ -592,7 +603,7 @@ describe('Session Deck iTerm2 web UI', () => {
     ]);
 
     expect(harness.elements.summary.childNodes.length).toBeGreaterThan(1);
-    expect(getSummaryChipTexts(harness.elements.summary)).toEqual(['1 live', '1 stale']);
+    expect(getSummaryCountTexts(harness.elements.summary)).toEqual(['1 live', '1 stale']);
     expect(harness.elements.summary.childNodes.every((child) => child instanceof FakeElement)).toBe(
       true,
     );
@@ -603,7 +614,7 @@ describe('Session Deck iTerm2 web UI', () => {
 
     setShowAll(harness.elements, true);
 
-    expect(getSummaryChipTexts(harness.elements.summary)).toEqual([
+    expect(getSummaryCountTexts(harness.elements.summary)).toEqual([
       '1 live',
       '1 stale',
       '1 dead',

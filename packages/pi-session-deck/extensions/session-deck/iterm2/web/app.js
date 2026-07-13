@@ -207,14 +207,23 @@ function renderSummary() {
 
   const snapshot = state.snapshot ?? emptySnapshot('Snapshot unavailable.');
   const counts = countPresenceStates(snapshot.records);
-  const chipLabels = [`${counts.live} live`, `${counts.stale} stale`];
+  const summaryLabels = [`${counts.live} live`];
+
+  if (counts.stale > 0) {
+    summaryLabels.push(`${counts.stale} stale`);
+  }
 
   if (state.showAll) {
-    chipLabels.push(`${counts.dead} dead`, `${counts.unknown} unknown`);
+    if (counts.dead > 0) {
+      summaryLabels.push(`${counts.dead} dead`);
+    }
+    if (counts.unknown > 0) {
+      summaryLabels.push(`${counts.unknown} unknown`);
+    }
   }
 
   elements.summary.replaceChildren(
-    ...chipLabels.map((label) => createChip(label, 'summary-chip')),
+    ...summaryLabels.map((label) => createText('span', label, 'summary-count')),
     createText('span', `updated ${formatTimestamp(snapshot.generatedAt)}`, 'summary-meta'),
   );
 }
@@ -572,7 +581,7 @@ function formatTimestamp(isoString) {
   if (Number.isNaN(date.getTime())) {
     return isoString;
   }
-  return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+  return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
 function getPresenceIcon(stateName) {
