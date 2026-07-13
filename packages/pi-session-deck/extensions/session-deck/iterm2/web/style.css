@@ -153,6 +153,7 @@ h2 {
 
 .summary-meta {
   color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .toggle {
@@ -271,13 +272,18 @@ h2 {
   height: 8px;
   border-right: 2px solid var(--color-text-muted);
   border-bottom: 2px solid var(--color-text-muted);
-  opacity: 0.8;
+  opacity: 0.38;
   pointer-events: none;
   transform: translateY(-50%) rotate(45deg);
   transition:
     transform 120ms ease,
     border-color 120ms ease,
     opacity 120ms ease;
+}
+
+button.card-toggle:hover::after,
+button.card-toggle:focus::after {
+  opacity: 0.9;
 }
 
 button.card-toggle[aria-expanded='true']::after {
@@ -357,6 +363,7 @@ button.card-toggle[aria-expanded='true']::after {
 .row-age {
   margin-left: auto;
   flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
@@ -396,6 +403,18 @@ button.card-toggle[aria-expanded='true']::after {
   background: var(--color-chip-subtle);
   border-color: var(--color-divider);
   color: var(--color-text-muted);
+}
+
+.chips-inline .chip {
+  background: rgba(129, 161, 193, 0.055);
+  border-color: rgba(167, 176, 192, 0.18);
+  color: var(--color-text-muted);
+}
+
+.chips-inline .chip-subtle {
+  background: transparent;
+  border-color: rgba(167, 176, 192, 0.12);
+  opacity: 0.82;
 }
 
 .detail {
@@ -453,6 +472,17 @@ button.card-toggle[aria-expanded='true']::after {
   text-align: right;
   font-size: 0.85rem;
   overflow-wrap: anywhere;
+}
+
+.detail-link,
+.detail-link:visited {
+  color: var(--color-accent);
+  text-decoration: none;
+}
+
+.detail-link:hover,
+.detail-link:focus-visible {
+  text-decoration: underline;
 }
 
 .detail-chips {

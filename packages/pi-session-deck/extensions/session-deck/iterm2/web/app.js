@@ -1,4 +1,4 @@
-/* global HTMLButtonElement, HTMLInputElement, document, fetch, navigator, window */
+/* global HTMLButtonElement, HTMLInputElement, URL, document, fetch, navigator, window */
 
 const AUTO_REFRESH_INTERVAL_MS = 15_000;
 const COLLAPSED_CHIP_LIMIT = 2;
@@ -317,6 +317,7 @@ function createRecordDetail(record) {
 
   const workspaceRepo = record.qualifiedRepoName ?? record.repoName;
   const workspacePr = formatPr(record.prUrl);
+  const workspacePrHref = getPullRequestHref(record);
   const checkout = formatCheckout(record);
 
   detail.append(
@@ -353,7 +354,8 @@ function createRecordDetail(record) {
       }),
       createDetailRow('PR', workspacePr, {
         copyLabel: 'PR',
-        copyValue: record.prUrl ?? workspacePr,
+        copyValue: workspacePrHref ?? workspacePr,
+        linkHref: workspacePrHref,
       }),
     ]),
     createStatusSection(record),
@@ -416,7 +418,10 @@ function createDetailRow(label, value, options = {}) {
 
   const row = document.createElement('div');
   row.className = 'detail-row';
-  row.append(createText('div', label, 'detail-label'), createText('div', value, 'detail-value'));
+  row.append(
+    createText('div', label, 'detail-label'),
+    createDetailValue(value, options.linkHref ?? null),
+  );
 
   const copyButton = createCopyButton(options.copyLabel ?? label, options.copyValue ?? value);
   if (copyButton) {
@@ -516,8 +521,33 @@ function formatPr(prUrl) {
   if (!prUrl) {
     return null;
   }
+  const prNumber = parsePullRequestNumber(prUrl);
+  return prNumber ? `#${prNumber}` : prUrl;
+}
+
+function getPullRequestHref(record) {
+  const prNumber = parsePullRequestNumber(record.prUrl);
+  if (prNumber !== null) {
+    const qualifiedRepoName = getQualifiedRepoName(record);
+    if (qualifiedRepoName !== null) {
+      return `https://github.com/${qualifiedRepoName}/pull/${prNumber}`;
+    }
+  }
+
+  return isHttpUrl(record.prUrl) ? record.prUrl : null;
+}
+
+function getQualifiedRepoName(record) {
+  const repoName = record.qualifiedRepoName ?? record.repoName;
+  return repoName && repoName.includes('/') ? repoName : null;
+}
+
+function parsePullRequestNumber(prUrl) {
+  if (!prUrl) {
+    return null;
+  }
   const match = prUrl.match(/\/pull\/(\d+)$/u);
-  return match ? `#${match[1]}` : prUrl;
+  return match ? match[1] : null;
 }
 
 function formatActivitySummary(record) {
@@ -565,7 +595,7 @@ function formatDuration(durationMs) {
     return 'n/a';
   }
   if (durationMs < 1_000) {
-    return `${durationMs}ms`;
+    return '<1s';
   }
   if (durationMs < 60_000) {
     return `${Math.round(durationMs / 1_000)}s`;
@@ -659,6 +689,19 @@ function copyTextToClipboard(text) {
   void navigator.clipboard.writeText(text).catch(() => {});
 }
 
+function isHttpUrl(value) {
+  if (!value) {
+    return false;
+  }
+
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' || url.protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
+
 function createLine(className, children) {
   const line = document.createElement('div');
   line.className = className;
@@ -673,6 +716,22 @@ function createText(tagName, text, className) {
   }
   element.textContent = text;
   return element;
+}
+
+function createDetailValue(text, linkHref) {
+  if (linkHref) {
+    const link = createText('a', text, 'detail-value detail-link');
+    link.setAttribute('href', linkHref);
+    link.setAttribute('target', '_blank');
+    link.setAttribute('rel', 'noreferrer');
+    link.addEventListener('click', (event) => {
+      event.preventDefault();
+      window.open(linkHref, '_blank', 'noopener,noreferrer');
+    });
+    return link;
+  }
+
+  return createText('div', text, 'detail-value');
 }
 
 function createChip(text, className = 'chip') {

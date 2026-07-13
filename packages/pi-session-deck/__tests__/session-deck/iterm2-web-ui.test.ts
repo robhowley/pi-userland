@@ -85,7 +85,12 @@ class FakeClassList {
   }
 }
 
-type EventListener = () => void;
+interface FakeEvent {
+  type: string;
+  preventDefault?: () => void;
+}
+
+type EventListener = (event: FakeEvent) => void;
 
 class FakeElement extends FakeNode {
   readonly classes = new Set<string>();
@@ -142,15 +147,19 @@ class FakeElement extends FakeNode {
     this.listeners.set(type, listeners);
   }
 
-  dispatchEvent(event: { type: string }): boolean {
+  dispatchEvent(event: FakeEvent): boolean {
+    const normalizedEvent = {
+      preventDefault() {},
+      ...event,
+    };
     for (const listener of this.listeners.get(event.type) ?? []) {
-      listener();
+      listener(normalizedEvent);
     }
     return true;
   }
 
   click(): void {
-    this.dispatchEvent({ type: 'click' });
+    this.dispatchEvent({ type: 'click', preventDefault() {} });
   }
 }
 
@@ -206,6 +215,7 @@ interface HarnessElements {
 interface AppHarness {
   elements: HarnessElements;
   pushSnapshot: (snapshot: SessionDeckSnapshot) => void;
+  openMock: ReturnType<typeof vi.fn>;
 }
 
 const HOME = '/Users/tester';
@@ -273,8 +283,9 @@ async function setupApp(snapshots: SessionDeckSnapshot[]): Promise<AppHarness> {
     };
   });
   const setIntervalMock = vi.fn(() => 1);
+  const openMock = vi.fn(() => null);
 
-  cleanupGlobals = installBrowserGlobals({ document, fetchMock, setIntervalMock });
+  cleanupGlobals = installBrowserGlobals({ document, fetchMock, setIntervalMock, openMock });
 
   await importFreshApp();
   await flushMicrotasks();
@@ -284,6 +295,7 @@ async function setupApp(snapshots: SessionDeckSnapshot[]): Promise<AppHarness> {
     pushSnapshot: (snapshot) => {
       queue.push(snapshot);
     },
+    openMock,
   };
 }
 
@@ -309,8 +321,9 @@ async function setupPendingApp(): Promise<{
       ),
   );
   const setIntervalMock = vi.fn(() => 1);
+  const openMock = vi.fn(() => null);
 
-  cleanupGlobals = installBrowserGlobals({ document, fetchMock, setIntervalMock });
+  cleanupGlobals = installBrowserGlobals({ document, fetchMock, setIntervalMock, openMock });
 
   await importFreshApp();
 
@@ -369,10 +382,12 @@ function installBrowserGlobals({
   document,
   fetchMock,
   setIntervalMock,
+  openMock,
 }: {
   document: FakeDocument;
   fetchMock: ReturnType<typeof vi.fn>;
   setIntervalMock: ReturnType<typeof vi.fn>;
+  openMock: ReturnType<typeof vi.fn>;
 }): () => void {
   const previous = {
     document: Reflect.get(globalThis, 'document'),
@@ -383,7 +398,7 @@ function installBrowserGlobals({
   };
 
   Reflect.set(globalThis, 'document', document);
-  Reflect.set(globalThis, 'window', { setInterval: setIntervalMock });
+  Reflect.set(globalThis, 'window', { setInterval: setIntervalMock, open: openMock });
   Reflect.set(globalThis, 'fetch', fetchMock);
   Reflect.set(globalThis, 'HTMLButtonElement', FakeButtonElement);
   Reflect.set(globalThis, 'HTMLInputElement', FakeInputElement);
@@ -502,6 +517,24 @@ function getDetailRowLabels(section: FakeElement): string[] {
 
 function getDetailRowValues(section: FakeElement): string[] {
   return findAllByClass(section, 'detail-value').map((value) => value.textContent);
+}
+
+function getDetailRow(section: FakeElement, label: string): FakeElement {
+  const row = findAllByClass(section, 'detail-row').find(
+    (candidate) => findAllByClass(candidate, 'detail-label')[0]?.textContent === label,
+  );
+  if (!row) {
+    throw new Error(`Expected detail row ${label}.`);
+  }
+  return row;
+}
+
+function getDetailRowValue(section: FakeElement, label: string): FakeElement {
+  const value = findAllByClass(getDetailRow(section, label), 'detail-value')[0];
+  if (!value) {
+    throw new Error(`Expected detail value ${label}.`);
+  }
+  return value;
 }
 
 function getCopyButtonLabels(root: FakeElement): string[] {
@@ -706,6 +739,45 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(getChildTextContents(line2)).toEqual(['shop-ml', '#22722', 'rh-baseline-gbdt']);
   });
 
+  it('renders subsecond card ages as <1s and preserves larger duration units', async () => {
+    const harness = await setupApp([
+      buildSnapshot({
+        records: [
+          buildRecord({
+            runtimeId: 'rt-subsecond',
+            sessionId: 'session-subsecond',
+            sessionName: 'subsecond',
+            heartbeatAgeMs: 999,
+          }),
+          buildRecord({
+            runtimeId: 'rt-one-second',
+            sessionId: 'session-one-second',
+            sessionName: 'one second',
+            heartbeatAgeMs: 1_000,
+          }),
+          buildRecord({
+            runtimeId: 'rt-minute',
+            sessionId: 'session-minute',
+            sessionName: 'minute',
+            heartbeatAgeMs: 60_000,
+          }),
+          buildRecord({
+            runtimeId: 'rt-hour',
+            sessionId: 'session-hour',
+            sessionName: 'hour',
+            heartbeatAgeMs: 60 * 60_000,
+          }),
+        ],
+      }),
+    ]);
+
+    expect(
+      getCards(harness.elements.list).map(
+        (card) => findAllByClass(getCardLine(card, 'row-line1'), 'row-age')[0]?.textContent,
+      ),
+    ).toEqual(['<1s', '1s', '1m', '1h']);
+  });
+
   it('shows tool-running age once by keeping it out of the activity summary', async () => {
     const harness = await setupApp([
       buildSnapshot({
@@ -842,6 +914,18 @@ describe('Session Deck iTerm2 web UI', () => {
       'worktree · shop-ml-pr22623-rankerspec-uses-pipeline',
       '#22623',
     ]);
+    const prValue = getDetailRowValue(workspace, 'PR');
+    expect(prValue.tagName).toBe('A');
+    expect(prValue.classList.contains('detail-link')).toBe(true);
+    expect(prValue.getAttribute('href')).toBe('https://github.com/Shopify/shop-ml/pull/22623');
+    expect(prValue.getAttribute('target')).toBe('_blank');
+    expect(prValue.getAttribute('rel')).toBe('noreferrer');
+    prValue.click();
+    expect(harness.openMock).toHaveBeenCalledWith(
+      'https://github.com/Shopify/shop-ml/pull/22623',
+      '_blank',
+      'noopener,noreferrer',
+    );
     expect(getCopyButtonLabels(workspace)).toEqual([
       'Copy CWD',
       'Copy Branch',
