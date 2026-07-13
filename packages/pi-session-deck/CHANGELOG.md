@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.0](https://github.com/robhowley/pi-userland/compare/pi-session-deck-v0.7.0...pi-session-deck-v0.8.0) (2026-07-13)
+
+
+### Features
+
+* **pi-session-deck:** add repo filter row to session deck browser ([#112](https://github.com/robhowley/pi-userland/issues/112)) ([c97f13f](https://github.com/robhowley/pi-userland/commit/c97f13fe0a44b1eb136dba718b87091175881534))
+* **pi-session-deck:** record iTerm2 terminal metadata ([#115](https://github.com/robhowley/pi-userland/issues/115)) ([1d38e68](https://github.com/robhowley/pi-userland/commit/1d38e68bf382e04f854ae94b24b025de12619f32))
+
 ## [0.7.0](https://github.com/robhowley/pi-userland/compare/pi-session-deck-v0.6.0...pi-session-deck-v0.7.0) (2026-07-10)
 
 
