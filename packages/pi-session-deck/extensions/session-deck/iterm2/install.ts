@@ -1,29 +1,34 @@
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
-import { dirname } from 'node:path';
-import { writeSessionDeckIterm2Manifest, hashSessionDeckIterm2Template } from './manifest.js';
+import { dirname, join } from 'node:path';
+import {
+  hashSessionDeckIterm2Content,
+  readSessionDeckIterm2InstallState,
+  writeSessionDeckIterm2InstallState,
+  SESSION_DECK_ITERM2_PRODUCT,
+  SESSION_DECK_ITERM2_STATE_SCHEMA_VERSION,
+  type SessionDeckIterm2InstallState,
+} from './state.js';
 import {
   getDefaultSessionDeckIterm2ScriptsDir,
   getSessionDeckIterm2AutoLaunchDir,
-  getSessionDeckIterm2ManifestPath,
-  getSessionDeckIterm2PythonBridgePath,
   getSessionDeckIterm2ScriptPath,
-  getSessionDeckIterm2StateDir,
+  getSessionDeckIterm2StatePath,
   getSessionDeckIterm2WebAssetPaths,
   normalizeSessionDeckIterm2ScriptsDir,
   resolveSessionDeckIterm2RuntimePaths,
   type SessionDeckIterm2RuntimePaths,
 } from './paths.js';
-import { renderSessionDeckIterm2PythonScript } from './python-template.js';
 import type { SessionDeckIterm2CommandResult } from './command.js';
 
 export interface InstallSessionDeckIterm2Options {
   homeDirectory?: string;
-  manifestPath?: string;
   now?: () => Date;
   platform?: NodeJS.Platform;
   runtimePaths?: SessionDeckIterm2RuntimePaths;
   scriptsDir?: string;
+  statePath?: string;
 }
 
 export async function installSessionDeckIterm2(
@@ -37,14 +42,53 @@ export async function installSessionDeckIterm2(
   }
 
   const homeDirectory = options.homeDirectory ?? homedir();
+  const statePath = options.statePath ?? getSessionDeckIterm2StatePath(homeDirectory);
+  let existingState: SessionDeckIterm2InstallState | null;
+  try {
+    existingState = await readSessionDeckIterm2InstallState(statePath);
+  } catch (error) {
+    return {
+      level: 'error',
+      message: [
+        'Could not install Session Deck iTerm2 Toolbelt.',
+        `State file at ${statePath} is invalid: ${getErrorMessage(error)}`,
+        'Remove or repair the state file and verify/remove any existing Session Deck AutoLaunch script manually before installing.',
+      ].join('\n'),
+    };
+  }
+
   const scriptsDir = normalizeSessionDeckIterm2ScriptsDir(
-    options.scriptsDir ?? getDefaultSessionDeckIterm2ScriptsDir(homeDirectory),
+    options.scriptsDir ??
+      existingState?.scriptsDir ??
+      getDefaultSessionDeckIterm2ScriptsDir(homeDirectory),
   );
-  const manifestPath = options.manifestPath ?? getSessionDeckIterm2ManifestPath(homeDirectory);
-  const stateDir = dirname(manifestPath) || getSessionDeckIterm2StateDir(homeDirectory);
+  const targetScriptPath = getSessionDeckIterm2ScriptPath(scriptsDir);
+
+  if (existingState !== null && existingState.script.path !== targetScriptPath) {
+    return {
+      level: 'error',
+      message: [
+        'Could not install Session Deck iTerm2 Toolbelt.',
+        `Existing state owns ${existingState.script.path}.`,
+        `Requested install target is ${targetScriptPath}.`,
+        'Run /session-deck iterm2 uninstall first, or install with the same scripts directory.',
+      ].join('\n'),
+    };
+  }
+
+  if ((await pathExists(targetScriptPath)) && existingState === null) {
+    return {
+      level: 'error',
+      message: [
+        'Could not install Session Deck iTerm2 Toolbelt.',
+        `AutoLaunch target already exists and is not owned by Session Deck state: ${targetScriptPath}`,
+        'Nothing was overwritten. Remove or verify the existing script manually, then rerun /session-deck iterm2 install.',
+      ].join('\n'),
+    };
+  }
+
   const runtimePaths =
     options.runtimePaths ?? (await resolveSessionDeckIterm2RuntimePaths(import.meta.url));
-
   const missingAsset = await findMissingRuntimeAsset(runtimePaths);
   if (missingAsset !== null) {
     return {
@@ -53,55 +97,37 @@ export async function installSessionDeckIterm2(
     };
   }
 
-  const generatedScriptPath = getSessionDeckIterm2ScriptPath(scriptsDir);
-  const generatedPythonBridgePath = getSessionDeckIterm2PythonBridgePath(scriptsDir);
-  const scriptContent = renderSessionDeckIterm2PythonScript({
-    helperScriptPath: runtimePaths.helperScriptPath,
-    nodeExecutablePath: runtimePaths.nodeExecutablePath,
-    packageVersion: runtimePaths.packageVersion,
-    webRootPath: runtimePaths.webRootPath,
-  });
-  const pythonBridgeContent = await readFile(runtimePaths.pythonBridgeSourcePath, 'utf8');
-  const templateHash = hashSessionDeckIterm2Template(scriptContent);
-  const pythonBridgeHash = hashSessionDeckIterm2Template(pythonBridgeContent);
-
-  await mkdir(getSessionDeckIterm2AutoLaunchDir(scriptsDir), { recursive: true });
-  await mkdir(stateDir, { recursive: true, mode: 0o700 });
-  await writeFile(generatedScriptPath, scriptContent, { encoding: 'utf8', mode: 0o755 });
-  await writeFile(generatedPythonBridgePath, pythonBridgeContent, {
-    encoding: 'utf8',
-    mode: 0o755,
-  });
-  await writeSessionDeckIterm2Manifest(manifestPath, {
-    schemaVersion: 2,
+  const autolaunchSource = await readFile(runtimePaths.autolaunchSourcePath);
+  const scriptHash = hashSessionDeckIterm2Content(autolaunchSource);
+  const state: SessionDeckIterm2InstallState = {
+    schemaVersion: SESSION_DECK_ITERM2_STATE_SCHEMA_VERSION,
+    product: SESSION_DECK_ITERM2_PRODUCT,
     packageVersion: runtimePaths.packageVersion,
     installedAt: (options.now ?? (() => new Date()))().toISOString(),
     scriptsDir,
-    artifacts: {
-      toolbelt: {
-        kind: 'autolaunch-script',
-        path: generatedScriptPath,
-        sha256: templateHash,
-        nodeExecutablePath: runtimePaths.nodeExecutablePath,
-        helperScriptPath: runtimePaths.helperScriptPath,
-        webRootPath: runtimePaths.webRootPath,
-      },
-      pythonBridge: {
-        kind: 'autolaunch-script',
-        path: generatedPythonBridgePath,
-        sha256: pythonBridgeHash,
-        sourcePath: runtimePaths.pythonBridgeSourcePath,
-      },
+    script: {
+      path: targetScriptPath,
+      sha256: scriptHash,
     },
-  });
+    runtime: {
+      nodeExecutablePath: runtimePaths.nodeExecutablePath,
+      snapshotHelperPath: runtimePaths.snapshotHelperPath,
+      webRootPath: runtimePaths.webRootPath,
+      bridgeSocketPath: runtimePaths.bridgeSocketPath,
+    },
+  };
+
+  await mkdir(getSessionDeckIterm2AutoLaunchDir(scriptsDir), { recursive: true });
+  await writeAutolaunchScriptAtomic(targetScriptPath, autolaunchSource);
+  await writeSessionDeckIterm2InstallState(statePath, state);
 
   return {
     level: 'info',
     message: [
       'Installed Session Deck iTerm2 Toolbelt.',
-      `Toolbelt script: ${generatedScriptPath}`,
-      `Python bridge: ${generatedPythonBridgePath}`,
-      `Manifest: ${manifestPath}`,
+      `AutoLaunch script: ${targetScriptPath}`,
+      `State: ${statePath}`,
+      `Bridge socket: ${runtimePaths.bridgeSocketPath}`,
       'Next: enable iTerm2 Python API if needed, then restart iTerm2 and open Toolbelt → Session Deck.',
     ].join('\n'),
   };
@@ -110,21 +136,21 @@ export async function installSessionDeckIterm2(
 async function findMissingRuntimeAsset(
   runtimePaths: SessionDeckIterm2RuntimePaths,
 ): Promise<{ message: string } | null> {
-  if (!(await pathExists(runtimePaths.helperScriptPath))) {
+  if (!(await pathExists(runtimePaths.autolaunchSourcePath))) {
     return {
-      message: `Snapshot helper not found: ${runtimePaths.helperScriptPath}`,
+      message: `iTerm2 AutoLaunch source not found: ${runtimePaths.autolaunchSourcePath}`,
+    };
+  }
+
+  if (!(await pathExists(runtimePaths.snapshotHelperPath))) {
+    return {
+      message: `Snapshot helper not found: ${runtimePaths.snapshotHelperPath}`,
     };
   }
 
   if (!(await pathExists(runtimePaths.webRootPath))) {
     return {
       message: `Web assets not found: ${runtimePaths.webRootPath}`,
-    };
-  }
-
-  if (!(await pathExists(runtimePaths.pythonBridgeSourcePath))) {
-    return {
-      message: `iTerm2 Python bridge source not found: ${runtimePaths.pythonBridgeSourcePath}`,
     };
   }
 
@@ -146,6 +172,20 @@ async function findMissingRuntimeAsset(
   return null;
 }
 
+async function writeAutolaunchScriptAtomic(targetPath: string, content: Buffer): Promise<void> {
+  const targetDir = dirname(targetPath);
+  const tempPath = join(targetDir, `.session-deck-iterm2.${process.pid}.${randomUUID()}.tmp`);
+  try {
+    await writeFile(tempPath, content, { mode: 0o755 });
+    await chmod(tempPath, 0o755);
+    await rename(tempPath, targetPath);
+    await chmod(targetPath, 0o755);
+  } catch (error) {
+    await rm(tempPath, { force: true });
+    throw error;
+  }
+}
+
 async function pathExists(path: string): Promise<boolean> {
   try {
     await access(path);
@@ -153,4 +193,8 @@ async function pathExists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

@@ -7,10 +7,10 @@ import {
   type TerminalFocusTarget,
 } from './identity/terminal-focus.js';
 import {
-  openWithIterm2PythonBridge,
-  type Iterm2PythonBridgeOpenRequest,
-  type Iterm2PythonBridgeOpenResult,
-} from './iterm2-python-bridge.js';
+  openWithIterm2Runtime,
+  type Iterm2RuntimeOpenRequest,
+  type Iterm2RuntimeOpenResult,
+} from './iterm2-runtime-client.js';
 
 const OPEN_COMMAND = '/usr/bin/open';
 const OSASCRIPT_COMMAND = '/usr/bin/osascript';
@@ -49,16 +49,17 @@ export type TerminalOpenExecFile = (
 
 export type TerminalRevealExecFile = TerminalOpenExecFile;
 
-export type TerminalPythonBridgeClient = (
-  request: Iterm2PythonBridgeOpenRequest,
-) => Promise<Iterm2PythonBridgeOpenResult>;
+export type TerminalIterm2RuntimeClient = (
+  request: Iterm2RuntimeOpenRequest,
+) => Promise<Iterm2RuntimeOpenResult>;
 
 export interface TerminalOpenOptions {
   platform?: NodeJS.Platform;
   execFile?: TerminalOpenExecFile;
   env?: NodeJS.ProcessEnv;
   bridgeMode?: TerminalBridgeMode;
-  pythonBridgeClient?: TerminalPythonBridgeClient;
+  iterm2RuntimeClient?: TerminalIterm2RuntimeClient;
+  pythonBridgeClient?: TerminalIterm2RuntimeClient;
   tmuxPreflightTimeoutMs?: number;
 }
 
@@ -122,13 +123,16 @@ async function openIterm2SessionTarget(
 
   const mode = resolveBridgeMode(options);
   if (mode === 'auto' || mode === 'iterm2-python') {
-    const pythonResult = await openIterm2SessionWithPythonBridge(target.itermSessionId, options);
-    if (pythonResult.ok || mode === 'iterm2-python') {
-      return pythonResult;
+    const runtimeResult = await openIterm2SessionWithRuntime(target.itermSessionId, options);
+    if (runtimeResult.ok || mode === 'iterm2-python') {
+      return runtimeResult;
     }
 
-    if (pythonResult.reason !== 'python-bridge-unavailable' || pythonResult.requestSent !== false) {
-      return pythonResult;
+    if (
+      runtimeResult.reason !== 'python-bridge-unavailable' ||
+      runtimeResult.requestSent !== false
+    ) {
+      return runtimeResult;
     }
   }
 
@@ -172,13 +176,16 @@ async function openTmuxTerminalTarget(
   }
 
   if (mode === 'auto' || mode === 'iterm2-python') {
-    const pythonResult = await openWithPythonBridge(tmuxAttachArgv, options);
-    if (pythonResult.ok || mode === 'iterm2-python') {
-      return pythonResult;
+    const runtimeResult = await openWithIterm2RuntimeClient(tmuxAttachArgv, options);
+    if (runtimeResult.ok || mode === 'iterm2-python') {
+      return runtimeResult;
     }
 
-    if (pythonResult.reason !== 'python-bridge-unavailable' || pythonResult.requestSent !== false) {
-      return pythonResult;
+    if (
+      runtimeResult.reason !== 'python-bridge-unavailable' ||
+      runtimeResult.requestSent !== false
+    ) {
+      return runtimeResult;
     }
   }
 
@@ -223,27 +230,28 @@ async function preflightTmuxTarget(
   return { ok: true };
 }
 
-async function openIterm2SessionWithPythonBridge(
+async function openIterm2SessionWithRuntime(
   itermSessionId: string,
   options: TerminalOpenOptions,
 ): Promise<TerminalOpenResult> {
-  const bridgeClient = getPythonBridgeClient(options);
-  return bridgeClient({ itermSessionId });
+  const runtimeClient = getIterm2RuntimeClient(options);
+  return runtimeClient({ itermSessionId });
 }
 
-async function openWithPythonBridge(
+async function openWithIterm2RuntimeClient(
   tmuxAttachArgv: readonly string[],
   options: TerminalOpenOptions,
 ): Promise<TerminalOpenResult> {
-  const bridgeClient = getPythonBridgeClient(options);
-  return bridgeClient({ tmuxAttachArgv });
+  const runtimeClient = getIterm2RuntimeClient(options);
+  return runtimeClient({ tmuxAttachArgv });
 }
 
-function getPythonBridgeClient(options: TerminalOpenOptions): TerminalPythonBridgeClient {
+function getIterm2RuntimeClient(options: TerminalOpenOptions): TerminalIterm2RuntimeClient {
   return (
+    options.iterm2RuntimeClient ??
     options.pythonBridgeClient ??
-    ((request: Iterm2PythonBridgeOpenRequest) =>
-      openWithIterm2PythonBridge(request, {
+    ((request: Iterm2RuntimeOpenRequest) =>
+      openWithIterm2Runtime(request, {
         ...(options.env === undefined ? {} : { env: options.env }),
       }))
   );

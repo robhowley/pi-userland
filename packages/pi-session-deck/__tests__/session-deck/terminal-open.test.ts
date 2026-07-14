@@ -4,7 +4,7 @@ import {
   openTerminalRevealUrl,
 } from '../../extensions/session-deck/terminal-open.js';
 import type { TerminalFocusTarget } from '../../extensions/session-deck/identity/terminal-focus.js';
-import type { Iterm2PythonBridgeOpenRequest } from '../../extensions/session-deck/iterm2-python-bridge.js';
+import type { Iterm2RuntimeOpenRequest } from '../../extensions/session-deck/iterm2-runtime-client.js';
 
 const REVEAL_URL = 'iterm2:///reveal?sessionid=w0t0p0%3Aabc';
 const ITERM_TARGET: TerminalFocusTarget = {
@@ -79,9 +79,9 @@ describe('openTerminalRevealUrl', () => {
 });
 
 describe('openTerminalFocusTarget iTerm2 session support', () => {
-  it('uses the Python bridge as the auto-mode primary opener for existing iTerm2 sessions', async () => {
+  it('uses the iTerm2 runtime as the auto-mode primary opener for existing iTerm2 sessions', async () => {
     const execFile = vi.fn(async () => ({ stdout: '', stderr: '' }));
-    const pythonBridgeClient = vi.fn(async (_request: Iterm2PythonBridgeOpenRequest) => ({
+    const iterm2RuntimeClient = vi.fn(async (_request: Iterm2RuntimeOpenRequest) => ({
       ok: true as const,
       reason: 'requested' as const,
       message: 'Requested iTerm2 focus for selected session.',
@@ -90,7 +90,7 @@ describe('openTerminalFocusTarget iTerm2 session support', () => {
     const result = await openTerminalFocusTarget(ITERM_TARGET, {
       platform: 'darwin',
       execFile,
-      pythonBridgeClient,
+      iterm2RuntimeClient,
     });
 
     expect(result).toEqual({
@@ -98,13 +98,13 @@ describe('openTerminalFocusTarget iTerm2 session support', () => {
       reason: 'requested',
       message: 'Requested iTerm2 focus for selected session.',
     });
-    expect(pythonBridgeClient).toHaveBeenCalledWith({ itermSessionId: 'w0t0p0:abc' });
+    expect(iterm2RuntimeClient).toHaveBeenCalledWith({ itermSessionId: 'w0t0p0:abc' });
     expect(execFile).not.toHaveBeenCalled();
   });
 
-  it('falls back to the reveal URL only when the Python bridge fails before sending the request', async () => {
+  it('falls back to the reveal URL only when the iTerm2 runtime fails before sending the request', async () => {
     const execFile = vi.fn(async () => ({ stdout: '', stderr: '' }));
-    const pythonBridgeClient = vi.fn(async () => ({
+    const iterm2RuntimeClient = vi.fn(async () => ({
       ok: false as const,
       reason: 'python-bridge-unavailable' as const,
       message: 'socket missing',
@@ -114,41 +114,41 @@ describe('openTerminalFocusTarget iTerm2 session support', () => {
     const result = await openTerminalFocusTarget(ITERM_TARGET, {
       platform: 'darwin',
       execFile,
-      pythonBridgeClient,
+      iterm2RuntimeClient,
     });
 
     expect(result).toMatchObject({ ok: true, reason: 'requested' });
-    expect(pythonBridgeClient).toHaveBeenCalledTimes(1);
+    expect(iterm2RuntimeClient).toHaveBeenCalledTimes(1);
     expect(execFile).toHaveBeenCalledWith('/usr/bin/open', [REVEAL_URL]);
   });
 
-  it('does not fall back to the reveal URL when the Python bridge may have received the focus request', async () => {
+  it('does not fall back to the reveal URL when the iTerm2 runtime may have received the focus request', async () => {
     const execFile = vi.fn(async () => ({ stdout: '', stderr: '' }));
-    const pythonBridgeClient = vi.fn(async () => ({
+    const iterm2RuntimeClient = vi.fn(async () => ({
       ok: false as const,
       reason: 'python-bridge-unavailable' as const,
-      message: 'bridge closed after request',
+      message: 'runtime closed after request',
       requestSent: true,
     }));
 
     const result = await openTerminalFocusTarget(ITERM_TARGET, {
       platform: 'darwin',
       execFile,
-      pythonBridgeClient,
+      iterm2RuntimeClient,
     });
 
     expect(result).toEqual({
       ok: false,
       reason: 'python-bridge-unavailable',
-      message: 'bridge closed after request',
+      message: 'runtime closed after request',
       requestSent: true,
     });
     expect(execFile).not.toHaveBeenCalled();
   });
 
-  it('returns bridge target-missing failures without falling back to a blind URL open', async () => {
+  it('returns runtime target-missing failures without falling back to a blind URL open', async () => {
     const execFile = vi.fn(async () => ({ stdout: '', stderr: '' }));
-    const pythonBridgeClient = vi.fn(async () => ({
+    const iterm2RuntimeClient = vi.fn(async () => ({
       ok: false as const,
       reason: 'terminal-target-missing' as const,
       message: 'iTerm2 session is no longer available.',
@@ -158,7 +158,7 @@ describe('openTerminalFocusTarget iTerm2 session support', () => {
     const result = await openTerminalFocusTarget(ITERM_TARGET, {
       platform: 'darwin',
       execFile,
-      pythonBridgeClient,
+      iterm2RuntimeClient,
     });
 
     expect(result).toEqual({
@@ -170,9 +170,9 @@ describe('openTerminalFocusTarget iTerm2 session support', () => {
     expect(execFile).not.toHaveBeenCalled();
   });
 
-  it('requires the Python bridge in Python-required mode for existing iTerm2 sessions', async () => {
+  it('requires the iTerm2 runtime in runtime-required mode for existing iTerm2 sessions', async () => {
     const execFile = vi.fn(async () => ({ stdout: '', stderr: '' }));
-    const pythonBridgeClient = vi.fn(async () => ({
+    const iterm2RuntimeClient = vi.fn(async () => ({
       ok: false as const,
       reason: 'python-bridge-unavailable' as const,
       message: 'socket missing',
@@ -183,7 +183,7 @@ describe('openTerminalFocusTarget iTerm2 session support', () => {
       platform: 'darwin',
       bridgeMode: 'iterm2-python',
       execFile,
-      pythonBridgeClient,
+      iterm2RuntimeClient,
     });
 
     expect(result).toEqual({
@@ -195,9 +195,9 @@ describe('openTerminalFocusTarget iTerm2 session support', () => {
     expect(execFile).not.toHaveBeenCalled();
   });
 
-  it('returns unsupported-platform for existing iTerm2 sessions before bridge or URL opening', async () => {
+  it('returns unsupported-platform for existing iTerm2 sessions before runtime or URL opening', async () => {
     const execFile = vi.fn(async () => ({ stdout: '', stderr: '' }));
-    const pythonBridgeClient = vi.fn(async () => ({
+    const iterm2RuntimeClient = vi.fn(async () => ({
       ok: true as const,
       reason: 'requested' as const,
       message: 'should not be used',
@@ -206,19 +206,19 @@ describe('openTerminalFocusTarget iTerm2 session support', () => {
     const result = await openTerminalFocusTarget(ITERM_TARGET, {
       platform: 'linux',
       execFile,
-      pythonBridgeClient,
+      iterm2RuntimeClient,
     });
 
     expect(result).toMatchObject({ ok: false, reason: 'unsupported-platform' });
-    expect(pythonBridgeClient).not.toHaveBeenCalled();
+    expect(iterm2RuntimeClient).not.toHaveBeenCalled();
     expect(execFile).not.toHaveBeenCalled();
   });
 });
 
 describe('openTerminalFocusTarget tmux support', () => {
-  it('preflights tmux and uses the Python bridge as the auto-mode primary opener', async () => {
+  it('preflights tmux and uses the iTerm2 runtime as the auto-mode primary opener', async () => {
     const execFile = vi.fn(async () => ({ stdout: '', stderr: '' }));
-    const pythonBridgeClient = vi.fn(async (_request: Iterm2PythonBridgeOpenRequest) => ({
+    const iterm2RuntimeClient = vi.fn(async (_request: Iterm2RuntimeOpenRequest) => ({
       ok: true as const,
       reason: 'requested' as const,
       message: 'Requested tmux attach in a new iTerm2 tab.',
@@ -227,7 +227,7 @@ describe('openTerminalFocusTarget tmux support', () => {
     const result = await openTerminalFocusTarget(TMUX_TARGET, {
       platform: 'darwin',
       execFile,
-      pythonBridgeClient,
+      iterm2RuntimeClient,
     });
 
     expect(result).toEqual({
@@ -241,8 +241,8 @@ describe('openTerminalFocusTarget tmux support', () => {
       ['-S', '/tmp/tmux socket/default', 'has-session', '-t', '$1'],
       { timeout: 500 },
     );
-    expect(pythonBridgeClient).toHaveBeenCalledWith({ tmuxAttachArgv: TMUX_ATTACH_ARGV });
-    expect(Object.keys(pythonBridgeClient.mock.calls[0]?.[0] ?? {})).toEqual(['tmuxAttachArgv']);
+    expect(iterm2RuntimeClient).toHaveBeenCalledWith({ tmuxAttachArgv: TMUX_ATTACH_ARGV });
+    expect(Object.keys(iterm2RuntimeClient.mock.calls[0]?.[0] ?? {})).toEqual(['tmuxAttachArgv']);
     expect(JSON.stringify(execFile.mock.calls)).not.toContain('new-session');
   });
 
@@ -254,7 +254,7 @@ describe('openTerminalFocusTarget tmux support', () => {
       sessionTarget: '=name with spaces',
     };
     const execFile = vi.fn(async () => ({ stdout: '', stderr: '' }));
-    const pythonBridgeClient = vi.fn(async () => ({
+    const iterm2RuntimeClient = vi.fn(async () => ({
       ok: true as const,
       reason: 'requested' as const,
       message: 'Requested tmux attach in a new iTerm2 tab.',
@@ -263,7 +263,7 @@ describe('openTerminalFocusTarget tmux support', () => {
     const result = await openTerminalFocusTarget(nameOnlyTarget, {
       platform: 'darwin',
       execFile,
-      pythonBridgeClient,
+      iterm2RuntimeClient,
     });
 
     expect(result).toMatchObject({ ok: true, reason: 'requested' });
@@ -272,14 +272,14 @@ describe('openTerminalFocusTarget tmux support', () => {
       ['-L', 'managed', 'has-session', '-t', '=name with spaces'],
       { timeout: 500 },
     );
-    expect(pythonBridgeClient).toHaveBeenCalledWith({
+    expect(iterm2RuntimeClient).toHaveBeenCalledWith({
       tmuxAttachArgv: ['tmux', '-L', 'managed', 'attach-session', '-E', '-t', '=name with spaces'],
     });
   });
 
-  it('falls back to AppleScript in auto mode only when the Python bridge fails before sending the request', async () => {
+  it('falls back to AppleScript in auto mode only when the iTerm2 runtime fails before sending the request', async () => {
     const execFile = vi.fn(async () => ({ stdout: '', stderr: '' }));
-    const pythonBridgeClient = vi.fn(async () => ({
+    const iterm2RuntimeClient = vi.fn(async () => ({
       ok: false as const,
       reason: 'python-bridge-unavailable' as const,
       message: 'socket missing',
@@ -289,7 +289,7 @@ describe('openTerminalFocusTarget tmux support', () => {
     const result = await openTerminalFocusTarget(TMUX_TARGET, {
       platform: 'darwin',
       execFile,
-      pythonBridgeClient,
+      iterm2RuntimeClient,
     });
 
     expect(result).toMatchObject({ ok: true, reason: 'requested' });
@@ -303,40 +303,40 @@ describe('openTerminalFocusTarget tmux support', () => {
     expect(JSON.stringify(execFile.mock.calls)).not.toContain('new-session');
   });
 
-  it('does not fall back to AppleScript when the Python bridge may have received the request', async () => {
+  it('does not fall back to AppleScript when the iTerm2 runtime may have received the request', async () => {
     const execFile = vi.fn(async (_file: string, _args: readonly string[], _options?: unknown) => ({
       stdout: '',
       stderr: '',
     }));
-    const pythonBridgeClient = vi.fn(async () => ({
+    const iterm2RuntimeClient = vi.fn(async () => ({
       ok: false as const,
       reason: 'python-bridge-unavailable' as const,
-      message: 'bridge closed after request',
+      message: 'runtime closed after request',
       requestSent: true,
     }));
 
     const result = await openTerminalFocusTarget(TMUX_TARGET, {
       platform: 'darwin',
       execFile,
-      pythonBridgeClient,
+      iterm2RuntimeClient,
     });
 
     expect(result).toEqual({
       ok: false,
       reason: 'python-bridge-unavailable',
-      message: 'bridge closed after request',
+      message: 'runtime closed after request',
       requestSent: true,
     });
     expect(execFile).toHaveBeenCalledTimes(1);
     expect(execFile.mock.calls[0]?.[0]).toBe('tmux');
   });
 
-  it('does not fall back to AppleScript when Python bridge request state is unknown', async () => {
+  it('does not fall back to AppleScript when iTerm2 runtime request state is unknown', async () => {
     const execFile = vi.fn(async (_file: string, _args: readonly string[], _options?: unknown) => ({
       stdout: '',
       stderr: '',
     }));
-    const pythonBridgeClient = vi.fn(async () => ({
+    const iterm2RuntimeClient = vi.fn(async () => ({
       ok: false as const,
       reason: 'python-bridge-unavailable' as const,
       message: 'legacy client did not report request state',
@@ -345,7 +345,7 @@ describe('openTerminalFocusTarget tmux support', () => {
     const result = await openTerminalFocusTarget(TMUX_TARGET, {
       platform: 'darwin',
       execFile,
-      pythonBridgeClient,
+      iterm2RuntimeClient,
     });
 
     expect(result).toEqual({
@@ -357,9 +357,9 @@ describe('openTerminalFocusTarget tmux support', () => {
     expect(execFile.mock.calls[0]?.[0]).toBe('tmux');
   });
 
-  it('does not fall back to AppleScript in Python-required mode', async () => {
+  it('does not fall back to AppleScript in runtime-required mode', async () => {
     const execFile = vi.fn(async () => ({ stdout: '', stderr: '' }));
-    const pythonBridgeClient = vi.fn(async () => ({
+    const iterm2RuntimeClient = vi.fn(async () => ({
       ok: false as const,
       reason: 'python-bridge-unavailable' as const,
       message: 'socket missing',
@@ -370,7 +370,7 @@ describe('openTerminalFocusTarget tmux support', () => {
       platform: 'darwin',
       bridgeMode: 'iterm2-python',
       execFile,
-      pythonBridgeClient,
+      iterm2RuntimeClient,
     });
 
     expect(result).toEqual({
@@ -387,7 +387,7 @@ describe('openTerminalFocusTarget tmux support', () => {
       stdout: '',
       stderr: '',
     }));
-    const pythonBridgeClient = vi.fn(async () => ({
+    const iterm2RuntimeClient = vi.fn(async () => ({
       ok: true as const,
       reason: 'requested' as const,
       message: 'should not be used',
@@ -397,18 +397,18 @@ describe('openTerminalFocusTarget tmux support', () => {
       platform: 'darwin',
       bridgeMode: 'iterm2-applescript',
       execFile,
-      pythonBridgeClient,
+      iterm2RuntimeClient,
     });
 
     expect(result).toMatchObject({ ok: true, reason: 'requested' });
-    expect(pythonBridgeClient).not.toHaveBeenCalled();
+    expect(iterm2RuntimeClient).not.toHaveBeenCalled();
     expect(execFile).toHaveBeenCalledTimes(2);
     expect(execFile.mock.calls[1]?.[0]).toBe('/usr/bin/osascript');
   });
 
   it('returns a disabled soft result when tmux terminal opening is disabled', async () => {
     const execFile = vi.fn(async () => ({ stdout: '', stderr: '' }));
-    const pythonBridgeClient = vi.fn(async () => ({
+    const iterm2RuntimeClient = vi.fn(async () => ({
       ok: true as const,
       reason: 'requested' as const,
       message: 'should not be used',
@@ -418,17 +418,17 @@ describe('openTerminalFocusTarget tmux support', () => {
       platform: 'darwin',
       bridgeMode: 'none',
       execFile,
-      pythonBridgeClient,
+      iterm2RuntimeClient,
     });
 
     expect(result).toMatchObject({ ok: false, reason: 'python-bridge-disabled' });
-    expect(pythonBridgeClient).not.toHaveBeenCalled();
+    expect(iterm2RuntimeClient).not.toHaveBeenCalled();
     expect(execFile).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects incomplete tmux targets before preflight or bridge opening', async () => {
+  it('rejects incomplete tmux targets before preflight or runtime opening', async () => {
     const execFile = vi.fn(async () => ({ stdout: '', stderr: '' }));
-    const pythonBridgeClient = vi.fn(async () => ({
+    const iterm2RuntimeClient = vi.fn(async () => ({
       ok: true as const,
       reason: 'requested' as const,
       message: 'should not be used',
@@ -439,20 +439,20 @@ describe('openTerminalFocusTarget tmux support', () => {
       {
         platform: 'darwin',
         execFile,
-        pythonBridgeClient,
+        iterm2RuntimeClient,
       },
     );
 
     expect(result).toMatchObject({ ok: false, reason: 'tmux-preflight-failed' });
     expect(execFile).not.toHaveBeenCalled();
-    expect(pythonBridgeClient).not.toHaveBeenCalled();
+    expect(iterm2RuntimeClient).not.toHaveBeenCalled();
   });
 
-  it('returns tmux-target-missing for stale tmux sessions and does not open a bridge', async () => {
+  it('returns tmux-target-missing for stale tmux sessions and does not open the runtime', async () => {
     const execFile = vi.fn(async () => {
       throw Object.assign(new Error('no such session'), { code: 1 });
     });
-    const pythonBridgeClient = vi.fn(async () => ({
+    const iterm2RuntimeClient = vi.fn(async () => ({
       ok: true as const,
       reason: 'requested' as const,
       message: 'should not be used',
@@ -461,11 +461,11 @@ describe('openTerminalFocusTarget tmux support', () => {
     const result = await openTerminalFocusTarget(TMUX_TARGET, {
       platform: 'darwin',
       execFile,
-      pythonBridgeClient,
+      iterm2RuntimeClient,
     });
 
     expect(result).toMatchObject({ ok: false, reason: 'tmux-target-missing' });
-    expect(pythonBridgeClient).not.toHaveBeenCalled();
+    expect(iterm2RuntimeClient).not.toHaveBeenCalled();
     expect(execFile).toHaveBeenCalledTimes(1);
   });
 
@@ -477,7 +477,7 @@ describe('openTerminalFocusTarget tmux support', () => {
     const result = await openTerminalFocusTarget(TMUX_TARGET, {
       platform: 'darwin',
       execFile,
-      pythonBridgeClient: vi.fn(),
+      iterm2RuntimeClient: vi.fn(),
     });
 
     expect(result).toMatchObject({ ok: false, reason: 'tmux-preflight-failed' });

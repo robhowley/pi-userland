@@ -1,11 +1,12 @@
+import { readFile } from 'node:fs/promises';
 import net from 'node:net';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { homedir } from 'node:os';
+import { getSessionDeckIterm2StatePath } from './iterm2/paths.js';
+import { parseSessionDeckIterm2InstallState } from './iterm2/state.js';
 
-const DEFAULT_BRIDGE_TIMEOUT_MS = 400;
-const BRIDGE_SOCKET_ENV = 'PI_SESSION_DECK_ITERM2_BRIDGE_SOCKET';
+const DEFAULT_RUNTIME_TIMEOUT_MS = 400;
 
-export type Iterm2PythonBridgeOpenResult =
+export type Iterm2RuntimeOpenResult =
   | { ok: true; reason: 'requested'; message: string }
   | {
       ok: false;
@@ -18,49 +19,63 @@ export type Iterm2PythonBridgeOpenResult =
       requestSent?: boolean;
     };
 
-export type Iterm2PythonBridgeOpenRequest =
+export type Iterm2RuntimeOpenRequest =
   | { tmuxAttachArgv: readonly string[] }
   | { itermSessionId: string };
 
-type BridgeSocket = NodeJS.ReadWriteStream & {
+export type Iterm2RuntimeInstallStateReader = (path: string) => Promise<unknown>;
+
+type RuntimeSocket = NodeJS.ReadWriteStream & {
   destroy?: () => void;
   setEncoding?: (encoding: BufferEncoding) => void;
 };
 
-export interface Iterm2PythonBridgeClientOptions {
+export interface Iterm2RuntimeClientOptions {
   env?: NodeJS.ProcessEnv;
+  homeDirectory?: string;
+  installStatePath?: string;
+  readInstallState?: Iterm2RuntimeInstallStateReader;
   socketPath?: string;
   timeoutMs?: number;
-  createConnection?: (path: string) => BridgeSocket;
+  createConnection?: (path: string) => RuntimeSocket;
   setTimeout?: typeof setTimeout;
   clearTimeout?: typeof clearTimeout;
 }
 
-export async function openWithIterm2PythonBridge(
-  request: Iterm2PythonBridgeOpenRequest,
-  options: Iterm2PythonBridgeClientOptions = {},
-): Promise<Iterm2PythonBridgeOpenResult> {
-  const validation = validateBridgeOpenRequest(request);
+export async function openWithIterm2Runtime(
+  request: Iterm2RuntimeOpenRequest,
+  options: Iterm2RuntimeClientOptions = {},
+): Promise<Iterm2RuntimeOpenResult> {
+  const validation = validateRuntimeOpenRequest(request);
   if (!validation.ok) {
     return validation.result;
   }
 
-  const socketPath = options.socketPath ?? getIterm2PythonBridgeSocketPath(options.env);
-  const timeoutMs = options.timeoutMs ?? DEFAULT_BRIDGE_TIMEOUT_MS;
+  const socketPathResult = await resolveIterm2RuntimeSocketPath(options);
+  if (!socketPathResult.ok) {
+    return {
+      ok: false,
+      reason: 'python-bridge-unavailable',
+      message: socketPathResult.message,
+      requestSent: false,
+    };
+  }
+
+  const timeoutMs = options.timeoutMs ?? DEFAULT_RUNTIME_TIMEOUT_MS;
   const createConnection =
-    options.createConnection ?? ((path: string): BridgeSocket => net.createConnection(path));
+    options.createConnection ?? ((path: string): RuntimeSocket => net.createConnection(path));
   const setTimer = options.setTimeout ?? setTimeout;
   const clearTimer = options.clearTimeout ?? clearTimeout;
 
-  return new Promise<Iterm2PythonBridgeOpenResult>((resolve) => {
-    let socket: BridgeSocket;
+  return new Promise<Iterm2RuntimeOpenResult>((resolve) => {
+    let socket: RuntimeSocket;
     try {
-      socket = createConnection(socketPath);
+      socket = createConnection(socketPathResult.socketPath);
     } catch (error) {
       resolve({
         ok: false,
         reason: 'python-bridge-unavailable',
-        message: `iTerm2 Python bridge is unavailable: ${getErrorMessage(error)}`,
+        message: `iTerm2 runtime is unavailable: ${getErrorMessage(error)}`,
         requestSent: false,
       });
       return;
@@ -70,7 +85,7 @@ export async function openWithIterm2PythonBridge(
     let requestSent = false;
     let buffer = '';
 
-    const finish = (result: Iterm2PythonBridgeOpenResult) => {
+    const finish = (result: Iterm2RuntimeOpenResult) => {
       if (settled) {
         return;
       }
@@ -93,7 +108,7 @@ export async function openWithIterm2PythonBridge(
       finish({
         ok: false,
         reason: 'python-bridge-unavailable',
-        message: 'iTerm2 Python bridge did not respond before the timeout.',
+        message: 'iTerm2 runtime did not respond before the timeout.',
         requestSent,
       });
     }, timeoutMs);
@@ -107,7 +122,7 @@ export async function openWithIterm2PythonBridge(
         finish({
           ok: false,
           reason: 'python-bridge-unavailable',
-          message: `iTerm2 Python bridge could not send the request: ${getErrorMessage(error)}`,
+          message: `iTerm2 runtime could not send the request: ${getErrorMessage(error)}`,
           requestSent: false,
         });
       }
@@ -119,13 +134,13 @@ export async function openWithIterm2PythonBridge(
         return;
       }
       const line = buffer.slice(0, newlineIndex);
-      finish(parseBridgeResponse(line, requestSent, validation.successMessage));
+      finish(parseRuntimeResponse(line, requestSent, validation.successMessage));
     });
     socket.on('error', (error) => {
       finish({
         ok: false,
         reason: 'python-bridge-unavailable',
-        message: `iTerm2 Python bridge is unavailable: ${getErrorMessage(error)}`,
+        message: `iTerm2 runtime is unavailable: ${getErrorMessage(error)}`,
         requestSent,
       });
     });
@@ -133,28 +148,70 @@ export async function openWithIterm2PythonBridge(
       finish({
         ok: false,
         reason: 'python-bridge-unavailable',
-        message: 'iTerm2 Python bridge closed before returning a response.',
+        message: 'iTerm2 runtime closed before returning a response.',
         requestSent,
       });
     });
   });
 }
 
-export function getIterm2PythonBridgeSocketPath(env: NodeJS.ProcessEnv = process.env): string {
-  const configured = trimNonEmpty(env[BRIDGE_SOCKET_ENV]);
-  if (configured !== undefined) {
-    return configured;
+export async function resolveIterm2RuntimeSocketPath(
+  options: Iterm2RuntimeClientOptions = {},
+): Promise<{ ok: true; socketPath: string } | { ok: false; message: string }> {
+  const injectedSocketPath = trimNonEmpty(options.socketPath);
+  if (injectedSocketPath !== undefined) {
+    return { ok: true, socketPath: injectedSocketPath };
   }
 
-  const uid = typeof process.getuid === 'function' ? process.getuid() : 'user';
-  return join(tmpdir(), `pi-session-deck-${uid}`, 'iterm2-python-bridge.sock');
+  const installStatePath =
+    options.installStatePath ?? getSessionDeckIterm2StatePath(options.homeDirectory ?? homedir());
+  return readSocketPathFromInstallState(
+    installStatePath,
+    options.readInstallState ?? readJsonInstallState,
+  );
 }
 
-function parseBridgeResponse(
+async function readSocketPathFromInstallState(
+  installStatePath: string,
+  readInstallState: Iterm2RuntimeInstallStateReader,
+): Promise<{ ok: true; socketPath: string } | { ok: false; message: string }> {
+  let installState: unknown;
+  try {
+    installState = await readInstallState(installStatePath);
+  } catch (error) {
+    if (isMissingError(error)) {
+      return {
+        ok: false,
+        message: `iTerm2 runtime install state was not found at ${installStatePath}. Run /session-deck iterm2 install.`,
+      };
+    }
+
+    return {
+      ok: false,
+      message: `Could not read iTerm2 runtime install state at ${installStatePath}: ${getErrorMessage(error)}`,
+    };
+  }
+
+  try {
+    const state = parseSessionDeckIterm2InstallState(installState);
+    return { ok: true, socketPath: state.runtime.bridgeSocketPath };
+  } catch (error) {
+    return {
+      ok: false,
+      message: `iTerm2 runtime install state is invalid at ${installStatePath}: ${getErrorMessage(error)} Run /session-deck iterm2 install.`,
+    };
+  }
+}
+
+async function readJsonInstallState(path: string): Promise<unknown> {
+  return JSON.parse(await readFile(path, 'utf8')) as unknown;
+}
+
+function parseRuntimeResponse(
   line: string,
   requestSent: boolean,
   successMessage: string,
-): Iterm2PythonBridgeOpenResult {
+): Iterm2RuntimeOpenResult {
   let parsed: unknown;
   try {
     parsed = JSON.parse(line) as unknown;
@@ -162,7 +219,7 @@ function parseBridgeResponse(
     return {
       ok: false,
       reason: 'open-failed',
-      message: `iTerm2 Python bridge returned malformed JSON: ${getErrorMessage(error)}`,
+      message: `iTerm2 runtime returned malformed JSON: ${getErrorMessage(error)}`,
       requestSent,
     };
   }
@@ -171,7 +228,7 @@ function parseBridgeResponse(
     return {
       ok: false,
       reason: 'open-failed',
-      message: 'iTerm2 Python bridge returned a malformed response.',
+      message: 'iTerm2 runtime returned a malformed response.',
       requestSent,
     };
   }
@@ -184,21 +241,21 @@ function parseBridgeResponse(
     };
   }
 
-  const reason = normalizeBridgeFailureReason(parsed['reason']);
+  const reason = normalizeRuntimeFailureReason(parsed['reason']);
   return {
     ok: false,
     reason,
     message:
       typeof parsed['message'] === 'string' && parsed['message'].length > 0
         ? parsed['message']
-        : 'iTerm2 Python bridge failed to open the tmux attach tab.',
+        : 'iTerm2 runtime failed to open the requested terminal target.',
     requestSent,
   };
 }
 
-function normalizeBridgeFailureReason(
+function normalizeRuntimeFailureReason(
   reason: unknown,
-): Extract<Iterm2PythonBridgeOpenResult, { ok: false }>['reason'] {
+): Extract<Iterm2RuntimeOpenResult, { ok: false }>['reason'] {
   switch (reason) {
     case 'python-bridge-unavailable':
     case 'automation-denied':
@@ -210,9 +267,9 @@ function normalizeBridgeFailureReason(
   }
 }
 
-function validateBridgeOpenRequest(
-  request: Iterm2PythonBridgeOpenRequest,
-): { ok: true; successMessage: string } | { ok: false; result: Iterm2PythonBridgeOpenResult } {
+function validateRuntimeOpenRequest(
+  request: Iterm2RuntimeOpenRequest,
+): { ok: true; successMessage: string } | { ok: false; result: Iterm2RuntimeOpenResult } {
   if ('tmuxAttachArgv' in request) {
     if (isValidTmuxAttachArgv(request.tmuxAttachArgv)) {
       return { ok: true, successMessage: 'Requested tmux attach in a new iTerm2 tab.' };
@@ -223,7 +280,7 @@ function validateBridgeOpenRequest(
       result: {
         ok: false,
         reason: 'open-failed',
-        message: 'Refusing to send an invalid tmux attach argv to the iTerm2 bridge.',
+        message: 'Refusing to send an invalid tmux attach argv to the iTerm2 runtime.',
         requestSent: false,
       },
     };
@@ -238,7 +295,7 @@ function validateBridgeOpenRequest(
     result: {
       ok: false,
       reason: 'open-failed',
-      message: 'Refusing to send an invalid iTerm2 session id to the iTerm2 bridge.',
+      message: 'Refusing to send an invalid iTerm2 session id to the iTerm2 runtime.',
       requestSent: false,
     },
   };
@@ -281,6 +338,10 @@ function trimNonEmpty(value: unknown): string | undefined {
 
 function isObject(candidate: unknown): candidate is Record<string, unknown> {
   return typeof candidate === 'object' && candidate !== null;
+}
+
+function isMissingError(error: unknown): boolean {
+  return isObject(error) && error['code'] === 'ENOENT';
 }
 
 function getErrorMessage(error: unknown): string {
