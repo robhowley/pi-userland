@@ -1,7 +1,10 @@
 import { readFile } from 'node:fs/promises';
-import net from 'node:net';
 import { homedir } from 'node:os';
 import { getSessionDeckIterm2StatePath } from './iterm2/paths.js';
+import {
+  sendJsonLineSocketRequest,
+  type JsonLineSocketClientSocket,
+} from './iterm2/json-line-socket-client.js';
 import { parseSessionDeckIterm2InstallState } from './iterm2/state.js';
 
 const DEFAULT_RUNTIME_TIMEOUT_MS = 400;
@@ -25,10 +28,7 @@ export type Iterm2RuntimeOpenRequest =
 
 export type Iterm2RuntimeInstallStateReader = (path: string) => Promise<unknown>;
 
-type RuntimeSocket = NodeJS.ReadWriteStream & {
-  destroy?: () => void;
-  setEncoding?: (encoding: BufferEncoding) => void;
-};
+type RuntimeSocket = JsonLineSocketClientSocket;
 
 export interface Iterm2RuntimeClientOptions {
   env?: NodeJS.ProcessEnv;
@@ -61,98 +61,46 @@ export async function openWithIterm2Runtime(
     };
   }
 
-  const timeoutMs = options.timeoutMs ?? DEFAULT_RUNTIME_TIMEOUT_MS;
-  const createConnection =
-    options.createConnection ?? ((path: string): RuntimeSocket => net.createConnection(path));
-  const setTimer = options.setTimeout ?? setTimeout;
-  const clearTimer = options.clearTimeout ?? clearTimeout;
+  const result = await sendJsonLineSocketRequest(socketPathResult.socketPath, request, {
+    clearTimeout: options.clearTimeout,
+    createConnection: options.createConnection,
+    setTimeout: options.setTimeout,
+    timeoutMs: options.timeoutMs ?? DEFAULT_RUNTIME_TIMEOUT_MS,
+  });
 
-  return new Promise<Iterm2RuntimeOpenResult>((resolve) => {
-    let socket: RuntimeSocket;
-    try {
-      socket = createConnection(socketPathResult.socketPath);
-    } catch (error) {
-      resolve({
+  switch (result.status) {
+    case 'line':
+      return parseRuntimeResponse(result.line, result.requestSent, validation.successMessage);
+    case 'connect-error':
+    case 'socket-error':
+      return {
         ok: false,
         reason: 'python-bridge-unavailable',
-        message: `iTerm2 runtime is unavailable: ${getErrorMessage(error)}`,
+        message: `iTerm2 runtime is unavailable: ${getErrorMessage(result.error)}`,
+        requestSent: result.requestSent,
+      };
+    case 'send-error':
+      return {
+        ok: false,
+        reason: 'python-bridge-unavailable',
+        message: `iTerm2 runtime could not send the request: ${getErrorMessage(result.error)}`,
         requestSent: false,
-      });
-      return;
-    }
-
-    let settled = false;
-    let requestSent = false;
-    let buffer = '';
-
-    const finish = (result: Iterm2RuntimeOpenResult) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimer(timeout);
-      try {
-        socket.end();
-      } catch {
-        // Best effort cleanup.
-      }
-      resolve(result);
-    };
-
-    const timeout = setTimer(() => {
-      try {
-        socket.destroy?.();
-      } catch {
-        // Best effort cleanup.
-      }
-      finish({
+      };
+    case 'timeout':
+      return {
         ok: false,
         reason: 'python-bridge-unavailable',
         message: 'iTerm2 runtime did not respond before the timeout.',
-        requestSent,
-      });
-    }, timeoutMs);
-
-    socket.setEncoding?.('utf8');
-    socket.on('connect', () => {
-      try {
-        socket.write(`${JSON.stringify(request)}\n`);
-        requestSent = true;
-      } catch (error) {
-        finish({
-          ok: false,
-          reason: 'python-bridge-unavailable',
-          message: `iTerm2 runtime could not send the request: ${getErrorMessage(error)}`,
-          requestSent: false,
-        });
-      }
-    });
-    socket.on('data', (chunk) => {
-      buffer += String(chunk);
-      const newlineIndex = buffer.indexOf('\n');
-      if (newlineIndex === -1) {
-        return;
-      }
-      const line = buffer.slice(0, newlineIndex);
-      finish(parseRuntimeResponse(line, requestSent, validation.successMessage));
-    });
-    socket.on('error', (error) => {
-      finish({
-        ok: false,
-        reason: 'python-bridge-unavailable',
-        message: `iTerm2 runtime is unavailable: ${getErrorMessage(error)}`,
-        requestSent,
-      });
-    });
-    socket.on('close', () => {
-      finish({
+        requestSent: result.requestSent,
+      };
+    case 'closed':
+      return {
         ok: false,
         reason: 'python-bridge-unavailable',
         message: 'iTerm2 runtime closed before returning a response.',
-        requestSent,
-      });
-    });
-  });
+        requestSent: result.requestSent,
+      };
+  }
 }
 
 export async function resolveIterm2RuntimeSocketPath(

@@ -28,7 +28,7 @@ function createInstallState(bridgeSocketPath: string): unknown {
     installedAt: '2026-07-14T00:00:00.000Z',
     scriptsDir: '/tmp/session-deck-iterm2-scripts',
     script: {
-      path: '/tmp/session-deck-iterm2-scripts/AutoLaunch/session_deck_iterm2.py',
+      path: '/tmp/session-deck-iterm2-scripts/AutoLaunch/session_deck.py',
       sha256: 'a'.repeat(64),
     },
     runtime: {

@@ -1,4 +1,4 @@
-import { access, chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -21,6 +21,11 @@ import {
   type SessionDeckIterm2RuntimePaths,
 } from './paths.js';
 import type { SessionDeckIterm2CommandResult } from './command.js';
+
+type AutolaunchScriptSnapshot = {
+  content: Buffer;
+  mode: number;
+} | null;
 
 export interface InstallSessionDeckIterm2Options {
   homeDirectory?: string;
@@ -118,8 +123,21 @@ export async function installSessionDeckIterm2(
   };
 
   await mkdir(getSessionDeckIterm2AutoLaunchDir(scriptsDir), { recursive: true });
+  const previousScript = await snapshotAutolaunchScript(targetScriptPath);
   await writeAutolaunchScriptAtomic(targetScriptPath, autolaunchSource);
-  await writeSessionDeckIterm2InstallState(statePath, state);
+  try {
+    await writeSessionDeckIterm2InstallState(statePath, state);
+  } catch (error) {
+    const rollbackMessage = await rollbackAutolaunchScript(targetScriptPath, previousScript);
+    return {
+      level: 'error',
+      message: [
+        'Could not install Session Deck iTerm2 Toolbelt.',
+        `Install state at ${statePath} could not be written: ${getErrorMessage(error)}`,
+        rollbackMessage,
+      ].join('\n'),
+    };
+  }
 
   return {
     level: 'info',
@@ -172,14 +190,46 @@ async function findMissingRuntimeAsset(
   return null;
 }
 
-async function writeAutolaunchScriptAtomic(targetPath: string, content: Buffer): Promise<void> {
+async function snapshotAutolaunchScript(targetPath: string): Promise<AutolaunchScriptSnapshot> {
+  try {
+    const [content, scriptStat] = await Promise.all([readFile(targetPath), stat(targetPath)]);
+    return {
+      content,
+      mode: scriptStat.mode & 0o777,
+    };
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function rollbackAutolaunchScript(
+  targetPath: string,
+  previousScript: AutolaunchScriptSnapshot,
+): Promise<string> {
+  if (previousScript === null) {
+    await rm(targetPath, { force: true });
+    return `Rolled back newly written AutoLaunch script: ${targetPath}`;
+  }
+
+  await writeAutolaunchScriptAtomic(targetPath, previousScript.content, previousScript.mode);
+  return `Restored previously owned AutoLaunch script: ${targetPath}`;
+}
+
+async function writeAutolaunchScriptAtomic(
+  targetPath: string,
+  content: Buffer,
+  mode: number = 0o755,
+): Promise<void> {
   const targetDir = dirname(targetPath);
   const tempPath = join(targetDir, `.session-deck-iterm2.${process.pid}.${randomUUID()}.tmp`);
   try {
-    await writeFile(tempPath, content, { mode: 0o755 });
-    await chmod(tempPath, 0o755);
+    await writeFile(tempPath, content, { mode });
+    await chmod(tempPath, mode);
     await rename(tempPath, targetPath);
-    await chmod(targetPath, 0o755);
+    await chmod(targetPath, mode);
   } catch (error) {
     await rm(tempPath, { force: true });
     throw error;
@@ -197,4 +247,8 @@ async function pathExists(path: string): Promise<boolean> {
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isMissingFileError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error && error.code === 'ENOENT';
 }

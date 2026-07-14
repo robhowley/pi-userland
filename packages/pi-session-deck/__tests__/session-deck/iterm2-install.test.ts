@@ -209,6 +209,28 @@ describe('session-deck iterm2 install + doctor + uninstall', () => {
     });
   });
 
+  it('rolls back a newly written AutoLaunch script when state write fails', async () => {
+    const homeDirectory = await createTempHome();
+    const runtimePaths = await createRuntimePaths(join(homeDirectory, 'package-root'));
+    const scriptsDir = join(homeDirectory, 'Library', 'Application Support', 'iTerm2', 'Scripts');
+    const scriptPath = getSessionDeckIterm2ScriptPath(scriptsDir);
+    const statePath = join(scriptPath, 'install.json');
+
+    const result = await installSessionDeckIterm2({
+      homeDirectory,
+      platform: 'darwin',
+      runtimePaths,
+      scriptsDir,
+      statePath,
+    });
+
+    expect(result.level).toBe('error');
+    expect(result.message).toContain('Could not install Session Deck iTerm2 Toolbelt.');
+    expect(result.message).toContain(`Install state at ${statePath} could not be written`);
+    expect(result.message).toContain(`Rolled back newly written AutoLaunch script: ${scriptPath}`);
+    await expectPathMissing(scriptPath);
+  });
+
   it('doctor is read-only and reports state, source, asset, script hash, and socket problems', async () => {
     const homeDirectory = await createTempHome();
     const runtimePaths = await createRuntimePaths(join(homeDirectory, 'package-root'));
@@ -301,7 +323,7 @@ describe('session-deck iterm2 install + doctor + uninstall', () => {
         installedAt: '2026-07-10T12:00:00.000Z',
         scriptsDir: '/tmp/scripts',
         script: {
-          path: '/tmp/scripts/AutoLaunch/session_deck_iterm2.py',
+          path: '/tmp/scripts/AutoLaunch/session_deck.py',
           sha256: hashSessionDeckIterm2Content(AUTOLAUNCH_SOURCE),
         },
         runtime: {

@@ -16,7 +16,7 @@ pi install npm:@robhowley/pi-session-deck
 - `/session-deck --identity` — include full identity details such as the session id.
 - `/session-deck --json --session-id <id>` — print one visible `SessionDeckRecord` as pretty JSON and bypass the TUI browser.
 - In JSON mode, `--all` widens eligibility to dead/unknown sessions; `--identity` does not change the JSON payload.
-- `/session-deck iterm2 install [--scripts-dir <path>]` — install the single `session_deck_iterm2.py` AutoLaunch script and install state.
+- `/session-deck iterm2 install [--scripts-dir <path>]` — install the single `session_deck.py` AutoLaunch script and install state.
 - `/session-deck iterm2 doctor` — verify the installed state, AutoLaunch script, helper, web assets, and live runtime ping, then print manual recovery hints.
 - `/session-deck iterm2 uninstall` — remove the state-owned AutoLaunch script and install state.
 - Flags can be combined.
@@ -43,7 +43,7 @@ pi install npm:@robhowley/pi-session-deck
 Notes:
 
 - v1 is read-only: refresh, collapsible session-card browsing, and a `Show all` diagnostics toggle only.
-- The installed `session_deck_iterm2.py` AutoLaunch script starts one Session Deck iTerm2 process that binds to `127.0.0.1`, reads snapshots through the package-owned helper, and exposes the local Unix socket used by the `/session-deck` TUI for terminal focus.
+- The installed `session_deck.py` AutoLaunch script starts one Session Deck iTerm2 process that binds to `127.0.0.1`, reads snapshots through the package-owned helper, and exposes the local Unix socket used by the `/session-deck` TUI for terminal focus.
 - The TypeScript client resolves that socket from the installed state rather than guessing a temporary path.
 - Local repo builds need `pnpm --dir packages/pi-session-deck run build` before install so the helper exists in `dist/`.
 
@@ -73,7 +73,7 @@ After installing the package, run:
 /session-deck iterm2 install
 ```
 
-Restart iTerm2, then choose **Scripts → AutoLaunch → `session_deck_iterm2.py`** from the menu if it is not already running. There is no standalone bridge script to start.
+Restart iTerm2, then choose **Scripts → AutoLaunch → `session_deck.py`** from the menu if it is not already running. There is no standalone bridge script to start.
 
 Read-only `/session-deck` text and JSON modes do not require iTerm2 setup.
 

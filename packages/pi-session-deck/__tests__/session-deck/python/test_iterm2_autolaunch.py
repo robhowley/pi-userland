@@ -27,7 +27,7 @@ VALID_TMUX_ATTACH_ARGV = [
 ]
 
 
-def load_autolaunch(name: str = "session_deck_iterm2_autolaunch_test"):
+def load_autolaunch(name: str = "session_deck_autolaunch_test"):
     spec = importlib.util.spec_from_file_location(name, AUTOLAUNCH_PATH)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -63,7 +63,7 @@ class TempRuntime:
             "installedAt": "2026-07-14T00:00:00.000Z",
             "scriptsDir": str(self.root / "Scripts"),
             "script": {
-                "path": str(self.root / "Scripts/AutoLaunch/session_deck_iterm2.py"),
+                "path": str(self.root / "Scripts/AutoLaunch/session_deck.py"),
                 "sha256": "a" * 64,
             },
             "runtime": {
@@ -191,11 +191,11 @@ class ImportAndConfigTests(unittest.TestCase):
     def test_import_is_safe_and_entrypoint_is_canonical(self):
         old_iterm2 = sys.modules.pop("iterm2", None)
         try:
-            module = load_autolaunch("session_deck_iterm2_autolaunch_import_safe_test")
+            module = load_autolaunch("session_deck_autolaunch_import_safe_test")
             self.assertEqual(module.TOOL_DISPLAY_NAME, "Session Deck")
             self.assertNotIn("iterm2", sys.modules)
         finally:
-            sys.modules.pop("session_deck_iterm2_autolaunch_import_safe_test", None)
+            sys.modules.pop("session_deck_autolaunch_import_safe_test", None)
             if old_iterm2 is not None:
                 sys.modules["iterm2"] = old_iterm2
 

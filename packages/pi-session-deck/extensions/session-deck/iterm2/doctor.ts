@@ -1,5 +1,4 @@
 import { access, lstat, readFile } from 'node:fs/promises';
-import net from 'node:net';
 import { homedir } from 'node:os';
 import {
   hashSessionDeckIterm2Content,
@@ -14,13 +13,14 @@ import {
   type SessionDeckIterm2RuntimePaths,
 } from './paths.js';
 import type { SessionDeckIterm2CommandResult } from './command.js';
+import {
+  sendJsonLineSocketRequest,
+  type JsonLineSocketClientSocket,
+} from './json-line-socket-client.js';
 
 const DEFAULT_PING_TIMEOUT_MS = 500;
 
-export type SessionDeckIterm2BridgeSocket = NodeJS.ReadWriteStream & {
-  destroy?: () => void;
-  setEncoding?: (encoding: BufferEncoding) => void;
-};
+export type SessionDeckIterm2BridgeSocket = JsonLineSocketClientSocket;
 
 export type SessionDeckIterm2BridgePingResult =
   | { status: 'live'; message: string }
@@ -143,85 +143,42 @@ export async function pingSessionDeckIterm2Bridge(
     };
   }
 
-  const timeoutMs = options.timeoutMs ?? DEFAULT_PING_TIMEOUT_MS;
-  const createConnection =
-    options.createConnection ??
-    ((path: string): SessionDeckIterm2BridgeSocket => net.createConnection(path));
-  const setTimer = options.setTimeout ?? setTimeout;
-  const clearTimer = options.clearTimeout ?? clearTimeout;
+  const result = await sendJsonLineSocketRequest(
+    socketPath,
+    { ping: true },
+    {
+      clearTimeout: options.clearTimeout,
+      createConnection: options.createConnection,
+      setTimeout: options.setTimeout,
+      timeoutMs: options.timeoutMs ?? DEFAULT_PING_TIMEOUT_MS,
+    },
+  );
 
-  return new Promise<SessionDeckIterm2BridgePingResult>((resolve) => {
-    let socket: SessionDeckIterm2BridgeSocket;
-    try {
-      socket = createConnection(socketPath);
-    } catch (error) {
-      resolve({
+  switch (result.status) {
+    case 'line':
+      return parsePingResponse(result.line);
+    case 'connect-error':
+    case 'socket-error':
+      return {
         status: 'stale',
-        message: `Bridge socket is not accepting connections: ${getErrorMessage(error)}`,
-      });
-      return;
-    }
-
-    let settled = false;
-    let buffer = '';
-    const finish = (result: SessionDeckIterm2BridgePingResult): void => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimer(timeout);
-      try {
-        socket.end();
-      } catch {
-        // Best effort cleanup.
-      }
-      resolve(result);
-    };
-
-    const timeout = setTimer(() => {
-      try {
-        socket.destroy?.();
-      } catch {
-        // Best effort cleanup.
-      }
-      finish({
+        message: `Bridge socket is not accepting connections: ${getErrorMessage(result.error)}`,
+      };
+    case 'send-error':
+      return {
+        status: 'stale',
+        message: `Bridge socket could not receive ping: ${getErrorMessage(result.error)}`,
+      };
+    case 'timeout':
+      return {
         status: 'stale',
         message: 'Bridge socket did not answer ping before the timeout.',
-      });
-    }, timeoutMs);
-
-    socket.setEncoding?.('utf8');
-    socket.on('connect', () => {
-      try {
-        socket.write(`${JSON.stringify({ ping: true })}\n`);
-      } catch (error) {
-        finish({
-          status: 'stale',
-          message: `Bridge socket could not receive ping: ${getErrorMessage(error)}`,
-        });
-      }
-    });
-    socket.on('data', (chunk) => {
-      buffer += String(chunk);
-      const newlineIndex = buffer.indexOf('\n');
-      if (newlineIndex === -1) {
-        return;
-      }
-      finish(parsePingResponse(buffer.slice(0, newlineIndex)));
-    });
-    socket.on('error', (error) => {
-      finish({
-        status: 'stale',
-        message: `Bridge socket is not accepting connections: ${getErrorMessage(error)}`,
-      });
-    });
-    socket.on('close', () => {
-      finish({
+      };
+    case 'closed':
+      return {
         status: 'stale',
         message: 'Bridge socket closed before answering ping.',
-      });
-    });
-  });
+      };
+  }
 }
 
 async function checkInstalledState(

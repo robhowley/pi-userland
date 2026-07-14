@@ -10,7 +10,7 @@ export const SESSION_DECK_ITERM2_DOCTOR_ACTION = 'doctor';
 export const SESSION_DECK_ITERM2_SCRIPTS_DIR_FLAG = '--scripts-dir';
 export const SESSION_DECK_ITERM2_TOOL_IDENTIFIER = 'dev.pi-userland.session-deck.toolbelt';
 export const SESSION_DECK_ITERM2_TOOL_DISPLAY_NAME = 'Session Deck';
-export const SESSION_DECK_ITERM2_SCRIPT_FILENAME = 'session_deck_iterm2.py';
+export const SESSION_DECK_ITERM2_SCRIPT_FILENAME = 'session_deck.py';
 export const SESSION_DECK_ITERM2_STATE_FILENAME = 'install.json';
 export const SESSION_DECK_ITERM2_HELPER_RELATIVE_PATH =
   'dist/extensions/session-deck/iterm2/snapshot-cli.js';
