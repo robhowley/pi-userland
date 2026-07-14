@@ -1,51 +1,53 @@
-import { access, readFile } from 'node:fs/promises';
+import { access, lstat, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import {
-  readSessionDeckIterm2Manifest,
-  hashSessionDeckIterm2Template,
-  type SessionDeckIterm2InstallManifest,
-} from './manifest.js';
+  hashSessionDeckIterm2Content,
+  readSessionDeckIterm2InstallState,
+  type SessionDeckIterm2InstallState,
+} from './state.js';
 import {
-  getDefaultSessionDeckIterm2ScriptsDir,
-  getSessionDeckIterm2ManifestPath,
   getSessionDeckIterm2ScriptPath,
+  getSessionDeckIterm2StatePath,
   getSessionDeckIterm2WebAssetPaths,
-  normalizeSessionDeckIterm2ScriptsDir,
   resolveSessionDeckIterm2RuntimePaths,
   type SessionDeckIterm2RuntimePaths,
 } from './paths.js';
-import { renderSessionDeckIterm2PythonScript } from './python-template.js';
 import type { SessionDeckIterm2CommandResult } from './command.js';
+import {
+  sendJsonLineSocketRequest,
+  type JsonLineSocketClientSocket,
+} from './json-line-socket-client.js';
+
+const DEFAULT_PING_TIMEOUT_MS = 500;
+
+export type SessionDeckIterm2BridgeSocket = JsonLineSocketClientSocket;
+
+export type SessionDeckIterm2BridgePingResult =
+  | { status: 'live'; message: string }
+  | { status: 'missing'; message: string }
+  | { status: 'not-socket'; message: string }
+  | { status: 'stale'; message: string };
 
 export interface DoctorSessionDeckIterm2InstallOptions {
   homeDirectory?: string;
-  manifestPath?: string;
+  pingBridge?: (socketPath: string) => Promise<SessionDeckIterm2BridgePingResult>;
   platform?: NodeJS.Platform;
   runtimePaths?: SessionDeckIterm2RuntimePaths;
-  scriptsDir?: string;
+  statePath?: string;
 }
 
 export async function doctorSessionDeckIterm2Install(
   options: DoctorSessionDeckIterm2InstallOptions = {},
 ): Promise<SessionDeckIterm2CommandResult> {
   const homeDirectory = options.homeDirectory ?? homedir();
-  const manifestPath = options.manifestPath ?? getSessionDeckIterm2ManifestPath(homeDirectory);
-  let manifest: SessionDeckIterm2InstallManifest | null = null;
-  let manifestReadError: string | null = null;
+  const statePath = options.statePath ?? getSessionDeckIterm2StatePath(homeDirectory);
+  let state: SessionDeckIterm2InstallState | null = null;
+  let stateReadError: string | null = null;
   try {
-    manifest = await readSessionDeckIterm2Manifest(manifestPath);
+    state = await readSessionDeckIterm2InstallState(statePath);
   } catch (error) {
-    manifestReadError = getErrorMessage(error);
+    stateReadError = getErrorMessage(error);
   }
-  const overrideScriptsDir =
-    options.scriptsDir === undefined
-      ? undefined
-      : normalizeSessionDeckIterm2ScriptsDir(options.scriptsDir);
-  const scriptsDir =
-    overrideScriptsDir ??
-    manifest?.scriptsDir ??
-    getDefaultSessionDeckIterm2ScriptsDir(homeDirectory);
-  const scriptPath = manifest?.generatedScriptPath ?? getSessionDeckIterm2ScriptPath(scriptsDir);
 
   const lines = ['Session Deck iTerm2 doctor'];
   const issues: string[] = [];
@@ -56,11 +58,20 @@ export async function doctorSessionDeckIterm2Install(
     issues.push('iTerm2 Toolbelt support is macOS-only.');
   }
 
-  lines.push(`- scripts dir: ${scriptsDir}`);
   lines.push(
-    `- manifest: ${manifestReadError === null ? (manifest === null ? 'missing' : manifestPath) : `invalid (${manifestPath})`}`,
+    `- state: ${stateReadError === null ? (state === null ? 'missing' : statePath) : `invalid (${statePath})`}`,
   );
-  lines.push(`- script: ${scriptPath}${(await pathExists(scriptPath)) ? '' : ' (missing)'}`);
+
+  if (stateReadError !== null) {
+    issues.push(`Install state at ${statePath} could not be read: ${stateReadError}`);
+    issues.push(
+      'Manual recovery required: remove or repair the state file, verify/remove any Session Deck AutoLaunch script manually, then rerun /session-deck iterm2 install.',
+    );
+  } else if (state === null) {
+    issues.push(`Install state not found at ${statePath}. Run /session-deck iterm2 install.`);
+  } else {
+    await checkInstalledState(state, lines, issues);
+  }
 
   let runtimePaths: SessionDeckIterm2RuntimePaths | null = options.runtimePaths ?? null;
   if (runtimePaths === null) {
@@ -71,89 +82,17 @@ export async function doctorSessionDeckIterm2Install(
     }
   }
 
-  if (manifestReadError !== null) {
-    issues.push(`Install manifest at ${manifestPath} could not be read: ${manifestReadError}`);
-    issues.push(
-      'Manual recovery required: remove or repair the manifest, verify/remove any Session Deck AutoLaunch script manually, then rerun /session-deck iterm2 install.',
-    );
-  } else if (manifest === null) {
-    issues.push(`Install manifest not found at ${manifestPath}. Run /session-deck iterm2 install.`);
-  } else if (overrideScriptsDir !== undefined && overrideScriptsDir !== manifest.scriptsDir) {
-    issues.push(
-      `Requested scripts dir ${overrideScriptsDir} does not match manifest ownership ${manifest.scriptsDir}.`,
-    );
-  }
-
   if (runtimePaths !== null) {
-    lines.push(
-      `- helper: ${runtimePaths.helperScriptPath}${(await pathExists(runtimePaths.helperScriptPath)) ? '' : ' (missing)'}`,
-    );
-    lines.push(
-      `- web root: ${runtimePaths.webRootPath}${(await pathExists(runtimePaths.webRootPath)) ? '' : ' (missing)'}`,
-    );
-
-    if (!(await pathExists(runtimePaths.helperScriptPath))) {
-      issues.push(`Snapshot helper is missing: ${runtimePaths.helperScriptPath}`);
-    }
-    if (!(await pathExists(runtimePaths.webRootPath))) {
-      issues.push(`Web assets are missing: ${runtimePaths.webRootPath}`);
-    } else {
-      const webAssets = getSessionDeckIterm2WebAssetPaths(runtimePaths.webRootPath);
-      const requiredAssets = [
-        { label: 'Web index', path: webAssets.indexPath },
-        { label: 'Web app', path: webAssets.appPath },
-        { label: 'Web stylesheet', path: webAssets.stylePath },
-      ];
-
-      for (const asset of requiredAssets) {
-        if (!(await pathExists(asset.path))) {
-          issues.push(`${asset.label} is missing: ${asset.path}`);
-        }
-      }
-    }
-
-    if (manifest !== null) {
-      if (manifest.packageVersion !== runtimePaths.packageVersion) {
-        issues.push(
-          `Installed manifest version ${manifest.packageVersion} does not match current package version ${runtimePaths.packageVersion}. Reinstall recommended.`,
-        );
-      }
-      if (manifest.helperScriptPath !== runtimePaths.helperScriptPath) {
-        issues.push('Snapshot helper path changed since install. Reinstall recommended.');
-      }
-      if (manifest.webRootPath !== runtimePaths.webRootPath) {
-        issues.push('Web asset path changed since install. Reinstall recommended.');
-      }
-      if (manifest.nodeExecutablePath !== runtimePaths.nodeExecutablePath) {
-        issues.push('Node executable path changed since install. Reinstall recommended.');
-      }
-
-      const renderedScript = renderSessionDeckIterm2PythonScript({
-        helperScriptPath: runtimePaths.helperScriptPath,
-        nodeExecutablePath: runtimePaths.nodeExecutablePath,
-        packageVersion: runtimePaths.packageVersion,
-        webRootPath: runtimePaths.webRootPath,
-      });
-      const expectedHash = hashSessionDeckIterm2Template(renderedScript);
-      if (manifest.templateHash !== expectedHash) {
-        issues.push(
-          'Generated script template hash is stale for the current package. Reinstall recommended.',
-        );
-      }
-
-      if (await pathExists(scriptPath)) {
-        const installedScript = await readFile(scriptPath, 'utf8');
-        if (installedScript !== renderedScript) {
-          issues.push(
-            'Installed AutoLaunch script differs from the current package template. Reinstall recommended.',
-          );
-        }
-      }
-    }
+    await checkRuntimePaths(runtimePaths, state, lines, issues);
   }
 
-  if (!(await pathExists(scriptPath)) && manifest !== null) {
-    issues.push(`Installed AutoLaunch script is missing: ${scriptPath}`);
+  if (state !== null) {
+    const pingBridge = options.pingBridge ?? pingSessionDeckIterm2Bridge;
+    const pingResult = await pingBridge(state.runtime.bridgeSocketPath);
+    lines.push(`- bridge socket: ${state.runtime.bridgeSocketPath} (${pingResult.status})`);
+    if (pingResult.status !== 'live') {
+      issues.push(pingResult.message);
+    }
   }
 
   lines.push(
@@ -174,6 +113,196 @@ export async function doctorSessionDeckIterm2Install(
   };
 }
 
+export async function pingSessionDeckIterm2Bridge(
+  socketPath: string,
+  options: {
+    clearTimeout?: typeof clearTimeout;
+    createConnection?: (path: string) => SessionDeckIterm2BridgeSocket;
+    setTimeout?: typeof setTimeout;
+    timeoutMs?: number;
+  } = {},
+): Promise<SessionDeckIterm2BridgePingResult> {
+  try {
+    const socketStat = await lstat(socketPath);
+    if (!socketStat.isSocket()) {
+      return {
+        status: 'not-socket',
+        message: `Bridge socket path exists but is not a socket: ${socketPath}`,
+      };
+    }
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return {
+        status: 'missing',
+        message: `Bridge socket is missing: ${socketPath}`,
+      };
+    }
+    return {
+      status: 'stale',
+      message: `Bridge socket could not be inspected: ${getErrorMessage(error)}`,
+    };
+  }
+
+  const result = await sendJsonLineSocketRequest(
+    socketPath,
+    { ping: true },
+    {
+      clearTimeout: options.clearTimeout,
+      createConnection: options.createConnection,
+      setTimeout: options.setTimeout,
+      timeoutMs: options.timeoutMs ?? DEFAULT_PING_TIMEOUT_MS,
+    },
+  );
+
+  switch (result.status) {
+    case 'line':
+      return parsePingResponse(result.line);
+    case 'connect-error':
+    case 'socket-error':
+      return {
+        status: 'stale',
+        message: `Bridge socket is not accepting connections: ${getErrorMessage(result.error)}`,
+      };
+    case 'send-error':
+      return {
+        status: 'stale',
+        message: `Bridge socket could not receive ping: ${getErrorMessage(result.error)}`,
+      };
+    case 'timeout':
+      return {
+        status: 'stale',
+        message: 'Bridge socket did not answer ping before the timeout.',
+      };
+    case 'closed':
+      return {
+        status: 'stale',
+        message: 'Bridge socket closed before answering ping.',
+      };
+  }
+}
+
+async function checkInstalledState(
+  state: SessionDeckIterm2InstallState,
+  lines: string[],
+  issues: string[],
+): Promise<void> {
+  const expectedScriptPath = getSessionDeckIterm2ScriptPath(state.scriptsDir);
+  lines.push(`- scripts dir: ${state.scriptsDir}`);
+  lines.push(
+    `- AutoLaunch script: ${state.script.path}${(await pathExists(state.script.path)) ? '' : ' (missing)'}`,
+  );
+
+  if (state.script.path !== expectedScriptPath) {
+    issues.push(
+      `State script path ${state.script.path} does not match scripts dir AutoLaunch target ${expectedScriptPath}.`,
+    );
+  }
+
+  if (await pathExists(state.script.path)) {
+    const installedScript = await readFile(state.script.path);
+    const installedHash = hashSessionDeckIterm2Content(installedScript);
+    if (installedHash !== state.script.sha256) {
+      issues.push(
+        'Installed AutoLaunch script hash differs from recorded state. Reinstall recommended.',
+      );
+    }
+  } else {
+    issues.push(`Installed AutoLaunch script is missing: ${state.script.path}`);
+  }
+}
+
+async function checkRuntimePaths(
+  runtimePaths: SessionDeckIterm2RuntimePaths,
+  state: SessionDeckIterm2InstallState | null,
+  lines: string[],
+  issues: string[],
+): Promise<void> {
+  lines.push(
+    `- canonical source: ${runtimePaths.autolaunchSourcePath}${(await pathExists(runtimePaths.autolaunchSourcePath)) ? '' : ' (missing)'}`,
+  );
+  lines.push(
+    `- snapshot helper: ${runtimePaths.snapshotHelperPath}${(await pathExists(runtimePaths.snapshotHelperPath)) ? '' : ' (missing)'}`,
+  );
+  lines.push(
+    `- web root: ${runtimePaths.webRootPath}${(await pathExists(runtimePaths.webRootPath)) ? '' : ' (missing)'}`,
+  );
+
+  if (!(await pathExists(runtimePaths.autolaunchSourcePath))) {
+    issues.push(`iTerm2 AutoLaunch source is missing: ${runtimePaths.autolaunchSourcePath}`);
+  } else if (state !== null) {
+    const sourceHash = hashSessionDeckIterm2Content(
+      await readFile(runtimePaths.autolaunchSourcePath),
+    );
+    if (sourceHash !== state.script.sha256) {
+      issues.push(
+        'Canonical AutoLaunch source hash differs from recorded state. Reinstall recommended.',
+      );
+    }
+  }
+
+  if (!(await pathExists(runtimePaths.snapshotHelperPath))) {
+    issues.push(`Snapshot helper is missing: ${runtimePaths.snapshotHelperPath}`);
+  }
+
+  if (!(await pathExists(runtimePaths.webRootPath))) {
+    issues.push(`Web assets are missing: ${runtimePaths.webRootPath}`);
+  } else {
+    const webAssets = getSessionDeckIterm2WebAssetPaths(runtimePaths.webRootPath);
+    const requiredAssets = [
+      { label: 'Web index', path: webAssets.indexPath },
+      { label: 'Web app', path: webAssets.appPath },
+      { label: 'Web stylesheet', path: webAssets.stylePath },
+    ];
+
+    for (const asset of requiredAssets) {
+      if (!(await pathExists(asset.path))) {
+        issues.push(`${asset.label} is missing: ${asset.path}`);
+      }
+    }
+  }
+
+  if (state !== null) {
+    if (state.packageVersion !== runtimePaths.packageVersion) {
+      issues.push(
+        `Installed state version ${state.packageVersion} does not match current package version ${runtimePaths.packageVersion}. Reinstall recommended.`,
+      );
+    }
+    if (state.runtime.nodeExecutablePath !== runtimePaths.nodeExecutablePath) {
+      issues.push('Node executable path changed since install. Reinstall recommended.');
+    }
+    if (state.runtime.snapshotHelperPath !== runtimePaths.snapshotHelperPath) {
+      issues.push('Snapshot helper path changed since install. Reinstall recommended.');
+    }
+    if (state.runtime.webRootPath !== runtimePaths.webRootPath) {
+      issues.push('Web asset path changed since install. Reinstall recommended.');
+    }
+    if (state.runtime.bridgeSocketPath !== runtimePaths.bridgeSocketPath) {
+      issues.push('Bridge socket path changed since install. Reinstall recommended.');
+    }
+  }
+}
+
+function parsePingResponse(line: string): SessionDeckIterm2BridgePingResult {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line) as unknown;
+  } catch (error) {
+    return {
+      status: 'stale',
+      message: `Bridge socket returned malformed ping JSON: ${getErrorMessage(error)}`,
+    };
+  }
+
+  if (isRecord(parsed) && parsed['ok'] === true) {
+    return { status: 'live', message: 'Bridge socket answered ping.' };
+  }
+
+  return {
+    status: 'stale',
+    message: 'Bridge socket returned an unhealthy ping response.',
+  };
+}
+
 async function pathExists(path: string): Promise<boolean> {
   try {
     await access(path);
@@ -181,6 +310,14 @@ async function pathExists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function isRecord(candidate: unknown): candidate is Record<string, unknown> {
+  return typeof candidate === 'object' && candidate !== null;
+}
+
+function isMissingFileError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error && error.code === 'ENOENT';
 }
 
 function getErrorMessage(error: unknown): string {

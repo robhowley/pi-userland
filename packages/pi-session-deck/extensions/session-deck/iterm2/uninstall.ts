@@ -1,64 +1,52 @@
 import { rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import {
-  readSessionDeckIterm2Manifest,
-  type SessionDeckIterm2InstallManifest,
-} from './manifest.js';
-import { getSessionDeckIterm2ManifestPath, normalizeSessionDeckIterm2ScriptsDir } from './paths.js';
+import { readSessionDeckIterm2InstallState, type SessionDeckIterm2InstallState } from './state.js';
+import { getSessionDeckIterm2StatePath } from './paths.js';
 import type { SessionDeckIterm2CommandResult } from './command.js';
 
 export interface UninstallSessionDeckIterm2Options {
   homeDirectory?: string;
-  manifestPath?: string;
-  scriptsDir?: string;
+  statePath?: string;
 }
 
 export async function uninstallSessionDeckIterm2(
   options: UninstallSessionDeckIterm2Options = {},
 ): Promise<SessionDeckIterm2CommandResult> {
   const homeDirectory = options.homeDirectory ?? homedir();
-  const manifestPath = options.manifestPath ?? getSessionDeckIterm2ManifestPath(homeDirectory);
-  let manifest: SessionDeckIterm2InstallManifest | null;
+  const statePath = options.statePath ?? getSessionDeckIterm2StatePath(homeDirectory);
+  let state: SessionDeckIterm2InstallState | null;
   try {
-    manifest = await readSessionDeckIterm2Manifest(manifestPath);
+    state = await readSessionDeckIterm2InstallState(statePath);
   } catch (error) {
     return {
       level: 'warning',
       message: [
         'Could not uninstall Session Deck iTerm2 Toolbelt automatically.',
-        `Install manifest at ${manifestPath} could not be read: ${getErrorMessage(error)}`,
+        `Install state at ${statePath} could not be read: ${getErrorMessage(error)}`,
         'Nothing was removed because script ownership could not be verified.',
-        'Manual recovery required: remove or repair the manifest and verify/remove any Session Deck AutoLaunch script manually.',
+        'Manual recovery required: remove or repair the state file and verify/remove any Session Deck AutoLaunch script manually.',
       ].join('\n'),
     };
   }
-  if (manifest === null) {
+
+  if (state === null) {
     return {
       level: 'warning',
-      message: `No Session Deck iTerm2 install manifest found at ${manifestPath}.`,
+      message: `No Session Deck iTerm2 install state found at ${statePath}.`,
     };
   }
 
-  const lines = ['Uninstalled Session Deck iTerm2 Toolbelt.'];
-  const overrideScriptsDir =
-    options.scriptsDir === undefined
-      ? undefined
-      : normalizeSessionDeckIterm2ScriptsDir(options.scriptsDir);
-  if (overrideScriptsDir !== undefined && overrideScriptsDir !== manifest.scriptsDir) {
-    lines.push(
-      `Ignored --scripts-dir ${overrideScriptsDir} because manifest ownership is ${manifest.scriptsDir}.`,
-    );
-  }
-
-  await rm(manifest.generatedScriptPath, { force: true });
-  await rm(manifestPath, { force: true });
-
-  lines.push(`Removed script: ${manifest.generatedScriptPath}`);
-  lines.push(`Removed manifest: ${manifestPath}`);
+  await rm(state.script.path, { force: true });
+  await rm(statePath, { force: true });
 
   return {
     level: 'info',
-    message: lines.join('\n'),
+    message: [
+      'Uninstalled Session Deck iTerm2 Toolbelt.',
+      `Removed AutoLaunch script: ${state.script.path}`,
+      `Removed state: ${statePath}`,
+      'Restart iTerm2 to stop any already-running Session Deck iTerm2 process.',
+    ].join('\n'),
   };
 }
 

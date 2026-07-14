@@ -1,5 +1,5 @@
 import { access, readFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -10,11 +10,13 @@ export const SESSION_DECK_ITERM2_DOCTOR_ACTION = 'doctor';
 export const SESSION_DECK_ITERM2_SCRIPTS_DIR_FLAG = '--scripts-dir';
 export const SESSION_DECK_ITERM2_TOOL_IDENTIFIER = 'dev.pi-userland.session-deck.toolbelt';
 export const SESSION_DECK_ITERM2_TOOL_DISPLAY_NAME = 'Session Deck';
-export const SESSION_DECK_ITERM2_SCRIPT_FILENAME = 'session_deck_toolbelt.py';
-export const SESSION_DECK_ITERM2_MANIFEST_FILENAME = 'install.json';
+export const SESSION_DECK_ITERM2_SCRIPT_FILENAME = 'session_deck.py';
+export const SESSION_DECK_ITERM2_STATE_FILENAME = 'install.json';
 export const SESSION_DECK_ITERM2_HELPER_RELATIVE_PATH =
   'dist/extensions/session-deck/iterm2/snapshot-cli.js';
 export const SESSION_DECK_ITERM2_WEB_ROOT_RELATIVE_PATH = 'extensions/session-deck/iterm2/web';
+export const SESSION_DECK_ITERM2_AUTOLAUNCH_SOURCE_RELATIVE_PATH =
+  'extensions/session-deck/iterm2/autolaunch.py';
 export const SESSION_DECK_ITERM2_WEB_INDEX_FILENAME = 'index.html';
 export const SESSION_DECK_ITERM2_WEB_APP_FILENAME = 'app.js';
 export const SESSION_DECK_ITERM2_WEB_STYLE_FILENAME = 'style.css';
@@ -23,8 +25,10 @@ export interface SessionDeckIterm2RuntimePaths {
   packageRoot: string;
   packageVersion: string;
   nodeExecutablePath: string;
-  helperScriptPath: string;
+  snapshotHelperPath: string;
   webRootPath: string;
+  autolaunchSourcePath: string;
+  bridgeSocketPath: string;
 }
 
 export function getDefaultSessionDeckIterm2ScriptsDir(homeDirectory: string = homedir()): string {
@@ -37,7 +41,8 @@ export function normalizeSessionDeckIterm2ScriptsDir(scriptsDir: string): string
     return trimmed;
   }
 
-  return basename(trimmed) === 'AutoLaunch' ? dirname(trimmed) : trimmed;
+  const scriptsRoot = basename(trimmed) === 'AutoLaunch' ? dirname(trimmed) : trimmed;
+  return resolve(scriptsRoot);
 }
 
 export function getSessionDeckIterm2AutoLaunchDir(scriptsDir: string): string {
@@ -52,8 +57,14 @@ export function getSessionDeckIterm2StateDir(homeDirectory: string = homedir()):
   return join(homeDirectory, '.pi', 'session-deck', 'iterm2');
 }
 
-export function getSessionDeckIterm2ManifestPath(homeDirectory: string = homedir()): string {
-  return join(getSessionDeckIterm2StateDir(homeDirectory), SESSION_DECK_ITERM2_MANIFEST_FILENAME);
+export function getSessionDeckIterm2StatePath(homeDirectory: string = homedir()): string {
+  return join(getSessionDeckIterm2StateDir(homeDirectory), SESSION_DECK_ITERM2_STATE_FILENAME);
+}
+
+export function getSessionDeckIterm2BridgeSocketPath(
+  uid: number | string = getCurrentUid(),
+): string {
+  return join(tmpdir(), `pi-session-deck-${uid}`, 'iterm2.sock');
 }
 
 export function getSessionDeckIterm2WebAssetPaths(webRootPath: string): {
@@ -71,6 +82,7 @@ export function getSessionDeckIterm2WebAssetPaths(webRootPath: string): {
 export async function resolveSessionDeckIterm2RuntimePaths(
   importMetaUrl: string,
   options: {
+    bridgeSocketPath?: string;
     nodeExecutablePath?: string;
     packageName?: string;
   } = {},
@@ -91,8 +103,10 @@ export async function resolveSessionDeckIterm2RuntimePaths(
     packageRoot,
     packageVersion,
     nodeExecutablePath: options.nodeExecutablePath ?? process.execPath,
-    helperScriptPath: join(packageRoot, SESSION_DECK_ITERM2_HELPER_RELATIVE_PATH),
+    snapshotHelperPath: join(packageRoot, SESSION_DECK_ITERM2_HELPER_RELATIVE_PATH),
     webRootPath: join(packageRoot, SESSION_DECK_ITERM2_WEB_ROOT_RELATIVE_PATH),
+    autolaunchSourcePath: join(packageRoot, SESSION_DECK_ITERM2_AUTOLAUNCH_SOURCE_RELATIVE_PATH),
+    bridgeSocketPath: options.bridgeSocketPath ?? getSessionDeckIterm2BridgeSocketPath(),
   };
 }
 
@@ -116,6 +130,10 @@ async function findPackageRoot(startDirectory: string, packageName: string): Pro
   }
 
   throw new Error(`Could not find package root for ${packageName}.`);
+}
+
+function getCurrentUid(): number | string {
+  return typeof process.getuid === 'function' ? process.getuid() : 'user';
 }
 
 async function pathExists(path: string): Promise<boolean> {

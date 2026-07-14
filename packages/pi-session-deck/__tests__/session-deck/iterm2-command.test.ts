@@ -16,22 +16,23 @@ describe('session-deck iterm2 command', () => {
     expect(isSessionDeckIterm2Command('')).toBe(false);
   });
 
-  it('parses install, uninstall, and doctor with an optional scripts dir override', () => {
+  it('parses install with an optional scripts dir and keeps doctor/uninstall state-authoritative', () => {
     expect(parseSessionDeckIterm2CommandArgs('iterm2 install')).toEqual({
       ok: true,
       action: 'install',
     });
-    expect(
-      parseSessionDeckIterm2CommandArgs('iterm2 uninstall --scripts-dir /tmp/scripts'),
-    ).toEqual({
+    expect(parseSessionDeckIterm2CommandArgs('iterm2 install --scripts-dir /tmp/scripts')).toEqual({
       ok: true,
-      action: 'uninstall',
+      action: 'install',
       scriptsDir: '/tmp/scripts',
     });
-    expect(parseSessionDeckIterm2CommandArgs('iterm2 doctor --scripts-dir /tmp/scripts')).toEqual({
+    expect(parseSessionDeckIterm2CommandArgs('iterm2 uninstall')).toEqual({
+      ok: true,
+      action: 'uninstall',
+    });
+    expect(parseSessionDeckIterm2CommandArgs('iterm2 doctor')).toEqual({
       ok: true,
       action: 'doctor',
-      scriptsDir: '/tmp/scripts',
     });
   });
 
@@ -58,9 +59,17 @@ describe('session-deck iterm2 command', () => {
       ok: false,
       message: `Unsupported argument: --wat. ${SESSION_DECK_ITERM2_COMMAND_USAGE}`,
     });
+    expect(parseSessionDeckIterm2CommandArgs('iterm2 doctor --scripts-dir /tmp')).toEqual({
+      ok: false,
+      message: `--scripts-dir is only supported for iterm2 install. ${SESSION_DECK_ITERM2_COMMAND_USAGE}`,
+    });
+    expect(parseSessionDeckIterm2CommandArgs('iterm2 uninstall --scripts-dir /tmp')).toEqual({
+      ok: false,
+      message: `--scripts-dir is only supported for iterm2 install. ${SESSION_DECK_ITERM2_COMMAND_USAGE}`,
+    });
   });
 
-  it('offers subcommand and scripts-dir completions and returns null when nothing matches', () => {
+  it('offers subcommand and install-only scripts-dir completions and returns null when nothing matches', () => {
     expect(getSessionDeckIterm2CommandCompletions('')).toEqual([
       { value: 'iterm2', label: 'iterm2' },
     ]);
@@ -78,6 +87,8 @@ describe('session-deck iterm2 command', () => {
     expect(getSessionDeckIterm2CommandCompletions('iterm2 install ')).toEqual([
       { value: 'iterm2 install --scripts-dir', label: '--scripts-dir' },
     ]);
+    expect(getSessionDeckIterm2CommandCompletions('iterm2 doctor ')).toBeNull();
+    expect(getSessionDeckIterm2CommandCompletions('iterm2 uninstall ')).toBeNull();
     expect(getSessionDeckIterm2CommandCompletions('iterm2 install --scripts-dir')).toBeNull();
     expect(getSessionDeckIterm2CommandCompletions('zzz')).toBeNull();
   });

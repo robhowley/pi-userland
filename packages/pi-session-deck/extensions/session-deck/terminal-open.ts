@@ -7,10 +7,10 @@ import {
   type TerminalFocusTarget,
 } from './identity/terminal-focus.js';
 import {
-  openWithIterm2PythonBridge,
-  type Iterm2PythonBridgeOpenRequest,
-  type Iterm2PythonBridgeOpenResult,
-} from './iterm2-python-bridge.js';
+  openWithIterm2Runtime,
+  type Iterm2RuntimeOpenRequest,
+  type Iterm2RuntimeOpenResult,
+} from './iterm2-runtime-client.js';
 
 const OPEN_COMMAND = '/usr/bin/open';
 const OSASCRIPT_COMMAND = '/usr/bin/osascript';
@@ -27,6 +27,7 @@ export type TerminalOpenFailureReason =
   | 'python-bridge-disabled'
   | 'python-bridge-unavailable'
   | 'automation-denied'
+  | 'terminal-target-missing'
   | 'open-failed';
 
 export type TerminalOpenResult =
@@ -48,16 +49,17 @@ export type TerminalOpenExecFile = (
 
 export type TerminalRevealExecFile = TerminalOpenExecFile;
 
-export type TerminalPythonBridgeClient = (
-  request: Iterm2PythonBridgeOpenRequest,
-) => Promise<Iterm2PythonBridgeOpenResult>;
+export type TerminalIterm2RuntimeClient = (
+  request: Iterm2RuntimeOpenRequest,
+) => Promise<Iterm2RuntimeOpenResult>;
 
 export interface TerminalOpenOptions {
   platform?: NodeJS.Platform;
   execFile?: TerminalOpenExecFile;
   env?: NodeJS.ProcessEnv;
   bridgeMode?: TerminalBridgeMode;
-  pythonBridgeClient?: TerminalPythonBridgeClient;
+  iterm2RuntimeClient?: TerminalIterm2RuntimeClient;
+  pythonBridgeClient?: TerminalIterm2RuntimeClient;
   tmuxPreflightTimeoutMs?: number;
 }
 
@@ -69,7 +71,7 @@ export async function openTerminalFocusTarget(
 ): Promise<TerminalOpenResult> {
   switch (target.kind) {
     case 'iterm2-session':
-      return openTerminalRevealUrl(target.revealUrl, options);
+      return openIterm2SessionTarget(target, options);
     case 'tmux-session':
       return openTmuxTerminalTarget(target, options);
   }
@@ -104,6 +106,37 @@ export async function openTerminalRevealUrl(
     reason: 'requested',
     message: 'Requested iTerm2 focus for selected session.',
   };
+}
+
+async function openIterm2SessionTarget(
+  target: Extract<TerminalFocusTarget, { kind: 'iterm2-session' }>,
+  options: TerminalOpenOptions,
+): Promise<TerminalOpenResult> {
+  const platform = options.platform ?? process.platform;
+  if (platform !== 'darwin') {
+    return {
+      ok: false,
+      reason: 'unsupported-platform',
+      message: 'iTerm2 focus requests are only supported on macOS.',
+    };
+  }
+
+  const mode = resolveBridgeMode(options);
+  if (mode === 'auto' || mode === 'iterm2-python') {
+    const runtimeResult = await openIterm2SessionWithRuntime(target.itermSessionId, options);
+    if (runtimeResult.ok || mode === 'iterm2-python') {
+      return runtimeResult;
+    }
+
+    if (
+      runtimeResult.reason !== 'python-bridge-unavailable' ||
+      runtimeResult.requestSent !== false
+    ) {
+      return runtimeResult;
+    }
+  }
+
+  return openTerminalRevealUrl(target.revealUrl, options);
 }
 
 async function openTmuxTerminalTarget(
@@ -143,13 +176,16 @@ async function openTmuxTerminalTarget(
   }
 
   if (mode === 'auto' || mode === 'iterm2-python') {
-    const pythonResult = await openWithPythonBridge(tmuxAttachArgv, options);
-    if (pythonResult.ok || mode === 'iterm2-python') {
-      return pythonResult;
+    const runtimeResult = await openWithIterm2RuntimeClient(tmuxAttachArgv, options);
+    if (runtimeResult.ok || mode === 'iterm2-python') {
+      return runtimeResult;
     }
 
-    if (pythonResult.reason !== 'python-bridge-unavailable' || pythonResult.requestSent !== false) {
-      return pythonResult;
+    if (
+      runtimeResult.reason !== 'python-bridge-unavailable' ||
+      runtimeResult.requestSent !== false
+    ) {
+      return runtimeResult;
     }
   }
 
@@ -194,18 +230,31 @@ async function preflightTmuxTarget(
   return { ok: true };
 }
 
-async function openWithPythonBridge(
+async function openIterm2SessionWithRuntime(
+  itermSessionId: string,
+  options: TerminalOpenOptions,
+): Promise<TerminalOpenResult> {
+  const runtimeClient = getIterm2RuntimeClient(options);
+  return runtimeClient({ itermSessionId });
+}
+
+async function openWithIterm2RuntimeClient(
   tmuxAttachArgv: readonly string[],
   options: TerminalOpenOptions,
 ): Promise<TerminalOpenResult> {
-  const bridgeClient =
-    options.pythonBridgeClient ??
-    ((request: Iterm2PythonBridgeOpenRequest) =>
-      openWithIterm2PythonBridge(request, {
-        ...(options.env === undefined ? {} : { env: options.env }),
-      }));
+  const runtimeClient = getIterm2RuntimeClient(options);
+  return runtimeClient({ tmuxAttachArgv });
+}
 
-  return bridgeClient({ tmuxAttachArgv });
+function getIterm2RuntimeClient(options: TerminalOpenOptions): TerminalIterm2RuntimeClient {
+  return (
+    options.iterm2RuntimeClient ??
+    options.pythonBridgeClient ??
+    ((request: Iterm2RuntimeOpenRequest) =>
+      openWithIterm2Runtime(request, {
+        ...(options.env === undefined ? {} : { env: options.env }),
+      }))
+  );
 }
 
 async function openWithAppleScript(

@@ -10,7 +10,7 @@ import {
 import { uninstallSessionDeckIterm2 } from './uninstall.js';
 
 export const SESSION_DECK_ITERM2_COMMAND_USAGE =
-  'Usage: /session-deck iterm2 <install|uninstall|doctor> [--scripts-dir <path>]';
+  'Usage: /session-deck iterm2 install [--scripts-dir <path>] | /session-deck iterm2 <uninstall|doctor>';
 
 export interface SessionDeckIterm2CommandResult {
   level: 'info' | 'warning' | 'error';
@@ -26,8 +26,12 @@ export interface RunSessionDeckIterm2CommandOptions {
 export type ParsedSessionDeckIterm2CommandArgs =
   | {
       ok: true;
-      action: 'install' | 'uninstall' | 'doctor';
+      action: 'install';
       scriptsDir?: string;
+    }
+  | {
+      ok: true;
+      action: 'uninstall' | 'doctor';
     }
   | {
       ok: false;
@@ -57,13 +61,9 @@ export async function runSessionDeckIterm2Command(
         ...(parsedArgs.scriptsDir === undefined ? {} : { scriptsDir: parsedArgs.scriptsDir }),
       });
     case 'uninstall':
-      return (options.uninstall ?? uninstallSessionDeckIterm2)({
-        ...(parsedArgs.scriptsDir === undefined ? {} : { scriptsDir: parsedArgs.scriptsDir }),
-      });
+      return (options.uninstall ?? uninstallSessionDeckIterm2)({});
     case 'doctor':
-      return (options.doctor ?? doctorSessionDeckIterm2Install)({
-        ...(parsedArgs.scriptsDir === undefined ? {} : { scriptsDir: parsedArgs.scriptsDir }),
-      });
+      return (options.doctor ?? doctorSessionDeckIterm2Install)({});
   }
 }
 
@@ -98,6 +98,22 @@ export function parseSessionDeckIterm2CommandArgs(
     );
   }
 
+  if (actionToken !== SESSION_DECK_ITERM2_INSTALL_ACTION) {
+    const extraToken = tokens[2];
+    if (extraToken !== undefined) {
+      return createUsageError(
+        extraToken === SESSION_DECK_ITERM2_SCRIPTS_DIR_FLAG
+          ? `${SESSION_DECK_ITERM2_SCRIPTS_DIR_FLAG} is only supported for iterm2 install`
+          : `Unsupported argument: ${extraToken}`,
+      );
+    }
+
+    return {
+      ok: true,
+      action: actionToken as 'uninstall' | 'doctor',
+    };
+  }
+
   let scriptsDir: string | undefined;
 
   for (let index = 2; index < tokens.length; index += 1) {
@@ -121,7 +137,7 @@ export function parseSessionDeckIterm2CommandArgs(
 
   return {
     ok: true,
-    action: actionToken as (typeof SESSION_DECK_ITERM2_ACTIONS)[number],
+    action: SESSION_DECK_ITERM2_INSTALL_ACTION,
     ...(scriptsDir === undefined ? {} : { scriptsDir }),
   };
 }
@@ -156,6 +172,10 @@ export function getSessionDeckIterm2CommandCompletions(prefix: string) {
       label: value,
     }));
     return matches.length > 0 ? matches : null;
+  }
+
+  if (segments[0] !== SESSION_DECK_ITERM2_INSTALL_ACTION) {
+    return null;
   }
 
   const flagPrefix = remainder.endsWith(' ') ? '' : (segments[segments.length - 1] ?? '');
