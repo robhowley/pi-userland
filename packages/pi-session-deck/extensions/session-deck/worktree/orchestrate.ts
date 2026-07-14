@@ -17,7 +17,7 @@ export async function orchestrateCreateWorktree(
   request: CreateWorktreeActionRequest,
   options: OrchestrateCreateWorktreeOptions = {},
 ): Promise<CreateWorktreeActionResult> {
-  const validation = validateCreateWorktreeRequest(request);
+  const validation = normalizeCreateWorktreeRequest(request);
   if (!validation.ok) {
     return {
       ok: false,
@@ -32,7 +32,8 @@ export async function orchestrateCreateWorktree(
     };
   }
 
-  const repo = await resolveRepoIntent(request.repoIntent, options);
+  const normalizedRequest = validation.request;
+  const repo = await resolveRepoIntent(normalizedRequest.repoIntent, options);
   if (!repo.ok) {
     return {
       ok: false,
@@ -48,7 +49,7 @@ export async function orchestrateCreateWorktree(
   }
 
   options.onStatus?.({ stage: 'creating-worktree', message: 'Creating worktree…' });
-  const worktree = await createGitWorktree(request, repo.repo, options);
+  const worktree = await createGitWorktree(normalizedRequest, repo.repo, options);
   if (!worktree.ok) {
     return {
       ok: false,
@@ -58,7 +59,7 @@ export async function orchestrateCreateWorktree(
     };
   }
 
-  const launchMode = getLaunchMode(request);
+  const launchMode = getLaunchMode(normalizedRequest);
   if (launchMode === 'none') {
     return {
       ok: true,
@@ -73,7 +74,7 @@ export async function orchestrateCreateWorktree(
     stage: 'waiting-for-session',
     message: 'Waiting for session to appear in Session Deck…',
   });
-  const launch = await launchDetachedTmuxPi(worktree, request.label.trim(), options);
+  const launch = await launchDetachedTmuxPi(worktree, normalizedRequest.label, options);
   if (launch.requested && !launch.ok) {
     return {
       ok: true,
@@ -91,11 +92,16 @@ export async function orchestrateCreateWorktree(
   };
 }
 
-function validateCreateWorktreeRequest(
+type NormalizedCreateWorktreeActionRequest = CreateWorktreeActionRequest & {
+  branchName: string;
+  label: string;
+};
+
+function normalizeCreateWorktreeRequest(
   request: CreateWorktreeActionRequest,
-): { ok: true } | { ok: false; message: string } {
-  if (typeof request.label !== 'string' || request.label.trim().length === 0) {
-    return { ok: false, message: 'Worktree name is required.' };
+): { ok: true; request: NormalizedCreateWorktreeActionRequest } | { ok: false; message: string } {
+  if (typeof request.branchName !== 'string' || request.branchName.trim().length === 0) {
+    return { ok: false, message: 'Branch name is required.' };
   }
 
   if (!Array.isArray(request.repoIntent.candidateRuntimeIds)) {
@@ -107,7 +113,15 @@ function validateCreateWorktreeRequest(
     return { ok: false, message: 'Unsupported launch mode.' };
   }
 
-  return { ok: true };
+  const branchName = request.branchName.trim();
+  return {
+    ok: true,
+    request: {
+      ...request,
+      branchName,
+      label: branchName,
+    },
+  };
 }
 
 function getLaunchMode(request: CreateWorktreeActionRequest): CreateWorktreeLaunchMode {

@@ -9,8 +9,7 @@ export interface CreateWorktreeRepoIntent {
 
 export interface CreateWorktreeActionRequest {
   repoIntent: CreateWorktreeRepoIntent;
-  label: string;
-  branchName?: string;
+  branchName: string;
   baseRef?: string;
   path?: string;
   launch?: {
@@ -114,6 +113,42 @@ export type CreateWorktreeActionResult =
       status: 'failed';
       worktree: Extract<CreateWorktreePhaseResult, { ok: false }>;
       launch: Extract<CreateWorktreeLaunchResult, { requested: false }>;
+    };
+
+export type BrowserSafeCreateWorktreePhaseResult =
+  | Omit<Extract<CreateWorktreePhaseResult, { ok: true }>, 'path' | 'manualCommand'>
+  | Extract<CreateWorktreePhaseResult, { ok: false }>;
+
+export type BrowserSafeCreateWorktreeLaunchResult =
+  | Extract<CreateWorktreeLaunchResult, { requested: false }>
+  | Omit<
+      Extract<CreateWorktreeLaunchResult, { requested: true; ok: true }>,
+      'tmuxSessionName' | 'tmuxTarget' | 'manualAttachCommand'
+    >
+  | Omit<Extract<CreateWorktreeLaunchResult, { requested: true; ok: false }>, 'manualCommand'>;
+
+export type BrowserSafeCreateWorktreeActionResult =
+  | {
+      ok: true;
+      status:
+        | 'worktree-created'
+        | 'worktree-reused'
+        | 'created-and-launched'
+        | 'reused-and-launched';
+      worktree: Extract<BrowserSafeCreateWorktreePhaseResult, { ok: true }>;
+      launch: BrowserSafeCreateWorktreeLaunchResult;
+    }
+  | {
+      ok: true;
+      status: 'partial-launch-failed';
+      worktree: Extract<BrowserSafeCreateWorktreePhaseResult, { ok: true }>;
+      launch: Extract<BrowserSafeCreateWorktreeLaunchResult, { requested: true; ok: false }>;
+    }
+  | {
+      ok: false;
+      status: 'failed';
+      worktree: Extract<BrowserSafeCreateWorktreePhaseResult, { ok: false }>;
+      launch: Extract<BrowserSafeCreateWorktreeLaunchResult, { requested: false }>;
     };
 
 export interface CreateWorktreeStatusUpdate {

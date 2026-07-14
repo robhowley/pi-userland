@@ -214,7 +214,7 @@ describe('SessionDeckBrowser', () => {
       lines,
       (line) =>
         line.includes(
-          '↑↓ move · ←→ switch repo · enter details · w new worktree + Pi · o open terminal · r refresh · q close',
+          '↑↓ move · ←→ switch repo · enter details · w new session · o open terminal · r refresh · q close',
         ),
       'help line',
     );
@@ -1078,7 +1078,56 @@ describe('SessionDeckBrowser', () => {
     );
   });
 
-  it('submits w from a named repo filter with default tmux launch and never opens automatically', async () => {
+  it('keeps the w prompt branch-name-first and open when branch name is blank', () => {
+    const createWorktree = vi.fn();
+    const browser = createBrowser({ createWorktree });
+
+    browser.handleInput('right');
+    browser.handleInput('w');
+    browser.handleInput('enter');
+
+    expect(createWorktree).not.toHaveBeenCalled();
+    const output = renderText(browser);
+    expect(output).toContain('Enter a branch name.');
+    expect(output).toContain('Branch name: <branch-name>');
+    expect(output).toContain('Start Pi session in tmux: yes');
+    expect(output).not.toContain('worktree/<name>');
+  });
+
+  it('preserves the typed branch name when shared validation returns an error', async () => {
+    const createWorktree = vi.fn<
+      NonNullable<ConstructorParameters<typeof SessionDeckBrowser>[0]['createWorktree']>
+    >(async () => ({
+      ok: false as const,
+      status: 'failed' as const,
+      worktree: {
+        ok: false as const,
+        reason: 'invalid-branch' as const,
+        message: 'Invalid Git branch name: rh/bad..branch',
+        recoverable: true,
+      },
+      launch: {
+        requested: false as const,
+        mode: 'none' as const,
+        status: 'not-requested' as const,
+      },
+    }));
+    const browser = createBrowser({ createWorktree });
+
+    browser.handleInput('right');
+    browser.handleInput('w');
+    for (const char of 'rh/bad..branch') {
+      browser.handleInput(char);
+    }
+    browser.handleInput('enter');
+
+    await vi.waitFor(() => expect(createWorktree).toHaveBeenCalledTimes(1));
+    const output = renderText(browser);
+    expect(output).toContain('Invalid Git branch name: rh/bad..branch');
+    expect(output).toContain('Branch name: rh/bad..branch');
+  });
+
+  it('submits w from a named repo filter with exact branchName, default tmux launch, and never opens automatically', async () => {
     const openSelected = vi.fn();
     const createWorktree = vi.fn<
       NonNullable<ConstructorParameters<typeof SessionDeckBrowser>[0]['createWorktree']>
@@ -1089,7 +1138,7 @@ describe('SessionDeckBrowser', () => {
         ok: true as const,
         status: 'created' as const,
         path: '/tmp/project-wt-feature',
-        branch: 'worktree/feature',
+        branch: 'rh/feature',
         baseRef: 'origin/main',
         repoName: 'project',
         qualifiedRepoName: 'owner/project',
@@ -1120,14 +1169,15 @@ describe('SessionDeckBrowser', () => {
 
     browser.handleInput('right');
     browser.handleInput('w');
-    for (const char of 'feature') {
+    for (const char of 'rh/feature') {
       browser.handleInput(char);
     }
     browser.handleInput('enter');
 
     await vi.waitFor(() => expect(createWorktree).toHaveBeenCalledTimes(1));
-    expect(createWorktree.mock.calls[0]?.[0]).toMatchObject({
-      label: 'feature',
+    const request = createWorktree.mock.calls[0]?.[0];
+    expect(request).toMatchObject({
+      branchName: 'rh/feature',
       repoIntent: {
         repoName: 'project',
         qualifiedRepoName: 'owner/project',
@@ -1136,6 +1186,7 @@ describe('SessionDeckBrowser', () => {
       },
       launch: { mode: 'tmux-detached' },
     });
+    expect(request).not.toHaveProperty('label');
     expect(openSelected).not.toHaveBeenCalled();
     await vi.waitFor(() =>
       expect(renderText(browser)).toContain('Session ready · press o to attach.'),

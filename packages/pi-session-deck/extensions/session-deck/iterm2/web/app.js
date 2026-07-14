@@ -537,13 +537,15 @@ function createRepoActionRow(repoGroup) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'repo-action-button';
-  button.textContent = 'New worktree + Pi';
+  button.textContent = '＋ New session';
+  button.setAttribute('aria-label', 'create new session');
+  button.setAttribute('title', 'create new session');
   button.addEventListener('click', () => {
     state.activeWorktreeFormRepoKey =
       state.activeWorktreeFormRepoKey === repoGroup.key ? null : repoGroup.key;
     state.expandedRepoKeys.add(repoGroup.key);
     if (!state.worktreeForms.has(repoGroup.key)) {
-      state.worktreeForms.set(repoGroup.key, { label: '', launchPi: true });
+      state.worktreeForms.set(repoGroup.key, { branchName: '', launchPi: true });
     }
     render();
   });
@@ -552,7 +554,7 @@ function createRepoActionRow(repoGroup) {
 }
 
 function createWorktreeForm(repoGroup) {
-  const formState = state.worktreeForms.get(repoGroup.key) ?? { label: '', launchPi: true };
+  const formState = state.worktreeForms.get(repoGroup.key) ?? { branchName: '', launchPi: true };
   const form = document.createElement('form');
   form.className = 'worktree-form';
   form.addEventListener('submit', (event) => {
@@ -562,11 +564,11 @@ function createWorktreeForm(repoGroup) {
 
   const labelInput = document.createElement('input');
   labelInput.type = 'text';
-  labelInput.value = formState.label;
-  labelInput.setAttribute('aria-label', 'Worktree name');
-  labelInput.setAttribute('placeholder', 'worktree name');
+  labelInput.value = formState.branchName;
+  labelInput.setAttribute('aria-label', 'Branch name');
+  labelInput.setAttribute('placeholder', 'rh/feature-name');
   labelInput.addEventListener('input', () => {
-    formState.label = labelInput.value;
+    formState.branchName = labelInput.value;
   });
 
   const launchInput = document.createElement('input');
@@ -585,9 +587,12 @@ function createWorktreeForm(repoGroup) {
   submit.textContent = 'Create';
   submit.disabled = state.pendingWorktrees.has(repoGroup.key);
 
-  const previewSlug = slugifyLabel(formState.label) || '<name>';
   form.append(
-    createText('div', `Branch preview: worktree/${previewSlug}`, 'worktree-preview'),
+    createText(
+      'div',
+      'From default branch · worktree path generated automatically',
+      'worktree-preview',
+    ),
     labelInput,
     launchLabel,
     submit,
@@ -606,20 +611,20 @@ function createPendingWorktreeCard(pending) {
 }
 
 function submitWorktreeForm(repoGroup, formState) {
-  const label = formState.label.trim();
-  if (label.length === 0 || state.pendingWorktrees.has(repoGroup.key)) {
+  const branchName = formState.branchName.trim();
+  if (branchName.length === 0 || state.pendingWorktrees.has(repoGroup.key)) {
     return;
   }
 
   state.pendingWorktrees.set(repoGroup.key, {
-    title: 'New worktree + Pi',
+    title: 'New session',
     message: 'Creating worktree…',
     tone: 'pending',
   });
   state.activeWorktreeFormRepoKey = null;
   render();
 
-  void postCreateWorktreeAction(repoGroup, label, formState.launchPi)
+  void postCreateWorktreeAction(repoGroup, branchName, formState.launchPi)
     .then(async (result) => {
       state.pendingWorktrees.set(repoGroup.key, summarizeWorktreeActionResult(result));
       if (result.ok && result.launch?.ok && result.launch.runtimeId) {
@@ -630,7 +635,7 @@ function submitWorktreeForm(repoGroup, formState) {
     })
     .catch((error) => {
       state.pendingWorktrees.set(repoGroup.key, {
-        title: 'New worktree + Pi',
+        title: 'New session',
         message: `Create worktree failed: ${error instanceof Error ? error.message : String(error)}`,
         tone: 'failed',
       });
@@ -638,7 +643,7 @@ function submitWorktreeForm(repoGroup, formState) {
     });
 }
 
-async function postCreateWorktreeAction(repoGroup, label, launchPi) {
+async function postCreateWorktreeAction(repoGroup, branchName, launchPi) {
   const response = await fetch('/actions/create-worktree', {
     method: 'POST',
     cache: 'no-store',
@@ -653,7 +658,7 @@ async function postCreateWorktreeAction(repoGroup, label, launchPi) {
         qualifiedRepoName: repoGroup.kind === 'qualified' ? repoGroup.label : null,
         candidateRuntimeIds: repoGroup.records.map((record) => record.runtimeId),
       },
-      label,
+      branchName,
       launch: { mode: launchPi ? 'tmux-detached' : 'none' },
     }),
   });
@@ -700,15 +705,6 @@ function summarizeWorktreeActionResult(result) {
 function getActionToken() {
   const tokenElement = document.getElementById('session-deck-action-token');
   return tokenElement?.getAttribute?.('content') ?? '';
-}
-
-function slugifyLabel(label) {
-  return label
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/gu, '-')
-    .replace(/^-+|-+$/gu, '')
-    .slice(0, 48);
 }
 
 function createRecordCard(record) {

@@ -26,23 +26,22 @@ export async function createGitWorktree(
   repo: CreateWorktreeResolvedRepo,
   options: CreateGitWorktreeOptions = {},
 ): Promise<CreateWorktreePhaseResult> {
-  const label = request.label.trim();
-  const slug = slugifyWorktreeLabel(label);
-  if (slug === null) {
-    return {
-      ok: false,
-      reason: 'invalid-label',
-      message: 'Enter a non-empty worktree name.',
-      recoverable: true,
-    };
-  }
-
-  const branch = request.branchName?.trim() || `worktree/${slug}`;
+  const branch = request.branchName.trim();
   if (!(await validateBranchName(repo.primaryWorktreePath, branch, options))) {
     return {
       ok: false,
       reason: 'invalid-branch',
       message: `Invalid Git branch name: ${branch}`,
+      recoverable: true,
+    };
+  }
+
+  const slug = slugifyWorktreeLabel(branch);
+  if (slug === null) {
+    return {
+      ok: false,
+      reason: 'invalid-label',
+      message: 'Could not derive a worktree path segment from the branch name.',
       recoverable: true,
     };
   }

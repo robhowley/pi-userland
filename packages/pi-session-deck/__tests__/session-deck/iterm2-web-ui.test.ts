@@ -171,6 +171,7 @@ class FakeButtonElement extends FakeElement {
 
 class FakeInputElement extends FakeElement {
   checked = false;
+  value = '';
 
   constructor() {
     super('input');
@@ -219,6 +220,7 @@ interface HarnessElements {
 interface AppHarness {
   elements: HarnessElements;
   pushSnapshot: (snapshot: unknown) => void;
+  fetchMock: ReturnType<typeof vi.fn>;
   openMock: ReturnType<typeof vi.fn>;
 }
 
@@ -299,6 +301,7 @@ async function setupApp(snapshots: unknown[]): Promise<AppHarness> {
     pushSnapshot: (snapshot) => {
       queue.push(snapshot);
     },
+    fetchMock,
     openMock,
   };
 }
@@ -504,6 +507,17 @@ function expandAllRepoGroups(list: FakeElement): void {
   for (const label of getRepoHeaderTexts(list).map((text) => text.split(' · ')[0] ?? text)) {
     expandRepoGroup(list, label);
   }
+}
+
+function findAllByTag(node: FakeNode, tagName: string): FakeElement[] {
+  const matches: FakeElement[] = [];
+  for (const child of node.childNodes) {
+    if (child instanceof FakeElement && child.tagName === tagName.toUpperCase()) {
+      matches.push(child);
+    }
+    matches.push(...findAllByTag(child, tagName));
+  }
+  return matches;
 }
 
 function getCards(root: FakeNode): FakeElement[] {
@@ -740,6 +754,137 @@ describe('Session Deck iTerm2 web UI', () => {
     );
     expect(findAllByClass(harness.elements.list, 'repo-group-records')).toHaveLength(0);
     expect(getCards(harness.elements.list)).toHaveLength(0);
+  });
+
+  it('opens a branch-name-first New session composer without a worktree branch preview', async () => {
+    const harness = await setupApp([buildSnapshot()]);
+    const repoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    const actionButton = findAllByClass(repoGroup, 'repo-action-button')[0] as FakeButtonElement;
+
+    expect(actionButton.textContent).toBe('＋ New session');
+    expect(actionButton.getAttribute('aria-label')).toBe('create new session');
+    actionButton.click();
+
+    const openedRepoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    const form = findAllByClass(openedRepoGroup, 'worktree-form')[0];
+    expect(form).toBeDefined();
+    expect(form!.textContent).toContain('From default branch');
+    expect(form!.textContent).toContain('worktree path generated automatically');
+    expect(form!.textContent).toContain('Start Pi session in tmux');
+    expect(form!.textContent).not.toContain('worktree/<');
+
+    const branchInput = findAllByTag(form!, 'input').find(
+      (input) => input.getAttribute('aria-label') === 'Branch name',
+    ) as FakeInputElement | undefined;
+    expect(branchInput).toBeDefined();
+    expect(branchInput!.getAttribute('placeholder')).toBe('rh/feature-name');
+  });
+
+  it('submits exact branchName from the New session composer and omits label from the browser request', async () => {
+    const harness = await setupApp([
+      buildSnapshot(),
+      {
+        ok: true,
+        status: 'created-and-launched',
+        worktree: {
+          ok: true,
+          status: 'created',
+          branch: 'rh/feature-name',
+          baseRef: 'origin/main',
+          repoName: 'project',
+          qualifiedRepoName: 'owner/project',
+        },
+        launch: {
+          requested: true,
+          ok: true,
+          mode: 'tmux-detached',
+          status: 'launched',
+          runtimeId: 'rt-created',
+          sessionId: 'session-created',
+          message: 'Started a detached tmux Pi session. Session ready · press o to attach.',
+        },
+      },
+      buildSnapshot({
+        records: [buildRecord(), buildRecord({ runtimeId: 'rt-created', sessionName: 'feature' })],
+      }),
+    ]);
+    const repoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    (findAllByClass(repoGroup, 'repo-action-button')[0] as FakeButtonElement).click();
+    const openedRepoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    const form = findAllByClass(openedRepoGroup, 'worktree-form')[0]!;
+    const branchInput = findAllByTag(form, 'input').find(
+      (input) => input.getAttribute('aria-label') === 'Branch name',
+    ) as FakeInputElement;
+
+    branchInput.value = 'rh/feature-name';
+    branchInput.dispatchEvent({ type: 'input' });
+    form.dispatchEvent({ type: 'submit' });
+    await flushMicrotasks();
+
+    const actionCall = harness.fetchMock.mock.calls.find(
+      ([url]) => url === '/actions/create-worktree',
+    );
+    expect(actionCall).toBeDefined();
+    const requestInit = actionCall![1] as { method?: string; body?: string };
+    expect(requestInit.method).toBe('POST');
+    expect(JSON.parse(requestInit.body ?? '{}')).toMatchObject({
+      repoIntent: {
+        repoName: 'project',
+        qualifiedRepoName: 'owner/project',
+        candidateRuntimeIds: ['rt-1'],
+      },
+      branchName: 'rh/feature-name',
+      launch: { mode: 'tmux-detached' },
+    });
+    expect(JSON.parse(requestInit.body ?? '{}')).not.toHaveProperty('label');
+    expect(harness.elements.list.textContent).toContain('feature');
+  });
+
+  it('renders partial launch failure from the sanitized browser-visible action shape', async () => {
+    const harness = await setupApp([
+      buildSnapshot(),
+      {
+        ok: true,
+        status: 'partial-launch-failed',
+        worktree: {
+          ok: true,
+          status: 'created',
+          branch: 'rh/feature-name',
+          baseRef: 'origin/main',
+          repoName: 'project',
+          qualifiedRepoName: 'owner/project',
+        },
+        launch: {
+          requested: true,
+          ok: false,
+          mode: 'tmux-detached',
+          status: 'failed',
+          reason: 'presence-timeout',
+          recoverable: true,
+          message: 'Created worktree, but Session Deck did not observe it.',
+        },
+      },
+      buildSnapshot(),
+    ]);
+    const repoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    (findAllByClass(repoGroup, 'repo-action-button')[0] as FakeButtonElement).click();
+    const openedRepoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    const form = findAllByClass(openedRepoGroup, 'worktree-form')[0]!;
+    const branchInput = findAllByTag(form, 'input').find(
+      (input) => input.getAttribute('aria-label') === 'Branch name',
+    ) as FakeInputElement;
+
+    branchInput.value = 'rh/feature-name';
+    branchInput.dispatchEvent({ type: 'input' });
+    form.dispatchEvent({ type: 'submit' });
+    await flushMicrotasks();
+
+    expect(harness.elements.list.textContent).toContain('Worktree ready · Pi launch failed');
+    expect(harness.elements.list.textContent).toContain(
+      'Created worktree, but Session Deck did not observe it.',
+    );
+    expect(harness.elements.list.textContent).not.toContain('/tmp/');
+    expect(harness.elements.list.textContent).not.toContain('tmux attach');
   });
 
   it('sorts named repo groups case-insensitively and keeps No repo last', async () => {
