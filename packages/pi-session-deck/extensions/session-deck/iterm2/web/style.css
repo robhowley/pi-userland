@@ -420,21 +420,38 @@ button.card-toggle[aria-expanded='true']::after {
   white-space: nowrap;
 }
 
-.status-icon {
-  min-width: 0.9rem;
-  color: var(--color-accent);
-}
-
-.card.stale .status-icon {
-  color: var(--color-warn);
-}
-
-.card.dead .status-icon {
-  color: var(--color-danger);
-}
-
-.card.unknown .status-icon {
+.activity-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  flex-shrink: 0;
   color: var(--color-text-muted);
+  opacity: 0.8;
+}
+
+.activity-icon svg {
+  display: block;
+}
+
+.activity-icon[data-activity='thinking'] .activity-icon-thinking-orbit {
+  opacity: 0.75;
+  stroke: var(--color-accent);
+  stroke-dasharray: 3 40;
+  animation: activity-icon-thinking-orbit 1.35s linear infinite;
+}
+
+@keyframes activity-icon-thinking-orbit {
+  to {
+    stroke-dashoffset: -43;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .activity-icon[data-activity='thinking'] .activity-icon-thinking-orbit {
+    animation: none;
+  }
 }
 
 .chips {

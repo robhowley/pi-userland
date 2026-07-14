@@ -192,6 +192,10 @@ class FakeDocument extends FakeNode {
     }
   }
 
+  createElementNS(_namespace: string, tagName: string): FakeElement {
+    return this.createElement(tagName);
+  }
+
   createTextNode(text: string): FakeTextNode {
     return new FakeTextNode(text);
   }
@@ -1303,9 +1307,45 @@ describe('Session Deck iTerm2 web UI', () => {
     const line1 = getCardLine(card, 'row-line1');
     const line2 = getCardLine(card, 'row-line2');
 
-    expect(getChildTextContents(line1)).toEqual(['●', 'idle', 'gbt baseline', '5s']);
+    const activityIcons = findAllByClass(line1, 'activity-icon');
+    expect(activityIcons).toHaveLength(1);
+    expect(activityIcons[0]?.getAttribute('role')).toBe('img');
+    expect(activityIcons[0]?.getAttribute('aria-label')).toBe('idle');
+    expect(activityIcons[0]?.getAttribute('title')).toBe('idle');
+    expect(findAllByClass(line1, 'status-icon')).toHaveLength(0);
+    expect(getChildTextContents(line1)).toEqual(['', 'gbt baseline', '5s']);
+    expect(line1.textContent).not.toContain('idle');
     expect(findAllByClass(line1, 'row-age')[0]?.textContent).toBe('5s');
     expect(getChildTextContents(line2)).toEqual(['shop-ml', '#22722', 'rh-baseline-gbdt']);
+  });
+
+  it('renders thinking as one accessible brain icon with a CSS orbit affordance', async () => {
+    const harness = await setupApp([
+      buildSnapshot({
+        records: [
+          buildRecord({
+            activityState: 'thinking',
+            activityAgeMs: 12_000,
+            heartbeatAgeMs: 4_000,
+          }),
+        ],
+      }),
+    ]);
+    expandAllRepoGroups(harness.elements.list);
+
+    const card = getCards(harness.elements.list)[0]!;
+    const line1 = getCardLine(card, 'row-line1');
+    const activityIcons = findAllByClass(line1, 'activity-icon');
+
+    expect(activityIcons).toHaveLength(1);
+    expect(activityIcons[0]?.getAttribute('role')).toBe('img');
+    expect(activityIcons[0]?.getAttribute('aria-label')).toBe('thinking');
+    expect(activityIcons[0]?.getAttribute('title')).toBe('thinking');
+    expect(activityIcons[0]?.getAttribute('data-activity')).toBe('thinking');
+    expect(findAllByClass(line1, 'activity-icon-thinking-orbit')).toHaveLength(1);
+    expect(findAllByClass(line1, 'status-icon')).toHaveLength(0);
+    expect(getChildTextContents(line1)).toEqual(['', 'alpha', '12s']);
+    expect(line1.textContent).not.toContain('thinking');
   });
 
   it('renders subsecond card ages as <1s and preserves larger duration units', async () => {
@@ -1348,7 +1388,7 @@ describe('Session Deck iTerm2 web UI', () => {
     ).toEqual(['<1s', '1s', '1m', '1h']);
   });
 
-  it('shows tool-running age once by keeping it out of the activity summary', async () => {
+  it('shows tool-running as one accessible icon and keeps the age visible once', async () => {
     const harness = await setupApp([
       buildSnapshot({
         records: [
@@ -1367,7 +1407,16 @@ describe('Session Deck iTerm2 web UI', () => {
     const line1 = getCardLine(card, 'row-line1');
     const line2 = getCardLine(card, 'row-line2');
 
-    expect(getChildTextContents(line1)).toEqual(['●', 'tool-running: bash', 'alpha', '12s']);
+    const activityIcons = findAllByClass(line1, 'activity-icon');
+    expect(activityIcons).toHaveLength(1);
+    expect(activityIcons[0]?.getAttribute('aria-label')).toBe('tool-running: bash');
+    expect(activityIcons[0]?.getAttribute('title')).toBe('tool-running: bash');
+    expect(activityIcons[0]?.getAttribute('data-activity')).toBe('tool-running');
+    expect(findAllByClass(line1, 'activity-icon-thinking-orbit')).toHaveLength(0);
+    expect(findAllByClass(line1, 'status-icon')).toHaveLength(0);
+    expect(getChildTextContents(line1)).toEqual(['', 'alpha', '12s']);
+    expect(line1.textContent).not.toContain('tool-running');
+    expect(line1.textContent).not.toContain('bash');
     expect(line1.textContent.match(/12s/gu) ?? []).toHaveLength(1);
     expect(line2.textContent).not.toContain('12s');
 
@@ -1487,6 +1536,7 @@ describe('Session Deck iTerm2 web UI', () => {
       'worktree · shop-ml-pr22623-rankerspec-uses-pipeline',
       '#22623',
     ]);
+
     const prValue = getDetailRowValue(workspace, 'PR');
     expect(prValue.tagName).toBe('A');
     expect(prValue.classList.contains('detail-link')).toBe(true);

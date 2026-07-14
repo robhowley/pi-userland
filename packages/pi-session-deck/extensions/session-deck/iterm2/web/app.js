@@ -524,8 +524,7 @@ function createRecordCard(record) {
 
   toggle.append(
     createLine('row-line1', [
-      createText('span', getPresenceIcon(record.presenceState), 'status-icon'),
-      createText('span', formatActivitySummary(record), 'muted'),
+      createActivityIcon(record),
       createText('span', title.text, 'row-title'),
       createText('span', formatDuration(getListAgeMs(record)), 'muted row-age'),
     ]),
@@ -797,11 +796,6 @@ function parsePullRequestNumber(prUrl) {
   return match ? match[1] : null;
 }
 
-function formatActivitySummary(record) {
-  const activity = getActivityDisplay(record);
-  return activity.detail ? `${activity.label}: ${activity.detail}` : activity.label;
-}
-
 function getActivityDisplay(record) {
   const ageLabel = record.activityAgeMs === null ? null : formatDuration(record.activityAgeMs);
 
@@ -861,17 +855,95 @@ function formatTimestamp(isoString) {
   return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
-function getPresenceIcon(stateName) {
-  switch (stateName) {
-    case 'live':
-      return '●';
-    case 'stale':
-      return '◌';
-    case 'dead':
-      return '×';
+function createActivityIcon(record) {
+  const activity = getActivityDisplay(record);
+  const label = activity.detail ? `${activity.label}: ${activity.detail}` : activity.label;
+  const icon = document.createElement('span');
+  icon.className = 'activity-icon';
+  icon.setAttribute('data-activity', record.activityState);
+  icon.setAttribute('role', 'img');
+  icon.setAttribute('aria-label', label);
+  icon.setAttribute('title', label);
+
+  const svg = createSvgElement('svg');
+  svg.setAttribute('viewBox', '0 0 16 16');
+  svg.setAttribute('width', '16');
+  svg.setAttribute('height', '16');
+  svg.setAttribute('aria-hidden', 'true');
+
+  switch (record.activityState) {
+    case 'idle':
+      svg.append(createSvgCircle({ cx: '8', cy: '8', r: '5.5' }));
+      break;
+    case 'thinking': {
+      const orbit = createSvgCircle({ cx: '8', cy: '8', r: '6.35' });
+      orbit.setAttribute('class', 'activity-icon-thinking-orbit');
+      orbit.setAttribute('stroke-linecap', 'round');
+      orbit.setAttribute('stroke-width', '1.2');
+      svg.append(
+        createSvgPath(
+          'M9.5 2A2.5 2.5 0 0 1 12 4.5v.2A2.5 2.5 0 0 1 14 7.1c0 .8-.4 1.5-1 2 .6.5 1 1.2 1 2A2.9 2.9 0 0 1 11.1 14H10a2 2 0 0 1-2-2V4a2 2 0 0 1 1.5-2ZM6.5 2A2.5 2.5 0 0 0 4 4.5v.2A2.5 2.5 0 0 0 2 7.1c0 .8.4 1.5 1 2-.6.5-1 1.2-1 2A2.9 2.9 0 0 0 4.9 14H6a2 2 0 0 0 2-2V4a2 2 0 0 0-1.5-2Z',
+        ),
+        orbit,
+      );
+      break;
+    }
+    case 'tool-running':
+      svg.append(
+        createSvgPath(
+          'M.1 2.2A3 3 0 0 0 3.8 5.9l6.3 6.3a3 3 0 0 0 3.7 3.7l-2.1-2.1a.5.5 0 0 1 .4-.9h1.4a.5.5 0 0 1 .4.1l2.1 2.1a3 3 0 0 0-3.7-3.7L5.9 5.1A3 3 0 0 0 2.2.1l2.1 2.1a.5.5 0 0 1-.4.9H2.5a.5.5 0 0 1-.4-.1L.1 2.2Z',
+        ),
+      );
+      break;
+    case 'error':
+      svg.append(
+        createSvgPath(
+          'M8.9 1.5l6.4 11c.3.5.1 1.1-.4 1.4-.2.1-.3.1-.5.1H1.6c-.6 0-1-.4-1-1 0-.2 0-.3.1-.5l6.4-11c.3-.5.9-.6 1.4-.4.2.2.4.3.4.4zM8 11c-.6 0-1 .4-1 1s.4 1 1 1 1-.4 1-1-.4-1-1-1zm0-6c-.6 0-1 .4-1 1v3c0 .6.4 1 1 1s1-.4 1-1V6c0-.6-.4-1-1-1z',
+        ),
+      );
+      break;
     default:
-      return '◇';
+      svg.append(createSvgCircle({ cx: '8', cy: '8', r: '6.5' }));
+      svg.append(createSvgText('?'));
+      break;
   }
+
+  icon.append(svg);
+  return icon;
+}
+
+function createSvgElement(tagName) {
+  return document.createElementNS('http://www.w3.org/2000/svg', tagName);
+}
+
+function createSvgPath(pathData) {
+  const path = createSvgElement('path');
+  path.setAttribute('d', pathData);
+  path.setAttribute('fill', 'currentColor');
+  return path;
+}
+
+function createSvgCircle(attributes) {
+  const circle = createSvgElement('circle');
+  for (const [name, value] of Object.entries(attributes)) {
+    circle.setAttribute(name, value);
+  }
+  circle.setAttribute('fill', 'none');
+  circle.setAttribute('stroke', 'currentColor');
+  circle.setAttribute('stroke-width', '1.5');
+  return circle;
+}
+
+function createSvgText(textValue) {
+  const text = createSvgElement('text');
+  text.setAttribute('x', '8');
+  text.setAttribute('y', '11');
+  text.setAttribute('fill', 'currentColor');
+  text.setAttribute('text-anchor', 'middle');
+  text.setAttribute('font-size', '10');
+  text.setAttribute('font-weight', '700');
+  text.textContent = textValue;
+  return text;
 }
 
 function humanizePresenceReason(reason) {
