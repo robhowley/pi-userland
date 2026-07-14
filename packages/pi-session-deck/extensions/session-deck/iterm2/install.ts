@@ -166,6 +166,12 @@ async function findMissingRuntimeAsset(
     };
   }
 
+  if (!(await pathExists(runtimePaths.createWorktreeHelperScriptPath))) {
+    return {
+      message: `Create-worktree helper not found: ${runtimePaths.createWorktreeHelperScriptPath}`,
+    };
+  }
+
   if (!(await pathExists(runtimePaths.webRootPath))) {
     return {
       message: `Web assets not found: ${runtimePaths.webRootPath}`,

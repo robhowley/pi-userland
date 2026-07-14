@@ -63,6 +63,14 @@ async function createRuntimePaths(
     'iterm2',
     'snapshot-cli.js',
   );
+  const createWorktreeHelperScriptPath = join(
+    root,
+    'dist',
+    'extensions',
+    'session-deck',
+    'worktree',
+    'action-cli.js',
+  );
   const webRootPath = join(root, 'extensions', 'session-deck', 'iterm2', 'web');
   const autolaunchSourcePath = join(root, 'extensions', 'session-deck', 'iterm2', 'autolaunch.py');
   const socketRoot = await mkdtemp('/tmp/psd-iterm2-sock-');
@@ -70,9 +78,11 @@ async function createRuntimePaths(
   const bridgeSocketPath = join(socketRoot, 'iterm2.sock');
 
   await mkdir(dirname(snapshotHelperPath), { recursive: true });
+  await mkdir(dirname(createWorktreeHelperScriptPath), { recursive: true });
   await mkdir(webRootPath, { recursive: true });
   await mkdir(dirname(autolaunchSourcePath), { recursive: true });
   await writeFile(snapshotHelperPath, 'console.log("snapshot")\n', 'utf8');
+  await writeFile(createWorktreeHelperScriptPath, 'console.log("action")\n', 'utf8');
   await writeFile(join(webRootPath, 'index.html'), '<!doctype html>\n', 'utf8');
   if (options.includeAppJs !== false) {
     await writeFile(join(webRootPath, 'app.js'), 'console.log("app")\n', 'utf8');
@@ -87,6 +97,7 @@ async function createRuntimePaths(
     packageVersion: '1.2.3',
     nodeExecutablePath: '/usr/local/bin/node',
     snapshotHelperPath,
+    createWorktreeHelperScriptPath,
     webRootPath,
     autolaunchSourcePath,
     bridgeSocketPath,

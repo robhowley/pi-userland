@@ -15,6 +15,10 @@ const state = {
   loading: false,
   fetchError: null,
   expandedRepoKeys: new Set(),
+  activeWorktreeFormRepoKey: null,
+  worktreeForms: new Map(),
+  pendingWorktrees: new Map(),
+  highlightedRuntimeId: null,
 };
 
 const elements = {
@@ -77,6 +81,7 @@ async function refreshSnapshot({ source }) {
     state.fetchError = null;
     reconcileSelection();
     reconcileExpandedRepoKeys();
+    reconcilePendingWorktrees();
   } catch (error) {
     state.fetchError = error instanceof Error ? error.message : String(error);
     if (source === 'startup') {
@@ -220,6 +225,19 @@ function reconcileExpandedRepoKeys(repoGroups = createRepoGroups(getVisibleRecor
     if (!visibleRepoKeys.has(expandedRepoKey)) {
       state.expandedRepoKeys.delete(expandedRepoKey);
     }
+  }
+}
+
+function reconcilePendingWorktrees(repoGroups = createRepoGroups(getVisibleRecords())) {
+  if (!state.highlightedRuntimeId) {
+    return;
+  }
+
+  const matchedGroup = repoGroups.find((repoGroup) =>
+    repoGroup.records.some((record) => record.runtimeId === state.highlightedRuntimeId),
+  );
+  if (matchedGroup) {
+    state.pendingWorktrees.delete(matchedGroup.key);
   }
 }
 
@@ -482,6 +500,10 @@ function createRepoGroup(repoGroup) {
 
   section.append(header);
 
+  if (repoGroup.kind !== 'no-repo') {
+    section.append(createRepoActionRow(repoGroup));
+  }
+
   if (isExpanded) {
     const records = document.createElement('div');
     const recordsId = getRepoGroupRecordsId(repoGroup.key);
@@ -490,6 +512,15 @@ function createRepoGroup(repoGroup) {
     records.setAttribute('role', 'list');
     records.setAttribute('aria-label', `${repoGroup.label} sessions`);
     header.setAttribute('aria-controls', recordsId);
+
+    const pending = state.pendingWorktrees.get(repoGroup.key);
+    if (pending) {
+      records.append(createPendingWorktreeCard(pending));
+    }
+
+    if (state.activeWorktreeFormRepoKey === repoGroup.key) {
+      records.append(createWorktreeForm(repoGroup));
+    }
 
     for (const record of repoGroup.records) {
       records.append(createRecordCard(record));
@@ -500,12 +531,193 @@ function createRepoGroup(repoGroup) {
   return section;
 }
 
+function createRepoActionRow(repoGroup) {
+  const row = document.createElement('div');
+  row.className = 'repo-actions';
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'repo-action-button';
+  button.textContent = 'New worktree + Pi';
+  button.addEventListener('click', () => {
+    state.activeWorktreeFormRepoKey =
+      state.activeWorktreeFormRepoKey === repoGroup.key ? null : repoGroup.key;
+    state.expandedRepoKeys.add(repoGroup.key);
+    if (!state.worktreeForms.has(repoGroup.key)) {
+      state.worktreeForms.set(repoGroup.key, { label: '', launchPi: true });
+    }
+    render();
+  });
+  row.append(button);
+  return row;
+}
+
+function createWorktreeForm(repoGroup) {
+  const formState = state.worktreeForms.get(repoGroup.key) ?? { label: '', launchPi: true };
+  const form = document.createElement('form');
+  form.className = 'worktree-form';
+  form.addEventListener('submit', (event) => {
+    event.preventDefault?.();
+    submitWorktreeForm(repoGroup, formState);
+  });
+
+  const labelInput = document.createElement('input');
+  labelInput.type = 'text';
+  labelInput.value = formState.label;
+  labelInput.setAttribute('aria-label', 'Worktree name');
+  labelInput.setAttribute('placeholder', 'worktree name');
+  labelInput.addEventListener('input', () => {
+    formState.label = labelInput.value;
+  });
+
+  const launchInput = document.createElement('input');
+  launchInput.type = 'checkbox';
+  launchInput.checked = formState.launchPi;
+  launchInput.addEventListener('change', () => {
+    formState.launchPi = launchInput.checked;
+  });
+
+  const launchLabel = document.createElement('label');
+  launchLabel.className = 'worktree-launch-toggle';
+  launchLabel.append(launchInput, createText('span', 'Start Pi session in tmux'));
+
+  const submit = document.createElement('button');
+  submit.type = 'submit';
+  submit.textContent = 'Create';
+  submit.disabled = state.pendingWorktrees.has(repoGroup.key);
+
+  const previewSlug = slugifyLabel(formState.label) || '<name>';
+  form.append(
+    createText('div', `Branch preview: worktree/${previewSlug}`, 'worktree-preview'),
+    labelInput,
+    launchLabel,
+    submit,
+  );
+  return form;
+}
+
+function createPendingWorktreeCard(pending) {
+  const card = document.createElement('article');
+  card.className = `pending-worktree ${pending.tone}`;
+  card.append(
+    createText('div', pending.title, 'pending-worktree-title'),
+    createText('div', pending.message, 'pending-worktree-message'),
+  );
+  return card;
+}
+
+function submitWorktreeForm(repoGroup, formState) {
+  const label = formState.label.trim();
+  if (label.length === 0 || state.pendingWorktrees.has(repoGroup.key)) {
+    return;
+  }
+
+  state.pendingWorktrees.set(repoGroup.key, {
+    title: 'New worktree + Pi',
+    message: 'Creating worktree…',
+    tone: 'pending',
+  });
+  state.activeWorktreeFormRepoKey = null;
+  render();
+
+  void postCreateWorktreeAction(repoGroup, label, formState.launchPi)
+    .then(async (result) => {
+      state.pendingWorktrees.set(repoGroup.key, summarizeWorktreeActionResult(result));
+      if (result.ok && result.launch?.ok && result.launch.runtimeId) {
+        state.highlightedRuntimeId = result.launch.runtimeId;
+      }
+      render();
+      await refreshSnapshot({ source: 'manual' });
+    })
+    .catch((error) => {
+      state.pendingWorktrees.set(repoGroup.key, {
+        title: 'New worktree + Pi',
+        message: `Create worktree failed: ${error instanceof Error ? error.message : String(error)}`,
+        tone: 'failed',
+      });
+      render();
+    });
+}
+
+async function postCreateWorktreeAction(repoGroup, label, launchPi) {
+  const response = await fetch('/actions/create-worktree', {
+    method: 'POST',
+    cache: 'no-store',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'X-Session-Deck-Action-Token': getActionToken(),
+    },
+    body: JSON.stringify({
+      repoIntent: {
+        repoName: getRepoShortName(repoGroup.label),
+        qualifiedRepoName: repoGroup.kind === 'qualified' ? repoGroup.label : null,
+        candidateRuntimeIds: repoGroup.records.map((record) => record.runtimeId),
+      },
+      label,
+      launch: { mode: launchPi ? 'tmux-detached' : 'none' },
+    }),
+  });
+
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload?.message ?? `HTTP ${response.status}`);
+  }
+  return payload;
+}
+
+function summarizeWorktreeActionResult(result) {
+  if (!result.ok) {
+    return {
+      title: 'Worktree failed',
+      message: result.worktree?.message ?? 'Worktree failed.',
+      tone: 'failed',
+    };
+  }
+  if (!result.launch?.requested) {
+    return { title: 'Worktree ready', message: 'Created worktree only.', tone: 'ready' };
+  }
+  if (!result.launch.ok) {
+    return {
+      title: 'Worktree ready · Pi launch failed',
+      message: result.launch.message,
+      tone: 'partial',
+    };
+  }
+  if (result.launch.status === 'requested-unobserved') {
+    return {
+      title: 'Pi starting in tmux',
+      message: 'Waiting for session to appear…',
+      tone: 'pending',
+    };
+  }
+  return {
+    title: 'Session ready',
+    message: 'Ready · attach/open from the session card.',
+    tone: 'ready',
+  };
+}
+
+function getActionToken() {
+  const tokenElement = document.getElementById('session-deck-action-token');
+  return tokenElement?.getAttribute?.('content') ?? '';
+}
+
+function slugifyLabel(label) {
+  return label
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/gu, '-')
+    .replace(/^-+|-+$/gu, '')
+    .slice(0, 48);
+}
+
 function createRecordCard(record) {
   const isExpanded = state.detailVisible && record.runtimeId === state.selectedRuntimeId;
   const title = getDisplayTitle(record);
   const card = document.createElement('article');
   card.className = `card ${record.presenceState}`;
   card.classList.toggle('expanded', isExpanded);
+  card.classList.toggle('highlighted', state.highlightedRuntimeId === record.runtimeId);
   card.setAttribute('role', 'listitem');
 
   const toggle = document.createElement('button');

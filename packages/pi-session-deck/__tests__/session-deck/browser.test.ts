@@ -156,6 +156,7 @@ function createBrowser(
     reapLines: string[];
     theme: Theme;
     openSelected: (record: SessionDeckRecord) => Promise<{ ok: boolean; message: string }>;
+    createWorktree: ConstructorParameters<typeof SessionDeckBrowser>[0]['createWorktree'];
   }> = {},
 ): SessionDeckBrowser {
   const browser = new SessionDeckBrowser({
@@ -167,6 +168,7 @@ function createBrowser(
     requestRender: overrides.requestRender ?? (() => {}),
     ...(overrides.reapLines === undefined ? {} : { reapLines: overrides.reapLines }),
     ...(overrides.openSelected === undefined ? {} : { openSelected: overrides.openSelected }),
+    ...(overrides.createWorktree === undefined ? {} : { createWorktree: overrides.createWorktree }),
     theme: overrides.theme ?? createTheme(),
   });
 
@@ -212,7 +214,7 @@ describe('SessionDeckBrowser', () => {
       lines,
       (line) =>
         line.includes(
-          '↑↓ move · ←→ switch repo · enter details · o open terminal · r refresh · q close',
+          '↑↓ move · ←→ switch repo · enter details · w new worktree + Pi · o open terminal · r refresh · q close',
         ),
       'help line',
     );
@@ -1062,6 +1064,82 @@ describe('SessionDeckBrowser', () => {
     expect(view.records[0]).not.toHaveProperty('paneId');
     expect(view.records[0]).not.toHaveProperty('attachCommand');
     expect(view.records[0]).not.toHaveProperty('sessionTarget');
+  });
+
+  it('warns when w is used outside an active named repo filter', () => {
+    const createWorktree = vi.fn();
+    const browser = createBrowser({ createWorktree });
+
+    browser.handleInput('w');
+
+    expect(createWorktree).not.toHaveBeenCalled();
+    expect(renderText(browser)).toContain(
+      'Switch to a named repo filter before creating a worktree.',
+    );
+  });
+
+  it('submits w from a named repo filter with default tmux launch and never opens automatically', async () => {
+    const openSelected = vi.fn();
+    const createWorktree = vi.fn<
+      NonNullable<ConstructorParameters<typeof SessionDeckBrowser>[0]['createWorktree']>
+    >(async () => ({
+      ok: true as const,
+      status: 'created-and-launched' as const,
+      worktree: {
+        ok: true as const,
+        status: 'created' as const,
+        path: '/tmp/project-wt-feature',
+        branch: 'worktree/feature',
+        baseRef: 'origin/main',
+        repoName: 'project',
+        qualifiedRepoName: 'owner/project',
+        manualCommand: 'git worktree add ...',
+      },
+      launch: {
+        requested: true as const,
+        ok: true as const,
+        mode: 'tmux-detached' as const,
+        status: 'launched' as const,
+        tmuxSessionName: 'pi-project-feature',
+        tmuxTarget: '=pi-project-feature',
+        runtimeId: 'rt-created',
+        sessionId: 'session-created',
+        message: 'Session ready · press o to attach.',
+        manualAttachCommand: 'tmux attach-session -t =pi-project-feature',
+      },
+    }));
+    const reload = vi.fn(async () =>
+      buildSnapshot({
+        records: [
+          buildSnapshotRecord({ runtimeId: 'rt-1', sessionName: 'alpha' }),
+          buildSnapshotRecord({ runtimeId: 'rt-created', sessionName: 'feature' }),
+        ],
+      }),
+    );
+    const browser = createBrowser({ createWorktree, openSelected, reload });
+
+    browser.handleInput('right');
+    browser.handleInput('w');
+    for (const char of 'feature') {
+      browser.handleInput(char);
+    }
+    browser.handleInput('enter');
+
+    await vi.waitFor(() => expect(createWorktree).toHaveBeenCalledTimes(1));
+    expect(createWorktree.mock.calls[0]?.[0]).toMatchObject({
+      label: 'feature',
+      repoIntent: {
+        repoName: 'project',
+        qualifiedRepoName: 'owner/project',
+        candidateRuntimeIds: ['922f7ac8deadbeef'],
+        preferredRuntimeId: '922f7ac8deadbeef',
+      },
+      launch: { mode: 'tmux-detached' },
+    });
+    expect(openSelected).not.toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(renderText(browser)).toContain('Session ready · press o to attach.'),
+    );
   });
 
   it('requests iTerm2 focus for the selected public record with o and renders success as muted', async () => {

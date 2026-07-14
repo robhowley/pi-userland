@@ -12,7 +12,7 @@ import types
 import unittest
 from pathlib import Path
 from urllib.error import HTTPError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[3]
 AUTOLAUNCH_PATH = PACKAGE_ROOT / "extensions/session-deck/iterm2/autolaunch.py"
@@ -68,7 +68,9 @@ class TempRuntime:
             },
             "runtime": {
                 "nodeExecutablePath": "/usr/bin/node",
-                "snapshotHelperPath": str(self.root / "missing-snapshot-cli.js"),
+                "snapshotHelperPath": str(
+                    self.root / "dist/extensions/session-deck/iterm2/missing-snapshot-cli.js"
+                ),
                 "webRootPath": str(self.web_root),
                 "bridgeSocketPath": str(self.socket_path),
             },
@@ -224,6 +226,10 @@ class ImportAndConfigTests(unittest.TestCase):
         config = fixture.config()
         self.assertEqual(config.package_version, "1.2.3")
         self.assertEqual(config.runtime.bridge_socket_path, fixture.socket_path)
+        self.assertEqual(
+            config.runtime.create_worktree_helper_path,
+            fixture.root / "dist/extensions/session-deck/worktree/action-cli.js",
+        )
         AUTO.validate_runtime_assets(config)
 
         (fixture.web_root / "app.js").unlink()
@@ -264,10 +270,16 @@ class ImportAndConfigTests(unittest.TestCase):
         self.assertEqual(health["service"], "dev.pi-userland.session-deck.toolbelt")
         self.assertEqual(health["packageVersion"], "1.2.3")
         self.assertEqual(health["webRoot"], str(fixture.web_root))
+        self.assertEqual(
+            health["createWorktreeHelperScriptPath"],
+            str(config.runtime.create_worktree_helper_path),
+        )
 
         with urlopen(f"{base_url}/", timeout=1.0) as response:
             self.assertEqual(response.headers["Content-Type"], "text/html; charset=utf-8")
-            self.assertIn("Session Deck", response.read().decode("utf-8"))
+            html = response.read().decode("utf-8")
+            self.assertIn("Session Deck", html)
+            self.assertNotIn("__SESSION_DECK_ACTION_TOKEN__", html)
 
         with urlopen(f"{base_url}/snapshot.json", timeout=1.0) as response:
             snapshot = json.loads(response.read().decode("utf-8"))
@@ -278,6 +290,49 @@ class ImportAndConfigTests(unittest.TestCase):
         with self.assertRaises(HTTPError) as raised:
             urlopen(f"{base_url}/missing.js", timeout=1.0)
         self.assertEqual(raised.exception.code, 404)
+
+    def test_toolbelt_create_worktree_action_requires_token_and_runs_helper(self):
+        fixture = TempRuntime(self)
+        helper_path = fixture.config().runtime.create_worktree_helper_path
+        helper_path.parent.mkdir(parents=True)
+        helper_path.write_text(
+            "import json, sys\n"
+            "payload = json.loads(sys.stdin.read())\n"
+            "print(json.dumps({'ok': True, 'status': 'created', 'repoPath': payload['repoPath']}))\n",
+            encoding="utf-8",
+        )
+        fixture.payload["runtime"]["nodeExecutablePath"] = sys.executable
+        fixture.write_state()
+        config = fixture.config()
+        http = AUTO.start_http_server(config)
+        self.addCleanup(http.close)
+        base_url = f"http://127.0.0.1:{http.port}"
+
+        token = http.server.session_deck_action_token
+        payload = json.dumps({"repoPath": str(fixture.root)}).encode("utf-8")
+        request = Request(
+            f"{base_url}/actions/create-worktree",
+            data=payload,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "X-Session-Deck-Action-Token": token,
+            },
+        )
+
+        with urlopen(request, timeout=1.0) as response:
+            action_result = json.loads(response.read().decode("utf-8"))
+        self.assertEqual(action_result, {"ok": True, "status": "created", "repoPath": str(fixture.root)})
+
+        missing_token = Request(
+            f"{base_url}/actions/create-worktree",
+            data=payload,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with self.assertRaises(HTTPError) as raised:
+            urlopen(missing_token, timeout=1.0)
+        self.assertEqual(raised.exception.code, 403)
 
 
 class BridgeRuntimeTests(unittest.IsolatedAsyncioTestCase):

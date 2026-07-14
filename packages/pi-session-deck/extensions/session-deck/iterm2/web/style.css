@@ -659,3 +659,69 @@ button.card-toggle[aria-expanded='true']::after {
 .empty {
   padding: 12px;
 }
+
+.repo-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--color-divider);
+  background: rgba(129, 161, 193, 0.04);
+}
+
+.repo-action-button {
+  color: var(--color-accent);
+  border-color: var(--color-divider);
+  background: rgba(129, 161, 193, 0.08);
+}
+
+.worktree-form,
+.pending-worktree {
+  display: grid;
+  gap: 8px;
+  margin: 8px 12px;
+  padding: 10px;
+  border: 1px solid var(--color-divider-strong);
+  border-radius: 10px;
+  background: var(--color-surface-raised);
+}
+
+.worktree-form input[type='text'] {
+  width: 100%;
+  color: var(--color-text);
+  border: 1px solid var(--color-divider);
+  border-radius: 8px;
+  padding: 0.4rem 0.55rem;
+  background: var(--color-chrome);
+}
+
+.worktree-launch-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+}
+
+.worktree-preview,
+.pending-worktree-message {
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+}
+
+.pending-worktree-title {
+  font-weight: 600;
+}
+
+.pending-worktree.partial {
+  border-color: rgba(235, 203, 139, 0.55);
+}
+
+.pending-worktree.failed {
+  border-color: var(--color-banner-border);
+  color: var(--color-banner-text);
+}
+
+.card.highlighted {
+  box-shadow: inset 3px 0 0 var(--color-accent);
+}

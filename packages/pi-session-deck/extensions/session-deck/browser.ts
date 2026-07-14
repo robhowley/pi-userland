@@ -10,6 +10,11 @@ import {
 } from './browser-render.js';
 import type { SessionDeckBrowserRow } from './browser-render.js';
 import type { SessionDeckBrowserRecord, SessionDeckBrowserSnapshot } from './browser-view.js';
+import type {
+  CreateWorktreeActionRequest,
+  CreateWorktreeActionResult,
+  CreateWorktreeStatusUpdate,
+} from './worktree/types.js';
 
 const DEFAULT_MAX_VISIBLE_ROWS = 8;
 const DEFAULT_MAX_VISIBLE_REPOS = 4;
@@ -67,12 +72,23 @@ export type SessionDeckBrowserOpenSelected = (
   record: SessionDeckBrowserRecord,
 ) => Promise<SessionDeckBrowserOpenSelectedResult>;
 
+export type SessionDeckBrowserCreateWorktree = (
+  request: CreateWorktreeActionRequest,
+  onStatus: (update: CreateWorktreeStatusUpdate) => void,
+) => Promise<CreateWorktreeActionResult>;
+
+interface SessionDeckWorktreePrompt {
+  label: string;
+  launchPi: boolean;
+}
+
 export interface SessionDeckBrowserOptions {
   all: boolean;
   showIdentity: boolean;
   initialView: SessionDeckBrowserSnapshot;
   onClose: () => void;
   openSelected?: SessionDeckBrowserOpenSelected;
+  createWorktree?: SessionDeckBrowserCreateWorktree;
   reload: () => Promise<SessionDeckBrowserSnapshot>;
   requestRender: () => void;
   reapLines?: string[];
@@ -84,6 +100,7 @@ export class SessionDeckBrowser {
   private readonly showIdentity: boolean;
   private readonly onClose: () => void;
   private readonly openSelected: SessionDeckBrowserOpenSelected | null;
+  private readonly createWorktree: SessionDeckBrowserCreateWorktree | null;
   private readonly reload: () => Promise<SessionDeckBrowserSnapshot>;
   private readonly requestRender: () => void;
   private readonly reapLines: string[];
@@ -95,8 +112,11 @@ export class SessionDeckBrowser {
   private detailVisible = true;
   private refreshStatus: { message: string; tone: 'muted' | 'warning' } | null = null;
   private openStatus: { message: string; tone: 'muted' | 'warning' } | null = null;
+  private worktreeStatus: { message: string; tone: 'muted' | 'warning' } | null = null;
+  private worktreePrompt: SessionDeckWorktreePrompt | null = null;
   private refreshPending: Promise<void> | null = null;
   private openPending: Promise<void> | null = null;
+  private worktreePending: Promise<void> | null = null;
   private isRefreshing = false;
   private autoRefreshInterval: ReturnType<typeof setInterval> | null = null;
   private disposed = false;
@@ -108,6 +128,7 @@ export class SessionDeckBrowser {
     this.showIdentity = options.showIdentity;
     this.onClose = options.onClose;
     this.openSelected = options.openSelected ?? null;
+    this.createWorktree = options.createWorktree ?? null;
     this.reload = options.reload;
     this.requestRender = options.requestRender;
     this.reapLines = options.reapLines ?? [];
@@ -119,6 +140,11 @@ export class SessionDeckBrowser {
 
   handleInput(data: string): void {
     if (this.disposed) {
+      return;
+    }
+
+    if (this.worktreePrompt !== null) {
+      this.handleWorktreePromptInput(data);
       return;
     }
 
@@ -140,11 +166,17 @@ export class SessionDeckBrowser {
       return;
     }
 
+    const selection = this.getSelection();
+
+    if (matchesKey(data, 'w')) {
+      this.openWorktreePrompt(selection);
+      return;
+    }
+
     if (this.view.records.length === 0) {
       return;
     }
 
-    const selection = this.getSelection();
     const selectedRecord = selection.records[this.selectedIndex] ?? null;
 
     if (matchesKey(data, 'o')) {
@@ -191,7 +223,7 @@ export class SessionDeckBrowser {
     );
     const help = this.theme.fg(
       'muted',
-      '↑↓ move · ←→ switch repo · enter details · o open terminal · r refresh · q close',
+      '↑↓ move · ←→ switch repo · enter details · w new worktree + Pi · o open terminal · r refresh · q close',
     );
 
     pushWrappedLine(lines, title, width);
@@ -209,6 +241,18 @@ export class SessionDeckBrowser {
 
     if (this.openStatus !== null) {
       pushWrappedLine(lines, this.theme.fg(this.openStatus.tone, this.openStatus.message), width);
+    }
+
+    if (this.worktreeStatus !== null) {
+      pushWrappedLine(
+        lines,
+        this.theme.fg(this.worktreeStatus.tone, this.worktreeStatus.message),
+        width,
+      );
+    }
+
+    if (this.worktreePrompt !== null) {
+      pushWrappedLine(lines, this.theme.fg('accent', this.formatWorktreePrompt()), width);
     }
 
     if (this.reapLines.length > 0) {
@@ -304,6 +348,157 @@ export class SessionDeckBrowser {
     }
   }
 
+  private openWorktreePrompt(selection: SessionDeckBrowserSelection): void {
+    if (this.worktreePending !== null) {
+      this.worktreeStatus = { message: 'Already creating a worktree…', tone: 'muted' };
+      this.bump();
+      return;
+    }
+
+    if (this.createWorktree === null) {
+      this.worktreeStatus = {
+        message: 'New worktree action is unavailable in this context.',
+        tone: 'warning',
+      };
+      this.bump();
+      return;
+    }
+
+    if (selection.repoOption.filter.kind !== 'named') {
+      this.worktreeStatus = {
+        message: 'Switch to a named repo filter before creating a worktree.',
+        tone: 'warning',
+      };
+      this.bump();
+      return;
+    }
+
+    this.clearStatus();
+    this.worktreePrompt = { label: '', launchPi: true };
+    this.bump();
+  }
+
+  private handleWorktreePromptInput(data: string): void {
+    const prompt = this.worktreePrompt;
+    if (prompt === null) {
+      return;
+    }
+
+    if (matchesKey(data, 'escape') || matchesKey(data, 'ctrl+c')) {
+      this.worktreePrompt = null;
+      this.worktreeStatus = { message: 'New worktree cancelled.', tone: 'muted' };
+      this.bump();
+      return;
+    }
+
+    if (matchesKey(data, 'tab')) {
+      prompt.launchPi = !prompt.launchPi;
+      this.bump();
+      return;
+    }
+
+    if (matchesKey(data, 'enter') || matchesKey(data, 'return')) {
+      void this.submitWorktreePrompt(prompt);
+      return;
+    }
+
+    if (matchesKey(data, 'backspace') || data === '\u007f') {
+      prompt.label = prompt.label.slice(0, -1);
+      this.bump();
+      return;
+    }
+
+    if (isPrintableInput(data)) {
+      prompt.label += data;
+      this.bump();
+    }
+  }
+
+  private async submitWorktreePrompt(prompt: SessionDeckWorktreePrompt): Promise<void> {
+    if (this.worktreePending !== null) {
+      this.worktreeStatus = { message: 'Already creating a worktree…', tone: 'muted' };
+      this.bump();
+      return this.worktreePending;
+    }
+
+    const label = prompt.label.trim();
+    if (label.length === 0) {
+      this.worktreeStatus = { message: 'Enter a worktree name.', tone: 'warning' };
+      this.bump();
+      return;
+    }
+
+    const selection = this.getSelection();
+    if (selection.repoOption.filter.kind !== 'named' || this.createWorktree === null) {
+      this.worktreePrompt = null;
+      this.worktreeStatus = {
+        message: 'New worktree action is unavailable here.',
+        tone: 'warning',
+      };
+      this.bump();
+      return;
+    }
+
+    const request = buildWorktreeRequest(selection, this.selectedIndex, label, prompt.launchPi);
+    this.worktreePrompt = null;
+    this.worktreeStatus = { message: 'Creating worktree…', tone: 'muted' };
+    this.bump();
+
+    this.worktreePending = (async () => {
+      try {
+        const result = await this.createWorktree!(request, (update) => {
+          this.worktreeStatus = { message: update.message, tone: 'muted' };
+          this.bump();
+        });
+        if (this.disposed) {
+          return;
+        }
+
+        this.worktreeStatus = formatWorktreeResultStatus(result);
+        const observedRuntimeId =
+          result.launch.requested && result.launch.ok ? result.launch.runtimeId : undefined;
+        await this.refreshAfterWorktree(observedRuntimeId ?? null);
+      } catch (error) {
+        if (!this.disposed) {
+          this.worktreeStatus = {
+            message: `Create worktree failed: ${getErrorMessage(error)}`,
+            tone: 'warning',
+          };
+        }
+      } finally {
+        this.worktreePending = null;
+        this.bump();
+      }
+    })();
+
+    return this.worktreePending;
+  }
+
+  private formatWorktreePrompt(): string {
+    const prompt = this.worktreePrompt;
+    if (prompt === null) {
+      return '';
+    }
+
+    const selection = this.getSelection();
+    const repoLabel = selection.repoOption.label;
+    const name = prompt.label.length === 0 ? '<name>' : prompt.label;
+    const branchPreview =
+      prompt.label.trim().length === 0
+        ? 'worktree/<name>'
+        : `worktree/${previewSlug(prompt.label)}`;
+    const launch = prompt.launchPi ? 'yes' : 'no';
+    return `New worktree + Pi for ${repoLabel} · name: ${name} · branch: ${branchPreview} · Start Pi session in tmux: ${launch} · enter create · tab toggle · esc cancel`;
+  }
+
+  private async refreshAfterWorktree(runtimeId: string | null): Promise<void> {
+    const nextView = await this.reload();
+    if (this.disposed) {
+      return;
+    }
+    this.applyNextView(nextView, runtimeId);
+  }
+
   private async openSelectedRecord(record: SessionDeckBrowserRecord): Promise<void> {
     if (this.disposed) {
       return;
@@ -362,6 +557,10 @@ export class SessionDeckBrowser {
       return;
     }
 
+    if (mode === 'auto' && (this.worktreePrompt !== null || this.worktreePending !== null)) {
+      return;
+    }
+
     if (this.refreshPending !== null) {
       return this.refreshPending;
     }
@@ -381,15 +580,7 @@ export class SessionDeckBrowser {
 
         const selection = this.getSelection();
         const selectedRuntimeId = selection.records[this.selectedIndex]?.runtimeId ?? null;
-        const nextRepoState = buildRepoState(nextView.records);
-        const nextRepoOption = getPreservedRepoOption(nextRepoState, selection.repoOption.filter);
-
-        this.view = nextView;
-        this.selectedRepoKey = nextRepoOption.key;
-        this.selectedIndex = findSelectedIndex(
-          getRepoRecords(nextRepoState.recordsByKey, nextRepoOption.key),
-          selectedRuntimeId,
-        );
+        this.applyNextView(nextView, selectedRuntimeId);
         this.refreshStatus = null;
       } catch (error) {
         if (this.disposed) {
@@ -408,6 +599,22 @@ export class SessionDeckBrowser {
     })();
 
     return this.refreshPending;
+  }
+
+  private applyNextView(
+    nextView: SessionDeckBrowserSnapshot,
+    selectedRuntimeId: string | null,
+  ): void {
+    const selection = this.getSelection();
+    const nextRepoState = buildRepoState(nextView.records);
+    const nextRepoOption = getPreservedRepoOption(nextRepoState, selection.repoOption.filter);
+
+    this.view = nextView;
+    this.selectedRepoKey = nextRepoOption.key;
+    this.selectedIndex = findSelectedIndex(
+      getRepoRecords(nextRepoState.recordsByKey, nextRepoOption.key),
+      selectedRuntimeId,
+    );
   }
 
   private startAutoRefresh(): void {
@@ -448,6 +655,7 @@ export class SessionDeckBrowser {
   private clearStatus(): void {
     this.refreshStatus = null;
     this.openStatus = null;
+    this.worktreeStatus = null;
   }
 
   private bump(): void {
@@ -458,6 +666,73 @@ export class SessionDeckBrowser {
     this.invalidate();
     this.requestRender();
   }
+}
+
+function buildWorktreeRequest(
+  selection: SessionDeckBrowserSelection,
+  selectedIndex: number,
+  label: string,
+  launchPi: boolean,
+): CreateWorktreeActionRequest {
+  const filter = selection.repoOption.filter;
+  const selectedRuntimeId = selection.records[selectedIndex]?.runtimeId ?? null;
+  return {
+    repoIntent: {
+      candidateRuntimeIds: selection.records.map((record) => record.runtimeId),
+      ...(filter.kind === 'named' && filter.shortLabel.length > 0
+        ? { repoName: filter.shortLabel }
+        : {}),
+      ...(filter.kind === 'named' && filter.qualifiedLabel !== null
+        ? { qualifiedRepoName: filter.qualifiedLabel }
+        : {}),
+      ...(selectedRuntimeId === null ? {} : { preferredRuntimeId: selectedRuntimeId }),
+    },
+    label,
+    launch: { mode: launchPi ? 'tmux-detached' : 'none' },
+  };
+}
+
+function formatWorktreeResultStatus(result: CreateWorktreeActionResult): {
+  message: string;
+  tone: 'muted' | 'warning';
+} {
+  if (!result.ok) {
+    return { message: result.worktree.message, tone: 'warning' };
+  }
+
+  if (!result.launch.requested) {
+    return { message: 'Worktree ready.', tone: 'muted' };
+  }
+
+  if (!result.launch.ok) {
+    return {
+      message: `Created worktree; Pi launch failed: ${result.launch.message}`,
+      tone: 'warning',
+    };
+  }
+
+  if (result.launch.status === 'requested-unobserved') {
+    return {
+      message: 'Worktree ready; Pi session is starting in tmux · press r to refresh.',
+      tone: 'muted',
+    };
+  }
+
+  return { message: 'Session ready · press o to attach.', tone: 'muted' };
+}
+
+function previewSlug(label: string): string {
+  const slug = label
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/gu, '-')
+    .replace(/^-+|-+$/gu, '')
+    .slice(0, 48);
+  return slug.length === 0 ? '<name>' : slug;
+}
+
+function isPrintableInput(data: string): boolean {
+  return data.length === 1 && data >= ' ' && data !== '\u007f';
 }
 
 function renderRepoRow(

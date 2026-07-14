@@ -7,6 +7,9 @@
     "outDir": "dist",
     "rootDir": "."
   },
-  "include": ["extensions/session-deck/iterm2/snapshot-cli.ts"],
+  "include": [
+    "extensions/session-deck/iterm2/snapshot-cli.ts",
+    "extensions/session-deck/worktree/action-cli.ts"
+  ],
   "exclude": ["__tests__"]
 }

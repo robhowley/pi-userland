@@ -224,6 +224,9 @@ async function checkRuntimePaths(
     `- snapshot helper: ${runtimePaths.snapshotHelperPath}${(await pathExists(runtimePaths.snapshotHelperPath)) ? '' : ' (missing)'}`,
   );
   lines.push(
+    `- create-worktree helper: ${runtimePaths.createWorktreeHelperScriptPath}${(await pathExists(runtimePaths.createWorktreeHelperScriptPath)) ? '' : ' (missing)'}`,
+  );
+  lines.push(
     `- web root: ${runtimePaths.webRootPath}${(await pathExists(runtimePaths.webRootPath)) ? '' : ' (missing)'}`,
   );
 
@@ -242,6 +245,12 @@ async function checkRuntimePaths(
 
   if (!(await pathExists(runtimePaths.snapshotHelperPath))) {
     issues.push(`Snapshot helper is missing: ${runtimePaths.snapshotHelperPath}`);
+  }
+
+  if (!(await pathExists(runtimePaths.createWorktreeHelperScriptPath))) {
+    issues.push(
+      `Create-worktree helper is missing: ${runtimePaths.createWorktreeHelperScriptPath}`,
+    );
   }
 
   if (!(await pathExists(runtimePaths.webRootPath))) {

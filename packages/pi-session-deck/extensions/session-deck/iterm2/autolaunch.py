@@ -12,6 +12,7 @@ import asyncio
 import json
 import os
 import posixpath
+import secrets
 import shlex
 import signal
 import socket
@@ -36,7 +37,10 @@ TOOL_IDENTIFIER = "dev.pi-userland.session-deck.toolbelt"
 SNAPSHOT_ERROR_CODE = "toolbelt_snapshot_unavailable"
 REQUEST_TIMEOUT_SECONDS = 2.0
 SNAPSHOT_TIMEOUT_SECONDS = 10.0
+ACTION_HELPER_TIMEOUT_SECONDS = 60.0
 MAX_REQUEST_BYTES = 8192
+ACTION_BODY_LIMIT_BYTES = 16 * 1024
+ACTION_TOKEN_PLACEHOLDER = b"__SESSION_DECK_ACTION_TOKEN__"
 
 INVALID_ATTACH_ARGV_MESSAGE = "Bridge only accepts exact tmux attach argv in 'tmuxAttachArgv'."
 INVALID_ITERM_SESSION_ID_MESSAGE = "Bridge only accepts non-empty iTerm2 session ids in 'itermSessionId'."
@@ -66,6 +70,7 @@ class ScriptConfig:
 class RuntimeConfig:
     node_executable_path: Path
     snapshot_helper_path: Path
+    create_worktree_helper_path: Path
     web_root_path: Path
     bridge_socket_path: Path
 
@@ -184,19 +189,29 @@ def parse_config(payload: dict[str, Any]) -> InstallConfig:
         installed_at=require_non_empty_string(payload.get("installedAt"), "installedAt"),
         scripts_dir=scripts_dir,
         script=script_config,
-        runtime=RuntimeConfig(
-            node_executable_path=require_absolute_path(
-                runtime.get("nodeExecutablePath"), "runtime.nodeExecutablePath"
-            ),
-            snapshot_helper_path=require_absolute_path(
-                runtime.get("snapshotHelperPath"), "runtime.snapshotHelperPath"
-            ),
-            web_root_path=require_absolute_path(runtime.get("webRootPath"), "runtime.webRootPath"),
-            bridge_socket_path=require_absolute_path(
-                runtime.get("bridgeSocketPath"), "runtime.bridgeSocketPath"
-            ),
+        runtime=build_runtime_config(runtime),
+    )
+
+
+def build_runtime_config(runtime: dict[str, Any]) -> RuntimeConfig:
+    snapshot_helper_path = require_absolute_path(
+        runtime.get("snapshotHelperPath"), "runtime.snapshotHelperPath"
+    )
+    return RuntimeConfig(
+        node_executable_path=require_absolute_path(
+            runtime.get("nodeExecutablePath"), "runtime.nodeExecutablePath"
+        ),
+        snapshot_helper_path=snapshot_helper_path,
+        create_worktree_helper_path=derive_create_worktree_helper_path(snapshot_helper_path),
+        web_root_path=require_absolute_path(runtime.get("webRootPath"), "runtime.webRootPath"),
+        bridge_socket_path=require_absolute_path(
+            runtime.get("bridgeSocketPath"), "runtime.bridgeSocketPath"
         ),
     )
+
+
+def derive_create_worktree_helper_path(snapshot_helper_path: Path) -> Path:
+    return snapshot_helper_path.parent.parent / "worktree" / "action-cli.js"
 
 
 def require_exact_keys(candidate: dict[str, Any], expected: tuple[str, ...], field: str) -> None:
@@ -312,6 +327,56 @@ def read_snapshot(config: InstallConfig) -> dict[str, Any]:
     return payload
 
 
+def run_create_worktree_action(config: InstallConfig, payload: str) -> tuple[int, dict[str, Any]]:
+    helper_path = config.runtime.create_worktree_helper_path
+    if not helper_path.exists():
+        return 503, {
+            "ok": False,
+            "status": "failed",
+            "message": f"Create-worktree helper not found: {helper_path}",
+        }
+
+    try:
+        completed = subprocess.run(
+            [str(config.runtime.node_executable_path), str(helper_path)],
+            input=payload,
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=ACTION_HELPER_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return 504, {"ok": False, "status": "failed", "message": "Create-worktree helper timed out."}
+    except Exception as exc:
+        return 500, {
+            "ok": False,
+            "status": "failed",
+            "message": f"Could not run create-worktree helper: {exc}",
+        }
+
+    try:
+        response_payload = json.loads(completed.stdout)
+    except Exception as exc:
+        detail = (completed.stderr or completed.stdout or f"exit {completed.returncode}").strip()
+        return 500, {
+            "ok": False,
+            "status": "failed",
+            "message": f"Create-worktree helper returned invalid JSON: {exc}; {detail}",
+        }
+
+    if not isinstance(response_payload, dict):
+        response_payload = {
+            "ok": False,
+            "status": "failed",
+            "message": "Create-worktree helper returned a non-object response.",
+        }
+
+    if completed.returncode != 0:
+        return 400, response_payload
+
+    return 200, response_payload
+
+
 def resolve_static_path(config: InstallConfig, pathname: str) -> Optional[Path]:
     normalized = "/index.html" if pathname in ("", "/") else pathname
     normalized = posixpath.normpath(normalized)
@@ -346,6 +411,7 @@ class SessionDeckToolbeltHandler(BaseHTTPRequestHandler):
                     "startedAt": STARTED_AT,
                     "packageVersion": config.package_version,
                     "helperScriptPath": str(config.runtime.snapshot_helper_path),
+                    "createWorktreeHelperScriptPath": str(config.runtime.create_worktree_helper_path),
                     "webRoot": str(config.runtime.web_root_path),
                 },
             )
@@ -362,9 +428,49 @@ class SessionDeckToolbeltHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            self.send_bytes(200, content_type, static_path.read_bytes())
+            payload = static_path.read_bytes()
+            if pathname in ("", "/", "/index.html") and static_path.name == "index.html":
+                token = self.server.session_deck_action_token  # type: ignore[attr-defined]
+                payload = payload.replace(ACTION_TOKEN_PLACEHOLDER, token.encode("utf-8"))
+            self.send_bytes(200, content_type, payload)
         except Exception:
             self.send_text(404, "Not found")
+
+    def do_POST(self) -> None:
+        config = self.server.session_deck_config  # type: ignore[attr-defined]
+        parsed = urlparse(self.path)
+        if parsed.path != "/actions/create-worktree":
+            self.send_json(404, {"ok": False, "status": "failed", "message": "Not found"})
+            return
+
+        action_token = self.server.session_deck_action_token  # type: ignore[attr-defined]
+        if self.headers.get("X-Session-Deck-Action-Token") != action_token:
+            self.send_json(403, {"ok": False, "status": "failed", "message": "Invalid action token."})
+            return
+
+        content_type = self.headers.get("Content-Type", "")
+        if content_type.split(";", 1)[0].strip().lower() != "application/json":
+            self.send_json(
+                415,
+                {"ok": False, "status": "failed", "message": "Content-Type must be application/json."},
+            )
+            return
+
+        content_length = self.headers.get("Content-Length")
+        try:
+            body_length = int(content_length) if content_length is not None else 0
+        except ValueError:
+            body_length = 0
+        if body_length <= 0 or body_length > ACTION_BODY_LIMIT_BYTES:
+            self.send_json(
+                413,
+                {"ok": False, "status": "failed", "message": "Request body is empty or too large."},
+            )
+            return
+
+        body = self.rfile.read(body_length).decode("utf-8")
+        status_code, response_payload = run_create_worktree_action(config, body)
+        self.send_json(status_code, response_payload)
 
     def log_message(self, _format: str, *args: Any) -> None:
         return
@@ -396,6 +502,7 @@ class SessionDeckToolbeltHandler(BaseHTTPRequestHandler):
 def start_http_server(config: InstallConfig) -> HttpRuntime:
     server = ThreadingHTTPServer((HOST, 0), SessionDeckToolbeltHandler)
     server.session_deck_config = config  # type: ignore[attr-defined]
+    server.session_deck_action_token = secrets.token_urlsafe(32)  # type: ignore[attr-defined]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return HttpRuntime(server=server, thread=thread)
