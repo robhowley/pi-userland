@@ -538,10 +538,37 @@ button.card-toggle[aria-expanded='true']::after {
 .detail-value {
   grid-area: value;
   min-width: 0;
-  justify-self: end;
+  max-width: 100%;
+  justify-self: stretch;
   text-align: right;
   font-size: 0.85rem;
   overflow-wrap: anywhere;
+}
+
+.detail-value-middle {
+  display: flex;
+  justify-content: flex-end;
+  overflow: hidden;
+  overflow-wrap: normal;
+  white-space: nowrap;
+}
+
+.detail-value-head,
+.detail-value-tail {
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.detail-value-head {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.detail-value-tail {
+  flex: 0 0 auto;
+  overflow: hidden;
+  text-overflow: clip;
 }
 
 .detail-link,

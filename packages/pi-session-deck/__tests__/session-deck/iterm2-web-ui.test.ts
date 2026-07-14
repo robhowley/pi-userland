@@ -1482,14 +1482,21 @@ describe('Session Deck iTerm2 web UI', () => {
   });
 
   it('starts expanded detail at IDENTITY and keeps workspace copy buttons with PR last', async () => {
+    const longSessionId = 'session-0123456789abcdef-0123456789abcdef';
+    const longRuntimeId = 'runtime-0123456789abcdef-0123456789abcdef';
+    const cwd = `${HOME}/src/github.com/Shopify/worktrees/shop-ml-pr22623-rankerspec-uses-pipeline`;
+    const shortenedCwd =
+      '~/src/github.com/Shopify/worktrees/shop-ml-pr22623-rankerspec-uses-pipeline';
     const harness = await setupApp([
       buildSnapshot({
         records: [
           buildRecord({
+            sessionId: longSessionId,
+            runtimeId: longRuntimeId,
             sessionName: 'gbdt rankerspec',
             repoName: 'shop-ml',
             qualifiedRepoName: 'Shopify/shop-ml',
-            cwd: `${HOME}/src/github.com/Shopify/worktrees/shop-ml-pr22623-rankerspec-uses-pipeline`,
+            cwd,
             branch: 'rh-baseline-gbdt-rankerspec-uses-pipeline',
             prUrl: 'https://github.com/owner/project/pull/22623',
             isLinkedWorktree: true,
@@ -1526,16 +1533,28 @@ describe('Session Deck iTerm2 web UI', () => {
     ]);
     expect(getCopyButtonTitles(identity)).toEqual(['copy', 'copy', 'copy']);
     expect(getCopyButtonTexts(identity)).toEqual(['⧉', '⧉', '⧉']);
+    const sessionIdValue = getDetailRowValue(identity, 'Session ID');
+    const runtimeIdValue = getDetailRowValue(identity, 'Runtime ID');
+    expect(sessionIdValue.classList.contains('detail-value-middle')).toBe(true);
+    expect(sessionIdValue.getAttribute('title')).toBe(longSessionId);
+    expect(getChildTextContents(sessionIdValue).join('')).toBe(longSessionId);
+    expect(runtimeIdValue.classList.contains('detail-value-middle')).toBe(true);
+    expect(runtimeIdValue.getAttribute('title')).toBe(longRuntimeId);
+    expect(getChildTextContents(runtimeIdValue).join('')).toBe(longRuntimeId);
 
     const workspace = getDetailSection(detail, 'WORKSPACE');
     expect(getDetailRowLabels(workspace)).toEqual(['CWD', 'Branch', 'Repo', 'Checkout', 'PR']);
     expect(getDetailRowValues(workspace)).toEqual([
-      '~/src/github.com/Shopify/worktrees/shop-ml-pr22623-rankerspec-uses-pipeline',
+      shortenedCwd,
       'rh-baseline-gbdt-rankerspec-uses-pipeline',
       'Shopify/shop-ml',
       'worktree · shop-ml-pr22623-rankerspec-uses-pipeline',
       '#22623',
     ]);
+    const cwdValue = getDetailRowValue(workspace, 'CWD');
+    expect(cwdValue.classList.contains('detail-value-middle')).toBe(true);
+    expect(cwdValue.getAttribute('title')).toBe(shortenedCwd);
+    expect(getChildTextContents(cwdValue).join('')).toBe(shortenedCwd);
 
     const prValue = getDetailRowValue(workspace, 'PR');
     expect(prValue.tagName).toBe('A');

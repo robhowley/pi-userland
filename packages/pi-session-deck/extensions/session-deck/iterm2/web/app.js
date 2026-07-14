@@ -571,10 +571,12 @@ function createRecordDetail(record) {
       createDetailRow('Session ID', record.sessionId, {
         copyLabel: 'Session ID',
         copyValue: record.sessionId,
+        middleTruncateTail: 12,
       }),
       createDetailRow('Runtime ID', record.runtimeId, {
         copyLabel: 'Runtime ID',
         copyValue: record.runtimeId,
+        middleTruncateTail: 12,
       }),
       createDetailRow('PID', record.pid === null ? null : String(record.pid), {
         copyLabel: 'PID',
@@ -585,6 +587,7 @@ function createRecordDetail(record) {
       createDetailRow('CWD', record.cwd === null ? null : shortenHomePath(record.cwd), {
         copyLabel: 'CWD',
         copyValue: record.cwd,
+        middleTruncateTail: 24,
       }),
       createDetailRow('Branch', record.branch, {
         copyLabel: 'Branch',
@@ -666,7 +669,7 @@ function createDetailRow(label, value, options = {}) {
   row.className = 'detail-row';
   row.append(
     createText('div', label, 'detail-label'),
-    createDetailValue(value, options.linkHref ?? null),
+    createDetailValue(value, options.linkHref ?? null, options.middleTruncateTail ?? null),
   );
 
   const copyButton = createCopyButton(options.copyLabel ?? label, options.copyValue ?? value);
@@ -1037,20 +1040,40 @@ function createText(tagName, text, className) {
   return element;
 }
 
-function createDetailValue(text, linkHref) {
+function createDetailValue(text, linkHref, middleTruncateTail) {
+  const value = document.createElement(linkHref ? 'a' : 'div');
+  value.className = linkHref ? 'detail-value detail-link' : 'detail-value';
+
+  if (middleTruncateTail === null || text.length <= middleTruncateTail) {
+    value.textContent = text;
+  } else {
+    value.classList.add('detail-value-middle');
+    value.setAttribute('title', text);
+    const { head, tail } = splitMiddleText(text, middleTruncateTail);
+    value.append(
+      createText('span', head, 'detail-value-head'),
+      createText('span', tail, 'detail-value-tail'),
+    );
+  }
+
   if (linkHref) {
-    const link = createText('a', text, 'detail-value detail-link');
-    link.setAttribute('href', linkHref);
-    link.setAttribute('target', '_blank');
-    link.setAttribute('rel', 'noreferrer');
-    link.addEventListener('click', (event) => {
+    value.setAttribute('href', linkHref);
+    value.setAttribute('target', '_blank');
+    value.setAttribute('rel', 'noreferrer');
+    value.addEventListener('click', (event) => {
       event.preventDefault();
       window.open(linkHref, '_blank', 'noopener,noreferrer');
     });
-    return link;
   }
 
-  return createText('div', text, 'detail-value');
+  return value;
+}
+
+function splitMiddleText(text, tailLength) {
+  return {
+    head: text.slice(0, -tailLength),
+    tail: text.slice(-tailLength),
+  };
 }
 
 function createChip(text, className = 'chip') {
