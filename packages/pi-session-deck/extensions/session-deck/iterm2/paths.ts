@@ -11,10 +11,13 @@ export const SESSION_DECK_ITERM2_SCRIPTS_DIR_FLAG = '--scripts-dir';
 export const SESSION_DECK_ITERM2_TOOL_IDENTIFIER = 'dev.pi-userland.session-deck.toolbelt';
 export const SESSION_DECK_ITERM2_TOOL_DISPLAY_NAME = 'Session Deck';
 export const SESSION_DECK_ITERM2_SCRIPT_FILENAME = 'session_deck_toolbelt.py';
+export const SESSION_DECK_ITERM2_PYTHON_BRIDGE_FILENAME = 'iterm2-python-bridge.py';
 export const SESSION_DECK_ITERM2_MANIFEST_FILENAME = 'install.json';
 export const SESSION_DECK_ITERM2_HELPER_RELATIVE_PATH =
   'dist/extensions/session-deck/iterm2/snapshot-cli.js';
 export const SESSION_DECK_ITERM2_WEB_ROOT_RELATIVE_PATH = 'extensions/session-deck/iterm2/web';
+export const SESSION_DECK_ITERM2_PYTHON_BRIDGE_RELATIVE_PATH =
+  'extensions/session-deck/iterm2-python-bridge.py';
 export const SESSION_DECK_ITERM2_WEB_INDEX_FILENAME = 'index.html';
 export const SESSION_DECK_ITERM2_WEB_APP_FILENAME = 'app.js';
 export const SESSION_DECK_ITERM2_WEB_STYLE_FILENAME = 'style.css';
@@ -25,6 +28,7 @@ export interface SessionDeckIterm2RuntimePaths {
   nodeExecutablePath: string;
   helperScriptPath: string;
   webRootPath: string;
+  pythonBridgeSourcePath: string;
 }
 
 export function getDefaultSessionDeckIterm2ScriptsDir(homeDirectory: string = homedir()): string {
@@ -46,6 +50,13 @@ export function getSessionDeckIterm2AutoLaunchDir(scriptsDir: string): string {
 
 export function getSessionDeckIterm2ScriptPath(scriptsDir: string): string {
   return join(getSessionDeckIterm2AutoLaunchDir(scriptsDir), SESSION_DECK_ITERM2_SCRIPT_FILENAME);
+}
+
+export function getSessionDeckIterm2PythonBridgePath(scriptsDir: string): string {
+  return join(
+    getSessionDeckIterm2AutoLaunchDir(scriptsDir),
+    SESSION_DECK_ITERM2_PYTHON_BRIDGE_FILENAME,
+  );
 }
 
 export function getSessionDeckIterm2StateDir(homeDirectory: string = homedir()): string {
@@ -93,6 +104,7 @@ export async function resolveSessionDeckIterm2RuntimePaths(
     nodeExecutablePath: options.nodeExecutablePath ?? process.execPath,
     helperScriptPath: join(packageRoot, SESSION_DECK_ITERM2_HELPER_RELATIVE_PATH),
     webRootPath: join(packageRoot, SESSION_DECK_ITERM2_WEB_ROOT_RELATIVE_PATH),
+    pythonBridgeSourcePath: join(packageRoot, SESSION_DECK_ITERM2_PYTHON_BRIDGE_RELATIVE_PATH),
   };
 }
 

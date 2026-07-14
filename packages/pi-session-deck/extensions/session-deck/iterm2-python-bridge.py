@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""iTerm2 AutoLaunch bridge for pi-session-deck tmux opens.
+"""iTerm2 AutoLaunch bridge for pi-session-deck terminal focus.
 
 Install by symlinking or copying this file into iTerm2's Scripts/AutoLaunch
 folder. The TypeScript side talks to a user-local Unix socket using JSON-lines:
 
   {"tmuxAttachArgv":["tmux","-S","...","attach-session","-E","-t","..."]}\n
-Only exact tmux attach argv arrays are accepted.
+or:
+
+  {"itermSessionId":"w0t0p0:..."}\n
+Only exact tmux attach argv arrays and non-empty iTerm2 session ids are accepted.
 """
 
 from __future__ import annotations
@@ -25,6 +28,9 @@ SOCKET_ENV = "PI_SESSION_DECK_ITERM2_BRIDGE_SOCKET"
 REQUEST_TIMEOUT_SECONDS = 2.0
 INVALID_ATTACH_ARGV_MESSAGE = (
     "Bridge only accepts exact tmux attach argv in 'tmuxAttachArgv'."
+)
+INVALID_ITERM_SESSION_ID_MESSAGE = (
+    "Bridge only accepts non-empty iTerm2 session ids in 'itermSessionId'."
 )
 
 
@@ -79,6 +85,20 @@ def format_iterm2_shell_command(tmux_attach_argv: list[str]) -> str:
     return "exec " + " ".join(shlex.quote(arg) for arg in tmux_attach_argv)
 
 
+def validate_iterm_session_id(candidate: Any) -> Optional[str]:
+    if not isinstance(candidate, str):
+        return None
+
+    session_id = candidate.strip()
+    return session_id if session_id else None
+
+
+async def maybe_call(action: Any) -> None:
+    if action is None:
+        return
+    await action()
+
+
 async def open_iterm2_tab(connection: iterm2.Connection, tmux_attach_argv: list[str]) -> None:
     command = format_iterm2_shell_command(tmux_attach_argv)
     app = await iterm2.async_get_app(connection)
@@ -103,6 +123,48 @@ async def open_iterm2_tab(connection: iterm2.Connection, tmux_attach_argv: list[
             pass
 
 
+async def focus_iterm2_session(connection: iterm2.Connection, iterm_session_id: str) -> bool:
+    app = await iterm2.async_get_app(connection)
+    get_session_by_id = getattr(app, "get_session_by_id", None)
+    if get_session_by_id is None:
+        raise RuntimeError("iTerm2 Python API does not expose get_session_by_id")
+
+    candidate_ids = [iterm_session_id]
+    if ":" in iterm_session_id:
+        candidate_ids.append(iterm_session_id.rsplit(":", 1)[1])
+
+    session = None
+    for candidate_id in candidate_ids:
+        try:
+            session = get_session_by_id(candidate_id)
+        except Exception:
+            session = None
+        if session is not None:
+            break
+
+    if session is None:
+        return False
+
+    tab = getattr(session, "tab", None)
+    window = getattr(tab, "window", None) if tab is not None else None
+
+    for action in (
+        getattr(app, "async_activate", None),
+        getattr(window, "async_activate", None),
+        getattr(tab, "async_select", None),
+    ):
+        try:
+            await maybe_call(action)
+        except Exception:
+            pass
+
+    activate_session = getattr(session, "async_activate", None)
+    if activate_session is None:
+        raise RuntimeError("iTerm2 Python API does not expose Session.async_activate")
+    await activate_session()
+    return True
+
+
 async def handle_client(
     connection: iterm2.Connection,
     reader: asyncio.StreamReader,
@@ -111,24 +173,38 @@ async def handle_client(
     try:
         line = await asyncio.wait_for(reader.readline(), timeout=REQUEST_TIMEOUT_SECONDS)
         request = json.loads(line.decode("utf-8"))
-        tmux_attach_argv = (
-            validate_tmux_attach_argv(request.get("tmuxAttachArgv"))
-            if isinstance(request, dict)
-            else None
-        )
-        if tmux_attach_argv is None:
+        if not isinstance(request, dict):
             writer.write(
-                response(
-                    False,
-                    reason="open-failed",
-                    message=INVALID_ATTACH_ARGV_MESSAGE,
-                )
+                response(False, reason="open-failed", message="Bridge request must be an object.")
             )
             await writer.drain()
             return
 
-        await open_iterm2_tab(connection, tmux_attach_argv)
-        writer.write(response(True))
+        tmux_attach_argv = validate_tmux_attach_argv(request.get("tmuxAttachArgv"))
+        iterm_session_id = validate_iterm_session_id(request.get("itermSessionId"))
+
+        if tmux_attach_argv is not None:
+            await open_iterm2_tab(connection, tmux_attach_argv)
+            writer.write(response(True, message="Requested tmux attach in a new iTerm2 tab."))
+        elif iterm_session_id is not None:
+            focused = await focus_iterm2_session(connection, iterm_session_id)
+            if focused:
+                writer.write(response(True, message="Requested iTerm2 focus for selected session."))
+            else:
+                writer.write(
+                    response(
+                        False,
+                        reason="terminal-target-missing",
+                        message="iTerm2 session is no longer available.",
+                    )
+                )
+        else:
+            message = (
+                INVALID_ATTACH_ARGV_MESSAGE
+                if "tmuxAttachArgv" in request
+                else INVALID_ITERM_SESSION_ID_MESSAGE
+            )
+            writer.write(response(False, reason="open-failed", message=message))
         await writer.drain()
     except asyncio.TimeoutError:
         writer.write(
@@ -142,7 +218,7 @@ async def handle_client(
         await writer.drain()
     except Exception as error:  # iTerm2 API failures should be reported, not crash the daemon.
         writer.write(
-            response(False, reason="open-failed", message=f"Failed to create iTerm2 tab: {error}")
+            response(False, reason="open-failed", message=f"Failed to request iTerm2 focus: {error}")
         )
         await writer.drain()
     finally:

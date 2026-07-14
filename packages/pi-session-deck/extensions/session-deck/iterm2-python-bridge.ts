@@ -9,14 +9,18 @@ export type Iterm2PythonBridgeOpenResult =
   | { ok: true; reason: 'requested'; message: string }
   | {
       ok: false;
-      reason: 'python-bridge-unavailable' | 'automation-denied' | 'open-failed';
+      reason:
+        | 'python-bridge-unavailable'
+        | 'automation-denied'
+        | 'terminal-target-missing'
+        | 'open-failed';
       message: string;
       requestSent?: boolean;
     };
 
-export interface Iterm2PythonBridgeOpenRequest {
-  tmuxAttachArgv: readonly string[];
-}
+export type Iterm2PythonBridgeOpenRequest =
+  | { tmuxAttachArgv: readonly string[] }
+  | { itermSessionId: string };
 
 type BridgeSocket = NodeJS.ReadWriteStream & {
   destroy?: () => void;
@@ -36,13 +40,9 @@ export async function openWithIterm2PythonBridge(
   request: Iterm2PythonBridgeOpenRequest,
   options: Iterm2PythonBridgeClientOptions = {},
 ): Promise<Iterm2PythonBridgeOpenResult> {
-  if (!isValidTmuxAttachArgv(request.tmuxAttachArgv)) {
-    return {
-      ok: false,
-      reason: 'open-failed',
-      message: 'Refusing to send an invalid tmux attach argv to the iTerm2 bridge.',
-      requestSent: false,
-    };
+  const validation = validateBridgeOpenRequest(request);
+  if (!validation.ok) {
+    return validation.result;
   }
 
   const socketPath = options.socketPath ?? getIterm2PythonBridgeSocketPath(options.env);
@@ -101,7 +101,7 @@ export async function openWithIterm2PythonBridge(
     socket.setEncoding?.('utf8');
     socket.on('connect', () => {
       try {
-        socket.write(`${JSON.stringify({ tmuxAttachArgv: request.tmuxAttachArgv })}\n`);
+        socket.write(`${JSON.stringify(request)}\n`);
         requestSent = true;
       } catch (error) {
         finish({
@@ -119,7 +119,7 @@ export async function openWithIterm2PythonBridge(
         return;
       }
       const line = buffer.slice(0, newlineIndex);
-      finish(parseBridgeResponse(line, requestSent));
+      finish(parseBridgeResponse(line, requestSent, validation.successMessage));
     });
     socket.on('error', (error) => {
       finish({
@@ -150,7 +150,11 @@ export function getIterm2PythonBridgeSocketPath(env: NodeJS.ProcessEnv = process
   return join(tmpdir(), `pi-session-deck-${uid}`, 'iterm2-python-bridge.sock');
 }
 
-function parseBridgeResponse(line: string, requestSent: boolean): Iterm2PythonBridgeOpenResult {
+function parseBridgeResponse(
+  line: string,
+  requestSent: boolean,
+  successMessage: string,
+): Iterm2PythonBridgeOpenResult {
   let parsed: unknown;
   try {
     parsed = JSON.parse(line) as unknown;
@@ -176,7 +180,7 @@ function parseBridgeResponse(line: string, requestSent: boolean): Iterm2PythonBr
     return {
       ok: true,
       reason: 'requested',
-      message: 'Requested tmux attach in a new iTerm2 tab.',
+      message: typeof parsed['message'] === 'string' ? parsed['message'] : successMessage,
     };
   }
 
@@ -198,11 +202,46 @@ function normalizeBridgeFailureReason(
   switch (reason) {
     case 'python-bridge-unavailable':
     case 'automation-denied':
+    case 'terminal-target-missing':
     case 'open-failed':
       return reason;
     default:
       return 'open-failed';
   }
+}
+
+function validateBridgeOpenRequest(
+  request: Iterm2PythonBridgeOpenRequest,
+): { ok: true; successMessage: string } | { ok: false; result: Iterm2PythonBridgeOpenResult } {
+  if ('tmuxAttachArgv' in request) {
+    if (isValidTmuxAttachArgv(request.tmuxAttachArgv)) {
+      return { ok: true, successMessage: 'Requested tmux attach in a new iTerm2 tab.' };
+    }
+
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        reason: 'open-failed',
+        message: 'Refusing to send an invalid tmux attach argv to the iTerm2 bridge.',
+        requestSent: false,
+      },
+    };
+  }
+
+  if (isNonBlankString(request.itermSessionId)) {
+    return { ok: true, successMessage: 'Requested iTerm2 focus for selected session.' };
+  }
+
+  return {
+    ok: false,
+    result: {
+      ok: false,
+      reason: 'open-failed',
+      message: 'Refusing to send an invalid iTerm2 session id to the iTerm2 bridge.',
+      requestSent: false,
+    },
+  };
 }
 
 function isValidTmuxAttachArgv(argv: unknown): argv is readonly string[] {

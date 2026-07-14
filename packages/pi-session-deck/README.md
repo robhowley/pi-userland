@@ -16,9 +16,9 @@ pi install npm:@robhowley/pi-session-deck
 - `/session-deck --identity` — include full identity details such as the session id.
 - `/session-deck --json --session-id <id>` — print one visible `SessionDeckRecord` as pretty JSON and bypass the TUI browser.
 - In JSON mode, `--all` widens eligibility to dead/unknown sessions; `--identity` does not change the JSON payload.
-- `/session-deck iterm2 install [--scripts-dir <path>]` — generate the iTerm2 AutoLaunch Toolbelt bridge and install manifest.
-- `/session-deck iterm2 doctor [--scripts-dir <path>]` — verify the generated script, helper, and web assets, then print manual recovery hints.
-- `/session-deck iterm2 uninstall [--scripts-dir <path>]` — remove the manifest-owned AutoLaunch script and manifest.
+- `/session-deck iterm2 install [--scripts-dir <path>]` — generate the iTerm2 AutoLaunch Toolbelt script, terminal-focus Python bridge, and install manifest.
+- `/session-deck iterm2 doctor [--scripts-dir <path>]` — verify the generated scripts, helper, and web assets, then print manual recovery hints.
+- `/session-deck iterm2 uninstall [--scripts-dir <path>]` — remove the manifest-owned AutoLaunch scripts and manifest.
 - Flags can be combined.
 
 ## TUI keys
@@ -26,7 +26,7 @@ pi install npm:@robhowley/pi-session-deck
 - `↑/↓` move selection.
 - `←/→` switch repo filters in the row above the session list.
 - `enter` toggle details.
-- `o` open the selected terminal target on macOS when captured terminal metadata is available. iTerm2 sessions use the iTerm2 reveal URL; tmux sessions open a new iTerm2 tab that attaches to the existing tmux session.
+- `o` open the selected terminal target on macOS when captured terminal metadata is available. iTerm2 sessions focus through the installed iTerm2 Python bridge when available; tmux sessions open a new iTerm2 tab that attaches to the existing tmux session.
 - `r` refresh.
 - `q` / `esc` close.
 
@@ -43,7 +43,8 @@ pi install npm:@robhowley/pi-session-deck
 Notes:
 
 - v1 is read-only: refresh, collapsible session-card browsing, and a `Show all` diagnostics toggle only.
-- The generated bridge binds to `127.0.0.1` and reads snapshots through the package-owned helper.
+- The generated Toolbelt script binds to `127.0.0.1` and reads snapshots through the package-owned helper.
+- The installed Python bridge exposes a local Unix socket for focusing existing iTerm2 sessions from the `/session-deck` TUI.
 - Local repo builds need `pnpm --dir packages/pi-session-deck run build` before install so the helper exists in `dist/`.
 
 ## What it provides
@@ -72,7 +73,7 @@ After installing the package, run:
 /session-deck iterm2 install
 ```
 
-Restart iTerm2, then choose **Scripts → AutoLaunch → `session_deck_toolbelt.py`** from the menu if it is not already running.
+Restart iTerm2, then choose **Scripts → AutoLaunch → `session_deck_toolbelt.py`** and **Scripts → AutoLaunch → `iterm2-python-bridge.py`** from the menu if they are not already running.
 
 Read-only `/session-deck` text and JSON modes do not require iTerm2 setup.
 

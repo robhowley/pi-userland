@@ -76,6 +76,70 @@ async function withBridgeServer(
 }
 
 describe('openWithIterm2PythonBridge', () => {
+  it('sends exact iTerm2 session id and accepts a success response from the default socket client', async () => {
+    let parsedRequest: unknown;
+
+    await withBridgeServer(
+      (line, socket) => {
+        parsedRequest = JSON.parse(line) as unknown;
+        socket.end(`${JSON.stringify({ ok: true })}\n`);
+      },
+      async ({ socketPath }) => {
+        const result = await openWithIterm2PythonBridge(
+          { itermSessionId: 'w0t0p0:abc' },
+          { socketPath },
+        );
+
+        expect(result).toEqual({
+          ok: true,
+          reason: 'requested',
+          message: 'Requested iTerm2 focus for selected session.',
+        });
+      },
+    );
+
+    expect(parsedRequest).toEqual({ itermSessionId: 'w0t0p0:abc' });
+  });
+
+  it('uses bridge-provided success messages when present', async () => {
+    await withBridgeServer(
+      (_line, socket) => {
+        socket.end(`${JSON.stringify({ ok: true, message: 'focused by bridge' })}\n`);
+      },
+      async ({ socketPath }) => {
+        const result = await openWithIterm2PythonBridge(
+          { itermSessionId: 'w0t0p0:abc' },
+          { socketPath },
+        );
+
+        expect(result).toEqual({
+          ok: true,
+          reason: 'requested',
+          message: 'focused by bridge',
+        });
+      },
+    );
+  });
+
+  it('rejects invalid iTerm2 session ids before creating a socket', async () => {
+    const createConnection = vi.fn(() => {
+      throw new Error('should not connect');
+    });
+
+    const result = await openWithIterm2PythonBridge(
+      { itermSessionId: '  ' },
+      { socketPath: '/tmp/unused.sock', createConnection },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      reason: 'open-failed',
+      message: 'Refusing to send an invalid iTerm2 session id to the iTerm2 bridge.',
+      requestSent: false,
+    });
+    expect(createConnection).not.toHaveBeenCalled();
+  });
+
   it('sends exact tmux argv and accepts a success response from the default socket client', async () => {
     let parsedRequest: unknown;
 
@@ -105,7 +169,7 @@ describe('openWithIterm2PythonBridge', () => {
     await withBridgeServer(
       (_line, socket) => {
         socket.end(
-          `${JSON.stringify({ ok: false, reason: 'automation-denied', message: 'blocked' })}\n`,
+          `${JSON.stringify({ ok: false, reason: 'terminal-target-missing', message: 'missing' })}\n`,
         );
       },
       async ({ socketPath }) => {
@@ -116,8 +180,8 @@ describe('openWithIterm2PythonBridge', () => {
 
         expect(result).toEqual({
           ok: false,
-          reason: 'automation-denied',
-          message: 'blocked',
+          reason: 'terminal-target-missing',
+          message: 'missing',
           requestSent: true,
         });
       },

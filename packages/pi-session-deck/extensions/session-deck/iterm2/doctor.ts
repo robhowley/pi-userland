@@ -1,6 +1,8 @@
 import { access, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import {
+  getSessionDeckIterm2PythonBridgeArtifact,
+  getSessionDeckIterm2ToolbeltArtifact,
   readSessionDeckIterm2Manifest,
   hashSessionDeckIterm2Template,
   type SessionDeckIterm2InstallManifest,
@@ -8,6 +10,7 @@ import {
 import {
   getDefaultSessionDeckIterm2ScriptsDir,
   getSessionDeckIterm2ManifestPath,
+  getSessionDeckIterm2PythonBridgePath,
   getSessionDeckIterm2ScriptPath,
   getSessionDeckIterm2WebAssetPaths,
   normalizeSessionDeckIterm2ScriptsDir,
@@ -45,7 +48,13 @@ export async function doctorSessionDeckIterm2Install(
     overrideScriptsDir ??
     manifest?.scriptsDir ??
     getDefaultSessionDeckIterm2ScriptsDir(homeDirectory);
-  const scriptPath = manifest?.generatedScriptPath ?? getSessionDeckIterm2ScriptPath(scriptsDir);
+  const toolbeltArtifact =
+    manifest === null ? null : getSessionDeckIterm2ToolbeltArtifact(manifest);
+  const pythonBridgeArtifact =
+    manifest === null ? null : getSessionDeckIterm2PythonBridgeArtifact(manifest);
+  const scriptPath = toolbeltArtifact?.path ?? getSessionDeckIterm2ScriptPath(scriptsDir);
+  const pythonBridgePath =
+    pythonBridgeArtifact?.path ?? getSessionDeckIterm2PythonBridgePath(scriptsDir);
 
   const lines = ['Session Deck iTerm2 doctor'];
   const issues: string[] = [];
@@ -60,7 +69,12 @@ export async function doctorSessionDeckIterm2Install(
   lines.push(
     `- manifest: ${manifestReadError === null ? (manifest === null ? 'missing' : manifestPath) : `invalid (${manifestPath})`}`,
   );
-  lines.push(`- script: ${scriptPath}${(await pathExists(scriptPath)) ? '' : ' (missing)'}`);
+  lines.push(
+    `- toolbelt script: ${scriptPath}${(await pathExists(scriptPath)) ? '' : ' (missing)'}`,
+  );
+  lines.push(
+    `- python bridge: ${pythonBridgePath}${(await pathExists(pythonBridgePath)) ? '' : ' (missing)'}`,
+  );
 
   let runtimePaths: SessionDeckIterm2RuntimePaths | null = options.runtimePaths ?? null;
   if (runtimePaths === null) {
@@ -91,6 +105,9 @@ export async function doctorSessionDeckIterm2Install(
     lines.push(
       `- web root: ${runtimePaths.webRootPath}${(await pathExists(runtimePaths.webRootPath)) ? '' : ' (missing)'}`,
     );
+    lines.push(
+      `- python bridge source: ${runtimePaths.pythonBridgeSourcePath}${(await pathExists(runtimePaths.pythonBridgeSourcePath)) ? '' : ' (missing)'}`,
+    );
 
     if (!(await pathExists(runtimePaths.helperScriptPath))) {
       issues.push(`Snapshot helper is missing: ${runtimePaths.helperScriptPath}`);
@@ -111,6 +128,9 @@ export async function doctorSessionDeckIterm2Install(
         }
       }
     }
+    if (!(await pathExists(runtimePaths.pythonBridgeSourcePath))) {
+      issues.push(`iTerm2 Python bridge source is missing: ${runtimePaths.pythonBridgeSourcePath}`);
+    }
 
     if (manifest !== null) {
       if (manifest.packageVersion !== runtimePaths.packageVersion) {
@@ -118,13 +138,13 @@ export async function doctorSessionDeckIterm2Install(
           `Installed manifest version ${manifest.packageVersion} does not match current package version ${runtimePaths.packageVersion}. Reinstall recommended.`,
         );
       }
-      if (manifest.helperScriptPath !== runtimePaths.helperScriptPath) {
+      if (toolbeltArtifact?.helperScriptPath !== runtimePaths.helperScriptPath) {
         issues.push('Snapshot helper path changed since install. Reinstall recommended.');
       }
-      if (manifest.webRootPath !== runtimePaths.webRootPath) {
+      if (toolbeltArtifact?.webRootPath !== runtimePaths.webRootPath) {
         issues.push('Web asset path changed since install. Reinstall recommended.');
       }
-      if (manifest.nodeExecutablePath !== runtimePaths.nodeExecutablePath) {
+      if (toolbeltArtifact?.nodeExecutablePath !== runtimePaths.nodeExecutablePath) {
         issues.push('Node executable path changed since install. Reinstall recommended.');
       }
 
@@ -135,7 +155,7 @@ export async function doctorSessionDeckIterm2Install(
         webRootPath: runtimePaths.webRootPath,
       });
       const expectedHash = hashSessionDeckIterm2Template(renderedScript);
-      if (manifest.templateHash !== expectedHash) {
+      if (toolbeltArtifact?.sha256 !== expectedHash) {
         issues.push(
           'Generated script template hash is stale for the current package. Reinstall recommended.',
         );
@@ -149,11 +169,45 @@ export async function doctorSessionDeckIterm2Install(
           );
         }
       }
+
+      if (pythonBridgeArtifact === null) {
+        issues.push(
+          'Install manifest predates iTerm2 Python bridge management. Reinstall recommended.',
+        );
+      } else {
+        if (pythonBridgeArtifact.sourcePath !== runtimePaths.pythonBridgeSourcePath) {
+          issues.push(
+            'iTerm2 Python bridge source path changed since install. Reinstall recommended.',
+          );
+        }
+
+        if (await pathExists(runtimePaths.pythonBridgeSourcePath)) {
+          const expectedPythonBridge = await readFile(runtimePaths.pythonBridgeSourcePath, 'utf8');
+          const expectedPythonBridgeHash = hashSessionDeckIterm2Template(expectedPythonBridge);
+          if (pythonBridgeArtifact.sha256 !== expectedPythonBridgeHash) {
+            issues.push(
+              'Installed iTerm2 Python bridge hash is stale for the current package. Reinstall recommended.',
+            );
+          }
+
+          if (await pathExists(pythonBridgePath)) {
+            const installedPythonBridge = await readFile(pythonBridgePath, 'utf8');
+            if (installedPythonBridge !== expectedPythonBridge) {
+              issues.push(
+                'Installed iTerm2 Python bridge differs from the current package source. Reinstall recommended.',
+              );
+            }
+          }
+        }
+      }
     }
   }
 
   if (!(await pathExists(scriptPath)) && manifest !== null) {
     issues.push(`Installed AutoLaunch script is missing: ${scriptPath}`);
+  }
+  if (pythonBridgeArtifact !== null && !(await pathExists(pythonBridgePath))) {
+    issues.push(`Installed iTerm2 Python bridge is missing: ${pythonBridgePath}`);
   }
 
   lines.push(

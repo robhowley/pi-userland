@@ -1,6 +1,8 @@
 import { rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import {
+  getSessionDeckIterm2PythonBridgeArtifact,
+  getSessionDeckIterm2ToolbeltArtifact,
   readSessionDeckIterm2Manifest,
   type SessionDeckIterm2InstallManifest,
 } from './manifest.js';
@@ -50,10 +52,19 @@ export async function uninstallSessionDeckIterm2(
     );
   }
 
-  await rm(manifest.generatedScriptPath, { force: true });
+  const toolbeltArtifact = getSessionDeckIterm2ToolbeltArtifact(manifest);
+  const pythonBridgeArtifact = getSessionDeckIterm2PythonBridgeArtifact(manifest);
+
+  await rm(toolbeltArtifact.path, { force: true });
+  if (pythonBridgeArtifact !== null) {
+    await rm(pythonBridgeArtifact.path, { force: true });
+  }
   await rm(manifestPath, { force: true });
 
-  lines.push(`Removed script: ${manifest.generatedScriptPath}`);
+  lines.push(`Removed toolbelt script: ${toolbeltArtifact.path}`);
+  if (pythonBridgeArtifact !== null) {
+    lines.push(`Removed Python bridge: ${pythonBridgeArtifact.path}`);
+  }
   lines.push(`Removed manifest: ${manifestPath}`);
 
   return {
