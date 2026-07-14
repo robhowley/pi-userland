@@ -1,4 +1,9 @@
 import type { Theme } from '@earendil-works/pi-coding-agent';
+import {
+  getSessionDeckIterm2CommandCompletions,
+  isSessionDeckIterm2Command,
+  runSessionDeckIterm2Command,
+} from '../iterm2/command.js';
 import { readSessionDeckSnapshot, type ReadSessionDeckSnapshotOptions } from '../reader.js';
 import { SessionDeckBrowser, type SessionDeckBrowserOpenSelectedResult } from '../browser.js';
 import {
@@ -80,8 +85,10 @@ export type OpenTerminalForRuntimeOptions = IdentityTerminalFocusLookupOptions &
 export type OpenIterm2TerminalForRuntimeOptions = OpenTerminalForRuntimeOptions;
 
 export interface RegisterSessionDeckCommandOptions extends ReadSessionDeckSnapshotOptions {
+  isSessionDeckIterm2Command?: typeof isSessionDeckIterm2Command;
   readSessionDeckSnapshot?: typeof readSessionDeckSnapshot;
   reapPresenceRecords?: typeof reapPresenceRecords;
+  runSessionDeckIterm2Command?: typeof runSessionDeckIterm2Command;
   unlink?: ReapPresenceRecordsOptions['unlink'];
   openTerminal?: (runtimeId: string) => Promise<SessionDeckBrowserOpenSelectedResult>;
   openIterm2Terminal?: (runtimeId: string) => Promise<SessionDeckBrowserOpenSelectedResult>;
@@ -134,13 +141,22 @@ export function registerSessionDeckCommand(
   pi: PresenceCommandAPI,
   options: RegisterSessionDeckCommandOptions = {},
 ): void {
+  const isIterm2Command = options.isSessionDeckIterm2Command ?? isSessionDeckIterm2Command;
   const readSnapshot = options.readSessionDeckSnapshot ?? readSessionDeckSnapshot;
   const reapPresence = options.reapPresenceRecords ?? reapPresenceRecords;
+  const runIterm2Command = options.runSessionDeckIterm2Command ?? runSessionDeckIterm2Command;
 
   pi.registerCommand(SESSION_DECK_COMMAND_NAME, {
-    description: 'Show Pi session presence, identity, activity, and chips from ~/.pi/session-deck',
+    description:
+      'Show Pi session presence, identity, activity, and chips from ~/.pi/session-deck, or manage the iTerm2 Toolbelt install',
     getArgumentCompletions: getSessionDeckCommandCompletions,
     handler: async (args: string, ctx: PresenceCommandContext) => {
+      if (isIterm2Command(args)) {
+        const result = await runIterm2Command(args);
+        ctx.ui.notify(result.message, result.level);
+        return;
+      }
+
       const parsedArgs = parseSessionDeckCommandArgs(args);
       if (!parsedArgs.ok) {
         ctx.ui.notify(parsedArgs.message, 'error');
@@ -511,12 +527,25 @@ function pluralize(count: number, singular: string): string {
 }
 
 function getSessionDeckCommandCompletions(prefix: string) {
-  const matches = COMMAND_FLAGS.filter((flag) => flag.startsWith(prefix)).map((flag) => ({
-    value: flag,
-    label: flag,
-  }));
+  const trimmedPrefix = prefix.trimStart();
+  const iterm2Matches = getSessionDeckIterm2CommandCompletions(trimmedPrefix);
 
-  return matches.length > 0 ? matches : null;
+  if (trimmedPrefix.startsWith('iterm2')) {
+    return iterm2Matches;
+  }
+
+  const flagMatches = COMMAND_FLAGS.filter((flag) => flag.startsWith(trimmedPrefix)).map(
+    (flag) => ({
+      value: flag,
+      label: flag,
+    }),
+  );
+
+  if (iterm2Matches === null) {
+    return flagMatches.length > 0 ? flagMatches : null;
+  }
+
+  return [...flagMatches, ...iterm2Matches];
 }
 
 function getOpenTerminalForRuntimeOptions(
