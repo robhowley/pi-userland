@@ -12,6 +12,7 @@ import asyncio
 import json
 import os
 import posixpath
+import pwd
 import re
 import secrets
 import shlex
@@ -43,7 +44,14 @@ ACTION_HELPER_TIMEOUT_SECONDS = 60.0
 MAX_REQUEST_BYTES = 8192
 ACTION_BODY_LIMIT_BYTES = 16 * 1024
 ACTION_TOKEN_PLACEHOLDER = b"__SESSION_DECK_ACTION_TOKEN__"
-LIVE_PATH_PROVENANCE = "live Toolbelt AutoLaunch PATH"
+EFFECTIVE_COMMAND_PATH_TIMEOUT_SECONDS = 3.0
+EFFECTIVE_COMMAND_PATH_MARKER_PREFIX = "__SESSION_DECK_EFFECTIVE_PATH__"
+EFFECTIVE_COMMAND_PATH_START_MARKER = f"{EFFECTIVE_COMMAND_PATH_MARKER_PREFIX}_START"
+EFFECTIVE_COMMAND_PATH_END_MARKER = f"{EFFECTIVE_COMMAND_PATH_MARKER_PREFIX}_END"
+CONFIGURED_LOGIN_SHELL_PATH_PROVENANCE = "configured login shell"
+ENV_LOGIN_SHELL_PATH_PROVENANCE = "$SHELL login shell fallback"
+INHERITED_PATH_PROVENANCE = "inherited process PATH fallback"
+OS_DEFPATH_PROVENANCE = "os.defpath fallback"
 HELPER_UNAVAILABLE_MESSAGE = "Create-worktree action is unavailable. Run /session-deck iterm2 doctor."
 HELPER_INVALID_RESPONSE_MESSAGE = (
     "Create-worktree action failed because the helper returned an invalid response. "
@@ -123,6 +131,12 @@ class InstallConfig:
 class SocketIdentity:
     device: int
     inode: int
+
+
+@dataclass(frozen=True)
+class EffectiveCommandPath:
+    value: str
+    provenance: str
 
 
 @dataclass
@@ -318,6 +332,110 @@ def validate_installed_script_hash(config: InstallConfig) -> None:
         raise StartupError("Installed Session Deck iTerm2 runtime hash does not match install state.")
 
 
+def fallback_effective_command_path() -> EffectiveCommandPath:
+    inherited_path = os.environ.get("PATH")
+    if isinstance(inherited_path, str) and len(inherited_path) > 0:
+        return EffectiveCommandPath(value=inherited_path, provenance=INHERITED_PATH_PROVENANCE)
+    return EffectiveCommandPath(value=os.defpath, provenance=OS_DEFPATH_PROVENANCE)
+
+
+def normalize_login_shell_path(candidate: Any) -> Optional[Path]:
+    if not isinstance(candidate, str):
+        return None
+
+    value = candidate.strip()
+    if len(value) == 0:
+        return None
+
+    path = Path(value)
+    if not path.is_absolute():
+        return None
+    if not os.access(str(path), os.X_OK):
+        return None
+    return path
+
+
+def select_login_shell() -> Optional[tuple[Path, str]]:
+    try:
+        shell_path = normalize_login_shell_path(pwd.getpwuid(os.getuid()).pw_shell)
+    except (AttributeError, KeyError, OSError):
+        shell_path = None
+
+    if shell_path is not None:
+        return shell_path, f"{CONFIGURED_LOGIN_SHELL_PATH_PROVENANCE} ({shell_path})"
+
+    env_shell = normalize_login_shell_path(os.environ.get("SHELL"))
+    if env_shell is not None:
+        return env_shell, f"{ENV_LOGIN_SHELL_PATH_PROVENANCE} ({env_shell})"
+
+    return None
+
+
+def build_effective_command_path_probe_command() -> str:
+    return (
+        f"/usr/bin/printf '%s\\n' {shlex.quote(EFFECTIVE_COMMAND_PATH_START_MARKER)}; "
+        f"/usr/bin/printenv PATH; "
+        f"/usr/bin/printf '%s\\n' {shlex.quote(EFFECTIVE_COMMAND_PATH_END_MARKER)}"
+    )
+
+
+def parse_effective_command_path_output(stdout: bytes) -> Optional[str]:
+    lines = stdout.splitlines()
+    start_marker = EFFECTIVE_COMMAND_PATH_START_MARKER.encode("utf-8")
+    end_marker = EFFECTIVE_COMMAND_PATH_END_MARKER.encode("utf-8")
+
+    try:
+        start_index = lines.index(start_marker)
+        end_index = lines.index(end_marker, start_index + 1)
+    except ValueError:
+        return None
+
+    if end_index != start_index + 2:
+        return None
+
+    path_bytes = lines[start_index + 1]
+    if len(path_bytes) == 0 or b"\x00" in path_bytes:
+        return None
+
+    try:
+        return path_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def resolve_effective_command_path() -> EffectiveCommandPath:
+    fallback = fallback_effective_command_path()
+    shell_selection = select_login_shell()
+    if shell_selection is None:
+        return fallback
+
+    shell_path, provenance = shell_selection
+    try:
+        completed = subprocess.run(
+            [f"-{shell_path.name}", "-i", "-c", build_effective_command_path_probe_command()],
+            executable=str(shell_path),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            check=False,
+            timeout=EFFECTIVE_COMMAND_PATH_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return fallback
+
+    if completed.returncode != 0:
+        return fallback
+
+    path_value = parse_effective_command_path_output(completed.stdout)
+    if path_value is None:
+        return fallback
+
+    return EffectiveCommandPath(value=path_value, provenance=provenance)
+
+
+def build_child_process_env(effective_command_path: EffectiveCommandPath) -> dict[str, str]:
+    return {**os.environ, "PATH": effective_command_path.value}
+
+
 def empty_snapshot(message: str) -> dict[str, Any]:
     return {
         "generatedAt": utc_now_iso(),
@@ -331,7 +449,10 @@ def empty_snapshot(message: str) -> dict[str, Any]:
     }
 
 
-def read_snapshot(config: InstallConfig) -> dict[str, Any]:
+def read_snapshot(
+    config: InstallConfig,
+    effective_command_path: EffectiveCommandPath,
+) -> dict[str, Any]:
     helper_path = config.runtime.snapshot_helper_path
     if not helper_path.exists():
         return empty_snapshot(f"Snapshot helper not found: {helper_path}")
@@ -343,6 +464,7 @@ def read_snapshot(config: InstallConfig) -> dict[str, Any]:
             check=False,
             text=True,
             timeout=SNAPSHOT_TIMEOUT_SECONDS,
+            env=build_child_process_env(effective_command_path),
         )
     except Exception as exc:
         return empty_snapshot(f"Could not run snapshot helper: {exc}")
@@ -362,16 +484,19 @@ def read_snapshot(config: InstallConfig) -> dict[str, Any]:
     return payload
 
 
-def build_launch_prereq_report() -> dict[str, Any]:
+def build_launch_prereq_report(effective_command_path: EffectiveCommandPath) -> dict[str, Any]:
     return {
-        "pathProvenance": LIVE_PATH_PROVENANCE,
-        "tmux": describe_executable_on_path("tmux"),
-        "pi": describe_executable_on_path("pi"),
+        "pathProvenance": effective_command_path.provenance,
+        "tmux": describe_executable_on_path("tmux", effective_command_path),
+        "pi": describe_executable_on_path("pi", effective_command_path),
     }
 
 
-def describe_executable_on_path(command: str) -> dict[str, Any]:
-    resolved = shutil.which(command)
+def describe_executable_on_path(
+    command: str,
+    effective_command_path: EffectiveCommandPath,
+) -> dict[str, Any]:
+    resolved = shutil.which(command, path=effective_command_path.value)
     if resolved is None:
         return {"status": "missing"}
     return {"status": "available", "path": resolved}
@@ -427,7 +552,11 @@ def redact_private_paths(text: str) -> str:
     return PRIVATE_PATH_RE.sub("[private path]", text)
 
 
-def run_create_worktree_action(config: InstallConfig, payload: str) -> tuple[int, dict[str, Any]]:
+def run_create_worktree_action(
+    config: InstallConfig,
+    payload: str,
+    effective_command_path: EffectiveCommandPath,
+) -> tuple[int, dict[str, Any]]:
     helper_path = config.runtime.create_worktree_helper_path
     if not helper_path.exists():
         return 503, helper_failure_payload(HELPER_UNAVAILABLE_MESSAGE)
@@ -440,6 +569,7 @@ def run_create_worktree_action(config: InstallConfig, payload: str) -> tuple[int
             check=False,
             text=True,
             timeout=ACTION_HELPER_TIMEOUT_SECONDS,
+            env=build_child_process_env(effective_command_path),
         )
     except subprocess.TimeoutExpired:
         return 504, helper_failure_payload(HELPER_TIMEOUT_MESSAGE)
@@ -477,11 +607,12 @@ def resolve_static_path(config: InstallConfig, pathname: str) -> Optional[Path]:
 class SessionDeckToolbeltHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         config = self.server.session_deck_config  # type: ignore[attr-defined]
+        effective_command_path = self.server.session_deck_effective_command_path  # type: ignore[attr-defined]
         parsed = urlparse(self.path)
         pathname = parsed.path
 
         if pathname == "/snapshot.json":
-            self.send_json(200, read_snapshot(config))
+            self.send_json(200, read_snapshot(config, effective_command_path))
             return
 
         if pathname == "/healthz":
@@ -521,6 +652,7 @@ class SessionDeckToolbeltHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         config = self.server.session_deck_config  # type: ignore[attr-defined]
+        effective_command_path = self.server.session_deck_effective_command_path  # type: ignore[attr-defined]
         parsed = urlparse(self.path)
         if parsed.path not in ("/actions/create-worktree", "/actions/create-worktree-preview"):
             self.send_json(404, {"ok": False, "status": "failed", "message": "Not found"})
@@ -552,7 +684,11 @@ class SessionDeckToolbeltHandler(BaseHTTPRequestHandler):
             return
 
         body = self.rfile.read(body_length).decode("utf-8")
-        status_code, response_payload = run_create_worktree_action(config, body)
+        status_code, response_payload = run_create_worktree_action(
+            config,
+            body,
+            effective_command_path,
+        )
         self.send_json(status_code, response_payload)
 
     def log_message(self, _format: str, *args: Any) -> None:
@@ -582,9 +718,13 @@ class SessionDeckToolbeltHandler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
 
-def start_http_server(config: InstallConfig) -> HttpRuntime:
+def start_http_server(
+    config: InstallConfig,
+    effective_command_path: EffectiveCommandPath,
+) -> HttpRuntime:
     server = ThreadingHTTPServer((HOST, 0), SessionDeckToolbeltHandler)
     server.session_deck_config = config  # type: ignore[attr-defined]
+    server.session_deck_effective_command_path = effective_command_path  # type: ignore[attr-defined]
     server.session_deck_action_token = secrets.token_urlsafe(32)  # type: ignore[attr-defined]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -711,6 +851,7 @@ async def focus_iterm2_session(connection: Any, iterm_session_id: str) -> bool:
 async def handle_client(
     connection: Any,
     ui_lock: asyncio.Lock,
+    effective_command_path: EffectiveCommandPath,
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
 ) -> None:
@@ -782,7 +923,7 @@ async def handle_client(
                 response(
                     True,
                     message="Reported launch prerequisites.",
-                    launchPrereqs=build_launch_prereq_report(),
+                    launchPrereqs=build_launch_prereq_report(effective_command_path),
                 )
             )
             await writer.drain()
@@ -962,13 +1103,20 @@ async def start_bridge_server(
     config: InstallConfig,
     connection: Any,
     ui_lock: asyncio.Lock,
+    effective_command_path: EffectiveCommandPath,
 ) -> BridgeRuntime:
     socket_path = config.runtime.bridge_socket_path
     prepare_bridge_socket_path(socket_path)
 
     try:
         server = await asyncio.start_unix_server(
-            lambda reader, writer: handle_client(connection, ui_lock, reader, writer),
+            lambda reader, writer: handle_client(
+                connection,
+                ui_lock,
+                effective_command_path,
+                reader,
+                writer,
+            ),
             path=str(socket_path),
             limit=MAX_REQUEST_BYTES + 1,
         )
@@ -1006,12 +1154,13 @@ async def start_runtime(connection: Any, state_path: Optional[Path] = None) -> S
     config = load_config(state_path)
     validate_runtime_assets(config)
     validate_installed_script_hash(config)
+    effective_command_path = resolve_effective_command_path()
 
     http: Optional[HttpRuntime] = None
     bridge: Optional[BridgeRuntime] = None
     try:
-        http = start_http_server(config)
-        bridge = await start_bridge_server(config, connection, asyncio.Lock())
+        http = start_http_server(config, effective_command_path)
+        bridge = await start_bridge_server(config, connection, asyncio.Lock(), effective_command_path)
         await register_toolbelt(connection, http, config)
         return SessionDeckRuntime(config=config, http=http, bridge=bridge)
     except BaseException as startup_error:

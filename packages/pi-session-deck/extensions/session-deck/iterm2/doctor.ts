@@ -21,8 +21,11 @@ import {
 } from './json-line-socket-client.js';
 
 const DEFAULT_PING_TIMEOUT_MS = 500;
-const LOCAL_PATH_PROVENANCE = 'local Pi doctor process PATH';
-const LIVE_PATH_PROVENANCE = 'live Toolbelt AutoLaunch PATH';
+const LOCAL_PATH_PROVENANCE = 'local Pi doctor process PATH (context only)';
+const LIVE_EFFECTIVE_PATH_LABEL = 'effective PATH used by + New';
+const LIVE_REPORT_LABEL = 'live AutoLaunch launch-prerequisite report';
+const LIVE_RESTART_GUIDANCE =
+  'Installed files do not reload an already-running AutoLaunch process; fully quit and reopen iTerm2 after install changes, then rerun /session-deck iterm2 doctor.';
 
 export type SessionDeckIterm2BridgeSocket = JsonLineSocketClientSocket;
 
@@ -122,31 +125,35 @@ export async function doctorSessionDeckIterm2Install(
   appendLaunchPrereqReport(lines, localLaunchPrereqs);
 
   let liveLaunchPrereqs: SessionDeckIterm2LiveLaunchPrereqResult | null = null;
+  let liveLaunchPrereqUnavailableMessage: string | null = null;
   if (state !== null) {
     const pingBridge = options.pingBridge ?? pingSessionDeckIterm2Bridge;
     const pingResult = await pingBridge(state.runtime.bridgeSocketPath);
     lines.push(`- bridge socket: ${state.runtime.bridgeSocketPath} (${pingResult.status})`);
     if (pingResult.status !== 'live') {
-      issues.push(pingResult.message);
+      liveLaunchPrereqUnavailableMessage = pingResult.message;
     } else {
       const readLiveLaunchPrereqs =
         options.readLiveLaunchPrereqs ?? readSessionDeckIterm2LiveLaunchPrereqs;
       liveLaunchPrereqs = await readLiveLaunchPrereqs(state.runtime.bridgeSocketPath);
       if (liveLaunchPrereqs.status === 'live') {
-        appendLaunchPrereqReport(lines, liveLaunchPrereqs.report);
+        appendLaunchPrereqReport(lines, liveLaunchPrereqs.report, { authoritative: true });
         addLiveLaunchPrereqIssues(liveLaunchPrereqs.report, issues);
       } else {
-        issues.push(liveLaunchPrereqs.message);
+        liveLaunchPrereqUnavailableMessage = liveLaunchPrereqs.message;
       }
     }
   }
 
-  if (liveLaunchPrereqs?.status !== 'live') {
-    lines.push(`- launch prerequisites (${LIVE_PATH_PROVENANCE}): unavailable`);
+  if (state === null) {
+    lines.push(`- launch prerequisites (${LIVE_EFFECTIVE_PATH_LABEL}): unavailable`);
+  } else if (liveLaunchPrereqs?.status !== 'live') {
+    appendUnavailableLiveLaunchPrereqReport(lines);
+    issues.push(formatLiveLaunchPrereqUnavailableIssue(liveLaunchPrereqUnavailableMessage));
   }
 
   lines.push(
-    '- manual: enable iTerm2 Python API if needed, then restart iTerm2 after install changes.',
+    '- manual: enable iTerm2 Python API if needed, then fully quit and reopen iTerm2 after install changes.',
   );
 
   if (issues.length > 0) {
@@ -258,22 +265,22 @@ export async function readSessionDeckIterm2LiveLaunchPrereqs(
     case 'socket-error':
       return {
         status: 'unavailable',
-        message: `${LIVE_PATH_PROVENANCE} could not be queried: ${getErrorMessage(result.error)}`,
+        message: `${LIVE_REPORT_LABEL} could not be queried: ${getErrorMessage(result.error)}`,
       };
     case 'send-error':
       return {
         status: 'unavailable',
-        message: `${LIVE_PATH_PROVENANCE} could not receive the launch prerequisite query: ${getErrorMessage(result.error)}`,
+        message: `${LIVE_REPORT_LABEL} could not receive the launch prerequisite query: ${getErrorMessage(result.error)}`,
       };
     case 'timeout':
       return {
         status: 'unavailable',
-        message: `${LIVE_PATH_PROVENANCE} did not answer the launch prerequisite query before the timeout.`,
+        message: `${LIVE_REPORT_LABEL} did not answer the launch prerequisite query before the timeout.`,
       };
     case 'closed':
       return {
         status: 'unavailable',
-        message: `${LIVE_PATH_PROVENANCE} closed the launch prerequisite query before answering.`,
+        message: `${LIVE_REPORT_LABEL} closed the launch prerequisite query before answering.`,
       };
   }
 }
@@ -403,10 +410,29 @@ async function collectLaunchPrereqReport(
 function appendLaunchPrereqReport(
   lines: string[],
   report: SessionDeckIterm2LaunchPrereqReport,
+  options: { authoritative?: boolean } = {},
 ): void {
-  lines.push(`- launch prerequisites (${report.pathProvenance}):`);
+  if (options.authoritative === true) {
+    lines.push(`- launch prerequisites (${LIVE_EFFECTIVE_PATH_LABEL}):`);
+    lines.push(`  - provenance: ${report.pathProvenance}`);
+  } else {
+    lines.push(`- launch prerequisites (${report.pathProvenance}):`);
+  }
   lines.push(`  - tmux: ${formatExecutableStatus(report.tmux)}`);
   lines.push(`  - pi: ${formatExecutableStatus(report.pi)}`);
+}
+
+function appendUnavailableLiveLaunchPrereqReport(lines: string[]): void {
+  lines.push(`- launch prerequisites (${LIVE_EFFECTIVE_PATH_LABEL}): unavailable`);
+  lines.push(`  - note: ${LIVE_RESTART_GUIDANCE}`);
+}
+
+function formatLiveLaunchPrereqUnavailableIssue(message: string | null): string {
+  if (message !== null) {
+    return `${message} ${LIVE_RESTART_GUIDANCE}`;
+  }
+
+  return `Could not verify the ${LIVE_EFFECTIVE_PATH_LABEL}. ${LIVE_RESTART_GUIDANCE}`;
 }
 
 function addLiveLaunchPrereqIssues(
@@ -423,13 +449,13 @@ function addLiveLaunchPrereqIssues(
 
     if (status.status === 'missing') {
       issues.push(
-        `Live Toolbelt AutoLaunch PATH is missing ${command}. + New requires ${command} on PATH.`,
+        `${LIVE_EFFECTIVE_PATH_LABEL} (${report.pathProvenance}) is missing ${command}. + New requires ${command} on PATH.`,
       );
       continue;
     }
 
     issues.push(
-      `Could not determine ${command} status in live Toolbelt AutoLaunch PATH: ${status.message ?? 'unknown error'}`,
+      `Could not determine ${command} status in ${LIVE_EFFECTIVE_PATH_LABEL} (${report.pathProvenance}): ${status.message ?? 'unknown error'}`,
     );
   }
 }
@@ -499,14 +525,14 @@ function parseLiveLaunchPrereqResponse(line: string): SessionDeckIterm2LiveLaunc
   } catch (error) {
     return {
       status: 'unavailable',
-      message: `${LIVE_PATH_PROVENANCE} returned malformed launch prerequisite JSON: ${getErrorMessage(error)}`,
+      message: `${LIVE_REPORT_LABEL} returned malformed launch prerequisite JSON: ${getErrorMessage(error)}`,
     };
   }
 
   if (!isRecord(parsed) || parsed['ok'] !== true) {
     return {
       status: 'unavailable',
-      message: `${LIVE_PATH_PROVENANCE} returned an unhealthy launch prerequisite response.`,
+      message: `${LIVE_REPORT_LABEL} returned an unhealthy launch prerequisite response.`,
     };
   }
 
@@ -514,7 +540,7 @@ function parseLiveLaunchPrereqResponse(line: string): SessionDeckIterm2LiveLaunc
   if (report === null) {
     return {
       status: 'unavailable',
-      message: `${LIVE_PATH_PROVENANCE} returned an invalid launch prerequisite response.`,
+      message: `${LIVE_REPORT_LABEL} returned an invalid launch prerequisite response.`,
     };
   }
 

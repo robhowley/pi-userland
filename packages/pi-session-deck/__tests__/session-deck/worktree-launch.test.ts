@@ -4,7 +4,11 @@ import {
   buildPiLauncherCommand,
   launchDetachedTmuxPi,
 } from '../../extensions/session-deck/worktree/launch.js';
-import type { WorktreeExecFile } from '../../extensions/session-deck/worktree/git.js';
+import {
+  defaultWorktreeExecFile,
+  type WorktreeExecFile,
+  type WorktreeExecFileOptions,
+} from '../../extensions/session-deck/worktree/git.js';
 
 const CREATED_WORKTREE = {
   ok: true as const,
@@ -17,7 +21,39 @@ const CREATED_WORKTREE = {
   manualCommand: 'git worktree add ...',
 };
 
+type ExecCall = {
+  file: string;
+  args: readonly string[];
+  options: WorktreeExecFileOptions;
+};
+
 describe('session-deck detached tmux launch', () => {
+  it('passes explicit env to the default exec helper without mutating process.env', async () => {
+    const envKey = 'PI_SESSION_DECK_WORKTREE_EXEC_TEST';
+    const originalValue = process.env[envKey];
+    delete process.env[envKey];
+
+    try {
+      const result = await defaultWorktreeExecFile(
+        process.execPath,
+        ['-e', `process.stdout.write(process.env.${envKey} ?? 'missing')`],
+        {
+          env: { ...process.env, [envKey]: 'from-child' },
+          timeoutMs: 10_000,
+        },
+      );
+
+      expect(result).toEqual({ stdout: 'from-child', stderr: '', exitCode: 0 });
+      expect(process.env[envKey]).toBeUndefined();
+    } finally {
+      if (originalValue === undefined) {
+        delete process.env[envKey];
+      } else {
+        process.env[envKey] = originalValue;
+      }
+    }
+  });
+
   it('builds safe bounded tmux session names and quoted Pi launcher commands', () => {
     const sessionName = buildManagedTmuxSessionName({
       repoName: 'owner/repo',
@@ -27,18 +63,30 @@ describe('session-deck detached tmux launch', () => {
 
     expect(sessionName).toMatch(/^pi-owner-repo-feature-o-hare-[a-f0-9]{8}$/u);
     expect(sessionName.length).toBeLessThanOrEqual(80);
-    expect(buildPiLauncherCommand("Feature O'Hare")).toBe("exec pi --name 'Feature O'\\''Hare'");
+    expect(
+      buildPiLauncherCommand(
+        "Feature O'Hare",
+        "/runtime/tools/bin:/tmp/with space:$HOME;`echo hi`:/tmp/O'Hare",
+      ),
+    ).toBe(
+      "exec /usr/bin/env 'PATH=/runtime/tools/bin:/tmp/with space:$HOME;`echo hi`:/tmp/O'\\''Hare' pi --name 'Feature O'\\''Hare'",
+    );
   });
 
-  it('returns launched as soon as tmux new-session succeeds', async () => {
-    const calls: Array<{ file: string; args: readonly string[] }> = [];
-    const execFile: WorktreeExecFile = async (file, args) => {
-      calls.push({ file, args });
+  it('returns launched with one explicit environment and a symbolic pi command', async () => {
+    const env: NodeJS.ProcessEnv = {
+      HOME: '/Users/test',
+      PATH: "/runtime/tools/bin:/tmp/with space:$HOME;`echo hi`:/tmp/O'Hare",
+    };
+    const whichPiPath = '/custom/tools/pi';
+    const calls: ExecCall[] = [];
+    const execFile: WorktreeExecFile = async (file, args, options) => {
+      calls.push({ file, args, options });
       if (file === 'tmux' && args[0] === '-V') {
         return { stdout: 'tmux 3.4\n', stderr: '', exitCode: 0 };
       }
       if (file === 'which') {
-        return { stdout: '/usr/local/bin/pi\n', stderr: '', exitCode: 0 };
+        return { stdout: `${whichPiPath}\n`, stderr: '', exitCode: 0 };
       }
       if (file === 'tmux' && args[0] === 'has-session') {
         return { stdout: '', stderr: '', exitCode: 1 };
@@ -49,7 +97,10 @@ describe('session-deck detached tmux launch', () => {
       return { stdout: '', stderr: `unexpected ${file} ${args.join(' ')}`, exitCode: 1 };
     };
 
-    const result = await launchDetachedTmuxPi(CREATED_WORKTREE, 'Feature', { execFile });
+    const result = await launchDetachedTmuxPi(CREATED_WORKTREE, "Feature O'Hare", {
+      execFile,
+      env,
+    });
 
     expect(result).toMatchObject({
       requested: true,
@@ -62,7 +113,8 @@ describe('session-deck detached tmux launch', () => {
       throw new Error('Expected successful launch result.');
     }
 
-    expect(calls).toEqual([
+    const expectedLaunchCommand = buildPiLauncherCommand("Feature O'Hare", env['PATH'] ?? '');
+    expect(calls.map(({ file, args }) => ({ file, args }))).toEqual([
       { file: 'tmux', args: ['-V'] },
       { file: 'which', args: ['pi'] },
       { file: 'tmux', args: ['has-session', '-t', `=${result.tmuxSessionName}`] },
@@ -76,23 +128,35 @@ describe('session-deck detached tmux launch', () => {
           '-c',
           '/tmp/repo-wt-feature',
           '-n',
-          'feature',
-          'exec pi --name Feature',
+          'feature-o-hare',
+          expectedLaunchCommand,
         ],
       },
     ]);
+    for (const call of calls) {
+      expect(call.options.env).toBe(env);
+      expect(call.options.timeoutMs).toBe(10_000);
+    }
+    expect(expectedLaunchCommand).toContain('/usr/bin/env');
+    expect(expectedLaunchCommand).toContain(' pi --name ');
+    expect(expectedLaunchCommand).not.toContain(whichPiPath);
   });
 
   it('reuses only the generated session name when cwd matches exactly', async () => {
+    const originalPath = process.env['PATH'];
+    const env: NodeJS.ProcessEnv = {
+      HOME: '/Users/test',
+      PATH: '/custom/reuse/path:$HOME;`echo hi`',
+    };
     let expectedSessionName = '';
-    const calls: Array<{ file: string; args: readonly string[] }> = [];
-    const execFile: WorktreeExecFile = async (file, args) => {
-      calls.push({ file, args });
+    const calls: ExecCall[] = [];
+    const execFile: WorktreeExecFile = async (file, args, options) => {
+      calls.push({ file, args, options });
       if (file === 'tmux' && args[0] === '-V') {
         return { stdout: 'tmux 3.4\n', stderr: '', exitCode: 0 };
       }
       if (file === 'which') {
-        return { stdout: '/usr/local/bin/pi\n', stderr: '', exitCode: 0 };
+        return { stdout: '/runtime/pi/bin/pi\n', stderr: '', exitCode: 0 };
       }
       if (file === 'tmux' && args[0] === 'has-session') {
         expect(args[2]).toBe(`=${expectedSessionName}`);
@@ -110,7 +174,7 @@ describe('session-deck detached tmux launch', () => {
       label: 'Feature',
     });
 
-    const result = await launchDetachedTmuxPi(CREATED_WORKTREE, 'Feature', { execFile });
+    const result = await launchDetachedTmuxPi(CREATED_WORKTREE, 'Feature', { execFile, env });
 
     expect(result).toMatchObject({
       requested: true,
@@ -120,6 +184,12 @@ describe('session-deck detached tmux launch', () => {
       tmuxSessionName: expectedSessionName,
     });
     expect(calls.some((call) => call.args[0] === 'new-session')).toBe(false);
+    expect(calls.some((call) => call.args[0] === 'set-environment')).toBe(false);
+    for (const call of calls) {
+      expect(call.options.env).toBe(env);
+      expect(call.options.timeoutMs).toBe(10_000);
+    }
+    expect(process.env['PATH']).toBe(originalPath);
   });
 
   it('fails when the generated tmux name is already bound to another cwd', async () => {
@@ -128,7 +198,7 @@ describe('session-deck detached tmux launch', () => {
         return { stdout: 'tmux 3.4\n', stderr: '', exitCode: 0 };
       }
       if (file === 'which') {
-        return { stdout: '/usr/local/bin/pi\n', stderr: '', exitCode: 0 };
+        return { stdout: '/runtime/pi/bin/pi\n', stderr: '', exitCode: 0 };
       }
       if (file === 'tmux' && args[0] === 'has-session') {
         return { stdout: '', stderr: '', exitCode: 0 };
@@ -156,7 +226,7 @@ describe('session-deck detached tmux launch', () => {
         return { stdout: 'tmux 3.4\n', stderr: '', exitCode: 0 };
       }
       if (file === 'which') {
-        return { stdout: '/usr/local/bin/pi\n', stderr: '', exitCode: 0 };
+        return { stdout: '/runtime/pi/bin/pi\n', stderr: '', exitCode: 0 };
       }
       if (file === 'tmux' && args[0] === 'has-session') {
         return { stdout: '', stderr: '', exitCode: 1 };

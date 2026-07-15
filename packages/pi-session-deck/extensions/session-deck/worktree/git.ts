@@ -9,10 +9,16 @@ export interface ExecFileResult {
   exitCode: number;
 }
 
+export interface WorktreeExecFileOptions {
+  cwd?: string;
+  timeoutMs?: number;
+  env?: NodeJS.ProcessEnv;
+}
+
 export type WorktreeExecFile = (
   file: string,
   args: readonly string[],
-  options: { cwd?: string; timeoutMs?: number },
+  options: WorktreeExecFileOptions,
 ) => Promise<ExecFileResult>;
 
 export interface GitCommandOptions {
@@ -35,6 +41,7 @@ export const defaultWorktreeExecFile: WorktreeExecFile = async (file, args, opti
       [...args],
       {
         ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+        ...(options.env === undefined ? {} : { env: options.env }),
         encoding: 'utf8',
         timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         windowsHide: true,

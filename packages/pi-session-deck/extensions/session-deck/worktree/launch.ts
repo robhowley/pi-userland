@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { basename } from 'node:path';
 import { formatPosixCommand, quotePosixArg } from '../identity/terminal-focus.js';
-import { defaultWorktreeExecFile, type WorktreeExecFile } from './git.js';
+import { defaultWorktreeExecFile, type ExecFileResult, type WorktreeExecFile } from './git.js';
 import { slugifyWorktreeLabel } from './create.js';
 import type {
   CreateWorktreeLaunchFailure,
@@ -12,12 +12,11 @@ import type {
 
 export interface LaunchDetachedTmuxPiOptions {
   execFile?: WorktreeExecFile;
+  env?: NodeJS.ProcessEnv;
 }
 
-interface TmuxCommandResult {
-  stdout: string;
-  stderr: string;
-  exitCode: number;
+interface ResolvedLaunchDetachedTmuxPiOptions extends LaunchDetachedTmuxPiOptions {
+  env: NodeJS.ProcessEnv;
 }
 
 export type DetachedTmuxPiPreflightResult =
@@ -32,12 +31,13 @@ const TMUX_SESSION_NAME_LIMIT = 80;
 export async function preflightDetachedTmuxPi(
   options: LaunchDetachedTmuxPiOptions = {},
 ): Promise<DetachedTmuxPiPreflightResult> {
-  const tmuxPreflight = await run(options, 'tmux', ['-V']);
+  const resolvedOptions = resolveLaunchOptions(options);
+  const tmuxPreflight = await run(resolvedOptions, 'tmux', ['-V']);
   if (tmuxPreflight.exitCode !== 0) {
     return { ok: false, reason: 'tmux-unavailable' };
   }
 
-  const piPreflight = await run(options, 'which', ['pi']);
+  const piPreflight = await run(resolvedOptions, 'which', ['pi']);
   if (piPreflight.exitCode !== 0) {
     return { ok: false, reason: 'pi-command-unavailable' };
   }
@@ -50,6 +50,8 @@ export async function launchDetachedTmuxPi(
   displayName: string,
   options: LaunchDetachedTmuxPiOptions = {},
 ): Promise<CreateWorktreeLaunchSuccess | CreateWorktreeLaunchFailure> {
+  const resolvedOptions = resolveLaunchOptions(options);
+  const launchCommand = buildPiLauncherCommand(displayName, resolvedOptions.env['PATH'] ?? '');
   const sessionName = buildManagedTmuxSessionName({
     repoName: worktree.repoName,
     worktreePath: worktree.path,
@@ -57,16 +59,16 @@ export async function launchDetachedTmuxPi(
   });
   const tmuxTarget = `=${sessionName}`;
   const manualAttachCommand = formatPosixCommand(['tmux', 'attach-session', '-t', tmuxTarget]);
-  const manualCommand = `cd ${quotePosixArg(worktree.path)} && ${buildPiLauncherCommand(displayName)}`;
+  const manualCommand = `cd ${quotePosixArg(worktree.path)} && ${launchCommand}`;
 
-  const preflight = await preflightDetachedTmuxPi(options);
+  const preflight = await preflightDetachedTmuxPi(resolvedOptions);
   if (!preflight.ok) {
     return prereqLaunchFailure(preflight.reason, manualCommand);
   }
 
-  const existing = await tmuxHasSession(sessionName, options);
+  const existing = await tmuxHasSession(sessionName, resolvedOptions);
   if (existing) {
-    const cwd = await readTmuxSessionCwd(sessionName, options);
+    const cwd = await readTmuxSessionCwd(sessionName, resolvedOptions);
     if (cwd !== worktree.path) {
       return {
         requested: true,
@@ -92,8 +94,7 @@ export async function launchDetachedTmuxPi(
     };
   }
 
-  const launchCommand = buildPiLauncherCommand(displayName);
-  const launchResult = await run(options, 'tmux', [
+  const launchResult = await run(resolvedOptions, 'tmux', [
     'new-session',
     '-d',
     '-s',
@@ -145,13 +146,13 @@ export function buildManagedTmuxSessionName(input: {
   return `${boundedPrefix}-${hash}`;
 }
 
-export function buildPiLauncherCommand(displayName: string): string {
-  return `exec pi --name ${quotePosixArg(displayName)}`;
+export function buildPiLauncherCommand(displayName: string, pathValue: string): string {
+  return `exec ${formatPosixCommand(['/usr/bin/env', `PATH=${pathValue}`, 'pi', '--name', displayName])}`;
 }
 
 async function tmuxHasSession(
   sessionName: string,
-  options: LaunchDetachedTmuxPiOptions,
+  options: ResolvedLaunchDetachedTmuxPiOptions,
 ): Promise<boolean> {
   const result = await run(options, 'tmux', ['has-session', '-t', `=${sessionName}`]);
   return result.exitCode === 0;
@@ -159,7 +160,7 @@ async function tmuxHasSession(
 
 async function readTmuxSessionCwd(
   sessionName: string,
-  options: LaunchDetachedTmuxPiOptions,
+  options: ResolvedLaunchDetachedTmuxPiOptions,
 ): Promise<string | null> {
   const result = await run(options, 'tmux', [
     'display-message',
@@ -177,11 +178,23 @@ async function readTmuxSessionCwd(
 }
 
 async function run(
-  options: LaunchDetachedTmuxPiOptions,
+  options: ResolvedLaunchDetachedTmuxPiOptions,
   file: string,
   args: readonly string[],
-): Promise<TmuxCommandResult> {
-  return await (options.execFile ?? defaultWorktreeExecFile)(file, args, { timeoutMs: 10_000 });
+): Promise<ExecFileResult> {
+  return await (options.execFile ?? defaultWorktreeExecFile)(file, args, {
+    env: options.env,
+    timeoutMs: 10_000,
+  });
+}
+
+function resolveLaunchOptions(
+  options: LaunchDetachedTmuxPiOptions,
+): ResolvedLaunchDetachedTmuxPiOptions {
+  return {
+    ...options,
+    env: options.env ?? process.env,
+  };
 }
 
 function prereqLaunchFailure(
@@ -213,6 +226,6 @@ function sanitizeTmuxName(value: string): string {
   return sanitized.length === 0 ? 'pi-session' : sanitized;
 }
 
-function formatCommandError(result: TmuxCommandResult): string {
+function formatCommandError(result: ExecFileResult): string {
   return (result.stderr || result.stdout).trim() || `exit ${result.exitCode}`;
 }
