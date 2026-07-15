@@ -9,7 +9,7 @@ export const DEFAULT_PRESENCE_THRESHOLDS: PresenceThresholds = {
   liveAfterMs: 30_000,
   deadAfterMs: 5 * 60_000,
   reapAfterMs: 24 * 60 * 60_000,
-  futureSkewMs: 5_000,
+  futureSkewMs: 10_000,
   pidReuseGraceMs: 2_000,
 };
 
