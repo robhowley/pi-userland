@@ -17,6 +17,27 @@ export interface CreateWorktreeActionRequest {
   };
 }
 
+export interface WorktreeBasePreviewRequest {
+  repoIntent: CreateWorktreeRepoIntent;
+}
+
+export type WorktreeBasePreviewResult =
+  | {
+      ok: true;
+      status: 'resolved';
+      baseRef: string;
+      warning?: string;
+    }
+  | {
+      ok: false;
+      status: 'failed';
+      reason: 'repo-intent-unresolved' | 'repo-intent-ambiguous';
+      message: string;
+      recoverable: true;
+    };
+
+export type BrowserSafeWorktreeBasePreviewResult = WorktreeBasePreviewResult;
+
 export type CreateWorktreeFailureReason =
   | 'invalid-request'
   | 'repo-intent-unresolved'

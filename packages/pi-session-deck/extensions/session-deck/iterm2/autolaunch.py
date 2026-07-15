@@ -439,7 +439,7 @@ class SessionDeckToolbeltHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         config = self.server.session_deck_config  # type: ignore[attr-defined]
         parsed = urlparse(self.path)
-        if parsed.path != "/actions/create-worktree":
+        if parsed.path not in ("/actions/create-worktree", "/actions/create-worktree-preview"):
             self.send_json(404, {"ok": False, "status": "failed", "message": "Not found"})
             return
 

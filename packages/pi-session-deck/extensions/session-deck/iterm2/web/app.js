@@ -17,6 +17,8 @@ const state = {
   expandedRepoKeys: new Set(),
   activeWorktreeFormRepoKey: null,
   worktreeForms: new Map(),
+  worktreeBasePreviews: new Map(),
+  nextWorktreeBasePreviewRequestId: 0,
   pendingWorktrees: new Map(),
   highlightedRuntimeId: null,
 };
@@ -498,10 +500,18 @@ function createRepoGroup(repoGroup) {
     render();
   });
 
-  section.append(header);
+  const headerRow = document.createElement('div');
+  headerRow.className = 'repo-header-row';
+  headerRow.append(header);
 
   if (repoGroup.kind !== 'no-repo') {
-    section.append(createRepoActionRow(repoGroup));
+    headerRow.append(createRepoActionButton(repoGroup));
+  }
+
+  section.append(headerRow);
+
+  if (state.activeWorktreeFormRepoKey === repoGroup.key) {
+    section.append(createWorktreeForm(repoGroup));
   }
 
   if (isExpanded) {
@@ -518,10 +528,6 @@ function createRepoGroup(repoGroup) {
       records.append(createPendingWorktreeCard(pending));
     }
 
-    if (state.activeWorktreeFormRepoKey === repoGroup.key) {
-      records.append(createWorktreeForm(repoGroup));
-    }
-
     for (const record of repoGroup.records) {
       records.append(createRecordCard(record));
     }
@@ -531,72 +537,93 @@ function createRepoGroup(repoGroup) {
   return section;
 }
 
-function createRepoActionRow(repoGroup) {
-  const row = document.createElement('div');
-  row.className = 'repo-actions';
+function createRepoActionButton(repoGroup) {
+  const isOpen = state.activeWorktreeFormRepoKey === repoGroup.key;
+  const label = isOpen ? 'cancel new session' : 'create new session';
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'repo-action-button';
-  button.textContent = '＋ New session';
-  button.setAttribute('aria-label', 'create new session');
-  button.setAttribute('title', 'create new session');
-  button.addEventListener('click', () => {
-    state.activeWorktreeFormRepoKey =
-      state.activeWorktreeFormRepoKey === repoGroup.key ? null : repoGroup.key;
-    state.expandedRepoKeys.add(repoGroup.key);
-    if (!state.worktreeForms.has(repoGroup.key)) {
-      state.worktreeForms.set(repoGroup.key, { branchName: '', launchPi: true });
+  button.textContent = isOpen ? 'Cancel' : '+ New';
+  button.setAttribute('aria-label', label);
+  button.setAttribute('title', label);
+  button.addEventListener('click', (event) => {
+    event.preventDefault?.();
+    event.stopPropagation?.();
+
+    if (isOpen) {
+      closeWorktreeForm(repoGroup.key);
+      return;
     }
+
+    state.activeWorktreeFormRepoKey = repoGroup.key;
+    if (!state.worktreeForms.has(repoGroup.key)) {
+      state.worktreeForms.set(repoGroup.key, { branchName: '' });
+    }
+    requestWorktreeBasePreview(repoGroup);
     render();
   });
-  row.append(button);
-  return row;
+  return button;
+}
+
+function closeWorktreeForm(repoKey) {
+  state.worktreeForms.delete(repoKey);
+  state.worktreeBasePreviews.delete(repoKey);
+  if (state.activeWorktreeFormRepoKey === repoKey) {
+    state.activeWorktreeFormRepoKey = null;
+  }
+  render();
 }
 
 function createWorktreeForm(repoGroup) {
-  const formState = state.worktreeForms.get(repoGroup.key) ?? { branchName: '', launchPi: true };
+  const formState = state.worktreeForms.get(repoGroup.key) ?? { branchName: '' };
+  const preview = state.worktreeBasePreviews.get(repoGroup.key);
   const form = document.createElement('form');
   form.className = 'worktree-form';
   form.addEventListener('submit', (event) => {
     event.preventDefault?.();
     submitWorktreeForm(repoGroup, formState);
   });
+  form.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') {
+      return;
+    }
+    event.preventDefault?.();
+    event.stopPropagation?.();
+    closeWorktreeForm(repoGroup.key);
+  });
 
   const labelInput = document.createElement('input');
   labelInput.type = 'text';
   labelInput.value = formState.branchName;
   labelInput.setAttribute('aria-label', 'Branch name');
-  labelInput.setAttribute('placeholder', 'rh/feature-name');
+  labelInput.setAttribute('placeholder', 'feat/feature-name');
   labelInput.addEventListener('input', () => {
     formState.branchName = labelInput.value;
   });
 
-  const launchInput = document.createElement('input');
-  launchInput.type = 'checkbox';
-  launchInput.checked = formState.launchPi;
-  launchInput.addEventListener('change', () => {
-    formState.launchPi = launchInput.checked;
-  });
-
-  const launchLabel = document.createElement('label');
-  launchLabel.className = 'worktree-launch-toggle';
-  launchLabel.append(launchInput, createText('span', 'Start Pi session in tmux'));
+  const fieldMeta = createText(
+    'span',
+    formatWorktreeBasePreviewCopy(preview),
+    'worktree-field-meta',
+  );
+  fieldMeta.setAttribute('data-state', preview?.status ?? 'loading');
 
   const submit = document.createElement('button');
   submit.type = 'submit';
+  submit.className = 'worktree-submit-button';
   submit.textContent = 'Create';
-  submit.disabled = state.pendingWorktrees.has(repoGroup.key);
+  submit.disabled =
+    !isResolvedWorktreeBasePreview(preview) || state.pendingWorktrees.has(repoGroup.key);
 
-  form.append(
-    createText(
-      'div',
-      'From default branch · worktree path generated automatically',
-      'worktree-preview',
-    ),
-    labelInput,
-    launchLabel,
-    submit,
-  );
+  const branchControl = document.createElement('div');
+  branchControl.className = 'worktree-branch-control';
+  branchControl.append(labelInput, submit);
+
+  const composeRow = document.createElement('div');
+  composeRow.className = 'worktree-compose-row';
+  composeRow.append(fieldMeta, branchControl);
+
+  form.append(composeRow);
   return form;
 }
 
@@ -610,21 +637,92 @@ function createPendingWorktreeCard(pending) {
   return card;
 }
 
+function requestWorktreeBasePreview(repoGroup) {
+  const requestId = state.nextWorktreeBasePreviewRequestId + 1;
+  state.nextWorktreeBasePreviewRequestId = requestId;
+  state.worktreeBasePreviews.set(repoGroup.key, { status: 'loading', requestId });
+
+  void postWorktreeBasePreview(repoGroup)
+    .then((result) => {
+      const activePreview = state.worktreeBasePreviews.get(repoGroup.key);
+      if (activePreview?.requestId !== requestId) {
+        return;
+      }
+
+      if (result?.ok && typeof result.baseRef === 'string' && result.baseRef.trim().length > 0) {
+        state.worktreeBasePreviews.set(repoGroup.key, {
+          status: 'resolved',
+          baseRef: result.baseRef,
+        });
+      } else {
+        state.worktreeBasePreviews.set(repoGroup.key, { status: 'failed' });
+      }
+      render();
+    })
+    .catch(() => {
+      const activePreview = state.worktreeBasePreviews.get(repoGroup.key);
+      if (activePreview?.requestId !== requestId) {
+        return;
+      }
+      state.worktreeBasePreviews.set(repoGroup.key, { status: 'failed' });
+      render();
+    });
+}
+
+function formatWorktreeBasePreviewCopy(preview) {
+  if (isResolvedWorktreeBasePreview(preview)) {
+    return `${formatBaseRefLabel(preview.baseRef)} →`;
+  }
+  if (preview?.status === 'failed') {
+    return 'Base unavailable';
+  }
+  return 'Resolving…';
+}
+
+function isResolvedWorktreeBasePreview(preview) {
+  return (
+    preview?.status === 'resolved' &&
+    typeof preview.baseRef === 'string' &&
+    preview.baseRef.trim().length > 0
+  );
+}
+
+function formatBaseRefLabel(baseRef) {
+  const trimmed = typeof baseRef === 'string' ? baseRef.trim() : '';
+  if (trimmed.length === 0 || trimmed === 'HEAD') {
+    return 'current HEAD';
+  }
+
+  const normalized = trimmed
+    .replace(/^refs\/remotes\//u, '')
+    .replace(/^refs\/heads\//u, '')
+    .replace(/^origin\//u, '');
+  return normalized.length > 0 ? normalized : trimmed;
+}
+
 function submitWorktreeForm(repoGroup, formState) {
   const branchName = formState.branchName.trim();
-  if (branchName.length === 0 || state.pendingWorktrees.has(repoGroup.key)) {
+  const preview = state.worktreeBasePreviews.get(repoGroup.key);
+  if (
+    branchName.length === 0 ||
+    state.pendingWorktrees.has(repoGroup.key) ||
+    !isResolvedWorktreeBasePreview(preview)
+  ) {
     return;
   }
 
+  const baseRef = preview.baseRef;
   state.pendingWorktrees.set(repoGroup.key, {
     title: 'New session',
     message: 'Creating worktree…',
     tone: 'pending',
   });
+  state.expandedRepoKeys.add(repoGroup.key);
+  state.worktreeForms.delete(repoGroup.key);
   state.activeWorktreeFormRepoKey = null;
   render();
 
-  void postCreateWorktreeAction(repoGroup, branchName, formState.launchPi)
+  void postCreateWorktreeAction(repoGroup, branchName, baseRef)
     .then(async (result) => {
       state.pendingWorktrees.set(repoGroup.key, summarizeWorktreeActionResult(result));
       if (result.ok && result.launch?.ok && result.launch.runtimeId) {
@@ -643,7 +741,37 @@ function submitWorktreeForm(repoGroup, formState) {
     });
 }
 
-async function postCreateWorktreeAction(repoGroup, branchName, launchPi) {
+function buildWorktreeRepoIntent(repoGroup) {
+  return {
+    repoName: getRepoShortName(repoGroup.label),
+    qualifiedRepoName: repoGroup.kind === 'qualified' ? repoGroup.label : null,
+    candidateRuntimeIds: repoGroup.records.map((record) => record.runtimeId),
+  };
+}
+
+async function postWorktreeBasePreview(repoGroup) {
+  const response = await fetch('/actions/create-worktree-preview', {
+    method: 'POST',
+    cache: 'no-store',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'X-Session-Deck-Action-Token': getActionToken(),
+    },
+    body: JSON.stringify({
+      action: 'preview-base-ref',
+      repoIntent: buildWorktreeRepoIntent(repoGroup),
+    }),
+  });
+
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload?.message ?? `HTTP ${response.status}`);
+  }
+  return payload;
+}
+
+async function postCreateWorktreeAction(repoGroup, branchName, baseRef) {
   const response = await fetch('/actions/create-worktree', {
     method: 'POST',
     cache: 'no-store',
@@ -653,13 +781,10 @@ async function postCreateWorktreeAction(repoGroup, branchName, launchPi) {
       'X-Session-Deck-Action-Token': getActionToken(),
     },
     body: JSON.stringify({
-      repoIntent: {
-        repoName: getRepoShortName(repoGroup.label),
-        qualifiedRepoName: repoGroup.kind === 'qualified' ? repoGroup.label : null,
-        candidateRuntimeIds: repoGroup.records.map((record) => record.runtimeId),
-      },
+      repoIntent: buildWorktreeRepoIntent(repoGroup),
       branchName,
-      launch: { mode: launchPi ? 'tmux-detached' : 'none' },
+      baseRef,
+      launch: { mode: 'tmux-detached' },
     }),
   });
 
@@ -690,7 +815,7 @@ function summarizeWorktreeActionResult(result) {
   }
   if (result.launch.status === 'requested-unobserved') {
     return {
-      title: 'Pi starting in tmux',
+      title: 'Session starting',
       message: 'Waiting for session to appear…',
       tone: 'pending',
     };

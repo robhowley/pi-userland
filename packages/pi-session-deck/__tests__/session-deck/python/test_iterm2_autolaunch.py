@@ -334,6 +334,52 @@ class ImportAndConfigTests(unittest.TestCase):
             urlopen(missing_token, timeout=1.0)
         self.assertEqual(raised.exception.code, 403)
 
+    def test_toolbelt_create_worktree_preview_route_runs_helper(self):
+        fixture = TempRuntime(self)
+        helper_path = fixture.config().runtime.create_worktree_helper_path
+        helper_path.parent.mkdir(parents=True)
+        helper_path.write_text(
+            "import json, sys\n"
+            "payload = json.loads(sys.stdin.read())\n"
+            "print(json.dumps({'ok': True, 'status': 'resolved', 'action': payload.get('action'), 'repoIntent': payload['repoIntent']}))\n",
+            encoding="utf-8",
+        )
+        fixture.payload["runtime"]["nodeExecutablePath"] = sys.executable
+        fixture.write_state()
+        config = fixture.config()
+        http = AUTO.start_http_server(config)
+        self.addCleanup(http.close)
+        base_url = f"http://127.0.0.1:{http.port}"
+
+        token = http.server.session_deck_action_token
+        payload = json.dumps(
+            {
+                "action": "preview-base-ref",
+                "repoIntent": {"repoName": "project", "candidateRuntimeIds": ["rt-1"]},
+            }
+        ).encode("utf-8")
+        request = Request(
+            f"{base_url}/actions/create-worktree-preview",
+            data=payload,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "X-Session-Deck-Action-Token": token,
+            },
+        )
+
+        with urlopen(request, timeout=1.0) as response:
+            action_result = json.loads(response.read().decode("utf-8"))
+        self.assertEqual(
+            action_result,
+            {
+                "ok": True,
+                "status": "resolved",
+                "action": "preview-base-ref",
+                "repoIntent": {"repoName": "project", "candidateRuntimeIds": ["rt-1"]},
+            },
+        )
+
 
 class BridgeRuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):

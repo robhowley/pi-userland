@@ -2,10 +2,14 @@
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { orchestrateCreateWorktree } from './orchestrate.js';
+import { resolveWorktreeBasePreview } from './preview.js';
 import type {
   BrowserSafeCreateWorktreeActionResult,
+  BrowserSafeWorktreeBasePreviewResult,
   CreateWorktreeActionRequest,
   CreateWorktreeActionResult,
+  WorktreeBasePreviewRequest,
+  WorktreeBasePreviewResult,
 } from './types.js';
 
 const FORBIDDEN_BROWSER_FIELDS = new Set([
@@ -41,6 +45,26 @@ async function main(): Promise<void> {
     return;
   }
 
+  const action = getRequestedAction(parsed);
+  if (!action.ok) {
+    writeJson({ ok: false, status: 'failed', message: action.message });
+    process.exitCode = 1;
+    return;
+  }
+
+  if (action.action === 'preview-base-ref') {
+    const request = normalizeBasePreviewRequest(parsed);
+    if (!request.ok) {
+      writeJson({ ok: false, status: 'failed', message: request.message });
+      process.exitCode = 1;
+      return;
+    }
+
+    const result = await resolveWorktreeBasePreview(request.request);
+    writeJson(toBrowserSafeWorktreeBasePreviewResult(result));
+    return;
+  }
+
   const request = normalizeActionRequest(parsed);
   if (!request.ok) {
     writeJson({ ok: false, status: 'failed', message: request.message });
@@ -55,27 +79,13 @@ async function main(): Promise<void> {
 export function normalizeActionRequest(
   parsed: unknown,
 ): { ok: true; request: CreateWorktreeActionRequest } | { ok: false; message: string } {
-  if (!isRecord(parsed)) {
-    return { ok: false, message: 'Request body must be a JSON object.' };
+  const repoIntent = normalizeRepoIntent(parsed);
+  if (!repoIntent.ok) {
+    return repoIntent;
   }
 
-  const forbidden = findForbiddenField(parsed);
-  if (forbidden !== null) {
-    return { ok: false, message: `Field is not accepted by this action boundary: ${forbidden}` };
-  }
-
-  const repoIntent = parsed['repoIntent'];
-  const branchName = parsed['branchName'];
-  if (!isRecord(repoIntent) || typeof branchName !== 'string') {
+  if (!isRecord(parsed) || typeof parsed['branchName'] !== 'string') {
     return { ok: false, message: 'Expected repoIntent and branchName.' };
-  }
-
-  const candidateRuntimeIds = repoIntent['candidateRuntimeIds'];
-  if (
-    !Array.isArray(candidateRuntimeIds) ||
-    !candidateRuntimeIds.every((value) => typeof value === 'string')
-  ) {
-    return { ok: false, message: 'repoIntent.candidateRuntimeIds must be an array of strings.' };
   }
 
   const launchMode = isRecord(parsed['launch']) ? parsed['launch']['mode'] : 'tmux-detached';
@@ -86,15 +96,82 @@ export function normalizeActionRequest(
   return {
     ok: true,
     request: {
-      repoIntent: {
-        candidateRuntimeIds,
-        ...optionalStringField(repoIntent, 'repoName'),
-        ...optionalStringField(repoIntent, 'qualifiedRepoName'),
-        ...optionalStringField(repoIntent, 'preferredRuntimeId'),
-      },
-      branchName,
+      repoIntent: repoIntent.repoIntent,
+      branchName: parsed['branchName'],
       ...optionalStringField(parsed, 'baseRef'),
       launch: { mode: launchMode },
+    },
+  };
+}
+
+export function normalizeBasePreviewRequest(
+  parsed: unknown,
+): { ok: true; request: WorktreeBasePreviewRequest } | { ok: false; message: string } {
+  const repoIntent = normalizeRepoIntent(parsed);
+  if (!repoIntent.ok) {
+    return repoIntent;
+  }
+
+  return {
+    ok: true,
+    request: {
+      repoIntent: repoIntent.repoIntent,
+    },
+  };
+}
+
+function getRequestedAction(
+  parsed: unknown,
+): { ok: true; action: 'create-worktree' | 'preview-base-ref' } | { ok: false; message: string } {
+  if (!isRecord(parsed)) {
+    return { ok: false, message: 'Request body must be a JSON object.' };
+  }
+
+  const action = parsed['action'];
+  if (action === undefined) {
+    return { ok: true, action: 'create-worktree' };
+  }
+  if (action === 'create-worktree' || action === 'preview-base-ref') {
+    return { ok: true, action };
+  }
+  return { ok: false, message: 'Unsupported worktree helper action.' };
+}
+
+function normalizeRepoIntent(parsed: unknown):
+  | {
+      ok: true;
+      repoIntent: WorktreeBasePreviewRequest['repoIntent'];
+    }
+  | { ok: false; message: string } {
+  if (!isRecord(parsed)) {
+    return { ok: false, message: 'Request body must be a JSON object.' };
+  }
+
+  const forbidden = findForbiddenField(parsed);
+  if (forbidden !== null) {
+    return { ok: false, message: `Field is not accepted by this action boundary: ${forbidden}` };
+  }
+
+  const repoIntent = parsed['repoIntent'];
+  if (!isRecord(repoIntent)) {
+    return { ok: false, message: 'Expected repoIntent.' };
+  }
+
+  const candidateRuntimeIds = repoIntent['candidateRuntimeIds'];
+  if (
+    !Array.isArray(candidateRuntimeIds) ||
+    !candidateRuntimeIds.every((value) => typeof value === 'string')
+  ) {
+    return { ok: false, message: 'repoIntent.candidateRuntimeIds must be an array of strings.' };
+  }
+
+  return {
+    ok: true,
+    repoIntent: {
+      candidateRuntimeIds,
+      ...optionalStringField(repoIntent, 'repoName'),
+      ...optionalStringField(repoIntent, 'qualifiedRepoName'),
+      ...optionalStringField(repoIntent, 'preferredRuntimeId'),
     },
   };
 }
@@ -151,6 +228,30 @@ export function toBrowserSafeCreateWorktreeActionResult(
   return { ...result, worktree, launch } as BrowserSafeCreateWorktreeActionResult;
 }
 
+export function toBrowserSafeWorktreeBasePreviewResult(
+  result: WorktreeBasePreviewResult,
+): BrowserSafeWorktreeBasePreviewResult {
+  if (result.ok) {
+    return result;
+  }
+
+  return {
+    ...result,
+    message: toBrowserSafeRepoIntentFailureMessage(result.reason),
+  };
+}
+
+function toBrowserSafeRepoIntentFailureMessage(
+  reason: 'repo-intent-unresolved' | 'repo-intent-ambiguous',
+): string {
+  switch (reason) {
+    case 'repo-intent-unresolved':
+      return 'Could not resolve the selected repository.';
+    case 'repo-intent-ambiguous':
+      return 'The selected repository is ambiguous.';
+  }
+}
+
 function toBrowserSafeWorktreeFailureMessage(
   reason: Extract<CreateWorktreeActionResult, { ok: false }>['worktree']['reason'],
 ): string {
@@ -158,9 +259,9 @@ function toBrowserSafeWorktreeFailureMessage(
     case 'invalid-request':
       return 'Create-worktree request is invalid.';
     case 'repo-intent-unresolved':
-      return 'Could not resolve the selected repository.';
+      return toBrowserSafeRepoIntentFailureMessage(reason);
     case 'repo-intent-ambiguous':
-      return 'The selected repository is ambiguous.';
+      return toBrowserSafeRepoIntentFailureMessage(reason);
     case 'invalid-label':
       return 'Could not derive a worktree path segment from the branch name.';
     case 'invalid-branch':
@@ -259,7 +360,7 @@ if (isMainModule()) {
     writeJson({
       ok: false,
       status: 'failed',
-      message: 'Create-worktree action failed. Run /session-deck iterm2 doctor for details.',
+      message: 'Worktree helper action failed. Run /session-deck iterm2 doctor for details.',
     });
     process.exitCode = 1;
   });

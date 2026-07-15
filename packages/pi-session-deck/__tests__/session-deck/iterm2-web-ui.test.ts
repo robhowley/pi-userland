@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
   SessionDeckDiagnostic,
@@ -87,7 +88,9 @@ class FakeClassList {
 
 interface FakeEvent {
   type: string;
+  key?: string;
   preventDefault?: () => void;
+  stopPropagation?: () => void;
 }
 
 type EventListener = (event: FakeEvent) => void;
@@ -164,6 +167,8 @@ class FakeElement extends FakeNode {
 }
 
 class FakeButtonElement extends FakeElement {
+  disabled = false;
+
   constructor() {
     super('button');
   }
@@ -269,6 +274,14 @@ function buildSnapshot(
     generatedAt: '2026-07-10T20:15:00.000Z',
     records: options.records ?? [buildRecord()],
     diagnostics: options.diagnostics ?? [],
+  };
+}
+
+function buildBasePreview(baseRef = 'origin/main') {
+  return {
+    ok: true,
+    status: 'resolved',
+    baseRef,
   };
 }
 
@@ -466,12 +479,28 @@ function getRepoGroups(list: FakeElement): FakeElement[] {
   );
 }
 
+function getRepoHeaderRow(repoGroup: FakeElement): FakeElement {
+  const headerRow = findAllByClass(repoGroup, 'repo-header-row')[0];
+  if (!(headerRow instanceof FakeElement)) {
+    throw new Error('Expected repo header row.');
+  }
+  return headerRow;
+}
+
 function getRepoHeader(repoGroup: FakeElement): FakeButtonElement {
-  const header = repoGroup.childNodes[0];
-  if (!(header instanceof FakeButtonElement) || !header.classList.contains('repo-header')) {
+  const header = findAllByClass(repoGroup, 'repo-header')[0];
+  if (!(header instanceof FakeButtonElement)) {
     throw new Error('Expected repo header button.');
   }
   return header;
+}
+
+function getRepoActionButton(repoGroup: FakeElement): FakeButtonElement {
+  const actionButton = findAllByClass(repoGroup, 'repo-action-button')[0];
+  if (!(actionButton instanceof FakeButtonElement)) {
+    throw new Error('Expected repo action button.');
+  }
+  return actionButton;
 }
 
 function getRepoHeaders(list: FakeElement): FakeButtonElement[] {
@@ -756,33 +785,242 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(getCards(harness.elements.list)).toHaveLength(0);
   });
 
-  it('opens a branch-name-first New session composer without a worktree branch preview', async () => {
-    const harness = await setupApp([buildSnapshot()]);
+  it('renders a sibling + New repo-row action and opens the compact composer', async () => {
+    const harness = await setupApp([buildSnapshot(), buildBasePreview()]);
     const repoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
-    const actionButton = findAllByClass(repoGroup, 'repo-action-button')[0] as FakeButtonElement;
+    const headerRow = getRepoHeaderRow(repoGroup);
+    const header = getRepoHeader(repoGroup);
+    const actionButton = getRepoActionButton(repoGroup);
 
-    expect(actionButton.textContent).toBe('＋ New session');
+    expect(actionButton.textContent).toBe('+ New');
     expect(actionButton.getAttribute('aria-label')).toBe('create new session');
+    expect(actionButton.getAttribute('title')).toBe('create new session');
+    expect(actionButton.parentNode).toBe(headerRow);
+    expect(findAllByClass(repoGroup, 'repo-actions')).toHaveLength(0);
+    expect(findAllByTag(header, 'button')).toHaveLength(0);
+
     actionButton.click();
+    await flushMicrotasks();
+
+    expect(
+      harness.fetchMock.mock.calls.filter(([url]) => url === '/actions/create-worktree-preview'),
+    ).toHaveLength(1);
 
     const openedRepoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    const openedActionButton = getRepoActionButton(openedRepoGroup);
+    expect(openedActionButton.textContent).toBe('Cancel');
+    expect(openedActionButton.getAttribute('aria-label')).toBe('cancel new session');
+    expect(openedActionButton.getAttribute('title')).toBe('cancel new session');
+    expect(openedActionButton.parentNode).toBe(getRepoHeaderRow(openedRepoGroup));
+    expect(getRepoHeader(openedRepoGroup).getAttribute('aria-expanded')).toBe('false');
+
     const form = findAllByClass(openedRepoGroup, 'worktree-form')[0];
     expect(form).toBeDefined();
-    expect(form!.textContent).toContain('From default branch');
-    expect(form!.textContent).toContain('worktree path generated automatically');
-    expect(form!.textContent).toContain('Start Pi session in tmux');
+    expect(form!.textContent).toContain('main →');
+    expect(form!.textContent).toContain('Create');
+    expect(form!.textContent).not.toContain('Branch name');
+    expect(form!.textContent).not.toContain('Cancel');
+    expect(form!.textContent).not.toContain('Create session');
+    expect(form!.textContent).not.toContain('worktree path generated automatically');
+    expect(form!.textContent).not.toContain('Base branch resolves on create');
+    expect(form!.textContent).not.toContain('From default branch');
+    expect(form!.textContent).not.toContain('From main');
+    expect(form!.textContent).not.toContain('tmux');
     expect(form!.textContent).not.toContain('worktree/<');
+
+    const composeRow = findAllByClass(form!, 'worktree-compose-row')[0];
+    expect(composeRow).toBeDefined();
+    expect(findAllByClass(form!, 'worktree-field-header')).toHaveLength(0);
+    expect(findAllByClass(form!, 'worktree-field-label')).toHaveLength(0);
+    expect(findAllByClass(form!, 'worktree-field-meta')[0]?.textContent).toBe('main →');
 
     const branchInput = findAllByTag(form!, 'input').find(
       (input) => input.getAttribute('aria-label') === 'Branch name',
     ) as FakeInputElement | undefined;
     expect(branchInput).toBeDefined();
-    expect(branchInput!.getAttribute('placeholder')).toBe('rh/feature-name');
+    expect(branchInput!.getAttribute('placeholder')).toBe('feat/feature-name');
+    expect(findAllByTag(form!, 'input').filter((input) => input.type === 'checkbox')).toHaveLength(
+      0,
+    );
+    const branchControl = findAllByClass(form!, 'worktree-branch-control')[0];
+    expect(branchControl).toBeDefined();
+    const buttons = findAllByTag(form!, 'button') as FakeButtonElement[];
+    expect(buttons.map((button) => button.textContent)).toEqual(['Create']);
+    expect(branchInput!.parentNode).toBe(branchControl);
+    expect(buttons[0]?.parentNode).toBe(branchControl);
+    expect(buttons[0]?.classList.contains('worktree-submit-button')).toBe(true);
+    expect(buttons[0]?.disabled).toBe(false);
   });
 
-  it('submits exact branchName from the New session composer and omits label from the browser request', async () => {
+  it('ships one-row compact composer input and Create button styling', async () => {
+    const css = await readFile(
+      new URL('../../extensions/session-deck/iterm2/web/style.css', import.meta.url),
+      'utf8',
+    );
+
+    expect(css).toMatch(
+      /\.worktree-form input\[type='text'\]::placeholder\s*\{[\s\S]*color:\s*rgba\(167, 176, 192, 0\.58\);/u,
+    );
+    expect(css).toMatch(
+      /\.worktree-compose-row\s*\{[\s\S]*display:\s*flex;[\s\S]*align-items:\s*center;/u,
+    );
+    expect(css).toMatch(/\.worktree-branch-control\s*\{[\s\S]*height:\s*32px;/u);
+    expect(css).toMatch(
+      /\.worktree-form input\[type='text'\]\s*\{[\s\S]*border-radius:\s*7px 0 0 7px;[\s\S]*font-family:\s*ui-monospace/u,
+    );
+    expect(css).toMatch(
+      /\.worktree-submit-button\s*\{[\s\S]*min-height:\s*32px;[\s\S]*border-radius:\s*0 7px 7px 0;/u,
+    );
+    expect(css).not.toContain('.worktree-form-actions');
+  });
+
+  it('closes the composer from the header Cancel without posting create-worktree', async () => {
+    const harness = await setupApp([buildSnapshot(), buildBasePreview()]);
+    const repoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+
+    getRepoActionButton(repoGroup).click();
+    await flushMicrotasks();
+
+    const openedRepoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    expect(getRepoActionButton(openedRepoGroup).textContent).toBe('Cancel');
+    getRepoActionButton(openedRepoGroup).click();
+    await flushMicrotasks();
+
+    const rerenderedGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    expect(findAllByClass(rerenderedGroup, 'worktree-form')).toHaveLength(0);
+    expect(getRepoActionButton(rerenderedGroup).textContent).toBe('+ New');
+    expect(getRepoActionButton(rerenderedGroup).getAttribute('aria-label')).toBe(
+      'create new session',
+    );
+    expect(getRepoHeader(rerenderedGroup).getAttribute('aria-expanded')).toBe('false');
+    expect(
+      harness.fetchMock.mock.calls.filter(([url]) => url === '/actions/create-worktree'),
+    ).toHaveLength(0);
+  });
+
+  it('keeps the composer independent from the repo disclosure', async () => {
+    const harness = await setupApp([buildSnapshot(), buildBasePreview()]);
+    const repoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+
+    getRepoActionButton(repoGroup).click();
+    await flushMicrotasks();
+
+    const openedRepoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    expect(getRepoHeader(openedRepoGroup).getAttribute('aria-expanded')).toBe('false');
+    expect(findAllByClass(openedRepoGroup, 'repo-group-records')).toHaveLength(0);
+    expect(findAllByClass(openedRepoGroup, 'worktree-form')).toHaveLength(1);
+    expect(getRepoActionButton(openedRepoGroup).textContent).toBe('Cancel');
+
+    getRepoHeader(openedRepoGroup).click();
+
+    const expandedRepoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    expect(getRepoHeader(expandedRepoGroup).getAttribute('aria-expanded')).toBe('true');
+    expect(findAllByClass(expandedRepoGroup, 'repo-group-records')).toHaveLength(1);
+    expect(findAllByClass(expandedRepoGroup, 'worktree-form')).toHaveLength(1);
+    expect(getRepoActionButton(expandedRepoGroup).textContent).toBe('Cancel');
+
+    getRepoHeader(expandedRepoGroup).click();
+
+    const collapsedRepoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    expect(getRepoHeader(collapsedRepoGroup).getAttribute('aria-expanded')).toBe('false');
+    expect(findAllByClass(collapsedRepoGroup, 'repo-group-records')).toHaveLength(0);
+    expect(findAllByClass(collapsedRepoGroup, 'worktree-form')).toHaveLength(1);
+    expect(getRepoActionButton(collapsedRepoGroup).textContent).toBe('Cancel');
+
+    getRepoActionButton(collapsedRepoGroup).click();
+    const closedRepoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    expect(getRepoHeader(closedRepoGroup).getAttribute('aria-expanded')).toBe('false');
+    expect(findAllByClass(closedRepoGroup, 'worktree-form')).toHaveLength(0);
+    expect(getRepoActionButton(closedRepoGroup).textContent).toBe('+ New');
+  });
+
+  it('disables Create and does not post when the preview is loading', async () => {
+    const harness = await setupApp([buildSnapshot(), buildBasePreview()]);
+    const repoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+
+    getRepoActionButton(repoGroup).click();
+
+    const loadingRepoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    const form = findAllByClass(loadingRepoGroup, 'worktree-form')[0]!;
+    expect(findAllByClass(form, 'worktree-field-meta')[0]?.textContent).toBe('Resolving…');
+    const submitButton = findAllByTag(form, 'button')[0] as FakeButtonElement;
+    expect(submitButton.textContent).toBe('Create');
+    expect(submitButton.disabled).toBe(true);
+
+    const branchInput = findAllByTag(form, 'input').find(
+      (input) => input.getAttribute('aria-label') === 'Branch name',
+    ) as FakeInputElement;
+    branchInput.value = 'rh/feature-name';
+    branchInput.dispatchEvent({ type: 'input' });
+    form.dispatchEvent({ type: 'submit' });
+    await flushMicrotasks();
+
+    expect(
+      harness.fetchMock.mock.calls.filter(([url]) => url === '/actions/create-worktree'),
+    ).toHaveLength(0);
+  });
+
+  it('disables Create and does not post when the preview fallback cannot resolve a base branch', async () => {
     const harness = await setupApp([
       buildSnapshot(),
+      {
+        ok: false,
+        status: 'failed',
+        reason: 'repo-intent-unresolved',
+        message: 'Preview unavailable.',
+        recoverable: true,
+      },
+    ]);
+    const repoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+
+    getRepoActionButton(repoGroup).click();
+    await flushMicrotasks();
+
+    const openedRepoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    const form = findAllByClass(openedRepoGroup, 'worktree-form')[0]!;
+    expect(findAllByClass(form, 'worktree-field-meta')[0]?.textContent).toBe('Base unavailable');
+    expect(form.textContent).not.toContain('Base branch resolves on create');
+    const submitButton = findAllByTag(form, 'button')[0] as FakeButtonElement;
+    expect(submitButton.textContent).toBe('Create');
+    expect(submitButton.disabled).toBe(true);
+
+    const branchInput = findAllByTag(form, 'input').find(
+      (input) => input.getAttribute('aria-label') === 'Branch name',
+    ) as FakeInputElement;
+    branchInput.value = 'rh/feature-name';
+    branchInput.dispatchEvent({ type: 'input' });
+    form.dispatchEvent({ type: 'submit' });
+    await flushMicrotasks();
+
+    expect(
+      harness.fetchMock.mock.calls.filter(([url]) => url === '/actions/create-worktree'),
+    ).toHaveLength(0);
+  });
+
+  it('closes the composer on Escape without posting create-worktree', async () => {
+    const harness = await setupApp([buildSnapshot(), buildBasePreview()]);
+    const repoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+
+    getRepoActionButton(repoGroup).click();
+    await flushMicrotasks();
+
+    const openedRepoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    const form = findAllByClass(openedRepoGroup, 'worktree-form')[0]!;
+    form.dispatchEvent({ type: 'keydown', key: 'Escape' });
+    await flushMicrotasks();
+
+    const closedRepoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    expect(findAllByClass(closedRepoGroup, 'worktree-form')).toHaveLength(0);
+    expect(getRepoActionButton(closedRepoGroup).textContent).toBe('+ New');
+    expect(
+      harness.fetchMock.mock.calls.filter(([url]) => url === '/actions/create-worktree'),
+    ).toHaveLength(0);
+  });
+
+  it('submits exact branchName from the New session composer and includes the preview baseRef', async () => {
+    const harness = await setupApp([
+      buildSnapshot(),
+      buildBasePreview(),
       {
         ok: true,
         status: 'created-and-launched',
@@ -809,7 +1047,8 @@ describe('Session Deck iTerm2 web UI', () => {
       }),
     ]);
     const repoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
-    (findAllByClass(repoGroup, 'repo-action-button')[0] as FakeButtonElement).click();
+    getRepoActionButton(repoGroup).click();
+    await flushMicrotasks();
     const openedRepoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
     const form = findAllByClass(openedRepoGroup, 'worktree-form')[0]!;
     const branchInput = findAllByTag(form, 'input').find(
@@ -834,6 +1073,7 @@ describe('Session Deck iTerm2 web UI', () => {
         candidateRuntimeIds: ['rt-1'],
       },
       branchName: 'rh/feature-name',
+      baseRef: 'origin/main',
       launch: { mode: 'tmux-detached' },
     });
     expect(JSON.parse(requestInit.body ?? '{}')).not.toHaveProperty('label');
@@ -843,6 +1083,7 @@ describe('Session Deck iTerm2 web UI', () => {
   it('renders partial launch failure from the sanitized browser-visible action shape', async () => {
     const harness = await setupApp([
       buildSnapshot(),
+      buildBasePreview(),
       {
         ok: true,
         status: 'partial-launch-failed',
@@ -867,7 +1108,8 @@ describe('Session Deck iTerm2 web UI', () => {
       buildSnapshot(),
     ]);
     const repoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
-    (findAllByClass(repoGroup, 'repo-action-button')[0] as FakeButtonElement).click();
+    getRepoActionButton(repoGroup).click();
+    await flushMicrotasks();
     const openedRepoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
     const form = findAllByClass(openedRepoGroup, 'worktree-form')[0]!;
     const branchInput = findAllByTag(form, 'input').find(
