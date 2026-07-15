@@ -104,6 +104,20 @@ export type MergeReadySignalsInput = {
   unresolvedConversationRequirement?: MergeReadyConversationRequirementSignal;
 };
 
+export const MERGE_READY_REPAIR_GUIDANCE_IDS = [
+  'branch_out_of_date',
+  'merge_conflicts',
+  'ci_failing',
+] as const;
+
+export type MergeReadyRepairGuidanceId = (typeof MERGE_READY_REPAIR_GUIDANCE_IDS)[number];
+
+const MERGE_READY_REPAIR_GUIDANCE_ID_SET = new Set<string>(MERGE_READY_REPAIR_GUIDANCE_IDS);
+
+export function isMergeReadyRepairGuidanceId(value: string): value is MergeReadyRepairGuidanceId {
+  return MERGE_READY_REPAIR_GUIDANCE_ID_SET.has(value);
+}
+
 export const MERGE_READY_OPEN_ITEM_IDS = [
   'no_pull_request',
   'status_ambiguous',
@@ -120,7 +134,7 @@ export const MERGE_READY_OPEN_ITEM_IDS = [
 
 export type MergeReadyOpenItemId = (typeof MERGE_READY_OPEN_ITEM_IDS)[number];
 
-export type MergeReadyRepairGuidanceMap = Partial<Record<MergeReadyOpenItemId, string>>;
+export type MergeReadyRepairGuidanceMap = Partial<Record<MergeReadyRepairGuidanceId, string>>;
 
 export type MergeReadyOpenItem = {
   id: MergeReadyOpenItemId;

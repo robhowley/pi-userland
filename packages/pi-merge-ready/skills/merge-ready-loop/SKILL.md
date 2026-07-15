@@ -108,7 +108,7 @@ Important:
 
 ## Watch-triggered turns
 
-Current-branch `/merge-ready watch` runs may invoke this skill with a status snapshot already provided. Watch-triggered turns may also include a `Configured repair guidance for the actionable item(s):` block assembled additively from global and trusted-project settings for the actionable blocker ids in that turn. URL-targeted `/merge-ready watch --url ...` runs may also invoke this skill with the exact PR URL plus explicit isolated-worktree instructions for the PR head repo/branch. Use any provided snapshot only when it is clearly fresh and the target is already confirmed.
+Current-branch `/merge-ready watch` runs may invoke this skill with a status snapshot already provided. Watch-triggered turns may also include a `Configured repair guidance for the actionable item(s):` block. Current-branch turns assemble that block additively from global and trusted-project settings for the actionable blocker ids in that turn. URL-targeted `/merge-ready watch --url ...` turns use global guidance only and may also include the exact PR URL plus explicit isolated-worktree instructions for the PR head repo/branch. Use any provided snapshot only when it is clearly fresh and the target is already confirmed.
 
 - If the snapshot is stale, incomplete, or the target still needs confirmation, call `merge_ready_status({})` or `merge_ready_status({ url })`.
 - If your environment supports isolated worker/session/agent contexts, prefer using one for the bounded repair attempt and return only a compact result to the coordinating watch turn. Do not assume any one subagent framework; use whatever isolated-context mechanism is available.

@@ -183,6 +183,9 @@ function createSettingsSandbox() {
 
   return {
     cwd,
+    writeGlobalSettings(settings: unknown) {
+      writeJsonFile(join(agentDir, 'settings.json'), settings);
+    },
     writeProjectSettings(settings: unknown) {
       writeJsonFile(join(cwd, '.pi', 'settings.json'), settings);
     },
@@ -1520,17 +1523,24 @@ describe('merge-ready command', () => {
     vi.resetModules();
   });
 
-  it('queues URL-targeted repair with settings-backed guidance and waits for agent_end before refreshing', async () => {
+  it('queues URL-targeted repair with global-only settings-backed guidance and waits for agent_end before refreshing', async () => {
     const sandbox = createSettingsSandbox();
 
     try {
-      sandbox.writeProjectSettings({
+      sandbox.writeGlobalSettings({
         'pi-merge-ready': {
           repairGuidance: {
             ci_failing:
               'Start with pnpm --filter @robhowley/pi-merge-ready test -- __tests__/merge-ready/watch.test.ts',
-            unresolved_conversations: 'This stored key is inert in watch mode today.',
-            review_pending: 'This wait-only key should not appear in repair prompts.',
+          },
+        },
+      });
+      sandbox.writeProjectSettings({
+        'pi-merge-ready': {
+          repairGuidance: {
+            ci_failing: 'Ignore this ambient trusted-project guidance for URL-targeted repair.',
+            unresolved_conversations: 'Ignore this canonical but non-repairable key.',
+            review_pending: 'Ignore this wait-only key.',
           },
         },
       });
@@ -1631,6 +1641,9 @@ describe('merge-ready command', () => {
       expect(prompt).toContain('Configured repair guidance for the actionable item(s):');
       expect(prompt).toContain(
         '- ci_failing: Start with pnpm --filter @robhowley/pi-merge-ready test -- __tests__/merge-ready/watch.test.ts',
+      );
+      expect(prompt).not.toContain(
+        'Ignore this ambient trusted-project guidance for URL-targeted repair.',
       );
       expect(prompt).not.toContain('review_pending:');
       expect(prompt).not.toContain('unresolved_conversations:');

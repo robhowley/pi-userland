@@ -1,5 +1,10 @@
 import { getErrorMessage, runNormalizedExecCommand } from './internal.js';
-import { loadMergeReadyConfigAsync, type MergeReadyConfig } from './config.js';
+import {
+  DEFAULT_MERGE_READY_CONFIG,
+  loadMergeReadyConfigAsync,
+  type LoadMergeReadyConfigOptions,
+  type MergeReadyConfig,
+} from './config.js';
 import { getMergeReadyStatus } from './merge-ready.js';
 import {
   claimMergeReadyStatusBarOwnership,
@@ -14,14 +19,16 @@ import {
   type MergeReadyWatchSessionRef,
 } from './watch-status.js';
 import type { MergeReadyExec } from './git.js';
-import type {
-  MergeReadyOpenItem,
-  MergeReadyOpenItemDetail,
-  MergeReadyOpenItemId,
-  MergeReadyPullRequest,
-  MergeReadyRepairGuidanceMap,
-  MergeReadyStatus,
-  MergeReadyTarget,
+import {
+  isMergeReadyRepairGuidanceId,
+  MERGE_READY_REPAIR_GUIDANCE_IDS,
+  type MergeReadyOpenItem,
+  type MergeReadyOpenItemDetail,
+  type MergeReadyOpenItemId,
+  type MergeReadyPullRequest,
+  type MergeReadyRepairGuidanceMap,
+  type MergeReadyStatus,
+  type MergeReadyTarget,
 } from './types.js';
 
 export const MERGE_READY_WATCH_STATUS_KEY = 'merge-ready-watch';
@@ -31,11 +38,8 @@ export const MERGE_READY_WATCH_MAX_INTERVAL_SECONDS = 3_600;
 export const MERGE_READY_WATCH_STOP_SHORTCUT = 'ctrl+shift+s';
 export const MERGE_READY_WATCH_STOP_SHORTCUT_LABEL = 'Ctrl-Shift-S';
 
-export const MERGE_READY_WATCH_REPAIR_OPEN_ITEM_IDS = [
-  'branch_out_of_date',
-  'merge_conflicts',
-  'ci_failing',
-] as const satisfies ReadonlyArray<MergeReadyOpenItemId>;
+export const MERGE_READY_WATCH_REPAIR_OPEN_ITEM_IDS =
+  MERGE_READY_REPAIR_GUIDANCE_IDS satisfies ReadonlyArray<MergeReadyOpenItemId>;
 
 export const MERGE_READY_WATCH_WAIT_OPEN_ITEM_IDS = [
   'ci_running',
@@ -212,6 +216,7 @@ export type RunMergeReadyWatchLoopOptions = {
   loadConfig?: (
     cwd: string,
     projectTrusted?: boolean,
+    options?: LoadMergeReadyConfigOptions,
   ) => Promise<MergeReadyConfig> | MergeReadyConfig;
 };
 
@@ -1159,7 +1164,19 @@ export async function runMergeReadyWatchLoop(
       }
 
       const loadConfigFn = options.loadConfig ?? loadMergeReadyConfigAsync;
-      const config = await loadConfigFn(options.ctx.cwd, options.ctx.projectTrusted ?? false);
+      let config = DEFAULT_MERGE_READY_CONFIG;
+      let configLoaded = false;
+      try {
+        config = await loadConfigFn(options.ctx.cwd, options.ctx.projectTrusted ?? false, {
+          repairGuidanceProjectTrusted:
+            status.target.mode === 'current_branch' ? (options.ctx.projectTrusted ?? false) : false,
+        });
+        configLoaded = true;
+      } catch (error) {
+        if (isAbortError(error) || options.signal.aborted) {
+          throw createAbortError(options.signal.reason);
+        }
+      }
       throwIfMergeReadyWatchAborted(options.signal);
 
       const agentEnd = waitForAgentEnd(options.signal);
@@ -1232,6 +1249,7 @@ export async function runMergeReadyWatchLoop(
       // After successful repair, trigger compaction if configured.
       if (
         refreshedClassification.actionability === 'wait' &&
+        configLoaded &&
         config.autoCompactRepair &&
         options.ctx.compact
       ) {
@@ -1352,6 +1370,10 @@ function resolveMergeReadyWatchRepairGuidanceLines(
       continue;
     }
     seen.add(openItem.id);
+
+    if (!isMergeReadyRepairGuidanceId(openItem.id)) {
+      continue;
+    }
 
     const guidance = repairGuidance[openItem.id];
     if (typeof guidance !== 'string' || guidance.length === 0) {

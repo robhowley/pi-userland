@@ -57,7 +57,7 @@ describe.sequential('loadMergeReadyConfigAsync', () => {
         enableStatusBarDiagnostics: false,
         repairGuidance: {
           ci_failing: 'Run the focused vitest file first.',
-          unresolved_conversations: 'Track the thread links before responding manually.',
+          branch_out_of_date: 'Merge the latest base branch before rerunning tests.',
         },
       },
     });
@@ -81,7 +81,7 @@ describe.sequential('loadMergeReadyConfigAsync', () => {
       repairGuidance: {
         ci_failing:
           'Start with pnpm --filter @robhowley/pi-merge-ready test -- __tests__/merge-ready/watch.test.ts',
-        unresolved_conversations: 'Track the thread links before responding manually.',
+        branch_out_of_date: 'Merge the latest base branch before rerunning tests.',
         merge_conflicts: 'Rebase onto main before touching unrelated files.',
       },
     });
@@ -184,6 +184,40 @@ describe.sequential('loadMergeReadyConfigAsync', () => {
     });
   });
 
+  it('can ignore trusted project repair guidance while still applying trusted project scalar fields', async () => {
+    writeGlobalSettings({
+      'pi-merge-ready': {
+        autoCompactRepair: true,
+        cacheTTLSeconds: 90,
+        enableStatusBarDiagnostics: false,
+        repairGuidance: {
+          ci_failing: 'Keep the global repair guidance.',
+        },
+      },
+    });
+    writeProjectSettings({
+      'pi-merge-ready': {
+        autoCompactRepair: false,
+        cacheTTLSeconds: 5,
+        enableStatusBarDiagnostics: true,
+        repairGuidance: {
+          ci_failing: 'Ignore this trusted project repair guidance.',
+        },
+      },
+    });
+
+    await expect(
+      loadMergeReadyConfigAsync(cwd, true, { repairGuidanceProjectTrusted: false }),
+    ).resolves.toEqual({
+      autoCompactRepair: false,
+      cacheTTLSeconds: 5,
+      enableStatusBarDiagnostics: true,
+      repairGuidance: {
+        ci_failing: 'Keep the global repair guidance.',
+      },
+    });
+  });
+
   it('enables diagnostics from settings without env overrides', async () => {
     writeGlobalSettings({
       'pi-merge-ready': {
@@ -207,12 +241,14 @@ describe.sequential('loadMergeReadyConfigAsync', () => {
     await expect(loadMergeReadyConfigAsync(cwd, true)).resolves.toEqual(DEFAULT_CONFIG);
   });
 
-  it('ignores invalid repair guidance keys', async () => {
+  it('ignores unknown aliases and non-repairable canonical repair guidance keys', async () => {
     writeGlobalSettings({
       'pi-merge-ready': {
         repairGuidance: {
-          ci_failing: 'Keep this canonical key.',
+          ci_failing: 'Keep this repairable key.',
           checks_failing: 'Ignore this alias.',
+          review_pending: 'Ignore this canonical but non-repairable key.',
+          unresolved_conversations: 'Ignore this canonical but non-repairable key too.',
         },
       },
     });
@@ -220,7 +256,7 @@ describe.sequential('loadMergeReadyConfigAsync', () => {
     await expect(loadMergeReadyConfigAsync(cwd, true)).resolves.toEqual({
       ...DEFAULT_CONFIG,
       repairGuidance: {
-        ci_failing: 'Keep this canonical key.',
+        ci_failing: 'Keep this repairable key.',
       },
     });
   });

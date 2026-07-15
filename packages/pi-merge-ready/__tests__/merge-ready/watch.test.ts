@@ -827,8 +827,6 @@ describe('merge-ready watch helpers', () => {
         {
           merge_conflicts: 'Rebase onto main before touching unrelated files.',
           ci_failing: 'Run the focused vitest file first.',
-          ci_running: 'This wait-only item should not appear.',
-          unresolved_conversations: 'This non-actionable item should not appear.',
         },
       );
 
@@ -1616,9 +1614,6 @@ describe('merge-ready watch loop', () => {
       repairGuidance: {
         merge_conflicts: 'Rebase before touching unrelated files.',
         ci_failing: 'Run the focused vitest file first.',
-        ci_running: 'This wait-only item should not appear.',
-        review_pending: 'This wait-only item should not appear either.',
-        unresolved_conversations: 'This non-actionable item should not appear.',
       },
     }));
 
@@ -1644,7 +1639,9 @@ describe('merge-ready watch loop', () => {
       reason: 'max_iterations',
       status: waitStatus,
     });
-    expect(loadConfig).toHaveBeenCalledWith('/repo', false);
+    expect(loadConfig).toHaveBeenCalledWith('/repo', false, {
+      repairGuidanceProjectTrusted: false,
+    });
     expect(sendUserMessage).toHaveBeenCalledTimes(1);
     const prompt = vi.mocked(sendUserMessage).mock.calls[0]?.[0];
     expect(prompt).toContain('Configured repair guidance for the actionable item(s):');
@@ -1653,6 +1650,134 @@ describe('merge-ready watch loop', () => {
     expect(prompt).not.toContain('ci_running:');
     expect(prompt).not.toContain('review_pending:');
     expect(prompt).not.toContain('unresolved_conversations:');
+  });
+
+  it('loads URL-targeted repair guidance without trusted project overrides', async () => {
+    const ctx = createWatchContext({ projectTrusted: true });
+    const sendUserMessage = vi.fn(
+      async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
+    );
+    const checkDirtyWorkingTree = vi.fn(async () => ({ ok: true as const, dirty: false }));
+    const loadConfig = vi.fn(
+      async (
+        _cwd: string,
+        _projectTrusted?: boolean,
+        options?: { repairGuidanceProjectTrusted?: boolean },
+      ) => ({
+        autoCompactRepair: false,
+        cacheTTLSeconds: 60,
+        enableStatusBarDiagnostics: false,
+        repairGuidance: {
+          ci_failing:
+            options?.repairGuidanceProjectTrusted === false
+              ? 'Keep the global repair guidance.'
+              : 'Incorrect trusted-project repair guidance.',
+        },
+      }),
+    );
+
+    const result = await runMergeReadyWatchLoop({
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
+      api: { sendUserMessage },
+      ctx,
+      intervalSeconds: 30,
+      signal: new AbortController().signal,
+      url: RUNTIME_URL_TARGET.url,
+      dependencies: {
+        getStatus: createStatusSequence([createUrlCiFailingStatus(), createUrlCiRunningStatus()]),
+        sleep: vi.fn(async () => undefined),
+        syncStatusBar: vi.fn(),
+        checkDirtyWorkingTree,
+        waitForAgentEnd: vi.fn(async () => undefined),
+        maxIterations: 1,
+      },
+      loadConfig,
+    });
+
+    expect(result).toMatchObject({
+      kind: 'stopped',
+      reason: 'max_iterations',
+      status: createUrlCiRunningStatus(),
+    });
+    expect(loadConfig).toHaveBeenCalledWith('/repo', true, {
+      repairGuidanceProjectTrusted: false,
+    });
+    expect(checkDirtyWorkingTree).not.toHaveBeenCalled();
+    const prompt = vi.mocked(sendUserMessage).mock.calls[0]?.[0];
+    expect(prompt).toContain('Do this URL-targeted repair in an isolated git worktree');
+    expect(prompt).toContain('Do not mutate the ambient checkout.');
+    expect(prompt).toContain('- ci_failing: Keep the global repair guidance.');
+    expect(prompt).not.toContain('Incorrect trusted-project repair guidance.');
+  });
+
+  it('falls back to default repair dispatch when config loading fails and skips compaction', async () => {
+    const ctx: Parameters<typeof runMergeReadyWatchLoop>[0]['ctx'] = {
+      ...createWatchContext(),
+      compact: vi.fn(async () => undefined),
+    };
+    const sendUserMessage = vi.fn(
+      async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
+    );
+    const loadConfig = vi.fn(async () => {
+      throw new Error('Config exploded');
+    });
+
+    const result = await runMergeReadyWatchLoop({
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
+      api: { sendUserMessage },
+      ctx,
+      intervalSeconds: 30,
+      signal: new AbortController().signal,
+      dependencies: {
+        getStatus: createStatusSequence([createCiFailingStatus(), createReadyStatus()]),
+        sleep: vi.fn(async () => undefined),
+        syncStatusBar: vi.fn(),
+        checkDirtyWorkingTree: vi.fn(async () => ({ ok: true as const, dirty: false })),
+        waitForAgentEnd: vi.fn(async () => undefined),
+        maxIterations: 1,
+      },
+      loadConfig,
+    });
+
+    expect(result).toMatchObject({
+      kind: 'stopped',
+      reason: 'max_iterations',
+      status: createReadyStatus(),
+    });
+    expect(loadConfig).toHaveBeenCalledWith('/repo', false, {
+      repairGuidanceProjectTrusted: false,
+    });
+    expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    const prompt = vi.mocked(sendUserMessage).mock.calls[0]?.[0];
+    expect(prompt).not.toContain('Configured repair guidance for the actionable item(s):');
+    expect(ctx.compact).not.toHaveBeenCalled();
+  });
+
+  it('does not swallow sendUserMessage failures when config loading falls back', async () => {
+    const sendUserMessage = vi.fn(async () => {
+      throw new Error('Repair dispatch exploded');
+    });
+
+    await expect(
+      runMergeReadyWatchLoop({
+        exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
+        api: { sendUserMessage },
+        ctx: createWatchContext(),
+        intervalSeconds: 30,
+        signal: new AbortController().signal,
+        dependencies: {
+          getStatus: createStatusSequence([createCiFailingStatus()]),
+          sleep: vi.fn(async () => undefined),
+          syncStatusBar: vi.fn(),
+          checkDirtyWorkingTree: vi.fn(async () => ({ ok: true as const, dirty: false })),
+          waitForAgentEnd: vi.fn(() => new Promise<void>(() => {})),
+          maxIterations: 1,
+        },
+        loadConfig: vi.fn(async () => {
+          throw new Error('Config exploded');
+        }),
+      }),
+    ).rejects.toThrow('Repair dispatch exploded');
   });
 
   it('stops immediately on status_ambiguous without sending repair work', async () => {
@@ -2325,7 +2450,9 @@ describe('merge-ready watch loop', () => {
       reason: 'max_iterations',
       status: createReadyStatus(),
     });
-    expect(loadConfig).toHaveBeenCalledWith('/repo', false);
+    expect(loadConfig).toHaveBeenCalledWith('/repo', false, {
+      repairGuidanceProjectTrusted: false,
+    });
     expect(ctx.compact).not.toHaveBeenCalled();
   });
 
@@ -2376,7 +2503,9 @@ describe('merge-ready watch loop', () => {
       customInstructions:
         'Compaction triggered after successful merge-ready repair loop completion',
     });
-    expect(loadConfig).toHaveBeenCalledWith('/repo', true);
+    expect(loadConfig).toHaveBeenCalledWith('/repo', true, {
+      repairGuidanceProjectTrusted: true,
+    });
     expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(
       MERGE_READY_WATCH_STATUS_KEY,
       expect.stringContaining('Compacting after successful repair…'),
