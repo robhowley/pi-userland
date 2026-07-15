@@ -56,6 +56,7 @@ class TempRuntime:
         (self.web_root / "style.css").write_text("body { color: black; }", encoding="utf-8")
         self.socket_path = self.root / "socket-parent" / "iterm2.sock"
         self.state_path = self.root / "install.json"
+        self.helper_path = self.root / "dist/extensions/session-deck/worktree/action-cli.js"
         self.payload = {
             "schemaVersion": 1,
             "product": "pi-session-deck-iterm2",
@@ -82,6 +83,18 @@ class TempRuntime:
 
     def config(self):
         return AUTO.load_config(self.state_path)
+
+    def write_helper(self, source: str) -> None:
+        self.helper_path.parent.mkdir(parents=True, exist_ok=True)
+        self.helper_path.write_text(source, encoding="utf-8")
+
+
+def assert_browser_safe_payload(case: unittest.TestCase, payload: dict, *private_strings: str) -> None:
+    rendered = json.dumps(payload)
+    for private_string in private_strings:
+        if len(private_string) == 0:
+            continue
+        case.assertNotIn(private_string, rendered)
 
 
 def install_fake_iterm2(fake) -> None:
@@ -293,13 +306,10 @@ class ImportAndConfigTests(unittest.TestCase):
 
     def test_toolbelt_create_worktree_action_requires_token_and_runs_helper(self):
         fixture = TempRuntime(self)
-        helper_path = fixture.config().runtime.create_worktree_helper_path
-        helper_path.parent.mkdir(parents=True)
-        helper_path.write_text(
+        fixture.write_helper(
             "import json, sys\n"
             "payload = json.loads(sys.stdin.read())\n"
-            "print(json.dumps({'ok': True, 'status': 'created', 'repoPath': payload['repoPath']}))\n",
-            encoding="utf-8",
+            "print(json.dumps({'ok': True, 'status': 'created', 'repoPath': payload['repoPath']}))\n"
         )
         fixture.payload["runtime"]["nodeExecutablePath"] = sys.executable
         fixture.write_state()
@@ -336,13 +346,10 @@ class ImportAndConfigTests(unittest.TestCase):
 
     def test_toolbelt_create_worktree_preview_route_runs_helper(self):
         fixture = TempRuntime(self)
-        helper_path = fixture.config().runtime.create_worktree_helper_path
-        helper_path.parent.mkdir(parents=True)
-        helper_path.write_text(
+        fixture.write_helper(
             "import json, sys\n"
             "payload = json.loads(sys.stdin.read())\n"
-            "print(json.dumps({'ok': True, 'status': 'resolved', 'action': payload.get('action'), 'repoIntent': payload['repoIntent']}))\n",
-            encoding="utf-8",
+            "print(json.dumps({'ok': True, 'status': 'resolved', 'action': payload.get('action'), 'repoIntent': payload['repoIntent']}))\n"
         )
         fixture.payload["runtime"]["nodeExecutablePath"] = sys.executable
         fixture.write_state()
@@ -378,6 +385,132 @@ class ImportAndConfigTests(unittest.TestCase):
                 "action": "preview-base-ref",
                 "repoIntent": {"repoName": "project", "candidateRuntimeIds": ["rt-1"]},
             },
+        )
+
+    def test_run_create_worktree_action_returns_browser_safe_helper_missing_failure(self):
+        fixture = TempRuntime(self)
+        fixture.payload["runtime"]["nodeExecutablePath"] = sys.executable
+        fixture.write_state()
+
+        status_code, payload = AUTO.run_create_worktree_action(fixture.config(), "{}")
+
+        self.assertEqual(status_code, 503)
+        self.assertEqual(payload, AUTO.helper_failure_payload(AUTO.HELPER_UNAVAILABLE_MESSAGE))
+        assert_browser_safe_payload(self, payload, str(fixture.root), str(fixture.helper_path))
+
+    def test_run_create_worktree_action_sanitizes_nonzero_helper_failures(self):
+        fixture = TempRuntime(self)
+        fixture.write_helper(
+            "import json, sys\n"
+            "print(json.dumps({'ok': False, 'status': 'failed', 'message': 'bad /private/tmp/secret', 'path': '/Users/example/private'}))\n"
+            "raise SystemExit(1)\n"
+        )
+        fixture.payload["runtime"]["nodeExecutablePath"] = sys.executable
+        fixture.write_state()
+
+        status_code, payload = AUTO.run_create_worktree_action(fixture.config(), "{}")
+
+        self.assertEqual(status_code, 400)
+        self.assertEqual(payload, AUTO.helper_failure_payload(AUTO.HELPER_FAILED_MESSAGE))
+        assert_browser_safe_payload(self, payload, str(fixture.root), str(fixture.helper_path))
+        self.assertNotIn("/private/tmp/secret", payload["message"])
+
+    def test_run_create_worktree_action_reports_indeterminate_helper_timeout(self):
+        fixture = TempRuntime(self)
+        fixture.write_helper(
+            "import time\n"
+            "time.sleep(0.05)\n"
+            "print('{}')\n"
+        )
+        fixture.payload["runtime"]["nodeExecutablePath"] = sys.executable
+        fixture.write_state()
+        original_timeout = AUTO.ACTION_HELPER_TIMEOUT_SECONDS
+        AUTO.ACTION_HELPER_TIMEOUT_SECONDS = 0.01
+        self.addCleanup(setattr, AUTO, "ACTION_HELPER_TIMEOUT_SECONDS", original_timeout)
+
+        status_code, payload = AUTO.run_create_worktree_action(fixture.config(), "{}")
+
+        self.assertEqual(status_code, 504)
+        self.assertEqual(payload, AUTO.helper_failure_payload(AUTO.HELPER_TIMEOUT_MESSAGE))
+        self.assertIn("check git worktrees", payload["message"])
+        self.assertNotIn("no worktree was created", payload["message"].lower())
+        assert_browser_safe_payload(self, payload, str(fixture.root), str(fixture.helper_path))
+
+    def test_run_create_worktree_action_rejects_invalid_json_or_non_object_helper_output(self):
+        fixture = TempRuntime(self)
+        fixture.write_helper("print('/private/tmp/helper-output')\n")
+        fixture.payload["runtime"]["nodeExecutablePath"] = sys.executable
+        fixture.write_state()
+
+        invalid_json_status, invalid_json_payload = AUTO.run_create_worktree_action(
+            fixture.config(), "{}"
+        )
+
+        self.assertEqual(invalid_json_status, 500)
+        self.assertEqual(
+            invalid_json_payload, AUTO.helper_failure_payload(AUTO.HELPER_INVALID_RESPONSE_MESSAGE)
+        )
+        assert_browser_safe_payload(
+            self, invalid_json_payload, str(fixture.root), str(fixture.helper_path)
+        )
+
+        fixture.write_helper("import json\nprint(json.dumps(['not', 'an', 'object']))\n")
+        non_object_status, non_object_payload = AUTO.run_create_worktree_action(
+            fixture.config(), "{}"
+        )
+
+        self.assertEqual(non_object_status, 500)
+        self.assertEqual(
+            non_object_payload, AUTO.helper_failure_payload(AUTO.HELPER_INVALID_RESPONSE_MESSAGE)
+        )
+        assert_browser_safe_payload(
+            self, non_object_payload, str(fixture.root), str(fixture.helper_path)
+        )
+
+    def test_toolbelt_create_worktree_route_rejects_invalid_content_type_and_large_body(self):
+        fixture = TempRuntime(self)
+        config = fixture.config()
+        http = AUTO.start_http_server(config)
+        self.addCleanup(http.close)
+        base_url = f"http://127.0.0.1:{http.port}"
+        token = http.server.session_deck_action_token
+
+        invalid_content_type = Request(
+            f"{base_url}/actions/create-worktree",
+            data=b"{}",
+            method="POST",
+            headers={
+                "Content-Type": "text/plain",
+                "X-Session-Deck-Action-Token": token,
+            },
+        )
+        with self.assertRaises(HTTPError) as invalid_content_type_raised:
+            urlopen(invalid_content_type, timeout=1.0)
+        self.assertEqual(invalid_content_type_raised.exception.code, 415)
+        invalid_content_type_payload = json.loads(
+            invalid_content_type_raised.exception.read().decode("utf-8")
+        )
+        self.assertEqual(
+            invalid_content_type_payload,
+            {"ok": False, "status": "failed", "message": "Content-Type must be application/json."},
+        )
+
+        oversized_request = Request(
+            f"{base_url}/actions/create-worktree",
+            data=b"x" * (AUTO.ACTION_BODY_LIMIT_BYTES + 1),
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "X-Session-Deck-Action-Token": token,
+            },
+        )
+        with self.assertRaises(HTTPError) as oversized_request_raised:
+            urlopen(oversized_request, timeout=1.0)
+        self.assertEqual(oversized_request_raised.exception.code, 413)
+        oversized_payload = json.loads(oversized_request_raised.exception.read().decode("utf-8"))
+        self.assertEqual(
+            oversized_payload,
+            {"ok": False, "status": "failed", "message": "Request body is empty or too large."},
         )
 
 
@@ -418,6 +551,32 @@ class BridgeRuntimeTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertFalse(too_large["ok"])
         self.assertIn("large", too_large["message"])
+
+    async def test_bridge_reports_live_launch_prereqs(self):
+        fixture = TempRuntime(self)
+        original_build_launch_prereq_report = AUTO.build_launch_prereq_report
+        AUTO.build_launch_prereq_report = lambda: {
+            "pathProvenance": AUTO.LIVE_PATH_PROVENANCE,
+            "tmux": {"status": "available", "path": "/opt/homebrew/bin/tmux"},
+            "pi": {"status": "missing"},
+        }
+        self.addCleanup(setattr, AUTO, "build_launch_prereq_report", original_build_launch_prereq_report)
+        bridge, _connection = await self.start_bridge(fixture)
+
+        result = await unix_json_request(bridge.socket_path, b'{"launchPrereqs":true}\n')
+
+        self.assertEqual(
+            result,
+            {
+                "ok": True,
+                "message": "Reported launch prerequisites.",
+                "launchPrereqs": {
+                    "pathProvenance": AUTO.LIVE_PATH_PROVENANCE,
+                    "tmux": {"status": "available", "path": "/opt/homebrew/bin/tmux"},
+                    "pi": {"status": "missing"},
+                },
+            },
+        )
 
     async def test_bridge_serializes_tmux_ui_mutations(self):
         fixture = TempRuntime(self)

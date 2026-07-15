@@ -26,14 +26,14 @@ pi install npm:@robhowley/pi-session-deck
 - `↑/↓` move selection.
 - `←/→` switch repo filters in the row above the session list.
 - `enter` toggle details.
-- `w` prompts for an exact branch name from the active named repo filter, then creates/reuses a generated Git worktree and, by default, starts/reuses a detached tmux Pi session. Use the inline toggle for “create worktree only”.
+- `w` prompts for an exact branch name from the active named repo filter, then creates/reuses a generated Git worktree and starts/reuses a detached tmux Pi session there. This is a new Pi session flow; there is no worktree-only mode.
 - `o` open the selected terminal target on macOS when captured terminal metadata is available. iTerm2 sessions focus through the installed Session Deck iTerm2 runtime when available; tmux sessions open a new iTerm2 tab that attaches to the existing tmux session. `o` is attach-only: it never creates a worktree, tmux session, or Pi process.
 - `r` refresh.
-- `q` / `esc` close.
+- `q` closes. `esc` closes unless the `w` prompt is open, where `esc` / `ctrl+c` cancel the prompt without closing the browser.
 
 ## iTerm2 Toolbelt
 
-`pi-session-deck` can install an iTerm2 Toolbelt view backed by the same public `SessionDeckSnapshot` / `SessionDeckRecord` data that `/session-deck` already uses. Repo groups include **＋ New session**, which opens a branch-name composer. Create posts to a narrow localhost action route and uses the shared TypeScript worktree action to create/reuse a generated Git worktree and start `pi` in detached tmux.
+`pi-session-deck` can install an iTerm2 Toolbelt view backed by the same public `SessionDeckSnapshot` / `SessionDeckRecord` data that `/session-deck` already uses. Repo groups include **＋ New**, which opens a branch-name composer for a new Pi session on a generated worktree. The composer posts to a narrow localhost action route and uses the shared TypeScript worktree action to create/reuse a generated Git worktree and start `pi` in detached tmux. There is no Toolbelt worktree-only mode.
 
 1. Install the package.
 2. Run `/session-deck iterm2 install`.
@@ -44,9 +44,10 @@ pi install npm:@robhowley/pi-session-deck
 Notes:
 
 - The main session snapshot remains read-only: refresh, collapsible session-card browsing, and a `Show all` diagnostics toggle. The only mutating Toolbelt action is `POST /actions/create-worktree` with a per-server token, JSON body cap, helper timeout, and fixed Node helper argv.
+- `＋ New` completes once the worktree is ready and the detached tmux Pi launch succeeds or is reused. Session Deck observes the new runtime passively after launch; success does not wait for an immediate runtime id or visibility in the browser/Toolbelt list.
 - The installed `session_deck.py` AutoLaunch script starts one Session Deck iTerm2 process that binds to `127.0.0.1`, reads snapshots through the package-owned helper, runs create-worktree actions through a dedicated helper, and exposes the local Unix socket used by the `/session-deck` TUI for terminal focus.
 - The TypeScript client resolves that socket from the installed state rather than guessing a temporary path.
-- Detached launch requires local `tmux` and a `pi` executable on PATH. iTerm2 is only required for visible attach/open.
+- `＋ New` requires local `tmux` and a `pi` executable on PATH. iTerm2 is only required for visible attach/open.
 - Local repo builds need `pnpm --dir packages/pi-session-deck run build` before install so the snapshot and create-worktree helpers exist in `dist/`.
 
 ## What it provides
@@ -57,7 +58,7 @@ Notes:
 - Repo, PR, and linked-worktree context in the dashboard.
 - Short status chips in `/session-deck`.
 - `/new` resets activity for the new session while keeping the same runtime.
-- Tmux-aware terminal opening: when Pi is running inside tmux, `o` attaches to the existing tmux session after verifying the pane is live. It never starts Pi and never creates tmux sessions; new branch/worktree launch belongs to `w` / Toolbelt **＋ New session**.
+- Tmux-aware terminal opening: when Pi is running inside tmux, `o` attaches to the existing tmux session after verifying the pane is live. It never starts Pi and never creates tmux sessions; new branch/worktree launch belongs to `w` / Toolbelt **＋ New**.
 
 ## Status chips
 

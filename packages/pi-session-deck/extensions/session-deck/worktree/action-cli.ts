@@ -5,9 +5,15 @@ import { orchestrateCreateWorktree } from './orchestrate.js';
 import { resolveWorktreeBasePreview } from './preview.js';
 import type {
   BrowserSafeCreateWorktreeActionResult,
+  BrowserSafeCreateWorktreeLaunchResult,
+  BrowserSafeCreateWorktreePhaseResult,
   BrowserSafeWorktreeBasePreviewResult,
   CreateWorktreeActionRequest,
   CreateWorktreeActionResult,
+  CreateWorktreeFailureReason,
+  CreateWorktreeLaunchFailureReason,
+  CreateWorktreeLaunchSuccess,
+  CreateWorktreeSuccess,
   WorktreeBasePreviewRequest,
   WorktreeBasePreviewResult,
 } from './types.js';
@@ -88,9 +94,11 @@ export function normalizeActionRequest(
     return { ok: false, message: 'Expected repoIntent and branchName.' };
   }
 
-  const launchMode = isRecord(parsed['launch']) ? parsed['launch']['mode'] : 'tmux-detached';
-  if (launchMode !== 'none' && launchMode !== 'tmux-detached') {
-    return { ok: false, message: 'launch.mode must be none or tmux-detached.' };
+  const launch = parsed['launch'];
+  if (launch !== undefined) {
+    if (!isRecord(launch) || launch['mode'] !== 'tmux-detached') {
+      return { ok: false, message: 'launch.mode must be tmux-detached when provided.' };
+    }
   }
 
   return {
@@ -99,7 +107,7 @@ export function normalizeActionRequest(
       repoIntent: repoIntent.repoIntent,
       branchName: parsed['branchName'],
       ...optionalStringField(parsed, 'baseRef'),
-      launch: { mode: launchMode },
+      launch: { mode: 'tmux-detached' },
     },
   };
 }
@@ -179,7 +187,17 @@ function normalizeRepoIntent(parsed: unknown):
 export function toBrowserSafeCreateWorktreeActionResult(
   result: CreateWorktreeActionResult,
 ): BrowserSafeCreateWorktreeActionResult {
-  if (!result.ok) {
+  if (result.status === 'preflight-failed') {
+    return {
+      ...result,
+      preflight: {
+        ...result.preflight,
+        message: toBrowserSafePreflightFailureMessage(result.preflight.reason),
+      },
+    };
+  }
+
+  if (result.status === 'failed') {
     return {
       ...result,
       worktree: {
@@ -189,43 +207,37 @@ export function toBrowserSafeCreateWorktreeActionResult(
     };
   }
 
-  const worktree = {
-    ok: result.worktree.ok,
-    status: result.worktree.status,
-    branch: result.worktree.branch,
-    baseRef: result.worktree.baseRef,
-    repoName: result.worktree.repoName,
-    qualifiedRepoName: result.worktree.qualifiedRepoName,
-    ...(result.worktree.warning === undefined ? {} : { warning: result.worktree.warning }),
-  };
-  if (!result.launch.requested) {
-    return { ...result, worktree, launch: result.launch } as BrowserSafeCreateWorktreeActionResult;
-  }
+  const worktree = toBrowserSafeWorktreeSuccess(result.worktree);
 
-  if (!result.launch.ok) {
-    const launch = {
-      requested: result.launch.requested,
-      ok: result.launch.ok,
-      mode: result.launch.mode,
-      status: result.launch.status,
-      reason: result.launch.reason,
-      recoverable: result.launch.recoverable,
-      message: toBrowserSafeLaunchFailureMessage(result.launch.reason),
+  if (result.status === 'partial-launch-failed') {
+    return {
+      ...result,
+      worktree,
+      launch: {
+        requested: result.launch.requested,
+        ok: result.launch.ok,
+        mode: result.launch.mode,
+        status: result.launch.status,
+        reason: result.launch.reason,
+        recoverable: result.launch.recoverable,
+        message: toBrowserSafeLaunchFailureMessage(result.launch.reason),
+      },
     };
-    return { ...result, worktree, launch } as BrowserSafeCreateWorktreeActionResult;
   }
 
-  const launch = {
-    requested: result.launch.requested,
-    ok: result.launch.ok,
-    mode: result.launch.mode,
-    status: result.launch.status,
-    ...(result.launch.runtimeId === undefined ? {} : { runtimeId: result.launch.runtimeId }),
-    ...(result.launch.sessionId === undefined ? {} : { sessionId: result.launch.sessionId }),
-    message: result.launch.message,
-    ...(result.launch.warning === undefined ? {} : { warning: result.launch.warning }),
-  };
-  return { ...result, worktree, launch } as BrowserSafeCreateWorktreeActionResult;
+  if (result.status === 'worktree-created' || result.status === 'worktree-reused') {
+    return { ...result, worktree, launch: result.launch };
+  }
+
+  if (result.status === 'created-and-launched' || result.status === 'reused-and-launched') {
+    return {
+      ...result,
+      worktree,
+      launch: toBrowserSafeLaunchSuccess(result.launch),
+    };
+  }
+
+  throw new Error('Unhandled worktree action result status.');
 }
 
 export function toBrowserSafeWorktreeBasePreviewResult(
@@ -252,9 +264,18 @@ function toBrowserSafeRepoIntentFailureMessage(
   }
 }
 
-function toBrowserSafeWorktreeFailureMessage(
-  reason: Extract<CreateWorktreeActionResult, { ok: false }>['worktree']['reason'],
+function toBrowserSafePreflightFailureMessage(
+  reason: Extract<CreateWorktreeLaunchFailureReason, 'tmux-unavailable' | 'pi-command-unavailable'>,
 ): string {
+  switch (reason) {
+    case 'tmux-unavailable':
+      return 'New Pi session requires tmux on PATH; no worktree was created.';
+    case 'pi-command-unavailable':
+      return 'New Pi session requires the pi executable on PATH; no worktree was created.';
+  }
+}
+
+function toBrowserSafeWorktreeFailureMessage(reason: CreateWorktreeFailureReason): string {
   switch (reason) {
     case 'invalid-request':
       return 'Create-worktree request is invalid.';
@@ -279,12 +300,7 @@ function toBrowserSafeWorktreeFailureMessage(
   }
 }
 
-function toBrowserSafeLaunchFailureMessage(
-  reason: Extract<
-    CreateWorktreeActionResult,
-    { status: 'partial-launch-failed' }
-  >['launch']['reason'],
-): string {
+function toBrowserSafeLaunchFailureMessage(reason: CreateWorktreeLaunchFailureReason): string {
   switch (reason) {
     case 'tmux-unavailable':
       return 'Created worktree, but tmux is not available.';
@@ -297,6 +313,35 @@ function toBrowserSafeLaunchFailureMessage(
     case 'presence-timeout':
       return 'Created worktree, but Session Deck could not observe the Pi session.';
   }
+}
+
+function toBrowserSafeWorktreeSuccess(
+  worktree: CreateWorktreeSuccess,
+): Extract<BrowserSafeCreateWorktreePhaseResult, { ok: true }> {
+  return {
+    ok: worktree.ok,
+    status: worktree.status,
+    branch: worktree.branch,
+    baseRef: worktree.baseRef,
+    repoName: worktree.repoName,
+    qualifiedRepoName: worktree.qualifiedRepoName,
+    ...(worktree.warning === undefined ? {} : { warning: worktree.warning }),
+  };
+}
+
+function toBrowserSafeLaunchSuccess(
+  launch: CreateWorktreeLaunchSuccess,
+): Extract<BrowserSafeCreateWorktreeLaunchResult, { requested: true; ok: true }> {
+  return {
+    requested: launch.requested,
+    ok: launch.ok,
+    mode: launch.mode,
+    status: launch.status,
+    ...(launch.runtimeId === undefined ? {} : { runtimeId: launch.runtimeId }),
+    ...(launch.sessionId === undefined ? {} : { sessionId: launch.sessionId }),
+    message: launch.message,
+    ...(launch.warning === undefined ? {} : { warning: launch.warning }),
+  };
 }
 
 function findForbiddenField(value: unknown, prefix = ''): string | null {

@@ -7,25 +7,43 @@ import {
   isPathCollision,
   listGitWorktrees,
   normalizeRequestedPath,
+  resolveCommitRef,
   resolveDefaultBaseRef,
   stripRefsHeads,
   validateBranchName,
-  verifyCommitRef,
   type GitCommandOptions,
+  type GitWorktreeEntry,
 } from './git.js';
 import type {
   CreateWorktreeActionRequest,
+  CreateWorktreeFailure,
   CreateWorktreePhaseResult,
   CreateWorktreeResolvedRepo,
+  CreateWorktreeSuccess,
 } from './types.js';
 
 export interface CreateGitWorktreeOptions extends GitCommandOptions, WorktreeLockOptions {}
 
-export async function createGitWorktree(
+export interface PlannedGitWorktree {
+  ok: true;
+  action: 'create' | 'reuse';
+  path: string;
+  branch: string;
+  baseRef: string;
+  baseSha: string;
+  repoName: string | null;
+  qualifiedRepoName: string | null;
+  warning?: string;
+  manualCommand: string;
+}
+
+export type PlanGitWorktreeResult = PlannedGitWorktree | CreateWorktreeFailure;
+
+export async function planGitWorktree(
   request: CreateWorktreeActionRequest,
   repo: CreateWorktreeResolvedRepo,
-  options: CreateGitWorktreeOptions = {},
-): Promise<CreateWorktreePhaseResult> {
+  options: GitCommandOptions = {},
+): Promise<PlanGitWorktreeResult> {
   const branch = request.branchName.trim();
   if (!(await validateBranchName(repo.primaryWorktreePath, branch, options))) {
     return {
@@ -49,7 +67,8 @@ export async function createGitWorktree(
   const baseResolution = request.baseRef?.trim()
     ? { baseRef: request.baseRef.trim() }
     : await resolveDefaultBaseRef(repo.primaryWorktreePath, options);
-  if (!(await verifyCommitRef(repo.primaryWorktreePath, baseResolution.baseRef, options))) {
+  const baseSha = await resolveCommitRef(repo.primaryWorktreePath, baseResolution.baseRef, options);
+  if (baseSha === null) {
     return {
       ok: false,
       reason: 'invalid-base-ref',
@@ -63,8 +82,75 @@ export async function createGitWorktree(
       ? normalizeRequestedPath(request.path, repo.primaryWorktreePath)
       : defaultWorktreePath(repo.primaryWorktreePath, repo.repoName, slug),
   );
-  const manualCommand = formatGitWorktreeManualCommand(path, branch, baseResolution.baseRef);
-  const lock = await acquireWorktreeLock([repo.commonGitDir, branch, path], options);
+  const manualCommand = formatGitWorktreeManualCommand(path, branch, baseSha);
+
+  const worktrees = await listGitWorktrees(repo.primaryWorktreePath, options);
+  if (worktrees === null) {
+    return {
+      ok: false,
+      reason: 'git-failed',
+      message: 'Could not list existing Git worktrees.',
+      recoverable: true,
+    };
+  }
+
+  const state = inspectExistingWorktrees(worktrees, path, branch);
+  if (state === 'exact-reuse') {
+    return buildPlan(
+      'reuse',
+      repo,
+      branch,
+      path,
+      baseResolution.baseRef,
+      baseSha,
+      manualCommand,
+      baseResolution.warning,
+    );
+  }
+  if (state === 'path-collision') {
+    return {
+      ok: false,
+      reason: 'path-collision',
+      message: 'An existing worktree already uses the requested path or branch.',
+      recoverable: true,
+    };
+  }
+  if (state === 'branch-collision') {
+    return {
+      ok: false,
+      reason: 'branch-collision',
+      message: 'An existing worktree already uses the requested path or branch.',
+      recoverable: true,
+    };
+  }
+
+  if (isPathCollision(path, worktrees)) {
+    return {
+      ok: false,
+      reason: 'path-collision',
+      message: `Target path already exists and is not a Git worktree: ${path}`,
+      recoverable: true,
+    };
+  }
+
+  return buildPlan(
+    'create',
+    repo,
+    branch,
+    path,
+    baseResolution.baseRef,
+    baseSha,
+    manualCommand,
+    baseResolution.warning,
+  );
+}
+
+export async function applyGitWorktreePlan(
+  plan: PlannedGitWorktree,
+  repo: CreateWorktreeResolvedRepo,
+  options: CreateGitWorktreeOptions = {},
+): Promise<CreateWorktreePhaseResult> {
+  const lock = await acquireWorktreeLock([repo.commonGitDir], options);
   if (!lock.ok) {
     return {
       ok: false,
@@ -85,46 +171,48 @@ export async function createGitWorktree(
       };
     }
 
-    const existingByPath = worktrees.find((entry) => resolve(entry.path) === path);
-    const existingByBranch = worktrees.find(
-      (entry) => stripRefsHeads(entry.branch ?? '') === branch,
-    );
-    if (existingByPath !== undefined || existingByBranch !== undefined) {
-      const existing = existingByPath ?? existingByBranch!;
-      if (resolve(existing.path) !== path || stripRefsHeads(existing.branch ?? '') !== branch) {
-        return {
-          ok: false,
-          reason: existingByPath !== undefined ? 'path-collision' : 'branch-collision',
-          message: 'An existing worktree already uses the requested path or branch.',
-          recoverable: true,
-        };
-      }
-
-      return {
-        ok: true,
-        status: 'reused',
-        path,
-        branch,
-        baseRef: baseResolution.baseRef,
-        repoName: repo.repoName,
-        qualifiedRepoName: repo.qualifiedRepoName,
-        ...(baseResolution.warning === undefined ? {} : { warning: baseResolution.warning }),
-        manualCommand,
-      };
+    const state = inspectExistingWorktrees(worktrees, plan.path, plan.branch);
+    if (state === 'exact-reuse') {
+      return toSuccess(plan, 'reused');
     }
-
-    if (isPathCollision(path, worktrees)) {
+    if (state === 'path-collision') {
       return {
         ok: false,
         reason: 'path-collision',
-        message: `Target path already exists and is not a Git worktree: ${path}`,
+        message: 'An existing worktree already uses the requested path or branch.',
+        recoverable: true,
+      };
+    }
+    if (state === 'branch-collision') {
+      return {
+        ok: false,
+        reason: 'branch-collision',
+        message: 'An existing worktree already uses the requested path or branch.',
+        recoverable: true,
+      };
+    }
+
+    if (isPathCollision(plan.path, worktrees)) {
+      return {
+        ok: false,
+        reason: 'path-collision',
+        message: `Target path already exists and is not a Git worktree: ${plan.path}`,
+        recoverable: true,
+      };
+    }
+
+    if (plan.action === 'reuse') {
+      return {
+        ok: false,
+        reason: 'git-failed',
+        message: 'Expected an existing reusable worktree, but it no longer exists.',
         recoverable: true,
       };
     }
 
     const result = await execGit(
       repo.primaryWorktreePath,
-      ['worktree', 'add', '-b', branch, path, baseResolution.baseRef],
+      ['worktree', 'add', '-b', plan.branch, plan.path, plan.baseSha],
       options,
     );
     if (result.exitCode !== 0) {
@@ -136,20 +224,23 @@ export async function createGitWorktree(
       };
     }
 
-    return {
-      ok: true,
-      status: 'created',
-      path,
-      branch,
-      baseRef: baseResolution.baseRef,
-      repoName: repo.repoName,
-      qualifiedRepoName: repo.qualifiedRepoName,
-      ...(baseResolution.warning === undefined ? {} : { warning: baseResolution.warning }),
-      manualCommand,
-    };
+    return toSuccess(plan, 'created');
   } finally {
     await lock.release();
   }
+}
+
+export async function createGitWorktree(
+  request: CreateWorktreeActionRequest,
+  repo: CreateWorktreeResolvedRepo,
+  options: CreateGitWorktreeOptions = {},
+): Promise<CreateWorktreePhaseResult> {
+  const plan = await planGitWorktree(request, repo, options);
+  if (!plan.ok) {
+    return plan;
+  }
+
+  return await applyGitWorktreePlan(plan, repo, options);
 }
 
 export function slugifyWorktreeLabel(label: string): string | null {
@@ -161,4 +252,72 @@ export function slugifyWorktreeLabel(label: string): string | null {
     .slice(0, 48);
 
   return slug.length === 0 ? null : slug;
+}
+
+function buildPlan(
+  action: PlannedGitWorktree['action'],
+  repo: CreateWorktreeResolvedRepo,
+  branch: string,
+  path: string,
+  baseRef: string,
+  baseSha: string,
+  manualCommand: string,
+  warning?: string,
+): PlannedGitWorktree {
+  return {
+    ok: true,
+    action,
+    path,
+    branch,
+    baseRef,
+    baseSha,
+    repoName: repo.repoName,
+    qualifiedRepoName: repo.qualifiedRepoName,
+    ...(warning === undefined ? {} : { warning }),
+    manualCommand,
+  };
+}
+
+function toSuccess(
+  plan: PlannedGitWorktree,
+  status: CreateWorktreeSuccess['status'],
+): CreateWorktreeSuccess {
+  return {
+    ok: true,
+    status,
+    path: plan.path,
+    branch: plan.branch,
+    baseRef: plan.baseRef,
+    repoName: plan.repoName,
+    qualifiedRepoName: plan.qualifiedRepoName,
+    ...(plan.warning === undefined ? {} : { warning: plan.warning }),
+    manualCommand: plan.manualCommand,
+  };
+}
+
+function inspectExistingWorktrees(
+  worktrees: readonly GitWorktreeEntry[],
+  path: string,
+  branch: string,
+): 'exact-reuse' | 'path-collision' | 'branch-collision' | 'available' {
+  const existingByPath = worktrees.find((entry) => resolve(entry.path) === path);
+  const existingByBranch = worktrees.find((entry) => stripRefsHeads(entry.branch ?? '') === branch);
+
+  const pathMatchesBranch =
+    existingByPath !== undefined && stripRefsHeads(existingByPath.branch ?? '') === branch;
+  const branchMatchesPath =
+    existingByBranch !== undefined && resolve(existingByBranch.path) === path;
+  if (pathMatchesBranch || branchMatchesPath) {
+    return 'exact-reuse';
+  }
+
+  if (existingByPath !== undefined) {
+    return 'path-collision';
+  }
+
+  if (existingByBranch !== undefined) {
+    return 'branch-collision';
+  }
+
+  return 'available';
 }

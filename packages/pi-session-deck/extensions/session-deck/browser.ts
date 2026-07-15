@@ -79,7 +79,6 @@ export type SessionDeckBrowserCreateWorktree = (
 
 interface SessionDeckWorktreePrompt {
   branchName: string;
-  launchPi: boolean;
 }
 
 export interface SessionDeckBrowserOptions {
@@ -223,7 +222,7 @@ export class SessionDeckBrowser {
     );
     const help = this.theme.fg(
       'muted',
-      '↑↓ move · ←→ switch repo · enter details · w new session · o open terminal · r refresh · q close',
+      '↑↓ move · ←→ switch repo · enter details · w new Pi session · o open terminal · r refresh · q close',
     );
 
     pushWrappedLine(lines, title, width);
@@ -350,14 +349,14 @@ export class SessionDeckBrowser {
 
   private openWorktreePrompt(selection: SessionDeckBrowserSelection): void {
     if (this.worktreePending !== null) {
-      this.worktreeStatus = { message: 'Already creating a worktree…', tone: 'muted' };
+      this.worktreeStatus = { message: 'Already starting a new Pi session…', tone: 'muted' };
       this.bump();
       return;
     }
 
     if (this.createWorktree === null) {
       this.worktreeStatus = {
-        message: 'New session action is unavailable in this context.',
+        message: 'New Pi session action is unavailable in this context.',
         tone: 'warning',
       };
       this.bump();
@@ -366,7 +365,7 @@ export class SessionDeckBrowser {
 
     if (selection.repoOption.filter.kind !== 'named') {
       this.worktreeStatus = {
-        message: 'Switch to a named repo filter before creating a worktree.',
+        message: 'Switch to a named repo filter before starting a new Pi session.',
         tone: 'warning',
       };
       this.bump();
@@ -374,7 +373,7 @@ export class SessionDeckBrowser {
     }
 
     this.clearStatus();
-    this.worktreePrompt = { branchName: '', launchPi: true };
+    this.worktreePrompt = { branchName: '' };
     this.bump();
   }
 
@@ -386,13 +385,7 @@ export class SessionDeckBrowser {
 
     if (matchesKey(data, 'escape') || matchesKey(data, 'ctrl+c')) {
       this.worktreePrompt = null;
-      this.worktreeStatus = { message: 'New session cancelled.', tone: 'muted' };
-      this.bump();
-      return;
-    }
-
-    if (matchesKey(data, 'tab')) {
-      prompt.launchPi = !prompt.launchPi;
+      this.worktreeStatus = { message: 'New Pi session cancelled.', tone: 'muted' };
       this.bump();
       return;
     }
@@ -416,7 +409,7 @@ export class SessionDeckBrowser {
 
   private async submitWorktreePrompt(prompt: SessionDeckWorktreePrompt): Promise<void> {
     if (this.worktreePending !== null) {
-      this.worktreeStatus = { message: 'Already creating a worktree…', tone: 'muted' };
+      this.worktreeStatus = { message: 'Already starting a new Pi session…', tone: 'muted' };
       this.bump();
       return this.worktreePending;
     }
@@ -432,22 +425,18 @@ export class SessionDeckBrowser {
     if (selection.repoOption.filter.kind !== 'named' || this.createWorktree === null) {
       this.worktreePrompt = null;
       this.worktreeStatus = {
-        message: 'New session action is unavailable here.',
+        message: 'New Pi session action is unavailable here.',
         tone: 'warning',
       };
       this.bump();
       return;
     }
 
-    const promptSnapshot = { branchName: prompt.branchName, launchPi: prompt.launchPi };
-    const request = buildWorktreeRequest(
-      selection,
-      this.selectedIndex,
-      branchName,
-      prompt.launchPi,
-    );
+    const promptSnapshot = { branchName: prompt.branchName };
+    const fallbackSelectedRuntimeId = selection.records[this.selectedIndex]?.runtimeId ?? null;
+    const request = buildWorktreeRequest(selection, this.selectedIndex, branchName);
     this.worktreePrompt = null;
-    this.worktreeStatus = { message: 'Creating worktree…', tone: 'muted' };
+    this.worktreeStatus = { message: 'Starting new Pi session…', tone: 'muted' };
     this.bump();
 
     this.worktreePending = (async () => {
@@ -462,18 +451,22 @@ export class SessionDeckBrowser {
 
         this.worktreeStatus = formatWorktreeResultStatus(result);
         if (!result.ok) {
-          this.worktreePrompt = promptSnapshot;
+          if (result.status === 'failed') {
+            this.worktreePrompt = promptSnapshot;
+          }
           return;
         }
 
-        const observedRuntimeId =
-          result.launch.requested && result.launch.ok ? result.launch.runtimeId : undefined;
-        await this.refreshAfterWorktree(observedRuntimeId ?? null);
+        const selectedRuntimeId =
+          result.launch.requested && result.launch.ok
+            ? (result.launch.runtimeId ?? fallbackSelectedRuntimeId)
+            : fallbackSelectedRuntimeId;
+        await this.refreshAfterWorktree(selectedRuntimeId);
       } catch (error) {
         if (!this.disposed) {
           this.worktreePrompt = promptSnapshot;
           this.worktreeStatus = {
-            message: `Create worktree failed: ${getErrorMessage(error)}`,
+            message: `Starting new Pi session failed: ${getErrorMessage(error)}`,
             tone: 'warning',
           };
         }
@@ -495,8 +488,7 @@ export class SessionDeckBrowser {
     const selection = this.getSelection();
     const repoLabel = selection.repoOption.label;
     const branchName = prompt.branchName.length === 0 ? '<branch-name>' : prompt.branchName;
-    const launch = prompt.launchPi ? 'yes' : 'no';
-    return `New session for ${repoLabel} · Branch name: ${branchName} · From default branch · worktree path generated automatically · Start Pi session in tmux: ${launch} · enter create · tab toggle · esc cancel`;
+    return `New Pi session for ${repoLabel} · Branch name: ${branchName} · From default branch · generated worktree path managed automatically · launches in detached tmux · enter create · esc/ctrl+c cancel`;
   }
 
   private async refreshAfterWorktree(runtimeId: string | null): Promise<void> {
@@ -680,7 +672,6 @@ function buildWorktreeRequest(
   selection: SessionDeckBrowserSelection,
   selectedIndex: number,
   branchName: string,
-  launchPi: boolean,
 ): CreateWorktreeActionRequest {
   const filter = selection.repoOption.filter;
   const selectedRuntimeId = selection.records[selectedIndex]?.runtimeId ?? null;
@@ -696,7 +687,7 @@ function buildWorktreeRequest(
       ...(selectedRuntimeId === null ? {} : { preferredRuntimeId: selectedRuntimeId }),
     },
     branchName,
-    launch: { mode: launchPi ? 'tmux-detached' : 'none' },
+    launch: { mode: 'tmux-detached' },
   };
 }
 
@@ -705,28 +696,42 @@ function formatWorktreeResultStatus(result: CreateWorktreeActionResult): {
   tone: 'muted' | 'warning';
 } {
   if (!result.ok) {
+    if (result.status === 'preflight-failed') {
+      return { message: result.preflight.message, tone: 'warning' };
+    }
+    if (result.status === 'partial-launch-failed') {
+      const cause = summarizeLaunchFailure(result.launch.message);
+      return {
+        message: `Pi did not start.${cause.length === 0 ? '' : ` ${cause}`} The generated worktree was kept. Fix the issue, then press w to retry.`,
+        tone: 'warning',
+      };
+    }
     return { message: result.worktree.message, tone: 'warning' };
   }
 
   if (!result.launch.requested) {
-    return { message: 'Worktree ready.', tone: 'muted' };
-  }
-
-  if (!result.launch.ok) {
     return {
-      message: `Created worktree; Pi launch failed: ${result.launch.message}`,
+      message:
+        'Generated worktree is ready, but no Pi session was launched. Retry after updating the create-worktree backend.',
       tone: 'warning',
     };
   }
 
-  if (result.launch.status === 'requested-unobserved') {
-    return {
-      message: 'Worktree ready; Pi session is starting in tmux · press r to refresh.',
-      tone: 'muted',
-    };
+  if (result.launch.status === 'reused-existing') {
+    return { message: 'Reused detached Pi session on the generated worktree.', tone: 'muted' };
   }
 
-  return { message: 'Session ready · press o to attach.', tone: 'muted' };
+  return { message: 'New Pi session launched on the generated worktree.', tone: 'muted' };
+}
+
+function summarizeLaunchFailure(message: string): string {
+  const trimmed = message.trim();
+  if (trimmed.length === 0) {
+    return '';
+  }
+
+  const withoutPrefix = trimmed.replace(/^Created worktree, but\s+/iu, '');
+  return `${withoutPrefix.slice(0, 1).toUpperCase()}${withoutPrefix.slice(1)}`;
 }
 
 function isPrintableInput(data: string): boolean {

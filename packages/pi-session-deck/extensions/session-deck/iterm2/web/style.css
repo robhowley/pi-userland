@@ -756,6 +756,17 @@ button.card-toggle[aria-expanded='true']::after {
   opacity: 1;
 }
 
+.worktree-form-feedback {
+  margin-top: 6px;
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.worktree-form-error {
+  color: var(--color-banner-text);
+}
+
 .worktree-submit-button {
   min-height: 32px;
   height: 32px;
@@ -790,8 +801,34 @@ button.card-toggle[aria-expanded='true']::after {
   background: var(--color-surface-raised);
 }
 
+.pending-worktree-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .pending-worktree-title {
   font-weight: 600;
+}
+
+.pending-worktree-dismiss {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  padding: 0;
+  border-color: transparent;
+  color: inherit;
+  font-size: 1rem;
+  line-height: 1;
+  opacity: 0.68;
+}
+
+.pending-worktree-dismiss:hover,
+.pending-worktree-dismiss:focus-visible {
+  background: rgba(216, 222, 233, 0.08);
+  border-color: var(--color-divider);
+  opacity: 1;
 }
 
 .pending-worktree.partial {
@@ -801,6 +838,41 @@ button.card-toggle[aria-expanded='true']::after {
 .pending-worktree.failed {
   border-color: var(--color-banner-border);
   color: var(--color-banner-text);
+}
+
+.pending-worktree.failed .pending-worktree-message {
+  color: inherit;
+}
+
+.pending-worktree-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pending-worktree-action {
+  min-height: 28px;
+  padding: 0.22rem 0.62rem;
+  border-color: var(--color-divider);
+  background: rgba(129, 161, 193, 0.08);
+  font-size: 0.76rem;
+  line-height: 1;
+}
+
+.pending-worktree-action.primary {
+  border-color: var(--color-divider-strong);
+  background: rgba(129, 161, 193, 0.14);
+}
+
+.pending-worktree-action:hover:not(:disabled),
+.pending-worktree-action:focus-visible:not(:disabled) {
+  background: rgba(129, 161, 193, 0.12);
+  border-color: var(--color-divider-strong);
+}
+
+.pending-worktree-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .card.highlighted {

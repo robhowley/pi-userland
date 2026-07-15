@@ -24,6 +24,10 @@ import type {
   SessionDeckRecord,
   SessionDeckSnapshot,
 } from '../../extensions/session-deck/types.js';
+import type {
+  CreateWorktreeActionResult,
+  CreateWorktreeFailureReason,
+} from '../../extensions/session-deck/worktree/types.js';
 
 const HOME = process.env['HOME'] ?? '/home/user';
 const openBrowsers: SessionDeckBrowser[] = [];
@@ -176,6 +180,28 @@ function createBrowser(
   return browser;
 }
 
+function buildCreateWorktreeFailureResult(
+  reason: CreateWorktreeFailureReason,
+  message: string,
+): Extract<CreateWorktreeActionResult, { ok: false; status: 'failed' }> {
+  return {
+    ok: false,
+    status: 'failed',
+    failurePhase: 'planning',
+    worktree: {
+      ok: false,
+      reason,
+      message,
+      recoverable: true,
+    },
+    launch: {
+      requested: false,
+      mode: 'tmux-detached',
+      status: 'not-started',
+    },
+  };
+}
+
 describe('SessionDeckBrowser', () => {
   it('renders the empty-state fallback', () => {
     const browser = createBrowser({
@@ -214,7 +240,7 @@ describe('SessionDeckBrowser', () => {
       lines,
       (line) =>
         line.includes(
-          '↑↓ move · ←→ switch repo · enter details · w new session · o open terminal · r refresh · q close',
+          '↑↓ move · ←→ switch repo · enter details · w new Pi session · o open terminal · r refresh · q close',
         ),
       'help line',
     );
@@ -1074,7 +1100,7 @@ describe('SessionDeckBrowser', () => {
 
     expect(createWorktree).not.toHaveBeenCalled();
     expect(renderText(browser)).toContain(
-      'Switch to a named repo filter before creating a worktree.',
+      'Switch to a named repo filter before starting a new Pi session.',
     );
   });
 
@@ -1089,29 +1115,71 @@ describe('SessionDeckBrowser', () => {
     expect(createWorktree).not.toHaveBeenCalled();
     const output = renderText(browser);
     expect(output).toContain('Enter a branch name.');
+    expect(output).toContain('New Pi session for project');
     expect(output).toContain('Branch name: <branch-name>');
-    expect(output).toContain('Start Pi session in tmux: yes');
+    expect(output).toContain('launches in detached tmux');
+    expect(output).not.toContain('tab toggle');
     expect(output).not.toContain('worktree/<name>');
   });
 
-  it('preserves the typed branch name when shared validation returns an error', async () => {
+  it('cancels the new Pi session prompt on escape without closing the browser', () => {
+    const onClose = vi.fn();
+    const createWorktree = vi.fn();
+    const browser = createBrowser({ onClose, createWorktree });
+
+    browser.handleInput('right');
+    browser.handleInput('w');
+    browser.handleInput('escape');
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(createWorktree).not.toHaveBeenCalled();
+    const output = renderText(browser);
+    expect(output).toContain('New Pi session cancelled.');
+    expect(output).not.toContain('Branch name: <branch-name>');
+  });
+
+  it('cancels the new Pi session prompt on ctrl+c without closing the browser', () => {
+    const onClose = vi.fn();
+    const createWorktree = vi.fn();
+    const browser = createBrowser({ onClose, createWorktree });
+
+    browser.handleInput('right');
+    browser.handleInput('w');
+    browser.handleInput('ctrl+c');
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(createWorktree).not.toHaveBeenCalled();
+    const output = renderText(browser);
+    expect(output).toContain('New Pi session cancelled.');
+    expect(output).not.toContain('Branch name: <branch-name>');
+  });
+
+  it.each([
+    [
+      'branch validation fails',
+      buildCreateWorktreeFailureResult('invalid-branch', 'Invalid Git branch name: rh/bad..branch'),
+      'Invalid Git branch name: rh/bad..branch',
+    ],
+    [
+      'base validation fails',
+      buildCreateWorktreeFailureResult(
+        'invalid-base-ref',
+        'Base ref does not resolve to a commit.',
+      ),
+      'Base ref does not resolve to a commit.',
+    ],
+    [
+      'repo resolution fails',
+      buildCreateWorktreeFailureResult(
+        'repo-intent-unresolved',
+        'Could not resolve the selected repository.',
+      ),
+      'Could not resolve the selected repository.',
+    ],
+  ])('preserves the typed branch name when %s', async (_caseName, result, message) => {
     const createWorktree = vi.fn<
       NonNullable<ConstructorParameters<typeof SessionDeckBrowser>[0]['createWorktree']>
-    >(async () => ({
-      ok: false as const,
-      status: 'failed' as const,
-      worktree: {
-        ok: false as const,
-        reason: 'invalid-branch' as const,
-        message: 'Invalid Git branch name: rh/bad..branch',
-        recoverable: true,
-      },
-      launch: {
-        requested: false as const,
-        mode: 'none' as const,
-        status: 'not-requested' as const,
-      },
-    }));
+    >(async () => result);
     const browser = createBrowser({ createWorktree });
 
     browser.handleInput('right');
@@ -1123,11 +1191,11 @@ describe('SessionDeckBrowser', () => {
 
     await vi.waitFor(() => expect(createWorktree).toHaveBeenCalledTimes(1));
     const output = renderText(browser);
-    expect(output).toContain('Invalid Git branch name: rh/bad..branch');
+    expect(output).toContain(message);
     expect(output).toContain('Branch name: rh/bad..branch');
   });
 
-  it('submits w from a named repo filter with exact branchName, default tmux launch, and never opens automatically', async () => {
+  it('submits w from a named repo filter with exact branchName, always requests detached tmux, and uses launched copy without runtime-id dependency', async () => {
     const openSelected = vi.fn();
     const createWorktree = vi.fn<
       NonNullable<ConstructorParameters<typeof SessionDeckBrowser>[0]['createWorktree']>
@@ -1151,20 +1219,11 @@ describe('SessionDeckBrowser', () => {
         status: 'launched' as const,
         tmuxSessionName: 'pi-project-feature',
         tmuxTarget: '=pi-project-feature',
-        runtimeId: 'rt-created',
-        sessionId: 'session-created',
-        message: 'Session ready · press o to attach.',
+        message: 'Started a detached tmux Pi session.',
         manualAttachCommand: 'tmux attach-session -t =pi-project-feature',
       },
     }));
-    const reload = vi.fn(async () =>
-      buildSnapshot({
-        records: [
-          buildSnapshotRecord({ runtimeId: 'rt-1', sessionName: 'alpha' }),
-          buildSnapshotRecord({ runtimeId: 'rt-created', sessionName: 'feature' }),
-        ],
-      }),
-    );
+    const reload = vi.fn(async () => buildSnapshot());
     const browser = createBrowser({ createWorktree, openSelected, reload });
 
     browser.handleInput('right');
@@ -1188,9 +1247,58 @@ describe('SessionDeckBrowser', () => {
     });
     expect(request).not.toHaveProperty('label');
     expect(openSelected).not.toHaveBeenCalled();
-    await vi.waitFor(() =>
-      expect(renderText(browser)).toContain('Session ready · press o to attach.'),
-    );
+    await vi.waitFor(() => {
+      const output = renderText(browser);
+      expect(output).toContain('New Pi session launched on the generated worktree.');
+      expect(output).not.toContain('Session ready · press o to attach.');
+      expect(output).not.toContain('has not observed it yet');
+    });
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps partial launch failures retryable with kept-worktree copy', async () => {
+    const createWorktree = vi.fn<
+      NonNullable<ConstructorParameters<typeof SessionDeckBrowser>[0]['createWorktree']>
+    >(async () => ({
+      ok: false as const,
+      status: 'partial-launch-failed' as const,
+      failurePhase: 'launch' as const,
+      worktree: {
+        ok: true as const,
+        status: 'created' as const,
+        path: '/tmp/project-wt-feature',
+        branch: 'rh/feature',
+        baseRef: 'origin/main',
+        repoName: 'project',
+        qualifiedRepoName: 'owner/project',
+        manualCommand: 'git worktree add ...',
+      },
+      worktreeRetained: true as const,
+      launch: {
+        requested: true as const,
+        ok: false as const,
+        mode: 'tmux-detached' as const,
+        status: 'failed' as const,
+        reason: 'spawn-failed' as const,
+        recoverable: true,
+        message: 'Created worktree, but tmux could not start Pi.',
+      },
+    }));
+    const browser = createBrowser({ createWorktree });
+
+    browser.handleInput('right');
+    browser.handleInput('w');
+    for (const char of 'rh/feature') {
+      browser.handleInput(char);
+    }
+    browser.handleInput('enter');
+
+    await vi.waitFor(() => expect(createWorktree).toHaveBeenCalledTimes(1));
+    const output = renderText(browser);
+    expect(output).toContain('Pi did not start.');
+    expect(output).toContain('Tmux could not start Pi.');
+    expect(output).toContain('The generated worktree was kept.');
+    expect(output).toContain('Fix the issue, then press w to retry.');
   });
 
   it('requests iTerm2 focus for the selected public record with o and renders success as muted', async () => {

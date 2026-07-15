@@ -12,8 +12,10 @@ import asyncio
 import json
 import os
 import posixpath
+import re
 import secrets
 import shlex
+import shutil
 import signal
 import socket
 import stat
@@ -41,6 +43,39 @@ ACTION_HELPER_TIMEOUT_SECONDS = 60.0
 MAX_REQUEST_BYTES = 8192
 ACTION_BODY_LIMIT_BYTES = 16 * 1024
 ACTION_TOKEN_PLACEHOLDER = b"__SESSION_DECK_ACTION_TOKEN__"
+LIVE_PATH_PROVENANCE = "live Toolbelt AutoLaunch PATH"
+HELPER_UNAVAILABLE_MESSAGE = "Create-worktree action is unavailable. Run /session-deck iterm2 doctor."
+HELPER_INVALID_RESPONSE_MESSAGE = (
+    "Create-worktree action failed because the helper returned an invalid response. "
+    "Refresh Session Deck, run /session-deck iterm2 doctor, and check git worktrees before retrying."
+)
+HELPER_TIMEOUT_MESSAGE = (
+    "Create-worktree action did not finish before the helper timeout. "
+    "Refresh Session Deck, run /session-deck iterm2 doctor, and check git worktrees before retrying."
+)
+HELPER_FAILED_MESSAGE = "Create-worktree action failed. Run /session-deck iterm2 doctor if this keeps happening."
+BROWSER_FORBIDDEN_FIELDS = {
+    "label",
+    "cwd",
+    "gitRoot",
+    "worktreeRoot",
+    "path",
+    "manualCommand",
+    "manualAttachCommand",
+    "tmuxSessionName",
+    "tmuxTarget",
+    "paneId",
+    "itermSessionId",
+    "tmuxArgv",
+    "tmuxCommand",
+    "piArgv",
+    "piCommand",
+    "shell",
+    "command",
+    "socketPath",
+    "sessionFile",
+}
+PRIVATE_PATH_RE = re.compile(r"(?<![A-Za-z0-9._-])(/(?:[^/\s]+/)+[^/\s]+)")
 
 INVALID_ATTACH_ARGV_MESSAGE = "Bridge only accepts exact tmux attach argv in 'tmuxAttachArgv'."
 INVALID_ITERM_SESSION_ID_MESSAGE = "Bridge only accepts non-empty iTerm2 session ids in 'itermSessionId'."
@@ -51,7 +86,7 @@ STATIC_CONTENT_TYPES = {
     ".js": "text/javascript; charset=utf-8",
 }
 REQUIRED_WEB_ASSETS = ("index.html", "app.js", "style.css")
-REQUEST_OPERATIONS = ("ping", "itermSessionId", "tmuxAttachArgv")
+REQUEST_OPERATIONS = ("ping", "itermSessionId", "launchPrereqs", "tmuxAttachArgv")
 
 STARTED_AT = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -327,14 +362,75 @@ def read_snapshot(config: InstallConfig) -> dict[str, Any]:
     return payload
 
 
+def build_launch_prereq_report() -> dict[str, Any]:
+    return {
+        "pathProvenance": LIVE_PATH_PROVENANCE,
+        "tmux": describe_executable_on_path("tmux"),
+        "pi": describe_executable_on_path("pi"),
+    }
+
+
+def describe_executable_on_path(command: str) -> dict[str, Any]:
+    resolved = shutil.which(command)
+    if resolved is None:
+        return {"status": "missing"}
+    return {"status": "available", "path": resolved}
+
+
+def helper_failure_payload(message: str) -> dict[str, Any]:
+    return {"ok": False, "status": "failed", "message": message}
+
+
+def sanitize_helper_failure_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    if find_forbidden_field(payload) is not None:
+        return helper_failure_payload(HELPER_FAILED_MESSAGE)
+
+    sanitized = redact_private_data(payload)
+    if not isinstance(sanitized, dict):
+        return helper_failure_payload(HELPER_FAILED_MESSAGE)
+
+    message = sanitized.get("message")
+    sanitized["ok"] = False
+    if not isinstance(sanitized.get("status"), str):
+        sanitized["status"] = "failed"
+    if not isinstance(message, str) or len(message.strip()) == 0:
+        sanitized["message"] = HELPER_FAILED_MESSAGE
+    return sanitized
+
+
+def find_forbidden_field(value: Any, prefix: str = "") -> Optional[str]:
+    if not isinstance(value, dict):
+        return None
+
+    for key, child in value.items():
+        path = key if len(prefix) == 0 else f"{prefix}.{key}"
+        if key in BROWSER_FORBIDDEN_FIELDS:
+            return path
+        nested = find_forbidden_field(child, path)
+        if nested is not None:
+            return nested
+
+    return None
+
+
+def redact_private_data(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: redact_private_data(child) for key, child in value.items()}
+    if isinstance(value, list):
+        return [redact_private_data(child) for child in value]
+    if isinstance(value, str):
+        return redact_private_paths(value)
+    return value
+
+
+def redact_private_paths(text: str) -> str:
+    return PRIVATE_PATH_RE.sub("[private path]", text)
+
+
 def run_create_worktree_action(config: InstallConfig, payload: str) -> tuple[int, dict[str, Any]]:
     helper_path = config.runtime.create_worktree_helper_path
     if not helper_path.exists():
-        return 503, {
-            "ok": False,
-            "status": "failed",
-            "message": f"Create-worktree helper not found: {helper_path}",
-        }
+        return 503, helper_failure_payload(HELPER_UNAVAILABLE_MESSAGE)
 
     try:
         completed = subprocess.run(
@@ -346,33 +442,20 @@ def run_create_worktree_action(config: InstallConfig, payload: str) -> tuple[int
             timeout=ACTION_HELPER_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired:
-        return 504, {"ok": False, "status": "failed", "message": "Create-worktree helper timed out."}
-    except Exception as exc:
-        return 500, {
-            "ok": False,
-            "status": "failed",
-            "message": f"Could not run create-worktree helper: {exc}",
-        }
+        return 504, helper_failure_payload(HELPER_TIMEOUT_MESSAGE)
+    except Exception:
+        return 500, helper_failure_payload(HELPER_UNAVAILABLE_MESSAGE)
 
     try:
         response_payload = json.loads(completed.stdout)
-    except Exception as exc:
-        detail = (completed.stderr or completed.stdout or f"exit {completed.returncode}").strip()
-        return 500, {
-            "ok": False,
-            "status": "failed",
-            "message": f"Create-worktree helper returned invalid JSON: {exc}; {detail}",
-        }
+    except Exception:
+        return 500, helper_failure_payload(HELPER_INVALID_RESPONSE_MESSAGE)
 
     if not isinstance(response_payload, dict):
-        response_payload = {
-            "ok": False,
-            "status": "failed",
-            "message": "Create-worktree helper returned a non-object response.",
-        }
+        return 500, helper_failure_payload(HELPER_INVALID_RESPONSE_MESSAGE)
 
     if completed.returncode != 0:
-        return 400, response_payload
+        return 400, sanitize_helper_failure_payload(response_payload)
 
     return 200, response_payload
 
@@ -660,7 +743,7 @@ async def handle_client(
                 response(
                     False,
                     reason="open-failed",
-                    message="Bridge request must include exactly one operation: ping, itermSessionId, or tmuxAttachArgv.",
+                    message="Bridge request must include exactly one operation: ping, itermSessionId, launchPrereqs, or tmuxAttachArgv.",
                 )
             )
             await writer.drain()
@@ -681,6 +764,27 @@ async def handle_client(
                 )
             else:
                 writer.write(response(True, message="pong"))
+            await writer.drain()
+            return
+
+        if operation == "launchPrereqs":
+            if request["launchPrereqs"] is not True:
+                writer.write(
+                    response(
+                        False,
+                        reason="open-failed",
+                        message="Bridge launchPrereqs request must be true.",
+                    )
+                )
+                await writer.drain()
+                return
+            writer.write(
+                response(
+                    True,
+                    message="Reported launch prerequisites.",
+                    launchPrereqs=build_launch_prereq_report(),
+                )
+            )
             await writer.drain()
             return
 

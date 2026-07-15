@@ -100,13 +100,20 @@ export async function validateBranchName(
   return result.exitCode === 0;
 }
 
+export async function resolveCommitRef(
+  cwd: string,
+  ref: string,
+  options: GitCommandOptions = {},
+): Promise<string | null> {
+  return await gitText(cwd, ['rev-parse', '--verify', `${ref}^{commit}`], options);
+}
+
 export async function verifyCommitRef(
   cwd: string,
   ref: string,
   options: GitCommandOptions = {},
 ): Promise<boolean> {
-  const result = await execGit(cwd, ['rev-parse', '--verify', `${ref}^{commit}`], options);
-  return result.exitCode === 0;
+  return (await resolveCommitRef(cwd, ref, options)) !== null;
 }
 
 export async function resolveDefaultBaseRef(

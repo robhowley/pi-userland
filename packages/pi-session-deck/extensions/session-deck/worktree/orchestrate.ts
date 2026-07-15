@@ -1,11 +1,17 @@
-import { createGitWorktree, type CreateGitWorktreeOptions } from './create.js';
-import { launchDetachedTmuxPi, type LaunchDetachedTmuxPiOptions } from './launch.js';
+import { applyGitWorktreePlan, planGitWorktree, type CreateGitWorktreeOptions } from './create.js';
+import {
+  launchDetachedTmuxPi,
+  preflightDetachedTmuxPi,
+  type LaunchDetachedTmuxPiOptions,
+} from './launch.js';
 import { resolveRepoIntent, type ResolveRepoIntentOptions } from './repo-intent.js';
 import type {
   CreateWorktreeActionRequest,
   CreateWorktreeActionResult,
   CreateWorktreeLaunchMode,
+  CreateWorktreeLaunchNotStarted,
   CreateWorktreeStatusReporter,
+  LaunchPrereqFailure,
 } from './types.js';
 
 export interface OrchestrateCreateWorktreeOptions
@@ -22,13 +28,14 @@ export async function orchestrateCreateWorktree(
     return {
       ok: false,
       status: 'failed',
+      failurePhase: 'planning',
       worktree: {
         ok: false,
         reason: 'invalid-request',
         message: validation.message,
         recoverable: true,
       },
-      launch: { requested: false, mode: 'none', status: 'not-requested' },
+      launch: notStartedLaunch(),
     };
   }
 
@@ -38,28 +45,55 @@ export async function orchestrateCreateWorktree(
     return {
       ok: false,
       status: 'failed',
+      failurePhase: 'planning',
       worktree: {
         ok: false,
         reason: repo.reason === 'ambiguous' ? 'repo-intent-ambiguous' : 'repo-intent-unresolved',
         message: repo.message,
         recoverable: true,
       },
-      launch: { requested: false, mode: 'none', status: 'not-requested' },
+      launch: notStartedLaunch(),
     };
   }
 
-  options.onStatus?.({ stage: 'creating-worktree', message: 'Creating worktree…' });
-  const worktree = await createGitWorktree(normalizedRequest, repo.repo, options);
-  if (!worktree.ok) {
+  const plan = await planGitWorktree(normalizedRequest, repo.repo, options);
+  if (!plan.ok) {
     return {
       ok: false,
       status: 'failed',
-      worktree,
-      launch: { requested: false, mode: 'none', status: 'not-requested' },
+      failurePhase: 'planning',
+      worktree: plan,
+      launch: notStartedLaunch(),
     };
   }
 
   const launchMode = getLaunchMode(normalizedRequest);
+  if (launchMode !== 'none') {
+    const preflight = await preflightDetachedTmuxPi(options);
+    if (!preflight.ok) {
+      return {
+        ok: false,
+        status: 'preflight-failed',
+        failurePhase: 'preflight',
+        preflight: toPreflightFailure(preflight.reason),
+        worktree: { requested: false, status: 'not-started' },
+        launch: notStartedLaunch(),
+      };
+    }
+  }
+
+  options.onStatus?.({ stage: 'creating-worktree', message: 'Creating worktree…' });
+  const worktree = await applyGitWorktreePlan(plan, repo.repo, options);
+  if (!worktree.ok) {
+    return {
+      ok: false,
+      status: 'failed',
+      failurePhase: 'worktree',
+      worktree,
+      launch: notStartedLaunch(),
+    };
+  }
+
   if (launchMode === 'none') {
     return {
       ok: true,
@@ -70,16 +104,14 @@ export async function orchestrateCreateWorktree(
   }
 
   options.onStatus?.({ stage: 'starting-pi', message: 'Starting Pi session in tmux…' });
-  options.onStatus?.({
-    stage: 'waiting-for-session',
-    message: 'Waiting for session to appear in Session Deck…',
-  });
   const launch = await launchDetachedTmuxPi(worktree, normalizedRequest.label, options);
-  if (launch.requested && !launch.ok) {
+  if (!launch.ok) {
     return {
-      ok: true,
+      ok: false,
       status: 'partial-launch-failed',
+      failurePhase: 'launch',
       worktree,
+      worktreeRetained: true,
       launch,
     };
   }
@@ -104,7 +136,7 @@ function normalizeCreateWorktreeRequest(
     return { ok: false, message: 'Branch name is required.' };
   }
 
-  if (!Array.isArray(request.repoIntent.candidateRuntimeIds)) {
+  if (!Array.isArray(request.repoIntent?.candidateRuntimeIds)) {
     return { ok: false, message: 'Repo intent must include candidate runtime ids.' };
   }
 
@@ -126,4 +158,19 @@ function normalizeCreateWorktreeRequest(
 
 function getLaunchMode(request: CreateWorktreeActionRequest): CreateWorktreeLaunchMode {
   return request.launch?.mode ?? 'tmux-detached';
+}
+
+function notStartedLaunch(): CreateWorktreeLaunchNotStarted {
+  return { requested: false, mode: 'tmux-detached', status: 'not-started' };
+}
+
+function toPreflightFailure(reason: LaunchPrereqFailure['reason']): LaunchPrereqFailure {
+  return {
+    reason,
+    recoverable: true,
+    message:
+      reason === 'tmux-unavailable'
+        ? 'New Pi session requires tmux on PATH; no worktree was created.'
+        : 'New Pi session requires the pi executable on PATH; no worktree was created.',
+  };
 }

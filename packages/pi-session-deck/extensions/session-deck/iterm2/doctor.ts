@@ -1,5 +1,7 @@
+import { constants } from 'node:fs';
 import { access, lstat, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
+import { delimiter, join } from 'node:path';
 import {
   hashSessionDeckIterm2Content,
   readSessionDeckIterm2InstallState,
@@ -19,6 +21,8 @@ import {
 } from './json-line-socket-client.js';
 
 const DEFAULT_PING_TIMEOUT_MS = 500;
+const LOCAL_PATH_PROVENANCE = 'local Pi doctor process PATH';
+const LIVE_PATH_PROVENANCE = 'live Toolbelt AutoLaunch PATH';
 
 export type SessionDeckIterm2BridgeSocket = JsonLineSocketClientSocket;
 
@@ -28,10 +32,34 @@ export type SessionDeckIterm2BridgePingResult =
   | { status: 'not-socket'; message: string }
   | { status: 'stale'; message: string };
 
+export interface SessionDeckIterm2ExecutableStatus {
+  status: 'available' | 'missing' | 'unknown';
+  path?: string;
+  message?: string;
+}
+
+export interface SessionDeckIterm2LaunchPrereqReport {
+  pathProvenance: string;
+  tmux: SessionDeckIterm2ExecutableStatus;
+  pi: SessionDeckIterm2ExecutableStatus;
+}
+
+export type SessionDeckIterm2LiveLaunchPrereqResult =
+  | {
+      status: 'live';
+      report: SessionDeckIterm2LaunchPrereqReport;
+    }
+  | {
+      status: 'unavailable';
+      message: string;
+    };
+
 export interface DoctorSessionDeckIterm2InstallOptions {
   homeDirectory?: string;
   pingBridge?: (socketPath: string) => Promise<SessionDeckIterm2BridgePingResult>;
   platform?: NodeJS.Platform;
+  readLiveLaunchPrereqs?: (socketPath: string) => Promise<SessionDeckIterm2LiveLaunchPrereqResult>;
+  resolveExecutable?: (command: 'tmux' | 'pi') => Promise<SessionDeckIterm2ExecutableStatus>;
   runtimePaths?: SessionDeckIterm2RuntimePaths;
   statePath?: string;
 }
@@ -86,13 +114,35 @@ export async function doctorSessionDeckIterm2Install(
     await checkRuntimePaths(runtimePaths, state, lines, issues);
   }
 
+  const resolveExecutable = options.resolveExecutable ?? resolveExecutableOnPath;
+  const localLaunchPrereqs = await collectLaunchPrereqReport(
+    LOCAL_PATH_PROVENANCE,
+    resolveExecutable,
+  );
+  appendLaunchPrereqReport(lines, localLaunchPrereqs);
+
+  let liveLaunchPrereqs: SessionDeckIterm2LiveLaunchPrereqResult | null = null;
   if (state !== null) {
     const pingBridge = options.pingBridge ?? pingSessionDeckIterm2Bridge;
     const pingResult = await pingBridge(state.runtime.bridgeSocketPath);
     lines.push(`- bridge socket: ${state.runtime.bridgeSocketPath} (${pingResult.status})`);
     if (pingResult.status !== 'live') {
       issues.push(pingResult.message);
+    } else {
+      const readLiveLaunchPrereqs =
+        options.readLiveLaunchPrereqs ?? readSessionDeckIterm2LiveLaunchPrereqs;
+      liveLaunchPrereqs = await readLiveLaunchPrereqs(state.runtime.bridgeSocketPath);
+      if (liveLaunchPrereqs.status === 'live') {
+        appendLaunchPrereqReport(lines, liveLaunchPrereqs.report);
+        addLiveLaunchPrereqIssues(liveLaunchPrereqs.report, issues);
+      } else {
+        issues.push(liveLaunchPrereqs.message);
+      }
     }
+  }
+
+  if (liveLaunchPrereqs?.status !== 'live') {
+    lines.push(`- launch prerequisites (${LIVE_PATH_PROVENANCE}): unavailable`);
   }
 
   lines.push(
@@ -177,6 +227,53 @@ export async function pingSessionDeckIterm2Bridge(
       return {
         status: 'stale',
         message: 'Bridge socket closed before answering ping.',
+      };
+  }
+}
+
+export async function readSessionDeckIterm2LiveLaunchPrereqs(
+  socketPath: string,
+  options: {
+    clearTimeout?: typeof clearTimeout;
+    createConnection?: (path: string) => SessionDeckIterm2BridgeSocket;
+    setTimeout?: typeof setTimeout;
+    timeoutMs?: number;
+  } = {},
+): Promise<SessionDeckIterm2LiveLaunchPrereqResult> {
+  const result = await sendJsonLineSocketRequest(
+    socketPath,
+    { launchPrereqs: true },
+    {
+      clearTimeout: options.clearTimeout,
+      createConnection: options.createConnection,
+      setTimeout: options.setTimeout,
+      timeoutMs: options.timeoutMs ?? DEFAULT_PING_TIMEOUT_MS,
+    },
+  );
+
+  switch (result.status) {
+    case 'line':
+      return parseLiveLaunchPrereqResponse(result.line);
+    case 'connect-error':
+    case 'socket-error':
+      return {
+        status: 'unavailable',
+        message: `${LIVE_PATH_PROVENANCE} could not be queried: ${getErrorMessage(result.error)}`,
+      };
+    case 'send-error':
+      return {
+        status: 'unavailable',
+        message: `${LIVE_PATH_PROVENANCE} could not receive the launch prerequisite query: ${getErrorMessage(result.error)}`,
+      };
+    case 'timeout':
+      return {
+        status: 'unavailable',
+        message: `${LIVE_PATH_PROVENANCE} did not answer the launch prerequisite query before the timeout.`,
+      };
+    case 'closed':
+      return {
+        status: 'unavailable',
+        message: `${LIVE_PATH_PROVENANCE} closed the launch prerequisite query before answering.`,
       };
   }
 }
@@ -291,6 +388,89 @@ async function checkRuntimePaths(
   }
 }
 
+async function collectLaunchPrereqReport(
+  pathProvenance: string,
+  resolveExecutable: (command: 'tmux' | 'pi') => Promise<SessionDeckIterm2ExecutableStatus>,
+): Promise<SessionDeckIterm2LaunchPrereqReport> {
+  const [tmux, pi] = await Promise.all([resolveExecutable('tmux'), resolveExecutable('pi')]);
+  return {
+    pathProvenance,
+    tmux,
+    pi,
+  };
+}
+
+function appendLaunchPrereqReport(
+  lines: string[],
+  report: SessionDeckIterm2LaunchPrereqReport,
+): void {
+  lines.push(`- launch prerequisites (${report.pathProvenance}):`);
+  lines.push(`  - tmux: ${formatExecutableStatus(report.tmux)}`);
+  lines.push(`  - pi: ${formatExecutableStatus(report.pi)}`);
+}
+
+function addLiveLaunchPrereqIssues(
+  report: SessionDeckIterm2LaunchPrereqReport,
+  issues: string[],
+): void {
+  for (const [command, status] of [
+    ['tmux', report.tmux],
+    ['pi', report.pi],
+  ] as const) {
+    if (status.status === 'available') {
+      continue;
+    }
+
+    if (status.status === 'missing') {
+      issues.push(
+        `Live Toolbelt AutoLaunch PATH is missing ${command}. + New requires ${command} on PATH.`,
+      );
+      continue;
+    }
+
+    issues.push(
+      `Could not determine ${command} status in live Toolbelt AutoLaunch PATH: ${status.message ?? 'unknown error'}`,
+    );
+  }
+}
+
+function formatExecutableStatus(status: SessionDeckIterm2ExecutableStatus): string {
+  switch (status.status) {
+    case 'available':
+      return status.path === undefined ? 'available' : `available (${status.path})`;
+    case 'missing':
+      return 'missing';
+    case 'unknown':
+      return status.message === undefined ? 'unknown' : `unknown (${status.message})`;
+  }
+}
+
+async function resolveExecutableOnPath(
+  command: 'tmux' | 'pi',
+): Promise<SessionDeckIterm2ExecutableStatus> {
+  const pathValue = process.env['PATH'];
+  if (typeof pathValue !== 'string' || pathValue.trim().length === 0) {
+    return { status: 'unknown', message: 'PATH is empty.' };
+  }
+
+  for (const directory of pathValue.split(delimiter)) {
+    const trimmedDirectory = directory.trim();
+    if (trimmedDirectory.length === 0) {
+      continue;
+    }
+
+    const candidatePath = join(trimmedDirectory, command);
+    try {
+      await access(candidatePath, constants.X_OK);
+      return { status: 'available', path: candidatePath };
+    } catch {
+      continue;
+    }
+  }
+
+  return { status: 'missing' };
+}
+
 function parsePingResponse(line: string): SessionDeckIterm2BridgePingResult {
   let parsed: unknown;
   try {
@@ -309,6 +489,79 @@ function parsePingResponse(line: string): SessionDeckIterm2BridgePingResult {
   return {
     status: 'stale',
     message: 'Bridge socket returned an unhealthy ping response.',
+  };
+}
+
+function parseLiveLaunchPrereqResponse(line: string): SessionDeckIterm2LiveLaunchPrereqResult {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line) as unknown;
+  } catch (error) {
+    return {
+      status: 'unavailable',
+      message: `${LIVE_PATH_PROVENANCE} returned malformed launch prerequisite JSON: ${getErrorMessage(error)}`,
+    };
+  }
+
+  if (!isRecord(parsed) || parsed['ok'] !== true) {
+    return {
+      status: 'unavailable',
+      message: `${LIVE_PATH_PROVENANCE} returned an unhealthy launch prerequisite response.`,
+    };
+  }
+
+  const report = parseLaunchPrereqReport(parsed['launchPrereqs']);
+  if (report === null) {
+    return {
+      status: 'unavailable',
+      message: `${LIVE_PATH_PROVENANCE} returned an invalid launch prerequisite response.`,
+    };
+  }
+
+  return { status: 'live', report };
+}
+
+function parseLaunchPrereqReport(candidate: unknown): SessionDeckIterm2LaunchPrereqReport | null {
+  if (!isRecord(candidate) || typeof candidate['pathProvenance'] !== 'string') {
+    return null;
+  }
+
+  const tmux = parseExecutableStatus(candidate['tmux']);
+  const pi = parseExecutableStatus(candidate['pi']);
+  if (tmux === null || pi === null) {
+    return null;
+  }
+
+  return {
+    pathProvenance: candidate['pathProvenance'],
+    tmux,
+    pi,
+  };
+}
+
+function parseExecutableStatus(candidate: unknown): SessionDeckIterm2ExecutableStatus | null {
+  if (!isRecord(candidate)) {
+    return null;
+  }
+
+  const status = candidate['status'];
+  if (status !== 'available' && status !== 'missing' && status !== 'unknown') {
+    return null;
+  }
+
+  const path = candidate['path'];
+  const message = candidate['message'];
+  if (path !== undefined && typeof path !== 'string') {
+    return null;
+  }
+  if (message !== undefined && typeof message !== 'string') {
+    return null;
+  }
+
+  return {
+    status,
+    ...(typeof path === 'string' ? { path } : {}),
+    ...(typeof message === 'string' ? { message } : {}),
   };
 }
 

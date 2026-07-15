@@ -11,6 +11,8 @@ import {
 import {
   doctorSessionDeckIterm2Install,
   pingSessionDeckIterm2Bridge,
+  type SessionDeckIterm2ExecutableStatus,
+  type SessionDeckIterm2LiveLaunchPrereqResult,
 } from '../../extensions/session-deck/iterm2/doctor.js';
 import { installSessionDeckIterm2 } from '../../extensions/session-deck/iterm2/install.js';
 import { uninstallSessionDeckIterm2 } from '../../extensions/session-deck/iterm2/uninstall.js';
@@ -118,6 +120,28 @@ async function createPingServer(socketPath: string): Promise<void> {
     server.once('error', reject);
     server.listen(socketPath, resolve);
   });
+}
+
+function availableExecutable(path: string): SessionDeckIterm2ExecutableStatus {
+  return { status: 'available', path };
+}
+
+function missingExecutable(): SessionDeckIterm2ExecutableStatus {
+  return { status: 'missing' };
+}
+
+function makeLiveLaunchPrereqs(
+  tmux: SessionDeckIterm2ExecutableStatus,
+  pi: SessionDeckIterm2ExecutableStatus,
+): SessionDeckIterm2LiveLaunchPrereqResult {
+  return {
+    status: 'live',
+    report: {
+      pathProvenance: 'live Toolbelt AutoLaunch PATH',
+      tmux,
+      pi,
+    },
+  };
 }
 
 describe('session-deck iterm2 install + doctor + uninstall', () => {
@@ -262,6 +286,15 @@ describe('session-deck iterm2 install + doctor + uninstall', () => {
     const result = await doctorSessionDeckIterm2Install({
       homeDirectory,
       platform: 'darwin',
+      readLiveLaunchPrereqs: async () =>
+        makeLiveLaunchPrereqs(
+          availableExecutable('/opt/homebrew/bin/tmux'),
+          availableExecutable('/usr/local/bin/pi'),
+        ),
+      resolveExecutable: async (command) =>
+        command === 'tmux'
+          ? availableExecutable('/opt/homebrew/bin/tmux')
+          : availableExecutable('/usr/local/bin/pi'),
       runtimePaths,
     });
 
@@ -277,10 +310,16 @@ describe('session-deck iterm2 install + doctor + uninstall', () => {
       `Web app is missing: ${join(runtimePaths.webRootPath, 'app.js')}`,
     );
     expect(result.message).toContain(`Bridge socket is missing: ${runtimePaths.bridgeSocketPath}`);
+    expect(result.message).toContain('- launch prerequisites (local Pi doctor process PATH):');
+    expect(result.message).toContain('  - tmux: available (/opt/homebrew/bin/tmux)');
+    expect(result.message).toContain('  - pi: available (/usr/local/bin/pi)');
+    expect(result.message).toContain(
+      '- launch prerequisites (live Toolbelt AutoLaunch PATH): unavailable',
+    );
     expect(await readFile(scriptPath, 'utf8')).toBe('# drifted script\n');
   });
 
-  it('doctor accepts a valid install when the recorded bridge socket answers ping', async () => {
+  it('doctor reports tmux/pi status with environment provenance for local and live helper PATHs', async () => {
     const homeDirectory = await createTempHome();
     const runtimePaths = await createRuntimePaths(join(homeDirectory, 'package-root'));
     await createPingServer(runtimePaths.bridgeSocketPath);
@@ -295,11 +334,58 @@ describe('session-deck iterm2 install + doctor + uninstall', () => {
     const result = await doctorSessionDeckIterm2Install({
       homeDirectory,
       platform: 'darwin',
+      readLiveLaunchPrereqs: async () =>
+        makeLiveLaunchPrereqs(
+          availableExecutable('/opt/homebrew/bin/tmux'),
+          availableExecutable('/usr/local/bin/pi'),
+        ),
+      resolveExecutable: async (command) =>
+        command === 'tmux' ? availableExecutable('/opt/homebrew/bin/tmux') : missingExecutable(),
       runtimePaths,
     });
 
     expect(result.level).toBe('info');
     expect(result.message).toContain(`- bridge socket: ${runtimePaths.bridgeSocketPath} (live)`);
+    expect(result.message).toContain('- launch prerequisites (local Pi doctor process PATH):');
+    expect(result.message).toContain('  - tmux: available (/opt/homebrew/bin/tmux)');
+    expect(result.message).toContain('  - pi: missing');
+    expect(result.message).toContain('- launch prerequisites (live Toolbelt AutoLaunch PATH):');
+    expect(result.message).toContain('  - tmux: available (/opt/homebrew/bin/tmux)');
+    expect(result.message).toContain('  - pi: available (/usr/local/bin/pi)');
+  });
+
+  it('doctor reports unavailable live helper PATH status as unknown instead of OK', async () => {
+    const homeDirectory = await createTempHome();
+    const runtimePaths = await createRuntimePaths(join(homeDirectory, 'package-root'));
+
+    await installSessionDeckIterm2({
+      homeDirectory,
+      now: () => new Date('2026-07-10T12:00:00.000Z'),
+      platform: 'darwin',
+      runtimePaths,
+    });
+
+    const result = await doctorSessionDeckIterm2Install({
+      homeDirectory,
+      pingBridge: async () => ({ status: 'live', message: 'Bridge socket answered ping.' }),
+      platform: 'darwin',
+      readLiveLaunchPrereqs: async () => ({
+        status: 'unavailable',
+        message: 'live Toolbelt AutoLaunch PATH could not be queried.',
+      }),
+      resolveExecutable: async (command) =>
+        command === 'tmux'
+          ? availableExecutable('/opt/homebrew/bin/tmux')
+          : availableExecutable('/usr/local/bin/pi'),
+      runtimePaths,
+    });
+
+    expect(result.level).toBe('warning');
+    expect(result.message).toContain(
+      '- launch prerequisites (live Toolbelt AutoLaunch PATH): unavailable',
+    );
+    expect(result.message).toContain('live Toolbelt AutoLaunch PATH could not be queried.');
+    expect(result.message).not.toContain('live Toolbelt AutoLaunch PATH): ok');
   });
 
   it('ping liveness distinguishes a non-socket path from a live bridge socket', async () => {
