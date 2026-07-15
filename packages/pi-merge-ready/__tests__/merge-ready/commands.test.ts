@@ -183,6 +183,9 @@ function createSettingsSandbox() {
 
   return {
     cwd,
+    writeGlobalSettings(settings: unknown) {
+      writeJsonFile(join(agentDir, 'settings.json'), settings);
+    },
     writeProjectSettings(settings: unknown) {
       writeJsonFile(join(cwd, '.pi', 'settings.json'), settings);
     },
@@ -618,16 +621,17 @@ describe('merge-ready command', () => {
         syncMergeReadyStatusBar,
       }));
       vi.doMock('../../extensions/merge-ready/merge-ready.js', async () => {
-        const actual = await vi.importActual<typeof import('../../extensions/merge-ready/merge-ready.js')>(
-          '../../extensions/merge-ready/merge-ready.js',
-        );
+        const actual = await vi.importActual<
+          typeof import('../../extensions/merge-ready/merge-ready.js')
+        >('../../extensions/merge-ready/merge-ready.js');
         return {
           ...actual,
           getMergeReadyStatus,
         };
       });
 
-      const { registerMergeReadyCommand } = await import('../../extensions/merge-ready/commands.js');
+      const { registerMergeReadyCommand } =
+        await import('../../extensions/merge-ready/commands.js');
       const { api, assertDone, getCommand } = createMockAPI();
       registerMergeReadyCommand(api);
       const handler = getCommand(MERGE_READY_COMMAND_NAME);
@@ -715,16 +719,17 @@ describe('merge-ready command', () => {
         syncMergeReadyStatusBar,
       }));
       vi.doMock('../../extensions/merge-ready/merge-ready.js', async () => {
-        const actual = await vi.importActual<typeof import('../../extensions/merge-ready/merge-ready.js')>(
-          '../../extensions/merge-ready/merge-ready.js',
-        );
+        const actual = await vi.importActual<
+          typeof import('../../extensions/merge-ready/merge-ready.js')
+        >('../../extensions/merge-ready/merge-ready.js');
         return {
           ...actual,
           getMergeReadyStatus,
         };
       });
 
-      const { registerMergeReadyCommand } = await import('../../extensions/merge-ready/commands.js');
+      const { registerMergeReadyCommand } =
+        await import('../../extensions/merge-ready/commands.js');
       const { api, assertDone, getCommand } = createMockAPI();
       registerMergeReadyCommand(api);
       const handler = getCommand(MERGE_READY_COMMAND_NAME);
@@ -1518,111 +1523,147 @@ describe('merge-ready command', () => {
     vi.resetModules();
   });
 
-  it('queues URL-targeted repair with isolated-worktree instructions and waits for agent_end before refreshing', async () => {
-    const url = 'https://github.com/shopify/pi/pull/64';
-    const target = {
-      mode: 'url' as const,
-      url,
-      owner: 'shopify',
-      repo: 'pi',
-      prNumber: 64,
-    };
-    const failingPullRequestPayload = buildPullRequestPayload({
-      number: 64,
-      title: 'Support explicit PR URL targets',
-      url,
-      headRefName: 'feat/explicit-pr-url',
-      headRepository: {
-        name: 'pi',
-      },
-      headRepositoryOwner: {
-        login: 'shopify',
-      },
-      baseRefName: 'main',
-      statusCheckRollup: [
-        {
-          __typename: 'CheckRun',
-          workflowName: 'ci',
-          name: 'unit',
-          status: 'COMPLETED',
-          conclusion: 'FAILURE',
-          detailsUrl: 'https://github.example/checks/unit',
+  it('queues URL-targeted repair with global-only settings-backed guidance and waits for agent_end before refreshing', async () => {
+    const sandbox = createSettingsSandbox();
+
+    try {
+      sandbox.writeGlobalSettings({
+        'pi-merge-ready': {
+          repairGuidance: {
+            ci_failing:
+              'Start with pnpm --filter @robhowley/pi-merge-ready test -- __tests__/merge-ready/watch.test.ts',
+          },
         },
-      ],
-    });
-    const { api, assertDone, getCommand, getHandler } = createMockAPI([
-      createPullRequestViewSuccessCall(failingPullRequestPayload, {
-        cwd: '/repo',
-        timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
-        target,
-      }),
-      createConversationsSuccessCall(buildConversationsPayload(), {
-        cwd: '/repo',
-        timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
-        repositoryOwner: 'shopify',
-        repositoryName: 'pi',
-        pullRequestNumber: 64,
-      }),
-      createPullRequestViewSuccessCall(failingPullRequestPayload, {
-        cwd: '/repo',
-        timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
-        target,
-      }),
-      createConversationsSuccessCall(buildConversationsPayload(), {
-        cwd: '/repo',
-        timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
-        repositoryOwner: 'shopify',
-        repositoryName: 'pi',
-        pullRequestNumber: 64,
-      }),
-    ]);
+      });
+      sandbox.writeProjectSettings({
+        'pi-merge-ready': {
+          repairGuidance: {
+            ci_failing: 'Ignore this ambient trusted-project guidance for URL-targeted repair.',
+            unresolved_conversations: 'Ignore this canonical but non-repairable key.',
+            review_pending: 'Ignore this wait-only key.',
+          },
+        },
+      });
 
-    mergeReadyExtension(api);
-    const handler = getCommand(MERGE_READY_COMMAND_NAME);
-    const ctx = createCommandContext();
+      const url = 'https://github.com/shopify/pi/pull/64';
+      const target = {
+        mode: 'url' as const,
+        url,
+        owner: 'shopify',
+        repo: 'pi',
+        prNumber: 64,
+      };
+      const failingPullRequestPayload = buildPullRequestPayload({
+        number: 64,
+        title: 'Support explicit PR URL targets',
+        url,
+        headRefName: 'feat/explicit-pr-url',
+        headRepository: {
+          name: 'pi',
+        },
+        headRepositoryOwner: {
+          login: 'shopify',
+        },
+        baseRefName: 'main',
+        statusCheckRollup: [
+          {
+            __typename: 'CheckRun',
+            workflowName: 'ci',
+            name: 'unit',
+            status: 'COMPLETED',
+            conclusion: 'FAILURE',
+            detailsUrl: 'https://github.example/checks/unit',
+          },
+        ],
+      });
+      const { api, assertDone, getCommand, getHandler } = createMockAPI([
+        createPullRequestViewSuccessCall(failingPullRequestPayload, {
+          cwd: sandbox.cwd,
+          timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+          target,
+        }),
+        createConversationsSuccessCall(buildConversationsPayload(), {
+          cwd: sandbox.cwd,
+          timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+          repositoryOwner: 'shopify',
+          repositoryName: 'pi',
+          pullRequestNumber: 64,
+        }),
+        createPullRequestViewSuccessCall(failingPullRequestPayload, {
+          cwd: sandbox.cwd,
+          timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+          target,
+        }),
+        createConversationsSuccessCall(buildConversationsPayload(), {
+          cwd: sandbox.cwd,
+          timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
+          repositoryOwner: 'shopify',
+          repositoryName: 'pi',
+          pullRequestNumber: 64,
+        }),
+      ]);
 
-    const run = handler?.(`watch --url ${url} --interval 15`, ctx) ?? Promise.resolve();
-    await vi.advanceTimersByTimeAsync(0);
-    await flushMicrotasks(12);
+      mergeReadyExtension(api);
+      const handler = getCommand(MERGE_READY_COMMAND_NAME);
+      const ctx = createCommandContext({
+        cwd: sandbox.cwd,
+        isProjectTrusted: () => true,
+      });
 
-    expect(getActiveMergeReadyWatch()).not.toBeNull();
-    expect(api.sendUserMessage).toHaveBeenCalledTimes(1);
-    expect(api.sendUserMessage).toHaveBeenCalledWith(expect.any(String), {
-      deliverAs: 'followUp',
-    });
-    expect(ctx.waitForIdle).not.toHaveBeenCalled();
-    expect(vi.mocked(ctx.ui.notify).mock.calls).not.toContainEqual([
-      `Stopping merge-ready watch for ${url}: the same actionable blocker is still present after one attempt.`,
-      'warning',
-    ]);
+      const run = handler?.(`watch --url ${url} --interval 15`, ctx) ?? Promise.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      await flushMicrotasks(12);
 
-    await getHandler('agent_end')?.({}, ctx);
-    await run;
+      expect(getActiveMergeReadyWatch()).not.toBeNull();
+      expect(api.sendUserMessage).toHaveBeenCalledTimes(1);
+      expect(api.sendUserMessage).toHaveBeenCalledWith(expect.any(String), {
+        deliverAs: 'followUp',
+      });
+      expect(ctx.waitForIdle).not.toHaveBeenCalled();
+      expect(vi.mocked(ctx.ui.notify).mock.calls).not.toContainEqual([
+        `Stopping merge-ready watch for ${url}: the same actionable blocker is still present after one attempt.`,
+        'warning',
+      ]);
 
-    assertDone();
-    const prompt = vi.mocked(api.sendUserMessage).mock.calls[0]?.[0];
-    expect(prompt).toContain(`Use the merge-ready-loop skill for ${url}.`);
-    expect(prompt).toContain('Do this URL-targeted repair in an isolated git worktree');
-    expect(prompt).toContain(
-      'If your environment supports isolated worker/session/agent contexts, prefer using one for this bounded repair',
-    );
-    expect(prompt).toContain('Do not assume any specific subagent framework.');
-    expect(prompt).toContain('Do not mutate the ambient checkout.');
-    expect(prompt).toContain("Use the snapshot's pr.headRepository and pr.headRefName");
-    expect(
-      vi
-        .mocked(ctx.ui.setStatus!)
-        .mock.calls.filter(([key]) => key === MERGE_READY_STATUS_BAR_KEY)
-        .every(([, value]) => value === undefined || !String(value).includes('#64')),
-    ).toBe(true);
-    expect(ctx.ui.setStatus).toHaveBeenCalledWith(
-      MERGE_READY_WATCH_STATUS_KEY,
-      expect.stringContaining('Repair queued #64 · ci_failing'),
-    );
-    expect(vi.mocked(ctx.ui.notify).mock.calls).toContainEqual([
-      `Stopping merge-ready watch for ${url}: the same actionable blocker is still present after one attempt.`,
-      'warning',
-    ]);
+      await getHandler('agent_end')?.({}, ctx);
+      await run;
+
+      assertDone();
+      const prompt = vi.mocked(api.sendUserMessage).mock.calls[0]?.[0];
+      expect(prompt).toContain(`Use the merge-ready-loop skill for ${url}.`);
+      expect(prompt).toContain('Do this URL-targeted repair in an isolated git worktree');
+      expect(prompt).toContain(
+        'If your environment supports isolated worker/session/agent contexts, prefer using one for this bounded repair',
+      );
+      expect(prompt).toContain('Do not assume any specific subagent framework.');
+      expect(prompt).toContain('Do not mutate the ambient checkout.');
+      expect(prompt).toContain("Use the snapshot's pr.headRepository and pr.headRefName");
+      expect(prompt).toContain('Configured repair guidance for the actionable item(s):');
+      expect(prompt).toContain(
+        '- ci_failing: Start with pnpm --filter @robhowley/pi-merge-ready test -- __tests__/merge-ready/watch.test.ts',
+      );
+      expect(prompt).not.toContain(
+        'Ignore this ambient trusted-project guidance for URL-targeted repair.',
+      );
+      expect(prompt).not.toContain('review_pending:');
+      expect(prompt).not.toContain('unresolved_conversations:');
+      expect(
+        vi
+          .mocked(ctx.ui.setStatus!)
+          .mock.calls.filter(([key]) => key === MERGE_READY_STATUS_BAR_KEY)
+          .every(([, value]) => value === undefined || !String(value).includes('#64')),
+      ).toBe(true);
+      expect(ctx.ui.setStatus).toHaveBeenCalledWith(
+        MERGE_READY_WATCH_STATUS_KEY,
+        expect.stringContaining('Repair queued #64 · ci_failing'),
+      );
+      expect(vi.mocked(ctx.ui.notify).mock.calls).toContainEqual([
+        `Stopping merge-ready watch for ${url}: the same actionable blocker is still present after one attempt.`,
+        'warning',
+      ]);
+    } finally {
+      sandbox.cleanup();
+    }
   });
 
   it('reports missing and duplicate --url errors clearly', async () => {

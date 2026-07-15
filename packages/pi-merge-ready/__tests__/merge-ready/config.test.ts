@@ -9,6 +9,13 @@ function writeJsonFile(path: string, value: unknown) {
   writeFileSync(path, JSON.stringify(value, null, 2), 'utf-8');
 }
 
+const DEFAULT_CONFIG = {
+  autoCompactRepair: true,
+  cacheTTLSeconds: 60,
+  enableStatusBarDiagnostics: false,
+  repairGuidance: {},
+};
+
 describe.sequential('loadMergeReadyConfigAsync', () => {
   let originalAgentDir: string | undefined;
   let testRoot: string;
@@ -42,12 +49,16 @@ describe.sequential('loadMergeReadyConfigAsync', () => {
     writeJsonFile(join(cwd, '.pi', 'settings.json'), settings);
   }
 
-  it('lets trusted project settings override global settings per field', async () => {
+  it('lets trusted project settings override scalar fields and layer repair guidance additively', async () => {
     writeGlobalSettings({
       'pi-merge-ready': {
         autoCompactRepair: true,
         cacheTTLSeconds: 90,
         enableStatusBarDiagnostics: false,
+        repairGuidance: {
+          ci_failing: 'Run the focused vitest file first.',
+          branch_out_of_date: 'Merge the latest base branch before rerunning tests.',
+        },
       },
     });
     writeProjectSettings({
@@ -55,6 +66,11 @@ describe.sequential('loadMergeReadyConfigAsync', () => {
         autoCompactRepair: false,
         cacheTTLSeconds: 5,
         enableStatusBarDiagnostics: true,
+        repairGuidance: {
+          ci_failing:
+            'Start with pnpm --filter @robhowley/pi-merge-ready test -- __tests__/merge-ready/watch.test.ts',
+          merge_conflicts: 'Rebase onto main before touching unrelated files.',
+        },
       },
     });
 
@@ -62,15 +78,17 @@ describe.sequential('loadMergeReadyConfigAsync', () => {
       autoCompactRepair: false,
       cacheTTLSeconds: 5,
       enableStatusBarDiagnostics: true,
+      repairGuidance: {
+        ci_failing:
+          'Start with pnpm --filter @robhowley/pi-merge-ready test -- __tests__/merge-ready/watch.test.ts',
+        branch_out_of_date: 'Merge the latest base branch before rerunning tests.',
+        merge_conflicts: 'Rebase onto main before touching unrelated files.',
+      },
     });
   });
 
   it('defaults when settings are absent', async () => {
-    await expect(loadMergeReadyConfigAsync(cwd)).resolves.toEqual({
-      autoCompactRepair: true,
-      cacheTTLSeconds: 60,
-      enableStatusBarDiagnostics: false,
-    });
+    await expect(loadMergeReadyConfigAsync(cwd)).resolves.toEqual(DEFAULT_CONFIG);
   });
 
   it('defaults to ignoring project settings when trust is unspecified', async () => {
@@ -79,6 +97,9 @@ describe.sequential('loadMergeReadyConfigAsync', () => {
         autoCompactRepair: false,
         cacheTTLSeconds: 30,
         enableStatusBarDiagnostics: false,
+        repairGuidance: {
+          ci_failing: 'Run the package tests first.',
+        },
       },
     });
     writeProjectSettings({
@@ -86,6 +107,9 @@ describe.sequential('loadMergeReadyConfigAsync', () => {
         autoCompactRepair: true,
         cacheTTLSeconds: 5,
         enableStatusBarDiagnostics: true,
+        repairGuidance: {
+          merge_conflicts: 'Project guidance should be ignored when trust is unspecified.',
+        },
       },
     });
 
@@ -93,15 +117,21 @@ describe.sequential('loadMergeReadyConfigAsync', () => {
       autoCompactRepair: false,
       cacheTTLSeconds: 30,
       enableStatusBarDiagnostics: false,
+      repairGuidance: {
+        ci_failing: 'Run the package tests first.',
+      },
     });
   });
 
-  it('falls back per field when project values are invalid', async () => {
+  it('falls back per scalar field when project values are invalid', async () => {
     writeGlobalSettings({
       'pi-merge-ready': {
         autoCompactRepair: false,
         cacheTTLSeconds: 45,
         enableStatusBarDiagnostics: false,
+        repairGuidance: {
+          ci_failing: 'Keep the valid global guidance.',
+        },
       },
     });
     writeProjectSettings({
@@ -116,6 +146,9 @@ describe.sequential('loadMergeReadyConfigAsync', () => {
       autoCompactRepair: false,
       cacheTTLSeconds: 45,
       enableStatusBarDiagnostics: false,
+      repairGuidance: {
+        ci_failing: 'Keep the valid global guidance.',
+      },
     });
   });
 
@@ -125,6 +158,9 @@ describe.sequential('loadMergeReadyConfigAsync', () => {
         autoCompactRepair: false,
         cacheTTLSeconds: 30,
         enableStatusBarDiagnostics: false,
+        repairGuidance: {
+          ci_failing: 'Keep the global prompt.',
+        },
       },
     });
     writeProjectSettings({
@@ -132,6 +168,9 @@ describe.sequential('loadMergeReadyConfigAsync', () => {
         autoCompactRepair: true,
         cacheTTLSeconds: 5,
         enableStatusBarDiagnostics: true,
+        repairGuidance: {
+          merge_conflicts: 'Ignored in untrusted projects.',
+        },
       },
     });
 
@@ -139,6 +178,43 @@ describe.sequential('loadMergeReadyConfigAsync', () => {
       autoCompactRepair: false,
       cacheTTLSeconds: 30,
       enableStatusBarDiagnostics: false,
+      repairGuidance: {
+        ci_failing: 'Keep the global prompt.',
+      },
+    });
+  });
+
+  it('can ignore trusted project repair guidance while still applying trusted project scalar fields', async () => {
+    writeGlobalSettings({
+      'pi-merge-ready': {
+        autoCompactRepair: true,
+        cacheTTLSeconds: 90,
+        enableStatusBarDiagnostics: false,
+        repairGuidance: {
+          ci_failing: 'Keep the global repair guidance.',
+        },
+      },
+    });
+    writeProjectSettings({
+      'pi-merge-ready': {
+        autoCompactRepair: false,
+        cacheTTLSeconds: 5,
+        enableStatusBarDiagnostics: true,
+        repairGuidance: {
+          ci_failing: 'Ignore this trusted project repair guidance.',
+        },
+      },
+    });
+
+    await expect(
+      loadMergeReadyConfigAsync(cwd, true, { repairGuidanceProjectTrusted: false }),
+    ).resolves.toEqual({
+      autoCompactRepair: false,
+      cacheTTLSeconds: 5,
+      enableStatusBarDiagnostics: true,
+      repairGuidance: {
+        ci_failing: 'Keep the global repair guidance.',
+      },
     });
   });
 
@@ -150,9 +226,99 @@ describe.sequential('loadMergeReadyConfigAsync', () => {
     });
 
     await expect(loadMergeReadyConfigAsync(cwd, true)).resolves.toEqual({
-      autoCompactRepair: true,
-      cacheTTLSeconds: 60,
+      ...DEFAULT_CONFIG,
       enableStatusBarDiagnostics: true,
+    });
+  });
+
+  it('ignores invalid repair guidance roots', async () => {
+    writeGlobalSettings({
+      'pi-merge-ready': {
+        repairGuidance: ['ci_failing'],
+      },
+    });
+
+    await expect(loadMergeReadyConfigAsync(cwd, true)).resolves.toEqual(DEFAULT_CONFIG);
+  });
+
+  it('ignores unknown aliases and non-repairable canonical repair guidance keys', async () => {
+    writeGlobalSettings({
+      'pi-merge-ready': {
+        repairGuidance: {
+          ci_failing: 'Keep this repairable key.',
+          checks_failing: 'Ignore this alias.',
+          review_pending: 'Ignore this canonical but non-repairable key.',
+          unresolved_conversations: 'Ignore this canonical but non-repairable key too.',
+        },
+      },
+    });
+
+    await expect(loadMergeReadyConfigAsync(cwd, true)).resolves.toEqual({
+      ...DEFAULT_CONFIG,
+      repairGuidance: {
+        ci_failing: 'Keep this repairable key.',
+      },
+    });
+  });
+
+  it('ignores invalid repair guidance values', async () => {
+    writeGlobalSettings({
+      'pi-merge-ready': {
+        repairGuidance: {
+          ci_failing: 'Keep this string.',
+          merge_conflicts: false,
+        },
+      },
+    });
+
+    await expect(loadMergeReadyConfigAsync(cwd, true)).resolves.toEqual({
+      ...DEFAULT_CONFIG,
+      repairGuidance: {
+        ci_failing: 'Keep this string.',
+      },
+    });
+  });
+
+  it('ignores blank repair guidance strings after trimming', async () => {
+    writeGlobalSettings({
+      'pi-merge-ready': {
+        repairGuidance: {
+          ci_failing: '   ',
+          merge_conflicts: '  Rebase and resolve only the reported conflicts.  ',
+        },
+      },
+    });
+
+    await expect(loadMergeReadyConfigAsync(cwd, true)).resolves.toEqual({
+      ...DEFAULT_CONFIG,
+      repairGuidance: {
+        merge_conflicts: 'Rebase and resolve only the reported conflicts.',
+      },
+    });
+  });
+
+  it('does not let invalid project guidance erase valid global guidance', async () => {
+    writeGlobalSettings({
+      'pi-merge-ready': {
+        repairGuidance: {
+          ci_failing: 'Keep this global fallback.',
+        },
+      },
+    });
+    writeProjectSettings({
+      'pi-merge-ready': {
+        repairGuidance: {
+          ci_failing: '   ',
+          merge_conflicts: false,
+        },
+      },
+    });
+
+    await expect(loadMergeReadyConfigAsync(cwd, true)).resolves.toEqual({
+      ...DEFAULT_CONFIG,
+      repairGuidance: {
+        ci_failing: 'Keep this global fallback.',
+      },
     });
   });
 });

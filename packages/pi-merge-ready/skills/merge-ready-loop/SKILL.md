@@ -61,7 +61,7 @@ For URL targets, `target` is `{ "mode": "url", "url": "https://github.com/OWNER/
 
 Important:
 
-- `openItems` is blocker-only. Optional unresolved comments may still appear in `signals`, but not as blocker items.
+- `openItems` is blocker-only. Optional unresolved conversations may still appear in `signals`, but not as blocker items.
 - `target` tells you whether the status came from the ambient current branch or an explicit PR URL.
 - Closed or merged PRs are valid statuses. Treat `pr.lifecycle !== "open"` as not ready, even if there are no blocker open items.
 - When `target.mode = "url"`, expect `pr.headRepository = { owner, repo }` for checkout verification. Compare that head repo to `target.owner/repo` to distinguish same-repo vs fork/cross-repo PRs.
@@ -108,12 +108,12 @@ Important:
 
 ## Watch-triggered turns
 
-Current-branch `/merge-ready watch` runs may invoke this skill with a status snapshot already provided. URL-targeted `/merge-ready watch --url ...` runs may also invoke this skill with the exact PR URL plus explicit isolated-worktree instructions for the PR head repo/branch. Use any provided snapshot only when it is clearly fresh and the target is already confirmed.
+Current-branch `/merge-ready watch` runs may invoke this skill with a status snapshot already provided. Watch-triggered turns may also include a `Configured repair guidance for the actionable item(s):` block. Current-branch turns assemble that block additively from global and trusted-project settings for the actionable blocker ids in that turn. URL-targeted `/merge-ready watch --url ...` turns use global guidance only and may also include the exact PR URL plus explicit isolated-worktree instructions for the PR head repo/branch. Use any provided snapshot only when it is clearly fresh and the target is already confirmed.
 
 - If the snapshot is stale, incomplete, or the target still needs confirmation, call `merge_ready_status({})` or `merge_ready_status({ url })`.
 - If your environment supports isolated worker/session/agent contexts, prefer using one for the bounded repair attempt and return only a compact result to the coordinating watch turn. Do not assume any one subagent framework; use whatever isolated-context mechanism is available.
 - For watch-triggered URL repair turns, use `status.pr.headRepository` + `status.pr.headRefName` to confirm or create/switch to the isolated worktree. Do not mutate the ambient checkout.
-- Work only from the provided or freshly returned `openItems`. `details` rows and detail URLs are provenance only.
+- Work only from the provided or freshly returned `openItems`. If a configured guidance block is present, treat it as additive instructions for those actionable ids, not as extra blockers. `details` rows and detail URLs are provenance only.
 - Make one bounded repair attempt for the triggered blocker or a tightly related set. Do not start another watch loop from inside the turn.
 - Report the worktree path used for URL watch repairs, which items were addressed locally, which were cleared by fresh remote status, and which are still waiting on CI, review, or GitHub recomputation.
 - Do not wait indefinitely for CI, review, or GitHub state to change; hand back control once the bounded attempt is done or the remaining work is external.
@@ -230,7 +230,7 @@ Response: "PR is waiting for required review. Nothing to fix locally unless you 
 }
 ```
 
-Response: "There are unresolved review conversations. I can help with code changes if you point me at the comments, but only GitHub/user action can resolve the threads themselves."
+Response: "There are unresolved review conversations. I can help with code changes if you point me at the thread context, but only GitHub/user action can resolve the threads themselves."
 
 ### Changes requested
 

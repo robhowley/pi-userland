@@ -1,15 +1,22 @@
 import { SettingsManager } from '@earendil-works/pi-coding-agent';
+import { isMergeReadyRepairGuidanceId, type MergeReadyRepairGuidanceMap } from './types.js';
 
 export type MergeReadyConfig = {
   autoCompactRepair: boolean;
   cacheTTLSeconds: number;
   enableStatusBarDiagnostics: boolean;
+  repairGuidance: MergeReadyRepairGuidanceMap;
 };
 
 export const DEFAULT_MERGE_READY_CONFIG: MergeReadyConfig = {
   autoCompactRepair: true,
   cacheTTLSeconds: 60,
   enableStatusBarDiagnostics: false,
+  repairGuidance: {},
+};
+
+export type LoadMergeReadyConfigOptions = {
+  repairGuidanceProjectTrusted?: boolean;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -49,15 +56,51 @@ function getEnableStatusBarDiagnostics(rawConfig: unknown): boolean | undefined 
     : undefined;
 }
 
+function getRepairGuidance(rawConfig: unknown): MergeReadyRepairGuidanceMap | undefined {
+  if (!isRecord(rawConfig)) {
+    return undefined;
+  }
+
+  const rawRepairGuidance = rawConfig['repairGuidance'];
+  if (!isRecord(rawRepairGuidance)) {
+    return undefined;
+  }
+
+  const repairGuidance: MergeReadyRepairGuidanceMap = {};
+  for (const [key, value] of Object.entries(rawRepairGuidance)) {
+    if (!isMergeReadyRepairGuidanceId(key) || typeof value !== 'string') {
+      continue;
+    }
+
+    const trimmedValue = value.trim();
+    if (trimmedValue.length === 0) {
+      continue;
+    }
+
+    repairGuidance[key] = trimmedValue;
+  }
+
+  return repairGuidance;
+}
+
 /**
  * Load merge-ready configuration from Pi settings.json.
  * Uses SettingsManager global + project settings layering.
  */
-export function loadMergeReadyConfig(cwd: string, projectTrusted = false): MergeReadyConfig {
+export function loadMergeReadyConfig(
+  cwd: string,
+  projectTrusted = false,
+  options: LoadMergeReadyConfigOptions = {},
+): MergeReadyConfig {
   const settingsManager = SettingsManager.create(cwd);
+  const projectSettings = settingsManager.getProjectSettings();
+  const repairGuidanceProjectTrusted = options.repairGuidanceProjectTrusted ?? projectTrusted;
   const globalMergeReadySettings = getMergeReadySettings(settingsManager.getGlobalSettings());
   const projectMergeReadySettings = projectTrusted
-    ? getMergeReadySettings(settingsManager.getProjectSettings())
+    ? getMergeReadySettings(projectSettings)
+    : undefined;
+  const projectRepairGuidanceSettings = repairGuidanceProjectTrusted
+    ? getMergeReadySettings(projectSettings)
     : undefined;
 
   const globalAutoCompactRepair = getAutoCompactRepair(globalMergeReadySettings);
@@ -67,6 +110,8 @@ export function loadMergeReadyConfig(cwd: string, projectTrusted = false): Merge
   const globalEnableStatusBarDiagnostics = getEnableStatusBarDiagnostics(globalMergeReadySettings);
   const projectEnableStatusBarDiagnostics =
     getEnableStatusBarDiagnostics(projectMergeReadySettings);
+  const globalRepairGuidance = getRepairGuidance(globalMergeReadySettings);
+  const projectRepairGuidance = getRepairGuidance(projectRepairGuidanceSettings);
 
   return {
     autoCompactRepair:
@@ -79,6 +124,10 @@ export function loadMergeReadyConfig(cwd: string, projectTrusted = false): Merge
       projectEnableStatusBarDiagnostics ??
       globalEnableStatusBarDiagnostics ??
       DEFAULT_MERGE_READY_CONFIG.enableStatusBarDiagnostics,
+    repairGuidance: {
+      ...(globalRepairGuidance ?? DEFAULT_MERGE_READY_CONFIG.repairGuidance),
+      ...(projectRepairGuidance ?? {}),
+    },
   };
 }
 
@@ -88,6 +137,7 @@ export function loadMergeReadyConfig(cwd: string, projectTrusted = false): Merge
 export async function loadMergeReadyConfigAsync(
   cwd: string,
   projectTrusted = false,
+  options: LoadMergeReadyConfigOptions = {},
 ): Promise<MergeReadyConfig> {
-  return loadMergeReadyConfig(cwd, projectTrusted);
+  return loadMergeReadyConfig(cwd, projectTrusted, options);
 }
