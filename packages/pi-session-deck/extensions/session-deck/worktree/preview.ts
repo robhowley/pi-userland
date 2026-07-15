@@ -2,7 +2,7 @@ import { resolveDefaultBaseRef } from './git.js';
 import { resolveRepoIntent, type ResolveRepoIntentOptions } from './repo-intent.js';
 import type { WorktreeBasePreviewRequest, WorktreeBasePreviewResult } from './types.js';
 
-export interface ResolveWorktreeBasePreviewOptions extends ResolveRepoIntentOptions {}
+export type ResolveWorktreeBasePreviewOptions = ResolveRepoIntentOptions;
 
 export async function resolveWorktreeBasePreview(
   request: WorktreeBasePreviewRequest,
