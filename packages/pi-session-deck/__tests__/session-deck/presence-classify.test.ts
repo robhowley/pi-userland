@@ -79,13 +79,49 @@ describe('classifyPresenceRecord', () => {
     expect(result.reason).toBe('pid_reused');
   });
 
-  it('marks slightly future timestamps unknown', async () => {
-    const inspectPid = vi.fn(async () => ({ status: 'matches' as const }));
+  it.each(['startedAt', 'heartbeatAt'] as const)(
+    'allows %s at the future-skew boundary',
+    async (field) => {
+      const inspectPid = vi.fn(async () => ({ status: 'matches' as const }));
+      const result = await classifyPresenceRecord(
+        buildRecord({ [field]: '2026-06-12T12:00:10.000Z' }),
+        {
+          now: NOW,
+          inspectPid,
+        },
+      );
 
+      expect(result.presenceState).toBe('live');
+      expect(result.reason).toBe('fresh_heartbeat');
+      expect(inspectPid).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(['startedAt', 'heartbeatAt'] as const)(
+    'marks %s beyond the future-skew boundary unknown',
+    async (field) => {
+      const inspectPid = vi.fn(async () => ({ status: 'matches' as const }));
+      const result = await classifyPresenceRecord(
+        buildRecord({ [field]: '2026-06-12T12:00:10.001Z' }),
+        {
+          now: NOW,
+          inspectPid,
+        },
+      );
+
+      expect(result.presenceState).toBe('unknown');
+      expect(result.reason).toBe('future_timestamp');
+      expect(inspectPid).not.toHaveBeenCalled();
+    },
+  );
+
+  it('honors future-skew threshold overrides', async () => {
+    const inspectPid = vi.fn(async () => ({ status: 'matches' as const }));
     const result = await classifyPresenceRecord(
       buildRecord({ heartbeatAt: '2026-06-12T12:00:02.000Z' }),
       {
         now: NOW,
+        thresholds: { futureSkewMs: 1_000 },
         inspectPid,
       },
     );
@@ -93,18 +129,5 @@ describe('classifyPresenceRecord', () => {
     expect(result.presenceState).toBe('unknown');
     expect(result.reason).toBe('future_timestamp');
     expect(inspectPid).not.toHaveBeenCalled();
-  });
-
-  it('marks far-future timestamps unknown', async () => {
-    const result = await classifyPresenceRecord(
-      buildRecord({ heartbeatAt: '2026-06-12T12:10:00.000Z' }),
-      {
-        now: NOW,
-        inspectPid: async () => ({ status: 'matches' }),
-      },
-    );
-
-    expect(result.presenceState).toBe('unknown');
-    expect(result.reason).toBe('future_timestamp');
   });
 });
