@@ -27,8 +27,8 @@
   --color-banner-bg: rgba(191, 97, 106, 0.12);
   --color-banner-border: rgba(191, 97, 106, 0.44);
   --color-banner-text: #e5c7cb;
-  --gutter-x: 18px;
-  --session-indent: 46px;
+  --gutter-x: 14px;
+  --session-indent: 38px;
   --activity-size: 18px;
   background: var(--color-bg);
   color: var(--color-text);
@@ -869,7 +869,7 @@ button.card-toggle[aria-expanded='true']::after {
 
 @media (max-width: 420px) {
   :root {
-    --session-indent: 42px;
+    --session-indent: 36px;
   }
 
   .topbar-copy::before {
