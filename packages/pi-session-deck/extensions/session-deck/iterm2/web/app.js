@@ -7,6 +7,8 @@ const HOME_PREFIXES = ['/Users/', '/home/'];
 const NO_REPO_GROUP_KEY = 'no-repo';
 const NO_REPO_LABEL = 'No repo';
 const SUCCESS_PENDING_WORKTREE_TTL_MS = 12_000;
+const OPEN_TERMINAL_SUCCESS_TTL_MS = 4_000;
+const DEFAULT_OPEN_TERMINAL_FAILURE_MESSAGE = 'Could not request terminal open.';
 const DOCTOR_COMMAND = '/session-deck iterm2 doctor';
 const INLINE_WORKTREE_FAILURE_REASONS = new Set([
   'invalid-branch',
@@ -28,6 +30,7 @@ const state = {
   worktreeBasePreviews: new Map(),
   nextWorktreeBasePreviewRequestId: 0,
   pendingWorktrees: new Map(),
+  openTerminalAction: null,
   highlightedRuntimeId: null,
 };
 
@@ -55,6 +58,7 @@ function init() {
     state.showAll = elements.showAll.checked;
     reconcileSelection();
     reconcileExpandedRepoKeys();
+    reconcileOpenTerminalAction();
     render();
   });
 
@@ -92,12 +96,14 @@ async function refreshSnapshot({ source }) {
     reconcileSelection();
     reconcileExpandedRepoKeys();
     reconcilePendingWorktrees();
+    reconcileOpenTerminalAction();
   } catch (error) {
     state.fetchError = error instanceof Error ? error.message : String(error);
     if (source === 'startup') {
       state.snapshot = emptySnapshot(`Snapshot request failed: ${state.fetchError}`);
       reconcileSelection();
       reconcileExpandedRepoKeys();
+      reconcileOpenTerminalAction();
     }
   } finally {
     state.loading = false;
@@ -247,6 +253,20 @@ function reconcilePendingWorktrees(repoGroups = createRepoGroups(getVisibleRecor
     if (hasObservedPendingWorktreeSuccess(pending, repoGroups)) {
       clearPendingWorktree(repoKey);
     }
+  }
+}
+
+function reconcileOpenTerminalAction() {
+  const action = state.openTerminalAction;
+  if (action === null) {
+    return;
+  }
+
+  const isStillVisible = getVisibleRecords().some(
+    (record) => record.runtimeId === action.runtimeId,
+  );
+  if (!isStillVisible) {
+    clearOpenTerminalAction();
   }
 }
 
@@ -952,6 +972,27 @@ async function postCreateWorktreeAction(request) {
   return payload;
 }
 
+async function postOpenTerminalAction(runtimeId) {
+  const response = await fetch('/actions/open-terminal', {
+    method: 'POST',
+    cache: 'no-store',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'X-Session-Deck-Action-Token': getActionToken(),
+    },
+    body: JSON.stringify({ runtimeId }),
+  });
+
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(
+      isNonEmptyString(payload?.message) ? payload.message : `HTTP ${response.status}`,
+    );
+  }
+  return payload;
+}
+
 function getRecoverableInlineWorktreeFailureMessage(result) {
   return result?.ok === false &&
     result?.status === 'failed' &&
@@ -1133,6 +1174,83 @@ function clearPendingWorktree(repoKey) {
   state.pendingWorktrees.delete(repoKey);
 }
 
+function setOpenTerminalAction(action) {
+  clearOpenTerminalAction();
+  const nextAction = { ...action };
+  if (nextAction.kind === 'success' && typeof window.setTimeout === 'function') {
+    nextAction.timeoutId = window.setTimeout(() => {
+      if (state.openTerminalAction === nextAction) {
+        state.openTerminalAction = null;
+        render();
+      }
+    }, OPEN_TERMINAL_SUCCESS_TTL_MS);
+  }
+  state.openTerminalAction = nextAction;
+  return nextAction;
+}
+
+function clearOpenTerminalAction() {
+  const action = state.openTerminalAction;
+  if (action && action.timeoutId !== undefined && typeof window.clearTimeout === 'function') {
+    window.clearTimeout(action.timeoutId);
+  }
+  state.openTerminalAction = null;
+}
+
+function getOpenTerminalActionForRecord(record) {
+  return state.openTerminalAction?.runtimeId === record.runtimeId ? state.openTerminalAction : null;
+}
+
+function openRecordTerminal(record) {
+  if (state.openTerminalAction?.kind === 'pending') {
+    return;
+  }
+
+  const pendingAction = setOpenTerminalAction({ kind: 'pending', runtimeId: record.runtimeId });
+  render();
+
+  void postOpenTerminalAction(record.runtimeId)
+    .then((result) => {
+      if (state.openTerminalAction !== pendingAction) {
+        return;
+      }
+
+      if (result?.ok === true) {
+        setOpenTerminalAction({
+          kind: 'success',
+          runtimeId: record.runtimeId,
+          message: isNonEmptyString(result.message) ? result.message : 'Terminal open requested.',
+        });
+      } else {
+        setOpenTerminalAction({
+          kind: 'failure',
+          runtimeId: record.runtimeId,
+          message: getOpenTerminalActionFailureMessage(result),
+        });
+      }
+      render();
+    })
+    .catch((error) => {
+      if (state.openTerminalAction !== pendingAction) {
+        return;
+      }
+
+      setOpenTerminalAction({
+        kind: 'failure',
+        runtimeId: record.runtimeId,
+        message:
+          error instanceof Error && isNonEmptyString(error.message)
+            ? error.message
+            : DEFAULT_OPEN_TERMINAL_FAILURE_MESSAGE,
+      });
+      render();
+    });
+}
+
+function getOpenTerminalActionFailureMessage(result) {
+  return isNonEmptyString(result?.message) ? result.message : DEFAULT_OPEN_TERMINAL_FAILURE_MESSAGE;
+}
+
 function getActionToken() {
   const tokenElement = document.getElementById('session-deck-action-token');
   return tokenElement?.getAttribute?.('content') ?? '';
@@ -1188,12 +1306,58 @@ function createRecordCard(record) {
     toggle.append(chips);
   }
 
-  card.append(toggle);
+  card.append(toggle, createRecordOpenButton(record, title.text));
   if (isExpanded) {
     card.append(createRecordDetail(record));
   }
 
   return card;
+}
+
+function createRecordOpenButton(record, title) {
+  const action = getOpenTerminalActionForRecord(record);
+  const isOpenPending = state.openTerminalAction?.kind === 'pending';
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'card-open';
+  button.disabled = isOpenPending;
+  button.textContent = getOpenTerminalButtonText(action);
+  const label = getOpenTerminalButtonLabel(title, action);
+  button.setAttribute('aria-label', label);
+  button.setAttribute('title', label);
+  if (action !== null) {
+    button.setAttribute('data-state', action.kind);
+  }
+  button.addEventListener('click', (event) => {
+    event.preventDefault?.();
+    event.stopPropagation?.();
+    openRecordTerminal(record);
+  });
+  return button;
+}
+
+function getOpenTerminalButtonText(action) {
+  switch (action?.kind) {
+    case 'success':
+      return '✓';
+    case 'failure':
+      return '!';
+    default:
+      return '↗';
+  }
+}
+
+function getOpenTerminalButtonLabel(title, action) {
+  switch (action?.kind) {
+    case 'pending':
+      return `Opening terminal for ${title}`;
+    case 'success':
+      return `Terminal open requested for ${title}`;
+    case 'failure':
+      return `Open terminal failed for ${title}: ${action.message}`;
+    default:
+      return `Open terminal for ${title}`;
+  }
 }
 
 function createRecordDetail(record) {

@@ -22,7 +22,7 @@ import {
 
 const DEFAULT_PING_TIMEOUT_MS = 500;
 const LOCAL_PATH_PROVENANCE = 'local Pi doctor process PATH (context only)';
-const LIVE_EFFECTIVE_PATH_LABEL = 'effective PATH used by + New';
+const LIVE_EFFECTIVE_PATH_LABEL = 'effective PATH used by + New and tmux Open preflight';
 const LIVE_REPORT_LABEL = 'live AutoLaunch launch-prerequisite report';
 const LIVE_RESTART_GUIDANCE =
   'Installed files do not reload an already-running AutoLaunch process; fully quit and reopen iTerm2 after install changes, then rerun /session-deck iterm2 doctor.';
@@ -331,6 +331,9 @@ async function checkRuntimePaths(
     `- create-worktree helper: ${runtimePaths.createWorktreeHelperScriptPath}${(await pathExists(runtimePaths.createWorktreeHelperScriptPath)) ? '' : ' (missing)'}`,
   );
   lines.push(
+    `- open-terminal helper: ${runtimePaths.openTerminalHelperScriptPath}${(await pathExists(runtimePaths.openTerminalHelperScriptPath)) ? '' : ' (missing)'}`,
+  );
+  lines.push(
     `- web root: ${runtimePaths.webRootPath}${(await pathExists(runtimePaths.webRootPath)) ? '' : ' (missing)'}`,
   );
 
@@ -355,6 +358,10 @@ async function checkRuntimePaths(
     issues.push(
       `Create-worktree helper is missing: ${runtimePaths.createWorktreeHelperScriptPath}`,
     );
+  }
+
+  if (!(await pathExists(runtimePaths.openTerminalHelperScriptPath))) {
+    issues.push(`Open-terminal helper is missing: ${runtimePaths.openTerminalHelperScriptPath}`);
   }
 
   if (!(await pathExists(runtimePaths.webRootPath))) {
@@ -449,7 +456,7 @@ function addLiveLaunchPrereqIssues(
 
     if (status.status === 'missing') {
       issues.push(
-        `${LIVE_EFFECTIVE_PATH_LABEL} (${report.pathProvenance}) is missing ${command}. + New requires ${command} on PATH.`,
+        `${LIVE_EFFECTIVE_PATH_LABEL} (${report.pathProvenance}) is missing ${command}. ${formatLaunchPrereqRequirement(command)}`,
       );
       continue;
     }
@@ -458,6 +465,12 @@ function addLiveLaunchPrereqIssues(
       `Could not determine ${command} status in ${LIVE_EFFECTIVE_PATH_LABEL} (${report.pathProvenance}): ${status.message ?? 'unknown error'}`,
     );
   }
+}
+
+function formatLaunchPrereqRequirement(command: 'tmux' | 'pi'): string {
+  return command === 'tmux'
+    ? '+ New and tmux Open preflight require tmux on PATH.'
+    : '+ New requires pi on PATH.';
 }
 
 function formatExecutableStatus(status: SessionDeckIterm2ExecutableStatus): string {

@@ -73,6 +73,14 @@ async function createRuntimePaths(
     'worktree',
     'action-cli.js',
   );
+  const openTerminalHelperScriptPath = join(
+    root,
+    'dist',
+    'extensions',
+    'session-deck',
+    'iterm2',
+    'open-action-cli.js',
+  );
   const webRootPath = join(root, 'extensions', 'session-deck', 'iterm2', 'web');
   const autolaunchSourcePath = join(root, 'extensions', 'session-deck', 'iterm2', 'autolaunch.py');
   const socketRoot = await mkdtemp('/tmp/psd-iterm2-sock-');
@@ -81,10 +89,12 @@ async function createRuntimePaths(
 
   await mkdir(dirname(snapshotHelperPath), { recursive: true });
   await mkdir(dirname(createWorktreeHelperScriptPath), { recursive: true });
+  await mkdir(dirname(openTerminalHelperScriptPath), { recursive: true });
   await mkdir(webRootPath, { recursive: true });
   await mkdir(dirname(autolaunchSourcePath), { recursive: true });
   await writeFile(snapshotHelperPath, 'console.log("snapshot")\n', 'utf8');
   await writeFile(createWorktreeHelperScriptPath, 'console.log("action")\n', 'utf8');
+  await writeFile(openTerminalHelperScriptPath, 'console.log("open")\n', 'utf8');
   await writeFile(join(webRootPath, 'index.html'), '<!doctype html>\n', 'utf8');
   if (options.includeAppJs !== false) {
     await writeFile(join(webRootPath, 'app.js'), 'console.log("app")\n', 'utf8');
@@ -100,6 +110,7 @@ async function createRuntimePaths(
     nodeExecutablePath: '/runtime/node/bin/node',
     snapshotHelperPath,
     createWorktreeHelperScriptPath,
+    openTerminalHelperScriptPath,
     webRootPath,
     autolaunchSourcePath,
     bridgeSocketPath,
@@ -249,6 +260,23 @@ describe('session-deck iterm2 install + doctor + uninstall', () => {
     });
   });
 
+  it('fails install when the open-terminal helper artifact is missing', async () => {
+    const homeDirectory = await createTempHome();
+    const runtimePaths = await createRuntimePaths(join(homeDirectory, 'package-root'));
+    await rm(runtimePaths.openTerminalHelperScriptPath);
+
+    const result = await installSessionDeckIterm2({
+      homeDirectory,
+      platform: 'darwin',
+      runtimePaths,
+    });
+
+    expect(result).toEqual({
+      level: 'error',
+      message: `Open-terminal helper not found: ${runtimePaths.openTerminalHelperScriptPath}\nRun \`pnpm --dir packages/pi-session-deck run build\` and try again.`,
+    });
+  });
+
   it('rolls back a newly written AutoLaunch script when state write fails', async () => {
     const homeDirectory = await createTempHome();
     const runtimePaths = await createRuntimePaths(join(homeDirectory, 'package-root'));
@@ -286,6 +314,7 @@ describe('session-deck iterm2 install + doctor + uninstall', () => {
     });
     await writeFile(scriptPath, '# drifted script\n', 'utf8');
     await writeFile(runtimePaths.autolaunchSourcePath, '# drifted source\n', 'utf8');
+    await rm(runtimePaths.openTerminalHelperScriptPath);
     await rm(join(runtimePaths.webRootPath, 'app.js'));
 
     const result = await doctorSessionDeckIterm2Install({
@@ -314,6 +343,9 @@ describe('session-deck iterm2 install + doctor + uninstall', () => {
     expect(result.message).toContain(
       `Web app is missing: ${join(runtimePaths.webRootPath, 'app.js')}`,
     );
+    expect(result.message).toContain(
+      `Open-terminal helper is missing: ${runtimePaths.openTerminalHelperScriptPath}`,
+    );
     expect(result.message).toContain(`Bridge socket is missing: ${runtimePaths.bridgeSocketPath}`);
     expect(result.message).toContain(
       '- launch prerequisites (local Pi doctor process PATH (context only)):',
@@ -321,7 +353,7 @@ describe('session-deck iterm2 install + doctor + uninstall', () => {
     expect(result.message).toContain('  - tmux: available (/runtime/tmux/bin/tmux)');
     expect(result.message).toContain('  - pi: available (/runtime/pi/bin/pi)');
     expect(result.message).toContain(
-      '- launch prerequisites (effective PATH used by + New): unavailable',
+      '- launch prerequisites (effective PATH used by + New and tmux Open preflight): unavailable',
     );
     expect(result.message).toContain(
       'Installed files do not reload an already-running AutoLaunch process; fully quit and reopen iTerm2 after install changes, then rerun /session-deck iterm2 doctor.',
@@ -365,7 +397,9 @@ describe('session-deck iterm2 install + doctor + uninstall', () => {
     );
     expect(result.message).toContain('  - tmux: available (/runtime/tmux/bin/tmux)');
     expect(result.message).toContain('  - pi: missing');
-    expect(result.message).toContain('- launch prerequisites (effective PATH used by + New):');
+    expect(result.message).toContain(
+      '- launch prerequisites (effective PATH used by + New and tmux Open preflight):',
+    );
     expect(result.message).toContain('  - provenance: configured user shell at runtime');
     expect(result.message).toContain('  - tmux: available (/runtime/tmux/bin/tmux)');
     expect(result.message).toContain('  - pi: available (/runtime/pi/bin/pi)');
@@ -402,7 +436,7 @@ describe('session-deck iterm2 install + doctor + uninstall', () => {
 
     expect(result.level).toBe('warning');
     expect(result.message).toContain(
-      '- launch prerequisites (effective PATH used by + New): unavailable',
+      '- launch prerequisites (effective PATH used by + New and tmux Open preflight): unavailable',
     );
     expect(result.message).toContain(
       'live AutoLaunch launch-prerequisite report could not be queried.',

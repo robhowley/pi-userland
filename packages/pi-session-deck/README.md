@@ -17,7 +17,7 @@ pi install npm:@robhowley/pi-session-deck
 - `/session-deck --json --session-id <id>` — print one visible `SessionDeckRecord` as pretty JSON and bypass the TUI browser.
 - In JSON mode, `--all` widens eligibility to dead/unknown sessions; `--identity` does not change the JSON payload.
 - `/session-deck iterm2 install [--scripts-dir <path>]` — install the single `session_deck.py` AutoLaunch script and install state.
-- `/session-deck iterm2 doctor` — verify the installed state, AutoLaunch script, helper, web assets, local doctor PATH context, and the live effective PATH used by Toolbelt `＋ New`, then print manual recovery hints.
+- `/session-deck iterm2 doctor` — verify the installed state, AutoLaunch script, helpers, web assets, local doctor PATH context, and the live effective PATH used by Toolbelt `＋ New` and tmux Open preflight, then print manual recovery hints.
 - `/session-deck iterm2 uninstall` — remove the state-owned AutoLaunch script and install state.
 - Flags can be combined.
 
@@ -33,7 +33,7 @@ pi install npm:@robhowley/pi-session-deck
 
 ## iTerm2 Toolbelt
 
-`pi-session-deck` can install an iTerm2 Toolbelt view backed by the same public `SessionDeckSnapshot` / `SessionDeckRecord` data that `/session-deck` already uses. Repo groups include **＋ New**, which opens a branch-name composer for a new Pi session on a generated worktree. The composer posts to a narrow localhost action route and uses the shared TypeScript worktree action to create/reuse a generated Git worktree and start `pi` in detached tmux. There is no Toolbelt worktree-only mode.
+`pi-session-deck` can install an iTerm2 Toolbelt view backed by the same public `SessionDeckSnapshot` / `SessionDeckRecord` data that `/session-deck` already uses. Session rows include **↗ Open**, which posts only the row `runtimeId` to focus the captured iTerm2 session or attach to the existing tmux session. Repo groups include **＋ New**, which opens a branch-name composer for a new Pi session on a generated worktree. The composer posts to a narrow localhost action route and uses the shared TypeScript worktree action to create/reuse a generated Git worktree and start `pi` in detached tmux. There is no Toolbelt worktree-only mode.
 
 1. Install the package.
 2. Run `/session-deck iterm2 install`.
@@ -43,15 +43,15 @@ pi install npm:@robhowley/pi-session-deck
 
 Notes:
 
-- The main session snapshot remains read-only: refresh, collapsible session-card browsing, and a `Show all` diagnostics toggle. The only mutating Toolbelt action is `POST /actions/create-worktree` with a per-server token, JSON body cap, helper timeout, and fixed Node helper argv.
+- The main session snapshot remains read-only: refresh, collapsible session-card browsing, and a `Show all` diagnostics toggle. Toolbelt actions use narrow authenticated localhost routes with JSON body caps, helper timeouts, and fixed Node helper argv: `POST /actions/open-terminal` accepts only `{ runtimeId }`, while `POST /actions/create-worktree` owns `＋ New`.
 - `＋ New` completes once the worktree is ready and the detached tmux Pi launch succeeds or is reused. Session Deck observes the new runtime passively after launch; success does not wait for an immediate runtime id or visibility in the browser/Toolbelt list.
-- The installed `session_deck.py` AutoLaunch script starts one Session Deck iTerm2 process that binds to `127.0.0.1`, reads snapshots through the package-owned helper, runs create-worktree actions through a dedicated helper, and exposes the local Unix socket used by the `/session-deck` TUI for terminal focus.
+- The installed `session_deck.py` AutoLaunch script starts one Session Deck iTerm2 process that binds to `127.0.0.1`, reads snapshots through the package-owned helper, runs Open and create-worktree actions through dedicated helpers, and exposes the local Unix socket used by `/session-deck` TUI and Toolbelt Open terminal focus.
 - The TypeScript client resolves that socket from the installed state rather than guessing a temporary path.
 - `＋ New` resolves symbolic `tmux` and `pi` from the running AutoLaunch process's effective PATH. At runtime Session Deck asks the configured user shell for PATH, falls back to the inherited GUI/AutoLaunch PATH if shell discovery fails, and never hard-codes Homebrew/Nix/asdf/mise directories or persists executable paths in `install.json`.
-- `/session-deck iterm2 doctor` shows `local Pi doctor process PATH (context only)` plus the authoritative live effective PATH used by `＋ New`.
-- If the live effective PATH is missing `tmux` or `pi`, `＋ New` fails before worktree mutation or detached tmux launch. There is no Toolbelt worktree-only mode.
+- `/session-deck iterm2 doctor` shows `local Pi doctor process PATH (context only)` plus the authoritative live effective PATH used by `＋ New` and tmux Open preflight.
+- If the live effective PATH is missing `tmux`, `＋ New` and tmux-backed Open cannot verify/attach the existing tmux session. If it is missing `pi`, `＋ New` fails before worktree mutation or detached tmux launch. There is no Toolbelt worktree-only mode.
 - After install changes, fully quit and reopen iTerm2. Copying new AutoLaunch files does not update an already-running AutoLaunch process.
-- Local repo builds need `pnpm --dir packages/pi-session-deck run build` before install so the snapshot and create-worktree helpers exist in `dist/`.
+- Local repo builds need `pnpm --dir packages/pi-session-deck run build` before install so the snapshot, Open, and create-worktree helpers exist in `dist/`.
 
 ## What it provides
 
@@ -90,4 +90,4 @@ Read-only `/session-deck` text and JSON modes do not require iTerm2 setup.
 - Tool failures are reduced to compact safe summaries like `tool bash failed`.
 - Assistant errors are sanitized/truncated before persistence.
 - Chip text must not contain prompts, messages, tool arguments, tool outputs, or secrets.
-- Public `/session-deck --json` records do not include raw terminal metadata, tmux socket paths, pane ids, or derived attach commands.
+- Public `/session-deck --json` records and Toolbelt snapshots do not include raw terminal metadata, tmux socket paths, pane ids, reveal URLs, or derived attach commands; Toolbelt Open sends only `{ runtimeId }`.

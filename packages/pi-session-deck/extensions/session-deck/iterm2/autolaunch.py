@@ -62,6 +62,21 @@ HELPER_TIMEOUT_MESSAGE = (
     "Refresh Session Deck, run /session-deck iterm2 doctor, and check git worktrees before retrying."
 )
 HELPER_FAILED_MESSAGE = "Create-worktree action failed. Run /session-deck iterm2 doctor if this keeps happening."
+OPEN_TERMINAL_BRIDGE_SOCKET_ENV = "PI_SESSION_DECK_ITERM2_BRIDGE_SOCKET_PATH"
+OPEN_TERMINAL_HELPER_UNAVAILABLE_MESSAGE = (
+    "Open-terminal action is unavailable. Run /session-deck iterm2 doctor."
+)
+OPEN_TERMINAL_HELPER_INVALID_RESPONSE_MESSAGE = (
+    "Open-terminal action failed because the helper returned an invalid response. "
+    "Refresh Session Deck, run /session-deck iterm2 doctor, and check the terminal before retrying."
+)
+OPEN_TERMINAL_HELPER_TIMEOUT_MESSAGE = (
+    "Open-terminal action did not finish before the helper timeout. "
+    "The request may have reached iTerm2; check the terminal before retrying."
+)
+OPEN_TERMINAL_HELPER_FAILED_MESSAGE = (
+    "Open-terminal action failed. Run /session-deck iterm2 doctor if this keeps happening."
+)
 BROWSER_FORBIDDEN_FIELDS = {
     "label",
     "cwd",
@@ -74,6 +89,10 @@ BROWSER_FORBIDDEN_FIELDS = {
     "tmuxTarget",
     "paneId",
     "itermSessionId",
+    "revealUrl",
+    "attachCommand",
+    "sessionTarget",
+    "tmuxAttachArgv",
     "tmuxArgv",
     "tmuxCommand",
     "piArgv",
@@ -81,6 +100,7 @@ BROWSER_FORBIDDEN_FIELDS = {
     "shell",
     "command",
     "socketPath",
+    "socketName",
     "sessionFile",
 }
 PRIVATE_PATH_RE = re.compile(r"(?<![A-Za-z0-9._-])(/(?:[^/\s]+/)+[^/\s]+)")
@@ -114,6 +134,7 @@ class RuntimeConfig:
     node_executable_path: Path
     snapshot_helper_path: Path
     create_worktree_helper_path: Path
+    open_terminal_helper_path: Path
     web_root_path: Path
     bridge_socket_path: Path
 
@@ -252,6 +273,7 @@ def build_runtime_config(runtime: dict[str, Any]) -> RuntimeConfig:
         ),
         snapshot_helper_path=snapshot_helper_path,
         create_worktree_helper_path=derive_create_worktree_helper_path(snapshot_helper_path),
+        open_terminal_helper_path=derive_open_terminal_helper_path(snapshot_helper_path),
         web_root_path=require_absolute_path(runtime.get("webRootPath"), "runtime.webRootPath"),
         bridge_socket_path=require_absolute_path(
             runtime.get("bridgeSocketPath"), "runtime.bridgeSocketPath"
@@ -261,6 +283,10 @@ def build_runtime_config(runtime: dict[str, Any]) -> RuntimeConfig:
 
 def derive_create_worktree_helper_path(snapshot_helper_path: Path) -> Path:
     return snapshot_helper_path.parent.parent / "worktree" / "action-cli.js"
+
+
+def derive_open_terminal_helper_path(snapshot_helper_path: Path) -> Path:
+    return snapshot_helper_path.parent / "open-action-cli.js"
 
 
 def require_exact_keys(candidate: dict[str, Any], expected: tuple[str, ...], field: str) -> None:
@@ -516,20 +542,22 @@ def helper_failure_payload(message: str) -> dict[str, Any]:
     return {"ok": False, "status": "failed", "message": message}
 
 
-def sanitize_helper_failure_payload(payload: dict[str, Any]) -> dict[str, Any]:
+def sanitize_helper_failure_payload(
+    payload: dict[str, Any], fallback_message: str = HELPER_FAILED_MESSAGE
+) -> dict[str, Any]:
     if find_forbidden_field(payload) is not None:
-        return helper_failure_payload(HELPER_FAILED_MESSAGE)
+        return helper_failure_payload(fallback_message)
 
     sanitized = redact_private_data(payload)
     if not isinstance(sanitized, dict):
-        return helper_failure_payload(HELPER_FAILED_MESSAGE)
+        return helper_failure_payload(fallback_message)
 
     message = sanitized.get("message")
     sanitized["ok"] = False
     if not isinstance(sanitized.get("status"), str):
         sanitized["status"] = "failed"
     if not isinstance(message, str) or len(message.strip()) == 0:
-        sanitized["message"] = HELPER_FAILED_MESSAGE
+        sanitized["message"] = fallback_message
     return sanitized
 
 
@@ -600,6 +628,98 @@ def run_create_worktree_action(
     return 200, response_payload
 
 
+OPEN_TERMINAL_SAFE_SUCCESS_MESSAGE = "Terminal open requested."
+OPEN_TERMINAL_SAFE_FAILURE_MESSAGES = {
+    "identity-missing": "Terminal metadata is no longer available for this session.",
+    "identity-read-error": "Could not read terminal metadata for this session.",
+    "identity-malformed": "Terminal metadata for this session is invalid.",
+    "runtime-mismatch": "Terminal metadata does not match this session.",
+    "terminal-missing": "No openable terminal target is available for this session.",
+    "terminal-target-incomplete": "Terminal metadata is incomplete for this session.",
+    "unsupported-platform": "Opening terminals from Session Deck is only supported on macOS.",
+    "tmux-target-missing": "The tmux session is no longer available.",
+    "tmux-preflight-failed": "Could not verify the tmux session before opening.",
+    "python-bridge-disabled": "Terminal opening through the iTerm2 runtime is disabled.",
+    "python-bridge-unavailable": "The iTerm2 runtime is unavailable.",
+    "automation-denied": "iTerm2 automation is not authorized.",
+    "terminal-target-missing": "The iTerm2 session is no longer available.",
+    "open-failed": "Could not request terminal open.",
+}
+
+
+def run_open_terminal_action(
+    config: InstallConfig,
+    payload: str,
+    effective_command_path: EffectiveCommandPath,
+) -> tuple[int, dict[str, Any]]:
+    helper_path = config.runtime.open_terminal_helper_path
+    if not helper_path.exists():
+        return 503, helper_failure_payload(OPEN_TERMINAL_HELPER_UNAVAILABLE_MESSAGE)
+
+    env = build_child_process_env(effective_command_path)
+    env[OPEN_TERMINAL_BRIDGE_SOCKET_ENV] = str(config.runtime.bridge_socket_path)
+
+    try:
+        completed = subprocess.run(
+            [str(config.runtime.node_executable_path), str(helper_path)],
+            input=payload,
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=ACTION_HELPER_TIMEOUT_SECONDS,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return 504, helper_failure_payload(OPEN_TERMINAL_HELPER_TIMEOUT_MESSAGE)
+    except Exception:
+        return 503, helper_failure_payload(OPEN_TERMINAL_HELPER_UNAVAILABLE_MESSAGE)
+
+    try:
+        response_payload = json.loads(completed.stdout)
+    except Exception:
+        return 500, helper_failure_payload(OPEN_TERMINAL_HELPER_INVALID_RESPONSE_MESSAGE)
+
+    if not isinstance(response_payload, dict):
+        return 500, helper_failure_payload(OPEN_TERMINAL_HELPER_INVALID_RESPONSE_MESSAGE)
+
+    if completed.returncode != 0:
+        return 400, sanitize_helper_failure_payload(
+            response_payload, OPEN_TERMINAL_HELPER_FAILED_MESSAGE
+        )
+
+    if not is_valid_open_terminal_helper_response(response_payload):
+        return 500, helper_failure_payload(OPEN_TERMINAL_HELPER_INVALID_RESPONSE_MESSAGE)
+
+    return 200, response_payload
+
+
+def is_valid_open_terminal_helper_response(payload: dict[str, Any]) -> bool:
+    if find_forbidden_field(payload) is not None:
+        return False
+
+    if payload.get("ok") is True:
+        if set(payload.keys()) != {"ok", "status", "message"}:
+            return False
+        return payload.get("status") == "requested" and payload.get("message") == OPEN_TERMINAL_SAFE_SUCCESS_MESSAGE
+
+    if payload.get("ok") is False:
+        allowed_keys = {"ok", "status", "reason", "message", "requestSent"}
+        if not set(payload.keys()).issubset(allowed_keys):
+            return False
+        if "reason" not in payload:
+            return False
+        reason = payload.get("reason")
+        request_sent = payload.get("requestSent")
+        return (
+            payload.get("status") == "failed"
+            and reason in OPEN_TERMINAL_SAFE_FAILURE_MESSAGES
+            and payload.get("message") == OPEN_TERMINAL_SAFE_FAILURE_MESSAGES.get(reason)
+            and ("requestSent" not in payload or isinstance(request_sent, bool))
+        )
+
+    return False
+
+
 def resolve_static_path(config: InstallConfig, pathname: str) -> Optional[Path]:
     normalized = "/index.html" if pathname in ("", "/") else pathname
     normalized = posixpath.normpath(normalized)
@@ -636,6 +756,7 @@ class SessionDeckToolbeltHandler(BaseHTTPRequestHandler):
                     "packageVersion": config.package_version,
                     "helperScriptPath": str(config.runtime.snapshot_helper_path),
                     "createWorktreeHelperScriptPath": str(config.runtime.create_worktree_helper_path),
+                    "openTerminalHelperScriptPath": str(config.runtime.open_terminal_helper_path),
                     "webRoot": str(config.runtime.web_root_path),
                 },
             )
@@ -664,7 +785,11 @@ class SessionDeckToolbeltHandler(BaseHTTPRequestHandler):
         config = self.server.session_deck_config  # type: ignore[attr-defined]
         effective_command_path = self.server.session_deck_effective_command_path  # type: ignore[attr-defined]
         parsed = urlparse(self.path)
-        if parsed.path not in ("/actions/create-worktree", "/actions/create-worktree-preview"):
+        if parsed.path not in (
+            "/actions/create-worktree",
+            "/actions/create-worktree-preview",
+            "/actions/open-terminal",
+        ):
             self.send_json(404, {"ok": False, "status": "failed", "message": "Not found"})
             return
 
@@ -694,11 +819,18 @@ class SessionDeckToolbeltHandler(BaseHTTPRequestHandler):
             return
 
         body = self.rfile.read(body_length).decode("utf-8")
-        status_code, response_payload = run_create_worktree_action(
-            config,
-            body,
-            effective_command_path,
-        )
+        if parsed.path == "/actions/open-terminal":
+            status_code, response_payload = run_open_terminal_action(
+                config,
+                body,
+                effective_command_path,
+            )
+        else:
+            status_code, response_payload = run_create_worktree_action(
+                config,
+                body,
+                effective_command_path,
+            )
         self.send_json(status_code, response_payload)
 
     def log_message(self, _format: str, *args: Any) -> None:

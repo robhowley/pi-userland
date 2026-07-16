@@ -16,6 +16,8 @@ export const SESSION_DECK_ITERM2_HELPER_RELATIVE_PATH =
   'dist/extensions/session-deck/iterm2/snapshot-cli.js';
 export const SESSION_DECK_ITERM2_CREATE_WORKTREE_HELPER_RELATIVE_PATH =
   'dist/extensions/session-deck/worktree/action-cli.js';
+export const SESSION_DECK_ITERM2_OPEN_HELPER_RELATIVE_PATH =
+  'dist/extensions/session-deck/iterm2/open-action-cli.js';
 export const SESSION_DECK_ITERM2_WEB_ROOT_RELATIVE_PATH = 'extensions/session-deck/iterm2/web';
 export const SESSION_DECK_ITERM2_AUTOLAUNCH_SOURCE_RELATIVE_PATH =
   'extensions/session-deck/iterm2/autolaunch.py';
@@ -29,6 +31,7 @@ export interface SessionDeckIterm2RuntimePaths {
   nodeExecutablePath: string;
   snapshotHelperPath: string;
   createWorktreeHelperScriptPath: string;
+  openTerminalHelperScriptPath: string;
   webRootPath: string;
   autolaunchSourcePath: string;
   bridgeSocketPath: string;
@@ -111,6 +114,7 @@ export async function resolveSessionDeckIterm2RuntimePaths(
       packageRoot,
       SESSION_DECK_ITERM2_CREATE_WORKTREE_HELPER_RELATIVE_PATH,
     ),
+    openTerminalHelperScriptPath: join(packageRoot, SESSION_DECK_ITERM2_OPEN_HELPER_RELATIVE_PATH),
     webRootPath: join(packageRoot, SESSION_DECK_ITERM2_WEB_ROOT_RELATIVE_PATH),
     autolaunchSourcePath: join(packageRoot, SESSION_DECK_ITERM2_AUTOLAUNCH_SOURCE_RELATIVE_PATH),
     bridgeSocketPath: options.bridgeSocketPath ?? getSessionDeckIterm2BridgeSocketPath(),
