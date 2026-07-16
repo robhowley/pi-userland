@@ -94,12 +94,16 @@ describe('session-deck detached tmux launch', () => {
       if (file === 'tmux' && args[0] === 'new-session') {
         return { stdout: '', stderr: '', exitCode: 0 };
       }
+      if (file === 'tmux' && args[0] === 'display-message') {
+        return { stdout: '/tmp/repo-wt-feature\n', stderr: '', exitCode: 0 };
+      }
       return { stdout: '', stderr: `unexpected ${file} ${args.join(' ')}`, exitCode: 1 };
     };
 
     const result = await launchDetachedTmuxPi(CREATED_WORKTREE, "Feature O'Hare", {
       execFile,
       env,
+      postLaunchVerifyDelayMs: 0,
     });
 
     expect(result).toMatchObject({
@@ -130,6 +134,16 @@ describe('session-deck detached tmux launch', () => {
           '-n',
           'feature-o-hare',
           expectedLaunchCommand,
+        ],
+      },
+      {
+        file: 'tmux',
+        args: [
+          'display-message',
+          '-p',
+          '-t',
+          `=${result.tmuxSessionName}:0.0`,
+          '#{pane_current_path}',
         ],
       },
     ]);
@@ -246,6 +260,41 @@ describe('session-deck detached tmux launch', () => {
       status: 'failed',
       reason: 'spawn-failed',
       message: 'Created worktree, but tmux could not start Pi: spawn boom',
+    });
+  });
+
+  it('returns presence-timeout when the launched tmux session is gone before verification', async () => {
+    const execFile: WorktreeExecFile = async (file, args) => {
+      if (file === 'tmux' && args[0] === '-V') {
+        return { stdout: 'tmux 3.4\n', stderr: '', exitCode: 0 };
+      }
+      if (file === 'which') {
+        return { stdout: '/runtime/pi/bin/pi\n', stderr: '', exitCode: 0 };
+      }
+      if (file === 'tmux' && args[0] === 'has-session') {
+        return { stdout: '', stderr: '', exitCode: 1 };
+      }
+      if (file === 'tmux' && args[0] === 'new-session') {
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
+      if (file === 'tmux' && args[0] === 'display-message') {
+        return { stdout: '', stderr: "can't find pane", exitCode: 1 };
+      }
+      return { stdout: '', stderr: `unexpected ${file} ${args.join(' ')}`, exitCode: 1 };
+    };
+
+    await expect(
+      launchDetachedTmuxPi(CREATED_WORKTREE, 'Feature', {
+        execFile,
+        postLaunchVerifyDelayMs: 0,
+      }),
+    ).resolves.toMatchObject({
+      requested: true,
+      ok: false,
+      mode: 'tmux-detached',
+      status: 'failed',
+      reason: 'presence-timeout',
+      message: 'Created worktree, but Pi did not remain running in tmux.',
     });
   });
 });

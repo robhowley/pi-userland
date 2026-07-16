@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { basename } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { formatPosixCommand, quotePosixArg } from '../identity/terminal-focus.js';
 import { defaultWorktreeExecFile, type ExecFileResult, type WorktreeExecFile } from './git.js';
 import { slugifyWorktreeLabel } from './create.js';
@@ -13,10 +14,12 @@ import type {
 export interface LaunchDetachedTmuxPiOptions {
   execFile?: WorktreeExecFile;
   env?: NodeJS.ProcessEnv;
+  postLaunchVerifyDelayMs?: number;
 }
 
 interface ResolvedLaunchDetachedTmuxPiOptions extends LaunchDetachedTmuxPiOptions {
   env: NodeJS.ProcessEnv;
+  postLaunchVerifyDelayMs: number;
 }
 
 export type DetachedTmuxPiPreflightResult =
@@ -27,6 +30,7 @@ export type DetachedTmuxPiPreflightResult =
     };
 
 const TMUX_SESSION_NAME_LIMIT = 80;
+const POST_LAUNCH_VERIFY_DELAY_MS = 1_000;
 
 export async function preflightDetachedTmuxPi(
   options: LaunchDetachedTmuxPiOptions = {},
@@ -118,6 +122,11 @@ export async function launchDetachedTmuxPi(
     };
   }
 
+  const verification = await verifyLaunchedTmuxSession(sessionName, worktree.path, resolvedOptions);
+  if (!verification.ok) {
+    return postLaunchVerificationFailure(verification.observedCwd, manualCommand);
+  }
+
   return {
     requested: true,
     ok: true,
@@ -158,6 +167,19 @@ async function tmuxHasSession(
   return result.exitCode === 0;
 }
 
+async function verifyLaunchedTmuxSession(
+  sessionName: string,
+  expectedCwd: string,
+  options: ResolvedLaunchDetachedTmuxPiOptions,
+): Promise<{ ok: true } | { ok: false; observedCwd: string | null }> {
+  if (options.postLaunchVerifyDelayMs > 0) {
+    await sleep(options.postLaunchVerifyDelayMs);
+  }
+
+  const observedCwd = await readTmuxSessionCwd(sessionName, options);
+  return observedCwd === expectedCwd ? { ok: true } : { ok: false, observedCwd };
+}
+
 async function readTmuxSessionCwd(
   sessionName: string,
   options: ResolvedLaunchDetachedTmuxPiOptions,
@@ -166,7 +188,7 @@ async function readTmuxSessionCwd(
     'display-message',
     '-p',
     '-t',
-    `=${sessionName}`,
+    `=${sessionName}:0.0`,
     '#{pane_current_path}',
   ]);
   if (result.exitCode !== 0) {
@@ -194,6 +216,7 @@ function resolveLaunchOptions(
   return {
     ...options,
     env: options.env ?? process.env,
+    postLaunchVerifyDelayMs: options.postLaunchVerifyDelayMs ?? POST_LAUNCH_VERIFY_DELAY_MS,
   };
 }
 
@@ -212,6 +235,25 @@ function prereqLaunchFailure(
       reason === 'tmux-unavailable'
         ? 'Created worktree, but tmux is not available on PATH.'
         : 'Created worktree, but the pi executable is not available on PATH.',
+    manualCommand,
+  };
+}
+
+function postLaunchVerificationFailure(
+  observedCwd: string | null,
+  manualCommand: string,
+): CreateWorktreeLaunchFailure {
+  return {
+    requested: true,
+    ok: false,
+    mode: 'tmux-detached',
+    status: 'failed',
+    reason: 'presence-timeout',
+    recoverable: true,
+    message:
+      observedCwd === null
+        ? 'Created worktree, but Pi did not remain running in tmux.'
+        : 'Created worktree, but the launched tmux pane is not in the worktree.',
     manualCommand,
   };
 }
