@@ -418,6 +418,54 @@ describe('openTerminalFocusTarget tmux support', () => {
     ]);
   });
 
+  it('passes the caller env through tmux preflight and AppleScript tmux resolution', async () => {
+    const env: NodeJS.ProcessEnv = { PATH: '/custom/tmux/bin:/usr/bin' };
+    const execFile = createTmuxAppleScriptExecFile();
+
+    const result = await openTerminalFocusTarget(TMUX_TARGET, {
+      platform: 'darwin',
+      bridgeMode: 'iterm2-applescript',
+      env,
+      execFile,
+    });
+
+    expect(result).toMatchObject({ ok: true, reason: 'requested' });
+    expect(execFile).toHaveBeenCalledTimes(3);
+    expect(execFile).toHaveBeenNthCalledWith(
+      1,
+      'tmux',
+      ['-S', '/tmp/tmux socket/default', 'has-session', '-t', '$1'],
+      { timeout: 500, env },
+    );
+    expect(execFile).toHaveBeenNthCalledWith(2, '/usr/bin/which', ['tmux'], { env });
+    expect((execFile.mock.calls[0]?.[2] as { env?: NodeJS.ProcessEnv } | undefined)?.env).toBe(env);
+    expect((execFile.mock.calls[1]?.[2] as { env?: NodeJS.ProcessEnv } | undefined)?.env).toBe(env);
+  });
+
+  it('returns open-failed without AppleScript UI mutation when /usr/bin/which cannot resolve tmux', async () => {
+    const execFile = vi.fn(async (file: string) => {
+      if (file === '/usr/bin/which') {
+        throw Object.assign(new Error('tmux not found'), { code: 'ENOENT' });
+      }
+
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await openTerminalFocusTarget(TMUX_TARGET, {
+      platform: 'darwin',
+      bridgeMode: 'iterm2-applescript',
+      execFile,
+    });
+
+    expect(result).toMatchObject({ ok: false, reason: 'open-failed' });
+    expect(result.message).toContain(
+      'Failed to resolve tmux for iTerm2 tab creation: tmux not found',
+    );
+    expect(execFile).toHaveBeenCalledTimes(2);
+    expect(execFile).toHaveBeenNthCalledWith(2, '/usr/bin/which', ['tmux'], undefined);
+    expect(execFile.mock.calls.some(([file]) => file === '/usr/bin/osascript')).toBe(false);
+  });
+
   it('returns open-failed before AppleScript UI mutation when tmux cannot be resolved absolutely', async () => {
     const execFile = createTmuxAppleScriptExecFile('tmux');
 
