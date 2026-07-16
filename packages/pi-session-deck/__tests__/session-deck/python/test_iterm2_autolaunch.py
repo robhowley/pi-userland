@@ -895,18 +895,60 @@ class BridgeRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_bridge_serializes_tmux_ui_mutations(self):
         fixture = TempRuntime(self)
-        bridge, connection = await self.start_bridge(fixture)
-        payload = (json.dumps({"tmuxAttachArgv": VALID_TMUX_ATTACH_ARGV}) + "\n").encode("utf-8")
-
-        first, second = await asyncio.gather(
-            unix_json_request(bridge.socket_path, payload),
-            unix_json_request(bridge.socket_path, payload),
+        effective_command_path = make_effective_command_path("/bridge/effective/bin:/usr/bin")
+        bridge, connection = await self.start_bridge(
+            fixture, effective_command_path=effective_command_path
         )
+        payload = (json.dumps({"tmuxAttachArgv": VALID_TMUX_ATTACH_ARGV}) + "\n").encode("utf-8")
+        which_calls = []
+
+        def fake_which(command, path=None):
+            which_calls.append((command, path))
+            if command == "tmux":
+                return "/bridge/effective/bin/tmux"
+            return None
+
+        with mock.patch.object(AUTO.shutil, "which", side_effect=fake_which):
+            first, second = await asyncio.gather(
+                unix_json_request(bridge.socket_path, payload),
+                unix_json_request(bridge.socket_path, payload),
+            )
 
         self.assertTrue(first["ok"])
         self.assertTrue(second["ok"])
         self.assertEqual(connection.max_active_tab_creations, 1)
-        self.assertEqual(connection.commands, ["exec tmux -S '/tmp/tmux socket/default' attach-session -E -t '$1'"] * 2)
+        self.assertEqual(which_calls, [("tmux", effective_command_path.value)] * 2)
+        self.assertEqual(
+            connection.commands,
+            [
+                "/bridge/effective/bin/tmux -S '/tmp/tmux socket/default' attach-session -E -t '$1'"
+            ]
+            * 2,
+        )
+        self.assertTrue(all(not command.startswith("exec ") for command in connection.commands))
+
+    async def test_bridge_returns_soft_failure_when_tmux_is_missing_from_effective_path(self):
+        fixture = TempRuntime(self)
+        effective_command_path = make_effective_command_path("/bridge/effective/bin:/usr/bin")
+        bridge, connection = await self.start_bridge(
+            fixture, effective_command_path=effective_command_path
+        )
+        payload = (json.dumps({"tmuxAttachArgv": VALID_TMUX_ATTACH_ARGV}) + "\n").encode("utf-8")
+
+        with mock.patch.object(AUTO.shutil, "which", return_value=None) as which:
+            result = await unix_json_request(bridge.socket_path, payload)
+
+        which.assert_called_once_with("tmux", path=effective_command_path.value)
+        self.assertEqual(
+            result,
+            {
+                "ok": False,
+                "reason": "open-failed",
+                "message": "Failed to request iTerm2 focus: Could not resolve tmux on the effective command PATH.",
+            },
+        )
+        self.assertEqual(connection.commands, [])
+        self.assertEqual(connection.events, [])
 
     async def test_bridge_reuses_existing_focus_behavior(self):
         fixture = TempRuntime(self)
