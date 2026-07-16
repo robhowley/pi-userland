@@ -429,8 +429,10 @@ function buildElements(document: FakeDocument): HarnessElements {
   diagnosticsPanel.className = 'diagnostics-panel hidden';
   const diagnostics = withId(document.createElement('ul'), 'diagnostics');
   diagnosticsPanel.append(diagnostics);
+  const actionToken = withId(document.createElement('meta'), 'session-deck-action-token');
+  actionToken.setAttribute('content', 'test-token');
 
-  document.append(summary, showAll, refresh, banner, list, empty, diagnosticsPanel);
+  document.append(summary, showAll, refresh, banner, list, empty, diagnosticsPanel, actionToken);
 
   return {
     summary,
@@ -650,6 +652,14 @@ function getCardToggle(card: FakeElement): FakeButtonElement {
     throw new Error('Expected card toggle button.');
   }
   return toggle;
+}
+
+function getCardOpenButton(card: FakeElement): FakeButtonElement {
+  const openButton = findAllByClass(card, 'card-open')[0];
+  if (!(openButton instanceof FakeButtonElement)) {
+    throw new Error('Expected card open button.');
+  }
+  return openButton;
 }
 
 function getCardLine(card: FakeElement, className: 'row-line1' | 'row-line2'): FakeElement {
@@ -2261,6 +2271,346 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(line1.textContent).not.toContain('idle');
     expect(findAllByClass(line1, 'row-age')[0]?.textContent).toBe('5s');
     expect(getChildTextContents(line2)).toEqual(['shop-ml', '#22722', 'rh-baseline-gbdt']);
+  });
+
+  it('renders one Open button sibling for each real card and none for pending worktree cards', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/snapshot.json') {
+        return Promise.resolve(
+          buildJsonResponse(
+            buildSnapshot({
+              records: [
+                buildRecord(),
+                buildRecord({ runtimeId: 'rt-2', sessionId: 'session-2', sessionName: 'bravo' }),
+              ],
+            }),
+          ),
+        );
+      }
+      if (url === '/actions/create-worktree-preview') {
+        return Promise.resolve(buildJsonResponse(buildBasePreview()));
+      }
+      if (url === '/actions/create-worktree') {
+        return new Promise(() => {});
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    const harness = await setupAppWithFetch(fetchMock);
+    expandAllRepoGroups(harness.elements.list);
+
+    const cards = getCards(harness.elements.list);
+    expect(cards).toHaveLength(2);
+    expect(findAllByClass(harness.elements.list, 'card-open')).toHaveLength(2);
+
+    for (const card of cards) {
+      const toggle = getCardToggle(card);
+      const openButton = getCardOpenButton(card);
+      expect(card.childNodes[0]).toBe(toggle);
+      expect(card.childNodes[1]).toBe(openButton);
+      expect(openButton.parentNode).toBe(card);
+      expect(findAllByTag(toggle, 'button')).toHaveLength(0);
+      expect(openButton.type).toBe('button');
+      expect(openButton.textContent).toBe('↗');
+      expect(openButton.getAttribute('aria-expanded')).toBeNull();
+      expect(openButton.getAttribute('aria-controls')).toBeNull();
+      expect(openButton.getAttribute('title')).toBe(openButton.getAttribute('aria-label'));
+      expect(findAllByClass(getCardLine(card, 'row-line1'), 'row-age')).toHaveLength(1);
+    }
+
+    expect(getCardOpenButton(cards[0]!).getAttribute('aria-label')).toBe('Open terminal for alpha');
+    expect(getCardOpenButton(cards[1]!).getAttribute('aria-label')).toBe('Open terminal for bravo');
+
+    getRepoActionButton(getRepoGroupByLabel(harness.elements.list, 'owner/project')).click();
+    await flushMicrotasks();
+
+    const form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'owner/project'),
+      'worktree-form',
+    )[0]!;
+    const branchInput = findAllByTag(form, 'input').find(
+      (input) => input.getAttribute('aria-label') === 'Branch name',
+    ) as FakeInputElement;
+    branchInput.value = 'rh/open-card';
+    branchInput.dispatchEvent({ type: 'input' });
+    form.dispatchEvent({ type: 'submit' });
+    await flushMicrotasks();
+
+    const pendingCards = getPendingWorktreeCards(harness.elements.list);
+    expect(pendingCards).toHaveLength(1);
+    expect(findAllByClass(pendingCards[0]!, 'card-open')).toHaveLength(0);
+    expect(findAllByClass(harness.elements.list, 'card-open')).toHaveLength(2);
+  });
+
+  it('posts exact authenticated Open requests without changing disclosure state', async () => {
+    const fetchMock = vi.fn((url: string, _init?: unknown) => {
+      if (url === '/snapshot.json') {
+        return Promise.resolve(buildJsonResponse(buildSnapshot()));
+      }
+      if (url === '/actions/open-terminal') {
+        return Promise.resolve(
+          buildJsonResponse({ ok: true, status: 'requested', message: 'Terminal open requested.' }),
+        );
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    const harness = await setupAppWithFetch(fetchMock);
+    expandAllRepoGroups(harness.elements.list);
+
+    getCardToggle(getCards(harness.elements.list)[0]!).click();
+    expect(getExpandedCardTitles(harness.elements.list)).toEqual(['alpha']);
+
+    const preventDefault = vi.fn();
+    const stopPropagation = vi.fn();
+    getCardOpenButton(getExpandedCards(harness.elements.list)[0]!).dispatchEvent({
+      type: 'click',
+      preventDefault,
+      stopPropagation,
+    });
+    await flushMicrotasks();
+
+    expect(preventDefault).toHaveBeenCalledTimes(1);
+    expect(stopPropagation).toHaveBeenCalledTimes(1);
+    expect(getExpandedCardTitles(harness.elements.list)).toEqual(['alpha']);
+
+    const openCall = fetchMock.mock.calls.find(([url]) => url === '/actions/open-terminal');
+    expect(openCall).toBeDefined();
+    const requestInit = openCall![1] as {
+      method?: string;
+      cache?: string;
+      headers?: Record<string, string>;
+      body?: string;
+    };
+    expect(requestInit.method).toBe('POST');
+    expect(requestInit.cache).toBe('no-store');
+    expect(requestInit.headers).toMatchObject({
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'X-Session-Deck-Action-Token': 'test-token',
+    });
+    expect(JSON.parse(requestInit.body ?? '{}')).toEqual({ runtimeId: 'rt-1' });
+    expect(Object.keys(JSON.parse(requestInit.body ?? '{}'))).toEqual(['runtimeId']);
+  });
+
+  it('keeps one pending Open request and disables all Open buttons until it resolves', async () => {
+    const openRequest = {
+      resolve: null as ((response: ReturnType<typeof buildJsonResponse>) => void) | null,
+    };
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/snapshot.json') {
+        return Promise.resolve(
+          buildJsonResponse(
+            buildSnapshot({
+              records: [
+                buildRecord(),
+                buildRecord({ runtimeId: 'rt-2', sessionId: 'session-2', sessionName: 'bravo' }),
+              ],
+            }),
+          ),
+        );
+      }
+      if (url === '/actions/open-terminal') {
+        return new Promise<ReturnType<typeof buildJsonResponse>>((resolve) => {
+          openRequest.resolve = resolve;
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    const harness = await setupAppWithFetch(fetchMock);
+    expandAllRepoGroups(harness.elements.list);
+
+    getCardOpenButton(getCards(harness.elements.list)[0]!).click();
+
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/actions/open-terminal')).toHaveLength(
+      1,
+    );
+    const pendingButtons = getCards(harness.elements.list).map(getCardOpenButton);
+    expect(pendingButtons.map((button) => button.disabled)).toEqual([true, true]);
+    expect(pendingButtons.map((button) => button.textContent)).toEqual(['↗', '↗']);
+    expect(pendingButtons[0]?.getAttribute('data-state')).toBe('pending');
+
+    pendingButtons[0]?.click();
+    pendingButtons[1]?.click();
+
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/actions/open-terminal')).toHaveLength(
+      1,
+    );
+
+    openRequest.resolve?.(
+      buildJsonResponse({ ok: true, status: 'requested', message: 'Terminal open requested.' }),
+    );
+    await flushMicrotasks();
+
+    const resolvedButtons = getCards(harness.elements.list).map(getCardOpenButton);
+    expect(resolvedButtons.map((button) => button.disabled)).toEqual([false, false]);
+    expect(resolvedButtons[0]?.textContent).toBe('✓');
+    expect(resolvedButtons[0]?.getAttribute('data-state')).toBe('success');
+    expect(resolvedButtons[1]?.textContent).toBe('↗');
+  });
+
+  it('renders retryable persistent Open failure feedback', async () => {
+    let openRequestCount = 0;
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/snapshot.json') {
+        return Promise.resolve(buildJsonResponse(buildSnapshot()));
+      }
+      if (url === '/actions/open-terminal') {
+        openRequestCount += 1;
+        return Promise.resolve(
+          openRequestCount === 1
+            ? buildJsonResponse({
+                ok: false,
+                status: 'failed',
+                reason: 'terminal-missing',
+                message: 'No openable terminal target is available for this session.',
+              })
+            : buildJsonResponse({
+                ok: true,
+                status: 'requested',
+                message: 'Terminal open requested.',
+              }),
+        );
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    const harness = await setupAppWithFetch(fetchMock);
+    expandAllRepoGroups(harness.elements.list);
+
+    getCardOpenButton(getCards(harness.elements.list)[0]!).click();
+    await flushMicrotasks();
+
+    const failedButton = getCardOpenButton(getCards(harness.elements.list)[0]!);
+    expect(failedButton.disabled).toBe(false);
+    expect(failedButton.textContent).toBe('!');
+    expect(failedButton.getAttribute('data-state')).toBe('failure');
+    expect(failedButton.getAttribute('aria-label')).toBe(
+      'Open terminal failed for alpha: No openable terminal target is available for this session.',
+    );
+    expect(failedButton.getAttribute('title')).toBe(failedButton.getAttribute('aria-label'));
+
+    failedButton.click();
+    await flushMicrotasks();
+
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/actions/open-terminal')).toHaveLength(
+      2,
+    );
+    expect(getCardOpenButton(getCards(harness.elements.list)[0]!).textContent).toBe('✓');
+  });
+
+  it('reconciles pending Open state across refresh and row disappearance', async () => {
+    const snapshots = [
+      buildSnapshot(),
+      buildSnapshot({ records: [buildRecord({ sessionName: 'alpha refreshed' })] }),
+      buildSnapshot({ records: [] }),
+      buildSnapshot(),
+    ];
+    const openRequest = {
+      resolve: null as ((response: ReturnType<typeof buildJsonResponse>) => void) | null,
+    };
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/snapshot.json') {
+        const snapshot = snapshots.shift();
+        if (!snapshot) {
+          throw new Error('Unexpected snapshot fetch.');
+        }
+        return Promise.resolve(buildJsonResponse(snapshot));
+      }
+      if (url === '/actions/open-terminal') {
+        return new Promise<ReturnType<typeof buildJsonResponse>>((resolve) => {
+          openRequest.resolve = resolve;
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    const harness = await setupAppWithFetch(fetchMock);
+    expandAllRepoGroups(harness.elements.list);
+
+    getCardOpenButton(getCards(harness.elements.list)[0]!).click();
+    expect(getCardOpenButton(getCards(harness.elements.list)[0]!).disabled).toBe(true);
+
+    harness.elements.refresh.click();
+    await flushMicrotasks();
+
+    expect(getCards(harness.elements.list)).toHaveLength(1);
+    expect(getCardOpenButton(getCards(harness.elements.list)[0]!).disabled).toBe(true);
+    expect(getCardOpenButton(getCards(harness.elements.list)[0]!).getAttribute('data-state')).toBe(
+      'pending',
+    );
+
+    harness.elements.refresh.click();
+    await flushMicrotasks();
+
+    expect(getCards(harness.elements.list)).toHaveLength(0);
+
+    harness.elements.refresh.click();
+    await flushMicrotasks();
+    expandAllRepoGroups(harness.elements.list);
+
+    const returnedButton = getCardOpenButton(getCards(harness.elements.list)[0]!);
+    expect(returnedButton.disabled).toBe(false);
+    expect(returnedButton.textContent).toBe('↗');
+    expect(returnedButton.getAttribute('data-state')).toBeNull();
+
+    openRequest.resolve?.(
+      buildJsonResponse({ ok: true, status: 'requested', message: 'Terminal open requested.' }),
+    );
+    await flushMicrotasks();
+
+    expect(getCardOpenButton(getCards(harness.elements.list)[0]!).textContent).toBe('↗');
+  });
+
+  it('clears pending Open state when show-all hides the runtime', async () => {
+    const openRequest = {
+      resolve: null as ((response: ReturnType<typeof buildJsonResponse>) => void) | null,
+    };
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/snapshot.json') {
+        return Promise.resolve(
+          buildJsonResponse(
+            buildSnapshot({
+              records: [
+                buildRecord(),
+                buildRecord({
+                  runtimeId: 'rt-dead',
+                  sessionId: 'session-dead',
+                  sessionName: 'dead session',
+                  presenceState: 'dead',
+                }),
+              ],
+            }),
+          ),
+        );
+      }
+      if (url === '/actions/open-terminal') {
+        return new Promise<ReturnType<typeof buildJsonResponse>>((resolve) => {
+          openRequest.resolve = resolve;
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    const harness = await setupAppWithFetch(fetchMock);
+    setShowAll(harness.elements, true);
+    expandAllRepoGroups(harness.elements.list);
+
+    getCardOpenButton(getCards(harness.elements.list)[1]!).click();
+    expect(getCardOpenButton(getCards(harness.elements.list)[1]!).disabled).toBe(true);
+
+    setShowAll(harness.elements, false);
+    expect(getCards(harness.elements.list)).toHaveLength(1);
+
+    setShowAll(harness.elements, true);
+    expandAllRepoGroups(harness.elements.list);
+
+    const deadOpenButton = getCardOpenButton(getCards(harness.elements.list)[1]!);
+    expect(deadOpenButton.disabled).toBe(false);
+    expect(deadOpenButton.textContent).toBe('↗');
+    expect(deadOpenButton.getAttribute('data-state')).toBeNull();
+
+    openRequest.resolve?.(
+      buildJsonResponse({ ok: true, status: 'requested', message: 'Terminal open requested.' }),
+    );
+    await flushMicrotasks();
+
+    expect(getCardOpenButton(getCards(harness.elements.list)[1]!).textContent).toBe('↗');
   });
 
   it('renders thinking as one accessible brain icon with a CSS orbit affordance', async () => {

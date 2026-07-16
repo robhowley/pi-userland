@@ -290,6 +290,7 @@ h2 {
 }
 
 .card {
+  position: relative;
   background: transparent;
   border: 0;
   border-bottom: 1px solid var(--color-divider);
@@ -310,7 +311,56 @@ h2 {
 .card-toggle {
   display: grid;
   gap: 6px;
-  padding: 10px 34px 10px 12px;
+  padding: 10px 68px 10px 12px;
+}
+
+.card-open {
+  position: absolute;
+  top: 9px;
+  right: 34px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  min-width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 0.86rem;
+  line-height: 1;
+  opacity: 0.78;
+}
+
+.card-open:hover,
+.card-open:focus-visible {
+  border-color: transparent;
+  background: rgba(129, 161, 193, 0.1);
+  color: var(--color-text);
+  opacity: 1;
+}
+
+.card-open:disabled {
+  cursor: not-allowed;
+  background: transparent;
+  opacity: 0.44;
+}
+
+.card-open[data-state='pending'] {
+  color: var(--color-accent);
+  opacity: 0.72;
+}
+
+.card-open[data-state='success'] {
+  color: var(--color-accent);
+  opacity: 1;
+}
+
+.card-open[data-state='failure'] {
+  color: var(--color-danger);
+  opacity: 0.95;
 }
 
 .repo-header::after,

@@ -172,6 +172,12 @@ async function findMissingRuntimeAsset(
     };
   }
 
+  if (!(await pathExists(runtimePaths.openTerminalHelperScriptPath))) {
+    return {
+      message: `Open-terminal helper not found: ${runtimePaths.openTerminalHelperScriptPath}`,
+    };
+  }
+
   if (!(await pathExists(runtimePaths.webRootPath))) {
     return {
       message: `Web assets not found: ${runtimePaths.webRootPath}`,

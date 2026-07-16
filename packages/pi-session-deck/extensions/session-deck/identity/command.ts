@@ -11,16 +11,14 @@ import {
   type SessionDeckBrowserOpenSelectedResult,
 } from '../browser.js';
 import { orchestrateCreateWorktree } from '../worktree/orchestrate.js';
-import {
-  openTerminalFocusTarget,
-  type TerminalOpenOptions,
-  type TerminalOpenResult,
-} from '../terminal-open.js';
-import {
-  lookupIdentityTerminalFocusTarget,
-  type IdentityTerminalFocusLookupOptions,
-  type IdentityTerminalFocusLookupResult,
-} from './terminal-focus.js';
+import { openTerminalForRuntime, type OpenTerminalForRuntimeOptions } from './open.js';
+export {
+  openIterm2TerminalForRuntime,
+  openTerminalForRuntime,
+  type OpenIterm2TerminalForRuntimeOptions,
+  type OpenTerminalForRuntimeOptions,
+  type SessionDeckOpenSelectedResult,
+} from './open.js';
 import {
   formatReapedRecord,
   formatSessionDeckDiagnosticLine,
@@ -79,15 +77,6 @@ export interface PresenceCommandRegistration {
 export interface PresenceCommandAPI {
   registerCommand: (name: string, options: PresenceCommandRegistration) => void;
 }
-
-export type SessionDeckOpenSelectedResult =
-  | TerminalOpenResult
-  | Extract<IdentityTerminalFocusLookupResult, { ok: false }>;
-
-export type OpenTerminalForRuntimeOptions = IdentityTerminalFocusLookupOptions &
-  TerminalOpenOptions;
-
-export type OpenIterm2TerminalForRuntimeOptions = OpenTerminalForRuntimeOptions;
 
 export interface RegisterSessionDeckCommandOptions extends ReadSessionDeckSnapshotOptions {
   isSessionDeckIterm2Command?: typeof isSessionDeckIterm2Command;
@@ -293,41 +282,6 @@ export function parseSessionDeckCommandArgs(args: string): ParsedSessionDeckComm
   return json
     ? { ok: true, all, reap, identity, json: true, sessionId: sessionId! }
     : { ok: true, all, reap, identity, json: false, sessionId: null };
-}
-
-export async function openTerminalForRuntime(
-  runtimeId: string,
-  options: OpenTerminalForRuntimeOptions = {},
-): Promise<SessionDeckOpenSelectedResult> {
-  const lookupResult = await lookupIdentityTerminalFocusTarget(runtimeId, {
-    ...(options.identityDirectory === undefined
-      ? {}
-      : { identityDirectory: options.identityDirectory }),
-    ...(options.readFile === undefined ? {} : { readFile: options.readFile }),
-  });
-  if (!lookupResult.ok) {
-    return lookupResult;
-  }
-
-  return openTerminalFocusTarget(lookupResult.target, {
-    ...(options.platform === undefined ? {} : { platform: options.platform }),
-    ...(options.execFile === undefined ? {} : { execFile: options.execFile }),
-    ...(options.env === undefined ? {} : { env: options.env }),
-    ...(options.bridgeMode === undefined ? {} : { bridgeMode: options.bridgeMode }),
-    ...(options.pythonBridgeClient === undefined
-      ? {}
-      : { pythonBridgeClient: options.pythonBridgeClient }),
-    ...(options.tmuxPreflightTimeoutMs === undefined
-      ? {}
-      : { tmuxPreflightTimeoutMs: options.tmuxPreflightTimeoutMs }),
-  });
-}
-
-export async function openIterm2TerminalForRuntime(
-  runtimeId: string,
-  options: OpenIterm2TerminalForRuntimeOptions = {},
-): Promise<SessionDeckOpenSelectedResult> {
-  return openTerminalForRuntime(runtimeId, options);
 }
 
 export function renderSessionDeckView(

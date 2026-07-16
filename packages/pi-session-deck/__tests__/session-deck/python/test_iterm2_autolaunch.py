@@ -66,6 +66,7 @@ class TempRuntime:
         self.socket_path = self.root / "socket-parent" / "iterm2.sock"
         self.state_path = self.root / "install.json"
         self.helper_path = self.root / "dist/extensions/session-deck/worktree/action-cli.js"
+        self.open_helper_path = self.root / "dist/extensions/session-deck/iterm2/open-action-cli.js"
         self.payload = {
             "schemaVersion": 1,
             "product": "pi-session-deck-iterm2",
@@ -96,6 +97,10 @@ class TempRuntime:
     def write_helper(self, source: str) -> None:
         self.helper_path.parent.mkdir(parents=True, exist_ok=True)
         self.helper_path.write_text(source, encoding="utf-8")
+
+    def write_open_helper(self, source: str) -> None:
+        self.open_helper_path.parent.mkdir(parents=True, exist_ok=True)
+        self.open_helper_path.write_text(source, encoding="utf-8")
 
 
 def assert_browser_safe_payload(case: unittest.TestCase, payload: dict, *private_strings: str) -> None:
@@ -531,6 +536,10 @@ class ImportAndConfigTests(unittest.TestCase):
             config.runtime.create_worktree_helper_path,
             fixture.root / "dist/extensions/session-deck/worktree/action-cli.js",
         )
+        self.assertEqual(
+            config.runtime.open_terminal_helper_path,
+            fixture.root / "dist/extensions/session-deck/iterm2/open-action-cli.js",
+        )
         AUTO.validate_runtime_assets(config)
 
         (fixture.web_root / "app.js").unlink()
@@ -575,6 +584,10 @@ class ImportAndConfigTests(unittest.TestCase):
         self.assertEqual(
             health["createWorktreeHelperScriptPath"],
             str(config.runtime.create_worktree_helper_path),
+        )
+        self.assertEqual(
+            health["openTerminalHelperScriptPath"],
+            str(config.runtime.open_terminal_helper_path),
         )
         self.assertNotIn(effective_command_path.value, json.dumps(health))
 
@@ -677,6 +690,249 @@ class ImportAndConfigTests(unittest.TestCase):
                 "repoIntent": {"repoName": "project", "candidateRuntimeIds": ["rt-1"]},
             },
         )
+
+    def test_toolbelt_open_terminal_action_requires_token_and_runs_helper(self):
+        fixture = TempRuntime(self)
+        fixture.write_open_helper(
+            "import json, sys\n"
+            "payload = json.loads(sys.stdin.read())\n"
+            "if payload != {'runtimeId': 'rt-1'}:\n"
+            "    print(json.dumps({'ok': False, 'status': 'failed', 'message': 'bad request'}))\n"
+            "    raise SystemExit(1)\n"
+            "print(json.dumps({'ok': True, 'status': 'requested', 'message': 'Terminal open requested.'}))\n"
+        )
+        fixture.payload["runtime"]["nodeExecutablePath"] = sys.executable
+        fixture.write_state()
+        config = fixture.config()
+        http = AUTO.start_http_server(config, make_effective_command_path())
+        self.addCleanup(http.close)
+        base_url = f"http://127.0.0.1:{http.port}"
+
+        token = http.server.session_deck_action_token
+        payload = json.dumps({"runtimeId": "rt-1"}).encode("utf-8")
+        request = Request(
+            f"{base_url}/actions/open-terminal",
+            data=payload,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "X-Session-Deck-Action-Token": token,
+            },
+        )
+
+        with urlopen(request, timeout=1.0) as response:
+            action_result = json.loads(response.read().decode("utf-8"))
+        self.assertEqual(
+            action_result,
+            {"ok": True, "status": "requested", "message": "Terminal open requested."},
+        )
+
+        missing_token = Request(
+            f"{base_url}/actions/open-terminal",
+            data=payload,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with self.assertRaises(HTTPError) as raised:
+            urlopen(missing_token, timeout=1.0)
+        self.assertEqual(raised.exception.code, 403)
+
+        unknown_route = Request(
+            f"{base_url}/actions/open",
+            data=payload,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "X-Session-Deck-Action-Token": token,
+            },
+        )
+        with self.assertRaises(HTTPError) as unknown_raised:
+            urlopen(unknown_route, timeout=1.0)
+        self.assertEqual(unknown_raised.exception.code, 404)
+
+    def test_run_open_terminal_action_invokes_fixed_helper_argv_with_live_bridge_env(self):
+        fixture = TempRuntime(self)
+        fixture.write_open_helper("# sentinel\n")
+        config = fixture.config()
+        effective_path = make_effective_command_path("/shell/bin:/usr/bin")
+        captured: dict[str, object] = {}
+
+        def fake_run(args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                stdout=json.dumps(
+                    {"ok": True, "status": "requested", "message": "Terminal open requested."}
+                ),
+                stderr="",
+            )
+
+        with mock.patch.object(AUTO.subprocess, "run", side_effect=fake_run):
+            status_code, payload = AUTO.run_open_terminal_action(
+                config, '{"runtimeId":"rt-1"}', effective_path
+            )
+
+        self.assertEqual(status_code, 200)
+        self.assertEqual(payload["ok"], True)
+        self.assertEqual(
+            captured["args"],
+            [str(config.runtime.node_executable_path), str(config.runtime.open_terminal_helper_path)],
+        )
+        kwargs = captured["kwargs"]
+        self.assertEqual(kwargs["input"], '{"runtimeId":"rt-1"}')
+        self.assertTrue(kwargs["capture_output"])
+        self.assertFalse(kwargs["check"])
+        self.assertTrue(kwargs["text"])
+        self.assertEqual(kwargs["timeout"], AUTO.ACTION_HELPER_TIMEOUT_SECONDS)
+        self.assertNotIn("shell", kwargs)
+        self.assertEqual(kwargs["env"]["PATH"], effective_path.value)
+        self.assertEqual(
+            kwargs["env"][AUTO.OPEN_TERMINAL_BRIDGE_SOCKET_ENV],
+            str(config.runtime.bridge_socket_path),
+        )
+
+    def test_run_open_terminal_action_returns_browser_safe_helper_missing_failure(self):
+        fixture = TempRuntime(self)
+        fixture.payload["runtime"]["nodeExecutablePath"] = sys.executable
+        fixture.write_state()
+
+        status_code, payload = AUTO.run_open_terminal_action(
+            fixture.config(), "{}", make_effective_command_path()
+        )
+
+        self.assertEqual(status_code, 503)
+        self.assertEqual(
+            payload, AUTO.helper_failure_payload(AUTO.OPEN_TERMINAL_HELPER_UNAVAILABLE_MESSAGE)
+        )
+        assert_browser_safe_payload(self, payload, str(fixture.root), str(fixture.open_helper_path))
+
+    def test_run_open_terminal_action_reports_indeterminate_helper_timeout(self):
+        fixture = TempRuntime(self)
+        fixture.write_open_helper("import time\ntime.sleep(0.05)\nprint('{}')\n")
+        fixture.payload["runtime"]["nodeExecutablePath"] = sys.executable
+        fixture.write_state()
+        original_timeout = AUTO.ACTION_HELPER_TIMEOUT_SECONDS
+        AUTO.ACTION_HELPER_TIMEOUT_SECONDS = 0.01
+        self.addCleanup(setattr, AUTO, "ACTION_HELPER_TIMEOUT_SECONDS", original_timeout)
+
+        status_code, payload = AUTO.run_open_terminal_action(
+            fixture.config(), "{}", make_effective_command_path()
+        )
+
+        self.assertEqual(status_code, 504)
+        self.assertEqual(payload, AUTO.helper_failure_payload(AUTO.OPEN_TERMINAL_HELPER_TIMEOUT_MESSAGE))
+        self.assertIn("may have reached iTerm2", payload["message"])
+        assert_browser_safe_payload(self, payload, str(fixture.root), str(fixture.open_helper_path))
+
+    def test_run_open_terminal_action_rejects_invalid_helper_json_non_object_and_extra_keys(self):
+        fixture = TempRuntime(self)
+        fixture.payload["runtime"]["nodeExecutablePath"] = sys.executable
+        fixture.write_state()
+
+        for source in (
+            "print('/private/tmp/helper-output')\n",
+            "import json\nprint(json.dumps(['not', 'an', 'object']))\n",
+            "import json\nprint(json.dumps({'ok': True, 'status': 'requested', 'message': 'ok', 'socketPath': '/tmp/private.sock'}))\n",
+            "import json\nprint(json.dumps({'ok': False, 'status': 'failed', 'reason': 'terminal-missing', 'message': '/tmp/private.sock'}))\n",
+        ):
+            with self.subTest(source=source):
+                fixture.write_open_helper(source)
+                status_code, payload = AUTO.run_open_terminal_action(
+                    fixture.config(), "{}", make_effective_command_path()
+                )
+
+                self.assertEqual(status_code, 500)
+                self.assertEqual(
+                    payload,
+                    AUTO.helper_failure_payload(AUTO.OPEN_TERMINAL_HELPER_INVALID_RESPONSE_MESSAGE),
+                )
+                assert_browser_safe_payload(
+                    self,
+                    payload,
+                    str(fixture.root),
+                    str(fixture.open_helper_path),
+                    "/private/tmp/helper-output",
+                    "/tmp/private.sock",
+                )
+
+    def test_run_open_terminal_action_maps_nonzero_validation_and_semantic_failures(self):
+        fixture = TempRuntime(self)
+        fixture.payload["runtime"]["nodeExecutablePath"] = sys.executable
+        fixture.write_state()
+
+        fixture.write_open_helper(
+            "import json\n"
+            "print(json.dumps({'ok': False, 'status': 'failed', 'message': 'runtimeId must be a string.'}))\n"
+            "raise SystemExit(1)\n"
+        )
+        invalid_status, invalid_payload = AUTO.run_open_terminal_action(
+            fixture.config(), "{}", make_effective_command_path()
+        )
+        self.assertEqual(invalid_status, 400)
+        self.assertEqual(
+            invalid_payload,
+            {"ok": False, "status": "failed", "message": "runtimeId must be a string."},
+        )
+
+        fixture.write_open_helper(
+            "import json\n"
+            "print(json.dumps({'ok': False, 'status': 'failed', 'reason': 'terminal-missing', 'message': 'No openable terminal target is available for this session.'}))\n"
+        )
+        semantic_status, semantic_payload = AUTO.run_open_terminal_action(
+            fixture.config(), "{}", make_effective_command_path()
+        )
+        self.assertEqual(semantic_status, 200)
+        self.assertEqual(semantic_payload["ok"], False)
+        self.assertEqual(semantic_payload["reason"], "terminal-missing")
+
+    def test_toolbelt_open_terminal_route_rejects_invalid_content_type_and_body_size(self):
+        fixture = TempRuntime(self)
+        config = fixture.config()
+        http = AUTO.start_http_server(config, make_effective_command_path())
+        self.addCleanup(http.close)
+        base_url = f"http://127.0.0.1:{http.port}"
+        token = http.server.session_deck_action_token
+
+        invalid_content_type = Request(
+            f"{base_url}/actions/open-terminal",
+            data=b"{}",
+            method="POST",
+            headers={
+                "Content-Type": "text/plain",
+                "X-Session-Deck-Action-Token": token,
+            },
+        )
+        with self.assertRaises(HTTPError) as invalid_content_type_raised:
+            urlopen(invalid_content_type, timeout=1.0)
+        self.assertEqual(invalid_content_type_raised.exception.code, 415)
+
+        empty_body = Request(
+            f"{base_url}/actions/open-terminal",
+            data=b"",
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "X-Session-Deck-Action-Token": token,
+            },
+        )
+        with self.assertRaises(HTTPError) as empty_body_raised:
+            urlopen(empty_body, timeout=1.0)
+        self.assertEqual(empty_body_raised.exception.code, 413)
+
+        oversized_request = Request(
+            f"{base_url}/actions/open-terminal",
+            data=b"x" * (AUTO.ACTION_BODY_LIMIT_BYTES + 1),
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "X-Session-Deck-Action-Token": token,
+            },
+        )
+        with self.assertRaises(HTTPError) as oversized_request_raised:
+            urlopen(oversized_request, timeout=1.0)
+        self.assertEqual(oversized_request_raised.exception.code, 413)
 
     def test_run_create_worktree_action_returns_browser_safe_helper_missing_failure(self):
         fixture = TempRuntime(self)
@@ -949,6 +1205,24 @@ class BridgeRuntimeTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(connection.commands, [])
         self.assertEqual(connection.events, [])
+
+    async def test_bridge_opens_tmux_in_a_new_window_when_no_current_window_exists(self):
+        fixture = TempRuntime(self)
+        bridge, connection = await self.start_bridge(fixture)
+        connection.app.current_terminal_window = None
+
+        with mock.patch.object(AUTO.shutil, "which", return_value="/bridge/effective/bin/tmux"):
+            result = await unix_json_request(
+                bridge.socket_path,
+                (json.dumps({"tmuxAttachArgv": VALID_TMUX_ATTACH_ARGV}) + "\n").encode("utf-8"),
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(
+            connection.commands,
+            ["/bridge/effective/bin/tmux -S '/tmp/tmux socket/default' attach-session -E -t '$1'"],
+        )
+        self.assertEqual(connection.events, ["app.activate", "window.activate", "tab.select"])
 
     async def test_bridge_reuses_existing_focus_behavior(self):
         fixture = TempRuntime(self)
