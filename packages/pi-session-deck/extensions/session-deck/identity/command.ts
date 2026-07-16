@@ -5,7 +5,12 @@ import {
   runSessionDeckIterm2Command,
 } from '../iterm2/command.js';
 import { readSessionDeckSnapshot, type ReadSessionDeckSnapshotOptions } from '../reader.js';
-import { SessionDeckBrowser, type SessionDeckBrowserOpenSelectedResult } from '../browser.js';
+import {
+  SessionDeckBrowser,
+  type SessionDeckBrowserCreateWorktree,
+  type SessionDeckBrowserOpenSelectedResult,
+} from '../browser.js';
+import { orchestrateCreateWorktree } from '../worktree/orchestrate.js';
 import {
   openTerminalFocusTarget,
   type TerminalOpenOptions,
@@ -92,6 +97,7 @@ export interface RegisterSessionDeckCommandOptions extends ReadSessionDeckSnapsh
   unlink?: ReapPresenceRecordsOptions['unlink'];
   openTerminal?: (runtimeId: string) => Promise<SessionDeckBrowserOpenSelectedResult>;
   openIterm2Terminal?: (runtimeId: string) => Promise<SessionDeckBrowserOpenSelectedResult>;
+  createWorktree?: SessionDeckBrowserCreateWorktree;
 }
 
 export type ParsedSessionDeckCommandArgs =
@@ -188,6 +194,20 @@ export function registerSessionDeckCommand(
           await withTerminalDisplayHints(loadedView.view, getTerminalDisplayHintOptions(options)),
           async () => readVisibleSessionDeckBrowserView(parsedArgs.all, readSnapshot, options),
           openTerminal,
+          options.createWorktree ??
+            ((request, onStatus) =>
+              orchestrateCreateWorktree(request, {
+                onStatus,
+                ...(options.identityDirectory === undefined
+                  ? {}
+                  : { identityDirectory: options.identityDirectory }),
+                ...(options.directory === undefined
+                  ? {}
+                  : { presenceDirectory: options.directory }),
+                ...(options.readFile === undefined ? {} : { readFile: options.readFile }),
+                ...(options.readdir === undefined ? {} : { readdir: options.readdir }),
+                ...(options.now === undefined ? {} : { now: options.now }),
+              })),
         );
         return;
       }
@@ -487,6 +507,7 @@ async function openSessionDeckBrowser(
   initialView: SessionDeckBrowserSnapshot,
   reload: () => Promise<SessionDeckBrowserSnapshot>,
   openTerminal: (runtimeId: string) => Promise<SessionDeckBrowserOpenSelectedResult>,
+  createWorktree: SessionDeckBrowserCreateWorktree,
 ): Promise<void> {
   if (ctx.ui.custom === undefined) {
     return;
@@ -500,6 +521,7 @@ async function openSessionDeckBrowser(
         initialView,
         onClose: () => done(undefined),
         openSelected: (record) => openTerminal(record.runtimeId),
+        createWorktree,
         reload,
         requestRender: () => tui.requestRender(),
         ...(loadedView.reapResult === null

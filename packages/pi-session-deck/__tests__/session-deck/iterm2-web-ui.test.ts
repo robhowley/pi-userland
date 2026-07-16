@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
   SessionDeckDiagnostic,
@@ -87,7 +88,9 @@ class FakeClassList {
 
 interface FakeEvent {
   type: string;
+  key?: string;
   preventDefault?: () => void;
+  stopPropagation?: () => void;
 }
 
 type EventListener = (event: FakeEvent) => void;
@@ -164,6 +167,8 @@ class FakeElement extends FakeNode {
 }
 
 class FakeButtonElement extends FakeElement {
+  disabled = false;
+
   constructor() {
     super('button');
   }
@@ -171,6 +176,7 @@ class FakeButtonElement extends FakeElement {
 
 class FakeInputElement extends FakeElement {
   checked = false;
+  value = '';
 
   constructor() {
     super('input');
@@ -219,6 +225,7 @@ interface HarnessElements {
 interface AppHarness {
   elements: HarnessElements;
   pushSnapshot: (snapshot: unknown) => void;
+  fetchMock: ReturnType<typeof vi.fn>;
   openMock: ReturnType<typeof vi.fn>;
 }
 
@@ -270,6 +277,22 @@ function buildSnapshot(
   };
 }
 
+function buildBasePreview(baseRef = 'origin/main') {
+  return {
+    ok: true,
+    status: 'resolved',
+    baseRef,
+  };
+}
+
+function buildJsonResponse(payload: unknown, ok = true, status = 200) {
+  return {
+    ok,
+    status,
+    json: async () => payload,
+  };
+}
+
 async function setupApp(snapshots: unknown[]): Promise<AppHarness> {
   const document = new FakeDocument();
   const elements = buildElements(document);
@@ -287,9 +310,18 @@ async function setupApp(snapshots: unknown[]): Promise<AppHarness> {
     };
   });
   const setIntervalMock = vi.fn(() => 1);
+  const setTimeoutMock = vi.fn(() => 1);
+  const clearTimeoutMock = vi.fn();
   const openMock = vi.fn(() => null);
 
-  cleanupGlobals = installBrowserGlobals({ document, fetchMock, setIntervalMock, openMock });
+  cleanupGlobals = installBrowserGlobals({
+    document,
+    fetchMock,
+    setIntervalMock,
+    setTimeoutMock,
+    clearTimeoutMock,
+    openMock,
+  });
 
   await importFreshApp();
   await flushMicrotasks();
@@ -299,6 +331,37 @@ async function setupApp(snapshots: unknown[]): Promise<AppHarness> {
     pushSnapshot: (snapshot) => {
       queue.push(snapshot);
     },
+    fetchMock,
+    openMock,
+  };
+}
+
+async function setupAppWithFetch(fetchMock: ReturnType<typeof vi.fn>): Promise<AppHarness> {
+  const document = new FakeDocument();
+  const elements = buildElements(document);
+  const setIntervalMock = vi.fn(() => 1);
+  const setTimeoutMock = vi.fn(() => 1);
+  const clearTimeoutMock = vi.fn();
+  const openMock = vi.fn(() => null);
+
+  cleanupGlobals = installBrowserGlobals({
+    document,
+    fetchMock,
+    setIntervalMock,
+    setTimeoutMock,
+    clearTimeoutMock,
+    openMock,
+  });
+
+  await importFreshApp();
+  await flushMicrotasks();
+
+  return {
+    elements,
+    pushSnapshot: () => {
+      throw new Error('setupAppWithFetch does not queue snapshots.');
+    },
+    fetchMock,
     openMock,
   };
 }
@@ -319,9 +382,18 @@ async function setupPendingApp(): Promise<{
       }),
   );
   const setIntervalMock = vi.fn(() => 1);
+  const setTimeoutMock = vi.fn(() => 1);
+  const clearTimeoutMock = vi.fn();
   const openMock = vi.fn(() => null);
 
-  cleanupGlobals = installBrowserGlobals({ document, fetchMock, setIntervalMock, openMock });
+  cleanupGlobals = installBrowserGlobals({
+    document,
+    fetchMock,
+    setIntervalMock,
+    setTimeoutMock,
+    clearTimeoutMock,
+    openMock,
+  });
 
   await importFreshApp();
 
@@ -381,11 +453,15 @@ function installBrowserGlobals({
   document,
   fetchMock,
   setIntervalMock,
+  setTimeoutMock,
+  clearTimeoutMock,
   openMock,
 }: {
   document: FakeDocument;
   fetchMock: ReturnType<typeof vi.fn>;
   setIntervalMock: ReturnType<typeof vi.fn>;
+  setTimeoutMock: ReturnType<typeof vi.fn>;
+  clearTimeoutMock: ReturnType<typeof vi.fn>;
   openMock: ReturnType<typeof vi.fn>;
 }): () => void {
   const previous = {
@@ -397,7 +473,12 @@ function installBrowserGlobals({
   };
 
   Reflect.set(globalThis, 'document', document);
-  Reflect.set(globalThis, 'window', { setInterval: setIntervalMock, open: openMock });
+  Reflect.set(globalThis, 'window', {
+    setInterval: setIntervalMock,
+    setTimeout: setTimeoutMock,
+    clearTimeout: clearTimeoutMock,
+    open: openMock,
+  });
   Reflect.set(globalThis, 'fetch', fetchMock);
   Reflect.set(globalThis, 'HTMLButtonElement', FakeButtonElement);
   Reflect.set(globalThis, 'HTMLInputElement', FakeInputElement);
@@ -463,12 +544,28 @@ function getRepoGroups(list: FakeElement): FakeElement[] {
   );
 }
 
+function getRepoHeaderRow(repoGroup: FakeElement): FakeElement {
+  const headerRow = findAllByClass(repoGroup, 'repo-header-row')[0];
+  if (!(headerRow instanceof FakeElement)) {
+    throw new Error('Expected repo header row.');
+  }
+  return headerRow;
+}
+
 function getRepoHeader(repoGroup: FakeElement): FakeButtonElement {
-  const header = repoGroup.childNodes[0];
-  if (!(header instanceof FakeButtonElement) || !header.classList.contains('repo-header')) {
+  const header = findAllByClass(repoGroup, 'repo-header')[0];
+  if (!(header instanceof FakeButtonElement)) {
     throw new Error('Expected repo header button.');
   }
   return header;
+}
+
+function getRepoActionButton(repoGroup: FakeElement): FakeButtonElement {
+  const actionButton = findAllByClass(repoGroup, 'repo-action-button')[0];
+  if (!(actionButton instanceof FakeButtonElement)) {
+    throw new Error('Expected repo action button.');
+  }
+  return actionButton;
 }
 
 function getRepoHeaders(list: FakeElement): FakeButtonElement[] {
@@ -506,8 +603,35 @@ function expandAllRepoGroups(list: FakeElement): void {
   }
 }
 
+function findAllByTag(node: FakeNode, tagName: string): FakeElement[] {
+  const matches: FakeElement[] = [];
+  for (const child of node.childNodes) {
+    if (child instanceof FakeElement && child.tagName === tagName.toUpperCase()) {
+      matches.push(child);
+    }
+    matches.push(...findAllByTag(child, tagName));
+  }
+  return matches;
+}
+
 function getCards(root: FakeNode): FakeElement[] {
   return findAllByClass(root, 'card');
+}
+
+function getPendingWorktreeCards(root: FakeNode): FakeElement[] {
+  return findAllByClass(root, 'pending-worktree');
+}
+
+function getPendingWorktreeActions(root: FakeNode): FakeButtonElement[] {
+  return findAllByClass(root, 'pending-worktree-action').filter(
+    (button): button is FakeButtonElement => button instanceof FakeButtonElement,
+  );
+}
+
+function getPendingWorktreeDismissButtons(root: FakeNode): FakeButtonElement[] {
+  return findAllByClass(root, 'pending-worktree-dismiss').filter(
+    (button): button is FakeButtonElement => button instanceof FakeButtonElement,
+  );
 }
 
 function getExpandedCards(list: FakeElement): FakeElement[] {
@@ -740,6 +864,826 @@ describe('Session Deck iTerm2 web UI', () => {
     );
     expect(findAllByClass(harness.elements.list, 'repo-group-records')).toHaveLength(0);
     expect(getCards(harness.elements.list)).toHaveLength(0);
+  });
+
+  it('renders a sibling + New repo-row action and opens the compact composer', async () => {
+    const harness = await setupApp([buildSnapshot(), buildBasePreview()]);
+    const repoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    const headerRow = getRepoHeaderRow(repoGroup);
+    const header = getRepoHeader(repoGroup);
+    const actionButton = getRepoActionButton(repoGroup);
+
+    expect(actionButton.textContent).toBe('+ New');
+    expect(actionButton.getAttribute('aria-label')).toBe('create new session');
+    expect(actionButton.getAttribute('title')).toBe('create new session');
+    expect(actionButton.parentNode).toBe(headerRow);
+    expect(findAllByClass(repoGroup, 'repo-actions')).toHaveLength(0);
+    expect(findAllByTag(header, 'button')).toHaveLength(0);
+
+    actionButton.click();
+    await flushMicrotasks();
+
+    expect(
+      harness.fetchMock.mock.calls.filter(([url]) => url === '/actions/create-worktree-preview'),
+    ).toHaveLength(1);
+
+    const openedRepoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    const openedActionButton = getRepoActionButton(openedRepoGroup);
+    expect(openedActionButton.textContent).toBe('Cancel');
+    expect(openedActionButton.getAttribute('aria-label')).toBe('cancel new session');
+    expect(openedActionButton.getAttribute('title')).toBe('cancel new session');
+    expect(openedActionButton.parentNode).toBe(getRepoHeaderRow(openedRepoGroup));
+    expect(getRepoHeader(openedRepoGroup).getAttribute('aria-expanded')).toBe('false');
+
+    const form = findAllByClass(openedRepoGroup, 'worktree-form')[0];
+    expect(form).toBeDefined();
+    expect(form!.textContent).toContain('main →');
+    expect(form!.textContent).toContain('Create');
+    expect(form!.textContent).not.toContain('Branch name');
+    expect(form!.textContent).not.toContain('Cancel');
+    expect(form!.textContent).not.toContain('Create session');
+    expect(form!.textContent).not.toContain('worktree path generated automatically');
+    expect(form!.textContent).not.toContain('Base branch resolves on create');
+    expect(form!.textContent).not.toContain('From default branch');
+    expect(form!.textContent).not.toContain('From main');
+    expect(form!.textContent).not.toContain('tmux');
+    expect(form!.textContent).not.toContain('worktree/<');
+
+    const composeRow = findAllByClass(form!, 'worktree-compose-row')[0];
+    expect(composeRow).toBeDefined();
+    expect(findAllByClass(form!, 'worktree-field-header')).toHaveLength(0);
+    expect(findAllByClass(form!, 'worktree-field-label')).toHaveLength(0);
+    expect(findAllByClass(form!, 'worktree-field-meta')[0]?.textContent).toBe('main →');
+
+    const branchInput = findAllByTag(form!, 'input').find(
+      (input) => input.getAttribute('aria-label') === 'Branch name',
+    ) as FakeInputElement | undefined;
+    expect(branchInput).toBeDefined();
+    expect(branchInput!.getAttribute('placeholder')).toBe('feat/feature-name');
+    expect(findAllByTag(form!, 'input').filter((input) => input.type === 'checkbox')).toHaveLength(
+      0,
+    );
+    const branchControl = findAllByClass(form!, 'worktree-branch-control')[0];
+    expect(branchControl).toBeDefined();
+    const buttons = findAllByTag(form!, 'button') as FakeButtonElement[];
+    expect(buttons.map((button) => button.textContent)).toEqual(['Create']);
+    expect(branchInput!.parentNode).toBe(branchControl);
+    expect(buttons[0]?.parentNode).toBe(branchControl);
+    expect(buttons[0]?.classList.contains('worktree-submit-button')).toBe(true);
+    expect(buttons[0]?.disabled).toBe(false);
+  });
+
+  it('ships one-row compact composer input and Create button styling', async () => {
+    const css = await readFile(
+      new URL('../../extensions/session-deck/iterm2/web/style.css', import.meta.url),
+      'utf8',
+    );
+
+    expect(css).toMatch(
+      /\.worktree-form input\[type='text'\]::placeholder\s*\{[\s\S]*color:\s*rgba\(167, 176, 192, 0\.58\);/u,
+    );
+    expect(css).toMatch(
+      /\.worktree-compose-row\s*\{[\s\S]*display:\s*flex;[\s\S]*align-items:\s*center;/u,
+    );
+    expect(css).toMatch(/\.worktree-branch-control\s*\{[\s\S]*height:\s*32px;/u);
+    expect(css).toMatch(
+      /\.worktree-form input\[type='text'\]\s*\{[\s\S]*border-radius:\s*7px 0 0 7px;[\s\S]*font-family:\s*ui-monospace/u,
+    );
+    expect(css).toMatch(
+      /\.worktree-submit-button\s*\{[\s\S]*min-height:\s*32px;[\s\S]*border-radius:\s*0 7px 7px 0;/u,
+    );
+    expect(css).toContain('.worktree-form-feedback');
+    expect(css).toContain('.pending-worktree-actions');
+    expect(css).not.toContain('.worktree-form-actions');
+  });
+
+  it('closes the composer from the header Cancel without posting create-worktree', async () => {
+    const harness = await setupApp([buildSnapshot(), buildBasePreview()]);
+    const repoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+
+    getRepoActionButton(repoGroup).click();
+    await flushMicrotasks();
+
+    const openedRepoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    expect(getRepoActionButton(openedRepoGroup).textContent).toBe('Cancel');
+    getRepoActionButton(openedRepoGroup).click();
+    await flushMicrotasks();
+
+    const rerenderedGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    expect(findAllByClass(rerenderedGroup, 'worktree-form')).toHaveLength(0);
+    expect(getRepoActionButton(rerenderedGroup).textContent).toBe('+ New');
+    expect(getRepoActionButton(rerenderedGroup).getAttribute('aria-label')).toBe(
+      'create new session',
+    );
+    expect(getRepoHeader(rerenderedGroup).getAttribute('aria-expanded')).toBe('false');
+    expect(
+      harness.fetchMock.mock.calls.filter(([url]) => url === '/actions/create-worktree'),
+    ).toHaveLength(0);
+  });
+
+  it('cancels a loading preview without posting create-worktree and ignores the stale preview response', async () => {
+    let previewRequestCount = 0;
+    let resolveFirstPreview: (() => void) | null = null;
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url === '/snapshot.json') {
+        return buildJsonResponse(buildSnapshot());
+      }
+      if (url === '/actions/create-worktree-preview') {
+        previewRequestCount += 1;
+        if (previewRequestCount === 1) {
+          return new Promise((resolve) => {
+            resolveFirstPreview = () => {
+              resolve(buildJsonResponse(buildBasePreview('origin/main')));
+            };
+          });
+        }
+        return buildJsonResponse(buildBasePreview('origin/release'));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    const harness = await setupAppWithFetch(fetchMock);
+    const repoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+
+    getRepoActionButton(repoGroup).click();
+    const loadingRepoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    const loadingForm = findAllByClass(loadingRepoGroup, 'worktree-form')[0]!;
+    const loadingBranchInput = findAllByTag(loadingForm, 'input').find(
+      (input) => input.getAttribute('aria-label') === 'Branch name',
+    ) as FakeInputElement;
+    loadingBranchInput.value = 'rh/cancel-me';
+    loadingBranchInput.dispatchEvent({ type: 'input' });
+
+    getRepoActionButton(loadingRepoGroup).click();
+    await flushMicrotasks();
+
+    expect(
+      findAllByClass(getRepoGroupByLabel(harness.elements.list, 'owner/project'), 'worktree-form'),
+    ).toHaveLength(0);
+    expect(
+      harness.fetchMock.mock.calls.filter(([url]) => url === '/actions/create-worktree'),
+    ).toHaveLength(0);
+
+    const finishFirstPreview = resolveFirstPreview as (() => void) | null;
+    if (finishFirstPreview) {
+      finishFirstPreview();
+    }
+    await flushMicrotasks();
+
+    const canceledRepoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    expect(findAllByClass(canceledRepoGroup, 'worktree-form')).toHaveLength(0);
+    expect(getRepoActionButton(canceledRepoGroup).textContent).toBe('+ New');
+
+    getRepoActionButton(canceledRepoGroup).click();
+    await flushMicrotasks();
+
+    const reopenedRepoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    const reopenedForm = findAllByClass(reopenedRepoGroup, 'worktree-form')[0]!;
+    const reopenedBranchInput = findAllByTag(reopenedForm, 'input').find(
+      (input) => input.getAttribute('aria-label') === 'Branch name',
+    ) as FakeInputElement;
+    expect(reopenedBranchInput.value).toBe('');
+    expect(reopenedForm.textContent).toContain('release →');
+  });
+
+  it('keeps the composer independent from the repo disclosure', async () => {
+    const harness = await setupApp([buildSnapshot(), buildBasePreview()]);
+    const repoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+
+    getRepoActionButton(repoGroup).click();
+    await flushMicrotasks();
+
+    const openedRepoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    expect(getRepoHeader(openedRepoGroup).getAttribute('aria-expanded')).toBe('false');
+    expect(findAllByClass(openedRepoGroup, 'repo-group-records')).toHaveLength(0);
+    expect(findAllByClass(openedRepoGroup, 'worktree-form')).toHaveLength(1);
+    expect(getRepoActionButton(openedRepoGroup).textContent).toBe('Cancel');
+
+    getRepoHeader(openedRepoGroup).click();
+
+    const expandedRepoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    expect(getRepoHeader(expandedRepoGroup).getAttribute('aria-expanded')).toBe('true');
+    expect(findAllByClass(expandedRepoGroup, 'repo-group-records')).toHaveLength(1);
+    expect(findAllByClass(expandedRepoGroup, 'worktree-form')).toHaveLength(1);
+    expect(getRepoActionButton(expandedRepoGroup).textContent).toBe('Cancel');
+
+    getRepoHeader(expandedRepoGroup).click();
+
+    const collapsedRepoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    expect(getRepoHeader(collapsedRepoGroup).getAttribute('aria-expanded')).toBe('false');
+    expect(findAllByClass(collapsedRepoGroup, 'repo-group-records')).toHaveLength(0);
+    expect(findAllByClass(collapsedRepoGroup, 'worktree-form')).toHaveLength(1);
+    expect(getRepoActionButton(collapsedRepoGroup).textContent).toBe('Cancel');
+
+    getRepoActionButton(collapsedRepoGroup).click();
+    const closedRepoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    expect(getRepoHeader(closedRepoGroup).getAttribute('aria-expanded')).toBe('false');
+    expect(findAllByClass(closedRepoGroup, 'worktree-form')).toHaveLength(0);
+    expect(getRepoActionButton(closedRepoGroup).textContent).toBe('+ New');
+  });
+
+  it('disables Create and does not post when the preview is loading', async () => {
+    const harness = await setupApp([buildSnapshot(), buildBasePreview()]);
+    const repoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+
+    getRepoActionButton(repoGroup).click();
+
+    const loadingRepoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    const form = findAllByClass(loadingRepoGroup, 'worktree-form')[0]!;
+    expect(findAllByClass(form, 'worktree-field-meta')[0]?.textContent).toBe('Resolving…');
+    const submitButton = findAllByTag(form, 'button')[0] as FakeButtonElement;
+    expect(submitButton.textContent).toBe('Create');
+    expect(submitButton.disabled).toBe(true);
+
+    const branchInput = findAllByTag(form, 'input').find(
+      (input) => input.getAttribute('aria-label') === 'Branch name',
+    ) as FakeInputElement;
+    branchInput.value = 'rh/feature-name';
+    branchInput.dispatchEvent({ type: 'input' });
+    form.dispatchEvent({ type: 'submit' });
+    await flushMicrotasks();
+
+    expect(
+      harness.fetchMock.mock.calls.filter(([url]) => url === '/actions/create-worktree'),
+    ).toHaveLength(0);
+  });
+
+  it('shows the safe unresolved repo preview error inline and keeps Create disabled', async () => {
+    const harness = await setupApp([
+      buildSnapshot(),
+      {
+        ok: false,
+        status: 'failed',
+        reason: 'repo-intent-unresolved',
+        message: 'Could not resolve the selected repository.',
+        recoverable: true,
+      },
+    ]);
+    const repoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+
+    getRepoActionButton(repoGroup).click();
+    await flushMicrotasks();
+
+    const openedRepoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    const form = findAllByClass(openedRepoGroup, 'worktree-form')[0]!;
+    expect(findAllByClass(form, 'worktree-field-meta')[0]?.textContent).toBe('Base unavailable');
+    expect(form.textContent).toContain('Could not resolve the selected repository.');
+    const submitButton = findAllByTag(form, 'button')[0] as FakeButtonElement;
+    expect(submitButton.textContent).toBe('Create');
+    expect(submitButton.disabled).toBe(true);
+
+    const branchInput = findAllByTag(form, 'input').find(
+      (input) => input.getAttribute('aria-label') === 'Branch name',
+    ) as FakeInputElement;
+    branchInput.value = 'rh/feature-name';
+    branchInput.dispatchEvent({ type: 'input' });
+    form.dispatchEvent({ type: 'submit' });
+    await flushMicrotasks();
+
+    expect(
+      harness.fetchMock.mock.calls.filter(([url]) => url === '/actions/create-worktree'),
+    ).toHaveLength(0);
+  });
+
+  it('shows the safe ambiguous repo preview error inline and keeps Create disabled', async () => {
+    const harness = await setupApp([
+      buildSnapshot(),
+      {
+        ok: false,
+        status: 'failed',
+        reason: 'repo-intent-ambiguous',
+        message: 'The selected repository is ambiguous.',
+        recoverable: true,
+      },
+    ]);
+    const repoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+
+    getRepoActionButton(repoGroup).click();
+    await flushMicrotasks();
+
+    const openedRepoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    const form = findAllByClass(openedRepoGroup, 'worktree-form')[0]!;
+    expect(form.textContent).toContain('The selected repository is ambiguous.');
+    expect((findAllByTag(form, 'button')[0] as FakeButtonElement).disabled).toBe(true);
+  });
+
+  it('closes the composer on Escape without posting create-worktree', async () => {
+    const harness = await setupApp([buildSnapshot(), buildBasePreview()]);
+    const repoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+
+    getRepoActionButton(repoGroup).click();
+    await flushMicrotasks();
+
+    const openedRepoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    const form = findAllByClass(openedRepoGroup, 'worktree-form')[0]!;
+    form.dispatchEvent({ type: 'keydown', key: 'Escape' });
+    await flushMicrotasks();
+
+    const closedRepoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    expect(findAllByClass(closedRepoGroup, 'worktree-form')).toHaveLength(0);
+    expect(getRepoActionButton(closedRepoGroup).textContent).toBe('+ New');
+    expect(
+      harness.fetchMock.mock.calls.filter(([url]) => url === '/actions/create-worktree'),
+    ).toHaveLength(0);
+  });
+
+  it('keeps the composer open with the typed branch on invalid branch submit', async () => {
+    const harness = await setupApp([
+      buildSnapshot(),
+      buildBasePreview(),
+      {
+        ok: false,
+        status: 'failed',
+        worktree: {
+          ok: false,
+          reason: 'invalid-branch',
+          recoverable: true,
+          message: 'Branch name is not valid.',
+        },
+        launch: { requested: false, mode: 'tmux-detached', status: 'not-started' },
+      },
+    ]);
+    const repoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    getRepoActionButton(repoGroup).click();
+    await flushMicrotasks();
+
+    const form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'owner/project'),
+      'worktree-form',
+    )[0]!;
+    const branchInput = findAllByTag(form, 'input').find(
+      (input) => input.getAttribute('aria-label') === 'Branch name',
+    ) as FakeInputElement;
+    branchInput.value = 'bad branch';
+    branchInput.dispatchEvent({ type: 'input' });
+    form.dispatchEvent({ type: 'submit' });
+    await flushMicrotasks();
+
+    const reopenedForm = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'owner/project'),
+      'worktree-form',
+    )[0]!;
+    const reopenedBranchInput = findAllByTag(reopenedForm, 'input').find(
+      (input) => input.getAttribute('aria-label') === 'Branch name',
+    ) as FakeInputElement;
+    expect(reopenedBranchInput.value).toBe('bad branch');
+    expect(reopenedForm.textContent).toContain('Branch name is not valid.');
+    expect(getPendingWorktreeCards(harness.elements.list)).toHaveLength(0);
+  });
+
+  it('keeps the composer open with the typed branch on invalid base submit', async () => {
+    const harness = await setupApp([
+      buildSnapshot(),
+      buildBasePreview(),
+      {
+        ok: false,
+        status: 'failed',
+        worktree: {
+          ok: false,
+          reason: 'invalid-base-ref',
+          recoverable: true,
+          message: 'Base ref does not resolve to a commit.',
+        },
+        launch: { requested: false, mode: 'tmux-detached', status: 'not-started' },
+      },
+    ]);
+    const repoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    getRepoActionButton(repoGroup).click();
+    await flushMicrotasks();
+
+    const form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'owner/project'),
+      'worktree-form',
+    )[0]!;
+    const branchInput = findAllByTag(form, 'input').find(
+      (input) => input.getAttribute('aria-label') === 'Branch name',
+    ) as FakeInputElement;
+    branchInput.value = 'rh/feature-name';
+    branchInput.dispatchEvent({ type: 'input' });
+    form.dispatchEvent({ type: 'submit' });
+    await flushMicrotasks();
+
+    const reopenedForm = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'owner/project'),
+      'worktree-form',
+    )[0]!;
+    const reopenedBranchInput = findAllByTag(reopenedForm, 'input').find(
+      (input) => input.getAttribute('aria-label') === 'Branch name',
+    ) as FakeInputElement;
+    expect(reopenedBranchInput.value).toBe('rh/feature-name');
+    expect(reopenedForm.textContent).toContain('Base ref does not resolve to a commit.');
+    expect(getPendingWorktreeCards(harness.elements.list)).toHaveLength(0);
+  });
+
+  it('keeps the composer open with the typed branch on unresolved repo submit', async () => {
+    const harness = await setupApp([
+      buildSnapshot(),
+      buildBasePreview(),
+      {
+        ok: false,
+        status: 'failed',
+        worktree: {
+          ok: false,
+          reason: 'repo-intent-unresolved',
+          recoverable: true,
+          message: 'Could not resolve the selected repository.',
+        },
+        launch: { requested: false, mode: 'tmux-detached', status: 'not-started' },
+      },
+    ]);
+    const repoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    getRepoActionButton(repoGroup).click();
+    await flushMicrotasks();
+
+    const form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'owner/project'),
+      'worktree-form',
+    )[0]!;
+    const branchInput = findAllByTag(form, 'input').find(
+      (input) => input.getAttribute('aria-label') === 'Branch name',
+    ) as FakeInputElement;
+    branchInput.value = 'rh/feature-name';
+    branchInput.dispatchEvent({ type: 'input' });
+    form.dispatchEvent({ type: 'submit' });
+    await flushMicrotasks();
+
+    const reopenedForm = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'owner/project'),
+      'worktree-form',
+    )[0]!;
+    expect(reopenedForm.textContent).toContain('Could not resolve the selected repository.');
+    expect(
+      (
+        findAllByTag(reopenedForm, 'input').find(
+          (input) => input.getAttribute('aria-label') === 'Branch name',
+        ) as FakeInputElement
+      ).value,
+    ).toBe('rh/feature-name');
+  });
+
+  it('keeps the composer open with the typed branch on ambiguous repo submit', async () => {
+    const harness = await setupApp([
+      buildSnapshot(),
+      buildBasePreview(),
+      {
+        ok: false,
+        status: 'failed',
+        worktree: {
+          ok: false,
+          reason: 'repo-intent-ambiguous',
+          recoverable: true,
+          message: 'The selected repository is ambiguous.',
+        },
+        launch: { requested: false, mode: 'tmux-detached', status: 'not-started' },
+      },
+    ]);
+    const repoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    getRepoActionButton(repoGroup).click();
+    await flushMicrotasks();
+
+    const form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'owner/project'),
+      'worktree-form',
+    )[0]!;
+    const branchInput = findAllByTag(form, 'input').find(
+      (input) => input.getAttribute('aria-label') === 'Branch name',
+    ) as FakeInputElement;
+    branchInput.value = 'rh/feature-name';
+    branchInput.dispatchEvent({ type: 'input' });
+    form.dispatchEvent({ type: 'submit' });
+    await flushMicrotasks();
+
+    const reopenedForm = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'owner/project'),
+      'worktree-form',
+    )[0]!;
+    expect(reopenedForm.textContent).toContain('The selected repository is ambiguous.');
+    expect(
+      (
+        findAllByTag(reopenedForm, 'input').find(
+          (input) => input.getAttribute('aria-label') === 'Branch name',
+        ) as FakeInputElement
+      ).value,
+    ).toBe('rh/feature-name');
+  });
+
+  it('submits exact branchName from the New session composer and includes the preview baseRef', async () => {
+    const harness = await setupApp([
+      buildSnapshot(),
+      buildBasePreview(),
+      {
+        ok: true,
+        status: 'created-and-launched',
+        worktree: {
+          ok: true,
+          status: 'created',
+          branch: 'rh/feature-name',
+          baseRef: 'origin/main',
+          repoName: 'project',
+          qualifiedRepoName: 'owner/project',
+        },
+        launch: {
+          requested: true,
+          ok: true,
+          mode: 'tmux-detached',
+          status: 'launched',
+          message: 'Started a detached tmux Pi session.',
+        },
+      },
+      buildSnapshot(),
+    ]);
+    const repoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    getRepoActionButton(repoGroup).click();
+    await flushMicrotasks();
+    const openedRepoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    const form = findAllByClass(openedRepoGroup, 'worktree-form')[0]!;
+    const branchInput = findAllByTag(form, 'input').find(
+      (input) => input.getAttribute('aria-label') === 'Branch name',
+    ) as FakeInputElement;
+
+    branchInput.value = 'rh/feature-name';
+    branchInput.dispatchEvent({ type: 'input' });
+    form.dispatchEvent({ type: 'submit' });
+    await flushMicrotasks();
+
+    const actionCall = harness.fetchMock.mock.calls.find(
+      ([url]) => url === '/actions/create-worktree',
+    );
+    expect(actionCall).toBeDefined();
+    const requestInit = actionCall![1] as { method?: string; body?: string };
+    expect(requestInit.method).toBe('POST');
+    expect(JSON.parse(requestInit.body ?? '{}')).toMatchObject({
+      repoIntent: {
+        repoName: 'project',
+        qualifiedRepoName: 'owner/project',
+        candidateRuntimeIds: ['rt-1'],
+      },
+      branchName: 'rh/feature-name',
+      baseRef: 'origin/main',
+      launch: { mode: 'tmux-detached' },
+    });
+    expect(JSON.parse(requestInit.body ?? '{}')).not.toHaveProperty('label');
+  });
+
+  it('renders a no-worktree-created preflight failure with doctor guidance', async () => {
+    const harness = await setupApp([
+      buildSnapshot(),
+      buildBasePreview(),
+      {
+        ok: false,
+        status: 'preflight-failed',
+        failurePhase: 'preflight',
+        preflight: {
+          requested: true,
+          ok: false,
+          mode: 'tmux-detached',
+          status: 'failed',
+          reason: 'tmux-unavailable',
+          recoverable: true,
+          message: 'New Pi session requires tmux on PATH; no worktree was created.',
+        },
+        worktree: { requested: false, status: 'not-started' },
+        launch: { requested: false, mode: 'tmux-detached', status: 'not-started' },
+      },
+    ]);
+    const repoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    getRepoActionButton(repoGroup).click();
+    await flushMicrotasks();
+
+    const form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'owner/project'),
+      'worktree-form',
+    )[0]!;
+    const branchInput = findAllByTag(form, 'input').find(
+      (input) => input.getAttribute('aria-label') === 'Branch name',
+    ) as FakeInputElement;
+    branchInput.value = 'rh/feature-name';
+    branchInput.dispatchEvent({ type: 'input' });
+    form.dispatchEvent({ type: 'submit' });
+    await flushMicrotasks();
+
+    expect(harness.elements.list.textContent).toContain('New session blocked');
+    expect(harness.elements.list.textContent).toContain('no worktree was created');
+    expect(harness.elements.list.textContent).toContain('/session-deck iterm2 doctor');
+    expect(harness.elements.list.textContent).not.toContain('Diagnostics');
+    expect(getPendingWorktreeActions(harness.elements.list)).toHaveLength(0);
+    const dismissButtons = getPendingWorktreeDismissButtons(harness.elements.list);
+    expect(dismissButtons).toHaveLength(1);
+    expect(dismissButtons[0]?.getAttribute('aria-label')).toBe('Dismiss New session blocked');
+    expect(
+      findAllByClass(getRepoGroupByLabel(harness.elements.list, 'owner/project'), 'worktree-form'),
+    ).toHaveLength(0);
+
+    dismissButtons[0]?.click();
+    await flushMicrotasks();
+
+    expect(getPendingWorktreeCards(harness.elements.list)).toHaveLength(0);
+  });
+
+  it('renders the pi preflight failure with no-worktree-created guidance', async () => {
+    const harness = await setupApp([
+      buildSnapshot(),
+      buildBasePreview(),
+      {
+        ok: false,
+        status: 'preflight-failed',
+        failurePhase: 'preflight',
+        preflight: {
+          requested: true,
+          ok: false,
+          mode: 'tmux-detached',
+          status: 'failed',
+          reason: 'pi-command-unavailable',
+          recoverable: true,
+          message: 'New Pi session requires the pi executable on PATH; no worktree was created.',
+        },
+        worktree: { requested: false, status: 'not-started' },
+        launch: { requested: false, mode: 'tmux-detached', status: 'not-started' },
+      },
+    ]);
+    const repoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    getRepoActionButton(repoGroup).click();
+    await flushMicrotasks();
+
+    const form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'owner/project'),
+      'worktree-form',
+    )[0]!;
+    const branchInput = findAllByTag(form, 'input').find(
+      (input) => input.getAttribute('aria-label') === 'Branch name',
+    ) as FakeInputElement;
+    branchInput.value = 'rh/feature-name';
+    branchInput.dispatchEvent({ type: 'input' });
+    form.dispatchEvent({ type: 'submit' });
+    await flushMicrotasks();
+
+    expect(harness.elements.list.textContent).toContain('no worktree was created');
+    expect(harness.elements.list.textContent).toContain('install Pi');
+    expect(harness.elements.list.textContent).not.toContain('Diagnostics');
+    expect(getPendingWorktreeActions(harness.elements.list)).toHaveLength(0);
+  });
+
+  it('renders launch success without runtimeId and clears the card after a matching refresh', async () => {
+    const harness = await setupApp([
+      buildSnapshot(),
+      buildBasePreview(),
+      {
+        ok: true,
+        status: 'created-and-launched',
+        worktree: {
+          ok: true,
+          status: 'created',
+          branch: 'rh/feature-name',
+          baseRef: 'origin/main',
+          repoName: 'project',
+          qualifiedRepoName: 'owner/project',
+        },
+        launch: {
+          requested: true,
+          ok: true,
+          mode: 'tmux-detached',
+          status: 'launched',
+          message: 'Started a detached tmux Pi session.',
+        },
+      },
+      buildSnapshot(),
+    ]);
+    const repoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    getRepoActionButton(repoGroup).click();
+    await flushMicrotasks();
+
+    const form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'owner/project'),
+      'worktree-form',
+    )[0]!;
+    const branchInput = findAllByTag(form, 'input').find(
+      (input) => input.getAttribute('aria-label') === 'Branch name',
+    ) as FakeInputElement;
+    branchInput.value = 'rh/feature-name';
+    branchInput.dispatchEvent({ type: 'input' });
+    form.dispatchEvent({ type: 'submit' });
+    await flushMicrotasks();
+
+    expect(harness.elements.list.textContent).toContain('Session launched');
+    expect(harness.elements.list.textContent).toContain(
+      'Pi session launched. Session Deck will pick it up automatically.',
+    );
+    expect(harness.elements.list.textContent).not.toContain('Waiting for session to appear');
+    expect(getPendingWorktreeCards(harness.elements.list)).toHaveLength(1);
+
+    harness.pushSnapshot(
+      buildSnapshot({
+        records: [
+          buildRecord(),
+          buildRecord({
+            runtimeId: 'rt-created',
+            sessionId: 'session-created',
+            sessionName: 'feature',
+            branch: 'rh/feature-name',
+            isLinkedWorktree: true,
+            worktreeLabel: 'feature-name',
+          }),
+        ],
+      }),
+    );
+    harness.elements.refresh.click();
+    await flushMicrotasks();
+
+    expect(getPendingWorktreeCards(harness.elements.list)).toHaveLength(0);
+    expect(harness.elements.list.textContent).toContain('feature');
+  });
+
+  it('renders partial launch failure with retry only, and retry re-posts the original request', async () => {
+    const harness = await setupApp([
+      buildSnapshot(),
+      buildBasePreview(),
+      {
+        ok: false,
+        status: 'partial-launch-failed',
+        failurePhase: 'launch',
+        worktreeRetained: true,
+        worktree: {
+          ok: true,
+          status: 'created',
+          branch: 'rh/feature-name',
+          baseRef: 'origin/main',
+          repoName: 'project',
+          qualifiedRepoName: 'owner/project',
+        },
+        launch: {
+          requested: true,
+          ok: false,
+          mode: 'tmux-detached',
+          status: 'failed',
+          reason: 'spawn-failed',
+          recoverable: true,
+          message: 'Created worktree, but tmux could not start Pi.',
+        },
+      },
+      buildSnapshot(),
+      {
+        ok: true,
+        status: 'reused-and-launched',
+        worktree: {
+          ok: true,
+          status: 'reused',
+          branch: 'rh/feature-name',
+          baseRef: 'origin/main',
+          repoName: 'project',
+          qualifiedRepoName: 'owner/project',
+        },
+        launch: {
+          requested: true,
+          ok: true,
+          mode: 'tmux-detached',
+          status: 'reused-existing',
+          message: 'Reused an existing detached tmux Pi session.',
+        },
+      },
+      buildSnapshot(),
+    ]);
+    const repoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    getRepoActionButton(repoGroup).click();
+    await flushMicrotasks();
+
+    const form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'owner/project'),
+      'worktree-form',
+    )[0]!;
+    const branchInput = findAllByTag(form, 'input').find(
+      (input) => input.getAttribute('aria-label') === 'Branch name',
+    ) as FakeInputElement;
+    branchInput.value = 'rh/feature-name';
+    branchInput.dispatchEvent({ type: 'input' });
+    form.dispatchEvent({ type: 'submit' });
+    await flushMicrotasks();
+
+    expect(harness.elements.list.textContent).toContain('Worktree ready · Pi did not start');
+    expect(harness.elements.list.textContent).toContain('Worktree kept. Pi did not start.');
+    const actions = getPendingWorktreeActions(harness.elements.list);
+    expect(actions.map((button) => button.textContent)).toEqual(['Retry']);
+    expect(harness.elements.list.textContent).not.toContain('Cleanup');
+    expect(harness.elements.list.textContent).not.toContain('Diagnostics');
+
+    const firstRequest = JSON.parse(
+      (
+        harness.fetchMock.mock.calls.find(([url]) => url === '/actions/create-worktree')?.[1] as {
+          body?: string;
+        }
+      )?.body ?? '{}',
+    );
+
+    actions[0]?.click();
+    await flushMicrotasks();
+
+    const createCalls = harness.fetchMock.mock.calls.filter(
+      ([url]) => url === '/actions/create-worktree',
+    );
+    expect(createCalls).toHaveLength(2);
+    expect(JSON.parse((createCalls[1]?.[1] as { body?: string })?.body ?? '{}')).toEqual(
+      firstRequest,
+    );
+    expect(harness.elements.list.textContent).toContain('Session reused');
   });
 
   it('sorts named repo groups case-insensitively and keeps No repo last', async () => {

@@ -6,6 +6,14 @@ const DEFAULT_VISIBLE_STATES = new Set(['live', 'stale']);
 const HOME_PREFIXES = ['/Users/', '/home/'];
 const NO_REPO_GROUP_KEY = 'no-repo';
 const NO_REPO_LABEL = 'No repo';
+const SUCCESS_PENDING_WORKTREE_TTL_MS = 12_000;
+const DOCTOR_COMMAND = '/session-deck iterm2 doctor';
+const INLINE_WORKTREE_FAILURE_REASONS = new Set([
+  'invalid-branch',
+  'invalid-base-ref',
+  'repo-intent-unresolved',
+  'repo-intent-ambiguous',
+]);
 
 const state = {
   snapshot: null,
@@ -15,6 +23,12 @@ const state = {
   loading: false,
   fetchError: null,
   expandedRepoKeys: new Set(),
+  activeWorktreeFormRepoKey: null,
+  worktreeForms: new Map(),
+  worktreeBasePreviews: new Map(),
+  nextWorktreeBasePreviewRequestId: 0,
+  pendingWorktrees: new Map(),
+  highlightedRuntimeId: null,
 };
 
 const elements = {
@@ -77,6 +91,7 @@ async function refreshSnapshot({ source }) {
     state.fetchError = null;
     reconcileSelection();
     reconcileExpandedRepoKeys();
+    reconcilePendingWorktrees();
   } catch (error) {
     state.fetchError = error instanceof Error ? error.message : String(error);
     if (source === 'startup') {
@@ -221,6 +236,64 @@ function reconcileExpandedRepoKeys(repoGroups = createRepoGroups(getVisibleRecor
       state.expandedRepoKeys.delete(expandedRepoKey);
     }
   }
+}
+
+function reconcilePendingWorktrees(repoGroups = createRepoGroups(getVisibleRecords())) {
+  for (const [repoKey, pending] of [...state.pendingWorktrees.entries()]) {
+    if (pending.kind !== 'success') {
+      continue;
+    }
+
+    if (hasObservedPendingWorktreeSuccess(pending, repoGroups)) {
+      clearPendingWorktree(repoKey);
+    }
+  }
+}
+
+function hasObservedPendingWorktreeSuccess(pending, repoGroups) {
+  return repoGroups.some((repoGroup) =>
+    repoGroup.records.some((record) => doesRecordMatchPendingWorktree(record, pending)),
+  );
+}
+
+function doesRecordMatchPendingWorktree(record, pending) {
+  if (typeof pending.runtimeId === 'string' && record.runtimeId === pending.runtimeId) {
+    return true;
+  }
+
+  const request = pending.request;
+  if (
+    !request ||
+    record.branch !== request.branchName ||
+    !repoIntentMatchesRecord(record, request.repoIntent)
+  ) {
+    return false;
+  }
+
+  return record.isLinkedWorktree === true || isNonEmptyString(record.worktreeLabel);
+}
+
+function repoIntentMatchesRecord(record, repoIntent) {
+  if (isNonEmptyString(repoIntent.qualifiedRepoName)) {
+    return record.qualifiedRepoName === repoIntent.qualifiedRepoName;
+  }
+
+  if (!isNonEmptyString(repoIntent.repoName)) {
+    return false;
+  }
+
+  return (
+    record.repoName === repoIntent.repoName ||
+    getQualifiedRepoShortName(record.qualifiedRepoName) === repoIntent.repoName
+  );
+}
+
+function getQualifiedRepoShortName(qualifiedRepoName) {
+  return isNonEmptyString(qualifiedRepoName) ? getRepoShortName(qualifiedRepoName) : null;
+}
+
+function isNonEmptyString(value) {
+  return typeof value === 'string' && value.length > 0;
 }
 
 function createRepoGroups(records) {
@@ -480,7 +553,19 @@ function createRepoGroup(repoGroup) {
     render();
   });
 
-  section.append(header);
+  const headerRow = document.createElement('div');
+  headerRow.className = 'repo-header-row';
+  headerRow.append(header);
+
+  if (repoGroup.kind !== 'no-repo') {
+    headerRow.append(createRepoActionButton(repoGroup));
+  }
+
+  section.append(headerRow);
+
+  if (state.activeWorktreeFormRepoKey === repoGroup.key) {
+    section.append(createWorktreeForm(repoGroup));
+  }
 
   if (isExpanded) {
     const records = document.createElement('div');
@@ -491,6 +576,11 @@ function createRepoGroup(repoGroup) {
     records.setAttribute('aria-label', `${repoGroup.label} sessions`);
     header.setAttribute('aria-controls', recordsId);
 
+    const pending = state.pendingWorktrees.get(repoGroup.key);
+    if (pending) {
+      records.append(createPendingWorktreeCard(repoGroup.key, pending));
+    }
+
     for (const record of repoGroup.records) {
       records.append(createRecordCard(record));
     }
@@ -500,12 +590,561 @@ function createRepoGroup(repoGroup) {
   return section;
 }
 
+function createRepoActionButton(repoGroup) {
+  const isOpen = state.activeWorktreeFormRepoKey === repoGroup.key;
+  const label = isOpen ? 'cancel new session' : 'create new session';
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'repo-action-button';
+  button.textContent = isOpen ? 'Cancel' : '+ New';
+  button.setAttribute('aria-label', label);
+  button.setAttribute('title', label);
+  button.addEventListener('click', (event) => {
+    event.preventDefault?.();
+    event.stopPropagation?.();
+
+    if (isOpen) {
+      closeWorktreeForm(repoGroup.key);
+      return;
+    }
+
+    if (state.pendingWorktrees.get(repoGroup.key)?.kind === 'pending') {
+      return;
+    }
+
+    state.activeWorktreeFormRepoKey = repoGroup.key;
+    if (!state.worktreeForms.has(repoGroup.key)) {
+      state.worktreeForms.set(repoGroup.key, { branchName: '', errorMessage: null });
+    }
+    requestWorktreeBasePreview(repoGroup);
+    render();
+  });
+  return button;
+}
+
+function closeWorktreeForm(repoKey) {
+  clearWorktreeFormState(repoKey);
+  render();
+}
+
+function clearWorktreeFormState(repoKey) {
+  state.worktreeForms.delete(repoKey);
+  state.worktreeBasePreviews.delete(repoKey);
+  if (state.activeWorktreeFormRepoKey === repoKey) {
+    state.activeWorktreeFormRepoKey = null;
+  }
+}
+
+function createWorktreeForm(repoGroup) {
+  const formState = state.worktreeForms.get(repoGroup.key) ?? {
+    branchName: '',
+    errorMessage: null,
+  };
+  const preview = state.worktreeBasePreviews.get(repoGroup.key);
+  const inlineMessage = getWorktreeFormInlineMessage(formState, preview);
+  const form = document.createElement('form');
+  form.className = 'worktree-form';
+  form.addEventListener('submit', (event) => {
+    event.preventDefault?.();
+    submitWorktreeForm(repoGroup, formState);
+  });
+  form.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') {
+      return;
+    }
+    event.preventDefault?.();
+    event.stopPropagation?.();
+    closeWorktreeForm(repoGroup.key);
+  });
+
+  const labelInput = document.createElement('input');
+  labelInput.type = 'text';
+  labelInput.value = formState.branchName;
+  labelInput.setAttribute('aria-label', 'Branch name');
+  labelInput.setAttribute('placeholder', 'feat/feature-name');
+  labelInput.addEventListener('input', () => {
+    formState.branchName = labelInput.value;
+  });
+
+  const fieldMeta = createText(
+    'span',
+    formatWorktreeBasePreviewCopy(preview),
+    'worktree-field-meta',
+  );
+  fieldMeta.setAttribute('data-state', preview?.status ?? 'loading');
+
+  const submit = document.createElement('button');
+  submit.type = 'submit';
+  submit.className = 'worktree-submit-button';
+  submit.textContent = 'Create';
+  submit.disabled =
+    !isResolvedWorktreeBasePreview(preview) || state.pendingWorktrees.has(repoGroup.key);
+
+  const branchControl = document.createElement('div');
+  branchControl.className = 'worktree-branch-control';
+  branchControl.append(labelInput, submit);
+
+  const composeRow = document.createElement('div');
+  composeRow.className = 'worktree-compose-row';
+  composeRow.append(fieldMeta, branchControl);
+
+  form.append(composeRow);
+  if (inlineMessage) {
+    form.append(createText('div', inlineMessage, 'worktree-form-feedback worktree-form-error'));
+  }
+  return form;
+}
+
+function getWorktreeFormInlineMessage(formState, preview) {
+  if (isNonEmptyString(formState.errorMessage)) {
+    return formState.errorMessage;
+  }
+  return preview?.status === 'failed' && isNonEmptyString(preview.message) ? preview.message : null;
+}
+
+function createPendingWorktreeCard(repoKey, pending) {
+  const card = document.createElement('article');
+  card.className = `pending-worktree ${pending.tone}`;
+
+  const header = document.createElement('div');
+  header.className = 'pending-worktree-header';
+  header.append(createText('div', pending.title, 'pending-worktree-title'));
+  if (isPendingWorktreeDismissible(pending)) {
+    header.append(createPendingWorktreeDismissButton(repoKey, pending));
+  }
+
+  card.append(header, createText('div', pending.message, 'pending-worktree-message'));
+
+  if (Array.isArray(pending.actions) && pending.actions.length > 0) {
+    const actions = document.createElement('div');
+    actions.className = 'pending-worktree-actions';
+    for (const action of pending.actions) {
+      actions.append(createPendingWorktreeActionButton(action));
+    }
+    card.append(actions);
+  }
+
+  return card;
+}
+
+function isPendingWorktreeDismissible(pending) {
+  return pending.kind !== 'pending';
+}
+
+function createPendingWorktreeDismissButton(repoKey, pending) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'pending-worktree-dismiss';
+  button.textContent = '×';
+  button.setAttribute('aria-label', `Dismiss ${pending.title}`);
+  button.addEventListener('click', (event) => {
+    event.preventDefault?.();
+    event.stopPropagation?.();
+    clearPendingWorktree(repoKey);
+    render();
+  });
+  return button;
+}
+
+function createPendingWorktreeActionButton(action) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = action.kind
+    ? `pending-worktree-action ${action.kind}`
+    : 'pending-worktree-action';
+  button.textContent = action.label;
+  button.disabled = action.disabled === true;
+  if (isNonEmptyString(action.title)) {
+    button.setAttribute('title', action.title);
+  }
+  button.addEventListener('click', (event) => {
+    event.preventDefault?.();
+    action.onClick?.();
+  });
+  return button;
+}
+
+function requestWorktreeBasePreview(repoGroup) {
+  const requestId = state.nextWorktreeBasePreviewRequestId + 1;
+  state.nextWorktreeBasePreviewRequestId = requestId;
+  state.worktreeBasePreviews.set(repoGroup.key, { status: 'loading', requestId });
+
+  void postWorktreeBasePreview(repoGroup)
+    .then((result) => {
+      const activePreview = state.worktreeBasePreviews.get(repoGroup.key);
+      if (activePreview?.requestId !== requestId) {
+        return;
+      }
+
+      if (result?.ok && typeof result.baseRef === 'string' && result.baseRef.trim().length > 0) {
+        state.worktreeBasePreviews.set(repoGroup.key, {
+          status: 'resolved',
+          baseRef: result.baseRef,
+        });
+      } else {
+        state.worktreeBasePreviews.set(repoGroup.key, {
+          status: 'failed',
+          message: getWorktreeBasePreviewFailureMessage(result),
+        });
+      }
+      render();
+    })
+    .catch(() => {
+      const activePreview = state.worktreeBasePreviews.get(repoGroup.key);
+      if (activePreview?.requestId !== requestId) {
+        return;
+      }
+      state.worktreeBasePreviews.set(repoGroup.key, {
+        status: 'failed',
+        message: 'Base unavailable.',
+      });
+      render();
+    });
+}
+
+function getWorktreeBasePreviewFailureMessage(result) {
+  return isNonEmptyString(result?.message) ? result.message : 'Base unavailable.';
+}
+
+function formatWorktreeBasePreviewCopy(preview) {
+  if (isResolvedWorktreeBasePreview(preview)) {
+    return `${formatBaseRefLabel(preview.baseRef)} →`;
+  }
+  if (preview?.status === 'failed') {
+    return 'Base unavailable';
+  }
+  return 'Resolving…';
+}
+
+function isResolvedWorktreeBasePreview(preview) {
+  return (
+    preview?.status === 'resolved' &&
+    typeof preview.baseRef === 'string' &&
+    preview.baseRef.trim().length > 0
+  );
+}
+
+function formatBaseRefLabel(baseRef) {
+  const trimmed = typeof baseRef === 'string' ? baseRef.trim() : '';
+  if (trimmed.length === 0 || trimmed === 'HEAD') {
+    return 'current HEAD';
+  }
+
+  const normalized = trimmed
+    .replace(/^refs\/remotes\//u, '')
+    .replace(/^refs\/heads\//u, '')
+    .replace(/^origin\//u, '');
+  return normalized.length > 0 ? normalized : trimmed;
+}
+
+function submitWorktreeForm(repoGroup, formState) {
+  const branchName = formState.branchName.trim();
+  const preview = state.worktreeBasePreviews.get(repoGroup.key);
+  if (
+    branchName.length === 0 ||
+    state.pendingWorktrees.has(repoGroup.key) ||
+    !isResolvedWorktreeBasePreview(preview)
+  ) {
+    return;
+  }
+
+  const request = buildCreateWorktreeRequest(repoGroup, branchName, preview.baseRef);
+  formState.branchName = branchName;
+  formState.errorMessage = null;
+  setPendingWorktree(repoGroup.key, {
+    kind: 'pending',
+    title: 'New session',
+    message: 'Creating worktree…',
+    tone: 'pending',
+  });
+  state.expandedRepoKeys.add(repoGroup.key);
+  state.activeWorktreeFormRepoKey = null;
+  render();
+
+  void postCreateWorktreeAction(request)
+    .then(async (result) => {
+      const inlineFailureMessage = getRecoverableInlineWorktreeFailureMessage(result);
+      if (inlineFailureMessage !== null) {
+        clearPendingWorktree(repoGroup.key);
+        state.worktreeForms.set(repoGroup.key, {
+          branchName,
+          errorMessage: inlineFailureMessage,
+        });
+        state.activeWorktreeFormRepoKey = repoGroup.key;
+        render();
+        return;
+      }
+
+      clearWorktreeFormState(repoGroup.key);
+      applyWorktreeActionResult(repoGroup.key, request, result);
+      render();
+      if (shouldRefreshAfterWorktreeActionResult(result)) {
+        await refreshSnapshot({ source: 'manual' });
+      }
+    })
+    .catch((error) => {
+      clearWorktreeFormState(repoGroup.key);
+      setPendingWorktree(repoGroup.key, {
+        kind: 'failure',
+        title: 'New session failed',
+        message: `Create worktree failed: ${error instanceof Error ? error.message : String(error)}`,
+        tone: 'failed',
+      });
+      render();
+    });
+}
+
+function buildWorktreeRepoIntent(repoGroup) {
+  return {
+    repoName: getRepoShortName(repoGroup.label),
+    qualifiedRepoName: repoGroup.kind === 'qualified' ? repoGroup.label : null,
+    candidateRuntimeIds: repoGroup.records.map((record) => record.runtimeId),
+  };
+}
+
+function buildCreateWorktreeRequest(repoGroup, branchName, baseRef) {
+  return {
+    repoIntent: buildWorktreeRepoIntent(repoGroup),
+    branchName,
+    baseRef,
+    launch: { mode: 'tmux-detached' },
+  };
+}
+
+async function postWorktreeBasePreview(repoGroup) {
+  const response = await fetch('/actions/create-worktree-preview', {
+    method: 'POST',
+    cache: 'no-store',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'X-Session-Deck-Action-Token': getActionToken(),
+    },
+    body: JSON.stringify({
+      action: 'preview-base-ref',
+      repoIntent: buildWorktreeRepoIntent(repoGroup),
+    }),
+  });
+
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload?.message ?? `HTTP ${response.status}`);
+  }
+  return payload;
+}
+
+async function postCreateWorktreeAction(request) {
+  const response = await fetch('/actions/create-worktree', {
+    method: 'POST',
+    cache: 'no-store',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'X-Session-Deck-Action-Token': getActionToken(),
+    },
+    body: JSON.stringify(request),
+  });
+
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload?.message ?? `HTTP ${response.status}`);
+  }
+  return payload;
+}
+
+function getRecoverableInlineWorktreeFailureMessage(result) {
+  return result?.ok === false &&
+    result?.status === 'failed' &&
+    INLINE_WORKTREE_FAILURE_REASONS.has(result.worktree?.reason)
+    ? (result.worktree?.message ?? 'New session request is invalid.')
+    : null;
+}
+
+function applyWorktreeActionResult(repoKey, request, result) {
+  setPendingWorktree(repoKey, summarizeWorktreeActionResult(repoKey, request, result));
+  const runtimeId = getActionResultRuntimeId(result);
+  if (runtimeId) {
+    state.highlightedRuntimeId = runtimeId;
+  }
+}
+
+function shouldRefreshAfterWorktreeActionResult(result) {
+  return result?.status !== 'preflight-failed';
+}
+
+function retryWorktreeAction(repoKey, request) {
+  setPendingWorktree(repoKey, {
+    kind: 'pending',
+    title: 'Retrying launch',
+    message: 'Retrying Pi launch…',
+    tone: 'pending',
+  });
+  state.expandedRepoKeys.add(repoKey);
+  render();
+
+  void postCreateWorktreeAction(request)
+    .then(async (result) => {
+      applyWorktreeActionResult(repoKey, request, result);
+      render();
+      if (shouldRefreshAfterWorktreeActionResult(result)) {
+        await refreshSnapshot({ source: 'manual' });
+      }
+    })
+    .catch((error) => {
+      setPendingWorktree(repoKey, {
+        kind: 'failure',
+        title: 'Retry failed',
+        message: `Create worktree failed: ${error instanceof Error ? error.message : String(error)}`,
+        tone: 'failed',
+      });
+      render();
+    });
+}
+
+function summarizeWorktreeActionResult(repoKey, request, result) {
+  if (result?.status === 'preflight-failed') {
+    return {
+      kind: 'failure',
+      title: 'New session blocked',
+      message: getPreflightFailureMessage(result.preflight),
+      tone: 'failed',
+    };
+  }
+
+  if (result?.status === 'partial-launch-failed') {
+    return {
+      kind: 'partial',
+      title: 'Worktree ready · Pi did not start',
+      message: getPartialLaunchFailureMessage(result.launch),
+      tone: 'partial',
+      actions: buildPartialLaunchActions(repoKey, request),
+    };
+  }
+
+  if (!result?.ok) {
+    return {
+      kind: 'failure',
+      title: 'New session failed',
+      message: result.worktree?.message ?? 'New session failed.',
+      tone: 'failed',
+    };
+  }
+
+  if (!result.launch?.requested) {
+    return {
+      kind: 'success',
+      title: 'Worktree ready',
+      message: 'Worktree created.',
+      tone: 'ready',
+      request,
+      autoDismissAfterMs: SUCCESS_PENDING_WORKTREE_TTL_MS,
+    };
+  }
+
+  return {
+    kind: 'success',
+    title:
+      result.status === 'reused-and-launched' || result.launch.status === 'reused-existing'
+        ? 'Session reused'
+        : 'Session launched',
+    message:
+      result.status === 'reused-and-launched' || result.launch.status === 'reused-existing'
+        ? 'Reused the managed Pi session. Session Deck will pick it up automatically.'
+        : 'Pi session launched. Session Deck will pick it up automatically.',
+    tone: 'ready',
+    request,
+    runtimeId: getActionResultRuntimeId(result),
+    autoDismissAfterMs: SUCCESS_PENDING_WORKTREE_TTL_MS,
+  };
+}
+
+function getActionResultRuntimeId(result) {
+  return result?.launch?.ok && isNonEmptyString(result.launch.runtimeId)
+    ? result.launch.runtimeId
+    : null;
+}
+
+function getPreflightFailureMessage(preflight) {
+  switch (preflight?.reason) {
+    case 'tmux-unavailable':
+      return `New Pi session requires tmux on PATH; no worktree was created. Run ${DOCTOR_COMMAND} or install tmux.`;
+    case 'pi-command-unavailable':
+      return `New Pi session requires the pi executable on PATH; no worktree was created. Run ${DOCTOR_COMMAND} or install Pi.`;
+    default:
+      return isNonEmptyString(preflight?.message)
+        ? preflight.message
+        : `New Pi session prerequisites are unavailable; no worktree was created. Run ${DOCTOR_COMMAND}.`;
+  }
+}
+
+function getPartialLaunchFailureMessage(launch) {
+  switch (launch?.reason) {
+    case 'tmux-unavailable':
+      return `Worktree kept. Pi did not start because tmux is not available. Run ${DOCTOR_COMMAND} or install tmux, then retry.`;
+    case 'pi-command-unavailable':
+      return `Worktree kept. Pi did not start because the pi executable is not available. Run ${DOCTOR_COMMAND} or install Pi, then retry.`;
+    case 'tmux-name-collision':
+      return 'Worktree kept. Pi did not start because the generated tmux session name is already in use. Retry after resolving the collision.';
+    case 'presence-timeout':
+      return 'Worktree kept. Session Deck could not confirm the Pi launch. Retry after confirming the session can start.';
+    case 'spawn-failed':
+      return 'Worktree kept. Pi did not start. Retry after fixing the launch issue.';
+    default:
+      return isNonEmptyString(launch?.message)
+        ? `${launch.message} Retry after fixing the launch issue.`
+        : 'Worktree kept. Pi did not start. Retry after fixing the launch issue.';
+  }
+}
+
+function buildPartialLaunchActions(repoKey, request) {
+  return [
+    {
+      label: 'Retry',
+      kind: 'primary',
+      onClick: () => {
+        retryWorktreeAction(repoKey, request);
+      },
+    },
+  ];
+}
+
+function setPendingWorktree(repoKey, pending) {
+  clearPendingWorktree(repoKey);
+  const nextPending = { ...pending };
+  if (
+    typeof nextPending.autoDismissAfterMs === 'number' &&
+    typeof window.setTimeout === 'function'
+  ) {
+    nextPending.timeoutId = window.setTimeout(() => {
+      if (state.pendingWorktrees.get(repoKey) === nextPending) {
+        state.pendingWorktrees.delete(repoKey);
+        render();
+      }
+    }, nextPending.autoDismissAfterMs);
+  }
+  state.pendingWorktrees.set(repoKey, nextPending);
+}
+
+function clearPendingWorktree(repoKey) {
+  const pending = state.pendingWorktrees.get(repoKey);
+  if (pending && pending.timeoutId !== undefined && typeof window.clearTimeout === 'function') {
+    window.clearTimeout(pending.timeoutId);
+  }
+  state.pendingWorktrees.delete(repoKey);
+}
+
+function getActionToken() {
+  const tokenElement = document.getElementById('session-deck-action-token');
+  return tokenElement?.getAttribute?.('content') ?? '';
+}
+
 function createRecordCard(record) {
   const isExpanded = state.detailVisible && record.runtimeId === state.selectedRuntimeId;
   const title = getDisplayTitle(record);
   const card = document.createElement('article');
   card.className = `card ${record.presenceState}`;
   card.classList.toggle('expanded', isExpanded);
+  card.classList.toggle('highlighted', state.highlightedRuntimeId === record.runtimeId);
   card.setAttribute('role', 'listitem');
 
   const toggle = document.createElement('button');

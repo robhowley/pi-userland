@@ -1,0 +1,412 @@
+#!/usr/bin/env node
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { orchestrateCreateWorktree } from './orchestrate.js';
+import { resolveWorktreeBasePreview } from './preview.js';
+import type {
+  BrowserSafeCreateWorktreeActionResult,
+  BrowserSafeCreateWorktreeLaunchResult,
+  BrowserSafeCreateWorktreePhaseResult,
+  BrowserSafeWorktreeBasePreviewResult,
+  CreateWorktreeActionRequest,
+  CreateWorktreeActionResult,
+  CreateWorktreeFailureReason,
+  CreateWorktreeLaunchFailureReason,
+  CreateWorktreeLaunchSuccess,
+  CreateWorktreeSuccess,
+  WorktreeBasePreviewRequest,
+  WorktreeBasePreviewResult,
+} from './types.js';
+
+const FORBIDDEN_BROWSER_FIELDS = new Set([
+  'label',
+  'cwd',
+  'gitRoot',
+  'worktreeRoot',
+  'path',
+  'manualCommand',
+  'manualAttachCommand',
+  'tmuxSessionName',
+  'tmuxTarget',
+  'paneId',
+  'itermSessionId',
+  'tmuxArgv',
+  'tmuxCommand',
+  'piArgv',
+  'piCommand',
+  'shell',
+  'command',
+  'socketPath',
+  'sessionFile',
+]);
+
+async function main(): Promise<void> {
+  const input = await readStdin();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(input);
+  } catch (error) {
+    writeJson({ ok: false, status: 'failed', message: `Invalid JSON: ${getErrorMessage(error)}` });
+    process.exitCode = 1;
+    return;
+  }
+
+  const action = getRequestedAction(parsed);
+  if (!action.ok) {
+    writeJson({ ok: false, status: 'failed', message: action.message });
+    process.exitCode = 1;
+    return;
+  }
+
+  if (action.action === 'preview-base-ref') {
+    const request = normalizeBasePreviewRequest(parsed);
+    if (!request.ok) {
+      writeJson({ ok: false, status: 'failed', message: request.message });
+      process.exitCode = 1;
+      return;
+    }
+
+    const result = await resolveWorktreeBasePreview(request.request);
+    writeJson(toBrowserSafeWorktreeBasePreviewResult(result));
+    return;
+  }
+
+  const request = normalizeActionRequest(parsed);
+  if (!request.ok) {
+    writeJson({ ok: false, status: 'failed', message: request.message });
+    process.exitCode = 1;
+    return;
+  }
+
+  const result = await orchestrateCreateWorktree(request.request);
+  writeJson(toBrowserSafeCreateWorktreeActionResult(result));
+}
+
+export function normalizeActionRequest(
+  parsed: unknown,
+): { ok: true; request: CreateWorktreeActionRequest } | { ok: false; message: string } {
+  const repoIntent = normalizeRepoIntent(parsed);
+  if (!repoIntent.ok) {
+    return repoIntent;
+  }
+
+  if (!isRecord(parsed) || typeof parsed['branchName'] !== 'string') {
+    return { ok: false, message: 'Expected repoIntent and branchName.' };
+  }
+
+  const launch = parsed['launch'];
+  if (launch !== undefined) {
+    if (!isRecord(launch) || launch['mode'] !== 'tmux-detached') {
+      return { ok: false, message: 'launch.mode must be tmux-detached when provided.' };
+    }
+  }
+
+  return {
+    ok: true,
+    request: {
+      repoIntent: repoIntent.repoIntent,
+      branchName: parsed['branchName'],
+      ...optionalStringField(parsed, 'baseRef'),
+      launch: { mode: 'tmux-detached' },
+    },
+  };
+}
+
+export function normalizeBasePreviewRequest(
+  parsed: unknown,
+): { ok: true; request: WorktreeBasePreviewRequest } | { ok: false; message: string } {
+  const repoIntent = normalizeRepoIntent(parsed);
+  if (!repoIntent.ok) {
+    return repoIntent;
+  }
+
+  return {
+    ok: true,
+    request: {
+      repoIntent: repoIntent.repoIntent,
+    },
+  };
+}
+
+function getRequestedAction(
+  parsed: unknown,
+): { ok: true; action: 'create-worktree' | 'preview-base-ref' } | { ok: false; message: string } {
+  if (!isRecord(parsed)) {
+    return { ok: false, message: 'Request body must be a JSON object.' };
+  }
+
+  const action = parsed['action'];
+  if (action === undefined) {
+    return { ok: true, action: 'create-worktree' };
+  }
+  if (action === 'create-worktree' || action === 'preview-base-ref') {
+    return { ok: true, action };
+  }
+  return { ok: false, message: 'Unsupported worktree helper action.' };
+}
+
+function normalizeRepoIntent(parsed: unknown):
+  | {
+      ok: true;
+      repoIntent: WorktreeBasePreviewRequest['repoIntent'];
+    }
+  | { ok: false; message: string } {
+  if (!isRecord(parsed)) {
+    return { ok: false, message: 'Request body must be a JSON object.' };
+  }
+
+  const forbidden = findForbiddenField(parsed);
+  if (forbidden !== null) {
+    return { ok: false, message: `Field is not accepted by this action boundary: ${forbidden}` };
+  }
+
+  const repoIntent = parsed['repoIntent'];
+  if (!isRecord(repoIntent)) {
+    return { ok: false, message: 'Expected repoIntent.' };
+  }
+
+  const candidateRuntimeIds = repoIntent['candidateRuntimeIds'];
+  if (
+    !Array.isArray(candidateRuntimeIds) ||
+    !candidateRuntimeIds.every((value) => typeof value === 'string')
+  ) {
+    return { ok: false, message: 'repoIntent.candidateRuntimeIds must be an array of strings.' };
+  }
+
+  return {
+    ok: true,
+    repoIntent: {
+      candidateRuntimeIds,
+      ...optionalStringField(repoIntent, 'repoName'),
+      ...optionalStringField(repoIntent, 'qualifiedRepoName'),
+      ...optionalStringField(repoIntent, 'preferredRuntimeId'),
+    },
+  };
+}
+
+export function toBrowserSafeCreateWorktreeActionResult(
+  result: CreateWorktreeActionResult,
+): BrowserSafeCreateWorktreeActionResult {
+  if (result.status === 'preflight-failed') {
+    return {
+      ...result,
+      preflight: {
+        ...result.preflight,
+        message: toBrowserSafePreflightFailureMessage(result.preflight.reason),
+      },
+    };
+  }
+
+  if (result.status === 'failed') {
+    return {
+      ...result,
+      worktree: {
+        ...result.worktree,
+        message: toBrowserSafeWorktreeFailureMessage(result.worktree.reason),
+      },
+    };
+  }
+
+  const worktree = toBrowserSafeWorktreeSuccess(result.worktree);
+
+  if (result.status === 'partial-launch-failed') {
+    return {
+      ...result,
+      worktree,
+      launch: {
+        requested: result.launch.requested,
+        ok: result.launch.ok,
+        mode: result.launch.mode,
+        status: result.launch.status,
+        reason: result.launch.reason,
+        recoverable: result.launch.recoverable,
+        message: toBrowserSafeLaunchFailureMessage(result.launch.reason),
+      },
+    };
+  }
+
+  if (result.status === 'worktree-created' || result.status === 'worktree-reused') {
+    return { ...result, worktree, launch: result.launch };
+  }
+
+  if (result.status === 'created-and-launched' || result.status === 'reused-and-launched') {
+    return {
+      ...result,
+      worktree,
+      launch: toBrowserSafeLaunchSuccess(result.launch),
+    };
+  }
+
+  throw new Error('Unhandled worktree action result status.');
+}
+
+export function toBrowserSafeWorktreeBasePreviewResult(
+  result: WorktreeBasePreviewResult,
+): BrowserSafeWorktreeBasePreviewResult {
+  if (result.ok) {
+    return result;
+  }
+
+  return {
+    ...result,
+    message: toBrowserSafeRepoIntentFailureMessage(result.reason),
+  };
+}
+
+function toBrowserSafeRepoIntentFailureMessage(
+  reason: 'repo-intent-unresolved' | 'repo-intent-ambiguous',
+): string {
+  switch (reason) {
+    case 'repo-intent-unresolved':
+      return 'Could not resolve the selected repository.';
+    case 'repo-intent-ambiguous':
+      return 'The selected repository is ambiguous.';
+  }
+}
+
+function toBrowserSafePreflightFailureMessage(
+  reason: Extract<CreateWorktreeLaunchFailureReason, 'tmux-unavailable' | 'pi-command-unavailable'>,
+): string {
+  switch (reason) {
+    case 'tmux-unavailable':
+      return 'New Pi session requires tmux on PATH; no worktree was created.';
+    case 'pi-command-unavailable':
+      return 'New Pi session requires the pi executable on PATH; no worktree was created.';
+  }
+}
+
+function toBrowserSafeWorktreeFailureMessage(reason: CreateWorktreeFailureReason): string {
+  switch (reason) {
+    case 'invalid-request':
+      return 'Create-worktree request is invalid.';
+    case 'repo-intent-unresolved':
+      return toBrowserSafeRepoIntentFailureMessage(reason);
+    case 'repo-intent-ambiguous':
+      return toBrowserSafeRepoIntentFailureMessage(reason);
+    case 'invalid-label':
+      return 'Could not derive a worktree path segment from the branch name.';
+    case 'invalid-branch':
+      return 'Branch name is not valid.';
+    case 'invalid-base-ref':
+      return 'Base ref does not resolve to a commit.';
+    case 'path-collision':
+      return 'A worktree path is already in use.';
+    case 'branch-collision':
+      return 'A worktree branch is already in use.';
+    case 'git-failed':
+      return 'Git could not create the worktree.';
+    case 'lock-busy':
+      return 'Another create-worktree operation is already in progress.';
+  }
+}
+
+function toBrowserSafeLaunchFailureMessage(reason: CreateWorktreeLaunchFailureReason): string {
+  switch (reason) {
+    case 'tmux-unavailable':
+      return 'Created worktree, but tmux is not available.';
+    case 'pi-command-unavailable':
+      return 'Created worktree, but the pi executable is not available.';
+    case 'tmux-name-collision':
+      return 'Created worktree, but an existing tmux session uses the generated name.';
+    case 'spawn-failed':
+      return 'Created worktree, but tmux could not start Pi.';
+    case 'presence-timeout':
+      return 'Created worktree, but Session Deck could not observe the Pi session.';
+  }
+}
+
+function toBrowserSafeWorktreeSuccess(
+  worktree: CreateWorktreeSuccess,
+): Extract<BrowserSafeCreateWorktreePhaseResult, { ok: true }> {
+  return {
+    ok: worktree.ok,
+    status: worktree.status,
+    branch: worktree.branch,
+    baseRef: worktree.baseRef,
+    repoName: worktree.repoName,
+    qualifiedRepoName: worktree.qualifiedRepoName,
+    ...(worktree.warning === undefined ? {} : { warning: worktree.warning }),
+  };
+}
+
+function toBrowserSafeLaunchSuccess(
+  launch: CreateWorktreeLaunchSuccess,
+): Extract<BrowserSafeCreateWorktreeLaunchResult, { requested: true; ok: true }> {
+  return {
+    requested: launch.requested,
+    ok: launch.ok,
+    mode: launch.mode,
+    status: launch.status,
+    ...(launch.runtimeId === undefined ? {} : { runtimeId: launch.runtimeId }),
+    ...(launch.sessionId === undefined ? {} : { sessionId: launch.sessionId }),
+    message: launch.message,
+    ...(launch.warning === undefined ? {} : { warning: launch.warning }),
+  };
+}
+
+function findForbiddenField(value: unknown, prefix = ''): string | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  for (const [key, child] of Object.entries(value)) {
+    const path = prefix.length === 0 ? key : `${prefix}.${key}`;
+    if (FORBIDDEN_BROWSER_FIELDS.has(key)) {
+      return path;
+    }
+    const nested = findForbiddenField(child, path);
+    if (nested !== null) {
+      return nested;
+    }
+  }
+
+  return null;
+}
+
+function optionalStringField<T extends string>(
+  record: Record<string, unknown>,
+  key: T,
+): Partial<Record<T, string>> {
+  const value = record[key];
+  return typeof value === 'string' && value.trim().length > 0
+    ? ({ [key]: value } as Partial<Record<T, string>>)
+    : {};
+}
+
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+function writeJson(payload: unknown): void {
+  process.stdout.write(`${JSON.stringify(payload)}\n`);
+}
+
+function isRecord(candidate: unknown): candidate is Record<string, unknown> {
+  return typeof candidate === 'object' && candidate !== null && !Array.isArray(candidate);
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error && error.message.length > 0 ? error.message : String(error);
+}
+
+function isMainModule(): boolean {
+  return (
+    process.argv[1] !== undefined &&
+    import.meta.url === pathToFileURL(resolve(process.argv[1])).href
+  );
+}
+
+if (isMainModule()) {
+  void main().catch(() => {
+    writeJson({
+      ok: false,
+      status: 'failed',
+      message: 'Worktree helper action failed. Run /session-deck iterm2 doctor for details.',
+    });
+    process.exitCode = 1;
+  });
+}

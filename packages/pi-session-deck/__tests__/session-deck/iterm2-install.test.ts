@@ -11,6 +11,8 @@ import {
 import {
   doctorSessionDeckIterm2Install,
   pingSessionDeckIterm2Bridge,
+  type SessionDeckIterm2ExecutableStatus,
+  type SessionDeckIterm2LiveLaunchPrereqResult,
 } from '../../extensions/session-deck/iterm2/doctor.js';
 import { installSessionDeckIterm2 } from '../../extensions/session-deck/iterm2/install.js';
 import { uninstallSessionDeckIterm2 } from '../../extensions/session-deck/iterm2/uninstall.js';
@@ -63,6 +65,14 @@ async function createRuntimePaths(
     'iterm2',
     'snapshot-cli.js',
   );
+  const createWorktreeHelperScriptPath = join(
+    root,
+    'dist',
+    'extensions',
+    'session-deck',
+    'worktree',
+    'action-cli.js',
+  );
   const webRootPath = join(root, 'extensions', 'session-deck', 'iterm2', 'web');
   const autolaunchSourcePath = join(root, 'extensions', 'session-deck', 'iterm2', 'autolaunch.py');
   const socketRoot = await mkdtemp('/tmp/psd-iterm2-sock-');
@@ -70,9 +80,11 @@ async function createRuntimePaths(
   const bridgeSocketPath = join(socketRoot, 'iterm2.sock');
 
   await mkdir(dirname(snapshotHelperPath), { recursive: true });
+  await mkdir(dirname(createWorktreeHelperScriptPath), { recursive: true });
   await mkdir(webRootPath, { recursive: true });
   await mkdir(dirname(autolaunchSourcePath), { recursive: true });
   await writeFile(snapshotHelperPath, 'console.log("snapshot")\n', 'utf8');
+  await writeFile(createWorktreeHelperScriptPath, 'console.log("action")\n', 'utf8');
   await writeFile(join(webRootPath, 'index.html'), '<!doctype html>\n', 'utf8');
   if (options.includeAppJs !== false) {
     await writeFile(join(webRootPath, 'app.js'), 'console.log("app")\n', 'utf8');
@@ -85,8 +97,9 @@ async function createRuntimePaths(
   return {
     packageRoot: root,
     packageVersion: '1.2.3',
-    nodeExecutablePath: '/usr/local/bin/node',
+    nodeExecutablePath: '/runtime/node/bin/node',
     snapshotHelperPath,
+    createWorktreeHelperScriptPath,
     webRootPath,
     autolaunchSourcePath,
     bridgeSocketPath,
@@ -107,6 +120,29 @@ async function createPingServer(socketPath: string): Promise<void> {
     server.once('error', reject);
     server.listen(socketPath, resolve);
   });
+}
+
+function availableExecutable(path: string): SessionDeckIterm2ExecutableStatus {
+  return { status: 'available', path };
+}
+
+function missingExecutable(): SessionDeckIterm2ExecutableStatus {
+  return { status: 'missing' };
+}
+
+function makeLiveLaunchPrereqs(
+  tmux: SessionDeckIterm2ExecutableStatus,
+  pi: SessionDeckIterm2ExecutableStatus,
+  pathProvenance: string = 'configured user shell at runtime',
+): SessionDeckIterm2LiveLaunchPrereqResult {
+  return {
+    status: 'live',
+    report: {
+      pathProvenance,
+      tmux,
+      pi,
+    },
+  };
 }
 
 describe('session-deck iterm2 install + doctor + uninstall', () => {
@@ -164,6 +200,10 @@ describe('session-deck iterm2 install + doctor + uninstall', () => {
         bridgeSocketPath: runtimePaths.bridgeSocketPath,
       },
     });
+    const rawState = await readFile(statePath, 'utf8');
+    expect(rawState).not.toContain('"PATH"');
+    expect(rawState).not.toContain('tmuxExecutablePath');
+    expect(rawState).not.toContain('piExecutablePath');
     expect((await stat(dirname(statePath))).mode & 0o777).toBe(0o700);
     expect((await stat(statePath)).mode & 0o777).toBe(0o600);
     expect((await stat(expectedScriptPath)).mode & 0o777).toBe(0o755);
@@ -251,6 +291,15 @@ describe('session-deck iterm2 install + doctor + uninstall', () => {
     const result = await doctorSessionDeckIterm2Install({
       homeDirectory,
       platform: 'darwin',
+      readLiveLaunchPrereqs: async () =>
+        makeLiveLaunchPrereqs(
+          availableExecutable('/runtime/tmux/bin/tmux'),
+          availableExecutable('/runtime/pi/bin/pi'),
+        ),
+      resolveExecutable: async (command) =>
+        command === 'tmux'
+          ? availableExecutable('/runtime/tmux/bin/tmux')
+          : availableExecutable('/runtime/pi/bin/pi'),
       runtimePaths,
     });
 
@@ -266,10 +315,24 @@ describe('session-deck iterm2 install + doctor + uninstall', () => {
       `Web app is missing: ${join(runtimePaths.webRootPath, 'app.js')}`,
     );
     expect(result.message).toContain(`Bridge socket is missing: ${runtimePaths.bridgeSocketPath}`);
+    expect(result.message).toContain(
+      '- launch prerequisites (local Pi doctor process PATH (context only)):',
+    );
+    expect(result.message).toContain('  - tmux: available (/runtime/tmux/bin/tmux)');
+    expect(result.message).toContain('  - pi: available (/runtime/pi/bin/pi)');
+    expect(result.message).toContain(
+      '- launch prerequisites (effective PATH used by + New): unavailable',
+    );
+    expect(result.message).toContain(
+      'Installed files do not reload an already-running AutoLaunch process; fully quit and reopen iTerm2 after install changes, then rerun /session-deck iterm2 doctor.',
+    );
+    expect(result.message).toContain(
+      '- manual: enable iTerm2 Python API if needed, then fully quit and reopen iTerm2 after install changes.',
+    );
     expect(await readFile(scriptPath, 'utf8')).toBe('# drifted script\n');
   });
 
-  it('doctor accepts a valid install when the recorded bridge socket answers ping', async () => {
+  it('doctor reports local context and authoritative live + New PATH provenance', async () => {
     const homeDirectory = await createTempHome();
     const runtimePaths = await createRuntimePaths(join(homeDirectory, 'package-root'));
     await createPingServer(runtimePaths.bridgeSocketPath);
@@ -284,11 +347,70 @@ describe('session-deck iterm2 install + doctor + uninstall', () => {
     const result = await doctorSessionDeckIterm2Install({
       homeDirectory,
       platform: 'darwin',
+      readLiveLaunchPrereqs: async () =>
+        makeLiveLaunchPrereqs(
+          availableExecutable('/runtime/tmux/bin/tmux'),
+          availableExecutable('/runtime/pi/bin/pi'),
+          'configured user shell at runtime',
+        ),
+      resolveExecutable: async (command) =>
+        command === 'tmux' ? availableExecutable('/runtime/tmux/bin/tmux') : missingExecutable(),
       runtimePaths,
     });
 
     expect(result.level).toBe('info');
     expect(result.message).toContain(`- bridge socket: ${runtimePaths.bridgeSocketPath} (live)`);
+    expect(result.message).toContain(
+      '- launch prerequisites (local Pi doctor process PATH (context only)):',
+    );
+    expect(result.message).toContain('  - tmux: available (/runtime/tmux/bin/tmux)');
+    expect(result.message).toContain('  - pi: missing');
+    expect(result.message).toContain('- launch prerequisites (effective PATH used by + New):');
+    expect(result.message).toContain('  - provenance: configured user shell at runtime');
+    expect(result.message).toContain('  - tmux: available (/runtime/tmux/bin/tmux)');
+    expect(result.message).toContain('  - pi: available (/runtime/pi/bin/pi)');
+    const statePayload = await readFile(getSessionDeckIterm2StatePath(homeDirectory), 'utf8');
+    expect(statePayload).not.toContain('/runtime/tmux/bin/tmux');
+    expect(statePayload).not.toContain('/runtime/pi/bin/pi');
+  });
+
+  it('doctor reports unavailable live + New PATH with actionable restart guidance', async () => {
+    const homeDirectory = await createTempHome();
+    const runtimePaths = await createRuntimePaths(join(homeDirectory, 'package-root'));
+
+    await installSessionDeckIterm2({
+      homeDirectory,
+      now: () => new Date('2026-07-10T12:00:00.000Z'),
+      platform: 'darwin',
+      runtimePaths,
+    });
+
+    const result = await doctorSessionDeckIterm2Install({
+      homeDirectory,
+      pingBridge: async () => ({ status: 'live', message: 'Bridge socket answered ping.' }),
+      platform: 'darwin',
+      readLiveLaunchPrereqs: async () => ({
+        status: 'unavailable',
+        message: 'live AutoLaunch launch-prerequisite report could not be queried.',
+      }),
+      resolveExecutable: async (command) =>
+        command === 'tmux'
+          ? availableExecutable('/runtime/tmux/bin/tmux')
+          : availableExecutable('/runtime/pi/bin/pi'),
+      runtimePaths,
+    });
+
+    expect(result.level).toBe('warning');
+    expect(result.message).toContain(
+      '- launch prerequisites (effective PATH used by + New): unavailable',
+    );
+    expect(result.message).toContain(
+      'live AutoLaunch launch-prerequisite report could not be queried.',
+    );
+    expect(result.message).toContain(
+      'Installed files do not reload an already-running AutoLaunch process; fully quit and reopen iTerm2 after install changes, then rerun /session-deck iterm2 doctor.',
+    );
+    expect(result.message).not.toContain('  - provenance:');
   });
 
   it('ping liveness distinguishes a non-socket path from a live bridge socket', async () => {
@@ -327,12 +449,75 @@ describe('session-deck iterm2 install + doctor + uninstall', () => {
           sha256: hashSessionDeckIterm2Content(AUTOLAUNCH_SOURCE),
         },
         runtime: {
-          nodeExecutablePath: '/usr/local/bin/node',
+          nodeExecutablePath: '/runtime/node/bin/node',
           snapshotHelperPath: '/tmp/snapshot-cli.js',
           webRootPath: '/tmp/web',
           bridgeSocketPath: '/tmp/iterm2.sock',
         },
         legacy: true,
+      }),
+    ],
+    [
+      'runtime PATH field',
+      JSON.stringify({
+        schemaVersion: 1,
+        product: SESSION_DECK_ITERM2_PRODUCT,
+        packageVersion: '1.2.3',
+        installedAt: '2026-07-10T12:00:00.000Z',
+        scriptsDir: '/tmp/scripts',
+        script: {
+          path: '/tmp/scripts/AutoLaunch/session_deck.py',
+          sha256: hashSessionDeckIterm2Content(AUTOLAUNCH_SOURCE),
+        },
+        runtime: {
+          nodeExecutablePath: '/runtime/node/bin/node',
+          snapshotHelperPath: '/tmp/snapshot-cli.js',
+          webRootPath: '/tmp/web',
+          bridgeSocketPath: '/tmp/iterm2.sock',
+          PATH: '/runtime/tools/bin:/usr/bin',
+        },
+      }),
+    ],
+    [
+      'runtime tmuxExecutablePath field',
+      JSON.stringify({
+        schemaVersion: 1,
+        product: SESSION_DECK_ITERM2_PRODUCT,
+        packageVersion: '1.2.3',
+        installedAt: '2026-07-10T12:00:00.000Z',
+        scriptsDir: '/tmp/scripts',
+        script: {
+          path: '/tmp/scripts/AutoLaunch/session_deck.py',
+          sha256: hashSessionDeckIterm2Content(AUTOLAUNCH_SOURCE),
+        },
+        runtime: {
+          nodeExecutablePath: '/runtime/node/bin/node',
+          snapshotHelperPath: '/tmp/snapshot-cli.js',
+          webRootPath: '/tmp/web',
+          bridgeSocketPath: '/tmp/iterm2.sock',
+          tmuxExecutablePath: '/runtime/tmux/bin/tmux',
+        },
+      }),
+    ],
+    [
+      'runtime piExecutablePath field',
+      JSON.stringify({
+        schemaVersion: 1,
+        product: SESSION_DECK_ITERM2_PRODUCT,
+        packageVersion: '1.2.3',
+        installedAt: '2026-07-10T12:00:00.000Z',
+        scriptsDir: '/tmp/scripts',
+        script: {
+          path: '/tmp/scripts/AutoLaunch/session_deck.py',
+          sha256: hashSessionDeckIterm2Content(AUTOLAUNCH_SOURCE),
+        },
+        runtime: {
+          nodeExecutablePath: '/runtime/node/bin/node',
+          snapshotHelperPath: '/tmp/snapshot-cli.js',
+          webRootPath: '/tmp/web',
+          bridgeSocketPath: '/tmp/iterm2.sock',
+          piExecutablePath: '/runtime/pi/bin/pi',
+        },
       }),
     ],
   ])('doctor and uninstall delete nothing when state has %s', async (_label, payload) => {
@@ -390,7 +575,7 @@ describe('session-deck iterm2 install + doctor + uninstall', () => {
         sha256: hashSessionDeckIterm2Content(AUTOLAUNCH_SOURCE),
       },
       runtime: {
-        nodeExecutablePath: '/usr/local/bin/node',
+        nodeExecutablePath: '/runtime/node/bin/node',
         snapshotHelperPath: '/tmp/snapshot-cli.js',
         webRootPath: '/tmp/web',
         bridgeSocketPath: '/tmp/iterm2.sock',
