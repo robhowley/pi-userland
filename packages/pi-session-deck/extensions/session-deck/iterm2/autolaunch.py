@@ -492,11 +492,21 @@ def build_launch_prereq_report(effective_command_path: EffectiveCommandPath) -> 
     }
 
 
+def resolve_executable_on_path(
+    command: str,
+    effective_command_path: EffectiveCommandPath,
+) -> Optional[str]:
+    resolved = shutil.which(command, path=effective_command_path.value)
+    if resolved is None:
+        return None
+    return resolved if Path(resolved).is_absolute() else None
+
+
 def describe_executable_on_path(
     command: str,
     effective_command_path: EffectiveCommandPath,
 ) -> dict[str, Any]:
-    resolved = shutil.which(command, path=effective_command_path.value)
+    resolved = resolve_executable_on_path(command, effective_command_path)
     if resolved is None:
         return {"status": "missing"}
     return {"status": "available", "path": resolved}
@@ -756,8 +766,22 @@ def validate_tmux_attach_argv(candidate: Any) -> Optional[list[str]]:
     return list(candidate)
 
 
-def format_iterm2_shell_command(tmux_attach_argv: list[str]) -> str:
-    return "exec " + " ".join(shlex.quote(arg) for arg in tmux_attach_argv)
+def resolve_tmux_attach_command_argv(
+    tmux_attach_argv: list[str],
+    effective_command_path: EffectiveCommandPath,
+) -> list[str]:
+    if len(tmux_attach_argv) == 0 or tmux_attach_argv[0] != "tmux":
+        raise RuntimeError(INVALID_ATTACH_ARGV_MESSAGE)
+
+    resolved_tmux = resolve_executable_on_path("tmux", effective_command_path)
+    if resolved_tmux is None:
+        raise RuntimeError("Could not resolve tmux on the effective command PATH.")
+
+    return [resolved_tmux, *tmux_attach_argv[1:]]
+
+
+def format_iterm2_command(command_argv: list[str]) -> str:
+    return " ".join(shlex.quote(arg) for arg in command_argv)
 
 
 def validate_iterm_session_id(candidate: Any) -> Optional[str]:
@@ -780,9 +804,15 @@ def get_iterm2_module() -> Any:
     return iterm2
 
 
-async def open_iterm2_tab(connection: Any, tmux_attach_argv: list[str]) -> None:
+async def open_iterm2_tab(
+    connection: Any,
+    tmux_attach_argv: list[str],
+    effective_command_path: EffectiveCommandPath,
+) -> None:
     iterm2 = get_iterm2_module()
-    command = format_iterm2_shell_command(tmux_attach_argv)
+    command = format_iterm2_command(
+        resolve_tmux_attach_command_argv(tmux_attach_argv, effective_command_path)
+    )
     app = await iterm2.async_get_app(connection)
     window = app.current_terminal_window
 
@@ -936,7 +966,7 @@ async def handle_client(
                 await writer.drain()
                 return
             async with ui_lock:
-                await open_iterm2_tab(connection, tmux_attach_argv)
+                await open_iterm2_tab(connection, tmux_attach_argv, effective_command_path)
             writer.write(response(True, message="Requested tmux attach in a new iTerm2 tab."))
             await writer.drain()
             return

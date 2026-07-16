@@ -1,4 +1,5 @@
 import { execFile as execFileCallback } from 'node:child_process';
+import { isAbsolute } from 'node:path';
 import { promisify } from 'node:util';
 import {
   buildTmuxAttachSessionArgv,
@@ -14,6 +15,7 @@ import {
 
 const OPEN_COMMAND = '/usr/bin/open';
 const OSASCRIPT_COMMAND = '/usr/bin/osascript';
+const WHICH_COMMAND = '/usr/bin/which';
 const DEFAULT_TMUX_PREFLIGHT_TIMEOUT_MS = 500;
 const TERMINAL_BRIDGE_ENV = 'PI_SESSION_DECK_TERMINAL_BRIDGE';
 const execFile = promisify(execFileCallback);
@@ -41,10 +43,15 @@ export type TerminalOpenResult =
 
 export type TerminalRevealOpenResult = TerminalOpenResult;
 
+interface TerminalOpenExecOptions {
+  timeout?: number;
+  env?: NodeJS.ProcessEnv;
+}
+
 export type TerminalOpenExecFile = (
   file: string,
   args: readonly string[],
-  options?: { timeout?: number },
+  options?: TerminalOpenExecOptions,
 ) => Promise<unknown>;
 
 export type TerminalRevealExecFile = TerminalOpenExecFile;
@@ -189,7 +196,12 @@ async function openTmuxTerminalTarget(
     }
   }
 
-  return openWithAppleScript(formatPosixCommand(['exec', ...tmuxAttachArgv]), options);
+  const appleScriptCommand = await buildAppleScriptTmuxAttachCommand(tmuxAttachArgv, options);
+  if (!appleScriptCommand.ok) {
+    return appleScriptCommand.result;
+  }
+
+  return openWithAppleScript(appleScriptCommand.attachCommand, options);
 }
 
 async function preflightTmuxTarget(
@@ -210,6 +222,7 @@ async function preflightTmuxTarget(
   try {
     await execFileImpl(file!, args, {
       timeout: options.tmuxPreflightTimeoutMs ?? DEFAULT_TMUX_PREFLIGHT_TIMEOUT_MS,
+      ...(options.env === undefined ? {} : { env: options.env }),
     });
   } catch (error) {
     if (isNonZeroExit(error)) {
@@ -255,6 +268,59 @@ function getIterm2RuntimeClient(options: TerminalOpenOptions): TerminalIterm2Run
         ...(options.env === undefined ? {} : { env: options.env }),
       }))
   );
+}
+
+async function buildAppleScriptTmuxAttachCommand(
+  tmuxAttachArgv: readonly string[],
+  options: TerminalOpenOptions,
+): Promise<{ ok: true; attachCommand: string } | { ok: false; result: TerminalOpenResult }> {
+  if (tmuxAttachArgv[0] !== 'tmux') {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        reason: 'open-failed',
+        message: 'Refusing to open an invalid tmux attach command.',
+      },
+    };
+  }
+
+  const execFileImpl = options.execFile ?? defaultExecFile;
+  let resolvedTmuxPath: string | null;
+  try {
+    const whichResult = await execFileImpl(
+      WHICH_COMMAND,
+      ['tmux'],
+      options.env === undefined ? undefined : { env: options.env },
+    );
+    resolvedTmuxPath = parseResolvedExecutablePath(whichResult);
+  } catch (error) {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        reason: 'open-failed',
+        message: `Failed to resolve tmux for iTerm2 tab creation: ${getErrorMessage(error)}`,
+      },
+    };
+  }
+
+  if (resolvedTmuxPath === null) {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        reason: 'open-failed',
+        message:
+          'Failed to resolve tmux for iTerm2 tab creation: /usr/bin/which did not return an absolute path.',
+      },
+    };
+  }
+
+  return {
+    ok: true,
+    attachCommand: formatPosixCommand([resolvedTmuxPath, ...tmuxAttachArgv.slice(1)]),
+  };
 }
 
 async function openWithAppleScript(
@@ -312,16 +378,44 @@ function resolveBridgeMode(options: TerminalOpenOptions): TerminalBridgeMode {
   }
 }
 
-const defaultExecFile: TerminalOpenExecFile = async (file, args, options) => {
-  await execFile(file, [...args], options);
-};
+const defaultExecFile: TerminalOpenExecFile = (file, args, options) =>
+  execFile(file, [...args], options);
 
 function isNonZeroExit(error: unknown): boolean {
   return isObject(error) && typeof error['code'] === 'number';
 }
 
+function parseResolvedExecutablePath(result: unknown): string | null {
+  if (!isObject(result)) {
+    return null;
+  }
+
+  const stdout = result['stdout'];
+  const renderedStdout =
+    typeof stdout === 'string' ? stdout : Buffer.isBuffer(stdout) ? stdout.toString('utf8') : null;
+  if (renderedStdout === null) {
+    return null;
+  }
+
+  for (const line of renderedStdout.split(/\r?\n/u)) {
+    const trimmedLine = trimNonEmpty(line);
+    if (trimmedLine === undefined) {
+      continue;
+    }
+
+    return isAbsolute(trimmedLine) ? trimmedLine : null;
+  }
+
+  return null;
+}
+
 function looksLikeAutomationDenied(message: string): boolean {
   return /not authorized|not permitted|automation|privilege/i.test(message);
+}
+
+function trimNonEmpty(value: string): string | undefined {
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 function isObject(candidate: unknown): candidate is Record<string, unknown> {

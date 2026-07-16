@@ -12,6 +12,7 @@ const ITERM_TARGET: TerminalFocusTarget = {
   itermSessionId: 'w0t0p0:abc',
   revealUrl: REVEAL_URL,
 };
+const ABSOLUTE_TMUX_PATH = '/opt/homebrew/bin/tmux';
 const TMUX_ATTACH_ARGV = [
   'tmux',
   '-S',
@@ -21,13 +22,20 @@ const TMUX_ATTACH_ARGV = [
   '-t',
   '$1',
 ] as const;
-const TMUX_ATTACH_COMMAND = "exec tmux -S '/tmp/tmux socket/default' attach-session -E -t '$1'";
+const TMUX_ATTACH_COMMAND = `${ABSOLUTE_TMUX_PATH} -S '/tmp/tmux socket/default' attach-session -E -t '$1'`;
 const TMUX_TARGET: TerminalFocusTarget = {
   kind: 'tmux-session',
   socketPath: '/tmp/tmux socket/default',
   sessionName: 'prod',
   sessionTarget: '$1',
 };
+
+function createTmuxAppleScriptExecFile(resolvedTmuxPath = ABSOLUTE_TMUX_PATH) {
+  return vi.fn(async (file: string, _args: readonly string[], _options?: unknown) => ({
+    stdout: file === '/usr/bin/which' ? `${resolvedTmuxPath}\n` : '',
+    stderr: '',
+  }));
+}
 
 describe('openTerminalRevealUrl', () => {
   it('uses macOS open with the reveal URL as one argument and no shell', async () => {
@@ -278,7 +286,7 @@ describe('openTerminalFocusTarget tmux support', () => {
   });
 
   it('falls back to AppleScript in auto mode only when the iTerm2 runtime fails before sending the request', async () => {
-    const execFile = vi.fn(async () => ({ stdout: '', stderr: '' }));
+    const execFile = createTmuxAppleScriptExecFile();
     const iterm2RuntimeClient = vi.fn(async () => ({
       ok: false as const,
       reason: 'python-bridge-unavailable' as const,
@@ -293,14 +301,16 @@ describe('openTerminalFocusTarget tmux support', () => {
     });
 
     expect(result).toMatchObject({ ok: true, reason: 'requested' });
-    expect(execFile).toHaveBeenCalledTimes(2);
-    expect(execFile).toHaveBeenNthCalledWith(2, '/usr/bin/osascript', [
+    expect(execFile).toHaveBeenCalledTimes(3);
+    expect(execFile).toHaveBeenNthCalledWith(2, '/usr/bin/which', ['tmux'], undefined);
+    expect(execFile).toHaveBeenNthCalledWith(3, '/usr/bin/osascript', [
       '-e',
       expect.stringContaining('create tab with default profile command commandText'),
       TMUX_ATTACH_COMMAND,
     ]);
     expect(JSON.stringify(execFile.mock.calls)).not.toContain('exec pi');
     expect(JSON.stringify(execFile.mock.calls)).not.toContain('new-session');
+    expect(JSON.stringify(execFile.mock.calls)).not.toContain('exec tmux');
   });
 
   it('does not fall back to AppleScript when the iTerm2 runtime may have received the request', async () => {
@@ -383,10 +393,7 @@ describe('openTerminalFocusTarget tmux support', () => {
   });
 
   it('uses AppleScript directly only when configured for AppleScript mode', async () => {
-    const execFile = vi.fn(async (_file: string, _args: readonly string[]) => ({
-      stdout: '',
-      stderr: '',
-    }));
+    const execFile = createTmuxAppleScriptExecFile();
     const iterm2RuntimeClient = vi.fn(async () => ({
       ok: true as const,
       reason: 'requested' as const,
@@ -402,8 +409,80 @@ describe('openTerminalFocusTarget tmux support', () => {
 
     expect(result).toMatchObject({ ok: true, reason: 'requested' });
     expect(iterm2RuntimeClient).not.toHaveBeenCalled();
+    expect(execFile).toHaveBeenCalledTimes(3);
+    expect(execFile).toHaveBeenNthCalledWith(2, '/usr/bin/which', ['tmux'], undefined);
+    expect(execFile).toHaveBeenNthCalledWith(3, '/usr/bin/osascript', [
+      '-e',
+      expect.stringContaining('create tab with default profile command commandText'),
+      TMUX_ATTACH_COMMAND,
+    ]);
+  });
+
+  it('passes the caller env through tmux preflight and AppleScript tmux resolution', async () => {
+    const env: NodeJS.ProcessEnv = { PATH: '/custom/tmux/bin:/usr/bin' };
+    const execFile = createTmuxAppleScriptExecFile();
+
+    const result = await openTerminalFocusTarget(TMUX_TARGET, {
+      platform: 'darwin',
+      bridgeMode: 'iterm2-applescript',
+      env,
+      execFile,
+    });
+
+    expect(result).toMatchObject({ ok: true, reason: 'requested' });
+    expect(execFile).toHaveBeenCalledTimes(3);
+    expect(execFile).toHaveBeenNthCalledWith(
+      1,
+      'tmux',
+      ['-S', '/tmp/tmux socket/default', 'has-session', '-t', '$1'],
+      { timeout: 500, env },
+    );
+    expect(execFile).toHaveBeenNthCalledWith(2, '/usr/bin/which', ['tmux'], { env });
+    expect((execFile.mock.calls[0]?.[2] as { env?: NodeJS.ProcessEnv } | undefined)?.env).toBe(env);
+    expect((execFile.mock.calls[1]?.[2] as { env?: NodeJS.ProcessEnv } | undefined)?.env).toBe(env);
+  });
+
+  it('returns open-failed without AppleScript UI mutation when /usr/bin/which cannot resolve tmux', async () => {
+    const execFile = vi.fn(async (file: string) => {
+      if (file === '/usr/bin/which') {
+        throw Object.assign(new Error('tmux not found'), { code: 'ENOENT' });
+      }
+
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await openTerminalFocusTarget(TMUX_TARGET, {
+      platform: 'darwin',
+      bridgeMode: 'iterm2-applescript',
+      execFile,
+    });
+
+    expect(result).toMatchObject({ ok: false, reason: 'open-failed' });
+    expect(result.message).toContain(
+      'Failed to resolve tmux for iTerm2 tab creation: tmux not found',
+    );
     expect(execFile).toHaveBeenCalledTimes(2);
-    expect(execFile.mock.calls[1]?.[0]).toBe('/usr/bin/osascript');
+    expect(execFile).toHaveBeenNthCalledWith(2, '/usr/bin/which', ['tmux'], undefined);
+    expect(execFile.mock.calls.some(([file]) => file === '/usr/bin/osascript')).toBe(false);
+  });
+
+  it('returns open-failed before AppleScript UI mutation when tmux cannot be resolved absolutely', async () => {
+    const execFile = createTmuxAppleScriptExecFile('tmux');
+
+    const result = await openTerminalFocusTarget(TMUX_TARGET, {
+      platform: 'darwin',
+      bridgeMode: 'iterm2-applescript',
+      execFile,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      reason: 'open-failed',
+      message:
+        'Failed to resolve tmux for iTerm2 tab creation: /usr/bin/which did not return an absolute path.',
+    });
+    expect(execFile).toHaveBeenCalledTimes(2);
+    expect(execFile).toHaveBeenNthCalledWith(2, '/usr/bin/which', ['tmux'], undefined);
   });
 
   it('returns a disabled soft result when tmux terminal opening is disabled', async () => {
@@ -499,6 +578,7 @@ describe('openTerminalFocusTarget tmux support', () => {
     const execFile = vi
       .fn()
       .mockResolvedValueOnce({ stdout: '', stderr: '' })
+      .mockResolvedValueOnce({ stdout: `${ABSOLUTE_TMUX_PATH}\n`, stderr: '' })
       .mockRejectedValueOnce(new Error('Not authorized to send Apple events to iTerm2'));
 
     const result = await openTerminalFocusTarget(TMUX_TARGET, {
