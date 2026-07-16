@@ -1211,14 +1211,16 @@ class BridgeRuntimeTests(unittest.IsolatedAsyncioTestCase):
         bridge, connection = await self.start_bridge(fixture)
         connection.app.current_terminal_window = None
 
-        result = await unix_json_request(
-            bridge.socket_path, (json.dumps({"tmuxAttachArgv": VALID_TMUX_ATTACH_ARGV}) + "\n").encode("utf-8")
-        )
+        with mock.patch.object(AUTO.shutil, "which", return_value="/bridge/effective/bin/tmux"):
+            result = await unix_json_request(
+                bridge.socket_path,
+                (json.dumps({"tmuxAttachArgv": VALID_TMUX_ATTACH_ARGV}) + "\n").encode("utf-8"),
+            )
 
         self.assertTrue(result["ok"])
         self.assertEqual(
             connection.commands,
-            ["exec tmux -S '/tmp/tmux socket/default' attach-session -E -t '$1'"],
+            ["/bridge/effective/bin/tmux -S '/tmp/tmux socket/default' attach-session -E -t '$1'"],
         )
         self.assertEqual(connection.events, ["app.activate", "window.activate", "tab.select"])
 
