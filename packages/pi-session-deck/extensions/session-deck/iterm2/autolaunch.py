@@ -41,6 +41,7 @@ SNAPSHOT_ERROR_CODE = "toolbelt_snapshot_unavailable"
 REQUEST_TIMEOUT_SECONDS = 2.0
 SNAPSHOT_TIMEOUT_SECONDS = 10.0
 ACTION_HELPER_TIMEOUT_SECONDS = 60.0
+KILL_ACTION_HELPER_TIMEOUT_SECONDS = 5.0
 MAX_REQUEST_BYTES = 8192
 ACTION_BODY_LIMIT_BYTES = 16 * 1024
 ACTION_TOKEN_PLACEHOLDER = b"__SESSION_DECK_ACTION_TOKEN__"
@@ -77,18 +78,39 @@ OPEN_TERMINAL_HELPER_TIMEOUT_MESSAGE = (
 OPEN_TERMINAL_HELPER_FAILED_MESSAGE = (
     "Open-terminal action failed. Run /session-deck iterm2 doctor if this keeps happening."
 )
+KILL_SESSION_HELPER_UNAVAILABLE_MESSAGE = (
+    "Stop action is unavailable. Run /session-deck iterm2 doctor."
+)
+KILL_SESSION_HELPER_INVALID_RESPONSE_MESSAGE = (
+    "Stop action failed because the helper returned an invalid response. "
+    "Refresh Session Deck, run /session-deck iterm2 doctor, and check the session before retrying."
+)
+KILL_SESSION_HELPER_TIMEOUT_MESSAGE = (
+    "Stop action timed out. The request may have reached the runtime; refresh Session Deck and check the session before retrying."
+)
+KILL_SESSION_HELPER_FAILED_MESSAGE = (
+    "Stop action failed. Run /session-deck iterm2 doctor if this keeps happening."
+)
 BROWSER_FORBIDDEN_FIELDS = {
     "label",
+    "pid",
+    "signal",
     "cwd",
     "gitRoot",
     "worktreeRoot",
     "path",
     "manualCommand",
     "manualAttachCommand",
+    "terminal",
+    "tmux",
     "tmuxSessionName",
     "tmuxTarget",
     "paneId",
     "itermSessionId",
+    "iterm",
+    "iTerm",
+    "iterm2",
+    "iTerm2",
     "revealUrl",
     "attachCommand",
     "sessionTarget",
@@ -97,6 +119,7 @@ BROWSER_FORBIDDEN_FIELDS = {
     "tmuxCommand",
     "piArgv",
     "piCommand",
+    "socket",
     "shell",
     "command",
     "socketPath",
@@ -135,6 +158,7 @@ class RuntimeConfig:
     snapshot_helper_path: Path
     create_worktree_helper_path: Path
     open_terminal_helper_path: Path
+    kill_session_helper_path: Path
     web_root_path: Path
     bridge_socket_path: Path
 
@@ -274,6 +298,7 @@ def build_runtime_config(runtime: dict[str, Any]) -> RuntimeConfig:
         snapshot_helper_path=snapshot_helper_path,
         create_worktree_helper_path=derive_create_worktree_helper_path(snapshot_helper_path),
         open_terminal_helper_path=derive_open_terminal_helper_path(snapshot_helper_path),
+        kill_session_helper_path=derive_kill_session_helper_path(snapshot_helper_path),
         web_root_path=require_absolute_path(runtime.get("webRootPath"), "runtime.webRootPath"),
         bridge_socket_path=require_absolute_path(
             runtime.get("bridgeSocketPath"), "runtime.bridgeSocketPath"
@@ -287,6 +312,10 @@ def derive_create_worktree_helper_path(snapshot_helper_path: Path) -> Path:
 
 def derive_open_terminal_helper_path(snapshot_helper_path: Path) -> Path:
     return snapshot_helper_path.parent / "open-action-cli.js"
+
+
+def derive_kill_session_helper_path(snapshot_helper_path: Path) -> Path:
+    return snapshot_helper_path.parent / "kill-action-cli.js"
 
 
 def require_exact_keys(candidate: dict[str, Any], expected: tuple[str, ...], field: str) -> None:
@@ -720,6 +749,92 @@ def is_valid_open_terminal_helper_response(payload: dict[str, Any]) -> bool:
     return False
 
 
+KILL_SESSION_SAFE_SUCCESS_MESSAGES = {
+    "requested": "Stop requested for this Pi session.",
+    "already-exited": "This Pi session is no longer running.",
+}
+KILL_SESSION_SAFE_FAILURE_MESSAGES = {
+    "invalid-runtime-id": "Session runtime metadata is invalid.",
+    "presence-missing": "Session runtime metadata is no longer available.",
+    "presence-malformed": "Session runtime metadata is invalid.",
+    "runtime-mismatch": "Session runtime metadata is invalid.",
+    "pid-reused": "The recorded process no longer matches this session.",
+    "pid-unverified": "Could not safely verify the selected process.",
+    "self-signal-denied": "Session Deck cannot signal its own helper process.",
+    "permission-denied": "Termination is not permitted for this process.",
+    "signal-failed": "Could not request session stop.",
+}
+
+
+def run_kill_session_action(
+    config: InstallConfig,
+    payload: str,
+    effective_command_path: EffectiveCommandPath,
+) -> tuple[int, dict[str, Any]]:
+    helper_path = config.runtime.kill_session_helper_path
+    if not helper_path.exists():
+        return 503, helper_failure_payload(KILL_SESSION_HELPER_UNAVAILABLE_MESSAGE)
+
+    try:
+        completed = subprocess.run(
+            [str(config.runtime.node_executable_path), str(helper_path)],
+            input=payload,
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=KILL_ACTION_HELPER_TIMEOUT_SECONDS,
+            env=build_child_process_env(effective_command_path),
+        )
+    except subprocess.TimeoutExpired:
+        return 504, helper_failure_payload(KILL_SESSION_HELPER_TIMEOUT_MESSAGE)
+    except Exception:
+        return 503, helper_failure_payload(KILL_SESSION_HELPER_UNAVAILABLE_MESSAGE)
+
+    try:
+        response_payload = json.loads(completed.stdout)
+    except Exception:
+        return 500, helper_failure_payload(KILL_SESSION_HELPER_INVALID_RESPONSE_MESSAGE)
+
+    if not isinstance(response_payload, dict):
+        return 500, helper_failure_payload(KILL_SESSION_HELPER_INVALID_RESPONSE_MESSAGE)
+
+    if completed.returncode != 0:
+        return 400, sanitize_helper_failure_payload(
+            response_payload, KILL_SESSION_HELPER_FAILED_MESSAGE
+        )
+
+    if not is_valid_kill_session_helper_response(response_payload):
+        return 500, helper_failure_payload(KILL_SESSION_HELPER_INVALID_RESPONSE_MESSAGE)
+
+    return 200, response_payload
+
+
+def is_valid_kill_session_helper_response(payload: dict[str, Any]) -> bool:
+    if find_forbidden_field(payload) is not None:
+        return False
+
+    if payload.get("ok") is True:
+        if set(payload.keys()) != {"ok", "status", "message"}:
+            return False
+        status = payload.get("status")
+        return (
+            status in KILL_SESSION_SAFE_SUCCESS_MESSAGES
+            and payload.get("message") == KILL_SESSION_SAFE_SUCCESS_MESSAGES.get(status)
+        )
+
+    if payload.get("ok") is False:
+        if set(payload.keys()) != {"ok", "status", "reason", "message"}:
+            return False
+        reason = payload.get("reason")
+        return (
+            payload.get("status") == "failed"
+            and reason in KILL_SESSION_SAFE_FAILURE_MESSAGES
+            and payload.get("message") == KILL_SESSION_SAFE_FAILURE_MESSAGES.get(reason)
+        )
+
+    return False
+
+
 def resolve_static_path(config: InstallConfig, pathname: str) -> Optional[Path]:
     normalized = "/index.html" if pathname in ("", "/") else pathname
     normalized = posixpath.normpath(normalized)
@@ -757,6 +872,13 @@ class SessionDeckToolbeltHandler(BaseHTTPRequestHandler):
                     "helperScriptPath": str(config.runtime.snapshot_helper_path),
                     "createWorktreeHelperScriptPath": str(config.runtime.create_worktree_helper_path),
                     "openTerminalHelperScriptPath": str(config.runtime.open_terminal_helper_path),
+                    "killSessionHelperScriptPath": str(config.runtime.kill_session_helper_path),
+                    "actionCapabilities": [
+                        "create-worktree",
+                        "create-worktree-preview",
+                        "open-terminal",
+                        "kill-session",
+                    ],
                     "webRoot": str(config.runtime.web_root_path),
                 },
             )
@@ -789,6 +911,7 @@ class SessionDeckToolbeltHandler(BaseHTTPRequestHandler):
             "/actions/create-worktree",
             "/actions/create-worktree-preview",
             "/actions/open-terminal",
+            "/actions/kill-session",
         ):
             self.send_json(404, {"ok": False, "status": "failed", "message": "Not found"})
             return
@@ -821,6 +944,12 @@ class SessionDeckToolbeltHandler(BaseHTTPRequestHandler):
         body = self.rfile.read(body_length).decode("utf-8")
         if parsed.path == "/actions/open-terminal":
             status_code, response_payload = run_open_terminal_action(
+                config,
+                body,
+                effective_command_path,
+            )
+        elif parsed.path == "/actions/kill-session":
+            status_code, response_payload = run_kill_session_action(
                 config,
                 body,
                 effective_command_path,

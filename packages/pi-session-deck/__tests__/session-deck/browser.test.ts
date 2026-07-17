@@ -172,6 +172,7 @@ function createBrowser(
     reapLines: string[];
     theme: Theme;
     openSelected: (record: SessionDeckRecord) => Promise<{ ok: boolean; message: string }>;
+    killSelected: (record: SessionDeckRecord) => Promise<{ ok: boolean; message: string }>;
     createWorktree: ConstructorParameters<typeof SessionDeckBrowser>[0]['createWorktree'];
     previewLaunchContext: ConstructorParameters<
       typeof SessionDeckBrowser
@@ -187,6 +188,7 @@ function createBrowser(
     requestRender: overrides.requestRender ?? (() => {}),
     ...(overrides.reapLines === undefined ? {} : { reapLines: overrides.reapLines }),
     ...(overrides.openSelected === undefined ? {} : { openSelected: overrides.openSelected }),
+    ...(overrides.killSelected === undefined ? {} : { killSelected: overrides.killSelected }),
     ...(overrides.createWorktree === undefined ? {} : { createWorktree: overrides.createWorktree }),
     ...(overrides.previewLaunchContext === undefined
       ? {}
@@ -258,7 +260,7 @@ describe('SessionDeckBrowser', () => {
       lines,
       (line) =>
         line.includes(
-          '↑↓ move · ←→ switch repo · enter details · w new Pi session · o open terminal · r refresh · q close',
+          '↑↓ move · ←→ switch repo · enter details · w new Pi session · o open terminal · k stop Pi · r refresh · q close',
         ),
       'help line',
     );
@@ -1498,6 +1500,98 @@ describe('SessionDeckBrowser', () => {
     browser.handleInput('o');
 
     expect(openSelected).not.toHaveBeenCalled();
+  });
+
+  it('opens a Stop Pi confirmation with k and only Enter confirms the frozen selected row', async () => {
+    const killSelected = vi.fn(async (_record: SessionDeckRecord) => ({
+      ok: true,
+      message: 'Stop requested for this Pi session.',
+    }));
+    const browser = createBrowser({
+      killSelected,
+      initialView: buildSnapshot({
+        records: [
+          buildSnapshotRecord({ runtimeId: 'rt-alpha', sessionName: 'alpha', pid: 111 }),
+          buildSnapshotRecord({ runtimeId: 'rt-bravo', sessionName: 'bravo', pid: 222 }),
+        ],
+      }),
+    });
+
+    browser.handleInput('k');
+    expect(renderText(browser)).toContain('Stop Pi for alpha (rt-alpha, pid 111)?');
+    expect(killSelected).not.toHaveBeenCalled();
+
+    browser.handleInput('k');
+    browser.handleInput('down');
+    expect(killSelected).not.toHaveBeenCalled();
+
+    browser.handleInput('enter');
+    await vi.waitFor(() => expect(killSelected).toHaveBeenCalledTimes(1));
+    const [stoppedRecord] = vi.mocked(killSelected).mock.calls[0] ?? [];
+    expect(stoppedRecord?.runtimeId).toBe('rt-alpha');
+    await vi.waitFor(() =>
+      expect(renderText(browser)).toContain('Stop requested for this Pi session.'),
+    );
+    expect(renderText(browser)).not.toContain('killed');
+  });
+
+  it('cancels Stop Pi confirmation with escape ctrl-c or q without stopping', () => {
+    const killSelected = vi.fn(async (_record: SessionDeckRecord) => ({
+      ok: true,
+      message: 'Stop requested for this Pi session.',
+    }));
+    const browser = createBrowser({ killSelected });
+
+    for (const key of ['escape', 'ctrl+c', 'q']) {
+      browser.handleInput('k');
+      expect(renderText(browser)).toContain('Stop Pi for alpha');
+      browser.handleInput(key);
+      expect(renderText(browser)).toContain('Stop Pi cancelled.');
+    }
+
+    expect(killSelected).not.toHaveBeenCalled();
+  });
+
+  it('cancels Stop Pi confirmation when the target disappears on refresh', async () => {
+    vi.useFakeTimers();
+    const killSelected = vi.fn(async (_record: SessionDeckRecord) => ({
+      ok: true,
+      message: 'Stop requested for this Pi session.',
+    }));
+    const reload = vi.fn(async () => buildSnapshot({ records: [] }));
+    const browser = createBrowser({ killSelected, reload });
+
+    browser.handleInput('k');
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+    expect(renderText(browser)).toContain('Stop cancelled; selected session is no longer visible.');
+    browser.handleInput('enter');
+    expect(killSelected).not.toHaveBeenCalled();
+  });
+
+  it('renders Stop Pi failures as retryable warning statuses', async () => {
+    const fg = vi.fn((_tone: string, text: string) => text);
+    const killSelected = vi.fn(async (_record: SessionDeckRecord) => ({
+      ok: false,
+      message: 'Could not safely verify the selected process.',
+    }));
+    const browser = createBrowser({ theme: createTheme({ fg }), killSelected });
+
+    browser.handleInput('k');
+    browser.handleInput('enter');
+
+    await vi.waitFor(() => {
+      expect(renderText(browser)).toContain('Could not safely verify the selected process.');
+    });
+    expect(
+      vi
+        .mocked(fg)
+        .mock.calls.some(
+          ([tone, text]) =>
+            tone === 'warning' && text === 'Could not safely verify the selected process.',
+        ),
+    ).toBe(true);
   });
 
   it('keeps auto-refresh running while an open request is pending', async () => {

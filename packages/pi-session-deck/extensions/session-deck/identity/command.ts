@@ -8,6 +8,8 @@ import { readSessionDeckSnapshot, type ReadSessionDeckSnapshotOptions } from '..
 import {
   SessionDeckBrowser,
   type SessionDeckBrowserCreateWorktree,
+  type SessionDeckBrowserKillSelected,
+  type SessionDeckBrowserKillSelectedResult,
   type SessionDeckBrowserOpenSelectedResult,
 } from '../browser.js';
 import { orchestrateCreateWorktree } from '../worktree/orchestrate.js';
@@ -36,6 +38,12 @@ import { toPublicSessionDeckRecord } from '../public-record.js';
 import type { SessionDeckSnapshot } from '../types.js';
 import { SESSION_DECK_COMMAND_NAME } from '../presence/constants.js';
 import { reapPresenceRecords, type ReapPresenceRecordsOptions } from '../presence/reap.js';
+import { getPresenceRuntimeIdentity } from '../presence/runtime.js';
+import {
+  terminateSessionDeckRuntime,
+  type TerminateSessionDeckRuntimeOptions,
+  type TerminateSessionDeckRuntimeResult,
+} from '../presence/terminate.js';
 import type { PresenceDiagnostic, PresenceState } from '../presence/types.js';
 
 interface SessionDeckCustomTui {
@@ -51,6 +59,7 @@ interface SessionDeckCustomComponent {
 
 export interface PresenceCommandContext {
   mode?: string;
+  shutdown?: () => void | Promise<void>;
   ui: {
     notify: (message: string, level: 'info' | 'warning' | 'error') => void;
     custom?: <T>(
@@ -87,6 +96,8 @@ export interface RegisterSessionDeckCommandOptions extends ReadSessionDeckSnapsh
   unlink?: ReapPresenceRecordsOptions['unlink'];
   openTerminal?: (runtimeId: string) => Promise<SessionDeckBrowserOpenSelectedResult>;
   openIterm2Terminal?: (runtimeId: string) => Promise<SessionDeckBrowserOpenSelectedResult>;
+  getCurrentRuntimeIdentity?: typeof getPresenceRuntimeIdentity;
+  killRuntime?: (runtimeId: string) => Promise<TerminateSessionDeckRuntimeResult>;
   createWorktree?: SessionDeckBrowserCreateWorktree;
 }
 
@@ -178,12 +189,18 @@ export function registerSessionDeckCommand(
           ((runtimeId: string) =>
             openTerminalForRuntime(runtimeId, getOpenTerminalForRuntimeOptions(options)));
 
+        const killRuntime =
+          options.killRuntime ??
+          ((runtimeId: string) =>
+            terminateSessionDeckRuntime(runtimeId, getTerminateOptions(options)));
+
         await openSessionDeckBrowser(
           ctx,
           loadedView,
           await withTerminalDisplayHints(loadedView.view, getTerminalDisplayHintOptions(options)),
           async () => readVisibleSessionDeckBrowserView(parsedArgs.all, readSnapshot, options),
           openTerminal,
+          createKillSelectedRuntime(ctx, options, killRuntime),
           options.createWorktree ??
             ((request, onStatus) =>
               orchestrateCreateWorktree(request, {
@@ -462,6 +479,7 @@ async function openSessionDeckBrowser(
   initialView: SessionDeckBrowserSnapshot,
   reload: () => Promise<SessionDeckBrowserSnapshot>,
   openTerminal: (runtimeId: string) => Promise<SessionDeckBrowserOpenSelectedResult>,
+  killSelected: SessionDeckBrowserKillSelected,
   createWorktree: SessionDeckBrowserCreateWorktree,
 ): Promise<void> {
   if (ctx.ui.custom === undefined) {
@@ -476,6 +494,7 @@ async function openSessionDeckBrowser(
         initialView,
         onClose: () => done(undefined),
         openSelected: (record) => openTerminal(record.runtimeId),
+        killSelected,
         createWorktree,
         previewLaunchContext: (agentDir) => resolveWorktreeLaunchContextPreview({ agentDir }),
         reload,
@@ -486,6 +505,75 @@ async function openSessionDeckBrowser(
         theme,
       }),
   );
+}
+
+function createKillSelectedRuntime(
+  ctx: PresenceCommandContext,
+  options: RegisterSessionDeckCommandOptions,
+  killRuntime: (runtimeId: string) => Promise<TerminateSessionDeckRuntimeResult>,
+): SessionDeckBrowserKillSelected {
+  return async (record): Promise<SessionDeckBrowserKillSelectedResult> => {
+    const currentRuntime = (options.getCurrentRuntimeIdentity ?? getPresenceRuntimeIdentity)();
+    if (record.runtimeId === currentRuntime.runtimeId) {
+      if (ctx.shutdown === undefined) {
+        return {
+          ok: false,
+          message: 'Current Pi session stop is unavailable in this context.',
+        };
+      }
+
+      await ctx.shutdown();
+      return { ok: true, message: 'Stop requested for the current Pi session.' };
+    }
+
+    return formatKillRuntimeResult(await killRuntime(record.runtimeId));
+  };
+}
+
+function formatKillRuntimeResult(
+  result: TerminateSessionDeckRuntimeResult,
+): SessionDeckBrowserKillSelectedResult {
+  if (result.ok) {
+    return result.status === 'already-exited'
+      ? { ok: true, message: 'This Pi session is no longer running.' }
+      : { ok: true, message: 'Stop requested for this Pi session.' };
+  }
+
+  return { ok: false, message: getKillRuntimeFailureMessage(result.reason) };
+}
+
+function getKillRuntimeFailureMessage(
+  reason: Exclude<TerminateSessionDeckRuntimeResult, { ok: true }>['reason'],
+): string {
+  switch (reason) {
+    case 'invalid-runtime-id':
+      return 'Session runtime metadata is invalid.';
+    case 'presence-missing':
+      return 'Session runtime metadata is no longer available.';
+    case 'presence-malformed':
+    case 'runtime-mismatch':
+      return 'Session runtime metadata is invalid.';
+    case 'pid-reused':
+      return 'The recorded process no longer matches this session.';
+    case 'pid-unverified':
+      return 'Could not safely verify the selected process.';
+    case 'self-signal-denied':
+      return 'Session Deck cannot signal its own helper process.';
+    case 'permission-denied':
+      return 'Termination is not permitted for this process.';
+    case 'signal-failed':
+      return 'Could not request session stop.';
+  }
+}
+
+function getTerminateOptions(
+  options: RegisterSessionDeckCommandOptions,
+): TerminateSessionDeckRuntimeOptions {
+  return {
+    ...(options.directory === undefined ? {} : { directory: options.directory }),
+    ...(options.readFile === undefined ? {} : { readFile: options.readFile }),
+    ...(options.inspectPid === undefined ? {} : { inspectPid: options.inspectPid }),
+  };
 }
 
 function formatReapSummary(removedCount: number): string {

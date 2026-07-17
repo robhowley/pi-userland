@@ -80,6 +80,15 @@ export type SessionDeckBrowserOpenSelected = (
   record: SessionDeckBrowserRecord,
 ) => Promise<SessionDeckBrowserOpenSelectedResult>;
 
+export interface SessionDeckBrowserKillSelectedResult {
+  ok: boolean;
+  message: string;
+}
+
+export type SessionDeckBrowserKillSelected = (
+  record: SessionDeckBrowserRecord,
+) => Promise<SessionDeckBrowserKillSelectedResult>;
+
 export type SessionDeckBrowserCreateWorktree = (
   request: CreateWorktreeActionRequest,
   onStatus: (update: CreateWorktreeStatusUpdate) => void,
@@ -103,12 +112,20 @@ interface SessionDeckWorktreePrompt {
   launchContextRequestId: number;
 }
 
+interface SessionDeckKillConfirm {
+  runtimeId: string;
+  title: string;
+  shortRuntimeId: string;
+  pid: number | null;
+}
+
 export interface SessionDeckBrowserOptions {
   all: boolean;
   showIdentity: boolean;
   initialView: SessionDeckBrowserSnapshot;
   onClose: () => void;
   openSelected?: SessionDeckBrowserOpenSelected;
+  killSelected?: SessionDeckBrowserKillSelected;
   createWorktree?: SessionDeckBrowserCreateWorktree;
   previewLaunchContext?: SessionDeckBrowserPreviewLaunchContext;
   reload: () => Promise<SessionDeckBrowserSnapshot>;
@@ -122,6 +139,7 @@ export class SessionDeckBrowser {
   private readonly showIdentity: boolean;
   private readonly onClose: () => void;
   private readonly openSelected: SessionDeckBrowserOpenSelected | null;
+  private readonly killSelected: SessionDeckBrowserKillSelected | null;
   private readonly createWorktree: SessionDeckBrowserCreateWorktree | null;
   private readonly previewLaunchContext: SessionDeckBrowserPreviewLaunchContext;
   private readonly reload: () => Promise<SessionDeckBrowserSnapshot>;
@@ -135,10 +153,13 @@ export class SessionDeckBrowser {
   private detailVisible = true;
   private refreshStatus: { message: string; tone: 'muted' | 'warning' } | null = null;
   private openStatus: { message: string; tone: 'muted' | 'warning' } | null = null;
+  private killStatus: { message: string; tone: 'muted' | 'warning' } | null = null;
   private worktreeStatus: { message: string; tone: 'muted' | 'warning' } | null = null;
   private worktreePrompt: SessionDeckWorktreePrompt | null = null;
+  private killConfirm: SessionDeckKillConfirm | null = null;
   private refreshPending: Promise<void> | null = null;
   private openPending: Promise<void> | null = null;
+  private killPending: Promise<void> | null = null;
   private worktreePending: Promise<void> | null = null;
   private isRefreshing = false;
   private autoRefreshInterval: ReturnType<typeof setInterval> | null = null;
@@ -151,6 +172,7 @@ export class SessionDeckBrowser {
     this.showIdentity = options.showIdentity;
     this.onClose = options.onClose;
     this.openSelected = options.openSelected ?? null;
+    this.killSelected = options.killSelected ?? null;
     this.createWorktree = options.createWorktree ?? null;
     this.previewLaunchContext = options.previewLaunchContext ?? previewLaunchContextFromProcess;
     this.reload = options.reload;
@@ -169,6 +191,11 @@ export class SessionDeckBrowser {
 
     if (this.worktreePrompt !== null) {
       this.handleWorktreePromptInput(data);
+      return;
+    }
+
+    if (this.killConfirm !== null) {
+      this.handleKillConfirmInput(data);
       return;
     }
 
@@ -202,6 +229,13 @@ export class SessionDeckBrowser {
     }
 
     const selectedRecord = selection.records[this.selectedIndex] ?? null;
+
+    if (matchesKey(data, 'k')) {
+      if (selectedRecord !== null) {
+        this.openKillConfirmation(selectedRecord);
+      }
+      return;
+    }
 
     if (matchesKey(data, 'o')) {
       if (selectedRecord !== null) {
@@ -247,7 +281,7 @@ export class SessionDeckBrowser {
     );
     const help = this.theme.fg(
       'muted',
-      '↑↓ move · ←→ switch repo · enter details · w new Pi session · o open terminal · r refresh · q close',
+      '↑↓ move · ←→ switch repo · enter details · w new Pi session · o open terminal · k stop Pi · r refresh · q close',
     );
 
     pushWrappedLine(lines, title, width);
@@ -267,6 +301,10 @@ export class SessionDeckBrowser {
       pushWrappedLine(lines, this.theme.fg(this.openStatus.tone, this.openStatus.message), width);
     }
 
+    if (this.killStatus !== null) {
+      pushWrappedLine(lines, this.theme.fg(this.killStatus.tone, this.killStatus.message), width);
+    }
+
     if (this.worktreeStatus !== null) {
       pushWrappedLine(
         lines,
@@ -279,6 +317,10 @@ export class SessionDeckBrowser {
       for (const line of this.formatWorktreePromptLines()) {
         pushWrappedLine(lines, this.theme.fg('accent', line), width);
       }
+    }
+
+    if (this.killConfirm !== null) {
+      pushWrappedLine(lines, this.theme.fg('warning', this.formatKillConfirmation()), width);
     }
 
     if (this.reapLines.length > 0) {
@@ -695,6 +737,116 @@ export class SessionDeckBrowser {
       });
   }
 
+  private openKillConfirmation(record: SessionDeckBrowserRecord): void {
+    if (this.killPending !== null) {
+      this.killStatus = { message: 'Already requesting stop for a Pi session…', tone: 'muted' };
+      this.bump();
+      return;
+    }
+
+    if (this.killSelected === null) {
+      this.killStatus = {
+        message: 'Stop Pi is unavailable in this context.',
+        tone: 'warning',
+      };
+      this.bump();
+      return;
+    }
+
+    const row = formatSessionDeckBrowserRow(record);
+    this.clearStatus();
+    this.killConfirm = {
+      runtimeId: record.runtimeId,
+      title: row.title,
+      shortRuntimeId: formatShortRuntimeId(record.runtimeId),
+      pid: record.pid,
+    };
+    this.bump();
+  }
+
+  private handleKillConfirmInput(data: string): void {
+    if (matchesKey(data, 'escape') || matchesKey(data, 'ctrl+c') || data === 'q') {
+      this.killConfirm = null;
+      this.killStatus = { message: 'Stop Pi cancelled.', tone: 'muted' };
+      this.bump();
+      return;
+    }
+
+    if (matchesKey(data, 'enter') || matchesKey(data, 'return')) {
+      void this.submitKillConfirmation();
+    }
+  }
+
+  private async submitKillConfirmation(): Promise<void> {
+    const confirmation = this.killConfirm;
+    const killSelected = this.killSelected;
+    if (confirmation === null || killSelected === null) {
+      return;
+    }
+
+    if (this.killPending !== null) {
+      this.killStatus = { message: 'Already requesting stop for a Pi session…', tone: 'muted' };
+      this.bump();
+      return this.killPending;
+    }
+
+    const record = this.view.records.find(
+      (candidate) => candidate.runtimeId === confirmation.runtimeId,
+    );
+    if (record === undefined) {
+      this.killConfirm = null;
+      this.killStatus = {
+        message: 'Stop cancelled; selected session is no longer visible.',
+        tone: 'muted',
+      };
+      this.bump();
+      return;
+    }
+
+    this.killConfirm = null;
+    this.killStatus = { message: 'Requesting Pi stop…', tone: 'muted' };
+    this.bump();
+
+    this.killPending = (async () => {
+      try {
+        const result = await killSelected(record);
+        if (this.disposed) {
+          return;
+        }
+
+        this.killStatus = {
+          message: result.message,
+          tone: result.ok ? 'muted' : 'warning',
+        };
+        void this.refresh('auto');
+      } catch (error) {
+        if (this.disposed) {
+          return;
+        }
+
+        this.killStatus = {
+          message: `Stop request failed: ${getErrorMessage(error)}`,
+          tone: 'warning',
+        };
+      } finally {
+        this.killPending = null;
+        this.bump();
+      }
+    })();
+
+    return this.killPending;
+  }
+
+  private formatKillConfirmation(): string {
+    const confirmation = this.killConfirm;
+    if (confirmation === null) {
+      return '';
+    }
+
+    const pid = confirmation.pid === null ? 'pid unavailable' : `pid ${confirmation.pid}`;
+    return `Stop Pi for ${confirmation.title} (${confirmation.shortRuntimeId}, ${pid})? Sends SIGTERM to the Pi runtime only. Session history is preserved. iTerm/tmux may exit naturally. Enter confirm · esc/q cancel`;
+  }
+
   private async refreshAfterWorktree(runtimeId: string | null): Promise<void> {
     const nextView = await this.reload();
     if (this.disposed) {
@@ -819,6 +971,17 @@ export class SessionDeckBrowser {
       getRepoRecords(nextRepoState.recordsByKey, nextRepoOption.key),
       selectedRuntimeId,
     );
+
+    if (
+      this.killConfirm !== null &&
+      !nextView.records.some((record) => record.runtimeId === this.killConfirm?.runtimeId)
+    ) {
+      this.killConfirm = null;
+      this.killStatus = {
+        message: 'Stop cancelled; selected session is no longer visible.',
+        tone: 'muted',
+      };
+    }
   }
 
   private startAutoRefresh(): void {
@@ -859,6 +1022,7 @@ export class SessionDeckBrowser {
   private clearStatus(): void {
     this.refreshStatus = null;
     this.openStatus = null;
+    this.killStatus = null;
     this.worktreeStatus = null;
   }
 
@@ -1537,6 +1701,10 @@ function clampIndex(index: number, length: number): number {
   }
 
   return Math.max(0, Math.min(length - 1, index));
+}
+
+function formatShortRuntimeId(runtimeId: string): string {
+  return runtimeId.length <= 8 ? runtimeId : runtimeId.slice(0, 8);
 }
 
 function getErrorMessage(error: unknown): string {

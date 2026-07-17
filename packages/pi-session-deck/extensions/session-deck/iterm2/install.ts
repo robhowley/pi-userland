@@ -178,6 +178,12 @@ async function findMissingRuntimeAsset(
     };
   }
 
+  if (!(await pathExists(runtimePaths.killSessionHelperScriptPath))) {
+    return {
+      message: `Kill-session helper not found: ${runtimePaths.killSessionHelperScriptPath}`,
+    };
+  }
+
   if (!(await pathExists(runtimePaths.webRootPath))) {
     return {
       message: `Web assets not found: ${runtimePaths.webRootPath}`,

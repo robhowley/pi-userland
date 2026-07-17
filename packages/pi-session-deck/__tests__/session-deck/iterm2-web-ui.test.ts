@@ -2584,6 +2584,164 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(Object.keys(JSON.parse(requestInit.body ?? '{}'))).toEqual(['runtimeId']);
   });
 
+  it('renders Stop Pi only in expanded details and posts exact authenticated Kill requests after confirmation', async () => {
+    const fetchMock = vi.fn((url: string, _init?: unknown) => {
+      if (url === '/snapshot.json') {
+        return Promise.resolve(buildJsonResponse(buildSnapshot()));
+      }
+      if (url === '/actions/kill-session') {
+        return Promise.resolve(
+          buildJsonResponse({
+            ok: true,
+            status: 'requested',
+            message: 'Stop requested for this Pi session.',
+          }),
+        );
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    const harness = await setupAppWithFetch(fetchMock);
+    expandAllRepoGroups(harness.elements.list);
+
+    expect(findAllByClass(harness.elements.list, 'stop-action-button')).toHaveLength(0);
+    expect(findAllByClass(harness.elements.list, 'card-open')).toHaveLength(1);
+
+    getCardToggle(getCards(harness.elements.list)[0]!).click();
+    const detail = getCardDetail(getExpandedCards(harness.elements.list)[0]!);
+    const actions = getDetailSection(detail, 'SESSION ACTIONS');
+    const stopButton = findAllByClass(actions, 'stop-action-button')[0] as FakeButtonElement;
+    expect(stopButton.textContent).toBe('Stop Pi');
+
+    stopButton.click();
+    await flushMicrotasks();
+
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/actions/kill-session')).toHaveLength(0);
+    expect(harness.elements.list.textContent).toContain('Stop Pi sends SIGTERM');
+    expect(harness.elements.list.textContent).toContain('Session history is preserved');
+
+    const confirm = findAllByClass(
+      harness.elements.list,
+      'stop-confirm-primary',
+    )[0] as FakeButtonElement;
+    confirm.click();
+    await flushMicrotasks();
+
+    const killCall = fetchMock.mock.calls.find(([url]) => url === '/actions/kill-session');
+    expect(killCall).toBeDefined();
+    const requestInit = killCall![1] as {
+      method?: string;
+      cache?: string;
+      headers?: Record<string, string>;
+      body?: string;
+    };
+    expect(requestInit.method).toBe('POST');
+    expect(requestInit.cache).toBe('no-store');
+    expect(requestInit.headers).toMatchObject({
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'X-Session-Deck-Action-Token': 'test-token',
+    });
+    expect(JSON.parse(requestInit.body ?? '{}')).toEqual({ runtimeId: 'rt-1' });
+    expect(Object.keys(JSON.parse(requestInit.body ?? '{}'))).toEqual(['runtimeId']);
+    expect(harness.elements.list.textContent).toContain('Stop requested for this Pi session.');
+    expect(harness.elements.list.textContent).not.toContain('killed');
+  });
+
+  it('cancels Stop Pi confirmation without posting on cancel, detail collapse, or show-all hiding', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/snapshot.json') {
+        return Promise.resolve(
+          buildJsonResponse(
+            buildSnapshot({
+              records: [buildRecord({ presenceState: 'dead', presenceReason: 'pid_missing' })],
+            }),
+          ),
+        );
+      }
+      if (url === '/actions/kill-session') {
+        return Promise.resolve(
+          buildJsonResponse({
+            ok: true,
+            status: 'requested',
+            message: 'Stop requested for this Pi session.',
+          }),
+        );
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    const harness = await setupAppWithFetch(fetchMock);
+
+    setShowAll(harness.elements, true);
+    expandAllRepoGroups(harness.elements.list);
+    getCardToggle(getCards(harness.elements.list)[0]!).click();
+
+    (findAllByClass(harness.elements.list, 'stop-action-button')[0] as FakeButtonElement).click();
+    expect(findAllByClass(harness.elements.list, 'stop-confirmation')).toHaveLength(1);
+    (findAllByClass(harness.elements.list, 'stop-confirm')[1] as FakeButtonElement).click();
+    expect(findAllByClass(harness.elements.list, 'stop-confirmation')).toHaveLength(0);
+
+    (findAllByClass(harness.elements.list, 'stop-action-button')[0] as FakeButtonElement).click();
+    getCardToggle(getExpandedCards(harness.elements.list)[0]!).click();
+    expect(findAllByClass(harness.elements.list, 'stop-confirmation')).toHaveLength(0);
+
+    getCardToggle(getCards(harness.elements.list)[0]!).click();
+    (findAllByClass(harness.elements.list, 'stop-action-button')[0] as FakeButtonElement).click();
+    setShowAll(harness.elements, false);
+    expect(findAllByClass(harness.elements.list, 'stop-confirmation')).toHaveLength(0);
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/actions/kill-session')).toHaveLength(0);
+  });
+
+  it('keeps one pending Stop Pi request and ignores stale completion after confirmation is replaced', async () => {
+    const killRequest = {
+      resolve: null as ((response: ReturnType<typeof buildJsonResponse>) => void) | null,
+    };
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/snapshot.json') {
+        return Promise.resolve(
+          buildJsonResponse(
+            buildSnapshot({
+              records: [
+                buildRecord(),
+                buildRecord({ runtimeId: 'rt-2', sessionId: 'session-2', sessionName: 'bravo' }),
+              ],
+            }),
+          ),
+        );
+      }
+      if (url === '/actions/kill-session') {
+        return new Promise<ReturnType<typeof buildJsonResponse>>((resolve) => {
+          killRequest.resolve = resolve;
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    const harness = await setupAppWithFetch(fetchMock);
+    expandAllRepoGroups(harness.elements.list);
+
+    getCardToggle(getCards(harness.elements.list)[0]!).click();
+    (findAllByClass(harness.elements.list, 'stop-action-button')[0] as FakeButtonElement).click();
+    (findAllByClass(harness.elements.list, 'stop-confirm-primary')[0] as FakeButtonElement).click();
+    await flushMicrotasks();
+
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/actions/kill-session')).toHaveLength(1);
+    expect(
+      findAllByClass(harness.elements.list, 'stop-action-button').map(
+        (button) => (button as FakeButtonElement).disabled,
+      ),
+    ).toEqual([true]);
+
+    killRequest.resolve?.(
+      buildJsonResponse({
+        ok: true,
+        status: 'already-exited',
+        message: 'This Pi session is no longer running.',
+      }),
+    );
+    await flushMicrotasks();
+
+    expect(harness.elements.list.textContent).toContain('This Pi session is no longer running.');
+  });
+
   it('keeps one pending Open request and disables all Open buttons until it resolves', async () => {
     const openRequest = {
       resolve: null as ((response: ReturnType<typeof buildJsonResponse>) => void) | null,
@@ -3008,6 +3166,7 @@ describe('Session Deck iTerm2 web UI', () => {
       'IDENTITY',
       'WORKSPACE',
       'STATUS',
+      'SESSION ACTIONS',
       'Record diagnostics',
     ]);
 

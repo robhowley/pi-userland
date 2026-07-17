@@ -488,6 +488,53 @@ button.card-toggle[aria-expanded='true']::after {
   background: var(--color-surface-raised);
 }
 
+.stop-action-row,
+.stop-confirmation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.stop-action-button,
+.stop-confirm {
+  border-color: rgba(191, 97, 106, 0.42);
+  color: var(--color-banner-text);
+  font-family: var(--font-mono);
+}
+
+.stop-action-button:hover,
+.stop-confirm:hover,
+.stop-confirm:focus-visible {
+  border-color: rgba(191, 97, 106, 0.72);
+  background: rgba(191, 97, 106, 0.14);
+}
+
+.stop-action-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.stop-confirmation {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(191, 97, 106, 0.38);
+  border-radius: 7px;
+  padding: 8px;
+  background: rgba(191, 97, 106, 0.08);
+}
+
+.stop-confirmation-copy,
+.stop-action-message {
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+}
+
+.stop-confirm-primary,
+.stop-action-failure {
+  color: var(--color-danger);
+}
+
 .row-line1,
 .row-line2,
 .summary-line,

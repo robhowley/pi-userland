@@ -124,7 +124,7 @@ export async function readPresenceView(
   return { records, diagnostics };
 }
 
-function normalizePresenceRecord(candidate: unknown): PresenceRecord | null {
+export function normalizePresenceRecord(candidate: unknown): PresenceRecord | null {
   if (!isObject(candidate)) {
     return null;
   }

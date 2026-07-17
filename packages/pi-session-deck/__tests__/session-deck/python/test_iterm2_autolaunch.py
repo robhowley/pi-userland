@@ -67,6 +67,7 @@ class TempRuntime:
         self.state_path = self.root / "install.json"
         self.helper_path = self.root / "dist/extensions/session-deck/worktree/action-cli.js"
         self.open_helper_path = self.root / "dist/extensions/session-deck/iterm2/open-action-cli.js"
+        self.kill_helper_path = self.root / "dist/extensions/session-deck/iterm2/kill-action-cli.js"
         self.payload = {
             "schemaVersion": 1,
             "product": "pi-session-deck-iterm2",
@@ -101,6 +102,10 @@ class TempRuntime:
     def write_open_helper(self, source: str) -> None:
         self.open_helper_path.parent.mkdir(parents=True, exist_ok=True)
         self.open_helper_path.write_text(source, encoding="utf-8")
+
+    def write_kill_helper(self, source: str) -> None:
+        self.kill_helper_path.parent.mkdir(parents=True, exist_ok=True)
+        self.kill_helper_path.write_text(source, encoding="utf-8")
 
 
 def assert_browser_safe_payload(case: unittest.TestCase, payload: dict, *private_strings: str) -> None:
@@ -540,6 +545,10 @@ class ImportAndConfigTests(unittest.TestCase):
             config.runtime.open_terminal_helper_path,
             fixture.root / "dist/extensions/session-deck/iterm2/open-action-cli.js",
         )
+        self.assertEqual(
+            config.runtime.kill_session_helper_path,
+            fixture.root / "dist/extensions/session-deck/iterm2/kill-action-cli.js",
+        )
         AUTO.validate_runtime_assets(config)
 
         (fixture.web_root / "app.js").unlink()
@@ -589,6 +598,11 @@ class ImportAndConfigTests(unittest.TestCase):
             health["openTerminalHelperScriptPath"],
             str(config.runtime.open_terminal_helper_path),
         )
+        self.assertEqual(
+            health["killSessionHelperScriptPath"],
+            str(config.runtime.kill_session_helper_path),
+        )
+        self.assertIn("kill-session", health["actionCapabilities"])
         self.assertNotIn(effective_command_path.value, json.dumps(health))
 
         with urlopen(f"{base_url}/", timeout=1.0) as response:
@@ -933,6 +947,158 @@ class ImportAndConfigTests(unittest.TestCase):
         with self.assertRaises(HTTPError) as oversized_request_raised:
             urlopen(oversized_request, timeout=1.0)
         self.assertEqual(oversized_request_raised.exception.code, 413)
+
+    def test_toolbelt_kill_session_action_requires_token_and_runs_helper(self):
+        fixture = TempRuntime(self)
+        fixture.write_kill_helper(
+            "import json, sys\n"
+            "payload = json.loads(sys.stdin.read())\n"
+            "if payload != {'runtimeId': 'rt-1'}:\n"
+            "    print(json.dumps({'ok': False, 'status': 'failed', 'message': 'bad request'}))\n"
+            "    raise SystemExit(1)\n"
+            "print(json.dumps({'ok': True, 'status': 'requested', 'message': 'Stop requested for this Pi session.'}))\n"
+        )
+        fixture.payload["runtime"]["nodeExecutablePath"] = sys.executable
+        fixture.write_state()
+        config = fixture.config()
+        http = AUTO.start_http_server(config, make_effective_command_path())
+        self.addCleanup(http.close)
+        base_url = f"http://127.0.0.1:{http.port}"
+
+        token = http.server.session_deck_action_token
+        payload = json.dumps({"runtimeId": "rt-1"}).encode("utf-8")
+        request = Request(
+            f"{base_url}/actions/kill-session",
+            data=payload,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "X-Session-Deck-Action-Token": token,
+            },
+        )
+
+        with urlopen(request, timeout=1.0) as response:
+            action_result = json.loads(response.read().decode("utf-8"))
+        self.assertEqual(
+            action_result,
+            {"ok": True, "status": "requested", "message": "Stop requested for this Pi session."},
+        )
+
+        missing_token = Request(
+            f"{base_url}/actions/kill-session",
+            data=payload,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with self.assertRaises(HTTPError) as raised:
+            urlopen(missing_token, timeout=1.0)
+        self.assertEqual(raised.exception.code, 403)
+
+    def test_run_kill_session_action_invokes_fixed_helper_argv_with_short_timeout(self):
+        fixture = TempRuntime(self)
+        fixture.write_kill_helper("# sentinel\n")
+        config = fixture.config()
+        effective_path = make_effective_command_path("/shell/bin:/usr/bin")
+        captured: dict[str, object] = {}
+
+        def fake_run(args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                stdout=json.dumps(
+                    {"ok": True, "status": "requested", "message": "Stop requested for this Pi session."}
+                ),
+                stderr="",
+            )
+
+        with mock.patch.object(AUTO.subprocess, "run", side_effect=fake_run):
+            status_code, payload = AUTO.run_kill_session_action(
+                config, '{"runtimeId":"rt-1"}', effective_path
+            )
+
+        self.assertEqual(status_code, 200)
+        self.assertEqual(payload["ok"], True)
+        self.assertEqual(
+            captured["args"],
+            [str(config.runtime.node_executable_path), str(config.runtime.kill_session_helper_path)],
+        )
+        kwargs = captured["kwargs"]
+        self.assertEqual(kwargs["input"], '{"runtimeId":"rt-1"}')
+        self.assertTrue(kwargs["capture_output"])
+        self.assertFalse(kwargs["check"])
+        self.assertTrue(kwargs["text"])
+        self.assertEqual(kwargs["timeout"], AUTO.KILL_ACTION_HELPER_TIMEOUT_SECONDS)
+        self.assertNotIn("shell", kwargs)
+        self.assertEqual(kwargs["env"]["PATH"], effective_path.value)
+
+    def test_run_kill_session_action_handles_missing_timeout_invalid_and_semantic_failures(self):
+        fixture = TempRuntime(self)
+        fixture.payload["runtime"]["nodeExecutablePath"] = sys.executable
+        fixture.write_state()
+
+        missing_status, missing_payload = AUTO.run_kill_session_action(
+            fixture.config(), "{}", make_effective_command_path()
+        )
+        self.assertEqual(missing_status, 503)
+        self.assertEqual(missing_payload, AUTO.helper_failure_payload(AUTO.KILL_SESSION_HELPER_UNAVAILABLE_MESSAGE))
+        assert_browser_safe_payload(self, missing_payload, str(fixture.root), str(fixture.kill_helper_path))
+
+        fixture.write_kill_helper("import time\ntime.sleep(0.05)\nprint('{}')\n")
+        original_timeout = AUTO.KILL_ACTION_HELPER_TIMEOUT_SECONDS
+        AUTO.KILL_ACTION_HELPER_TIMEOUT_SECONDS = 0.01
+        self.addCleanup(setattr, AUTO, "KILL_ACTION_HELPER_TIMEOUT_SECONDS", original_timeout)
+        timeout_status, timeout_payload = AUTO.run_kill_session_action(
+            fixture.config(), "{}", make_effective_command_path()
+        )
+        self.assertEqual(timeout_status, 504)
+        self.assertEqual(timeout_payload, AUTO.helper_failure_payload(AUTO.KILL_SESSION_HELPER_TIMEOUT_MESSAGE))
+        self.assertIn("may have reached the runtime", timeout_payload["message"])
+        AUTO.KILL_ACTION_HELPER_TIMEOUT_SECONDS = original_timeout
+
+        for source in (
+            "print('/private/tmp/helper-output')\n",
+            "import json\nprint(json.dumps(['not', 'an', 'object']))\n",
+            "import json\nprint(json.dumps({'ok': True, 'status': 'requested', 'message': 'ok', 'pid': 1234}))\n",
+            "import json\nprint(json.dumps({'ok': False, 'status': 'failed', 'reason': 'pid-reused', 'message': '/tmp/private.sock'}))\n",
+        ):
+            with self.subTest(source=source):
+                fixture.write_kill_helper(source)
+                status_code, payload = AUTO.run_kill_session_action(
+                    fixture.config(), "{}", make_effective_command_path()
+                )
+                self.assertEqual(status_code, 500)
+                self.assertEqual(
+                    payload,
+                    AUTO.helper_failure_payload(AUTO.KILL_SESSION_HELPER_INVALID_RESPONSE_MESSAGE),
+                )
+                assert_browser_safe_payload(self, payload, "/private/tmp/helper-output", "/tmp/private.sock")
+
+        fixture.write_kill_helper(
+            "import json\n"
+            "print(json.dumps({'ok': False, 'status': 'failed', 'message': 'runtimeId must be a string.'}))\n"
+            "raise SystemExit(1)\n"
+        )
+        invalid_status, invalid_payload = AUTO.run_kill_session_action(
+            fixture.config(), "{}", make_effective_command_path()
+        )
+        self.assertEqual(invalid_status, 400)
+        self.assertEqual(
+            invalid_payload,
+            {"ok": False, "status": "failed", "message": "runtimeId must be a string."},
+        )
+
+        fixture.write_kill_helper(
+            "import json\n"
+            "print(json.dumps({'ok': False, 'status': 'failed', 'reason': 'pid-reused', 'message': 'The recorded process no longer matches this session.'}))\n"
+        )
+        semantic_status, semantic_payload = AUTO.run_kill_session_action(
+            fixture.config(), "{}", make_effective_command_path()
+        )
+        self.assertEqual(semantic_status, 200)
+        self.assertEqual(semantic_payload["ok"], False)
+        self.assertEqual(semantic_payload["reason"], "pid-reused")
 
     def test_run_create_worktree_action_returns_browser_safe_helper_missing_failure(self):
         fixture = TempRuntime(self)
