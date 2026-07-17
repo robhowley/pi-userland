@@ -1,6 +1,10 @@
 # pi-session-deck
 
-A TUI dashboard for Pi sessions: live windows, worktrees, PRs, activity, and statuses in one place.
+A control plane for your Pi agents: live sessions, worktrees, PRs, activity, terminal focus, and new-agent launches in one place.
+
+<img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-session-deck/img/session-deck-toolbelt.png" alt="Session Deck iTerm2 Toolbelt showing live Pi agent sessions grouped by repo" width="720">
+
+Session Deck gives each Pi agent a live operating surface across the TUI and iTerm2 Toolbelt. Use it to inspect agent liveness, branch context, PR state, status chips, and attached terminal targets without hunting through terminal tabs.
 
 ## Installation
 
