@@ -196,7 +196,7 @@ describe('session-deck worktree orchestration', () => {
     expect(mockedLaunchDetachedTmuxPi).not.toHaveBeenCalled();
   });
 
-  it('returns created-and-launched and omits waiting-for-session updates', async () => {
+  it('returns created-and-launched, threads ambient agent dir, and omits waiting-for-session updates', async () => {
     const updates: string[] = [];
 
     await expect(
@@ -213,6 +213,48 @@ describe('session-deck worktree orchestration', () => {
     });
 
     expect(updates).toEqual(['creating-worktree', 'starting-pi']);
+    expect(mockedLaunchDetachedTmuxPi).toHaveBeenCalledWith(
+      CREATED_WORKTREE,
+      'feature/test',
+      expect.objectContaining({ agentDir: { mode: 'ambient' } }),
+    );
+  });
+
+  it('fails before launch when agent dir selection is invalid', async () => {
+    await expect(
+      orchestrateCreateWorktree({
+        ...REQUEST,
+        launch: {
+          mode: 'tmux-detached',
+          agentDir: { mode: 'custom', customDir: 'relative' } as never,
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 'failed',
+      failurePhase: 'planning',
+      worktree: { reason: 'invalid-request' },
+    });
+    expect(mockedResolveRepoIntent).not.toHaveBeenCalled();
+    expect(mockedLaunchDetachedTmuxPi).not.toHaveBeenCalled();
+  });
+
+  it('threads explicit custom agent dir to launch', async () => {
+    await orchestrateCreateWorktree({
+      ...REQUEST,
+      launch: {
+        mode: 'tmux-detached',
+        agentDir: { mode: 'custom', customDir: '/Users/test/.pi/agent-work' },
+      },
+    });
+
+    expect(mockedLaunchDetachedTmuxPi).toHaveBeenCalledWith(
+      CREATED_WORKTREE,
+      'feature/test',
+      expect.objectContaining({
+        agentDir: { mode: 'custom', customDir: '/Users/test/.pi/agent-work' },
+      }),
+    );
   });
 
   it('returns reused-and-launched when apply reuses an existing worktree', async () => {

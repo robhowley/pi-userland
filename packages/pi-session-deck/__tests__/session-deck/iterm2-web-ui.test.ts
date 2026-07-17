@@ -101,6 +101,7 @@ class FakeElement extends FakeNode {
   readonly tagName: string;
   readonly attributes = new Map<string, string>();
   readonly listeners = new Map<string, EventListener[]>();
+  ownerDocument: FakeDocument | null = null;
   id = '';
   type = '';
 
@@ -161,6 +162,10 @@ class FakeElement extends FakeNode {
     return true;
   }
 
+  focus(): void {
+    this.ownerDocument?.setActiveElement(this);
+  }
+
   click(): void {
     this.dispatchEvent({ type: 'click', preventDefault() {} });
   }
@@ -177,25 +182,42 @@ class FakeButtonElement extends FakeElement {
 class FakeInputElement extends FakeElement {
   checked = false;
   value = '';
+  selectionStart: number | null = 0;
+  selectionEnd: number | null = 0;
 
   constructor() {
     super('input');
   }
+
+  setSelectionRange(start: number, end: number): void {
+    this.selectionStart = start;
+    this.selectionEnd = end;
+  }
 }
 
 class FakeDocument extends FakeNode {
+  activeElement: FakeElement | null = null;
+
   createElement(tagName: 'button'): FakeButtonElement;
   createElement(tagName: 'input'): FakeInputElement;
   createElement(tagName: string): FakeElement;
   createElement(tagName: string): FakeElement {
-    switch (tagName.toLowerCase()) {
-      case 'button':
-        return new FakeButtonElement();
-      case 'input':
-        return new FakeInputElement();
-      default:
-        return new FakeElement(tagName);
-    }
+    const element = (() => {
+      switch (tagName.toLowerCase()) {
+        case 'button':
+          return new FakeButtonElement();
+        case 'input':
+          return new FakeInputElement();
+        default:
+          return new FakeElement(tagName);
+      }
+    })();
+    element.ownerDocument = this;
+    return element;
+  }
+
+  setActiveElement(element: FakeElement): void {
+    this.activeElement = element;
   }
 
   createElementNS(_namespace: string, tagName: string): FakeElement {
@@ -223,6 +245,7 @@ interface HarnessElements {
 }
 
 interface AppHarness {
+  document: FakeDocument;
   elements: HarnessElements;
   pushSnapshot: (snapshot: unknown) => void;
   fetchMock: ReturnType<typeof vi.fn>;
@@ -285,6 +308,19 @@ function buildBasePreview(baseRef = 'origin/main') {
   };
 }
 
+function buildLaunchPreview(overrides: Record<string, unknown> = {}) {
+  return {
+    ok: true,
+    status: 'resolved',
+    mode: 'ambient',
+    envAction: 'inherit',
+    effectiveDisplay: '~/.pi/agent-or',
+    provenance: 'process-env',
+    warnings: [],
+    ...overrides,
+  };
+}
+
 function buildJsonResponse(payload: unknown, ok = true, status = 200) {
   return {
     ok,
@@ -297,7 +333,14 @@ async function setupApp(snapshots: unknown[]): Promise<AppHarness> {
   const document = new FakeDocument();
   const elements = buildElements(document);
   const queue = [...snapshots];
-  const fetchMock = vi.fn(async () => {
+  const fetchMock = vi.fn(async (url: string, init?: { body?: string }) => {
+    if (url === '/actions/create-worktree-preview') {
+      const body = JSON.parse(init?.body ?? '{}') as { action?: string };
+      if (body.action === 'preview-launch-context') {
+        return buildJsonResponse(buildLaunchPreview());
+      }
+    }
+
     const snapshot = queue.shift();
     if (!snapshot) {
       throw new Error('Unexpected snapshot fetch.');
@@ -327,6 +370,7 @@ async function setupApp(snapshots: unknown[]): Promise<AppHarness> {
   await flushMicrotasks();
 
   return {
+    document,
     elements,
     pushSnapshot: (snapshot) => {
       queue.push(snapshot);
@@ -357,6 +401,7 @@ async function setupAppWithFetch(fetchMock: ReturnType<typeof vi.fn>): Promise<A
   await flushMicrotasks();
 
   return {
+    document,
     elements,
     pushSnapshot: () => {
       throw new Error('setupAppWithFetch does not queue snapshots.');
@@ -893,9 +938,13 @@ describe('Session Deck iTerm2 web UI', () => {
     actionButton.click();
     await flushMicrotasks();
 
+    const previewCalls = harness.fetchMock.mock.calls.filter(
+      ([url]) => url === '/actions/create-worktree-preview',
+    );
+    expect(previewCalls).toHaveLength(2);
     expect(
-      harness.fetchMock.mock.calls.filter(([url]) => url === '/actions/create-worktree-preview'),
-    ).toHaveLength(1);
+      previewCalls.map(([, init]) => JSON.parse((init as { body?: string }).body ?? '{}').action),
+    ).toEqual(['preview-base-ref', 'preview-launch-context']);
 
     const openedRepoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
     const openedActionButton = getRepoActionButton(openedRepoGroup);
@@ -908,6 +957,8 @@ describe('Session Deck iTerm2 web UI', () => {
     const form = findAllByClass(openedRepoGroup, 'worktree-form')[0];
     expect(form).toBeDefined();
     expect(form!.textContent).toContain('main →');
+    expect(form!.textContent).toContain('Pi config → ~/.pi/agent-or');
+    expect(form!.textContent).toContain('Change');
     expect(form!.textContent).toContain('Create');
     expect(form!.textContent).not.toContain('Branch name');
     expect(form!.textContent).not.toContain('Cancel');
@@ -936,7 +987,9 @@ describe('Session Deck iTerm2 web UI', () => {
     const branchControl = findAllByClass(form!, 'worktree-branch-control')[0];
     expect(branchControl).toBeDefined();
     const buttons = findAllByTag(form!, 'button') as FakeButtonElement[];
-    expect(buttons.map((button) => button.textContent)).toEqual(['Create']);
+    expect(buttons.map((button) => button.textContent)).toEqual(['Create', 'Change']);
+    expect(buttons[1]?.getAttribute('aria-label')).toBe('Change Pi config');
+    expect(buttons[1]?.getAttribute('aria-expanded')).toBe('false');
     expect(branchInput!.parentNode).toBe(branchControl);
     expect(buttons[0]?.parentNode).toBe(branchControl);
     expect(buttons[0]?.classList.contains('worktree-submit-button')).toBe(true);
@@ -1110,6 +1163,9 @@ describe('Session Deck iTerm2 web UI', () => {
     const loadingRepoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
     const form = findAllByClass(loadingRepoGroup, 'worktree-form')[0]!;
     expect(findAllByClass(form, 'worktree-field-meta')[0]?.textContent).toBe('Resolving…');
+    expect(findAllByClass(form, 'worktree-config-summary')[0]?.textContent).toBe(
+      'Pi config resolving…',
+    );
     const submitButton = findAllByTag(form, 'button')[0] as FakeButtonElement;
     expect(submitButton.textContent).toBe('Create');
     expect(submitButton.disabled).toBe(true);
@@ -1439,9 +1495,134 @@ describe('Session Deck iTerm2 web UI', () => {
       },
       branchName: 'rh/feature-name',
       baseRef: 'origin/main',
-      launch: { mode: 'tmux-detached' },
+      launch: { mode: 'tmux-detached', agentDir: { mode: 'ambient' } },
     });
     expect(JSON.parse(requestInit.body ?? '{}')).not.toHaveProperty('label');
+  });
+
+  it('changes Pi config to custom, validates locally, and preserves the branch draft', async () => {
+    const harness = await setupApp([
+      buildSnapshot(),
+      buildBasePreview(),
+      {
+        ok: true,
+        status: 'created-and-launched',
+        worktree: {
+          ok: true,
+          status: 'created',
+          branch: 'rh/custom-agent',
+          baseRef: 'origin/main',
+          repoName: 'project',
+          qualifiedRepoName: 'owner/project',
+        },
+        launch: {
+          requested: true,
+          ok: true,
+          mode: 'tmux-detached',
+          status: 'launched',
+          message: 'Started a detached tmux Pi session.',
+        },
+      },
+      buildSnapshot(),
+    ]);
+    const repoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
+    getRepoActionButton(repoGroup).click();
+    await flushMicrotasks();
+
+    let form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'owner/project'),
+      'worktree-form',
+    )[0]!;
+    const branchInput = findAllByTag(form, 'input').find(
+      (input) => input.getAttribute('aria-label') === 'Branch name',
+    ) as FakeInputElement;
+    branchInput.value = 'rh/custom-agent';
+    branchInput.dispatchEvent({ type: 'input' });
+    const changeButton = findAllByTag(form, 'button').find(
+      (button) => button.getAttribute('aria-label') === 'Change Pi config',
+    ) as FakeButtonElement;
+    changeButton.click();
+
+    form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'owner/project'),
+      'worktree-form',
+    )[0]!;
+    expect(findAllByClass(form, 'worktree-config-drawer')).toHaveLength(1);
+    const drawerButtonLabels = findAllByTag(form, 'button').map((button) => button.textContent);
+    expect(drawerButtonLabels).toContain('Current');
+    expect(drawerButtonLabels).toContain('Pi default');
+    expect(drawerButtonLabels).not.toContain('Ambient env');
+    expect(drawerButtonLabels).not.toContain('Pi default (~/.pi/agent)');
+    const customButton = findAllByTag(form, 'button').find(
+      (button) => button.textContent === 'Custom…',
+    ) as FakeButtonElement;
+    customButton.click();
+
+    form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'owner/project'),
+      'worktree-form',
+    )[0]!;
+    const customInput = findAllByTag(form, 'input').find(
+      (input) => input.getAttribute('aria-label') === 'Custom Pi config directory',
+    ) as FakeInputElement;
+    customInput.focus();
+    customInput.value = 'relative';
+    customInput.dispatchEvent({ type: 'input' });
+
+    form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'owner/project'),
+      'worktree-form',
+    )[0]!;
+    const focusedInvalidCustomInput = findAllByTag(form, 'input').find(
+      (input) => input.getAttribute('aria-label') === 'Custom Pi config directory',
+    );
+    expect(harness.document.activeElement).toBe(focusedInvalidCustomInput);
+    await flushMicrotasks();
+    form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'owner/project'),
+      'worktree-form',
+    )[0]!;
+    const focusedInvalidCustomInputAfterPreview = findAllByTag(form, 'input').find(
+      (input) => input.getAttribute('aria-label') === 'Custom Pi config directory',
+    );
+    expect(harness.document.activeElement).toBe(focusedInvalidCustomInputAfterPreview);
+    expect(form.textContent).toContain('Custom Pi config must be absolute or start with ~/.');
+    expect((findAllByTag(form, 'button')[0] as FakeButtonElement).disabled).toBe(true);
+    expect(
+      (
+        findAllByTag(form, 'input').find(
+          (input) => input.getAttribute('aria-label') === 'Branch name',
+        ) as FakeInputElement
+      ).value,
+    ).toBe('rh/custom-agent');
+
+    const fixedCustomInput = findAllByTag(form, 'input').find(
+      (input) => input.getAttribute('aria-label') === 'Custom Pi config directory',
+    ) as FakeInputElement;
+    fixedCustomInput.value = '~/agent-work';
+    fixedCustomInput.dispatchEvent({ type: 'input' });
+    form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'owner/project'),
+      'worktree-form',
+    )[0]!;
+    const focusedValidCustomInput = findAllByTag(form, 'input').find(
+      (input) => input.getAttribute('aria-label') === 'Custom Pi config directory',
+    );
+    expect(harness.document.activeElement).toBe(focusedValidCustomInput);
+    form.dispatchEvent({ type: 'submit' });
+    await flushMicrotasks();
+
+    const actionCall = harness.fetchMock.mock.calls.find(
+      ([url]) => url === '/actions/create-worktree',
+    );
+    expect(actionCall).toBeDefined();
+    expect(JSON.parse((actionCall?.[1] as { body?: string })?.body ?? '{}')).toMatchObject({
+      branchName: 'rh/custom-agent',
+      launch: {
+        mode: 'tmux-detached',
+        agentDir: { mode: 'custom', customDir: '~/agent-work' },
+      },
+    });
   });
 
   it('renders a no-worktree-created preflight failure with doctor guidance', async () => {
@@ -1481,22 +1662,24 @@ describe('Session Deck iTerm2 web UI', () => {
     form.dispatchEvent({ type: 'submit' });
     await flushMicrotasks();
 
-    expect(harness.elements.list.textContent).toContain('New session blocked');
     expect(harness.elements.list.textContent).toContain('no worktree was created');
     expect(harness.elements.list.textContent).toContain('/session-deck iterm2 doctor');
     expect(harness.elements.list.textContent).not.toContain('Diagnostics');
     expect(getPendingWorktreeActions(harness.elements.list)).toHaveLength(0);
-    const dismissButtons = getPendingWorktreeDismissButtons(harness.elements.list);
-    expect(dismissButtons).toHaveLength(1);
-    expect(dismissButtons[0]?.getAttribute('aria-label')).toBe('Dismiss New session blocked');
-    expect(
-      findAllByClass(getRepoGroupByLabel(harness.elements.list, 'owner/project'), 'worktree-form'),
-    ).toHaveLength(0);
-
-    dismissButtons[0]?.click();
-    await flushMicrotasks();
-
+    expect(getPendingWorktreeDismissButtons(harness.elements.list)).toHaveLength(0);
     expect(getPendingWorktreeCards(harness.elements.list)).toHaveLength(0);
+    const reopenedForm = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'owner/project'),
+      'worktree-form',
+    )[0]!;
+    expect(reopenedForm.textContent).toContain('no worktree was created');
+    expect(
+      (
+        findAllByTag(reopenedForm, 'input').find(
+          (input) => input.getAttribute('aria-label') === 'Branch name',
+        ) as FakeInputElement
+      ).value,
+    ).toBe('rh/feature-name');
   });
 
   it('renders the pi preflight failure with no-worktree-created guidance', async () => {

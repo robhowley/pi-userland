@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   normalizeActionRequest,
+  normalizeLaunchContextPreviewRequest,
   toBrowserSafeCreateWorktreeActionResult,
 } from '../../extensions/session-deck/worktree/action-cli.js';
 import type { CreateWorktreeActionResult } from '../../extensions/session-deck/worktree/types.js';
@@ -25,9 +26,108 @@ describe('session-deck worktree action cli', () => {
           candidateRuntimeIds: ['rt-1'],
         },
         branchName: 'feature/test',
-        launch: { mode: 'tmux-detached' },
+        launch: { mode: 'tmux-detached', agentDir: { mode: 'ambient' } },
       },
     });
+  });
+
+  it('accepts one-shot default and custom launch agent dir selectors', () => {
+    expect(
+      normalizeActionRequest({
+        repoIntent: {
+          repoName: 'project',
+          candidateRuntimeIds: ['rt-1'],
+        },
+        branchName: 'feature/test',
+        launch: { mode: 'tmux-detached', agentDir: { mode: 'default' } },
+      }),
+    ).toMatchObject({
+      ok: true,
+      request: { launch: { agentDir: { mode: 'default' } } },
+    });
+
+    expect(
+      normalizeActionRequest({
+        repoIntent: {
+          repoName: 'project',
+          candidateRuntimeIds: ['rt-1'],
+        },
+        branchName: 'feature/test',
+        launch: {
+          mode: 'tmux-detached',
+          agentDir: { mode: 'custom', customDir: '~/agent-or/../agent-work' },
+        },
+      }),
+    ).toMatchObject({
+      ok: true,
+      request: { launch: { agentDir: { mode: 'custom' } } },
+    });
+    const result = normalizeActionRequest({
+      repoIntent: {
+        repoName: 'project',
+        candidateRuntimeIds: ['rt-1'],
+      },
+      branchName: 'feature/test',
+      launch: {
+        mode: 'tmux-detached',
+        agentDir: { mode: 'custom', customDir: '~/agent-or/../agent-work' },
+      },
+    });
+    expect(result.ok && result.request.launch?.agentDir?.customDir).toMatch(/\/agent-work$/u);
+  });
+
+  it('rejects invalid launch agent dir selectors and recursive path fields', () => {
+    expect(
+      normalizeActionRequest({
+        repoIntent: { repoName: 'project', candidateRuntimeIds: ['rt-1'] },
+        branchName: 'feature/test',
+        launch: { mode: 'tmux-detached', agentDir: { mode: 'default', customDir: '/tmp/pi' } },
+      }),
+    ).toEqual({ ok: false, message: 'launch.agentDir.customDir is only valid for custom mode.' });
+
+    expect(
+      normalizeActionRequest({
+        repoIntent: { repoName: 'project', candidateRuntimeIds: ['rt-1'] },
+        branchName: 'feature/test',
+        launch: { mode: 'tmux-detached', agentDir: { mode: 'custom', customDir: 'relative' } },
+      }),
+    ).toEqual({
+      ok: false,
+      message: 'launch.agentDir.customDir must be absolute or start with ~/.',
+    });
+
+    expect(
+      normalizeLaunchContextPreviewRequest({
+        action: 'preview-launch-context',
+        launch: { agentDir: { mode: 'custom', path: '/tmp/pi' } },
+      }),
+    ).toEqual({
+      ok: false,
+      message: 'Field is not accepted by this action boundary: launch.agentDir.path',
+    });
+
+    expect(
+      normalizeLaunchContextPreviewRequest({
+        action: 'preview-launch-context',
+        launch: {
+          mode: 'tmux-detached',
+          agentDir: { mode: 'default' },
+          candidates: [{ path: '/tmp/pi' }],
+        },
+      }),
+    ).toEqual({
+      ok: false,
+      message: 'Field is not accepted by this action boundary: launch.candidates.0.path',
+    });
+  });
+
+  it('normalizes launch-context preview requests through the structured launch object', () => {
+    expect(
+      normalizeLaunchContextPreviewRequest({
+        action: 'preview-launch-context',
+        launch: { mode: 'tmux-detached', agentDir: { mode: 'default' } },
+      }),
+    ).toEqual({ ok: true, request: { agentDir: { mode: 'default' } } });
   });
 
   it('rejects explicit launch.mode none at the public boundary', () => {

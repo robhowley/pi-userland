@@ -1,4 +1,42 @@
 export type CreateWorktreeLaunchMode = 'none' | 'tmux-detached';
+export type CreateWorktreeLaunchAgentDirMode = 'ambient' | 'default' | 'custom';
+
+export type CreateWorktreeLaunchAgentDir =
+  | { mode: 'ambient'; customDir?: never }
+  | { mode: 'default'; customDir?: never }
+  | { mode: 'custom'; customDir: string };
+
+export type WorktreeLaunchContextEnvAction = 'inherit' | 'unset' | 'set';
+export type WorktreeLaunchContextProvenance =
+  | 'request'
+  | 'tmux-server-env'
+  | 'process-env'
+  | 'pi-default'
+  | 'unknown';
+
+export interface WorktreeLaunchContextPreviewRequest {
+  agentDir?: CreateWorktreeLaunchAgentDir;
+}
+
+export type WorktreeLaunchContextPreviewResult =
+  | {
+      ok: true;
+      status: 'resolved';
+      mode: CreateWorktreeLaunchAgentDirMode;
+      envAction: WorktreeLaunchContextEnvAction;
+      effectiveDisplay: string;
+      provenance: WorktreeLaunchContextProvenance;
+      warnings: string[];
+    }
+  | {
+      ok: false;
+      status: 'failed';
+      reason: 'invalid-request';
+      message: string;
+      recoverable: true;
+    };
+
+export type BrowserSafeWorktreeLaunchContextPreviewResult = WorktreeLaunchContextPreviewResult;
 
 export interface CreateWorktreeRepoIntent {
   qualifiedRepoName?: string | null;
@@ -14,6 +52,7 @@ export interface CreateWorktreeActionRequest {
   path?: string;
   launch?: {
     mode: CreateWorktreeLaunchMode;
+    agentDir?: CreateWorktreeLaunchAgentDir;
   };
 }
 
@@ -55,6 +94,7 @@ export type LaunchPrereqFailureReason = 'tmux-unavailable' | 'pi-command-unavail
 export type CreateWorktreeLaunchFailureReason =
   | LaunchPrereqFailureReason
   | 'tmux-name-collision'
+  | 'launch-context-mismatch'
   | 'spawn-failed'
   | 'presence-timeout';
 

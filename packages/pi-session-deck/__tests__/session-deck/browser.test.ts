@@ -3,18 +3,30 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { visibleWidth } from '@mariozechner/pi-tui';
 import type { Theme } from '@earendil-works/pi-coding-agent';
 
-vi.mock('@mariozechner/pi-tui', async () => {
-  const actual =
-    await vi.importActual<typeof import('@mariozechner/pi-tui')>('@mariozechner/pi-tui');
+vi.mock('@mariozechner/pi-tui', () => {
+  const visibleWidth = (value: string) => value.length;
+  const truncateToWidth = (value: string, width: number) => value.slice(0, Math.max(0, width));
+  const wrapTextWithAnsi = (value: string, width: number) => {
+    if (visibleWidth(value) <= width) {
+      return [value];
+    }
+    const lines: string[] = [];
+    for (let index = 0; index < value.length; index += width) {
+      lines.push(value.slice(index, index + width));
+    }
+    return lines;
+  };
 
   return {
-    ...actual,
     matchesKey: (data: string, key: string) => {
       if ((key === 'enter' || key === 'return') && data === 'enter') {
         return true;
       }
       return data === key;
     },
+    truncateToWidth,
+    visibleWidth,
+    wrapTextWithAnsi,
   };
 });
 
@@ -161,6 +173,9 @@ function createBrowser(
     theme: Theme;
     openSelected: (record: SessionDeckRecord) => Promise<{ ok: boolean; message: string }>;
     createWorktree: ConstructorParameters<typeof SessionDeckBrowser>[0]['createWorktree'];
+    previewLaunchContext: ConstructorParameters<
+      typeof SessionDeckBrowser
+    >[0]['previewLaunchContext'];
   }> = {},
 ): SessionDeckBrowser {
   const browser = new SessionDeckBrowser({
@@ -173,6 +188,9 @@ function createBrowser(
     ...(overrides.reapLines === undefined ? {} : { reapLines: overrides.reapLines }),
     ...(overrides.openSelected === undefined ? {} : { openSelected: overrides.openSelected }),
     ...(overrides.createWorktree === undefined ? {} : { createWorktree: overrides.createWorktree }),
+    ...(overrides.previewLaunchContext === undefined
+      ? {}
+      : { previewLaunchContext: overrides.previewLaunchContext }),
     theme: overrides.theme ?? createTheme(),
   });
 
@@ -1104,7 +1122,7 @@ describe('SessionDeckBrowser', () => {
     );
   });
 
-  it('keeps the w prompt branch-name-first and open when branch name is blank', () => {
+  it('keeps the w prompt multi-line branch and Pi config form open when branch name is blank', () => {
     const createWorktree = vi.fn();
     const browser = createBrowser({ createWorktree });
 
@@ -1116,10 +1134,63 @@ describe('SessionDeckBrowser', () => {
     const output = renderText(browser);
     expect(output).toContain('Enter a branch name.');
     expect(output).toContain('New Pi session for project');
-    expect(output).toContain('Branch name: <branch-name>');
-    expect(output).toContain('launches in detached tmux');
-    expect(output).not.toContain('tab toggle');
+    expect(output).toContain('Branch:    <branch-name>');
+    expect(output).toContain('Pi config resolving…');
+    expect(output).toContain('Base:      default branch · generated worktree · detached tmux');
+    expect(output).toContain('tab focus');
     expect(output).not.toContain('worktree/<name>');
+  });
+
+  it('changes the TUI prompt Pi config to custom for one create request', async () => {
+    const previewLaunchContext = vi.fn<
+      NonNullable<ConstructorParameters<typeof SessionDeckBrowser>[0]['previewLaunchContext']>
+    >(async (agentDir) => ({
+      ok: true as const,
+      status: 'resolved' as const,
+      mode: agentDir.mode,
+      envAction: agentDir.mode === 'custom' ? 'set' : 'inherit',
+      effectiveDisplay: agentDir.mode === 'custom' ? '~/agent-work' : '~/.pi/agent-or',
+      provenance: agentDir.mode === 'custom' ? 'request' : 'process-env',
+      warnings: [],
+    }));
+    const createWorktree = vi.fn<
+      NonNullable<ConstructorParameters<typeof SessionDeckBrowser>[0]['createWorktree']>
+    >(async () => buildCreateWorktreeFailureResult('invalid-branch', 'stop after payload'));
+    const browser = createBrowser({ createWorktree, previewLaunchContext });
+
+    browser.handleInput('right');
+    browser.handleInput('w');
+    browser.handleInput('tab');
+    browser.handleInput('enter');
+    const selectorOutput = renderText(browser);
+    expect(selectorOutput).toContain('Choose:    › Current');
+    expect(selectorOutput).toContain('Pi default');
+    expect(selectorOutput).not.toContain('Ambient env');
+    expect(selectorOutput).not.toContain('Pi default (');
+    browser.handleInput('down');
+    browser.handleInput('down');
+    for (const char of '~/agent-work') {
+      browser.handleInput(char);
+    }
+    browser.handleInput('enter');
+    await vi.waitFor(() => {
+      expect(renderText(browser)).toContain('Pi config → ~/agent-work');
+    });
+
+    browser.handleInput('tab');
+    for (const char of 'rh/feature') {
+      browser.handleInput(char);
+    }
+    browser.handleInput('enter');
+
+    await vi.waitFor(() => expect(createWorktree).toHaveBeenCalledTimes(1));
+    expect(createWorktree.mock.calls[0]?.[0]).toMatchObject({
+      branchName: 'rh/feature',
+      launch: {
+        mode: 'tmux-detached',
+        agentDir: { mode: 'custom', customDir: expect.stringMatching(/\/agent-work$/u) },
+      },
+    });
   });
 
   it('cancels the new Pi session prompt on escape without closing the browser', () => {
@@ -1135,7 +1206,7 @@ describe('SessionDeckBrowser', () => {
     expect(createWorktree).not.toHaveBeenCalled();
     const output = renderText(browser);
     expect(output).toContain('New Pi session cancelled.');
-    expect(output).not.toContain('Branch name: <branch-name>');
+    expect(output).not.toContain('Branch:    <branch-name>');
   });
 
   it('cancels the new Pi session prompt on ctrl+c without closing the browser', () => {
@@ -1151,7 +1222,7 @@ describe('SessionDeckBrowser', () => {
     expect(createWorktree).not.toHaveBeenCalled();
     const output = renderText(browser);
     expect(output).toContain('New Pi session cancelled.');
-    expect(output).not.toContain('Branch name: <branch-name>');
+    expect(output).not.toContain('Branch:    <branch-name>');
   });
 
   it.each([
@@ -1192,7 +1263,7 @@ describe('SessionDeckBrowser', () => {
     await vi.waitFor(() => expect(createWorktree).toHaveBeenCalledTimes(1));
     const output = renderText(browser);
     expect(output).toContain(message);
-    expect(output).toContain('Branch name: rh/bad..branch');
+    expect(output).toContain('Branch:    rh/bad..branch');
   });
 
   it('submits w from a named repo filter with exact branchName, always requests detached tmux, and uses launched copy without runtime-id dependency', async () => {
@@ -1243,7 +1314,7 @@ describe('SessionDeckBrowser', () => {
         candidateRuntimeIds: ['922f7ac8deadbeef'],
         preferredRuntimeId: '922f7ac8deadbeef',
       },
-      launch: { mode: 'tmux-detached' },
+      launch: { mode: 'tmux-detached', agentDir: { mode: 'ambient' } },
     });
     expect(request).not.toHaveProperty('label');
     expect(openSelected).not.toHaveBeenCalled();

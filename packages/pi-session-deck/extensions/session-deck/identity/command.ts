@@ -11,6 +11,7 @@ import {
   type SessionDeckBrowserOpenSelectedResult,
 } from '../browser.js';
 import { orchestrateCreateWorktree } from '../worktree/orchestrate.js';
+import { resolveWorktreeLaunchContextPreview } from '../worktree/preview.js';
 import { openTerminalForRuntime, type OpenTerminalForRuntimeOptions } from './open.js';
 export {
   openIterm2TerminalForRuntime,
@@ -476,6 +477,7 @@ async function openSessionDeckBrowser(
         onClose: () => done(undefined),
         openSelected: (record) => openTerminal(record.runtimeId),
         createWorktree,
+        previewLaunchContext: (agentDir) => resolveWorktreeLaunchContextPreview({ agentDir }),
         reload,
         requestRender: () => tui.requestRender(),
         ...(loadedView.reapResult === null

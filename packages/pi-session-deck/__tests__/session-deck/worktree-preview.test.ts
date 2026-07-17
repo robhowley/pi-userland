@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { normalizeBasePreviewRequest } from '../../extensions/session-deck/worktree/action-cli.js';
-import { resolveWorktreeBasePreview } from '../../extensions/session-deck/worktree/preview.js';
+import {
+  resolveWorktreeBasePreview,
+  resolveWorktreeLaunchContextPreview,
+} from '../../extensions/session-deck/worktree/preview.js';
 import type { WorktreeExecFile } from '../../extensions/session-deck/worktree/git.js';
 
 function buildIdentityRecord(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -101,6 +104,107 @@ describe('session-deck worktree base preview', () => {
       status: 'failed',
       reason: 'repo-intent-unresolved',
       recoverable: true,
+    });
+  });
+});
+
+describe('session-deck worktree launch-context preview', () => {
+  it('shows ambient tmux server env when queryable', async () => {
+    const execFile: WorktreeExecFile = async (file, args) => {
+      expect(file).toBe('tmux');
+      expect(args).toEqual(['show-environment', '-g', 'PI_CODING_AGENT_DIR']);
+      return {
+        stdout: 'PI_CODING_AGENT_DIR=/Users/tester/.pi/agent-or\n',
+        stderr: '',
+        exitCode: 0,
+      };
+    };
+
+    await expect(
+      resolveWorktreeLaunchContextPreview({}, { execFile, env: {}, homeDir: '/Users/tester' }),
+    ).resolves.toEqual({
+      ok: true,
+      status: 'resolved',
+      mode: 'ambient',
+      envAction: 'inherit',
+      effectiveDisplay: '~/.pi/agent-or',
+      provenance: 'tmux-server-env',
+      warnings: [
+        'Only controls PI_CODING_AGENT_DIR for this Pi launch; wrapper flags are out of scope.',
+      ],
+    });
+  });
+
+  it('falls back to process env when no tmux server exists', async () => {
+    const execFile: WorktreeExecFile = async () => ({
+      stdout: '',
+      stderr: 'no server running on /tmp/tmux/default',
+      exitCode: 1,
+    });
+
+    await expect(
+      resolveWorktreeLaunchContextPreview(
+        {},
+        {
+          execFile,
+          env: { PI_CODING_AGENT_DIR: '/Users/tester/.pi/process-agent' },
+          homeDir: '/Users/tester',
+        },
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      mode: 'ambient',
+      envAction: 'inherit',
+      effectiveDisplay: '~/.pi/process-agent',
+      provenance: 'process-env',
+    });
+  });
+
+  it('uses Pi default for explicit default and normalizes custom display', async () => {
+    await expect(
+      resolveWorktreeLaunchContextPreview(
+        { agentDir: { mode: 'default' } },
+        { homeDir: '/Users/tester' },
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      mode: 'default',
+      envAction: 'unset',
+      effectiveDisplay: '~/.pi/agent',
+      provenance: 'request',
+    });
+
+    await expect(
+      resolveWorktreeLaunchContextPreview(
+        { agentDir: { mode: 'custom', customDir: '~/agent-or/../agent-work' } },
+        { homeDir: '/Users/tester' },
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      mode: 'custom',
+      envAction: 'set',
+      effectiveDisplay: '~/agent-work',
+      provenance: 'request',
+    });
+  });
+
+  it('adds a warning when tmux env query is ambiguous', async () => {
+    const execFile: WorktreeExecFile = async () => ({
+      stdout: '',
+      stderr: 'tmux exploded',
+      exitCode: 2,
+    });
+
+    await expect(
+      resolveWorktreeLaunchContextPreview({}, { execFile, env: {}, homeDir: '/Users/tester' }),
+    ).resolves.toMatchObject({
+      ok: true,
+      mode: 'ambient',
+      effectiveDisplay: '~/.pi/agent',
+      provenance: 'pi-default',
+      warnings: expect.arrayContaining([
+        'Could not determine tmux server PI_CODING_AGENT_DIR; showing process/default preview.',
+      ]),
     });
   });
 });

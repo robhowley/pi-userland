@@ -2,9 +2,11 @@ import { createHash } from 'node:crypto';
 import { basename } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { formatPosixCommand, quotePosixArg } from '../identity/terminal-focus.js';
+import { buildLaunchAgentDirEnvPlan, normalizeLaunchAgentDirSelection } from './agent-dir.js';
 import { defaultWorktreeExecFile, type ExecFileResult, type WorktreeExecFile } from './git.js';
 import { slugifyWorktreeLabel } from './create.js';
 import type {
+  CreateWorktreeLaunchAgentDir,
   CreateWorktreeLaunchFailure,
   CreateWorktreeLaunchSuccess,
   CreateWorktreeSuccess,
@@ -15,11 +17,13 @@ export interface LaunchDetachedTmuxPiOptions {
   execFile?: WorktreeExecFile;
   env?: NodeJS.ProcessEnv;
   postLaunchVerifyDelayMs?: number;
+  agentDir?: CreateWorktreeLaunchAgentDir;
 }
 
 interface ResolvedLaunchDetachedTmuxPiOptions extends LaunchDetachedTmuxPiOptions {
   env: NodeJS.ProcessEnv;
   postLaunchVerifyDelayMs: number;
+  agentDir: CreateWorktreeLaunchAgentDir;
 }
 
 export type DetachedTmuxPiPreflightResult =
@@ -55,7 +59,11 @@ export async function launchDetachedTmuxPi(
   options: LaunchDetachedTmuxPiOptions = {},
 ): Promise<CreateWorktreeLaunchSuccess | CreateWorktreeLaunchFailure> {
   const resolvedOptions = resolveLaunchOptions(options);
-  const launchCommand = buildPiLauncherCommand(displayName, resolvedOptions.env['PATH'] ?? '');
+  const launchCommand = buildPiLauncherCommand(
+    displayName,
+    resolvedOptions.env['PATH'] ?? '',
+    resolvedOptions.agentDir,
+  );
   const sessionName = buildManagedTmuxSessionName({
     repoName: worktree.repoName,
     worktreePath: worktree.path,
@@ -82,6 +90,19 @@ export async function launchDetachedTmuxPi(
         reason: 'tmux-name-collision',
         recoverable: true,
         message: `Created worktree, but tmux session ${sessionName} already exists for a different cwd.`,
+        manualCommand,
+      };
+    }
+
+    if (resolvedOptions.agentDir.mode !== 'ambient') {
+      return {
+        requested: true,
+        ok: false,
+        mode: 'tmux-detached',
+        status: 'failed',
+        reason: 'launch-context-mismatch',
+        recoverable: true,
+        message: `Created worktree, but existing tmux session ${sessionName} cannot be verified against the requested Pi config.`,
         manualCommand,
       };
     }
@@ -155,8 +176,24 @@ export function buildManagedTmuxSessionName(input: {
   return `${boundedPrefix}-${hash}`;
 }
 
-export function buildPiLauncherCommand(displayName: string, pathValue: string): string {
-  return `exec ${formatPosixCommand(['/usr/bin/env', `PATH=${pathValue}`, 'pi', '--name', displayName])}`;
+export function buildPiLauncherCommand(
+  displayName: string,
+  pathValue: string,
+  agentDir: CreateWorktreeLaunchAgentDir = { mode: 'ambient' },
+): string {
+  const normalized = normalizeLaunchAgentDirSelection(agentDir);
+  if (!normalized.ok) {
+    throw new Error(normalized.message);
+  }
+  const envPlan = buildLaunchAgentDirEnvPlan(normalized.agentDir);
+  const envArgs =
+    envPlan.envAction === 'unset'
+      ? ['-u', 'PI_CODING_AGENT_DIR', `PATH=${pathValue}`]
+      : [
+          `PATH=${pathValue}`,
+          ...(envPlan.envAssignment === undefined ? [] : [envPlan.envAssignment]),
+        ];
+  return `exec ${formatPosixCommand(['/usr/bin/env', ...envArgs, 'pi', '--name', displayName])}`;
 }
 
 async function tmuxHasSession(
@@ -213,10 +250,15 @@ async function run(
 function resolveLaunchOptions(
   options: LaunchDetachedTmuxPiOptions,
 ): ResolvedLaunchDetachedTmuxPiOptions {
+  const agentDir = normalizeLaunchAgentDirSelection(options.agentDir);
+  if (!agentDir.ok) {
+    throw new Error(agentDir.message);
+  }
   return {
     ...options,
     env: options.env ?? process.env,
     postLaunchVerifyDelayMs: options.postLaunchVerifyDelayMs ?? POST_LAUNCH_VERIFY_DELAY_MS,
+    agentDir: agentDir.agentDir,
   };
 }
 
