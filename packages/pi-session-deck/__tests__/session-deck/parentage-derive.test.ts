@@ -305,7 +305,7 @@ describe('deriveChildRuntimeFacets', () => {
 });
 
 describe('attachChildRuntimeFacets', () => {
-  it('promotes likely in-memory child runtimes to the ephemeral child row kind', () => {
+  it('keeps env-only in-memory candidates as plain ephemeral runtimes', () => {
     const parent = buildRecord();
     const child = buildChild({
       runtimeSignals: {
@@ -316,7 +316,73 @@ describe('attachChildRuntimeFacets', () => {
     const attached = attachChildRuntimeFacets([parent, child]);
     const updatedChild = attached.find((record) => record.runtimeId === 'rt-child');
 
+    expect(updatedChild?.derivedFacets?.childRuntime?.confidence).toBe('high');
+    expect(updatedChild?.derivedFacets?.rowKind).toBe('ephemeral_runtime');
+  });
+
+  it('promotes explicit header parents to the ephemeral child row kind', () => {
+    const parent = buildRecord();
+    const child = buildChild({
+      sessionHeader: {
+        id: 'session-child',
+        timestamp: '2026-07-17T12:01:30.000Z',
+        cwd: '/repo',
+        parentSession: '/tmp/session-parent.md',
+      },
+    });
+
+    const attached = attachChildRuntimeFacets([parent, child]);
+    const updatedChild = attached.find((record) => record.runtimeId === 'rt-child');
+
     expect(updatedChild?.derivedFacets?.rowKind).toBe('ephemeral_child_runtime');
+  });
+
+  it('promotes verified process ancestors to the ephemeral child row kind', () => {
+    const parent = buildRecord({
+      runtimeSignals: {
+        process: {
+          pid: 100,
+          ppid: 1,
+          processStartedAt: '2026-07-17T12:00:00.000Z',
+          ancestors: [],
+        },
+      },
+    });
+    const child = buildChild({
+      runtimeSignals: {
+        process: {
+          pid: 200,
+          ppid: 100,
+          processStartedAt: '2026-07-17T12:01:30.000Z',
+          ancestors: [{ pid: 100, ppid: 1, processStartedAt: '2026-07-17T12:00:00.000Z' }],
+        },
+      },
+    });
+
+    const attached = attachChildRuntimeFacets([parent, child]);
+    const updatedChild = attached.find((record) => record.runtimeId === 'rt-child');
+
+    expect(updatedChild?.derivedFacets?.rowKind).toBe('ephemeral_child_runtime');
+  });
+
+  it('keeps unverified process ancestors as plain ephemeral runtimes', () => {
+    const parent = buildRecord();
+    const child = buildChild({
+      runtimeSignals: {
+        process: {
+          pid: 200,
+          ppid: 100,
+          processStartedAt: '2026-07-17T12:01:30.000Z',
+          ancestors: [{ pid: 100, ppid: 1, processStartedAt: '2026-07-17T11:59:00.000Z' }],
+        },
+      },
+    });
+
+    const attached = attachChildRuntimeFacets([parent, child]);
+    const updatedChild = attached.find((record) => record.runtimeId === 'rt-child');
+
+    expect(updatedChild?.derivedFacets?.childRuntime?.confidence).toBe('medium');
+    expect(updatedChild?.derivedFacets?.rowKind).toBe('ephemeral_runtime');
   });
 
   it('keeps low-confidence in-memory candidates as plain ephemeral runtimes', () => {

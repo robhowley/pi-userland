@@ -91,17 +91,18 @@ function deriveRowKindFacet(
     return rowKind;
   }
 
-  return isLikelyEphemeralChildRuntime(childRuntime) ? 'ephemeral_child_runtime' : rowKind;
+  return hasRowKindPromotionEvidence(childRuntime) ? 'ephemeral_child_runtime' : rowKind;
 }
 
-function isLikelyEphemeralChildRuntime(childRuntime: ChildRuntimeFacet | undefined): boolean {
+function hasRowKindPromotionEvidence(childRuntime: ChildRuntimeFacet | undefined): boolean {
+  return childRuntime?.candidate === true && childRuntime.evidence.some(isRowKindPromotionEvidence);
+}
+
+function isRowKindPromotionEvidence(evidence: ChildRuntimeEvidence): boolean {
   return (
-    childRuntime?.candidate === true && isLikelyChildRuntimeConfidence(childRuntime.confidence)
+    evidence.code === 'explicit_header_parent' ||
+    (evidence.code === 'process_ancestor_match' && evidence.confidence === 'high')
   );
-}
-
-function isLikelyChildRuntimeConfidence(confidence: ChildRuntimeConfidence): boolean {
-  return confidence === 'medium' || confidence === 'high' || confidence === 'explicit';
 }
 
 function deriveChildRuntimeFacet(
