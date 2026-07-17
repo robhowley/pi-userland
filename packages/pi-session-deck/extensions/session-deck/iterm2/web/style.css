@@ -496,14 +496,37 @@ button.card-toggle[aria-expanded='true']::after {
   align-items: center;
 }
 
+.stop-action-row,
+.stop-confirmation-actions {
+  justify-content: flex-end;
+}
+
 .stop-action-button,
+.stop-confirm {
+  padding: 0.26rem 0.58rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.05;
+}
+
+.stop-action-button {
+  border-color: rgba(76, 86, 106, 0.82);
+  background: rgba(191, 97, 106, 0.04);
+  color: rgba(229, 199, 203, 0.82);
+}
+
 .stop-confirm {
   border-color: rgba(191, 97, 106, 0.42);
   color: var(--color-banner-text);
-  font-family: var(--font-mono);
 }
 
 .stop-action-button:hover,
+.stop-action-button:focus-visible {
+  border-color: rgba(191, 97, 106, 0.5);
+  background: rgba(191, 97, 106, 0.1);
+  color: var(--color-banner-text);
+}
+
 .stop-confirm:hover,
 .stop-confirm:focus-visible {
   border-color: rgba(191, 97, 106, 0.72);

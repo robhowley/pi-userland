@@ -281,7 +281,7 @@ export class SessionDeckBrowser {
     );
     const help = this.theme.fg(
       'muted',
-      '↑↓ move · ←→ switch repo · enter details · w new Pi session · o open terminal · k stop Pi · r refresh · q close',
+      '↑↓ move · ←→ switch repo · enter details · w new Pi session · o open terminal · k end session · r refresh · q close',
     );
 
     pushWrappedLine(lines, title, width);
@@ -739,14 +739,14 @@ export class SessionDeckBrowser {
 
   private openKillConfirmation(record: SessionDeckBrowserRecord): void {
     if (this.killPending !== null) {
-      this.killStatus = { message: 'Already requesting stop for a Pi session…', tone: 'muted' };
+      this.killStatus = { message: 'Already requesting session end…', tone: 'muted' };
       this.bump();
       return;
     }
 
     if (this.killSelected === null) {
       this.killStatus = {
-        message: 'Stop Pi is unavailable in this context.',
+        message: 'End session is unavailable in this context.',
         tone: 'warning',
       };
       this.bump();
@@ -767,7 +767,7 @@ export class SessionDeckBrowser {
   private handleKillConfirmInput(data: string): void {
     if (matchesKey(data, 'escape') || matchesKey(data, 'ctrl+c') || data === 'q') {
       this.killConfirm = null;
-      this.killStatus = { message: 'Stop Pi cancelled.', tone: 'muted' };
+      this.killStatus = { message: 'End session cancelled.', tone: 'muted' };
       this.bump();
       return;
     }
@@ -785,7 +785,7 @@ export class SessionDeckBrowser {
     }
 
     if (this.killPending !== null) {
-      this.killStatus = { message: 'Already requesting stop for a Pi session…', tone: 'muted' };
+      this.killStatus = { message: 'Already requesting session end…', tone: 'muted' };
       this.bump();
       return this.killPending;
     }
@@ -796,7 +796,7 @@ export class SessionDeckBrowser {
     if (record === undefined) {
       this.killConfirm = null;
       this.killStatus = {
-        message: 'Stop cancelled; selected session is no longer visible.',
+        message: 'End session cancelled; selected session is no longer visible.',
         tone: 'muted',
       };
       this.bump();
@@ -804,7 +804,7 @@ export class SessionDeckBrowser {
     }
 
     this.killConfirm = null;
-    this.killStatus = { message: 'Requesting Pi stop…', tone: 'muted' };
+    this.killStatus = { message: 'Requesting session end…', tone: 'muted' };
     this.bump();
 
     this.killPending = (async () => {
@@ -825,7 +825,7 @@ export class SessionDeckBrowser {
         }
 
         this.killStatus = {
-          message: `Stop request failed: ${getErrorMessage(error)}`,
+          message: `End request failed: ${getErrorMessage(error)}`,
           tone: 'warning',
         };
       } finally {
@@ -844,7 +844,7 @@ export class SessionDeckBrowser {
     }
 
     const pid = confirmation.pid === null ? 'pid unavailable' : `pid ${confirmation.pid}`;
-    return `Stop Pi for ${confirmation.title} (${confirmation.shortRuntimeId}, ${pid})? Sends SIGTERM to the Pi runtime only. Session history is preserved. iTerm/tmux may exit naturally. Enter confirm · esc/q cancel`;
+    return `End session for ${confirmation.title} (${confirmation.shortRuntimeId}, ${pid})? Ending this session sends SIGTERM to the Pi runtime only. Session history is preserved. Enter confirm · esc/q cancel`;
   }
 
   private async refreshAfterWorktree(runtimeId: string | null): Promise<void> {
@@ -978,7 +978,7 @@ export class SessionDeckBrowser {
     ) {
       this.killConfirm = null;
       this.killStatus = {
-        message: 'Stop cancelled; selected session is no longer visible.',
+        message: 'End session cancelled; selected session is no longer visible.',
         tone: 'muted',
       };
     }

@@ -1899,7 +1899,7 @@ function createKillSessionSection(record) {
     const copy = document.createElement('p');
     copy.className = 'stop-confirmation-copy';
     copy.textContent =
-      'Stop Pi sends SIGTERM to the Pi runtime only. Session history is preserved. Session Deck does not explicitly close iTerm or kill tmux; a terminal or tmux pane may exit naturally.';
+      'Ending this session sends SIGTERM to the Pi runtime only. Session history is preserved.';
 
     const actions = document.createElement('div');
     actions.className = 'stop-confirmation-actions';
@@ -1907,7 +1907,7 @@ function createKillSessionSection(record) {
     const confirm = document.createElement('button');
     confirm.type = 'button';
     confirm.className = 'stop-confirm stop-confirm-primary';
-    confirm.textContent = 'Confirm stop';
+    confirm.textContent = 'End session';
     confirm.addEventListener('click', (event) => {
       event.preventDefault?.();
       event.stopPropagation?.();
@@ -1953,12 +1953,19 @@ function createKillSessionSection(record) {
   }
 
   if (action?.kind === 'pending') {
-    content.push(createText('p', 'Requesting Pi stop…', 'stop-action-message'));
+    content.push(createText('p', 'Requesting session end…', 'stop-action-message'));
   } else if (action?.kind === 'success' || action?.kind === 'failure') {
+    const message =
+      action.kind === 'success' &&
+      (action.message === 'Stop requested for this Pi session.' ||
+        action.message === 'Stop requested for the current Pi session.')
+        ? 'End requested for this session.'
+        : action.message;
+
     content.push(
       createText(
         'p',
-        action.message,
+        message,
         action.kind === 'failure'
           ? 'stop-action-message stop-action-failure'
           : 'stop-action-message',
@@ -1966,19 +1973,19 @@ function createKillSessionSection(record) {
     );
   }
 
-  return createDetailSection('SESSION ACTIONS', content);
+  return createDetailSection(null, content, { ariaLabel: 'Session actions' });
 }
 
 function getKillSessionButtonText(action) {
   switch (action?.kind) {
     case 'pending':
-      return 'Stopping…';
+      return 'Ending…';
     case 'success':
-      return 'Stop requested';
+      return 'End requested';
     case 'failure':
-      return 'Retry stop';
+      return 'Retry end';
     default:
-      return 'Stop Pi';
+      return 'End session';
   }
 }
 
@@ -2003,10 +2010,15 @@ function createStatusSection(record) {
   return createDetailSection('STATUS', content);
 }
 
-function createDetailSection(title, children) {
+function createDetailSection(title, children, options = {}) {
   const section = document.createElement('section');
   section.className = 'detail-section';
-  section.append(createText('div', title, 'detail-section-title'));
+  if (options.ariaLabel) {
+    section.setAttribute('aria-label', options.ariaLabel);
+  }
+  if (title) {
+    section.append(createText('div', title, 'detail-section-title'));
+  }
 
   const body = document.createElement('div');
   body.className = 'detail-section-body';

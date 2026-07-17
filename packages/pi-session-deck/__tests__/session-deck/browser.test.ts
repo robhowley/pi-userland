@@ -260,7 +260,7 @@ describe('SessionDeckBrowser', () => {
       lines,
       (line) =>
         line.includes(
-          '↑↓ move · ←→ switch repo · enter details · w new Pi session · o open terminal · k stop Pi · r refresh · q close',
+          '↑↓ move · ←→ switch repo · enter details · w new Pi session · o open terminal · k end session · r refresh · q close',
         ),
       'help line',
     );
@@ -1502,10 +1502,10 @@ describe('SessionDeckBrowser', () => {
     expect(openSelected).not.toHaveBeenCalled();
   });
 
-  it('opens a Stop Pi confirmation with k and only Enter confirms the frozen selected row', async () => {
+  it('opens an End session confirmation with k and only Enter confirms the frozen selected row', async () => {
     const killSelected = vi.fn(async (_record: SessionDeckRecord) => ({
       ok: true,
-      message: 'Stop requested for this Pi session.',
+      message: 'End requested for this session.',
     }));
     const browser = createBrowser({
       killSelected,
@@ -1518,7 +1518,12 @@ describe('SessionDeckBrowser', () => {
     });
 
     browser.handleInput('k');
-    expect(renderText(browser)).toContain('Stop Pi for alpha (rt-alpha, pid 111)?');
+    const killConfirmation = renderText(browser).replaceAll('\n', ' ');
+    expect(killConfirmation).toContain('End session for alpha (rt-alpha, pid 111)?');
+    expect(killConfirmation).toContain(
+      'Ending this session sends SIGTERM to the Pi runtime only. Session history is preserved.',
+    );
+    expect(killConfirmation).toContain('Enter confirm · esc/q cancel');
     expect(killSelected).not.toHaveBeenCalled();
 
     browser.handleInput('k');
@@ -1530,33 +1535,33 @@ describe('SessionDeckBrowser', () => {
     const [stoppedRecord] = vi.mocked(killSelected).mock.calls[0] ?? [];
     expect(stoppedRecord?.runtimeId).toBe('rt-alpha');
     await vi.waitFor(() =>
-      expect(renderText(browser)).toContain('Stop requested for this Pi session.'),
+      expect(renderText(browser)).toContain('End requested for this session.'),
     );
     expect(renderText(browser)).not.toContain('killed');
   });
 
-  it('cancels Stop Pi confirmation with escape ctrl-c or q without stopping', () => {
+  it('cancels End session confirmation with escape ctrl-c or q without stopping', () => {
     const killSelected = vi.fn(async (_record: SessionDeckRecord) => ({
       ok: true,
-      message: 'Stop requested for this Pi session.',
+      message: 'End requested for this session.',
     }));
     const browser = createBrowser({ killSelected });
 
     for (const key of ['escape', 'ctrl+c', 'q']) {
       browser.handleInput('k');
-      expect(renderText(browser)).toContain('Stop Pi for alpha');
+      expect(renderText(browser)).toContain('End session for alpha');
       browser.handleInput(key);
-      expect(renderText(browser)).toContain('Stop Pi cancelled.');
+      expect(renderText(browser)).toContain('End session cancelled.');
     }
 
     expect(killSelected).not.toHaveBeenCalled();
   });
 
-  it('cancels Stop Pi confirmation when the target disappears on refresh', async () => {
+  it('cancels End session confirmation when the target disappears on refresh', async () => {
     vi.useFakeTimers();
     const killSelected = vi.fn(async (_record: SessionDeckRecord) => ({
       ok: true,
-      message: 'Stop requested for this Pi session.',
+      message: 'End requested for this session.',
     }));
     const reload = vi.fn(async () => buildSnapshot({ records: [] }));
     const browser = createBrowser({ killSelected, reload });
@@ -1565,12 +1570,14 @@ describe('SessionDeckBrowser', () => {
     await vi.advanceTimersByTimeAsync(15_000);
 
     await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
-    expect(renderText(browser)).toContain('Stop cancelled; selected session is no longer visible.');
+    expect(renderText(browser)).toContain(
+      'End session cancelled; selected session is no longer visible.',
+    );
     browser.handleInput('enter');
     expect(killSelected).not.toHaveBeenCalled();
   });
 
-  it('renders Stop Pi failures as retryable warning statuses', async () => {
+  it('renders End session failures as retryable warning statuses', async () => {
     const fg = vi.fn((_tone: string, text: string) => text);
     const killSelected = vi.fn(async (_record: SessionDeckRecord) => ({
       ok: false,

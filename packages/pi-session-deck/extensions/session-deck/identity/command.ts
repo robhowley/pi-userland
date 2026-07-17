@@ -518,12 +518,12 @@ function createKillSelectedRuntime(
       if (ctx.shutdown === undefined) {
         return {
           ok: false,
-          message: 'Current Pi session stop is unavailable in this context.',
+          message: 'End session is unavailable in this context.',
         };
       }
 
       await ctx.shutdown();
-      return { ok: true, message: 'Stop requested for the current Pi session.' };
+      return { ok: true, message: 'End requested for this session.' };
     }
 
     return formatKillRuntimeResult(await killRuntime(record.runtimeId));
@@ -536,7 +536,7 @@ function formatKillRuntimeResult(
   if (result.ok) {
     return result.status === 'already-exited'
       ? { ok: true, message: 'This Pi session is no longer running.' }
-      : { ok: true, message: 'Stop requested for this Pi session.' };
+      : { ok: true, message: 'End requested for this session.' };
   }
 
   return { ok: false, message: getKillRuntimeFailureMessage(result.reason) };
@@ -562,7 +562,7 @@ function getKillRuntimeFailureMessage(
     case 'permission-denied':
       return 'Termination is not permitted for this process.';
     case 'signal-failed':
-      return 'Could not request session stop.';
+      return 'Could not request session end.';
   }
 }
 

@@ -664,7 +664,7 @@ describe('session-deck joined command', () => {
     expect(vi.mocked(ctx.ui.notify)).not.toHaveBeenCalled();
   });
 
-  it('routes TUI Stop Pi for the current runtime through ctx.shutdown without signaling', async () => {
+  it('routes TUI End session for the current runtime through ctx.shutdown without signaling', async () => {
     const { api, getHandler } = createMockAPI();
     const shutdown = vi.fn(async () => undefined);
     const killRuntime = vi.fn(async (_runtimeId: string) => ({
@@ -715,7 +715,7 @@ describe('session-deck joined command', () => {
     expect(killRuntime).not.toHaveBeenCalled();
   });
 
-  it('routes TUI Stop Pi for another runtime through the shared runtime primitive with runtimeId only', async () => {
+  it('routes TUI End session for another runtime through the shared runtime primitive with runtimeId only', async () => {
     const { api, getHandler } = createMockAPI();
     const shutdown = vi.fn(async () => undefined);
     const killRuntime = vi.fn(async (_runtimeId: string) => ({

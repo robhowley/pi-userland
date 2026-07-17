@@ -2584,7 +2584,7 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(Object.keys(JSON.parse(requestInit.body ?? '{}'))).toEqual(['runtimeId']);
   });
 
-  it('renders Stop Pi only in expanded details and posts exact authenticated Kill requests after confirmation', async () => {
+  it('renders End session only in expanded details and posts exact authenticated Kill requests after confirmation', async () => {
     const fetchMock = vi.fn((url: string, _init?: unknown) => {
       if (url === '/snapshot.json') {
         return Promise.resolve(buildJsonResponse(buildSnapshot()));
@@ -2608,21 +2608,25 @@ describe('Session Deck iTerm2 web UI', () => {
 
     getCardToggle(getCards(harness.elements.list)[0]!).click();
     const detail = getCardDetail(getExpandedCards(harness.elements.list)[0]!);
-    const actions = getDetailSection(detail, 'SESSION ACTIONS');
-    const stopButton = findAllByClass(actions, 'stop-action-button')[0] as FakeButtonElement;
-    expect(stopButton.textContent).toBe('Stop Pi');
+    const stopButton = findAllByClass(detail, 'stop-action-button')[0] as FakeButtonElement;
+    expect(stopButton.textContent).toBe('End session');
 
     stopButton.click();
     await flushMicrotasks();
 
     expect(fetchMock.mock.calls.filter(([url]) => url === '/actions/kill-session')).toHaveLength(0);
-    expect(harness.elements.list.textContent).toContain('Stop Pi sends SIGTERM');
-    expect(harness.elements.list.textContent).toContain('Session history is preserved');
+    expect(harness.elements.list.textContent).toContain(
+      'Ending this session sends SIGTERM to the Pi runtime only. Session history is preserved.',
+    );
+    expect(harness.elements.list.textContent).not.toContain(
+      'Session Deck does not explicitly close iTerm or kill tmux',
+    );
 
     const confirm = findAllByClass(
       harness.elements.list,
       'stop-confirm-primary',
     )[0] as FakeButtonElement;
+    expect(confirm.textContent).toBe('End session');
     confirm.click();
     await flushMicrotasks();
 
@@ -2643,11 +2647,11 @@ describe('Session Deck iTerm2 web UI', () => {
     });
     expect(JSON.parse(requestInit.body ?? '{}')).toEqual({ runtimeId: 'rt-1' });
     expect(Object.keys(JSON.parse(requestInit.body ?? '{}'))).toEqual(['runtimeId']);
-    expect(harness.elements.list.textContent).toContain('Stop requested for this Pi session.');
+    expect(harness.elements.list.textContent).toContain('End requested for this session.');
     expect(harness.elements.list.textContent).not.toContain('killed');
   });
 
-  it('cancels Stop Pi confirmation without posting on cancel, detail collapse, or show-all hiding', async () => {
+  it('cancels End session confirmation without posting on cancel, detail collapse, or show-all hiding', async () => {
     const fetchMock = vi.fn((url: string) => {
       if (url === '/snapshot.json') {
         return Promise.resolve(
@@ -2691,7 +2695,7 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(fetchMock.mock.calls.filter(([url]) => url === '/actions/kill-session')).toHaveLength(0);
   });
 
-  it('keeps one pending Stop Pi request and ignores stale completion after confirmation is replaced', async () => {
+  it('keeps one pending End session request and ignores stale completion after confirmation is replaced', async () => {
     const killRequest = {
       resolve: null as ((response: ReturnType<typeof buildJsonResponse>) => void) | null,
     };
@@ -3166,7 +3170,6 @@ describe('Session Deck iTerm2 web UI', () => {
       'IDENTITY',
       'WORKSPACE',
       'STATUS',
-      'SESSION ACTIONS',
       'Record diagnostics',
     ]);
 
@@ -3227,6 +3230,7 @@ describe('Session Deck iTerm2 web UI', () => {
     const status = getDetailSection(detail, 'STATUS');
     expect(status.textContent).toContain('#22623 Conflicts');
     expect(getDetailRowLabels(status)).toEqual([]);
+    expect(findAllByClass(detail, 'stop-action-button')[0]?.textContent).toBe('End session');
 
     const diagnostics = getDetailSection(detail, 'Record diagnostics');
     expect(diagnostics.textContent).toContain('activity_stale');
