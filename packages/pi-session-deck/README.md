@@ -1,6 +1,31 @@
 # pi-session-deck
 
-A TUI dashboard for Pi sessions: live windows, worktrees, PRs, activity, and statuses in one place.
+A control plane for your Pi agents: live sessions organized by repo, detailed status tracking, terminal multiplexing, and new-agent launches in one place.
+
+Pi agents are most useful when they can work independently, but that can scatter context across terminal tabs, repos, and worktrees. Session Deck gives them one operational view: see what is running, understand what each agent is doing, and return to the right terminal without hunting for it.
+
+Open Session Deck as a native Pi TUI with `/session-deck`, or keep it visible as an always-on iTerm2 Toolbelt sidebar.
+
+<img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-session-deck/img/session-deck-toolbelt-overview.png" alt="Session Deck iTerm2 Toolbelt showing live Pi agent sessions grouped under pi-userland" width="720">
+
+## What you get
+
+- **Agents organized by repo.** See every live session in its project context and collapse repos that do not need attention.
+- **Detailed status at a glance.** Names, liveness, current activity, branch and worktree context, PR state, and safe status chips stay together.
+- **A reliable way back.** Focus an active iTerm2 session or reattach to an existing tmux session from the deck.
+- **New isolated agents on demand.** Start Pi on a generated Git worktree in detached tmux and let it keep running headlessly.
+
+<img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-session-deck/img/session-deck-toolbelt-repos.png" alt="Session Deck iTerm2 Toolbelt showing Pi agents organized across betterby-bike and pi-userland repos" width="720">
+
+Repo groups make a busy deck readable: expand the work in motion, collapse everything else, and keep each agent's branch, activity, and status close at hand.
+
+## Launch and return
+
+Use `w` in the Pi TUI or **＋ New** in the Toolbelt to start an agent on a new branch. Session Deck gives it an isolated Git worktree and detached tmux session, so it can keep working without occupying a terminal tab.
+
+<img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-session-deck/img/session-deck-toolbelt.png" alt="Session Deck iTerm2 Toolbelt branch composer for launching a new Pi agent on a worktree" width="720">
+
+When you are ready to return, use `o` or **↗ Open** to focus or reattach to that agent's existing terminal. Opening and launching stay separate, so returning to an agent never starts another one.
 
 ## Installation
 
@@ -8,86 +33,59 @@ A TUI dashboard for Pi sessions: live windows, worktrees, PRs, activity, and sta
 pi install npm:@robhowley/pi-session-deck
 ```
 
-## Commands
+### Native Pi TUI
 
-- `/session-deck` — browse current sessions. In TUI mode, it opens an interactive browser with a repo filter row above the session list; elsewhere, it prints a compact snapshot.
-- `/session-deck --all` — include stale, dead, and unknown sessions, plus diagnostics.
-- `/session-deck --reap` — remove expired presence records before showing results.
-- `/session-deck --identity` — include full identity details such as the session id.
-- `/session-deck --json --session-id <id>` — print one visible `SessionDeckRecord` as pretty JSON and bypass the TUI browser.
-- In JSON mode, `--all` widens eligibility to dead/unknown sessions; `--identity` does not change the JSON payload.
-- `/session-deck iterm2 install [--scripts-dir <path>]` — install the single `session_deck.py` AutoLaunch script and install state.
-- `/session-deck iterm2 doctor` — verify the installed state, AutoLaunch script, helpers, web assets, local doctor PATH context, and the live effective PATH used by Toolbelt `＋ New` and tmux Open preflight, then print manual recovery hints.
-- `/session-deck iterm2 uninstall` — remove the state-owned AutoLaunch script and install state.
-- Flags can be combined.
+Run inside Pi:
 
-## TUI keys
+```text
+/session-deck
+```
 
-- `↑/↓` move selection.
-- `←/→` switch repo filters in the row above the session list.
-- `enter` toggle details.
-- `w` prompts for an exact branch name from the active named repo filter, then creates/reuses a generated Git worktree and starts/reuses a detached tmux Pi session there. This is a new Pi session flow; there is no worktree-only mode.
-- `o` open the selected terminal target on macOS when captured terminal metadata is available. iTerm2 sessions focus through the installed Session Deck iTerm2 runtime when available; tmux sessions open a new iTerm2 tab that attaches to the existing tmux session. `o` is attach-only: it never creates a worktree, tmux session, or Pi process.
-- `r` refresh.
-- `q` closes. `esc` closes unless the `w` prompt is open, where `esc` / `ctrl+c` cancel the prompt without closing the browser.
+### iTerm2 Toolbelt
 
-## iTerm2 Toolbelt
-
-`pi-session-deck` can install an iTerm2 Toolbelt view backed by the same public `SessionDeckSnapshot` / `SessionDeckRecord` data that `/session-deck` already uses. Session rows include **↗ Open**, which posts only the row `runtimeId` to focus the captured iTerm2 session or attach to the existing tmux session. Repo groups include **＋ New**, which opens a branch-name composer for a new Pi session on a generated worktree. The composer posts to a narrow localhost action route and uses the shared TypeScript worktree action to create/reuse a generated Git worktree and start `pi` in detached tmux. There is no Toolbelt worktree-only mode.
-
-1. Install the package.
-2. Run `/session-deck iterm2 install`.
-3. Enable the iTerm2 Python API if prompted.
-4. Fully quit iTerm2 and reopen it, then open `Toolbelt → Session Deck`.
-5. Run `/session-deck iterm2 doctor` if the Toolbelt does not appear, the snapshot looks stale, or `＋ New` cannot find `tmux`/`pi`.
-
-Notes:
-
-- The main session snapshot remains read-only: refresh, collapsible session-card browsing, and a `Show all` diagnostics toggle. Toolbelt actions use narrow authenticated localhost routes with JSON body caps, helper timeouts, and fixed Node helper argv: `POST /actions/open-terminal` accepts only `{ runtimeId }`, while `POST /actions/create-worktree` owns `＋ New`.
-- `＋ New` completes once the worktree is ready and the detached tmux Pi launch succeeds or is reused. Session Deck observes the new runtime passively after launch; success does not wait for an immediate runtime id or visibility in the browser/Toolbelt list.
-- The installed `session_deck.py` AutoLaunch script starts one Session Deck iTerm2 process that binds to `127.0.0.1`, reads snapshots through the package-owned helper, runs Open and create-worktree actions through dedicated helpers, and exposes the local Unix socket used by `/session-deck` TUI and Toolbelt Open terminal focus.
-- The TypeScript client resolves that socket from the installed state rather than guessing a temporary path.
-- `＋ New` resolves symbolic `tmux` and `pi` from the running AutoLaunch process's effective PATH. At runtime Session Deck asks the configured user shell for PATH, falls back to the inherited GUI/AutoLaunch PATH if shell discovery fails, and never hard-codes Homebrew/Nix/asdf/mise directories or persists executable paths in `install.json`.
-- `/session-deck iterm2 doctor` shows `local Pi doctor process PATH (context only)` plus the authoritative live effective PATH used by `＋ New` and tmux Open preflight.
-- If the live effective PATH is missing `tmux`, `＋ New` and tmux-backed Open cannot verify/attach the existing tmux session. If it is missing `pi`, `＋ New` fails before worktree mutation or detached tmux launch. There is no Toolbelt worktree-only mode.
-- After install changes, fully quit and reopen iTerm2. Copying new AutoLaunch files does not update an already-running AutoLaunch process.
-- Local repo builds need `pnpm --dir packages/pi-session-deck run build` before install so the snapshot, Open, and create-worktree helpers exist in `dist/`.
-
-## What it provides
-
-- Heartbeat-backed session presence.
-- Session names from `/name` or `--name`.
-- Current activity such as `idle`, `thinking`, `tool-running`, and `error`.
-- Repo, PR, and linked-worktree context in the dashboard.
-- Short status chips in `/session-deck`.
-- `/new` resets activity for the new session while keeping the same runtime.
-- Tmux-aware terminal opening: when Pi is running inside tmux, `o` attaches to the existing tmux session after verifying the pane is live. It never starts Pi and never creates tmux sessions; new branch/worktree launch belongs to `w` / Toolbelt **＋ New**.
-
-## Status chips
-
-`pi-session-deck` can mirror visible `ctx.ui.setStatus()` text into lightweight per-session chips so `/session-deck` can show short status labels.
-
-- Mirrors visible `setStatus()` text automatically.
-- Persists sanitized visible text only.
-- Never stores prompts, transcript content, tool args, or tool outputs in chips.
-
-## iTerm2 setup
-
-After installing the package, run:
+Install the Toolbelt integration:
 
 ```text
 /session-deck iterm2 install
 ```
 
-Fully quit iTerm2 and reopen it, then choose **Scripts → AutoLaunch → `session_deck.py`** from the menu if it is not already running. Copying new AutoLaunch files does not update an already-running AutoLaunch process, so a full quit/reopen is required after install changes. There is no standalone bridge script to start.
+Enable the iTerm2 Python API if prompted, fully quit and reopen iTerm2, then open **Toolbelt → Session Deck**. If the view is missing, stale, or unable to launch/open an agent, run `/session-deck iterm2 doctor`.
 
-Read-only `/session-deck` text and JSON modes do not require iTerm2 setup.
+The native TUI, text output, and JSON output do not require iTerm2 setup.
 
-## Privacy limits
+## Command reference
 
-- Activity capture is current-state only; there is no transcript/history reconstruction.
-- It does not persist prompt text, transcript snippets, tool args, or tool outputs.
-- Tool failures are reduced to compact safe summaries like `tool bash failed`.
-- Assistant errors are sanitized/truncated before persistence.
-- Chip text must not contain prompts, messages, tool arguments, tool outputs, or secrets.
-- Public `/session-deck --json` records and Toolbelt snapshots do not include raw terminal metadata, tmux socket paths, pane ids, reveal URLs, or derived attach commands; Toolbelt Open sends only `{ runtimeId }`.
+| Command                                  | Purpose                                     |
+| ---------------------------------------- | ------------------------------------------- |
+| `/session-deck`                          | Browse current sessions.                    |
+| `/session-deck --all`                    | Include stale, dead, and unknown sessions.  |
+| `/session-deck --reap`                   | Clear expired sessions from the deck.       |
+| `/session-deck --identity`               | Show full session identity details.         |
+| `/session-deck --json --session-id <id>` | Print one visible session record as JSON.   |
+| `/session-deck iterm2 install`           | Install the iTerm2 Toolbelt integration.    |
+| `/session-deck iterm2 doctor`            | Diagnose Toolbelt setup and runtime issues. |
+| `/session-deck iterm2 uninstall`         | Remove the iTerm2 Toolbelt integration.     |
+
+Flags can be combined.
+
+## TUI controls
+
+| Key       | Action                                                      |
+| --------- | ----------------------------------------------------------- |
+| `↑` / `↓` | Move between sessions.                                      |
+| `←` / `→` | Switch repo filters.                                        |
+| `enter`   | Toggle session details.                                     |
+| `w`       | Launch a Pi agent on a generated worktree in detached tmux. |
+| `o`       | Open or focus the selected agent's terminal.                |
+| `r`       | Refresh.                                                    |
+| `q`       | Close Session Deck.                                         |
+| `esc`     | Cancel the branch prompt, or close Session Deck.            |
+
+## Privacy
+
+Session Deck observes current operational state, not conversation history.
+
+- It does not persist prompts, transcript content, tool arguments, or tool output.
+- Status chips contain sanitized visible text only.
+- Tool and assistant errors are reduced to compact, safe summaries.
+- Public JSON and the Toolbelt view omit raw terminal metadata and tmux attach details.
