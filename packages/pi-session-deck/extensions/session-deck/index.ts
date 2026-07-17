@@ -68,11 +68,11 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   on(
     'session_start',
     async (event: { reason: string; previousSessionFile?: string }, ctx: SessionStartContext) => {
+      const terminal = await collectSessionTerminalMetadata({
+        enableFocusedGhosttyCapture: ctx.hasUI !== false,
+      });
       const presenceRuntime = await ensurePresenceRuntimeStarted();
-      const [terminal, runtimeSignals] = await Promise.all([
-        collectSessionTerminalMetadata(),
-        collectRuntimeSignalsMetadata(),
-      ]);
+      const runtimeSignals = await collectRuntimeSignalsMetadata();
       const sessionManager = createSessionManager(ctx, event, terminal, runtimeSignals);
 
       // Install setStatus wrapper before session-deck sets its own status

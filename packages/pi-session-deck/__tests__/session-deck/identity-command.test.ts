@@ -425,6 +425,7 @@ describe('session-deck joined command', () => {
         sessionTarget: '$1',
         windowName: 'editor',
         paneId: '%12',
+        host: { kind: 'ghostty', terminalId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' },
         attachCommand: 'exec tmux attach-session -t prod',
       },
       terminalDisplay: {
@@ -433,6 +434,8 @@ describe('session-deck joined command', () => {
         detail: 'tmux prod:editor %12',
         openLabel: 'new iTerm2 tab attaches to tmux',
       },
+      terminalId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+      host: { kind: 'ghostty', terminalId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' },
       worktree: `${HOME}/project`,
     } as SessionDeckRecord;
 
@@ -451,6 +454,9 @@ describe('session-deck joined command', () => {
     expect(jsonMessage).not.toContain('sessionFile');
     expect(jsonMessage).not.toContain('"terminal"');
     expect(jsonMessage).not.toContain('terminalDisplay');
+    expect(jsonMessage).not.toContain('terminalId');
+    expect(jsonMessage).not.toContain('host');
+    expect(jsonMessage).not.toContain('aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee');
     expect(jsonMessage).not.toContain('socketPath');
     expect(jsonMessage).not.toContain('paneId');
     expect(jsonMessage).not.toContain('attachCommand');

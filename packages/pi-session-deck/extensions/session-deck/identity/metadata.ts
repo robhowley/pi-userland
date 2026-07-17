@@ -1,4 +1,5 @@
 import type {
+  SessionGhosttyTerminalMetadata,
   SessionHeaderMetadata,
   SessionRuntimeInheritedDeckRuntimeMetadata,
   SessionRuntimeLaunchMetadata,
@@ -68,6 +69,8 @@ export function normalizeSessionTerminalMetadata(
   switch (candidate['kind']) {
     case 'iterm2':
       return normalizeIterm2TerminalMetadata(candidate);
+    case 'ghostty':
+      return normalizeGhosttyTerminalMetadata(candidate);
     case 'tmux':
       return normalizeTmuxTerminalMetadata(candidate);
     default:
@@ -124,6 +127,17 @@ function normalizeIterm2TerminalMetadata(
   };
 }
 
+function normalizeGhosttyTerminalMetadata(
+  candidate: Record<string, unknown>,
+): SessionGhosttyTerminalMetadata | undefined {
+  const terminalId = normalizeGhosttyTerminalId(candidate['terminalId']);
+  if (terminalId === undefined) {
+    return undefined;
+  }
+
+  return { kind: 'ghostty', terminalId };
+}
+
 function normalizeTmuxTerminalMetadata(
   candidate: Record<string, unknown>,
 ): SessionTerminalMetadata | undefined {
@@ -145,6 +159,7 @@ function normalizeTmuxTerminalMetadata(
   const windowIndex = normalizeNonNegativeIntegerField(candidate['windowIndex']);
   const paneIndex = normalizeNonNegativeIntegerField(candidate['paneIndex']);
   const panePid = normalizeNonNegativeIntegerField(candidate['panePid']);
+  const host = normalizeGhosttyHostMetadata(candidate['host']);
 
   return {
     kind: 'tmux',
@@ -158,7 +173,25 @@ function normalizeTmuxTerminalMetadata(
     ...(windowIndex === undefined ? {} : { windowIndex }),
     ...(paneIndex === undefined ? {} : { paneIndex }),
     ...(panePid === undefined ? {} : { panePid }),
+    ...(host === undefined ? {} : { host }),
   };
+}
+
+function normalizeGhosttyHostMetadata(value: unknown): SessionGhosttyTerminalMetadata | undefined {
+  if (!isObject(value)) {
+    return undefined;
+  }
+
+  return value['kind'] === 'ghostty' ? normalizeGhosttyTerminalMetadata(value) : undefined;
+}
+
+export function normalizeGhosttyTerminalId(value: unknown): string | undefined {
+  const terminalId = normalizeTrimmedStringField(value);
+  if (terminalId === undefined || !isCanonicalUuid(terminalId)) {
+    return undefined;
+  }
+
+  return terminalId.toLowerCase();
 }
 
 function normalizeSessionRuntimeProcessMetadata(
@@ -369,6 +402,10 @@ function normalizeTmuxSocketName(value: unknown): string | undefined {
   }
 
   return socketName;
+}
+
+function isCanonicalUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(value);
 }
 
 function isObject(candidate: unknown): candidate is Record<string, unknown> {

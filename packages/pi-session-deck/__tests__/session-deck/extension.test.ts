@@ -434,6 +434,40 @@ describe('pi-session-deck extension', () => {
     );
   });
 
+  it('collects terminal metadata before presence startup and gates focused Ghostty capture by UI', async () => {
+    const order: string[] = [];
+    const collectSessionTerminalMetadata = vi.fn(async () => {
+      order.push('terminal');
+      return undefined;
+    });
+    const ensurePresenceRuntimeStarted = vi.fn(async () => {
+      order.push('presence');
+      return {
+        runtime: {
+          runtimeId: 'runtime-1',
+          pid: 1234,
+          startedAt: '2026-06-12T12:00:00.000Z',
+        },
+        startup: { state: 'healthy' },
+        isRunning: vi.fn(() => true),
+        stop: vi.fn(),
+      };
+    });
+    vi.doMock('../../extensions/session-deck/identity/terminal-collect.js', () => ({
+      collectSessionTerminalMetadata,
+    }));
+    setupMocks(ensurePresenceRuntimeStarted);
+    const { handlers } = await installExtension();
+
+    order.length = 0;
+    await handlers.get('session_start')?.({ reason: 'startup' }, makeCtx({ hasUI: false }));
+
+    expect(order.slice(0, 2)).toEqual(['terminal', 'presence']);
+    expect(collectSessionTerminalMetadata).toHaveBeenCalledWith({
+      enableFocusedGhosttyCapture: false,
+    });
+  });
+
   it('uses collected tmux terminal metadata for identity refresh when available', async () => {
     const tmuxTerminal = {
       kind: 'tmux' as const,
@@ -452,7 +486,9 @@ describe('pi-session-deck extension', () => {
 
     const sessionManager = refreshIdentity.mock.calls[0]?.[1];
     expect(sessionManager.getTerminal?.()).toEqual(tmuxTerminal);
-    expect(collectSessionTerminalMetadata).toHaveBeenCalledTimes(1);
+    expect(collectSessionTerminalMetadata).toHaveBeenCalledWith({
+      enableFocusedGhosttyCapture: true,
+    });
   });
 
   it('captures iTerm2 terminal metadata for identity refresh when ITERM_SESSION_ID is set', async () => {

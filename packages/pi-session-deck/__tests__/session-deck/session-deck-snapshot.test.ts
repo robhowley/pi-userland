@@ -131,6 +131,10 @@ describe('readSessionDeckSnapshot', () => {
           sessionName: 'prod',
           windowName: 'editor',
           paneId: '%12',
+          host: {
+            kind: 'ghostty',
+            terminalId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+          },
         },
         runtimeSignals: {
           process: {
@@ -233,6 +237,8 @@ describe('readSessionDeckSnapshot', () => {
       'terminal',
       'terminalDisplay',
       'runtimeSignals',
+      'terminalId',
+      'host',
       'socketPath',
       'paneId',
       'attachCommand',
@@ -248,6 +254,7 @@ describe('readSessionDeckSnapshot', () => {
     ]) {
       expect(record).not.toHaveProperty(field);
     }
+    expect(JSON.stringify(snapshot)).not.toContain('aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee');
   });
 
   it('projects only sanitized child runtime evidence into the public snapshot', async () => {

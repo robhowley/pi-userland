@@ -31,6 +31,11 @@ export interface SessionIterm2TerminalMetadata {
   lcTerminalVersion?: string;
 }
 
+export interface SessionGhosttyTerminalMetadata {
+  kind: 'ghostty';
+  terminalId: string;
+}
+
 export interface SessionTmuxTerminalMetadata {
   kind: 'tmux';
   sessionName: string;
@@ -43,9 +48,13 @@ export interface SessionTmuxTerminalMetadata {
   windowIndex?: number;
   paneIndex?: number;
   panePid?: number;
+  host?: SessionGhosttyTerminalMetadata;
 }
 
-export type SessionTerminalMetadata = SessionIterm2TerminalMetadata | SessionTmuxTerminalMetadata;
+export type SessionTerminalMetadata =
+  | SessionIterm2TerminalMetadata
+  | SessionGhosttyTerminalMetadata
+  | SessionTmuxTerminalMetadata;
 
 export type SessionRuntimeLaunchMode = 'tui' | 'rpc' | 'json' | 'print';
 
