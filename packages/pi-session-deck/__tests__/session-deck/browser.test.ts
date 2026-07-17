@@ -3,7 +3,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { visibleWidth } from '@mariozechner/pi-tui';
 import type { Theme } from '@earendil-works/pi-coding-agent';
 
-vi.mock('@mariozechner/pi-tui', () => {
+vi.mock('@mariozechner/pi-tui', async () => {
+  const actual =
+    await vi.importActual<typeof import('@mariozechner/pi-tui')>('@mariozechner/pi-tui');
   const visibleWidth = (value: string) => value.length;
   const truncateToWidth = (value: string, width: number) => value.slice(0, Math.max(0, width));
   const wrapTextWithAnsi = (value: string, width: number) => {
@@ -18,12 +20,8 @@ vi.mock('@mariozechner/pi-tui', () => {
   };
 
   return {
-    matchesKey: (data: string, key: string) => {
-      if ((key === 'enter' || key === 'return') && data === 'enter') {
-        return true;
-      }
-      return data === key;
-    },
+    ...actual,
+    matchesKey: (data: string, key: string) => data === key || actual.matchesKey(data, key),
     truncateToWidth,
     visibleWidth,
     wrapTextWithAnsi,
