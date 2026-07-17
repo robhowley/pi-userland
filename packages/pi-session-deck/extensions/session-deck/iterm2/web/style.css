@@ -488,6 +488,76 @@ button.card-toggle[aria-expanded='true']::after {
   background: var(--color-surface-raised);
 }
 
+.stop-action-row,
+.stop-confirmation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.stop-action-row,
+.stop-confirmation-actions {
+  justify-content: flex-end;
+}
+
+.stop-action-button,
+.stop-confirm {
+  padding: 0.26rem 0.58rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.05;
+}
+
+.stop-action-button {
+  border-color: rgba(76, 86, 106, 0.82);
+  background: rgba(191, 97, 106, 0.04);
+  color: rgba(229, 199, 203, 0.82);
+}
+
+.stop-confirm {
+  border-color: rgba(191, 97, 106, 0.42);
+  color: var(--color-banner-text);
+}
+
+.stop-action-button:hover,
+.stop-action-button:focus-visible {
+  border-color: rgba(191, 97, 106, 0.5);
+  background: rgba(191, 97, 106, 0.1);
+  color: var(--color-banner-text);
+}
+
+.stop-confirm:hover,
+.stop-confirm:focus-visible {
+  border-color: rgba(191, 97, 106, 0.72);
+  background: rgba(191, 97, 106, 0.14);
+}
+
+.stop-action-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.stop-confirmation {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(191, 97, 106, 0.38);
+  border-radius: 7px;
+  padding: 8px;
+  background: rgba(191, 97, 106, 0.08);
+}
+
+.stop-confirmation-copy,
+.stop-action-message {
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+}
+
+.stop-confirm-primary,
+.stop-action-failure {
+  color: var(--color-danger);
+}
+
 .row-line1,
 .row-line2,
 .summary-line,

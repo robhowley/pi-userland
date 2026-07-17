@@ -8,7 +8,20 @@ const NO_REPO_GROUP_KEY = 'no-repo';
 const NO_REPO_LABEL = 'No repo';
 const SUCCESS_PENDING_WORKTREE_TTL_MS = 12_000;
 const OPEN_TERMINAL_SUCCESS_TTL_MS = 4_000;
+const KILL_SESSION_SUCCESS_TTL_MS = 6_000;
 const DEFAULT_OPEN_TERMINAL_FAILURE_MESSAGE = 'Could not request terminal open.';
+const DEFAULT_KILL_SESSION_FAILURE_MESSAGE = 'Could not request session end.';
+const KILL_SESSION_FAILURE_MESSAGES = {
+  'invalid-runtime-id': 'Session runtime metadata is invalid.',
+  'presence-missing': 'Session runtime metadata is no longer available.',
+  'presence-malformed': 'Session runtime metadata is invalid.',
+  'runtime-mismatch': 'Session runtime metadata is invalid.',
+  'pid-reused': 'The recorded process no longer matches this session.',
+  'pid-unverified': 'Could not safely verify the selected process.',
+  'self-signal-denied': 'Session Deck cannot signal its own helper process.',
+  'permission-denied': 'Termination is not permitted for this process.',
+  'signal-failed': DEFAULT_KILL_SESSION_FAILURE_MESSAGE,
+};
 const DOCTOR_COMMAND = '/session-deck iterm2 doctor';
 const AGENT_DIR_MODES = ['ambient', 'default', 'custom'];
 const INLINE_WORKTREE_FAILURE_REASONS = new Set([
@@ -34,6 +47,7 @@ const state = {
   nextWorktreeLaunchPreviewRequestId: 0,
   pendingWorktrees: new Map(),
   openTerminalAction: null,
+  killSessionAction: null,
   highlightedRuntimeId: null,
 };
 
@@ -62,8 +76,17 @@ function init() {
     reconcileSelection();
     reconcileExpandedRepoKeys();
     reconcileOpenTerminalAction();
+    reconcileKillSessionAction();
     render();
   });
+
+  if (typeof window.addEventListener === 'function') {
+    window.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && clearKillSessionConfirmation()) {
+        render();
+      }
+    });
+  }
 
   elements.refresh.addEventListener('click', () => {
     void refreshSnapshot({ source: 'manual' });
@@ -100,6 +123,7 @@ async function refreshSnapshot({ source }) {
     reconcileExpandedRepoKeys();
     reconcilePendingWorktrees();
     reconcileOpenTerminalAction();
+    reconcileKillSessionAction();
   } catch (error) {
     state.fetchError = error instanceof Error ? error.message : String(error);
     if (source === 'startup') {
@@ -107,6 +131,7 @@ async function refreshSnapshot({ source }) {
       reconcileSelection();
       reconcileExpandedRepoKeys();
       reconcileOpenTerminalAction();
+      reconcileKillSessionAction();
     }
   } finally {
     state.loading = false;
@@ -270,6 +295,20 @@ function reconcileOpenTerminalAction() {
   );
   if (!isStillVisible) {
     clearOpenTerminalAction();
+  }
+}
+
+function reconcileKillSessionAction() {
+  const action = state.killSessionAction;
+  if (action?.kind !== 'confirming') {
+    return;
+  }
+
+  const isStillVisible = getVisibleRecords().some(
+    (record) => record.runtimeId === action.runtimeId,
+  );
+  if (!isStillVisible) {
+    clearKillSessionAction();
   }
 }
 
@@ -1300,6 +1339,27 @@ async function postOpenTerminalAction(runtimeId) {
   return payload;
 }
 
+async function postKillSessionAction(runtimeId) {
+  const response = await fetch('/actions/kill-session', {
+    method: 'POST',
+    cache: 'no-store',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'X-Session-Deck-Action-Token': getActionToken(),
+    },
+    body: JSON.stringify({ runtimeId }),
+  });
+
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(
+      isNonEmptyString(payload?.message) ? payload.message : `HTTP ${response.status}`,
+    );
+  }
+  return payload;
+}
+
 function getRecoverableInlineWorktreeFailureMessage(result) {
   if (result?.ok === false && result?.status === 'preflight-failed') {
     return getPreflightFailureMessage(result.preflight);
@@ -1563,6 +1623,107 @@ function getOpenTerminalActionFailureMessage(result) {
   return isNonEmptyString(result?.message) ? result.message : DEFAULT_OPEN_TERMINAL_FAILURE_MESSAGE;
 }
 
+function setKillSessionAction(action) {
+  clearKillSessionAction();
+  const nextAction = { ...action };
+  if (nextAction.kind === 'success' && typeof window.setTimeout === 'function') {
+    nextAction.timeoutId = window.setTimeout(() => {
+      if (state.killSessionAction === nextAction) {
+        state.killSessionAction = null;
+        render();
+      }
+    }, KILL_SESSION_SUCCESS_TTL_MS);
+  }
+  state.killSessionAction = nextAction;
+  return nextAction;
+}
+
+function clearKillSessionAction() {
+  const action = state.killSessionAction;
+  if (action && action.timeoutId !== undefined && typeof window.clearTimeout === 'function') {
+    window.clearTimeout(action.timeoutId);
+  }
+  state.killSessionAction = null;
+}
+
+function clearKillSessionConfirmation() {
+  if (state.killSessionAction?.kind !== 'confirming') {
+    return false;
+  }
+  clearKillSessionAction();
+  return true;
+}
+
+function getKillSessionActionForRecord(record) {
+  return state.killSessionAction?.runtimeId === record.runtimeId ? state.killSessionAction : null;
+}
+
+function openKillSessionConfirmation(record) {
+  if (state.killSessionAction?.kind === 'pending') {
+    return;
+  }
+
+  setKillSessionAction({ kind: 'confirming', runtimeId: record.runtimeId });
+  render();
+}
+
+function confirmKillSession(record) {
+  if (state.killSessionAction?.kind === 'pending') {
+    return;
+  }
+
+  const pendingAction = setKillSessionAction({ kind: 'pending', runtimeId: record.runtimeId });
+  render();
+
+  void postKillSessionAction(record.runtimeId)
+    .then((result) => {
+      if (state.killSessionAction !== pendingAction) {
+        return;
+      }
+
+      if (result?.ok === true) {
+        setKillSessionAction({
+          kind: 'success',
+          runtimeId: record.runtimeId,
+          message: getKillSessionActionSuccessMessage(result),
+        });
+        void refreshSnapshot({ source: 'manual' });
+      } else {
+        setKillSessionAction({
+          kind: 'failure',
+          runtimeId: record.runtimeId,
+          message: getKillSessionActionFailureMessage(result),
+        });
+      }
+      render();
+    })
+    .catch((error) => {
+      if (state.killSessionAction !== pendingAction) {
+        return;
+      }
+
+      setKillSessionAction({
+        kind: 'failure',
+        runtimeId: record.runtimeId,
+        message:
+          error instanceof Error && isNonEmptyString(error.message)
+            ? error.message
+            : DEFAULT_KILL_SESSION_FAILURE_MESSAGE,
+      });
+      render();
+    });
+}
+
+function getKillSessionActionSuccessMessage(result) {
+  return result?.status === 'already-exited'
+    ? 'This Pi session is no longer running.'
+    : 'End requested for this session.';
+}
+
+function getKillSessionActionFailureMessage(result) {
+  return KILL_SESSION_FAILURE_MESSAGES[result?.reason] ?? DEFAULT_KILL_SESSION_FAILURE_MESSAGE;
+}
+
 function getActionToken() {
   const tokenElement = document.getElementById('session-deck-action-token');
   return tokenElement?.getAttribute?.('content') ?? '';
@@ -1582,6 +1743,7 @@ function createRecordCard(record) {
   toggle.className = 'card-toggle';
   toggle.setAttribute('aria-expanded', String(isExpanded));
   toggle.addEventListener('click', () => {
+    clearKillSessionConfirmation();
     if (isExpanded) {
       state.detailVisible = false;
     } else {
@@ -1724,6 +1886,7 @@ function createRecordDetail(record) {
       }),
     ]),
     createStatusSection(record),
+    createKillSessionSection(record),
   );
 
   if (record.diagnostics.length > 0) {
@@ -1736,6 +1899,100 @@ function createRecordDetail(record) {
   }
 
   return detail;
+}
+
+function createKillSessionSection(record) {
+  const action = getKillSessionActionForRecord(record);
+  const content = [];
+
+  if (action?.kind === 'confirming') {
+    const panel = document.createElement('div');
+    panel.className = 'stop-confirmation';
+
+    const copy = document.createElement('p');
+    copy.className = 'stop-confirmation-copy';
+    copy.textContent =
+      'Ending this session sends SIGTERM to the Pi runtime only. Session history is preserved.';
+
+    const actions = document.createElement('div');
+    actions.className = 'stop-confirmation-actions';
+
+    const confirm = document.createElement('button');
+    confirm.type = 'button';
+    confirm.className = 'stop-confirm stop-confirm-primary';
+    confirm.textContent = 'End session';
+    confirm.addEventListener('click', (event) => {
+      event.preventDefault?.();
+      event.stopPropagation?.();
+      confirmKillSession(record);
+    });
+
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'stop-confirm';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', (event) => {
+      event.preventDefault?.();
+      event.stopPropagation?.();
+      clearKillSessionAction();
+      render();
+    });
+
+    actions.append(confirm, cancel);
+    panel.append(copy, actions);
+    content.push(panel);
+
+    if (typeof window.setTimeout === 'function') {
+      window.setTimeout(() => {
+        confirm.focus?.();
+      }, 0);
+    }
+  } else {
+    const row = document.createElement('div');
+    row.className = 'stop-action-row';
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'stop-action-button';
+    button.textContent = getKillSessionButtonText(action);
+    button.disabled = state.killSessionAction?.kind === 'pending';
+    button.addEventListener('click', (event) => {
+      event.preventDefault?.();
+      event.stopPropagation?.();
+      openKillSessionConfirmation(record);
+    });
+    row.append(button);
+    content.push(row);
+  }
+
+  if (action?.kind === 'pending') {
+    content.push(createText('p', 'Requesting session end…', 'stop-action-message'));
+  } else if (action?.kind === 'success' || action?.kind === 'failure') {
+    content.push(
+      createText(
+        'p',
+        action.message,
+        action.kind === 'failure'
+          ? 'stop-action-message stop-action-failure'
+          : 'stop-action-message',
+      ),
+    );
+  }
+
+  return createDetailSection(null, content, { ariaLabel: 'Session actions' });
+}
+
+function getKillSessionButtonText(action) {
+  switch (action?.kind) {
+    case 'pending':
+      return 'Ending…';
+    case 'success':
+      return 'End requested';
+    case 'failure':
+      return 'Retry end';
+    default:
+      return 'End session';
+  }
 }
 
 function createStatusSection(record) {
@@ -1759,10 +2016,15 @@ function createStatusSection(record) {
   return createDetailSection('STATUS', content);
 }
 
-function createDetailSection(title, children) {
+function createDetailSection(title, children, options = {}) {
   const section = document.createElement('section');
   section.className = 'detail-section';
-  section.append(createText('div', title, 'detail-section-title'));
+  if (options.ariaLabel) {
+    section.setAttribute('aria-label', options.ariaLabel);
+  }
+  if (title) {
+    section.append(createText('div', title, 'detail-section-title'));
+  }
 
   const body = document.createElement('div');
   body.className = 'detail-section-body';

@@ -1,11 +1,18 @@
+import type { KeyId } from '@mariozechner/pi-tui';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@mariozechner/pi-tui', () => ({
-  matchesKey: (data: string, key: string) => data === key,
-  truncateToWidth: (value: string, width: number) => value.slice(0, Math.max(0, width)),
-  visibleWidth: (value: string) => value.length,
-  wrapTextWithAnsi: (value: string) => [value],
-}));
+vi.mock('@mariozechner/pi-tui', async () => {
+  const actual =
+    await vi.importActual<typeof import('@mariozechner/pi-tui')>('@mariozechner/pi-tui');
+
+  return {
+    ...actual,
+    matchesKey: (data: string, key: KeyId) => data === key || actual.matchesKey(data, key),
+    truncateToWidth: (value: string, width: number) => value.slice(0, Math.max(0, width)),
+    visibleWidth: (value: string) => value.length,
+    wrapTextWithAnsi: (value: string) => [value],
+  };
+});
 
 import {
   parseSessionDeckCommandArgs,
@@ -518,10 +525,15 @@ describe('session-deck joined command', () => {
       ok: true,
       message: 'Requested iTerm2 focus for selected session.',
     }));
+    const killRuntime = vi.fn(async (_runtimeId: string) => ({
+      ok: true as const,
+      status: 'signal-sent' as const,
+    }));
 
     registerSessionDeckCommand(api, {
       readSessionDeckSnapshot: vi.fn(async () => buildSnapshot()),
       openIterm2Terminal,
+      killRuntime,
     });
 
     const handler = getHandler();
@@ -538,6 +550,7 @@ describe('session-deck joined command', () => {
 
     expect(custom).not.toHaveBeenCalled();
     expect(openIterm2Terminal).not.toHaveBeenCalled();
+    expect(killRuntime).not.toHaveBeenCalled();
     expect(vi.mocked(ctx.ui.notify)).toHaveBeenCalledWith(
       JSON.stringify(buildSnapshotRecord(), null, 2),
       'info',
@@ -656,6 +669,113 @@ describe('session-deck joined command', () => {
 
     expect(custom).toHaveBeenCalledTimes(1);
     expect(vi.mocked(ctx.ui.notify)).not.toHaveBeenCalled();
+  });
+
+  it('routes TUI End session for the current runtime through ctx.shutdown without signaling', async () => {
+    const { api, getHandler } = createMockAPI();
+    const shutdown = vi.fn(async () => undefined);
+    const killRuntime = vi.fn(async (_runtimeId: string) => ({
+      ok: true as const,
+      status: 'signal-sent' as const,
+    }));
+
+    registerSessionDeckCommand(api, {
+      getCurrentRuntimeIdentity: () => ({
+        runtimeId: 'rt-self',
+        pid: 101,
+        startedAt: '2026-07-17T12:00:00.000Z',
+      }),
+      killRuntime,
+      readSessionDeckSnapshot: vi.fn(async () =>
+        buildSnapshot({ records: [buildSnapshotRecord({ runtimeId: 'rt-self' })] }),
+      ),
+    });
+
+    const handler = getHandler();
+    const custom = vi.fn(async (factory) => {
+      const component = factory(
+        { requestRender: vi.fn() },
+        createTheme() as never,
+        undefined,
+        () => undefined,
+      );
+
+      try {
+        component.handleInput?.('k');
+        component.handleInput?.('\r');
+        await vi.waitFor(() => expect(shutdown).toHaveBeenCalledTimes(1));
+      } finally {
+        component.dispose?.();
+      }
+    });
+    const ctx = createCommandContext({
+      mode: 'tui',
+      shutdown,
+      ui: {
+        notify: vi.fn(),
+        custom: custom as NonNullable<PresenceCommandContext['ui']['custom']>,
+      },
+    });
+
+    await handler?.('', ctx);
+
+    expect(shutdown).toHaveBeenCalledTimes(1);
+    expect(killRuntime).not.toHaveBeenCalled();
+  });
+
+  it('routes TUI End session for another runtime through the shared runtime primitive with runtimeId only', async () => {
+    const { api, getHandler } = createMockAPI();
+    const shutdown = vi.fn(async () => undefined);
+    const killRuntime = vi.fn(async (_runtimeId: string) => ({
+      ok: true as const,
+      status: 'signal-sent' as const,
+    }));
+
+    registerSessionDeckCommand(api, {
+      getCurrentRuntimeIdentity: () => ({
+        runtimeId: 'rt-self',
+        pid: 101,
+        startedAt: '2026-07-17T12:00:00.000Z',
+      }),
+      killRuntime,
+      readSessionDeckSnapshot: vi.fn(async () =>
+        buildSnapshot({
+          records: [buildSnapshotRecord({ runtimeId: 'rt-other', sessionName: 'other' })],
+        }),
+      ),
+    });
+
+    const handler = getHandler();
+    const custom = vi.fn(async (factory) => {
+      const component = factory(
+        { requestRender: vi.fn() },
+        createTheme() as never,
+        undefined,
+        () => undefined,
+      );
+
+      try {
+        component.handleInput?.('k');
+        component.handleInput?.('\r');
+        await vi.waitFor(() => expect(killRuntime).toHaveBeenCalledTimes(1));
+      } finally {
+        component.dispose?.();
+      }
+    });
+    const ctx = createCommandContext({
+      mode: 'tui',
+      shutdown,
+      ui: {
+        notify: vi.fn(),
+        custom: custom as NonNullable<PresenceCommandContext['ui']['custom']>,
+      },
+    });
+
+    await handler?.('', ctx);
+
+    expect(killRuntime).toHaveBeenCalledTimes(1);
+    expect(killRuntime.mock.calls[0]).toEqual(['rt-other']);
+    expect(shutdown).not.toHaveBeenCalled();
   });
 
   it('dispatches to a custom browser in tui mode, shows session ids by default, and keeps refresh/reap wiring stable', async () => {

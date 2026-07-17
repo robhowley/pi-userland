@@ -1,9 +1,11 @@
 import type { Dirent } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { visibleWidth } from '@mariozechner/pi-tui';
+import { visibleWidth, type KeyId } from '@mariozechner/pi-tui';
 import type { Theme } from '@earendil-works/pi-coding-agent';
 
-vi.mock('@mariozechner/pi-tui', () => {
+vi.mock('@mariozechner/pi-tui', async () => {
+  const actual =
+    await vi.importActual<typeof import('@mariozechner/pi-tui')>('@mariozechner/pi-tui');
   const visibleWidth = (value: string) => value.length;
   const truncateToWidth = (value: string, width: number) => value.slice(0, Math.max(0, width));
   const wrapTextWithAnsi = (value: string, width: number) => {
@@ -18,12 +20,8 @@ vi.mock('@mariozechner/pi-tui', () => {
   };
 
   return {
-    matchesKey: (data: string, key: string) => {
-      if ((key === 'enter' || key === 'return') && data === 'enter') {
-        return true;
-      }
-      return data === key;
-    },
+    ...actual,
+    matchesKey: (data: string, key: KeyId) => data === key || actual.matchesKey(data, key),
     truncateToWidth,
     visibleWidth,
     wrapTextWithAnsi,
@@ -106,6 +104,10 @@ function renderText(browser: SessionDeckBrowser, width = 120): string {
   return renderLines(browser, width).join('\n');
 }
 
+function normalizeWhitespace(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
 function buildRepoRecord(
   runtimeId: string,
   sessionName: string,
@@ -172,6 +174,7 @@ function createBrowser(
     reapLines: string[];
     theme: Theme;
     openSelected: (record: SessionDeckRecord) => Promise<{ ok: boolean; message: string }>;
+    killSelected: (record: SessionDeckRecord) => Promise<{ ok: boolean; message: string }>;
     createWorktree: ConstructorParameters<typeof SessionDeckBrowser>[0]['createWorktree'];
     previewLaunchContext: ConstructorParameters<
       typeof SessionDeckBrowser
@@ -187,6 +190,7 @@ function createBrowser(
     requestRender: overrides.requestRender ?? (() => {}),
     ...(overrides.reapLines === undefined ? {} : { reapLines: overrides.reapLines }),
     ...(overrides.openSelected === undefined ? {} : { openSelected: overrides.openSelected }),
+    ...(overrides.killSelected === undefined ? {} : { killSelected: overrides.killSelected }),
     ...(overrides.createWorktree === undefined ? {} : { createWorktree: overrides.createWorktree }),
     ...(overrides.previewLaunchContext === undefined
       ? {}
@@ -258,7 +262,7 @@ describe('SessionDeckBrowser', () => {
       lines,
       (line) =>
         line.includes(
-          '↑↓ move · ←→ switch repo · enter details · w new Pi session · o open terminal · r refresh · q close',
+          '↑↓ move · ←→ switch repo · enter details · w new Pi session · o open terminal · k end session · r refresh · q close',
         ),
       'help line',
     );
@@ -1498,6 +1502,105 @@ describe('SessionDeckBrowser', () => {
     browser.handleInput('o');
 
     expect(openSelected).not.toHaveBeenCalled();
+  });
+
+  it('opens an End session confirmation with k and only Enter confirms the frozen selected row', async () => {
+    const killSelected = vi.fn(async (_record: SessionDeckRecord) => ({
+      ok: true,
+      message: 'End requested for this session.',
+    }));
+    const browser = createBrowser({
+      killSelected,
+      initialView: buildSnapshot({
+        records: [
+          buildSnapshotRecord({ runtimeId: 'rt-alpha', sessionName: 'alpha', pid: 111 }),
+          buildSnapshotRecord({ runtimeId: 'rt-bravo', sessionName: 'bravo', pid: 222 }),
+        ],
+      }),
+    });
+
+    browser.handleInput('k');
+    const killConfirmation = normalizeWhitespace(renderText(browser));
+    expect(killConfirmation).toContain('End session for alpha (rt-alpha, pid 111)?');
+    expect(killConfirmation).toContain(
+      'Ending this session sends SIGTERM to the Pi runtime only. Session history is preserved.',
+    );
+    expect(killConfirmation).toContain('Enter confirm · esc/q cancel');
+    expect(killSelected).not.toHaveBeenCalled();
+
+    browser.handleInput('k');
+    browser.handleInput('down');
+    expect(killSelected).not.toHaveBeenCalled();
+
+    browser.handleInput('enter');
+    await vi.waitFor(() => expect(killSelected).toHaveBeenCalledTimes(1));
+    const [stoppedRecord] = vi.mocked(killSelected).mock.calls[0] ?? [];
+    expect(stoppedRecord?.runtimeId).toBe('rt-alpha');
+    await vi.waitFor(() =>
+      expect(renderText(browser)).toContain('End requested for this session.'),
+    );
+    expect(renderText(browser)).not.toContain('killed');
+  });
+
+  it('cancels End session confirmation with escape ctrl-c or q without stopping', () => {
+    const killSelected = vi.fn(async (_record: SessionDeckRecord) => ({
+      ok: true,
+      message: 'End requested for this session.',
+    }));
+    const browser = createBrowser({ killSelected });
+
+    for (const key of ['escape', 'ctrl+c', 'q']) {
+      browser.handleInput('k');
+      expect(renderText(browser)).toContain('End session for alpha');
+      browser.handleInput(key);
+      expect(renderText(browser)).toContain('End session cancelled.');
+    }
+
+    expect(killSelected).not.toHaveBeenCalled();
+  });
+
+  it('cancels End session confirmation when the target disappears on refresh', async () => {
+    vi.useFakeTimers();
+    const killSelected = vi.fn(async (_record: SessionDeckRecord) => ({
+      ok: true,
+      message: 'End requested for this session.',
+    }));
+    const reload = vi.fn(async () => buildSnapshot({ records: [] }));
+    const browser = createBrowser({ killSelected, reload });
+
+    browser.handleInput('k');
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+    expect(renderText(browser)).toContain(
+      'End session cancelled; selected session is no longer visible.',
+    );
+    browser.handleInput('enter');
+    expect(killSelected).not.toHaveBeenCalled();
+  });
+
+  it('renders End session failures as retryable warning statuses', async () => {
+    const fg = vi.fn((_tone: string, text: string) => text);
+    const killSelected = vi.fn(async (_record: SessionDeckRecord) => ({
+      ok: false,
+      message: 'Could not safely verify the selected process.',
+    }));
+    const browser = createBrowser({ theme: createTheme({ fg }), killSelected });
+
+    browser.handleInput('k');
+    browser.handleInput('enter');
+
+    await vi.waitFor(() => {
+      expect(renderText(browser)).toContain('Could not safely verify the selected process.');
+    });
+    expect(
+      vi
+        .mocked(fg)
+        .mock.calls.some(
+          ([tone, text]) =>
+            tone === 'warning' && text === 'Could not safely verify the selected process.',
+        ),
+    ).toBe(true);
   });
 
   it('keeps auto-refresh running while an open request is pending', async () => {

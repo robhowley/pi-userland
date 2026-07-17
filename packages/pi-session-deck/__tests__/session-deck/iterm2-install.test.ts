@@ -81,6 +81,14 @@ async function createRuntimePaths(
     'iterm2',
     'open-action-cli.js',
   );
+  const killSessionHelperScriptPath = join(
+    root,
+    'dist',
+    'extensions',
+    'session-deck',
+    'iterm2',
+    'kill-action-cli.js',
+  );
   const webRootPath = join(root, 'extensions', 'session-deck', 'iterm2', 'web');
   const autolaunchSourcePath = join(root, 'extensions', 'session-deck', 'iterm2', 'autolaunch.py');
   const socketRoot = await mkdtemp('/tmp/psd-iterm2-sock-');
@@ -90,11 +98,13 @@ async function createRuntimePaths(
   await mkdir(dirname(snapshotHelperPath), { recursive: true });
   await mkdir(dirname(createWorktreeHelperScriptPath), { recursive: true });
   await mkdir(dirname(openTerminalHelperScriptPath), { recursive: true });
+  await mkdir(dirname(killSessionHelperScriptPath), { recursive: true });
   await mkdir(webRootPath, { recursive: true });
   await mkdir(dirname(autolaunchSourcePath), { recursive: true });
   await writeFile(snapshotHelperPath, 'console.log("snapshot")\n', 'utf8');
   await writeFile(createWorktreeHelperScriptPath, 'console.log("action")\n', 'utf8');
   await writeFile(openTerminalHelperScriptPath, 'console.log("open")\n', 'utf8');
+  await writeFile(killSessionHelperScriptPath, 'console.log("kill")\n', 'utf8');
   await writeFile(join(webRootPath, 'index.html'), '<!doctype html>\n', 'utf8');
   if (options.includeAppJs !== false) {
     await writeFile(join(webRootPath, 'app.js'), 'console.log("app")\n', 'utf8');
@@ -111,6 +121,7 @@ async function createRuntimePaths(
     snapshotHelperPath,
     createWorktreeHelperScriptPath,
     openTerminalHelperScriptPath,
+    killSessionHelperScriptPath,
     webRootPath,
     autolaunchSourcePath,
     bridgeSocketPath,
@@ -274,6 +285,23 @@ describe('session-deck iterm2 install + doctor + uninstall', () => {
     expect(result).toEqual({
       level: 'error',
       message: `Open-terminal helper not found: ${runtimePaths.openTerminalHelperScriptPath}\nRun \`pnpm --dir packages/pi-session-deck run build\` and try again.`,
+    });
+  });
+
+  it('fails install when the kill-session helper artifact is missing', async () => {
+    const homeDirectory = await createTempHome();
+    const runtimePaths = await createRuntimePaths(join(homeDirectory, 'package-root'));
+    await rm(runtimePaths.killSessionHelperScriptPath);
+
+    const result = await installSessionDeckIterm2({
+      homeDirectory,
+      platform: 'darwin',
+      runtimePaths,
+    });
+
+    expect(result).toEqual({
+      level: 'error',
+      message: `Kill-session helper not found: ${runtimePaths.killSessionHelperScriptPath}\nRun \`pnpm --dir packages/pi-session-deck run build\` and try again.`,
     });
   });
 

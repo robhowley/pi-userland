@@ -334,6 +334,9 @@ async function checkRuntimePaths(
     `- open-terminal helper: ${runtimePaths.openTerminalHelperScriptPath}${(await pathExists(runtimePaths.openTerminalHelperScriptPath)) ? '' : ' (missing)'}`,
   );
   lines.push(
+    `- kill-session helper: ${runtimePaths.killSessionHelperScriptPath}${(await pathExists(runtimePaths.killSessionHelperScriptPath)) ? '' : ' (missing)'}`,
+  );
+  lines.push(
     `- web root: ${runtimePaths.webRootPath}${(await pathExists(runtimePaths.webRootPath)) ? '' : ' (missing)'}`,
   );
 
@@ -362,6 +365,10 @@ async function checkRuntimePaths(
 
   if (!(await pathExists(runtimePaths.openTerminalHelperScriptPath))) {
     issues.push(`Open-terminal helper is missing: ${runtimePaths.openTerminalHelperScriptPath}`);
+  }
+
+  if (!(await pathExists(runtimePaths.killSessionHelperScriptPath))) {
+    issues.push(`Kill-session helper is missing: ${runtimePaths.killSessionHelperScriptPath}`);
   }
 
   if (!(await pathExists(runtimePaths.webRootPath))) {

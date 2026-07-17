@@ -13,19 +13,22 @@ Open Session Deck as a native Pi TUI with `/session-deck`, or keep it visible as
 - **Agents organized by repo.** See every live session in its project context and collapse repos that do not need attention.
 - **Detailed status at a glance.** Names, liveness, current activity, branch and worktree context, PR state, and safe status chips stay together.
 - **A reliable way back.** Focus an active iTerm2 session or reattach to an existing tmux session from the deck.
+- **End sessions safely.** Preserve session history when an agent is done.
 - **New isolated agents on demand.** Start Pi on a generated Git worktree in detached tmux and let it keep running headlessly.
 
 <img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-session-deck/img/session-deck-toolbelt-repos.png" alt="Session Deck iTerm2 Toolbelt showing Pi agents organized across betterby-bike and pi-userland repos" width="720">
 
 Repo groups make a busy deck readable: expand the work in motion, collapse everything else, and keep each agent's branch, activity, and status close at hand.
 
-## Launch and return
+## Launch, return, and end sessions
 
 Use `w` in the Pi TUI or **＋ New** in the Toolbelt to start an agent on a new branch. Session Deck gives it an isolated Git worktree and detached tmux session, so it can keep working without occupying a terminal tab.
 
 <img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-session-deck/img/session-deck-toolbelt.png" alt="Session Deck iTerm2 Toolbelt branch composer for launching a new Pi agent on a worktree" width="720">
 
 When you are ready to return, use `o` or **↗ Open** to focus or reattach to that agent's existing terminal. Opening and launching stay separate, so returning to an agent never starts another one.
+
+When an agent is done, end it with `k` in the Pi TUI or **End session** in the Toolbelt.
 
 ## Installation
 
@@ -77,9 +80,10 @@ Flags can be combined.
 | `enter`   | Toggle session details.                                     |
 | `w`       | Launch a Pi agent on a generated worktree in detached tmux. |
 | `o`       | Open or focus the selected agent's terminal.                |
+| `k`       | End the selected session.                                   |
 | `r`       | Refresh.                                                    |
 | `q`       | Close Session Deck.                                         |
-| `esc`     | Cancel the branch prompt, or close Session Deck.            |
+| `esc`     | Cancel an open prompt, or close Session Deck.               |
 
 ## Privacy
 

@@ -1,9 +1,11 @@
+import { EventEmitter } from 'node:events';
 import { mkdtemp, rm } from 'node:fs/promises';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { openWithIterm2Runtime } from '../../extensions/session-deck/iterm2-runtime-client.js';
+import type { JsonLineSocketClientSocket } from '../../extensions/session-deck/iterm2/json-line-socket-client.js';
 
 const VALID_TMUX_ATTACH_ARGV = [
   'tmux',
@@ -344,24 +346,41 @@ describe('openWithIterm2Runtime', () => {
   });
 
   it('marks post-send runtime timeout as not fallback-safe', async () => {
-    await withRuntimeServer(
-      () => {
-        // Keep the socket open until the client timeout fires.
-      },
-      async ({ socketPath, requests }) => {
-        const result = await openWithIterm2Runtime(
-          { tmuxAttachArgv: VALID_TMUX_ATTACH_ARGV },
-          { socketPath, timeoutMs: 10 },
-        );
+    vi.useFakeTimers();
 
-        expect(requests).toHaveLength(1);
-        expect(result).toEqual({
-          ok: false,
-          reason: 'python-bridge-unavailable',
-          message: 'iTerm2 runtime did not respond before the timeout.',
-          requestSent: true,
-        });
-      },
-    );
+    try {
+      const writes: string[] = [];
+      const socket = Object.assign(new EventEmitter(), {
+        destroy: vi.fn(),
+        end: vi.fn(),
+        setEncoding: vi.fn(),
+        write: vi.fn((chunk: string | Uint8Array) => {
+          writes.push(String(chunk));
+          return true;
+        }) as JsonLineSocketClientSocket['write'],
+      }) as unknown as JsonLineSocketClientSocket;
+      const createConnection = vi.fn(() => socket);
+      const resultPromise = openWithIterm2Runtime(
+        { tmuxAttachArgv: VALID_TMUX_ATTACH_ARGV },
+        { socketPath: '/tmp/runtime.sock', timeoutMs: 10, createConnection },
+      );
+
+      await Promise.resolve();
+      socket.emit('connect');
+
+      expect(createConnection).toHaveBeenCalledWith('/tmp/runtime.sock');
+      expect(writes).toEqual([`${JSON.stringify({ tmuxAttachArgv: VALID_TMUX_ATTACH_ARGV })}\n`]);
+
+      await vi.advanceTimersByTimeAsync(10);
+
+      await expect(resultPromise).resolves.toEqual({
+        ok: false,
+        reason: 'python-bridge-unavailable',
+        message: 'iTerm2 runtime did not respond before the timeout.',
+        requestSent: true,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
