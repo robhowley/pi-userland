@@ -1,3 +1,4 @@
+import type { KeyId } from '@mariozechner/pi-tui';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@mariozechner/pi-tui', async () => {
@@ -6,7 +7,7 @@ vi.mock('@mariozechner/pi-tui', async () => {
 
   return {
     ...actual,
-    matchesKey: (data: string, key: string) => data === key || actual.matchesKey(data, key),
+    matchesKey: (data: string, key: KeyId) => data === key || actual.matchesKey(data, key),
     truncateToWidth: (value: string, width: number) => value.slice(0, Math.max(0, width)),
     visibleWidth: (value: string) => value.length,
     wrapTextWithAnsi: (value: string) => [value],

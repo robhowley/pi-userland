@@ -1,6 +1,6 @@
 import type { Dirent } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { visibleWidth } from '@mariozechner/pi-tui';
+import { visibleWidth, type KeyId } from '@mariozechner/pi-tui';
 import type { Theme } from '@earendil-works/pi-coding-agent';
 
 vi.mock('@mariozechner/pi-tui', async () => {
@@ -21,7 +21,7 @@ vi.mock('@mariozechner/pi-tui', async () => {
 
   return {
     ...actual,
-    matchesKey: (data: string, key: string) => data === key || actual.matchesKey(data, key),
+    matchesKey: (data: string, key: KeyId) => data === key || actual.matchesKey(data, key),
     truncateToWidth,
     visibleWidth,
     wrapTextWithAnsi,
