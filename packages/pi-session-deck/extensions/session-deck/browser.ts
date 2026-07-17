@@ -10,10 +10,19 @@ import {
 } from './browser-render.js';
 import type { SessionDeckBrowserRow } from './browser-render.js';
 import type { SessionDeckBrowserRecord, SessionDeckBrowserSnapshot } from './browser-view.js';
+import {
+  formatLaunchAgentDirModeLabel,
+  getPiDefaultAgentDirDisplay,
+  normalizeLaunchAgentDirSelection,
+  shortenHomeDir,
+} from './worktree/agent-dir.js';
 import type {
   CreateWorktreeActionRequest,
   CreateWorktreeActionResult,
+  CreateWorktreeLaunchAgentDir,
+  CreateWorktreeLaunchAgentDirMode,
   CreateWorktreeStatusUpdate,
+  WorktreeLaunchContextPreviewResult,
 } from './worktree/types.js';
 
 const DEFAULT_MAX_VISIBLE_ROWS = 8;
@@ -77,8 +86,22 @@ export type SessionDeckBrowserCreateWorktree = (
   onStatus: (update: CreateWorktreeStatusUpdate) => void,
 ) => Promise<CreateWorktreeActionResult>;
 
+export type SessionDeckBrowserPreviewLaunchContext = (
+  agentDir: CreateWorktreeLaunchAgentDir,
+) => Promise<WorktreeLaunchContextPreviewResult>;
+
+type SessionDeckWorktreePromptFocus = 'branch' | 'pi-config';
+
 interface SessionDeckWorktreePrompt {
   branchName: string;
+  agentDirSelection: CreateWorktreeLaunchAgentDir;
+  customDraft: string;
+  focus: SessionDeckWorktreePromptFocus;
+  selectorOpen: boolean;
+  selectorIndex: number;
+  feedback: string | null;
+  launchContext: WorktreeLaunchContextPreviewResult | { status: 'loading' };
+  launchContextRequestId: number;
 }
 
 export interface SessionDeckBrowserOptions {
@@ -88,6 +111,7 @@ export interface SessionDeckBrowserOptions {
   onClose: () => void;
   openSelected?: SessionDeckBrowserOpenSelected;
   createWorktree?: SessionDeckBrowserCreateWorktree;
+  previewLaunchContext?: SessionDeckBrowserPreviewLaunchContext;
   reload: () => Promise<SessionDeckBrowserSnapshot>;
   requestRender: () => void;
   reapLines?: string[];
@@ -100,6 +124,7 @@ export class SessionDeckBrowser {
   private readonly onClose: () => void;
   private readonly openSelected: SessionDeckBrowserOpenSelected | null;
   private readonly createWorktree: SessionDeckBrowserCreateWorktree | null;
+  private readonly previewLaunchContext: SessionDeckBrowserPreviewLaunchContext;
   private readonly reload: () => Promise<SessionDeckBrowserSnapshot>;
   private readonly requestRender: () => void;
   private readonly reapLines: string[];
@@ -128,6 +153,7 @@ export class SessionDeckBrowser {
     this.onClose = options.onClose;
     this.openSelected = options.openSelected ?? null;
     this.createWorktree = options.createWorktree ?? null;
+    this.previewLaunchContext = options.previewLaunchContext ?? previewLaunchContextFromProcess;
     this.reload = options.reload;
     this.requestRender = options.requestRender;
     this.reapLines = options.reapLines ?? [];
@@ -251,7 +277,9 @@ export class SessionDeckBrowser {
     }
 
     if (this.worktreePrompt !== null) {
-      pushWrappedLine(lines, this.theme.fg('accent', this.formatWorktreePrompt()), width);
+      for (const line of this.formatWorktreePromptLines()) {
+        pushWrappedLine(lines, this.theme.fg('accent', line), width);
+      }
     }
 
     if (this.reapLines.length > 0) {
@@ -373,7 +401,8 @@ export class SessionDeckBrowser {
     }
 
     this.clearStatus();
-    this.worktreePrompt = { branchName: '' };
+    this.worktreePrompt = createInitialWorktreePrompt();
+    this.refreshWorktreeLaunchContextPreview(this.worktreePrompt);
     this.bump();
   }
 
@@ -384,14 +413,50 @@ export class SessionDeckBrowser {
     }
 
     if (matchesKey(data, 'escape') || matchesKey(data, 'ctrl+c')) {
+      if (prompt.selectorOpen) {
+        prompt.selectorOpen = false;
+        prompt.feedback = null;
+        this.bump();
+        return;
+      }
       this.worktreePrompt = null;
       this.worktreeStatus = { message: 'New Pi session cancelled.', tone: 'muted' };
       this.bump();
       return;
     }
 
+    if (prompt.selectorOpen) {
+      this.handleWorktreePromptSelectorInput(prompt, data);
+      return;
+    }
+
+    if (isTabKey(data)) {
+      prompt.focus = prompt.focus === 'branch' ? 'pi-config' : 'branch';
+      prompt.feedback = null;
+      this.bump();
+      return;
+    }
+
+    if (isShiftTabKey(data)) {
+      prompt.focus = prompt.focus === 'branch' ? 'pi-config' : 'branch';
+      prompt.feedback = null;
+      this.bump();
+      return;
+    }
+
     if (matchesKey(data, 'enter') || matchesKey(data, 'return')) {
+      if (prompt.focus === 'pi-config') {
+        prompt.selectorOpen = true;
+        prompt.selectorIndex = agentDirModeIndex(prompt.agentDirSelection.mode);
+        prompt.feedback = null;
+        this.bump();
+        return;
+      }
       void this.submitWorktreePrompt(prompt);
+      return;
+    }
+
+    if (prompt.focus !== 'branch') {
       return;
     }
 
@@ -405,6 +470,77 @@ export class SessionDeckBrowser {
       prompt.branchName += data;
       this.bump();
     }
+  }
+
+  private handleWorktreePromptSelectorInput(prompt: SessionDeckWorktreePrompt, data: string): void {
+    if (matchesKey(data, 'up') || matchesKey(data, 'left')) {
+      prompt.selectorIndex =
+        (prompt.selectorIndex + AGENT_DIR_MODE_OPTIONS.length - 1) % AGENT_DIR_MODE_OPTIONS.length;
+      prompt.feedback = null;
+      this.bump();
+      return;
+    }
+    if (matchesKey(data, 'down') || matchesKey(data, 'right') || isTabKey(data)) {
+      prompt.selectorIndex = (prompt.selectorIndex + 1) % AGENT_DIR_MODE_OPTIONS.length;
+      prompt.feedback = null;
+      this.bump();
+      return;
+    }
+    if (isShiftTabKey(data)) {
+      prompt.selectorIndex =
+        (prompt.selectorIndex + AGENT_DIR_MODE_OPTIONS.length - 1) % AGENT_DIR_MODE_OPTIONS.length;
+      prompt.feedback = null;
+      this.bump();
+      return;
+    }
+
+    const selectedMode = AGENT_DIR_MODE_OPTIONS[prompt.selectorIndex] ?? 'ambient';
+    if (selectedMode === 'custom') {
+      if (matchesKey(data, 'backspace') || data === '\u007f') {
+        prompt.customDraft = prompt.customDraft.slice(0, -1);
+        prompt.feedback = null;
+        this.bump();
+        return;
+      }
+      if (isPrintableInput(data)) {
+        prompt.customDraft += data;
+        prompt.feedback = null;
+        this.bump();
+        return;
+      }
+    }
+
+    const quickMode = getAgentDirQuickMode(data);
+    if (quickMode !== null) {
+      prompt.selectorIndex = agentDirModeIndex(quickMode);
+      this.applyWorktreePromptAgentDirSelection(prompt);
+      return;
+    }
+
+    if (matchesKey(data, 'enter') || matchesKey(data, 'return')) {
+      this.applyWorktreePromptAgentDirSelection(prompt);
+    }
+  }
+
+  private applyWorktreePromptAgentDirSelection(prompt: SessionDeckWorktreePrompt): void {
+    const selectedMode = AGENT_DIR_MODE_OPTIONS[prompt.selectorIndex] ?? 'ambient';
+    const candidate =
+      selectedMode === 'custom'
+        ? { mode: selectedMode, customDir: prompt.customDraft }
+        : { mode: selectedMode };
+    const normalized = normalizeLaunchAgentDirSelection(candidate);
+    if (!normalized.ok) {
+      prompt.feedback = normalized.message;
+      this.bump();
+      return;
+    }
+
+    prompt.agentDirSelection = normalized.agentDir;
+    prompt.selectorOpen = false;
+    prompt.focus = 'pi-config';
+    prompt.feedback = null;
+    this.refreshWorktreeLaunchContextPreview(prompt);
+    this.bump();
   }
 
   private async submitWorktreePrompt(prompt: SessionDeckWorktreePrompt): Promise<void> {
@@ -432,9 +568,21 @@ export class SessionDeckBrowser {
       return;
     }
 
-    const promptSnapshot = { branchName: prompt.branchName };
+    const normalizedAgentDir = normalizeLaunchAgentDirSelection(prompt.agentDirSelection);
+    if (!normalizedAgentDir.ok) {
+      this.worktreeStatus = { message: normalizedAgentDir.message, tone: 'warning' };
+      this.bump();
+      return;
+    }
+
+    const promptSnapshot = cloneWorktreePrompt(prompt);
     const fallbackSelectedRuntimeId = selection.records[this.selectedIndex]?.runtimeId ?? null;
-    const request = buildWorktreeRequest(selection, this.selectedIndex, branchName);
+    const request = buildWorktreeRequest(
+      selection,
+      this.selectedIndex,
+      branchName,
+      normalizedAgentDir.agentDir,
+    );
     this.worktreePrompt = null;
     this.worktreeStatus = { message: 'Starting new Pi session…', tone: 'muted' };
     this.bump();
@@ -451,7 +599,7 @@ export class SessionDeckBrowser {
 
         this.worktreeStatus = formatWorktreeResultStatus(result);
         if (!result.ok) {
-          if (result.status === 'failed') {
+          if (result.status === 'failed' || result.status === 'preflight-failed') {
             this.worktreePrompt = promptSnapshot;
           }
           return;
@@ -479,16 +627,73 @@ export class SessionDeckBrowser {
     return this.worktreePending;
   }
 
-  private formatWorktreePrompt(): string {
+  private formatWorktreePromptLines(): string[] {
     const prompt = this.worktreePrompt;
     if (prompt === null) {
-      return '';
+      return [];
     }
 
     const selection = this.getSelection();
     const repoLabel = selection.repoOption.label;
     const branchName = prompt.branchName.length === 0 ? '<branch-name>' : prompt.branchName;
-    return `New Pi session for ${repoLabel} · Branch name: ${branchName} · From default branch · generated worktree path managed automatically · launches in detached tmux · enter create · esc/ctrl+c cancel`;
+    const branchMarker = prompt.focus === 'branch' ? '› ' : '  ';
+    const piConfigMarker = prompt.focus === 'pi-config' ? '› ' : '  ';
+    const lines = [
+      `New Pi session for ${repoLabel}`,
+      `${branchMarker}Branch:    ${branchName}`,
+      `${piConfigMarker}Pi config: ${formatWorktreePromptLaunchContext(prompt)}   Change`,
+      '  Base:      default branch · generated worktree · detached tmux',
+    ];
+
+    if (prompt.selectorOpen) {
+      lines.push(formatWorktreePromptSelector(prompt));
+      if ((AGENT_DIR_MODE_OPTIONS[prompt.selectorIndex] ?? 'ambient') === 'custom') {
+        lines.push(
+          `  Custom:    ${prompt.customDraft.length === 0 ? '<absolute-or-~/dir>' : prompt.customDraft}`,
+        );
+      }
+    }
+    if (prompt.feedback !== null) {
+      lines.push(`  ${prompt.feedback}`);
+    }
+    lines.push('  tab focus · enter create/change · esc cancel');
+    return lines;
+  }
+
+  private refreshWorktreeLaunchContextPreview(prompt: SessionDeckWorktreePrompt): void {
+    const requestId = prompt.launchContextRequestId + 1;
+    prompt.launchContextRequestId = requestId;
+    prompt.launchContext = { status: 'loading' };
+    const selection = prompt.agentDirSelection;
+    void this.previewLaunchContext(selection)
+      .then((result) => {
+        if (
+          this.disposed ||
+          this.worktreePrompt !== prompt ||
+          prompt.launchContextRequestId !== requestId
+        ) {
+          return;
+        }
+        prompt.launchContext = result;
+        this.bump();
+      })
+      .catch((error) => {
+        if (
+          this.disposed ||
+          this.worktreePrompt !== prompt ||
+          prompt.launchContextRequestId !== requestId
+        ) {
+          return;
+        }
+        prompt.launchContext = {
+          ok: false,
+          status: 'failed',
+          reason: 'invalid-request',
+          message: getErrorMessage(error),
+          recoverable: true,
+        };
+        this.bump();
+      });
   }
 
   private async refreshAfterWorktree(runtimeId: string | null): Promise<void> {
@@ -668,10 +873,87 @@ export class SessionDeckBrowser {
   }
 }
 
+const AGENT_DIR_MODE_OPTIONS: CreateWorktreeLaunchAgentDirMode[] = ['ambient', 'default', 'custom'];
+
+function createInitialWorktreePrompt(): SessionDeckWorktreePrompt {
+  return {
+    branchName: '',
+    agentDirSelection: { mode: 'ambient' },
+    customDraft: '',
+    focus: 'branch',
+    selectorOpen: false,
+    selectorIndex: 0,
+    feedback: null,
+    launchContext: { status: 'loading' },
+    launchContextRequestId: 0,
+  };
+}
+
+function cloneWorktreePrompt(prompt: SessionDeckWorktreePrompt): SessionDeckWorktreePrompt {
+  return {
+    ...prompt,
+    agentDirSelection: { ...prompt.agentDirSelection },
+    launchContext:
+      prompt.launchContext.status === 'loading'
+        ? { status: 'loading' }
+        : { ...prompt.launchContext },
+  };
+}
+
+async function previewLaunchContextFromProcess(
+  agentDir: CreateWorktreeLaunchAgentDir,
+): Promise<WorktreeLaunchContextPreviewResult> {
+  const normalized = normalizeLaunchAgentDirSelection(agentDir);
+  if (!normalized.ok) {
+    return {
+      ok: false,
+      status: 'failed',
+      reason: 'invalid-request',
+      message: normalized.message,
+      recoverable: true,
+    };
+  }
+
+  if (normalized.agentDir.mode === 'custom') {
+    return {
+      ok: true,
+      status: 'resolved',
+      mode: 'custom',
+      envAction: 'set',
+      effectiveDisplay: shortenHomeDir(normalized.agentDir.customDir),
+      provenance: 'request',
+      warnings: [],
+    };
+  }
+  if (normalized.agentDir.mode === 'default') {
+    return {
+      ok: true,
+      status: 'resolved',
+      mode: 'default',
+      envAction: 'unset',
+      effectiveDisplay: getPiDefaultAgentDirDisplay(),
+      provenance: 'request',
+      warnings: [],
+    };
+  }
+
+  const envValue = process.env['PI_CODING_AGENT_DIR']?.trim();
+  return {
+    ok: true,
+    status: 'resolved',
+    mode: 'ambient',
+    envAction: 'inherit',
+    effectiveDisplay: envValue ? shortenHomeDir(envValue) : getPiDefaultAgentDirDisplay(),
+    provenance: envValue ? 'process-env' : 'pi-default',
+    warnings: [],
+  };
+}
+
 function buildWorktreeRequest(
   selection: SessionDeckBrowserSelection,
   selectedIndex: number,
   branchName: string,
+  agentDir: CreateWorktreeLaunchAgentDir,
 ): CreateWorktreeActionRequest {
   const filter = selection.repoOption.filter;
   const selectedRuntimeId = selection.records[selectedIndex]?.runtimeId ?? null;
@@ -687,8 +969,75 @@ function buildWorktreeRequest(
       ...(selectedRuntimeId === null ? {} : { preferredRuntimeId: selectedRuntimeId }),
     },
     branchName,
-    launch: { mode: 'tmux-detached' },
+    launch: { mode: 'tmux-detached', agentDir },
   };
+}
+
+function formatWorktreePromptLaunchContext(prompt: SessionDeckWorktreePrompt): string {
+  if (prompt.launchContext.status === 'loading') {
+    return `${formatLaunchAgentDirModeLabel(prompt.agentDirSelection.mode)} → resolving…`;
+  }
+  if (!prompt.launchContext.ok) {
+    return `${formatLaunchAgentDirModeLabel(prompt.agentDirSelection.mode)} → unavailable`;
+  }
+
+  const provenance = formatLaunchContextProvenance(prompt.launchContext.provenance);
+  return `${formatLaunchAgentDirModeLabel(prompt.launchContext.mode)} → ${prompt.launchContext.effectiveDisplay}${
+    provenance.length === 0 ? '' : ` (${provenance})`
+  }`;
+}
+
+function formatWorktreePromptSelector(prompt: SessionDeckWorktreePrompt): string {
+  const options = AGENT_DIR_MODE_OPTIONS.map((mode, index) => {
+    const label =
+      mode === 'custom'
+        ? 'Custom…'
+        : mode === 'default'
+          ? `Pi default (${getPiDefaultAgentDirDisplay()})`
+          : 'Ambient env';
+    return index === prompt.selectorIndex ? `› ${label}` : label;
+  });
+  return `  Choose:    ${options.join('  ·  ')}`;
+}
+
+function formatLaunchContextProvenance(provenance: string): string {
+  switch (provenance) {
+    case 'tmux-server-env':
+      return 'tmux';
+    case 'process-env':
+      return 'process';
+    case 'pi-default':
+      return 'Pi default';
+    case 'request':
+      return 'request';
+    default:
+      return '';
+  }
+}
+
+function agentDirModeIndex(mode: CreateWorktreeLaunchAgentDirMode): number {
+  return Math.max(0, AGENT_DIR_MODE_OPTIONS.indexOf(mode));
+}
+
+function getAgentDirQuickMode(data: string): CreateWorktreeLaunchAgentDirMode | null {
+  switch (data.toLowerCase()) {
+    case 'a':
+      return 'ambient';
+    case 'd':
+      return 'default';
+    case 'c':
+      return 'custom';
+    default:
+      return null;
+  }
+}
+
+function isTabKey(data: string): boolean {
+  return matchesKey(data, 'tab') || data === '\t';
+}
+
+function isShiftTabKey(data: string): boolean {
+  return matchesKey(data, 'shift+tab') || data === '\u001b[Z';
 }
 
 function formatWorktreeResultStatus(result: CreateWorktreeActionResult): {

@@ -1,3 +1,4 @@
+import { normalizeLaunchAgentDirSelection } from './agent-dir.js';
 import { applyGitWorktreePlan, planGitWorktree, type CreateGitWorktreeOptions } from './create.js';
 import {
   launchDetachedTmuxPi,
@@ -8,6 +9,7 @@ import { resolveRepoIntent, type ResolveRepoIntentOptions } from './repo-intent.
 import type {
   CreateWorktreeActionRequest,
   CreateWorktreeActionResult,
+  CreateWorktreeLaunchAgentDir,
   CreateWorktreeLaunchMode,
   CreateWorktreeLaunchNotStarted,
   CreateWorktreeStatusReporter,
@@ -104,7 +106,10 @@ export async function orchestrateCreateWorktree(
   }
 
   options.onStatus?.({ stage: 'starting-pi', message: 'Starting Pi session in tmux…' });
-  const launch = await launchDetachedTmuxPi(worktree, normalizedRequest.label, options);
+  const launch = await launchDetachedTmuxPi(worktree, normalizedRequest.label, {
+    ...options,
+    agentDir: normalizedRequest.launch.agentDir,
+  });
   if (!launch.ok) {
     return {
       ok: false,
@@ -127,6 +132,10 @@ export async function orchestrateCreateWorktree(
 type NormalizedCreateWorktreeActionRequest = CreateWorktreeActionRequest & {
   branchName: string;
   label: string;
+  launch: {
+    mode: CreateWorktreeLaunchMode;
+    agentDir: CreateWorktreeLaunchAgentDir;
+  };
 };
 
 function normalizeCreateWorktreeRequest(
@@ -145,6 +154,14 @@ function normalizeCreateWorktreeRequest(
     return { ok: false, message: 'Unsupported launch mode.' };
   }
 
+  const agentDir = normalizeLaunchAgentDirSelection(request.launch?.agentDir);
+  if (!agentDir.ok) {
+    return { ok: false, message: agentDir.message };
+  }
+  if (launchMode === 'none' && request.launch?.agentDir !== undefined) {
+    return { ok: false, message: 'launch.agentDir requires tmux-detached launch mode.' };
+  }
+
   const branchName = request.branchName.trim();
   return {
     ok: true,
@@ -152,6 +169,7 @@ function normalizeCreateWorktreeRequest(
       ...request,
       branchName,
       label: branchName,
+      launch: { mode: launchMode, agentDir: agentDir.agentDir },
     },
   };
 }

@@ -963,6 +963,66 @@ button.card-toggle[aria-expanded='true']::after {
   min-width: 0;
 }
 
+.worktree-config-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-top: 5px;
+}
+
+.worktree-config-summary {
+  flex: 1 1 auto;
+  max-width: none;
+}
+
+.worktree-config-button {
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+
+.worktree-config-button:hover,
+.worktree-config-button:focus-visible {
+  border-color: transparent;
+  background: transparent;
+  color: var(--color-text-strong);
+}
+
+.worktree-config-drawer {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.worktree-config-option,
+.worktree-config-drawer input[type='text'] {
+  min-width: 0;
+  height: 28px;
+  border: 1px solid var(--color-divider);
+  background: var(--color-chrome);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+
+.worktree-config-option[aria-checked='true'] {
+  border-color: var(--color-accent);
+  color: var(--color-text-strong);
+  background: rgba(136, 192, 208, 0.1);
+}
+
+.worktree-config-drawer input[type='text'] {
+  grid-column: 1 / -1;
+  width: 100%;
+  border-radius: 7px;
+  padding: 0 0.56rem;
+}
+
 .worktree-field-meta,
 .pending-worktree-message {
   color: var(--color-text-muted);
@@ -977,6 +1037,11 @@ button.card-toggle[aria-expanded='true']::after {
   color: var(--color-accent);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.worktree-field-meta.worktree-config-summary {
+  flex: 1 1 auto;
+  max-width: none;
 }
 
 .worktree-field-meta[data-state='loading'],

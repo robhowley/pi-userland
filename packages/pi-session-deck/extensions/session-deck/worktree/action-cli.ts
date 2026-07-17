@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { normalizeLaunchAgentDirSelection } from './agent-dir.js';
 import { orchestrateCreateWorktree } from './orchestrate.js';
-import { resolveWorktreeBasePreview } from './preview.js';
+import { resolveWorktreeBasePreview, resolveWorktreeLaunchContextPreview } from './preview.js';
 import type {
   BrowserSafeCreateWorktreeActionResult,
   BrowserSafeCreateWorktreeLaunchResult,
   BrowserSafeCreateWorktreePhaseResult,
   BrowserSafeWorktreeBasePreviewResult,
+  BrowserSafeWorktreeLaunchContextPreviewResult,
   CreateWorktreeActionRequest,
   CreateWorktreeActionResult,
   CreateWorktreeFailureReason,
@@ -16,6 +18,8 @@ import type {
   CreateWorktreeSuccess,
   WorktreeBasePreviewRequest,
   WorktreeBasePreviewResult,
+  WorktreeLaunchContextPreviewRequest,
+  WorktreeLaunchContextPreviewResult,
 } from './types.js';
 
 const FORBIDDEN_BROWSER_FIELDS = new Set([
@@ -71,6 +75,19 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (action.action === 'preview-launch-context') {
+    const request = normalizeLaunchContextPreviewRequest(parsed);
+    if (!request.ok) {
+      writeJson({ ok: false, status: 'failed', message: request.message });
+      process.exitCode = 1;
+      return;
+    }
+
+    const result = await resolveWorktreeLaunchContextPreview(request.request);
+    writeJson(toBrowserSafeWorktreeLaunchContextPreviewResult(result));
+    return;
+  }
+
   const request = normalizeActionRequest(parsed);
   if (!request.ok) {
     writeJson({ ok: false, status: 'failed', message: request.message });
@@ -101,13 +118,20 @@ export function normalizeActionRequest(
     }
   }
 
+  const agentDir = normalizeLaunchAgentDirSelection(
+    isRecord(launch) ? launch['agentDir'] : undefined,
+  );
+  if (!agentDir.ok) {
+    return { ok: false, message: agentDir.message };
+  }
+
   return {
     ok: true,
     request: {
       repoIntent: repoIntent.repoIntent,
       branchName: parsed['branchName'],
       ...optionalStringField(parsed, 'baseRef'),
-      launch: { mode: 'tmux-detached' },
+      launch: { mode: 'tmux-detached', agentDir: agentDir.agentDir },
     },
   };
 }
@@ -128,9 +152,41 @@ export function normalizeBasePreviewRequest(
   };
 }
 
+export function normalizeLaunchContextPreviewRequest(
+  parsed: unknown,
+): { ok: true; request: WorktreeLaunchContextPreviewRequest } | { ok: false; message: string } {
+  if (!isRecord(parsed)) {
+    return { ok: false, message: 'Request body must be a JSON object.' };
+  }
+
+  const forbidden = findForbiddenField(parsed);
+  if (forbidden !== null) {
+    return { ok: false, message: `Field is not accepted by this action boundary: ${forbidden}` };
+  }
+
+  const launch = parsed['launch'];
+  if (launch !== undefined && !isRecord(launch)) {
+    return { ok: false, message: 'launch must be an object when provided.' };
+  }
+  if (isRecord(launch) && launch['mode'] !== undefined && launch['mode'] !== 'tmux-detached') {
+    return { ok: false, message: 'launch.mode must be tmux-detached when provided.' };
+  }
+
+  const agentDir = normalizeLaunchAgentDirSelection(
+    isRecord(launch) ? launch['agentDir'] : parsed['agentDir'],
+  );
+  if (!agentDir.ok) {
+    return { ok: false, message: agentDir.message };
+  }
+
+  return { ok: true, request: { agentDir: agentDir.agentDir } };
+}
+
 function getRequestedAction(
   parsed: unknown,
-): { ok: true; action: 'create-worktree' | 'preview-base-ref' } | { ok: false; message: string } {
+):
+  | { ok: true; action: 'create-worktree' | 'preview-base-ref' | 'preview-launch-context' }
+  | { ok: false; message: string } {
   if (!isRecord(parsed)) {
     return { ok: false, message: 'Request body must be a JSON object.' };
   }
@@ -139,7 +195,11 @@ function getRequestedAction(
   if (action === undefined) {
     return { ok: true, action: 'create-worktree' };
   }
-  if (action === 'create-worktree' || action === 'preview-base-ref') {
+  if (
+    action === 'create-worktree' ||
+    action === 'preview-base-ref' ||
+    action === 'preview-launch-context'
+  ) {
     return { ok: true, action };
   }
   return { ok: false, message: 'Unsupported worktree helper action.' };
@@ -253,6 +313,12 @@ export function toBrowserSafeWorktreeBasePreviewResult(
   };
 }
 
+export function toBrowserSafeWorktreeLaunchContextPreviewResult(
+  result: WorktreeLaunchContextPreviewResult,
+): BrowserSafeWorktreeLaunchContextPreviewResult {
+  return result;
+}
+
 function toBrowserSafeRepoIntentFailureMessage(
   reason: 'repo-intent-unresolved' | 'repo-intent-ambiguous',
 ): string {
@@ -308,6 +374,8 @@ function toBrowserSafeLaunchFailureMessage(reason: CreateWorktreeLaunchFailureRe
       return 'Created worktree, but the pi executable is not available.';
     case 'tmux-name-collision':
       return 'Created worktree, but an existing tmux session uses the generated name.';
+    case 'launch-context-mismatch':
+      return 'Created worktree, but an existing managed tmux session may use a different Pi config.';
     case 'spawn-failed':
       return 'Created worktree, but tmux could not start Pi.';
     case 'presence-timeout':
@@ -345,6 +413,17 @@ function toBrowserSafeLaunchSuccess(
 }
 
 function findForbiddenField(value: unknown, prefix = ''): string | null {
+  if (Array.isArray(value)) {
+    for (const [index, child] of value.entries()) {
+      const path = prefix.length === 0 ? String(index) : `${prefix}.${index}`;
+      const nested = findForbiddenField(child, path);
+      if (nested !== null) {
+        return nested;
+      }
+    }
+    return null;
+  }
+
   if (!isRecord(value)) {
     return null;
   }

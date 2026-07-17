@@ -71,6 +71,17 @@ describe('session-deck detached tmux launch', () => {
     ).toBe(
       "exec /usr/bin/env 'PATH=/runtime/tools/bin:/tmp/with space:$HOME;`echo hi`:/tmp/O'\\''Hare' pi --name 'Feature O'\\''Hare'",
     );
+    expect(buildPiLauncherCommand('Feature', '/runtime/bin', { mode: 'default' })).toBe(
+      'exec /usr/bin/env -u PI_CODING_AGENT_DIR PATH=/runtime/bin pi --name Feature',
+    );
+    expect(
+      buildPiLauncherCommand('Feature', '/runtime/bin', {
+        mode: 'custom',
+        customDir: "/Users/test/.pi/agent O'Hare",
+      }),
+    ).toBe(
+      "exec /usr/bin/env PATH=/runtime/bin 'PI_CODING_AGENT_DIR=/Users/test/.pi/agent O'\\''Hare' pi --name Feature",
+    );
   });
 
   it('returns launched with one explicit environment and a symbolic pi command', async () => {
@@ -206,6 +217,37 @@ describe('session-deck detached tmux launch', () => {
     expect(process.env['PATH']).toBe(originalPath);
   });
 
+  it('fails closed for explicit agent dir modes on existing unmarked sessions', async () => {
+    const execFile: WorktreeExecFile = async (file, args) => {
+      if (file === 'tmux' && args[0] === '-V') {
+        return { stdout: 'tmux 3.4\n', stderr: '', exitCode: 0 };
+      }
+      if (file === 'which') {
+        return { stdout: '/runtime/pi/bin/pi\n', stderr: '', exitCode: 0 };
+      }
+      if (file === 'tmux' && args[0] === 'has-session') {
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
+      if (file === 'tmux' && args[0] === 'display-message') {
+        return { stdout: '/tmp/repo-wt-feature\n', stderr: '', exitCode: 0 };
+      }
+      return { stdout: '', stderr: `unexpected ${file} ${args.join(' ')}`, exitCode: 1 };
+    };
+
+    await expect(
+      launchDetachedTmuxPi(CREATED_WORKTREE, 'Feature', {
+        execFile,
+        agentDir: { mode: 'default' },
+      }),
+    ).resolves.toMatchObject({
+      requested: true,
+      ok: false,
+      mode: 'tmux-detached',
+      status: 'failed',
+      reason: 'launch-context-mismatch',
+    });
+  });
+
   it('fails when the generated tmux name is already bound to another cwd', async () => {
     const execFile: WorktreeExecFile = async (file, args) => {
       if (file === 'tmux' && args[0] === '-V') {
@@ -231,6 +273,30 @@ describe('session-deck detached tmux launch', () => {
       mode: 'tmux-detached',
       status: 'failed',
       reason: 'tmux-name-collision',
+    });
+  });
+
+  it('uses the same agent dir env plan in manual fallback commands', async () => {
+    const execFile: WorktreeExecFile = async (file) => {
+      if (file === 'tmux') {
+        return { stdout: '', stderr: 'tmux missing', exitCode: 1 };
+      }
+      return { stdout: '', stderr: `unexpected ${file}`, exitCode: 1 };
+    };
+
+    await expect(
+      launchDetachedTmuxPi(CREATED_WORKTREE, 'Feature', {
+        execFile,
+        env: { PATH: '' },
+        agentDir: { mode: 'default' },
+      }),
+    ).resolves.toMatchObject({
+      requested: true,
+      ok: false,
+      reason: 'tmux-unavailable',
+      manualCommand: `cd /tmp/repo-wt-feature && ${buildPiLauncherCommand('Feature', '', {
+        mode: 'default',
+      })}`,
     });
   });
 

@@ -10,6 +10,7 @@ const SUCCESS_PENDING_WORKTREE_TTL_MS = 12_000;
 const OPEN_TERMINAL_SUCCESS_TTL_MS = 4_000;
 const DEFAULT_OPEN_TERMINAL_FAILURE_MESSAGE = 'Could not request terminal open.';
 const DOCTOR_COMMAND = '/session-deck iterm2 doctor';
+const AGENT_DIR_MODES = ['ambient', 'default', 'custom'];
 const INLINE_WORKTREE_FAILURE_REASONS = new Set([
   'invalid-branch',
   'invalid-base-ref',
@@ -28,7 +29,9 @@ const state = {
   activeWorktreeFormRepoKey: null,
   worktreeForms: new Map(),
   worktreeBasePreviews: new Map(),
+  worktreeLaunchPreviews: new Map(),
   nextWorktreeBasePreviewRequestId: 0,
+  nextWorktreeLaunchPreviewRequestId: 0,
   pendingWorktrees: new Map(),
   openTerminalAction: null,
   highlightedRuntimeId: null,
@@ -634,9 +637,10 @@ function createRepoActionButton(repoGroup) {
 
     state.activeWorktreeFormRepoKey = repoGroup.key;
     if (!state.worktreeForms.has(repoGroup.key)) {
-      state.worktreeForms.set(repoGroup.key, { branchName: '', errorMessage: null });
+      state.worktreeForms.set(repoGroup.key, createInitialWorktreeFormState());
     }
     requestWorktreeBasePreview(repoGroup);
+    requestWorktreeLaunchPreview(repoGroup);
     render();
   });
   return button;
@@ -650,18 +654,18 @@ function closeWorktreeForm(repoKey) {
 function clearWorktreeFormState(repoKey) {
   state.worktreeForms.delete(repoKey);
   state.worktreeBasePreviews.delete(repoKey);
+  state.worktreeLaunchPreviews.delete(repoKey);
   if (state.activeWorktreeFormRepoKey === repoKey) {
     state.activeWorktreeFormRepoKey = null;
   }
 }
 
 function createWorktreeForm(repoGroup) {
-  const formState = state.worktreeForms.get(repoGroup.key) ?? {
-    branchName: '',
-    errorMessage: null,
-  };
+  const formState = getWorktreeFormState(repoGroup.key);
   const preview = state.worktreeBasePreviews.get(repoGroup.key);
-  const inlineMessage = getWorktreeFormInlineMessage(formState, preview);
+  const launchPreview = state.worktreeLaunchPreviews.get(repoGroup.key);
+  const customValidation = validateWorktreeFormAgentDir(formState);
+  const inlineMessage = getWorktreeFormInlineMessage(formState, preview, customValidation);
   const form = document.createElement('form');
   form.className = 'worktree-form';
   form.addEventListener('submit', (event) => {
@@ -674,6 +678,11 @@ function createWorktreeForm(repoGroup) {
     }
     event.preventDefault?.();
     event.stopPropagation?.();
+    if (formState.configDrawerOpen) {
+      formState.configDrawerOpen = false;
+      render();
+      return;
+    }
     closeWorktreeForm(repoGroup.key);
   });
 
@@ -698,7 +707,9 @@ function createWorktreeForm(repoGroup) {
   submit.className = 'worktree-submit-button';
   submit.textContent = 'Create';
   submit.disabled =
-    !isResolvedWorktreeBasePreview(preview) || state.pendingWorktrees.has(repoGroup.key);
+    !isResolvedWorktreeBasePreview(preview) ||
+    customValidation !== null ||
+    state.pendingWorktrees.has(repoGroup.key);
 
   const branchControl = document.createElement('div');
   branchControl.className = 'worktree-branch-control';
@@ -708,16 +719,110 @@ function createWorktreeForm(repoGroup) {
   composeRow.className = 'worktree-compose-row';
   composeRow.append(fieldMeta, branchControl);
 
-  form.append(composeRow);
+  form.append(composeRow, createWorktreeConfigRow(repoGroup, formState, launchPreview));
+  if (formState.configDrawerOpen) {
+    form.append(createWorktreeConfigDrawer(repoGroup, formState));
+  }
   if (inlineMessage) {
     form.append(createText('div', inlineMessage, 'worktree-form-feedback worktree-form-error'));
   }
   return form;
 }
 
-function getWorktreeFormInlineMessage(formState, preview) {
+function createInitialWorktreeFormState() {
+  return {
+    branchName: '',
+    errorMessage: null,
+    agentDirSelection: { mode: 'ambient' },
+    customDraft: '',
+    configDrawerOpen: false,
+  };
+}
+
+function getWorktreeFormState(repoKey) {
+  const existing = state.worktreeForms.get(repoKey);
+  if (existing) {
+    return existing;
+  }
+  const created = createInitialWorktreeFormState();
+  state.worktreeForms.set(repoKey, created);
+  return created;
+}
+
+function createWorktreeConfigRow(repoGroup, formState, launchPreview) {
+  const row = document.createElement('div');
+  row.className = 'worktree-config-row';
+  row.setAttribute('aria-label', 'Pi config');
+
+  const summary = createText(
+    'span',
+    `Pi config: ${formatWorktreeLaunchPreviewCopy(formState, launchPreview)}`,
+    'worktree-field-meta worktree-config-summary',
+  );
+  summary.setAttribute('data-state', launchPreview?.status ?? 'loading');
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'worktree-config-button';
+  button.textContent = 'Change';
+  button.setAttribute('aria-label', 'Change Pi config');
+  button.setAttribute('aria-expanded', String(formState.configDrawerOpen));
+  button.addEventListener('click', (event) => {
+    event.preventDefault?.();
+    formState.configDrawerOpen = !formState.configDrawerOpen;
+    render();
+  });
+
+  row.append(summary, button);
+  return row;
+}
+
+function createWorktreeConfigDrawer(repoGroup, formState) {
+  const drawer = document.createElement('div');
+  drawer.className = 'worktree-config-drawer';
+  drawer.setAttribute('role', 'radiogroup');
+  drawer.setAttribute('aria-label', 'Pi config');
+
+  for (const mode of AGENT_DIR_MODES) {
+    const option = document.createElement('button');
+    option.type = 'button';
+    option.className = 'worktree-config-option';
+    option.setAttribute('role', 'radio');
+    option.setAttribute('aria-checked', String(formState.agentDirSelection.mode === mode));
+    option.textContent = formatWorktreeAgentDirOptionLabel(mode);
+    option.addEventListener('click', (event) => {
+      event.preventDefault?.();
+      formState.agentDirSelection =
+        mode === 'custom' ? { mode, customDir: formState.customDraft } : { mode };
+      requestWorktreeLaunchPreview(repoGroup);
+      render();
+    });
+    drawer.append(option);
+  }
+
+  const customInput = document.createElement('input');
+  customInput.type = 'text';
+  customInput.value = formState.customDraft;
+  customInput.setAttribute('aria-label', 'Custom Pi config directory');
+  customInput.setAttribute('placeholder', '~/.pi/agent-work');
+  customInput.addEventListener('input', () => {
+    formState.customDraft = customInput.value;
+    if (formState.agentDirSelection.mode === 'custom') {
+      formState.agentDirSelection = { mode: 'custom', customDir: formState.customDraft };
+      requestWorktreeLaunchPreview(repoGroup);
+    }
+    render();
+  });
+  drawer.append(customInput);
+  return drawer;
+}
+
+function getWorktreeFormInlineMessage(formState, preview, customValidation) {
   if (isNonEmptyString(formState.errorMessage)) {
     return formState.errorMessage;
+  }
+  if (customValidation !== null) {
+    return customValidation;
   }
   return preview?.status === 'failed' && isNonEmptyString(preview.message) ? preview.message : null;
 }
@@ -826,6 +931,42 @@ function getWorktreeBasePreviewFailureMessage(result) {
   return isNonEmptyString(result?.message) ? result.message : 'Base unavailable.';
 }
 
+function requestWorktreeLaunchPreview(repoGroup) {
+  const formState = getWorktreeFormState(repoGroup.key);
+  const requestId = state.nextWorktreeLaunchPreviewRequestId + 1;
+  state.nextWorktreeLaunchPreviewRequestId = requestId;
+  state.worktreeLaunchPreviews.set(repoGroup.key, { status: 'loading', requestId });
+
+  void postWorktreeLaunchPreview(formState)
+    .then((result) => {
+      const activePreview = state.worktreeLaunchPreviews.get(repoGroup.key);
+      if (activePreview?.requestId !== requestId) {
+        return;
+      }
+
+      if (result?.ok && result.status === 'resolved') {
+        state.worktreeLaunchPreviews.set(repoGroup.key, result);
+      } else {
+        state.worktreeLaunchPreviews.set(repoGroup.key, {
+          status: 'failed',
+          message: isNonEmptyString(result?.message) ? result.message : 'Pi config unavailable.',
+        });
+      }
+      render();
+    })
+    .catch(() => {
+      const activePreview = state.worktreeLaunchPreviews.get(repoGroup.key);
+      if (activePreview?.requestId !== requestId) {
+        return;
+      }
+      state.worktreeLaunchPreviews.set(repoGroup.key, {
+        status: 'failed',
+        message: 'Pi config unavailable.',
+      });
+      render();
+    });
+}
+
 function formatWorktreeBasePreviewCopy(preview) {
   if (isResolvedWorktreeBasePreview(preview)) {
     return `${formatBaseRefLabel(preview.baseRef)} →`;
@@ -857,18 +998,107 @@ function formatBaseRefLabel(baseRef) {
   return normalized.length > 0 ? normalized : trimmed;
 }
 
+function formatWorktreeLaunchPreviewCopy(formState, preview) {
+  if (preview?.status === 'resolved') {
+    return `${formatWorktreeAgentDirModeLabel(preview.mode)} → ${preview.effectiveDisplay}`;
+  }
+  if (preview?.status === 'failed') {
+    return `${formatWorktreeAgentDirModeLabel(formState.agentDirSelection.mode)} unavailable`;
+  }
+  return `${formatWorktreeAgentDirModeLabel(formState.agentDirSelection.mode)} resolving…`;
+}
+
+function formatWorktreeAgentDirModeLabel(mode) {
+  switch (mode) {
+    case 'default':
+      return 'Pi default';
+    case 'custom':
+      return 'custom';
+    default:
+      return 'ambient';
+  }
+}
+
+function formatWorktreeAgentDirOptionLabel(mode) {
+  switch (mode) {
+    case 'default':
+      return 'Pi default (~/.pi/agent)';
+    case 'custom':
+      return 'Custom…';
+    default:
+      return 'Ambient env';
+  }
+}
+
+function validateWorktreeFormAgentDir(formState) {
+  if (formState.agentDirSelection.mode !== 'custom') {
+    return null;
+  }
+  const normalized = normalizeCustomAgentDir(formState.customDraft);
+  return normalized.ok ? null : normalized.message;
+}
+
+function normalizeWorktreeFormAgentDir(formState) {
+  if (formState.agentDirSelection.mode !== 'custom') {
+    return { ok: true, agentDir: { mode: formState.agentDirSelection.mode } };
+  }
+  const normalized = normalizeCustomAgentDir(formState.customDraft);
+  return normalized.ok
+    ? { ok: true, agentDir: { mode: 'custom', customDir: normalized.value } }
+    : normalized;
+}
+
+function normalizeCustomAgentDir(value) {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return { ok: false, message: 'Custom Pi config must be non-empty.' };
+  }
+  if (value.includes('\0') || /[\r\n]/u.test(value)) {
+    return { ok: false, message: 'Custom Pi config must not contain newlines.' };
+  }
+  const trimmed = value.trim();
+  if (trimmed.startsWith('~/')) {
+    return { ok: true, value: trimmed };
+  }
+  if (trimmed.startsWith('/')) {
+    return { ok: true, value: normalizeAbsolutePathText(trimmed) };
+  }
+  return { ok: false, message: 'Custom Pi config must be absolute or start with ~/.' };
+}
+
+function normalizeAbsolutePathText(value) {
+  const parts = [];
+  for (const part of value.split('/')) {
+    if (part.length === 0 || part === '.') {
+      continue;
+    }
+    if (part === '..') {
+      parts.pop();
+      continue;
+    }
+    parts.push(part);
+  }
+  return `/${parts.join('/')}`;
+}
+
 function submitWorktreeForm(repoGroup, formState) {
   const branchName = formState.branchName.trim();
   const preview = state.worktreeBasePreviews.get(repoGroup.key);
+  const agentDir = normalizeWorktreeFormAgentDir(formState);
   if (
     branchName.length === 0 ||
     state.pendingWorktrees.has(repoGroup.key) ||
-    !isResolvedWorktreeBasePreview(preview)
+    !isResolvedWorktreeBasePreview(preview) ||
+    !agentDir.ok
   ) {
     return;
   }
 
-  const request = buildCreateWorktreeRequest(repoGroup, branchName, preview.baseRef);
+  const request = buildCreateWorktreeRequest(
+    repoGroup,
+    branchName,
+    preview.baseRef,
+    agentDir.agentDir,
+  );
   formState.branchName = branchName;
   formState.errorMessage = null;
   setPendingWorktree(repoGroup.key, {
@@ -887,6 +1117,7 @@ function submitWorktreeForm(repoGroup, formState) {
       if (inlineFailureMessage !== null) {
         clearPendingWorktree(repoGroup.key);
         state.worktreeForms.set(repoGroup.key, {
+          ...formState,
           branchName,
           errorMessage: inlineFailureMessage,
         });
@@ -922,12 +1153,12 @@ function buildWorktreeRepoIntent(repoGroup) {
   };
 }
 
-function buildCreateWorktreeRequest(repoGroup, branchName, baseRef) {
+function buildCreateWorktreeRequest(repoGroup, branchName, baseRef, agentDir) {
   return {
     repoIntent: buildWorktreeRepoIntent(repoGroup),
     branchName,
     baseRef,
-    launch: { mode: 'tmux-detached' },
+    launch: { mode: 'tmux-detached', agentDir },
   };
 }
 
@@ -943,6 +1174,32 @@ async function postWorktreeBasePreview(repoGroup) {
     body: JSON.stringify({
       action: 'preview-base-ref',
       repoIntent: buildWorktreeRepoIntent(repoGroup),
+    }),
+  });
+
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload?.message ?? `HTTP ${response.status}`);
+  }
+  return payload;
+}
+
+async function postWorktreeLaunchPreview(formState) {
+  const agentDir = normalizeWorktreeFormAgentDir(formState);
+  const response = await fetch('/actions/create-worktree-preview', {
+    method: 'POST',
+    cache: 'no-store',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'X-Session-Deck-Action-Token': getActionToken(),
+    },
+    body: JSON.stringify({
+      action: 'preview-launch-context',
+      launch: {
+        mode: 'tmux-detached',
+        agentDir: agentDir.ok ? agentDir.agentDir : formState.agentDirSelection,
+      },
     }),
   });
 
@@ -994,6 +1251,9 @@ async function postOpenTerminalAction(runtimeId) {
 }
 
 function getRecoverableInlineWorktreeFailureMessage(result) {
+  if (result?.ok === false && result?.status === 'preflight-failed') {
+    return getPreflightFailureMessage(result.preflight);
+  }
   return result?.ok === false &&
     result?.status === 'failed' &&
     INLINE_WORKTREE_FAILURE_REASONS.has(result.worktree?.reason)
@@ -1126,6 +1386,8 @@ function getPartialLaunchFailureMessage(launch) {
       return `Worktree kept. Pi did not start because the pi executable is not available. Run ${DOCTOR_COMMAND} or install Pi, then retry.`;
     case 'tmux-name-collision':
       return 'Worktree kept. Pi did not start because the generated tmux session name is already in use. Retry after resolving the collision.';
+    case 'launch-context-mismatch':
+      return 'Worktree kept. Pi did not start because an existing managed tmux session may use a different Pi config. Attach to it or choose Ambient env.';
     case 'presence-timeout':
       return 'Worktree kept. Session Deck could not confirm the Pi launch. Retry after confirming the session can start.';
     case 'spawn-failed':

@@ -1,4 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('@mariozechner/pi-tui', () => ({
+  matchesKey: (data: string, key: string) => data === key,
+  truncateToWidth: (value: string, width: number) => value.slice(0, Math.max(0, width)),
+  visibleWidth: (value: string) => value.length,
+  wrapTextWithAnsi: (value: string) => [value],
+}));
+
 import {
   parseSessionDeckCommandArgs,
   registerSessionDeckCommand,
