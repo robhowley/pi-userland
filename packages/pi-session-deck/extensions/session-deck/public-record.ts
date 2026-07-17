@@ -21,11 +21,15 @@ export function toPublicSessionDeckRecord(record: SessionDeckRecord): SessionDec
       : {
           derivedFacets: {
             persistence: record.derivedFacets.persistence,
+            rowKind: record.derivedFacets.rowKind,
             interactivity: record.derivedFacets.interactivity,
             lifecycle: record.derivedFacets.lifecycle,
             lineage: record.derivedFacets.lineage,
             identityStrength: record.derivedFacets.identityStrength,
             headerConsistency: record.derivedFacets.headerConsistency,
+            ...(record.derivedFacets.childRuntime === undefined
+              ? {}
+              : { childRuntime: record.derivedFacets.childRuntime }),
           },
         }),
     activityState: record.activityState,

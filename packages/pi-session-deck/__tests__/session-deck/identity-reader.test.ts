@@ -1,6 +1,9 @@
 import type { Dirent } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
-import { normalizeSessionTerminalMetadata } from '../../extensions/session-deck/identity/metadata.js';
+import {
+  normalizeSessionRuntimeSignalsMetadata,
+  normalizeSessionTerminalMetadata,
+} from '../../extensions/session-deck/identity/metadata.js';
 import type { JoinedSessionRecord } from '../../extensions/session-deck/identity/types.js';
 import type { PresenceView } from '../../extensions/session-deck/presence/types.js';
 
@@ -137,6 +140,108 @@ describe('identity terminal metadata normalization', () => {
   });
 });
 
+describe('identity runtime signal metadata normalization', () => {
+  it('normalizes runtime signals and drops extra launch payloads', () => {
+    expect(
+      normalizeSessionRuntimeSignalsMetadata({
+        process: {
+          pid: '321',
+          ppid: '123',
+          processStartedAt: ' 2026-07-16T12:00:00.000Z ',
+          ancestors: [
+            { pid: '123', ppid: '1', processStartedAt: '2026-07-16T11:59:00.000Z' },
+            { pid: 1, ppid: 0 },
+          ],
+        },
+        launch: {
+          noSession: true,
+          print: false,
+          mode: 'json',
+          sessionArgPresent: false,
+          forkArgPresent: true,
+          argv: ['secret'],
+        },
+        stdio: {
+          stdinTTY: false,
+          stdoutTTY: true,
+          stderrTTY: false,
+        },
+        inheritedDeckRuntime: {
+          runtimeId: ' parent-runtime ',
+          sessionId: ' parent-session ',
+          sessionFile: ' /tmp/parent.md ',
+          startedAt: ' 2026-07-16T11:58:00.000Z ',
+        },
+      }),
+    ).toEqual({
+      process: {
+        pid: 321,
+        ppid: 123,
+        processStartedAt: '2026-07-16T12:00:00.000Z',
+        ancestors: [
+          { pid: 123, ppid: 1, processStartedAt: '2026-07-16T11:59:00.000Z' },
+          { pid: 1 },
+        ],
+      },
+      launch: {
+        noSession: true,
+        print: false,
+        mode: 'json',
+        sessionArgPresent: false,
+        forkArgPresent: true,
+      },
+      stdio: {
+        stdinTTY: false,
+        stdoutTTY: true,
+        stderrTTY: false,
+      },
+      inheritedDeckRuntime: {
+        runtimeId: 'parent-runtime',
+        sessionId: 'parent-session',
+        sessionFile: '/tmp/parent.md',
+        startedAt: '2026-07-16T11:58:00.000Z',
+      },
+    });
+  });
+
+  it('drops malformed runtime signal subobjects independently', () => {
+    expect(
+      normalizeSessionRuntimeSignalsMetadata({
+        process: {
+          pid: 'bad',
+          ancestors: [{ pid: 123 }],
+        },
+        launch: {
+          noSession: true,
+          print: false,
+          mode: 'json',
+          sessionArgPresent: false,
+          forkArgPresent: false,
+        },
+        stdio: {
+          stdinTTY: 'yes',
+          stdoutTTY: true,
+          stderrTTY: false,
+        },
+        inheritedDeckRuntime: {
+          runtimeId: 'parent-runtime',
+        },
+      }),
+    ).toEqual({
+      launch: {
+        noSession: true,
+        print: false,
+        mode: 'json',
+        sessionArgPresent: false,
+        forkArgPresent: false,
+      },
+      inheritedDeckRuntime: {
+        runtimeId: 'parent-runtime',
+      },
+    });
+  });
+});
+
 describe('identity reader — join', () => {
   it('joins presence records with matching identity records and preserves future raw sessionStart strings', async () => {
     const { readJoinedSessionView } =
@@ -219,6 +324,7 @@ describe('identity reader — join', () => {
     expect(record.identityFreshness).toBe('fresh');
     expect(record.derivedFacets).toEqual({
       persistence: 'file_backed',
+      rowKind: 'durable_session',
       interactivity: 'interactive',
       lifecycle: 'other',
       lineage: 'previous_and_parent',
@@ -290,6 +396,61 @@ describe('identity reader — join', () => {
     });
   });
 
+  it('normalizes persisted runtime signals and joins them into internal records', async () => {
+    const record = await readSingleJoinedRecord(
+      buildIdentityRecord({
+        runtimeSignals: {
+          process: {
+            pid: '321',
+            ppid: '123',
+            ancestors: [{ pid: '123', ppid: '1' }],
+          },
+          launch: {
+            noSession: true,
+            print: false,
+            mode: 'rpc',
+            sessionArgPresent: false,
+            forkArgPresent: true,
+            prompt: 'secret',
+          },
+          stdio: {
+            stdinTTY: false,
+            stdoutTTY: true,
+            stderrTTY: false,
+          },
+          inheritedDeckRuntime: {
+            runtimeId: ' parent-runtime ',
+            sessionFile: ' /tmp/parent.md ',
+          },
+        },
+      }),
+    );
+
+    expect(record.runtimeSignals).toEqual({
+      process: {
+        pid: 321,
+        ppid: 123,
+        ancestors: [{ pid: 123, ppid: 1 }],
+      },
+      launch: {
+        noSession: true,
+        print: false,
+        mode: 'rpc',
+        sessionArgPresent: false,
+        forkArgPresent: true,
+      },
+      stdio: {
+        stdinTTY: false,
+        stdoutTTY: true,
+        stderrTTY: false,
+      },
+      inheritedDeckRuntime: {
+        runtimeId: 'parent-runtime',
+        sessionFile: '/tmp/parent.md',
+      },
+    });
+  });
+
   it('sets identity fields to null when identity record is missing', async () => {
     const { readJoinedSessionView } =
       await import('../../extensions/session-deck/identity/reader.js');
@@ -326,6 +487,7 @@ describe('identity reader — join', () => {
     expect(record.identityFreshness).toBe('missing');
     expect(record.derivedFacets).toEqual({
       persistence: 'unknown',
+      rowKind: 'unknown',
       interactivity: 'unknown',
       lifecycle: 'unknown',
       lineage: 'unknown',
@@ -386,6 +548,7 @@ describe('identity reader — join', () => {
     expect(view.records[0]?.worktreeLabel).toBeNull();
     expect(view.records[0]?.derivedFacets).toEqual({
       persistence: 'file_backed',
+      rowKind: 'durable_session',
       interactivity: 'unknown',
       lifecycle: 'unknown',
       lineage: 'root',
@@ -410,6 +573,42 @@ describe('identity reader — join', () => {
 
     expect(record.sessionId).toBe('session-abc');
     expect(record).not.toHaveProperty('terminal');
+    expect(record.diagnostics).toEqual([]);
+  });
+
+  it('ignores malformed runtime signal subobjects without treating the identity record as malformed', async () => {
+    const record = await readSingleJoinedRecord(
+      buildIdentityRecord({
+        runtimeSignals: {
+          process: {
+            pid: 'bad',
+          },
+          launch: {
+            noSession: true,
+            print: false,
+            mode: 'json',
+            sessionArgPresent: false,
+            forkArgPresent: false,
+          },
+          stdio: {
+            stdinTTY: 'yes',
+            stdoutTTY: true,
+            stderrTTY: false,
+          },
+        },
+      }),
+    );
+
+    expect(record.sessionId).toBe('session-abc');
+    expect(record.runtimeSignals).toEqual({
+      launch: {
+        noSession: true,
+        print: false,
+        mode: 'json',
+        sessionArgPresent: false,
+        forkArgPresent: false,
+      },
+    });
     expect(record.diagnostics).toEqual([]);
   });
 
@@ -443,6 +642,7 @@ describe('identity reader — join', () => {
     });
     expect(record.derivedFacets).toEqual({
       persistence: 'file_backed',
+      rowKind: 'durable_session',
       interactivity: 'interactive',
       lifecycle: 'resume',
       lineage: 'previous',
@@ -473,6 +673,7 @@ describe('identity reader — join', () => {
     });
     expect(record.derivedFacets).toEqual({
       persistence: 'in_memory',
+      rowKind: 'ephemeral_runtime',
       interactivity: 'unknown',
       lifecycle: 'other',
       lineage: 'root',

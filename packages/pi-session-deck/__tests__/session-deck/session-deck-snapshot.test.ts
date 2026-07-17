@@ -132,6 +132,32 @@ describe('readSessionDeckSnapshot', () => {
           windowName: 'editor',
           paneId: '%12',
         },
+        runtimeSignals: {
+          process: {
+            pid: 101,
+            ppid: 99,
+            processStartedAt: '2026-06-23T11:59:30.000Z',
+            ancestors: [{ pid: 99, ppid: 1, processStartedAt: '2026-06-23T11:59:00.000Z' }],
+          },
+          launch: {
+            noSession: true,
+            print: false,
+            mode: 'rpc',
+            sessionArgPresent: false,
+            forkArgPresent: false,
+          },
+          stdio: {
+            stdinTTY: false,
+            stdoutTTY: true,
+            stderrTTY: true,
+          },
+          inheritedDeckRuntime: {
+            runtimeId: 'parent-runtime',
+            sessionId: 'parent-session',
+            sessionFile: '/tmp/parent-session.json',
+            startedAt: '2026-06-23T11:58:00.000Z',
+          },
+        },
       }),
       { directory: directories.identityDirectory },
     );
@@ -172,6 +198,7 @@ describe('readSessionDeckSnapshot', () => {
         worktreeLabel: null,
         derivedFacets: {
           persistence: 'file_backed',
+          rowKind: 'durable_session',
           interactivity: 'headless',
           lifecycle: 'resume',
           lineage: 'previous_and_parent',
@@ -198,10 +225,14 @@ describe('readSessionDeckSnapshot', () => {
       'currentTurnStartedAt',
       'lastEventAt',
       'activityUpdatedAt',
+      'inputSummary',
+      'recentToolWindows',
+      'sessionStartedAt',
       'sessionStart',
       'sessionHeader',
       'terminal',
       'terminalDisplay',
+      'runtimeSignals',
       'socketPath',
       'paneId',
       'attachCommand',
@@ -217,6 +248,138 @@ describe('readSessionDeckSnapshot', () => {
     ]) {
       expect(record).not.toHaveProperty(field);
     }
+  });
+
+  it('projects only sanitized child runtime evidence into the public snapshot', async () => {
+    const directories = await createSnapshotDirectories();
+
+    await writePresenceRecord(
+      buildPresenceRecord({
+        runtimeId: 'rt-parent',
+        pid: 101,
+        startedAt: '2026-06-23T12:00:00.000Z',
+      }),
+      { directory: directories.presenceDirectory },
+    );
+    await writeIdentityRecord(
+      buildIdentityRecord({
+        runtimeId: 'rt-parent',
+        sessionId: 'session-parent',
+        sessionFile: '/tmp/session-parent.json',
+        sessionHeader: {
+          id: 'session-parent',
+          timestamp: '2026-06-23T12:00:00.000Z',
+          cwd: '/tmp/project',
+        },
+        runtimeSignals: {
+          process: {
+            pid: 101,
+            ppid: 1,
+            processStartedAt: '2026-06-23T12:00:00.000Z',
+            ancestors: [],
+          },
+        },
+      }),
+      { directory: directories.identityDirectory },
+    );
+    await writeActivityRecord(
+      buildActivityRecord({
+        runtimeId: 'rt-parent',
+        sessionId: 'session-parent',
+        recentToolWindows: [
+          {
+            toolCallId: 'raw-tool-id',
+            toolName: 'bash',
+            startedAt: '2026-06-23T12:01:00.000Z',
+            endedAt: '2026-06-23T12:02:00.000Z',
+          },
+        ],
+      }),
+      { directory: directories.activityDirectory },
+    );
+
+    await writePresenceRecord(
+      buildPresenceRecord({
+        runtimeId: 'rt-child',
+        pid: 202,
+        startedAt: '2026-06-23T12:01:30.000Z',
+        heartbeatAt: '2026-06-23T12:09:56.000Z',
+      }),
+      { directory: directories.presenceDirectory },
+    );
+    await writeIdentityRecord(
+      buildIdentityRecord({
+        runtimeId: 'rt-child',
+        sessionId: 'session-child',
+        sessionFile: null,
+        sessionName: 'child',
+        sessionStartedAt: '2026-06-23T12:01:30.000Z',
+        sessionStart: { reason: 'startup', mode: 'json', hasUI: false },
+        sessionHeader: {
+          id: 'session-child',
+          timestamp: '2026-06-23T12:01:30.000Z',
+          cwd: '/tmp/project',
+        },
+        runtimeSignals: {
+          process: {
+            pid: 202,
+            ppid: 101,
+            processStartedAt: '2026-06-23T12:01:30.000Z',
+            ancestors: [{ pid: 101, ppid: 1, processStartedAt: '2026-06-23T12:00:00.000Z' }],
+          },
+          launch: {
+            noSession: true,
+            print: true,
+            mode: 'json',
+            sessionArgPresent: false,
+            forkArgPresent: false,
+          },
+          inheritedDeckRuntime: {
+            runtimeId: 'rt-parent',
+            sessionId: 'session-parent',
+            sessionFile: '/tmp/session-parent.json',
+            startedAt: '2026-06-23T12:00:00.000Z',
+          },
+        },
+      }),
+      { directory: directories.identityDirectory },
+    );
+    await writeActivityRecord(
+      buildActivityRecord({
+        runtimeId: 'rt-child',
+        sessionId: 'session-child',
+        inputSummary: { lastSource: 'extension', counts: { extension: 1 } },
+      }),
+      { directory: directories.activityDirectory },
+    );
+
+    const snapshot = await readSessionDeckSnapshot({
+      directory: directories.presenceDirectory,
+      identityDirectory: directories.identityDirectory,
+      activityDirectory: directories.activityDirectory,
+      chipsDirectory: directories.chipsDirectory,
+      now: new Date('2026-06-23T12:10:00.000Z'),
+      inspectPid: vi.fn().mockResolvedValue({ status: 'matches' }),
+    });
+
+    const child = snapshot.records.find((record) => record.runtimeId === 'rt-child');
+    expect(child?.derivedFacets?.rowKind).toBe('ephemeral_child_runtime');
+    expect(child?.derivedFacets?.childRuntime).toMatchObject({
+      candidate: true,
+      confidence: 'high',
+      parentRuntimeId: 'rt-parent',
+      parentSessionId: 'session-parent',
+    });
+    expect(child?.derivedFacets?.childRuntime?.evidence.map((evidence) => evidence.code)).toEqual(
+      expect.arrayContaining(['inherited_deck_runtime', 'process_ancestor_match']),
+    );
+
+    const serialized = JSON.stringify(child ?? {});
+    expect(serialized).not.toContain('/tmp/session-parent.json');
+    expect(serialized).not.toContain('raw-tool-id');
+    expect(serialized).not.toContain('recentToolWindows');
+    expect(serialized).not.toContain('inputSummary');
+    expect(serialized).not.toContain('runtimeSignals');
   });
 
   it('orders session-deck rows by startedAt ascending before projecting the slim snapshot', async () => {

@@ -1312,11 +1312,11 @@ function renderRowLine2(
 }
 
 function formatRowLine2Detail(row: SessionDeckBrowserRow): string {
-  if (row.terminalLabel === null) {
-    return row.hasChips ? row.chipPreview : 'no chips';
-  }
+  const parts = [row.hasChips ? row.chipPreview : null, row.childLabel, row.terminalLabel].filter(
+    (part): part is string => part !== null && part.length > 0,
+  );
 
-  return row.hasChips ? `${row.chipPreview} · ${row.terminalLabel}` : row.terminalLabel;
+  return parts.length > 0 ? parts.join(' · ') : 'no chips';
 }
 
 function formatRowLine1Metadata(row: SessionDeckBrowserRow, includeBranch: boolean): string {

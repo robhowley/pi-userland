@@ -13,7 +13,15 @@ import {
   normalizeSessionStartMetadata,
 } from './identity/metadata.js';
 import { collectSessionTerminalMetadata } from './identity/terminal-collect.js';
-import type { SessionManagerLike, SessionTerminalMetadata } from './identity/types.js';
+import {
+  collectRuntimeSignalsMetadata,
+  publishDeckRuntimeEnv,
+} from './identity/runtime-signals.js';
+import type {
+  SessionManagerLike,
+  SessionRuntimeSignalsMetadata,
+  SessionTerminalMetadata,
+} from './identity/types.js';
 
 interface SessionStartContext {
   mode?: string;
@@ -61,8 +69,11 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     'session_start',
     async (event: { reason: string; previousSessionFile?: string }, ctx: SessionStartContext) => {
       const presenceRuntime = await ensurePresenceRuntimeStarted();
-      const terminal = await collectSessionTerminalMetadata();
-      const sessionManager = createSessionManager(ctx, event, terminal);
+      const [terminal, runtimeSignals] = await Promise.all([
+        collectSessionTerminalMetadata(),
+        collectRuntimeSignalsMetadata(),
+      ]);
+      const sessionManager = createSessionManager(ctx, event, terminal, runtimeSignals);
 
       // Install setStatus wrapper before session-deck sets its own status
       statusMirror.install(ctx.ui);
@@ -77,12 +88,27 @@ export default async function (pi: ExtensionAPI): Promise<void> {
       const activityRuntime = await ensureActivityRuntimeStarted(presenceRuntime.runtime.runtimeId);
 
       await identityRuntime.refreshIdentity(event.reason, sessionManager);
+      publishDeckRuntimeEnv({
+        runtimeId: presenceRuntime.runtime.runtimeId,
+        sessionId: sessionManager.getSessionId(),
+        sessionFile: sessionManager.getSessionFile(),
+        startedAt: presenceRuntime.runtime.startedAt,
+      });
       await activityRuntime.refreshActivity(
         event.reason === 'new' ? 'new' : 'startup',
         sessionManager,
       );
     },
   );
+
+  on('input', async (event: { source?: unknown }) => {
+    if (!isActivityInputSource(event.source)) {
+      return;
+    }
+
+    const activityRuntime = await ensureActivityRuntime();
+    await activityRuntime.recordInputSource(event.source);
+  });
 
   on('message_end', async (event: { message?: unknown }) => {
     const activityRuntime = await ensureActivityRuntime();
@@ -136,6 +162,7 @@ function createSessionManager(
   ctx: SessionStartContext,
   event: { reason: string; previousSessionFile?: string },
   terminal: SessionTerminalMetadata | undefined,
+  runtimeSignals: SessionRuntimeSignalsMetadata,
 ): SessionManagerLike {
   const sessionStart = normalizeSessionStartMetadata({
     reason: event.reason,
@@ -151,6 +178,7 @@ function createSessionManager(
     getSessionStart: () => sessionStart,
     getHeader: () => normalizeSessionHeaderMetadata(ctx.sessionManager?.getHeader?.()) ?? null,
     getTerminal: () => terminal,
+    getRuntimeSignals: () => runtimeSignals,
   };
 }
 
@@ -171,6 +199,10 @@ function getActivityMessage(event: { message?: unknown }): {
       ? { errorMessage: message['errorMessage'] }
       : {}),
   };
+}
+
+function isActivityInputSource(value: unknown): value is 'interactive' | 'rpc' | 'extension' {
+  return value === 'interactive' || value === 'rpc' || value === 'extension';
 }
 
 function isObject(candidate: unknown): candidate is Record<string, unknown> {

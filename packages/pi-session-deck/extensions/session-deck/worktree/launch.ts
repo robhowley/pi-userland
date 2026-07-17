@@ -1,6 +1,12 @@
 import { createHash } from 'node:crypto';
 import { basename } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
+import {
+  PI_SESSION_DECK_RUNTIME_ID_ENV,
+  PI_SESSION_DECK_RUNTIME_STARTED_AT_ENV,
+  PI_SESSION_DECK_SESSION_FILE_ENV,
+  PI_SESSION_DECK_SESSION_ID_ENV,
+} from '../identity/runtime-signals.js';
 import { formatPosixCommand, quotePosixArg } from '../identity/terminal-focus.js';
 import { buildLaunchAgentDirEnvPlan, normalizeLaunchAgentDirSelection } from './agent-dir.js';
 import { defaultWorktreeExecFile, type ExecFileResult, type WorktreeExecFile } from './git.js';
@@ -35,6 +41,12 @@ export type DetachedTmuxPiPreflightResult =
 
 const TMUX_SESSION_NAME_LIMIT = 80;
 const POST_LAUNCH_VERIFY_DELAY_MS = 1_000;
+const DECK_HANDOFF_ENV_KEYS = [
+  PI_SESSION_DECK_RUNTIME_ID_ENV,
+  PI_SESSION_DECK_SESSION_ID_ENV,
+  PI_SESSION_DECK_SESSION_FILE_ENV,
+  PI_SESSION_DECK_RUNTIME_STARTED_AT_ENV,
+] as const;
 
 export async function preflightDetachedTmuxPi(
   options: LaunchDetachedTmuxPiOptions = {},
@@ -64,6 +76,7 @@ export async function launchDetachedTmuxPi(
     resolvedOptions.env['PATH'] ?? '',
     resolvedOptions.agentDir,
   );
+  const deckHandoffEnvArgs = buildTmuxEnvironmentArgs(resolvedOptions.env);
   const sessionName = buildManagedTmuxSessionName({
     repoName: worktree.repoName,
     worktreePath: worktree.path,
@@ -121,6 +134,7 @@ export async function launchDetachedTmuxPi(
 
   const launchResult = await run(resolvedOptions, 'tmux', [
     'new-session',
+    ...deckHandoffEnvArgs,
     '-d',
     '-s',
     sessionName,
@@ -194,6 +208,13 @@ export function buildPiLauncherCommand(
           ...(envPlan.envAssignment === undefined ? [] : [envPlan.envAssignment]),
         ];
   return `exec ${formatPosixCommand(['/usr/bin/env', ...envArgs, 'pi', '--name', displayName])}`;
+}
+
+export function buildTmuxEnvironmentArgs(env: NodeJS.ProcessEnv): string[] {
+  return DECK_HANDOFF_ENV_KEYS.flatMap((key) => {
+    const value = trimNonEmpty(env[key]);
+    return value === undefined ? [] : ['-e', `${key}=${value}`];
+  });
 }
 
 async function tmuxHasSession(
@@ -312,4 +333,13 @@ function sanitizeTmuxName(value: string): string {
 
 function formatCommandError(result: ExecFileResult): string {
   return (result.stderr || result.stdout).trim() || `exit ${result.exitCode}`;
+}
+
+function trimNonEmpty(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }

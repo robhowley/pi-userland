@@ -921,6 +921,88 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(getCards(harness.elements.list)).toHaveLength(0);
   });
 
+  it('gates visible child runtime labeling on rowKind while keeping proven child detail', async () => {
+    const harness = await setupApp([
+      buildSnapshot({
+        records: [
+          buildRecord({
+            runtimeId: 'rt-high-child',
+            sessionName: 'worker',
+            derivedFacets: {
+              persistence: 'in_memory',
+              rowKind: 'ephemeral_child_runtime',
+              interactivity: 'headless',
+              lifecycle: 'startup',
+              lineage: 'root',
+              identityStrength: 'weak',
+              headerConsistency: 'consistent',
+              childRuntime: {
+                candidate: true,
+                confidence: 'high',
+                parentRuntimeId: 'rt-parent',
+                evidence: [
+                  {
+                    code: 'inherited_deck_runtime',
+                    confidence: 'high',
+                    parentRuntimeId: 'rt-parent',
+                  },
+                  {
+                    code: 'process_ancestor_match',
+                    confidence: 'high',
+                    parentRuntimeId: 'rt-parent',
+                  },
+                ],
+              },
+            },
+          }),
+          buildRecord({
+            runtimeId: 'rt-env-only',
+            sessionId: 'session-low',
+            sessionName: 'maybe',
+            derivedFacets: {
+              persistence: 'in_memory',
+              rowKind: 'ephemeral_runtime',
+              interactivity: 'interactive',
+              lifecycle: 'startup',
+              lineage: 'root',
+              identityStrength: 'weak',
+              headerConsistency: 'consistent',
+              childRuntime: {
+                candidate: true,
+                confidence: 'high',
+                parentRuntimeId: 'rt-parent',
+                evidence: [
+                  {
+                    code: 'inherited_deck_runtime',
+                    confidence: 'high',
+                    parentRuntimeId: 'rt-parent',
+                  },
+                ],
+              },
+            },
+          }),
+        ],
+      }),
+    ]);
+
+    expandRepoGroup(harness.elements.list, 'owner/project');
+    let cards = getCards(harness.elements.list);
+    expect(getCardLine(cards[0]!, 'row-line2').textContent).toContain('child: high');
+    expect(getCardLine(cards[1]!, 'row-line2').textContent).not.toContain('child: high');
+
+    getCardToggle(cards[0]!).click();
+    cards = getCards(harness.elements.list);
+    let status = getDetailSection(getCardDetail(cards[0]!), 'STATUS');
+    expect(getDetailRowValue(status, 'Child runtime').textContent).toContain(
+      'high via deck env + process ancestor · parent rt-paren',
+    );
+
+    getCardToggle(cards[1]!).click();
+    cards = getCards(harness.elements.list);
+    status = getDetailSection(getCardDetail(cards[1]!), 'STATUS');
+    expect(getDetailRowLabels(status)).not.toContain('Child runtime');
+  });
+
   it('renders a sibling + New repo-row action and opens the compact composer', async () => {
     const harness = await setupApp([buildSnapshot(), buildBasePreview()]);
     const repoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
@@ -2383,6 +2465,7 @@ describe('Session Deck iTerm2 web UI', () => {
           buildRecord({
             derivedFacets: {
               persistence: 'file_backed',
+              rowKind: 'durable_session',
               interactivity: 'interactive',
               lifecycle: 'resume',
               lineage: 'root',

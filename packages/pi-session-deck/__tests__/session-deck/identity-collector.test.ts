@@ -5,8 +5,9 @@ import type {
   SessionManagerLike,
 } from '../../extensions/session-deck/identity/types.js';
 
-type UnsafeSessionManager = Omit<SessionManagerLike, 'getTerminal'> & {
+type UnsafeSessionManager = Omit<SessionManagerLike, 'getTerminal' | 'getRuntimeSignals'> & {
   getTerminal?: () => unknown;
+  getRuntimeSignals?: () => unknown;
 };
 
 function makeExecGit(results: Record<string, { stdout: string; exitCode: number }>): GitExec {
@@ -23,6 +24,7 @@ function makeExecGit(results: Record<string, { stdout: string; exitCode: number 
 async function collectGitlessIdentityWithTerminal(
   terminal: unknown,
   options: {
+    runtimeSignals?: unknown;
     sessionId?: string;
     sessionFile?: string;
     existingRecord?: SessionIdentityRecord;
@@ -38,6 +40,9 @@ async function collectGitlessIdentityWithTerminal(
     getSessionFile: () => sessionFile,
     getCwd: () => '/tmp',
     ...(terminal === undefined ? {} : { getTerminal: () => terminal }),
+    ...(options.runtimeSignals === undefined
+      ? {}
+      : { getRuntimeSignals: () => options.runtimeSignals }),
   };
 
   return collectSessionIdentity('rt-1', {
@@ -517,6 +522,174 @@ describe('identity collector', () => {
     });
 
     expect(secondRecord).not.toHaveProperty('terminal');
+  });
+
+  it('collects normalized runtime signals from the session manager', async () => {
+    const record = await collectGitlessIdentityWithTerminal(undefined, {
+      runtimeSignals: {
+        process: {
+          pid: '321',
+          ppid: '123',
+          processStartedAt: ' 2026-07-16T12:00:00.000Z ',
+          ancestors: [
+            { pid: '123', ppid: '1', processStartedAt: '2026-07-16T11:59:00.000Z' },
+            { pid: 1, ppid: 0, processStartedAt: '' },
+          ],
+        },
+        launch: {
+          noSession: true,
+          print: false,
+          mode: 'json',
+          sessionArgPresent: false,
+          forkArgPresent: true,
+          argv: ['secret'],
+        },
+        stdio: {
+          stdinTTY: false,
+          stdoutTTY: true,
+          stderrTTY: false,
+        },
+        inheritedDeckRuntime: {
+          runtimeId: ' parent-runtime ',
+          sessionId: ' parent-session ',
+          sessionFile: ' /tmp/parent.md ',
+          startedAt: ' 2026-07-16T11:58:00.000Z ',
+        },
+      },
+    });
+
+    expect(record.runtimeSignals).toEqual({
+      process: {
+        pid: 321,
+        ppid: 123,
+        processStartedAt: '2026-07-16T12:00:00.000Z',
+        ancestors: [
+          { pid: 123, ppid: 1, processStartedAt: '2026-07-16T11:59:00.000Z' },
+          { pid: 1 },
+        ],
+      },
+      launch: {
+        noSession: true,
+        print: false,
+        mode: 'json',
+        sessionArgPresent: false,
+        forkArgPresent: true,
+      },
+      stdio: {
+        stdinTTY: false,
+        stdoutTTY: true,
+        stderrTTY: false,
+      },
+      inheritedDeckRuntime: {
+        runtimeId: 'parent-runtime',
+        sessionId: 'parent-session',
+        sessionFile: '/tmp/parent.md',
+        startedAt: '2026-07-16T11:58:00.000Z',
+      },
+    });
+  });
+
+  it('preserves existing runtime signals when later refreshes omit them for the same Pi session', async () => {
+    const firstRecord = await collectGitlessIdentityWithTerminal(undefined, {
+      sessionId: 'session-456',
+      sessionFile: '/tmp/session-456.json',
+      runtimeSignals: {
+        process: {
+          pid: 321,
+          ppid: 123,
+          ancestors: [{ pid: 123 }],
+        },
+        launch: {
+          noSession: true,
+          print: false,
+          mode: 'rpc',
+          sessionArgPresent: false,
+          forkArgPresent: false,
+        },
+        stdio: {
+          stdinTTY: false,
+          stdoutTTY: false,
+          stderrTTY: false,
+        },
+      },
+    });
+
+    const secondRecord = await collectGitlessIdentityWithTerminal(undefined, {
+      sessionId: 'session-456',
+      sessionFile: '/tmp/session-456.json',
+      existingRecord: firstRecord,
+      now: '2026-06-17T12:05:00.000Z',
+    });
+
+    expect(secondRecord.runtimeSignals).toEqual(firstRecord.runtimeSignals);
+  });
+
+  it('does not preserve existing runtime signals across different Pi sessions', async () => {
+    const firstRecord = await collectGitlessIdentityWithTerminal(undefined, {
+      sessionId: 'session-old',
+      sessionFile: '/tmp/session-old.json',
+      runtimeSignals: {
+        process: {
+          pid: 321,
+          ppid: 123,
+          ancestors: [{ pid: 123 }],
+        },
+        stdio: {
+          stdinTTY: false,
+          stdoutTTY: false,
+          stderrTTY: false,
+        },
+      },
+    });
+
+    const secondRecord = await collectGitlessIdentityWithTerminal(undefined, {
+      sessionId: 'session-new',
+      sessionFile: '/tmp/session-new.json',
+      existingRecord: firstRecord,
+      now: '2026-06-17T12:05:00.000Z',
+    });
+
+    expect(secondRecord).not.toHaveProperty('runtimeSignals');
+  });
+
+  it('drops malformed runtime signal subobjects without rejecting the identity record', async () => {
+    const record = await collectGitlessIdentityWithTerminal(undefined, {
+      runtimeSignals: {
+        process: {
+          pid: 'bad',
+          ancestors: [{ pid: 123 }],
+        },
+        launch: {
+          noSession: true,
+          print: false,
+          mode: 'json',
+          sessionArgPresent: false,
+          forkArgPresent: false,
+        },
+        stdio: {
+          stdinTTY: 'yes',
+          stdoutTTY: true,
+          stderrTTY: false,
+        },
+        inheritedDeckRuntime: {
+          runtimeId: 'parent-runtime',
+        },
+      },
+    });
+
+    expect(record.sessionId).toBe('session-123');
+    expect(record.runtimeSignals).toEqual({
+      launch: {
+        noSession: true,
+        print: false,
+        mode: 'json',
+        sessionArgPresent: false,
+        forkArgPresent: false,
+      },
+      inheritedDeckRuntime: {
+        runtimeId: 'parent-runtime',
+      },
+    });
   });
 
   it('emits diagnostics for missing session fields', async () => {

@@ -47,6 +47,49 @@ export interface SessionTmuxTerminalMetadata {
 
 export type SessionTerminalMetadata = SessionIterm2TerminalMetadata | SessionTmuxTerminalMetadata;
 
+export type SessionRuntimeLaunchMode = 'tui' | 'rpc' | 'json' | 'print';
+
+export interface SessionRuntimeProcessAncestorMetadata {
+  pid: number;
+  ppid?: number;
+  processStartedAt?: string;
+}
+
+export interface SessionRuntimeProcessMetadata {
+  pid: number;
+  ppid?: number;
+  processStartedAt?: string;
+  ancestors: SessionRuntimeProcessAncestorMetadata[];
+}
+
+export interface SessionRuntimeLaunchMetadata {
+  noSession: boolean;
+  print: boolean;
+  mode?: SessionRuntimeLaunchMode;
+  sessionArgPresent: boolean;
+  forkArgPresent: boolean;
+}
+
+export interface SessionRuntimeStdioMetadata {
+  stdinTTY: boolean;
+  stdoutTTY: boolean;
+  stderrTTY: boolean;
+}
+
+export interface SessionRuntimeInheritedDeckRuntimeMetadata {
+  runtimeId?: string;
+  sessionId?: string;
+  sessionFile?: string;
+  startedAt?: string;
+}
+
+export interface SessionRuntimeSignalsMetadata {
+  process?: SessionRuntimeProcessMetadata;
+  launch?: SessionRuntimeLaunchMetadata;
+  stdio?: SessionRuntimeStdioMetadata;
+  inheritedDeckRuntime?: SessionRuntimeInheritedDeckRuntimeMetadata;
+}
+
 export interface SessionManagerLike {
   getSessionId: () => string | null;
   getSessionFile: () => string | null;
@@ -55,6 +98,7 @@ export interface SessionManagerLike {
   getSessionStart?: () => SessionStartMetadata | undefined;
   getHeader?: () => SessionHeaderMetadata | null | undefined;
   getTerminal?: () => SessionTerminalMetadata | undefined;
+  getRuntimeSignals?: () => SessionRuntimeSignalsMetadata | undefined;
 }
 
 // ─── Identity runtime controller ─────────────────────────────────────
@@ -88,6 +132,7 @@ export interface SessionIdentityRecord {
   sessionStart?: SessionStartMetadata;
   sessionHeader?: SessionHeaderMetadata;
   terminal?: SessionTerminalMetadata;
+  runtimeSignals?: SessionRuntimeSignalsMetadata;
   diagnostics?: IdentityDiagnostic[];
 }
 
@@ -132,6 +177,12 @@ export interface IdentityFreshnessThresholds {
 
 export type SessionPersistenceFacet = 'in_memory' | 'file_backed' | 'unknown';
 
+export type SessionRowKindFacet =
+  | 'durable_session'
+  | 'ephemeral_runtime'
+  | 'ephemeral_child_runtime'
+  | 'unknown';
+
 export type SessionInteractivityFacet = 'interactive' | 'headless' | 'unknown';
 
 export type SessionLifecycleFacet =
@@ -158,13 +209,41 @@ export type SessionHeaderConsistencyFacet =
   | 'mismatch'
   | 'unavailable';
 
+export type ChildRuntimeConfidence = 'none' | 'low' | 'medium' | 'high' | 'explicit' | 'unknown';
+
+export type ChildRuntimeEvidenceCode =
+  | 'explicit_header_parent'
+  | 'inherited_deck_runtime'
+  | 'process_ancestor_match'
+  | 'started_during_parent_tool'
+  | 'same_terminal'
+  | 'headless_in_memory'
+  | 'automation_input_source';
+
+export interface ChildRuntimeEvidence {
+  code: ChildRuntimeEvidenceCode;
+  confidence: ChildRuntimeConfidence;
+  parentRuntimeId?: string;
+  parentSessionId?: string;
+}
+
+export interface ChildRuntimeFacet {
+  candidate: boolean;
+  confidence: ChildRuntimeConfidence;
+  evidence: ChildRuntimeEvidence[];
+  parentRuntimeId?: string;
+  parentSessionId?: string;
+}
+
 export interface SessionDerivedFacets {
   persistence: SessionPersistenceFacet;
+  rowKind: SessionRowKindFacet;
   interactivity: SessionInteractivityFacet;
   lifecycle: SessionLifecycleFacet;
   lineage: SessionLineageFacet;
   identityStrength: SessionIdentityStrengthFacet;
   headerConsistency: SessionHeaderConsistencyFacet;
+  childRuntime?: ChildRuntimeFacet;
 }
 
 // ─── Joined session records ─────────────────────────────────────────
@@ -196,6 +275,7 @@ export interface JoinedSessionRecord {
   sessionStart?: SessionStartMetadata;
   sessionHeader?: SessionHeaderMetadata;
   terminal?: SessionTerminalMetadata;
+  runtimeSignals?: SessionRuntimeSignalsMetadata;
 
   // Combined diagnostics
   diagnostics: JoinedDiagnostic[];

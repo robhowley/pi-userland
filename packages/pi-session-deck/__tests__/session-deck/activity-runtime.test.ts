@@ -62,6 +62,53 @@ describe('activity runtime lifecycle', () => {
     expect(writes.at(-1)?.activityState).toBe('thinking');
   });
 
+  it('records input summaries and a bounded sanitized tool-window ring', async () => {
+    const controller = await ensureActivityRuntimeStarted('rt-1', {
+      writeRecord: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await controller.refreshActivity('startup', {
+      getSessionId: () => 'session-abc',
+      getSessionFile: () => '/tmp/session-abc.json',
+    });
+
+    await controller.recordInputSource('interactive');
+    vi.setSystemTime(new Date('2026-06-17T12:00:01.000Z'));
+    await controller.recordInputSource('rpc');
+
+    expect(controller.getActivity()?.inputSummary).toEqual({
+      lastSource: 'rpc',
+      lastInputAt: '2026-06-17T12:00:01.000Z',
+      counts: { interactive: 1, rpc: 1 },
+    });
+
+    for (let index = 0; index < 22; index += 1) {
+      vi.setSystemTime(new Date(`2026-06-17T12:00:${String(index + 2).padStart(2, '0')}.000Z`));
+      await controller.recordToolExecutionStart({
+        toolCallId: `tool-${index}`,
+        toolName: 'bash',
+      });
+      await controller.recordToolExecutionEnd({
+        toolCallId: `tool-${index}`,
+        toolName: 'bash',
+        isError: index === 21,
+      });
+    }
+
+    const windows = controller.getActivity()?.recentToolWindows ?? [];
+    expect(windows).toHaveLength(20);
+    expect(windows[0]?.toolCallId).toBe('tool-2');
+    expect(windows.at(-1)).toEqual({
+      toolCallId: 'tool-21',
+      toolName: 'bash',
+      startedAt: '2026-06-17T12:00:23.000Z',
+      endedAt: '2026-06-17T12:00:23.000Z',
+      isError: true,
+    });
+    expect(JSON.stringify(windows)).not.toContain('args');
+    expect(JSON.stringify(windows)).not.toContain('result');
+  });
+
   it('resets activity on /new while keeping the same runtimeId', async () => {
     const controller = await ensureActivityRuntimeStarted('rt-1', {
       writeRecord: vi.fn().mockResolvedValue(undefined),
