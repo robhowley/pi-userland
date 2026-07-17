@@ -1549,7 +1549,9 @@ describe('Session Deck iTerm2 web UI', () => {
     )[0]!;
     expect(findAllByClass(form, 'worktree-config-drawer')).toHaveLength(1);
     const drawerButtonLabels = findAllByTag(form, 'button').map((button) => button.textContent);
+    expect(drawerButtonLabels).toContain('Current');
     expect(drawerButtonLabels).toContain('Pi default');
+    expect(drawerButtonLabels).not.toContain('Ambient env');
     expect(drawerButtonLabels).not.toContain('Pi default (~/.pi/agent)');
     const customButton = findAllByTag(form, 'button').find(
       (button) => button.textContent === 'Custom…',

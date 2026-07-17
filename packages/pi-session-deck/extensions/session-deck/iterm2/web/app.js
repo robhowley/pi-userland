@@ -1076,7 +1076,7 @@ function formatWorktreeAgentDirOptionLabel(mode) {
     case 'custom':
       return 'Custom…';
     default:
-      return 'Ambient env';
+      return 'Current';
   }
 }
 
@@ -1437,7 +1437,7 @@ function getPartialLaunchFailureMessage(launch) {
     case 'tmux-name-collision':
       return 'Worktree kept. Pi did not start because the generated tmux session name is already in use. Retry after resolving the collision.';
     case 'launch-context-mismatch':
-      return 'Worktree kept. Pi did not start because an existing managed tmux session may use a different Pi config. Attach to it or choose Ambient env.';
+      return 'Worktree kept. Pi did not start because an existing managed tmux session may use a different Pi config. Attach to it or choose Current.';
     case 'presence-timeout':
       return 'Worktree kept. Session Deck could not confirm the Pi launch. Retry after confirming the session can start.';
     case 'spawn-failed':
