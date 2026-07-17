@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.9.0](https://github.com/robhowley/pi-userland/compare/pi-session-deck-v0.8.0...pi-session-deck-v0.9.0) (2026-07-17)
+
+
+### Features
+
+* **pi-session-deck:** add create-worktree launch flow ([#119](https://github.com/robhowley/pi-userland/issues/119)) ([0d90cae](https://github.com/robhowley/pi-userland/commit/0d90cae8ad3dfb573ce884f69b4404588ae30bf6))
+* **pi-session-deck:** add iTerm2 Toolbelt support ([#111](https://github.com/robhowley/pi-userland/issues/111)) ([67aceb3](https://github.com/robhowley/pi-userland/commit/67aceb32cc2bcb21e8eae7c50a433dd8bf27b709))
+* **pi-session-deck:** add Toolbelt terminal open action ([#121](https://github.com/robhowley/pi-userland/issues/121)) ([6e765f8](https://github.com/robhowley/pi-userland/commit/6e765f83e428d183426b1ea7db920c483df025b8))
+
+
+### Bug Fixes
+
+* **pi-session-deck:** add Prompt Gutter Toolbelt styling ([#123](https://github.com/robhowley/pi-userland/issues/123)) ([9b41f47](https://github.com/robhowley/pi-userland/commit/9b41f47ddb25f438cb3af909445ce3acd75d05c7))
+* **pi-session-deck:** focus sessions through one iterm2 runtime ([#118](https://github.com/robhowley/pi-userland/issues/118)) ([ca71e18](https://github.com/robhowley/pi-userland/commit/ca71e18aa5349519a7bc66b766c33be8d3f88ba2))
+* **pi-session-deck:** honor presence future skew ([#120](https://github.com/robhowley/pi-userland/issues/120)) ([bb9c81d](https://github.com/robhowley/pi-userland/commit/bb9c81da793e1b0294c22b54f9eb27e5b8aa4510))
+* **pi-session-deck:** open tmux sessions with absolute executable ([#122](https://github.com/robhowley/pi-userland/issues/122)) ([d9ce8f0](https://github.com/robhowley/pi-userland/commit/d9ce8f0666a96c433332f2fc75bc58d8ebfd8240))
+
 ## [0.8.0](https://github.com/robhowley/pi-userland/compare/pi-session-deck-v0.7.0...pi-session-deck-v0.8.0) (2026-07-13)
 
 
