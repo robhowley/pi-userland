@@ -1,6 +1,7 @@
 import { resolveGitInfo, resolvePrUrl } from './git.js';
 import {
   normalizeSessionHeaderMetadata,
+  normalizeSessionRuntimeSignalsMetadata,
   normalizeSessionStartMetadata,
   normalizeSessionTerminalMetadata,
 } from './metadata.js';
@@ -57,6 +58,10 @@ export async function collectSessionIdentity(
     normalizeSessionTerminalMetadata(
       safeCall(() => options.sessionManager?.getTerminal?.(), null),
     ) ?? (sameSessionIdentity ? options.existingRecord?.terminal : undefined);
+  const runtimeSignals =
+    normalizeSessionRuntimeSignalsMetadata(
+      safeCall(() => options.sessionManager?.getRuntimeSignals?.(), null),
+    ) ?? (sameSessionIdentity ? options.existingRecord?.runtimeSignals : undefined);
 
   // Emit diagnostics for missing session fields
   if (sessionId === null) {
@@ -154,6 +159,7 @@ export async function collectSessionIdentity(
     ...(sessionStart === undefined ? {} : { sessionStart }),
     ...(sessionHeader === undefined ? {} : { sessionHeader }),
     ...(terminal === undefined ? {} : { terminal }),
+    ...(runtimeSignals === undefined ? {} : { runtimeSignals }),
     diagnostics,
   };
 }

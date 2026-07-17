@@ -7,6 +7,7 @@ import {
 } from './constants.js';
 import {
   normalizeSessionHeaderMetadata,
+  normalizeSessionRuntimeSignalsMetadata,
   normalizeSessionStartMetadata,
   normalizeSessionTerminalMetadata,
 } from './metadata.js';
@@ -203,6 +204,7 @@ function joinRecord(
   const sessionStart = identity?.sessionStart;
   const sessionHeader = identity?.sessionHeader;
   const terminal = identity?.terminal;
+  const runtimeSignals = identity?.runtimeSignals;
 
   const joinedRecord: JoinedSessionRecord = {
     runtimeId: presence.runtimeId,
@@ -238,6 +240,7 @@ function joinRecord(
     ...(sessionStart === undefined ? {} : { sessionStart }),
     ...(sessionHeader === undefined ? {} : { sessionHeader }),
     ...(terminal === undefined ? {} : { terminal }),
+    ...(runtimeSignals === undefined ? {} : { runtimeSignals }),
 
     diagnostics: recordDiagnostics,
   };
@@ -439,6 +442,7 @@ function normalizeIdentityRecord(candidate: unknown): SessionIdentityRecord | nu
   const sessionStart = normalizeSessionStartMetadata(candidate['sessionStart']);
   const sessionHeader = normalizeSessionHeaderMetadata(candidate['sessionHeader']);
   const terminal = normalizeSessionTerminalMetadata(candidate['terminal']);
+  const runtimeSignals = normalizeSessionRuntimeSignalsMetadata(candidate['runtimeSignals']);
 
   return {
     runtimeId,
@@ -461,6 +465,7 @@ function normalizeIdentityRecord(candidate: unknown): SessionIdentityRecord | nu
     ...(sessionStart === undefined ? {} : { sessionStart }),
     ...(sessionHeader === undefined ? {} : { sessionHeader }),
     ...(terminal === undefined ? {} : { terminal }),
+    ...(runtimeSignals === undefined ? {} : { runtimeSignals }),
     ...(diagnostics === undefined ? {} : { diagnostics }),
   };
 }

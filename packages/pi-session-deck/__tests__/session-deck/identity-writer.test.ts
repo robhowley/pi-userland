@@ -41,6 +41,31 @@ describe('identity writer', () => {
         sessionId: 'w0t0p0:abc',
         revealUrl: 'iterm2:///reveal?sessionid=w0t0p0%3Aabc',
       },
+      runtimeSignals: {
+        process: {
+          pid: 321,
+          ppid: 123,
+          ancestors: [{ pid: 123 }],
+        },
+        launch: {
+          noSession: true,
+          print: false,
+          mode: 'rpc',
+          sessionArgPresent: false,
+          forkArgPresent: true,
+        },
+        stdio: {
+          stdinTTY: false,
+          stdoutTTY: true,
+          stderrTTY: false,
+        },
+        inheritedDeckRuntime: {
+          runtimeId: 'parent-runtime',
+          sessionId: 'parent-session',
+          sessionFile: '/tmp/parent.md',
+          startedAt: '2026-07-16T11:58:00.000Z',
+        },
+      },
     };
 
     const json = serializeIdentityRecord(record);
@@ -68,6 +93,31 @@ describe('identity writer', () => {
       kind: 'iterm2',
       sessionId: 'w0t0p0:abc',
       revealUrl: 'iterm2:///reveal?sessionid=w0t0p0%3Aabc',
+    });
+    expect(parsed.runtimeSignals).toEqual({
+      process: {
+        pid: 321,
+        ppid: 123,
+        ancestors: [{ pid: 123 }],
+      },
+      launch: {
+        noSession: true,
+        print: false,
+        mode: 'rpc',
+        sessionArgPresent: false,
+        forkArgPresent: true,
+      },
+      stdio: {
+        stdinTTY: false,
+        stdoutTTY: true,
+        stderrTTY: false,
+      },
+      inheritedDeckRuntime: {
+        runtimeId: 'parent-runtime',
+        sessionId: 'parent-session',
+        sessionFile: '/tmp/parent.md',
+        startedAt: '2026-07-16T11:58:00.000Z',
+      },
     });
   });
 

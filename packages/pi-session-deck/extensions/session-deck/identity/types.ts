@@ -47,6 +47,49 @@ export interface SessionTmuxTerminalMetadata {
 
 export type SessionTerminalMetadata = SessionIterm2TerminalMetadata | SessionTmuxTerminalMetadata;
 
+export type SessionRuntimeLaunchMode = 'tui' | 'rpc' | 'json' | 'print';
+
+export interface SessionRuntimeProcessAncestorMetadata {
+  pid: number;
+  ppid?: number;
+  processStartedAt?: string;
+}
+
+export interface SessionRuntimeProcessMetadata {
+  pid: number;
+  ppid?: number;
+  processStartedAt?: string;
+  ancestors: SessionRuntimeProcessAncestorMetadata[];
+}
+
+export interface SessionRuntimeLaunchMetadata {
+  noSession: boolean;
+  print: boolean;
+  mode?: SessionRuntimeLaunchMode;
+  sessionArgPresent: boolean;
+  forkArgPresent: boolean;
+}
+
+export interface SessionRuntimeStdioMetadata {
+  stdinTTY: boolean;
+  stdoutTTY: boolean;
+  stderrTTY: boolean;
+}
+
+export interface SessionRuntimeInheritedDeckRuntimeMetadata {
+  runtimeId?: string;
+  sessionId?: string;
+  sessionFile?: string;
+  startedAt?: string;
+}
+
+export interface SessionRuntimeSignalsMetadata {
+  process?: SessionRuntimeProcessMetadata;
+  launch?: SessionRuntimeLaunchMetadata;
+  stdio?: SessionRuntimeStdioMetadata;
+  inheritedDeckRuntime?: SessionRuntimeInheritedDeckRuntimeMetadata;
+}
+
 export interface SessionManagerLike {
   getSessionId: () => string | null;
   getSessionFile: () => string | null;
@@ -55,6 +98,7 @@ export interface SessionManagerLike {
   getSessionStart?: () => SessionStartMetadata | undefined;
   getHeader?: () => SessionHeaderMetadata | null | undefined;
   getTerminal?: () => SessionTerminalMetadata | undefined;
+  getRuntimeSignals?: () => SessionRuntimeSignalsMetadata | undefined;
 }
 
 // ─── Identity runtime controller ─────────────────────────────────────
@@ -88,6 +132,7 @@ export interface SessionIdentityRecord {
   sessionStart?: SessionStartMetadata;
   sessionHeader?: SessionHeaderMetadata;
   terminal?: SessionTerminalMetadata;
+  runtimeSignals?: SessionRuntimeSignalsMetadata;
   diagnostics?: IdentityDiagnostic[];
 }
 
@@ -196,6 +241,7 @@ export interface JoinedSessionRecord {
   sessionStart?: SessionStartMetadata;
   sessionHeader?: SessionHeaderMetadata;
   terminal?: SessionTerminalMetadata;
+  runtimeSignals?: SessionRuntimeSignalsMetadata;
 
   // Combined diagnostics
   diagnostics: JoinedDiagnostic[];

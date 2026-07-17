@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 afterEach(() => {
+  vi.doUnmock('../../extensions/session-deck/identity/runtime-signals.js');
   vi.doUnmock('../../extensions/session-deck/identity/terminal-collect.js');
   vi.restoreAllMocks();
   vi.resetModules();
@@ -23,6 +24,12 @@ type TerminalEnvKey =
   | 'TMUX'
   | 'TMUX_PANE';
 
+type DeckEnvKey =
+  | 'PI_SESSION_DECK_RUNTIME_ID'
+  | 'PI_SESSION_DECK_SESSION_ID'
+  | 'PI_SESSION_DECK_SESSION_FILE'
+  | 'PI_SESSION_DECK_RUNTIME_STARTED_AT';
+
 const TERMINAL_ENV_KEYS: TerminalEnvKey[] = [
   'ITERM_SESSION_ID',
   'TERM_SESSION_ID',
@@ -33,21 +40,27 @@ const TERMINAL_ENV_KEYS: TerminalEnvKey[] = [
   'TMUX_PANE',
 ];
 
-async function withTerminalEnv(
-  overrides: Partial<Record<TerminalEnvKey, string | undefined>>,
+const DECK_ENV_KEYS: DeckEnvKey[] = [
+  'PI_SESSION_DECK_RUNTIME_ID',
+  'PI_SESSION_DECK_SESSION_ID',
+  'PI_SESSION_DECK_SESSION_FILE',
+  'PI_SESSION_DECK_RUNTIME_STARTED_AT',
+];
+
+async function withManagedEnv(
+  keys: readonly string[],
+  overrides: Partial<Record<string, string | undefined>>,
   run: () => Promise<void>,
 ): Promise<void> {
-  const previous = Object.fromEntries(
-    TERMINAL_ENV_KEYS.map((key) => [key, process.env[key]]),
-  ) as Partial<Record<TerminalEnvKey, string>>;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]])) as Partial<
+    Record<string, string>
+  >;
 
-  for (const key of TERMINAL_ENV_KEYS) {
+  for (const key of keys) {
     delete process.env[key];
   }
 
-  for (const [key, value] of Object.entries(overrides) as Array<
-    [TerminalEnvKey, string | undefined]
-  >) {
+  for (const [key, value] of Object.entries(overrides)) {
     if (value === undefined) {
       delete process.env[key];
     } else {
@@ -58,7 +71,7 @@ async function withTerminalEnv(
   try {
     await run();
   } finally {
-    for (const key of TERMINAL_ENV_KEYS) {
+    for (const key of keys) {
       const value = previous[key];
       if (value === undefined) {
         delete process.env[key];
@@ -69,7 +82,26 @@ async function withTerminalEnv(
   }
 }
 
-function setupMocks(presenceMock?: unknown, identityMock?: unknown, activityMock?: unknown) {
+async function withTerminalEnv(
+  overrides: Partial<Record<TerminalEnvKey, string | undefined>>,
+  run: () => Promise<void>,
+): Promise<void> {
+  await withManagedEnv(TERMINAL_ENV_KEYS, overrides, run);
+}
+
+async function withDeckEnv(
+  overrides: Partial<Record<DeckEnvKey, string | undefined>>,
+  run: () => Promise<void>,
+): Promise<void> {
+  await withManagedEnv(DECK_ENV_KEYS, overrides, run);
+}
+
+function setupMocks(
+  presenceMock?: unknown,
+  identityMock?: unknown,
+  activityMock?: unknown,
+  runtimeSignalsMock?: unknown,
+) {
   const ensurePresenceRuntimeStarted =
     presenceMock ??
     vi.fn().mockResolvedValue({
@@ -107,6 +139,24 @@ function setupMocks(presenceMock?: unknown, identityMock?: unknown, activityMock
       isRunning: vi.fn(() => true),
     });
 
+  const collectRuntimeSignalsMetadata =
+    runtimeSignalsMock ??
+    vi.fn().mockResolvedValue({
+      process: { pid: 1234, ppid: 4321, ancestors: [] },
+      launch: {
+        noSession: false,
+        print: false,
+        mode: 'tui',
+        sessionArgPresent: false,
+        forkArgPresent: false,
+      },
+      stdio: {
+        stdinTTY: false,
+        stdoutTTY: false,
+        stderrTTY: false,
+      },
+    });
+
   const stopIdentityRuntime = vi.fn().mockResolvedValue(undefined);
 
   vi.doMock('../../extensions/session-deck/presence/runtime.js', () => ({
@@ -119,6 +169,15 @@ function setupMocks(presenceMock?: unknown, identityMock?: unknown, activityMock
   vi.doMock('../../extensions/session-deck/activity/runtime.js', () => ({
     ensureActivityRuntimeStarted: activityRuntime,
   }));
+  vi.doMock('../../extensions/session-deck/identity/runtime-signals.js', async () => {
+    const actual = await vi.importActual<
+      typeof import('../../extensions/session-deck/identity/runtime-signals.js')
+    >('../../extensions/session-deck/identity/runtime-signals.js');
+    return {
+      ...actual,
+      collectRuntimeSignalsMetadata,
+    };
+  });
   vi.doMock('../../extensions/session-deck/identity/command.js', () => ({
     registerSessionDeckCommand: vi.fn(),
   }));
@@ -126,7 +185,13 @@ function setupMocks(presenceMock?: unknown, identityMock?: unknown, activityMock
     createSetStatusMirror: vi.fn(() => MOCK_STATUS_MIRROR),
   }));
 
-  return { ensurePresenceRuntimeStarted, refreshIdentity, refreshActivity, stopIdentityRuntime };
+  return {
+    ensurePresenceRuntimeStarted,
+    refreshIdentity,
+    refreshActivity,
+    collectRuntimeSignalsMetadata,
+    stopIdentityRuntime,
+  };
 }
 
 async function installExtension() {
@@ -263,6 +328,110 @@ describe('pi-session-deck extension', () => {
       cwd: '/repo',
       parentSession: '/tmp/session-parent.md',
     });
+  });
+
+  it('wires runtime signals into identity refresh and publishes current deck env after capturing inherited values', async () => {
+    await withDeckEnv(
+      {
+        PI_SESSION_DECK_RUNTIME_ID: 'parent-runtime',
+        PI_SESSION_DECK_SESSION_ID: 'parent-session',
+        PI_SESSION_DECK_SESSION_FILE: '/tmp/parent-session.md',
+        PI_SESSION_DECK_RUNTIME_STARTED_AT: '2026-06-17T11:55:00.000Z',
+      },
+      async () => {
+        const collectRuntimeSignalsMetadata = vi.fn().mockImplementation(async () => ({
+          process: { pid: 1234, ppid: 4321, ancestors: [] },
+          launch: {
+            noSession: false,
+            print: false,
+            mode: 'tui',
+            sessionArgPresent: false,
+            forkArgPresent: false,
+          },
+          stdio: {
+            stdinTTY: false,
+            stdoutTTY: false,
+            stderrTTY: false,
+          },
+          inheritedDeckRuntime: {
+            runtimeId: process.env['PI_SESSION_DECK_RUNTIME_ID'],
+            sessionId: process.env['PI_SESSION_DECK_SESSION_ID'],
+            sessionFile: process.env['PI_SESSION_DECK_SESSION_FILE'],
+            startedAt: process.env['PI_SESSION_DECK_RUNTIME_STARTED_AT'],
+          },
+        }));
+        const { refreshIdentity } = setupMocks(
+          undefined,
+          undefined,
+          undefined,
+          collectRuntimeSignalsMetadata,
+        );
+        const { handlers } = await installExtension();
+
+        await handlers.get('session_start')?.({ reason: 'startup' }, makeCtx());
+
+        const sessionManager = refreshIdentity.mock.calls[0]?.[1];
+        expect(sessionManager.getRuntimeSignals?.()).toEqual({
+          process: { pid: 1234, ppid: 4321, ancestors: [] },
+          launch: {
+            noSession: false,
+            print: false,
+            mode: 'tui',
+            sessionArgPresent: false,
+            forkArgPresent: false,
+          },
+          stdio: {
+            stdinTTY: false,
+            stdoutTTY: false,
+            stderrTTY: false,
+          },
+          inheritedDeckRuntime: {
+            runtimeId: 'parent-runtime',
+            sessionId: 'parent-session',
+            sessionFile: '/tmp/parent-session.md',
+            startedAt: '2026-06-17T11:55:00.000Z',
+          },
+        });
+        expect(process.env['PI_SESSION_DECK_RUNTIME_ID']).toBe('runtime-1');
+        expect(process.env['PI_SESSION_DECK_SESSION_ID']).toBe('session-1');
+        expect(process.env['PI_SESSION_DECK_SESSION_FILE']).toBe('/tmp/session-1.md');
+        expect(process.env['PI_SESSION_DECK_RUNTIME_STARTED_AT']).toBe(
+          '2026-06-12T12:00:00.000Z',
+        );
+      },
+    );
+  });
+
+  it('unsets the deck session file env when the current runtime has no session file', async () => {
+    await withDeckEnv(
+      {
+        PI_SESSION_DECK_SESSION_FILE: '/tmp/parent-session.md',
+      },
+      async () => {
+        setupMocks();
+        const { handlers } = await installExtension();
+
+        await handlers.get('session_start')?.(
+          { reason: 'startup' },
+          makeCtx({
+            sessionManager: {
+              getSessionId: () => 'session-1',
+              getSessionFile: () => null,
+              getEntries: () => [],
+              getSessionName: () => 'Focused session',
+              getCwd: () => '/repo',
+              getHeader: () => ({
+                id: 'session-1',
+                timestamp: '2026-06-17T12:00:00.000Z',
+                cwd: '/repo',
+              }),
+            },
+          }),
+        );
+
+        expect(process.env).not.toHaveProperty('PI_SESSION_DECK_SESSION_FILE');
+      },
+    );
   });
 
   it('uses collected tmux terminal metadata for identity refresh when available', async () => {

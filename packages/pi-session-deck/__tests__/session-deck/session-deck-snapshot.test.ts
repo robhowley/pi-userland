@@ -132,6 +132,32 @@ describe('readSessionDeckSnapshot', () => {
           windowName: 'editor',
           paneId: '%12',
         },
+        runtimeSignals: {
+          process: {
+            pid: 101,
+            ppid: 99,
+            processStartedAt: '2026-06-23T11:59:30.000Z',
+            ancestors: [{ pid: 99, ppid: 1, processStartedAt: '2026-06-23T11:59:00.000Z' }],
+          },
+          launch: {
+            noSession: true,
+            print: false,
+            mode: 'rpc',
+            sessionArgPresent: false,
+            forkArgPresent: false,
+          },
+          stdio: {
+            stdinTTY: false,
+            stdoutTTY: true,
+            stderrTTY: true,
+          },
+          inheritedDeckRuntime: {
+            runtimeId: 'parent-runtime',
+            sessionId: 'parent-session',
+            sessionFile: '/tmp/parent-session.json',
+            startedAt: '2026-06-23T11:58:00.000Z',
+          },
+        },
       }),
       { directory: directories.identityDirectory },
     );
@@ -202,6 +228,7 @@ describe('readSessionDeckSnapshot', () => {
       'sessionHeader',
       'terminal',
       'terminalDisplay',
+      'runtimeSignals',
       'socketPath',
       'paneId',
       'attachCommand',

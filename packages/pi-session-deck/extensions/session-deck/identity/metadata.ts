@@ -1,5 +1,12 @@
 import type {
   SessionHeaderMetadata,
+  SessionRuntimeInheritedDeckRuntimeMetadata,
+  SessionRuntimeLaunchMetadata,
+  SessionRuntimeLaunchMode,
+  SessionRuntimeProcessAncestorMetadata,
+  SessionRuntimeProcessMetadata,
+  SessionRuntimeSignalsMetadata,
+  SessionRuntimeStdioMetadata,
   SessionStartMetadata,
   SessionTerminalMetadata,
 } from './types.js';
@@ -68,6 +75,33 @@ export function normalizeSessionTerminalMetadata(
   }
 }
 
+export function normalizeSessionRuntimeSignalsMetadata(
+  candidate: unknown,
+): SessionRuntimeSignalsMetadata | undefined {
+  if (!isObject(candidate)) {
+    return undefined;
+  }
+
+  const process = normalizeSessionRuntimeProcessMetadata(candidate['process']);
+  const launch = normalizeSessionRuntimeLaunchMetadata(candidate['launch']);
+  const stdio = normalizeSessionRuntimeStdioMetadata(candidate['stdio']);
+  const inheritedDeckRuntime = normalizeSessionRuntimeInheritedDeckRuntimeMetadata(
+    candidate['inheritedDeckRuntime'],
+  );
+
+  return process === undefined &&
+    launch === undefined &&
+    stdio === undefined &&
+    inheritedDeckRuntime === undefined
+    ? undefined
+    : {
+        ...(process === undefined ? {} : { process }),
+        ...(launch === undefined ? {} : { launch }),
+        ...(stdio === undefined ? {} : { stdio }),
+        ...(inheritedDeckRuntime === undefined ? {} : { inheritedDeckRuntime }),
+      };
+}
+
 function normalizeIterm2TerminalMetadata(
   candidate: Record<string, unknown>,
 ): SessionTerminalMetadata | undefined {
@@ -127,6 +161,144 @@ function normalizeTmuxTerminalMetadata(
   };
 }
 
+function normalizeSessionRuntimeProcessMetadata(
+  candidate: unknown,
+): SessionRuntimeProcessMetadata | undefined {
+  if (!isObject(candidate)) {
+    return undefined;
+  }
+
+  const pid = normalizePositiveIntegerField(candidate['pid']);
+  if (pid === undefined) {
+    return undefined;
+  }
+
+  const ppid = normalizePositiveIntegerField(candidate['ppid']);
+  const processStartedAt = normalizeTrimmedStringField(candidate['processStartedAt']);
+  const ancestors = Array.isArray(candidate['ancestors'])
+    ? candidate['ancestors']
+        .map((entry) => normalizeSessionRuntimeProcessAncestorMetadata(entry))
+        .filter((entry): entry is SessionRuntimeProcessAncestorMetadata => entry !== undefined)
+        .slice(0, 8)
+    : [];
+
+  return {
+    pid,
+    ...(ppid === undefined ? {} : { ppid }),
+    ...(processStartedAt === undefined ? {} : { processStartedAt }),
+    ancestors,
+  };
+}
+
+function normalizeSessionRuntimeProcessAncestorMetadata(
+  candidate: unknown,
+): SessionRuntimeProcessAncestorMetadata | undefined {
+  if (!isObject(candidate)) {
+    return undefined;
+  }
+
+  const pid = normalizePositiveIntegerField(candidate['pid']);
+  if (pid === undefined) {
+    return undefined;
+  }
+
+  const ppid = normalizePositiveIntegerField(candidate['ppid']);
+  const processStartedAt = normalizeTrimmedStringField(candidate['processStartedAt']);
+
+  return {
+    pid,
+    ...(ppid === undefined ? {} : { ppid }),
+    ...(processStartedAt === undefined ? {} : { processStartedAt }),
+  };
+}
+
+function normalizeSessionRuntimeLaunchMetadata(
+  candidate: unknown,
+): SessionRuntimeLaunchMetadata | undefined {
+  if (!isObject(candidate)) {
+    return undefined;
+  }
+
+  const noSession = normalizeBooleanField(candidate['noSession']);
+  const print = normalizeBooleanField(candidate['print']);
+  const sessionArgPresent = normalizeBooleanField(candidate['sessionArgPresent']);
+  const forkArgPresent = normalizeBooleanField(candidate['forkArgPresent']);
+  if (
+    noSession === undefined ||
+    print === undefined ||
+    sessionArgPresent === undefined ||
+    forkArgPresent === undefined
+  ) {
+    return undefined;
+  }
+
+  const mode = normalizeSessionRuntimeLaunchMode(candidate['mode']);
+
+  return {
+    noSession,
+    print,
+    ...(mode === undefined ? {} : { mode }),
+    sessionArgPresent,
+    forkArgPresent,
+  };
+}
+
+function normalizeSessionRuntimeLaunchMode(
+  value: unknown,
+): SessionRuntimeLaunchMode | undefined {
+  switch (value) {
+    case 'tui':
+    case 'rpc':
+    case 'json':
+    case 'print':
+      return value;
+    default:
+      return undefined;
+  }
+}
+
+function normalizeSessionRuntimeStdioMetadata(
+  candidate: unknown,
+): SessionRuntimeStdioMetadata | undefined {
+  if (!isObject(candidate)) {
+    return undefined;
+  }
+
+  const stdinTTY = normalizeBooleanField(candidate['stdinTTY']);
+  const stdoutTTY = normalizeBooleanField(candidate['stdoutTTY']);
+  const stderrTTY = normalizeBooleanField(candidate['stderrTTY']);
+  if (stdinTTY === undefined || stdoutTTY === undefined || stderrTTY === undefined) {
+    return undefined;
+  }
+
+  return { stdinTTY, stdoutTTY, stderrTTY };
+}
+
+function normalizeSessionRuntimeInheritedDeckRuntimeMetadata(
+  candidate: unknown,
+): SessionRuntimeInheritedDeckRuntimeMetadata | undefined {
+  if (!isObject(candidate)) {
+    return undefined;
+  }
+
+  const runtimeId = normalizeTrimmedStringField(candidate['runtimeId']);
+  const sessionId = normalizeTrimmedStringField(candidate['sessionId']);
+  const sessionFile = normalizeTrimmedStringField(candidate['sessionFile']);
+  const startedAt = normalizeTrimmedStringField(candidate['startedAt']);
+
+  return runtimeId === undefined &&
+    sessionId === undefined &&
+    sessionFile === undefined &&
+    startedAt === undefined
+    ? undefined
+    : {
+        ...(runtimeId === undefined ? {} : { runtimeId }),
+        ...(sessionId === undefined ? {} : { sessionId }),
+        ...(sessionFile === undefined ? {} : { sessionFile }),
+        ...(startedAt === undefined ? {} : { startedAt }),
+      };
+}
+
 function normalizeOptionalStringField(value: unknown): string | undefined {
   if (typeof value === 'string' && value.length > 0) {
     return value;
@@ -167,6 +339,24 @@ function normalizeNonNegativeIntegerField(value: unknown): number | undefined {
 
   const trimmed = value.trim();
   if (!/^\d+$/.test(trimmed)) {
+    return undefined;
+  }
+
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
+function normalizePositiveIntegerField(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isInteger(value) && value > 0) {
+    return value;
+  }
+
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  if (!/^[1-9]\d*$/.test(trimmed)) {
     return undefined;
   }
 
