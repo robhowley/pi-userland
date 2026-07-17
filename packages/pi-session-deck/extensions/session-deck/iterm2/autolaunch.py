@@ -79,17 +79,17 @@ OPEN_TERMINAL_HELPER_FAILED_MESSAGE = (
     "Open-terminal action failed. Run /session-deck iterm2 doctor if this keeps happening."
 )
 KILL_SESSION_HELPER_UNAVAILABLE_MESSAGE = (
-    "Stop action is unavailable. Run /session-deck iterm2 doctor."
+    "End session action is unavailable. Run /session-deck iterm2 doctor."
 )
 KILL_SESSION_HELPER_INVALID_RESPONSE_MESSAGE = (
-    "Stop action failed because the helper returned an invalid response. "
+    "End session action failed because the helper returned an invalid response. "
     "Refresh Session Deck, run /session-deck iterm2 doctor, and check the session before retrying."
 )
 KILL_SESSION_HELPER_TIMEOUT_MESSAGE = (
-    "Stop action timed out. The request may have reached the runtime; refresh Session Deck and check the session before retrying."
+    "End session action timed out. The request may have reached the runtime; refresh Session Deck and check the session before retrying."
 )
 KILL_SESSION_HELPER_FAILED_MESSAGE = (
-    "Stop action failed. Run /session-deck iterm2 doctor if this keeps happening."
+    "End session action failed. Run /session-deck iterm2 doctor if this keeps happening."
 )
 BROWSER_FORBIDDEN_FIELDS = {
     "label",
@@ -750,7 +750,7 @@ def is_valid_open_terminal_helper_response(payload: dict[str, Any]) -> bool:
 
 
 KILL_SESSION_SAFE_SUCCESS_MESSAGES = {
-    "requested": "Stop requested for this Pi session.",
+    "requested": "End requested for this session.",
     "already-exited": "This Pi session is no longer running.",
 }
 KILL_SESSION_SAFE_FAILURE_MESSAGES = {
@@ -762,7 +762,7 @@ KILL_SESSION_SAFE_FAILURE_MESSAGES = {
     "pid-unverified": "Could not safely verify the selected process.",
     "self-signal-denied": "Session Deck cannot signal its own helper process.",
     "permission-denied": "Termination is not permitted for this process.",
-    "signal-failed": "Could not request session stop.",
+    "signal-failed": "Could not request session end.",
 }
 
 

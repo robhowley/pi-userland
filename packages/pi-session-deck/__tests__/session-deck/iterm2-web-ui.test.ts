@@ -2594,7 +2594,7 @@ describe('Session Deck iTerm2 web UI', () => {
           buildJsonResponse({
             ok: true,
             status: 'requested',
-            message: 'Stop requested for this Pi session.',
+            message: 'Helper success copy should not render.',
           }),
         );
       }
@@ -2648,7 +2648,41 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(JSON.parse(requestInit.body ?? '{}')).toEqual({ runtimeId: 'rt-1' });
     expect(Object.keys(JSON.parse(requestInit.body ?? '{}'))).toEqual(['runtimeId']);
     expect(harness.elements.list.textContent).toContain('End requested for this session.');
+    expect(harness.elements.list.textContent).not.toContain(
+      'Helper success copy should not render.',
+    );
     expect(harness.elements.list.textContent).not.toContain('killed');
+  });
+
+  it('renders End session failure copy from reason instead of helper text', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/snapshot.json') {
+        return Promise.resolve(buildJsonResponse(buildSnapshot()));
+      }
+      if (url === '/actions/kill-session') {
+        return Promise.resolve(
+          buildJsonResponse({
+            ok: false,
+            status: 'failed',
+            reason: 'signal-failed',
+            message: 'Helper failure copy should not render.',
+          }),
+        );
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    const harness = await setupAppWithFetch(fetchMock);
+    expandAllRepoGroups(harness.elements.list);
+
+    getCardToggle(getCards(harness.elements.list)[0]!).click();
+    (findAllByClass(harness.elements.list, 'stop-action-button')[0] as FakeButtonElement).click();
+    (findAllByClass(harness.elements.list, 'stop-confirm-primary')[0] as FakeButtonElement).click();
+    await flushMicrotasks();
+
+    expect(harness.elements.list.textContent).toContain('Could not request session end.');
+    expect(harness.elements.list.textContent).not.toContain(
+      'Helper failure copy should not render.',
+    );
   });
 
   it('cancels End session confirmation without posting on cancel, detail collapse, or show-all hiding', async () => {
@@ -2667,7 +2701,7 @@ describe('Session Deck iTerm2 web UI', () => {
           buildJsonResponse({
             ok: true,
             status: 'requested',
-            message: 'Stop requested for this Pi session.',
+            message: 'End requested for this session.',
           }),
         );
       }

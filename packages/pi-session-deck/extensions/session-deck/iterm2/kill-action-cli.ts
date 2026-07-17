@@ -8,10 +8,10 @@ import {
 } from '../presence/terminate.js';
 import { isSafePresenceRuntimeIdSegment } from '../presence/store.js';
 
-const REQUEST_VALIDATION_MESSAGE = 'Kill-session request must contain only runtimeId.';
-const INVALID_JSON_MESSAGE = 'Kill-session request body must be valid JSON.';
+const REQUEST_VALIDATION_MESSAGE = 'End session request must contain only runtimeId.';
+const INVALID_JSON_MESSAGE = 'End session request body must be valid JSON.';
 const HELPER_FAILED_MESSAGE =
-  'Kill-session helper action failed. Run /session-deck iterm2 doctor for details.';
+  'End session helper action failed. Run /session-deck iterm2 doctor for details.';
 
 const FORBIDDEN_KILL_ACTION_FIELDS = new Set([
   'pid',
@@ -86,7 +86,7 @@ export function normalizeKillSessionActionRequest(
   parsed: unknown,
 ): { ok: true; request: KillSessionActionRequest } | { ok: false; message: string } {
   if (!isRecord(parsed)) {
-    return { ok: false, message: 'Kill-session request body must be a JSON object.' };
+    return { ok: false, message: 'End session request body must be a JSON object.' };
   }
 
   if (findForbiddenKillActionField(parsed) !== null) {
@@ -147,7 +147,7 @@ export function toBrowserSafeKillSessionActionResult(
     return {
       ok: true,
       status: 'requested',
-      message: 'Stop requested for this Pi session.',
+      message: 'End requested for this session.',
     };
   }
 
@@ -214,7 +214,7 @@ function getBrowserSafeFailureMessage(reason: KillSessionFailureReason): string 
     case 'permission-denied':
       return 'Termination is not permitted for this process.';
     case 'signal-failed':
-      return 'Could not request session stop.';
+      return 'Could not request session end.';
   }
 }
 

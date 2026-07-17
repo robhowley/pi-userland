@@ -956,7 +956,7 @@ class ImportAndConfigTests(unittest.TestCase):
             "if payload != {'runtimeId': 'rt-1'}:\n"
             "    print(json.dumps({'ok': False, 'status': 'failed', 'message': 'bad request'}))\n"
             "    raise SystemExit(1)\n"
-            "print(json.dumps({'ok': True, 'status': 'requested', 'message': 'Stop requested for this Pi session.'}))\n"
+            "print(json.dumps({'ok': True, 'status': 'requested', 'message': 'End requested for this session.'}))\n"
         )
         fixture.payload["runtime"]["nodeExecutablePath"] = sys.executable
         fixture.write_state()
@@ -981,7 +981,7 @@ class ImportAndConfigTests(unittest.TestCase):
             action_result = json.loads(response.read().decode("utf-8"))
         self.assertEqual(
             action_result,
-            {"ok": True, "status": "requested", "message": "Stop requested for this Pi session."},
+            {"ok": True, "status": "requested", "message": "End requested for this session."},
         )
 
         missing_token = Request(
@@ -1008,7 +1008,7 @@ class ImportAndConfigTests(unittest.TestCase):
                 args,
                 0,
                 stdout=json.dumps(
-                    {"ok": True, "status": "requested", "message": "Stop requested for this Pi session."}
+                    {"ok": True, "status": "requested", "message": "End requested for this session."}
                 ),
                 stderr="",
             )
@@ -1091,14 +1091,15 @@ class ImportAndConfigTests(unittest.TestCase):
 
         fixture.write_kill_helper(
             "import json\n"
-            "print(json.dumps({'ok': False, 'status': 'failed', 'reason': 'pid-reused', 'message': 'The recorded process no longer matches this session.'}))\n"
+            "print(json.dumps({'ok': False, 'status': 'failed', 'reason': 'signal-failed', 'message': 'Could not request session end.'}))\n"
         )
         semantic_status, semantic_payload = AUTO.run_kill_session_action(
             fixture.config(), "{}", make_effective_command_path()
         )
         self.assertEqual(semantic_status, 200)
         self.assertEqual(semantic_payload["ok"], False)
-        self.assertEqual(semantic_payload["reason"], "pid-reused")
+        self.assertEqual(semantic_payload["reason"], "signal-failed")
+        self.assertEqual(semantic_payload["message"], "Could not request session end.")
 
     def test_run_create_worktree_action_returns_browser_safe_helper_missing_failure(self):
         fixture = TempRuntime(self)

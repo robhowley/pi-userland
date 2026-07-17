@@ -65,7 +65,7 @@ describe('kill-session action helper request boundary', () => {
     expect(result).toEqual({
       ok: true,
       status: 'requested',
-      message: 'Stop requested for this Pi session.',
+      message: 'End requested for this session.',
     });
   });
 
@@ -107,7 +107,7 @@ describe('kill-session action helper request boundary', () => {
       ok: false,
       status: 'failed',
       reason: 'signal-failed',
-      message: 'Could not request session stop.',
+      message: 'Could not request session end.',
     });
     for (const secret of SENSITIVE_STRINGS) {
       expect(JSON.stringify(result)).not.toContain(secret);

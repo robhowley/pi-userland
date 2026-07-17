@@ -10,7 +10,18 @@ const SUCCESS_PENDING_WORKTREE_TTL_MS = 12_000;
 const OPEN_TERMINAL_SUCCESS_TTL_MS = 4_000;
 const KILL_SESSION_SUCCESS_TTL_MS = 6_000;
 const DEFAULT_OPEN_TERMINAL_FAILURE_MESSAGE = 'Could not request terminal open.';
-const DEFAULT_KILL_SESSION_FAILURE_MESSAGE = 'Could not request session stop.';
+const DEFAULT_KILL_SESSION_FAILURE_MESSAGE = 'Could not request session end.';
+const KILL_SESSION_FAILURE_MESSAGES = {
+  'invalid-runtime-id': 'Session runtime metadata is invalid.',
+  'presence-missing': 'Session runtime metadata is no longer available.',
+  'presence-malformed': 'Session runtime metadata is invalid.',
+  'runtime-mismatch': 'Session runtime metadata is invalid.',
+  'pid-reused': 'The recorded process no longer matches this session.',
+  'pid-unverified': 'Could not safely verify the selected process.',
+  'self-signal-denied': 'Session Deck cannot signal its own helper process.',
+  'permission-denied': 'Termination is not permitted for this process.',
+  'signal-failed': DEFAULT_KILL_SESSION_FAILURE_MESSAGE,
+};
 const DOCTOR_COMMAND = '/session-deck iterm2 doctor';
 const AGENT_DIR_MODES = ['ambient', 'default', 'custom'];
 const INLINE_WORKTREE_FAILURE_REASONS = new Set([
@@ -1674,11 +1685,7 @@ function confirmKillSession(record) {
         setKillSessionAction({
           kind: 'success',
           runtimeId: record.runtimeId,
-          message: isNonEmptyString(result.message)
-            ? result.message
-            : result.status === 'already-exited'
-              ? 'This Pi session is no longer running.'
-              : 'Stop requested for this Pi session.',
+          message: getKillSessionActionSuccessMessage(result),
         });
         void refreshSnapshot({ source: 'manual' });
       } else {
@@ -1707,8 +1714,14 @@ function confirmKillSession(record) {
     });
 }
 
+function getKillSessionActionSuccessMessage(result) {
+  return result?.status === 'already-exited'
+    ? 'This Pi session is no longer running.'
+    : 'End requested for this session.';
+}
+
 function getKillSessionActionFailureMessage(result) {
-  return isNonEmptyString(result?.message) ? result.message : DEFAULT_KILL_SESSION_FAILURE_MESSAGE;
+  return KILL_SESSION_FAILURE_MESSAGES[result?.reason] ?? DEFAULT_KILL_SESSION_FAILURE_MESSAGE;
 }
 
 function getActionToken() {
@@ -1955,17 +1968,10 @@ function createKillSessionSection(record) {
   if (action?.kind === 'pending') {
     content.push(createText('p', 'Requesting session end…', 'stop-action-message'));
   } else if (action?.kind === 'success' || action?.kind === 'failure') {
-    const message =
-      action.kind === 'success' &&
-      (action.message === 'Stop requested for this Pi session.' ||
-        action.message === 'Stop requested for the current Pi session.')
-        ? 'End requested for this session.'
-        : action.message;
-
     content.push(
       createText(
         'p',
-        message,
+        action.message,
         action.kind === 'failure'
           ? 'stop-action-message stop-action-failure'
           : 'stop-action-message',
