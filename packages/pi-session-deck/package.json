@@ -2,7 +2,7 @@
   "name": "@robhowley/pi-session-deck",
   "version": "0.9.0",
   "type": "module",
-  "description": "A TUI dashboard for Pi sessions: live windows, worktrees, PRs, activity, and statuses in one place.",
+  "description": "A repo-aware control plane for Pi agents: launch, monitor, reattach, and track live status, PRs, branches, and worktrees.",
   "files": [
     "dist",
     "extensions",
@@ -29,7 +29,7 @@
     "url": "https://github.com/robhowley/pi-userland.git",
     "directory": "packages/pi-session-deck"
   },
-  "homepage": "https://pi-userland.dev",
+  "homepage": "https://github.com/robhowley/pi-userland/tree/main/packages/pi-session-deck",
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "lint": "eslint extensions/ __tests__/",
