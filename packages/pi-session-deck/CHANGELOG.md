@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/robhowley/pi-userland/compare/pi-session-deck-v0.9.0...pi-session-deck-v0.9.1) (2026-07-17)
+
+
+### Bug Fixes
+
+* **pi-session-deck:** update package metadata ([#129](https://github.com/robhowley/pi-userland/issues/129)) ([b7956f4](https://github.com/robhowley/pi-userland/commit/b7956f4b13a6cc599ee674169dd271e5f296f8d1))
+
 ## [0.9.0](https://github.com/robhowley/pi-userland/compare/pi-session-deck-v0.8.0...pi-session-deck-v0.9.0) (2026-07-17)
 
 

@@ -1,6 +1,6 @@
 {
   "name": "@robhowley/pi-session-deck",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "type": "module",
   "description": "A repo-aware control plane for Pi agents: launch, monitor, reattach, and track live status, PRs, branches, and worktrees.",
   "files": [
