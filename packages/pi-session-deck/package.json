@@ -21,7 +21,8 @@
   "pi": {
     "extensions": [
       "./extensions/session-deck"
-    ]
+    ],
+    "image": "https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-session-deck/img/session-deck-toolbelt-overview.png"
   },
   "repository": {
     "type": "git",
