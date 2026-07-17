@@ -712,6 +712,7 @@ describe('session-deck joined command', () => {
 
     await handler?.('', ctx);
 
+    expect(shutdown).toHaveBeenCalledTimes(1);
     expect(killRuntime).not.toHaveBeenCalled();
   });
 
@@ -765,6 +766,7 @@ describe('session-deck joined command', () => {
 
     await handler?.('', ctx);
 
+    expect(killRuntime).toHaveBeenCalledTimes(1);
     expect(killRuntime.mock.calls[0]).toEqual(['rt-other']);
     expect(shutdown).not.toHaveBeenCalled();
   });

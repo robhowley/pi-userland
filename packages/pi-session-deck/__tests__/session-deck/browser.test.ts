@@ -106,6 +106,10 @@ function renderText(browser: SessionDeckBrowser, width = 120): string {
   return renderLines(browser, width).join('\n');
 }
 
+function normalizeWhitespace(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
 function buildRepoRecord(
   runtimeId: string,
   sessionName: string,
@@ -1518,7 +1522,7 @@ describe('SessionDeckBrowser', () => {
     });
 
     browser.handleInput('k');
-    const killConfirmation = renderText(browser).replaceAll('\n', ' ');
+    const killConfirmation = normalizeWhitespace(renderText(browser));
     expect(killConfirmation).toContain('End session for alpha (rt-alpha, pid 111)?');
     expect(killConfirmation).toContain(
       'Ending this session sends SIGTERM to the Pi runtime only. Session history is preserved.',
