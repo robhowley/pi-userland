@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/robhowley/pi-userland/compare/pi-merge-ready-v0.11.0...pi-merge-ready-v0.12.0) (2026-07-17)
+
+
+### Features
+
+* **pi-merge-ready:** add blocker-specific repair guidance ([#114](https://github.com/robhowley/pi-userland/issues/114)) ([7112682](https://github.com/robhowley/pi-userland/commit/71126826cf1af7e1fb7d68a2c63eec478c7a6da6))
+
 ## [0.11.0](https://github.com/robhowley/pi-userland/compare/pi-merge-ready-v0.10.0...pi-merge-ready-v0.11.0) (2026-07-10)
 
 
