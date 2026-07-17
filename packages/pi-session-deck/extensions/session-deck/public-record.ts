@@ -21,6 +21,7 @@ export function toPublicSessionDeckRecord(record: SessionDeckRecord): SessionDec
       : {
           derivedFacets: {
             persistence: record.derivedFacets.persistence,
+            rowKind: record.derivedFacets.rowKind,
             interactivity: record.derivedFacets.interactivity,
             lifecycle: record.derivedFacets.lifecycle,
             lineage: record.derivedFacets.lineage,

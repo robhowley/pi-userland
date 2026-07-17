@@ -198,6 +198,7 @@ describe('readSessionDeckSnapshot', () => {
         worktreeLabel: null,
         derivedFacets: {
           persistence: 'file_backed',
+          rowKind: 'durable_session',
           interactivity: 'headless',
           lifecycle: 'resume',
           lineage: 'previous_and_parent',
@@ -362,6 +363,7 @@ describe('readSessionDeckSnapshot', () => {
     });
 
     const child = snapshot.records.find((record) => record.runtimeId === 'rt-child');
+    expect(child?.derivedFacets?.rowKind).toBe('ephemeral_child_runtime');
     expect(child?.derivedFacets?.childRuntime).toMatchObject({
       candidate: true,
       confidence: 'high',

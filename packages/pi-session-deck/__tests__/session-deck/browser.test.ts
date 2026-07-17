@@ -635,6 +635,7 @@ describe('SessionDeckBrowser', () => {
             chips: [],
             derivedFacets: {
               persistence: 'in_memory',
+              rowKind: 'ephemeral_child_runtime',
               interactivity: 'headless',
               lifecycle: 'startup',
               lineage: 'root',
@@ -665,6 +666,7 @@ describe('SessionDeckBrowser', () => {
             chips: [],
             derivedFacets: {
               persistence: 'in_memory',
+              rowKind: 'ephemeral_runtime',
               interactivity: 'interactive',
               lifecycle: 'startup',
               lineage: 'root',

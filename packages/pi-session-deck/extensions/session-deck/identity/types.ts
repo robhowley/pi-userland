@@ -177,6 +177,12 @@ export interface IdentityFreshnessThresholds {
 
 export type SessionPersistenceFacet = 'in_memory' | 'file_backed' | 'unknown';
 
+export type SessionRowKindFacet =
+  | 'durable_session'
+  | 'ephemeral_runtime'
+  | 'ephemeral_child_runtime'
+  | 'unknown';
+
 export type SessionInteractivityFacet = 'interactive' | 'headless' | 'unknown';
 
 export type SessionLifecycleFacet =
@@ -231,6 +237,7 @@ export interface ChildRuntimeFacet {
 
 export interface SessionDerivedFacets {
   persistence: SessionPersistenceFacet;
+  rowKind: SessionRowKindFacet;
   interactivity: SessionInteractivityFacet;
   lifecycle: SessionLifecycleFacet;
   lineage: SessionLineageFacet;

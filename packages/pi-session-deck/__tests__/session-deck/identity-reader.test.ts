@@ -324,6 +324,7 @@ describe('identity reader — join', () => {
     expect(record.identityFreshness).toBe('fresh');
     expect(record.derivedFacets).toEqual({
       persistence: 'file_backed',
+      rowKind: 'durable_session',
       interactivity: 'interactive',
       lifecycle: 'other',
       lineage: 'previous_and_parent',
@@ -486,6 +487,7 @@ describe('identity reader — join', () => {
     expect(record.identityFreshness).toBe('missing');
     expect(record.derivedFacets).toEqual({
       persistence: 'unknown',
+      rowKind: 'unknown',
       interactivity: 'unknown',
       lifecycle: 'unknown',
       lineage: 'unknown',
@@ -546,6 +548,7 @@ describe('identity reader — join', () => {
     expect(view.records[0]?.worktreeLabel).toBeNull();
     expect(view.records[0]?.derivedFacets).toEqual({
       persistence: 'file_backed',
+      rowKind: 'durable_session',
       interactivity: 'unknown',
       lifecycle: 'unknown',
       lineage: 'root',
@@ -639,6 +642,7 @@ describe('identity reader — join', () => {
     });
     expect(record.derivedFacets).toEqual({
       persistence: 'file_backed',
+      rowKind: 'durable_session',
       interactivity: 'interactive',
       lifecycle: 'resume',
       lineage: 'previous',
@@ -669,6 +673,7 @@ describe('identity reader — join', () => {
     });
     expect(record.derivedFacets).toEqual({
       persistence: 'in_memory',
+      rowKind: 'ephemeral_runtime',
       interactivity: 'unknown',
       lifecycle: 'other',
       lineage: 'root',

@@ -930,6 +930,7 @@ describe('Session Deck iTerm2 web UI', () => {
             sessionName: 'worker',
             derivedFacets: {
               persistence: 'in_memory',
+              rowKind: 'ephemeral_child_runtime',
               interactivity: 'headless',
               lifecycle: 'startup',
               lineage: 'root',
@@ -960,6 +961,7 @@ describe('Session Deck iTerm2 web UI', () => {
             sessionName: 'maybe',
             derivedFacets: {
               persistence: 'in_memory',
+              rowKind: 'ephemeral_runtime',
               interactivity: 'interactive',
               lifecycle: 'startup',
               lineage: 'root',
@@ -2451,6 +2453,7 @@ describe('Session Deck iTerm2 web UI', () => {
           buildRecord({
             derivedFacets: {
               persistence: 'file_backed',
+              rowKind: 'durable_session',
               interactivity: 'interactive',
               lifecycle: 'resume',
               lineage: 'root',

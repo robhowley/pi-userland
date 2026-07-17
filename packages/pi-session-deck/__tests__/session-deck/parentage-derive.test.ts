@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { deriveChildRuntimeFacets } from '../../extensions/session-deck/parentage/derive.js';
+import {
+  attachChildRuntimeFacets,
+  deriveChildRuntimeFacets,
+} from '../../extensions/session-deck/parentage/derive.js';
 import type { SessionDeckRecord } from '../../extensions/session-deck/activity/types.js';
 
 function buildRecord(overrides: Partial<SessionDeckRecord> = {}): SessionDeckRecord {
@@ -26,6 +29,7 @@ function buildRecord(overrides: Partial<SessionDeckRecord> = {}): SessionDeckRec
     identityFreshness: 'fresh',
     derivedFacets: {
       persistence: 'file_backed',
+      rowKind: 'durable_session',
       interactivity: 'interactive',
       lifecycle: 'startup',
       lineage: 'root',
@@ -56,6 +60,7 @@ function buildChild(overrides: Partial<SessionDeckRecord> = {}): SessionDeckReco
     sessionName: 'child',
     derivedFacets: {
       persistence: 'in_memory',
+      rowKind: 'ephemeral_runtime',
       interactivity: 'headless',
       lifecycle: 'startup',
       lineage: 'root',
@@ -82,6 +87,7 @@ describe('deriveChildRuntimeFacets', () => {
       sessionStart: { reason: 'startup', hasUI: true },
       derivedFacets: {
         persistence: 'in_memory',
+        rowKind: 'ephemeral_runtime',
         interactivity: 'interactive',
         lifecycle: 'startup',
         lineage: 'root',
@@ -105,6 +111,7 @@ describe('deriveChildRuntimeFacets', () => {
       },
       derivedFacets: {
         persistence: 'in_memory',
+        rowKind: 'ephemeral_runtime',
         interactivity: 'interactive',
         lifecycle: 'resume',
         lineage: 'previous',
@@ -132,6 +139,7 @@ describe('deriveChildRuntimeFacets', () => {
       },
       derivedFacets: {
         persistence: 'in_memory',
+        rowKind: 'ephemeral_runtime',
         interactivity: 'unknown',
         lifecycle: 'startup',
         lineage: 'root',
@@ -246,6 +254,7 @@ describe('deriveChildRuntimeFacets', () => {
       sessionStart: { reason: 'startup', hasUI: true },
       derivedFacets: {
         persistence: 'in_memory',
+        rowKind: 'ephemeral_runtime',
         interactivity: 'interactive',
         lifecycle: 'startup',
         lineage: 'root',
@@ -292,5 +301,49 @@ describe('deriveChildRuntimeFacets', () => {
 
     expect(facet?.confidence).toBe('medium');
     expect(facet).not.toHaveProperty('parentRuntimeId');
+  });
+});
+
+describe('attachChildRuntimeFacets', () => {
+  it('promotes likely in-memory child runtimes to the ephemeral child row kind', () => {
+    const parent = buildRecord();
+    const child = buildChild({
+      runtimeSignals: {
+        inheritedDeckRuntime: { runtimeId: 'rt-parent', sessionId: 'session-parent' },
+      },
+    });
+
+    const attached = attachChildRuntimeFacets([parent, child]);
+    const updatedChild = attached.find((record) => record.runtimeId === 'rt-child');
+
+    expect(updatedChild?.derivedFacets?.rowKind).toBe('ephemeral_child_runtime');
+  });
+
+  it('keeps low-confidence in-memory candidates as plain ephemeral runtimes', () => {
+    const terminal = {
+      kind: 'tmux' as const,
+      socketPath: '/tmp/tmux/default',
+      sessionName: 'main',
+      paneId: '%1',
+    };
+    const parent = buildRecord({ terminal });
+    const child = buildChild({
+      terminal,
+      sessionStart: { reason: 'startup', hasUI: true },
+      derivedFacets: {
+        persistence: 'in_memory',
+        rowKind: 'ephemeral_runtime',
+        interactivity: 'interactive',
+        lifecycle: 'startup',
+        lineage: 'root',
+        identityStrength: 'weak',
+        headerConsistency: 'consistent',
+      },
+    });
+
+    const attached = attachChildRuntimeFacets([parent, child]);
+    const updatedChild = attached.find((record) => record.runtimeId === 'rt-child');
+
+    expect(updatedChild?.derivedFacets?.rowKind).toBe('ephemeral_runtime');
   });
 });

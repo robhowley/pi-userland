@@ -379,6 +379,7 @@ describe('session-deck joined command', () => {
       sessionName: 'alpha',
       derivedFacets: {
         persistence: 'file_backed',
+        rowKind: 'durable_session',
         interactivity: 'interactive',
         lifecycle: 'resume',
         lineage: 'root',

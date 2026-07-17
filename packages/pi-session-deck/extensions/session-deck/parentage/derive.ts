@@ -8,6 +8,7 @@ import type {
   ChildRuntimeEvidence,
   ChildRuntimeEvidenceCode,
   ChildRuntimeFacet,
+  SessionRowKindFacet,
   SessionRuntimeProcessAncestorMetadata,
   SessionTerminalMetadata,
 } from '../identity/types.js';
@@ -45,8 +46,13 @@ interface ParentResolution {
 export function attachChildRuntimeFacets<T extends SessionDeckRecord>(records: readonly T[]): T[] {
   const facets = deriveChildRuntimeFacets(records);
   return records.map((record) => {
+    if (record.derivedFacets === undefined) {
+      return record;
+    }
+
     const childRuntime = facets.get(record.runtimeId);
-    if (childRuntime === undefined || record.derivedFacets === undefined) {
+    const rowKind = deriveRowKindFacet(record.derivedFacets.rowKind, childRuntime);
+    if (childRuntime === undefined && rowKind === record.derivedFacets.rowKind) {
       return record;
     }
 
@@ -54,7 +60,8 @@ export function attachChildRuntimeFacets<T extends SessionDeckRecord>(records: r
       ...record,
       derivedFacets: {
         ...record.derivedFacets,
-        childRuntime,
+        rowKind,
+        ...(childRuntime === undefined ? {} : { childRuntime }),
       },
     } as T;
   });
@@ -74,6 +81,27 @@ export function deriveChildRuntimeFacets(
   }
 
   return facets;
+}
+
+function deriveRowKindFacet(
+  rowKind: SessionRowKindFacet,
+  childRuntime: ChildRuntimeFacet | undefined,
+): SessionRowKindFacet {
+  if (rowKind !== 'ephemeral_runtime') {
+    return rowKind;
+  }
+
+  return isLikelyEphemeralChildRuntime(childRuntime) ? 'ephemeral_child_runtime' : rowKind;
+}
+
+function isLikelyEphemeralChildRuntime(childRuntime: ChildRuntimeFacet | undefined): boolean {
+  return (
+    childRuntime?.candidate === true && isLikelyChildRuntimeConfidence(childRuntime.confidence)
+  );
+}
+
+function isLikelyChildRuntimeConfidence(confidence: ChildRuntimeConfidence): boolean {
+  return confidence === 'medium' || confidence === 'high' || confidence === 'explicit';
 }
 
 function deriveChildRuntimeFacet(

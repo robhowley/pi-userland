@@ -263,8 +263,10 @@ interface DerivedFacetInput {
 }
 
 function deriveSessionDerivedFacets(input: DerivedFacetInput): SessionDerivedFacets {
+  const persistence = derivePersistenceFacet(input);
   return {
-    persistence: derivePersistenceFacet(input),
+    persistence,
+    rowKind: deriveBaseRowKindFacet(persistence),
     interactivity: deriveInteractivityFacet(input.sessionStart),
     lifecycle: deriveLifecycleFacet(input.sessionStart),
     lineage: deriveLineage({
@@ -283,6 +285,19 @@ function derivePersistenceFacet(input: DerivedFacetInput): SessionDerivedFacets[
   }
 
   return input.hasIdentity ? 'in_memory' : 'unknown';
+}
+
+function deriveBaseRowKindFacet(
+  persistence: SessionDerivedFacets['persistence'],
+): SessionDerivedFacets['rowKind'] {
+  switch (persistence) {
+    case 'file_backed':
+      return 'durable_session';
+    case 'in_memory':
+      return 'ephemeral_runtime';
+    default:
+      return 'unknown';
+  }
 }
 
 function deriveInteractivityFacet(
