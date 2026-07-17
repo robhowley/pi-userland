@@ -4,7 +4,7 @@ A control plane for your Pi agents: live sessions organized by repo, detailed st
 
 <img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-session-deck/img/session-deck-toolbelt.png" alt="Session Deck iTerm2 Toolbelt showing live Pi agent sessions grouped by repo" width="720">
 
-Session Deck gives each Pi agent a live operating surface across the TUI and iTerm2 Toolbelt. Run it as the native Pi TUI with `/session-deck`, or install the iTerm2 Toolbelt UI for an always-on sidebar. Use it to inspect liveness, branch context, PR state, status chips, and attached terminal targets, then jump back into the right agent without hunting through terminal tabs.
+Session Deck gives each Pi agent a live operating surface across the TUI and iTerm2 Toolbelt. Run it as the native Pi TUI with `/session-deck`, or install the iTerm2 Toolbelt UI for an always-on sidebar. Launch new agents headlessly on generated Git worktrees as detached tmux sessions, then reattach to the right terminal when you need it. Use it to inspect liveness, branch context, PR state, status chips, and attached terminal targets without hunting through terminal tabs.
 
 ## Installation
 
