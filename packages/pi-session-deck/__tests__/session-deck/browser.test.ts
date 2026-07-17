@@ -1135,7 +1135,7 @@ describe('SessionDeckBrowser', () => {
     expect(output).toContain('Enter a branch name.');
     expect(output).toContain('New Pi session for project');
     expect(output).toContain('Branch:    <branch-name>');
-    expect(output).toContain('Pi config: ambient env →');
+    expect(output).toContain('Pi config resolving…');
     expect(output).toContain('Base:      default branch · generated worktree · detached tmux');
     expect(output).toContain('tab focus');
     expect(output).not.toContain('worktree/<name>');
@@ -1162,6 +1162,11 @@ describe('SessionDeckBrowser', () => {
     browser.handleInput('w');
     browser.handleInput('tab');
     browser.handleInput('enter');
+    const selectorOutput = renderText(browser);
+    expect(selectorOutput).toContain('Choose:    › Current');
+    expect(selectorOutput).toContain('Pi default');
+    expect(selectorOutput).not.toContain('Ambient env');
+    expect(selectorOutput).not.toContain('Pi default (');
     browser.handleInput('down');
     browser.handleInput('down');
     for (const char of '~/agent-work') {
@@ -1169,7 +1174,7 @@ describe('SessionDeckBrowser', () => {
     }
     browser.handleInput('enter');
     await vi.waitFor(() => {
-      expect(renderText(browser)).toContain('Pi config: custom → ~/agent-work');
+      expect(renderText(browser)).toContain('Pi config → ~/agent-work');
     });
 
     browser.handleInput('tab');

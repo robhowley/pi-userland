@@ -96,7 +96,7 @@ export function shortenHomeDir(value: string, options: LaunchAgentDirDisplayOpti
 export function formatLaunchAgentDirModeLabel(mode: CreateWorktreeLaunchAgentDirMode): string {
   switch (mode) {
     case 'ambient':
-      return 'ambient env';
+      return 'Current';
     case 'default':
       return 'Pi default';
     case 'custom':

@@ -11,7 +11,6 @@ import {
 import type { SessionDeckBrowserRow } from './browser-render.js';
 import type { SessionDeckBrowserRecord, SessionDeckBrowserSnapshot } from './browser-view.js';
 import {
-  formatLaunchAgentDirModeLabel,
   getPiDefaultAgentDirDisplay,
   normalizeLaunchAgentDirSelection,
   shortenHomeDir,
@@ -641,7 +640,7 @@ export class SessionDeckBrowser {
     const lines = [
       `New Pi session for ${repoLabel}`,
       `${branchMarker}Branch:    ${branchName}`,
-      `${piConfigMarker}Pi config: ${formatWorktreePromptLaunchContext(prompt)}   Change`,
+      `${piConfigMarker}${formatWorktreePromptLaunchContext(prompt)}   Change`,
       '  Base:      default branch · generated worktree · detached tmux',
     ];
 
@@ -975,44 +974,21 @@ function buildWorktreeRequest(
 
 function formatWorktreePromptLaunchContext(prompt: SessionDeckWorktreePrompt): string {
   if (prompt.launchContext.status === 'loading') {
-    return `${formatLaunchAgentDirModeLabel(prompt.agentDirSelection.mode)} → resolving…`;
+    return 'Pi config resolving…';
   }
   if (!prompt.launchContext.ok) {
-    return `${formatLaunchAgentDirModeLabel(prompt.agentDirSelection.mode)} → unavailable`;
+    return 'Pi config unavailable';
   }
 
-  const provenance = formatLaunchContextProvenance(prompt.launchContext.provenance);
-  return `${formatLaunchAgentDirModeLabel(prompt.launchContext.mode)} → ${prompt.launchContext.effectiveDisplay}${
-    provenance.length === 0 ? '' : ` (${provenance})`
-  }`;
+  return `Pi config → ${prompt.launchContext.effectiveDisplay}`;
 }
 
 function formatWorktreePromptSelector(prompt: SessionDeckWorktreePrompt): string {
   const options = AGENT_DIR_MODE_OPTIONS.map((mode, index) => {
-    const label =
-      mode === 'custom'
-        ? 'Custom…'
-        : mode === 'default'
-          ? `Pi default (${getPiDefaultAgentDirDisplay()})`
-          : 'Ambient env';
+    const label = mode === 'custom' ? 'Custom…' : mode === 'default' ? 'Pi default' : 'Current';
     return index === prompt.selectorIndex ? `› ${label}` : label;
   });
   return `  Choose:    ${options.join('  ·  ')}`;
-}
-
-function formatLaunchContextProvenance(provenance: string): string {
-  switch (provenance) {
-    case 'tmux-server-env':
-      return 'tmux';
-    case 'process-env':
-      return 'process';
-    case 'pi-default':
-      return 'Pi default';
-    case 'request':
-      return 'request';
-    default:
-      return '';
-  }
 }
 
 function agentDirModeIndex(mode: CreateWorktreeLaunchAgentDirMode): number {
