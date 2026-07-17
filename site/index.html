@@ -1,62 +1,103 @@
 <!doctype html>
-<html lang="en" xmlns="http://www.w3.org/1999/html">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="dark" />
-  <title>pi-userland</title>
+  <title>pi-userland · Operations Prompt Rail</title>
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
   <header class="site-header">
     <div class="wrap nav">
-      <a class="brand" href="#">pi-userland</a>
-      <nav class="nav-links" aria-label="Primary navigation">
-        <a href="#packages">Packages</a>
-        <a href="https://www.npmjs.com/search?page=0&q=keywords%3Api-userland&sortBy=downloads_monthly">npm</a>
-        <a href="https://pi.dev/">Pi</a>
-        <a href="https://github.com/robhowley/pi-userland">GitHub</a>
-        <a class="install-link" href="#install">Install</a>
+      <a class="brand" href="#top" aria-label="pi-userland home">
+        <span aria-hidden="true">❯</span>
+        <span>userland</span>
+      </a>
+      <nav class="nav-links mono" aria-label="Primary navigation">
+        <a href="#control-plane">control plane</a>
+        <a href="#visibility">visibility</a>
+        <a href="#ship-with-proof">ship with proof</a>
+        <a href="#guardrails-voice">guardrails + voice</a>
+        <a href="#install">install</a>
+        <a href="https://github.com/robhowley/pi-userland">github</a>
       </nav>
     </div>
   </header>
 
-  <main class="wrap">
-    <section class="hero">
-      <div class="hero-main">
-    <div class="eyebrow mono">&gt; Pi userland</div>
-    <h1>Pi extensions for sharper agent sessions.</h1>
-    <p class="hero-copy">
-      Usage overlays, merge-readiness gates, environment sync, structured command returns, session health lights, bash guardrails, and a little terminal personality for long-running Pi work.
-    </p>
-    <div class="hero-actions">
-      <a class="button primary" href="#packages">Browse packages</a>
-      <a class="button" href="https://github.com/robhowley/pi-userland">View GitHub</a>
-    </div>
-  </div>
+  <main id="main" class="wrap ops-rail">
+    <section id="top" class="rail-section hero-section" aria-labelledby="hero-title">
+      <div class="rail-label mono" aria-hidden="true">❯ userland</div>
 
-  <aside class="hero-aside surface">
-    <div class="hero-aside-label mono">current packages</div>
-    <div class="hero-package-list mono">
-      <a href="#pi-openrouter">pi-openrouter</a>
-      <a href="#pi-merge-ready">pi-merge-ready</a>
-      <a href="#pi-structured-return">pi-structured-return</a>
-      <a href="#session-hygiene">session-hygiene</a>
-      <a href="#pi-yolo-seatbelt">pi-yolo-seatbelt</a>
-      <a href="#pi-spinner-verbs">pi-spinner-verbs</a>
-    </div>
-  </aside>
+      <div class="hero-grid">
+        <div class="hero-main">
+          <p class="eyebrow mono">operations prompt rail</p>
+          <h1 id="hero-title">❯ userland is the operations rail for Pi agent work.</h1>
+          <p class="hero-copy">
+            <strong>Session Deck</strong> gives you the control plane to see running work, return to the right session, and launch the next isolated agent. The rest of pi-userland adds visibility, proof, guardrails, and voice around that rail.
+          </p>
+          <div class="hero-actions" aria-label="Primary actions">
+            <a class="button primary" href="#install-control-plane">❯ install pi-session-deck</a>
+            <a class="button" href="#control-plane">see the control plane</a>
+          </div>
+          <ul class="rail-legend mono" aria-label="Operations rail jobs">
+            <li>control plane</li>
+            <li>visibility</li>
+            <li>ship with proof</li>
+            <li>guardrails + voice</li>
+          </ul>
+        </div>
 
-      <div class="compare" aria-label="Structured return before and after comparison">
-        <article class="compare-card surface">
-          <div class="label mono">before · raw pytest</div>
-          <div class="terminal">
-            <div class="terminal-head mono">
-              <span>pytest</span>
-              <span class="terminal-dots" aria-hidden="true"><span></span><span></span><span></span></span>
-            </div>
-            <div class="terminal-body">
-              <pre>================ test session starts ================
+        <aside class="deck-hero proof-surface" aria-labelledby="deck-hero-title">
+          <div class="proof-chrome mono">
+            <span>signature package</span>
+            <span>/session-deck</span>
+          </div>
+          <figure class="deck-figure">
+            <img
+              src="../packages/pi-session-deck/img/session-deck-toolbelt-overview.png"
+              alt="Session Deck iTerm2 Toolbelt showing live Pi agent sessions grouped under pi-userland"
+            />
+            <figcaption class="mono">real Session Deck Toolbelt view · repo-grouped Pi agents</figcaption>
+          </figure>
+          <div class="deck-hero-copy">
+            <h2 id="deck-hero-title" class="mono">pi-session-deck</h2>
+            <p>
+              A control plane for your Pi agents: live sessions organized by repo, detailed status tracking, terminal multiplexing, and new-agent launches in one place.
+            </p>
+          </div>
+          <ol class="deck-steps mono" aria-label="Session Deck operator loop">
+            <li><strong>see</strong><span>live sessions by repo</span></li>
+            <li><strong>return</strong><span>focus or reattach</span></li>
+            <li><strong>launch</strong><span>isolated worktrees</span></li>
+          </ol>
+        </aside>
+      </div>
+    </section>
+
+    <section id="proof" class="rail-section proof-section" aria-labelledby="proof-title">
+      <div class="rail-label mono" aria-hidden="true">❯ proof</div>
+      <div class="section-shell">
+        <header class="section-head">
+          <p class="section-kicker mono">Secondary evidence</p>
+          <h2 id="proof-title">structured_return keeps tool output useful without flooding the session.</h2>
+          <p>
+            The rail is not just launch control. It preserves proof: compact parsed failures for the agent, full logs on disk for the operator.
+          </p>
+        </header>
+
+        <div class="compare" aria-label="Structured return before and after comparison">
+          <article class="compare-card">
+            <div class="label mono">before · raw pytest</div>
+            <div class="terminal">
+              <div class="terminal-head mono">
+                <span>pytest</span>
+                <span class="terminal-dots" aria-hidden="true">•••</span>
+              </div>
+              <div class="terminal-body">
+                <pre>================ test session starts ================
 collected 3 items
 
 test_math.py::test_adds_two_numbers_correctly PASSED
@@ -71,228 +112,272 @@ test_math.py:5: AssertionError
 ____________ test_does_not_divide_by_zero ____________
 &gt;       result = 1 / 0
 E       ZeroDivisionError: division by zero</pre>
+              </div>
             </div>
-          </div>
-        </article>
+          </article>
 
-        <div class="compare-arrow mono" aria-hidden="true">→</div>
+          <div class="compare-arrow mono" aria-hidden="true">❯</div>
 
-        <article class="compare-card surface">
-  <div class="label mono">after · structured_return</div>
-
-  <div class="terminal">
-    <div class="terminal-head mono">
-      <span>structured_return</span>
-      <span class="terminal-dots" aria-hidden="true"><span></span><span></span><span></span></span>
-    </div>
-    <div class="terminal-body">
-      <pre><span class="accent">&gt;</span> pytest test_math.py --junitxml=.tmp/report.xml
+          <article class="compare-card compare-after">
+            <div class="label mono">after · structured_return</div>
+            <div class="terminal">
+              <div class="terminal-head mono">
+                <span>structured_return</span>
+                <span class="terminal-dots" aria-hidden="true">•••</span>
+              </div>
+              <div class="terminal-body">
+                <pre><span class="accent">&gt;</span> pytest test_math.py --junitxml=.tmp/report.xml
 <span class="muted">cwd: project</span>
 
 <span class="red">2 failed</span>, <span class="green">1 passed</span>
   test_math.py:5  assert (3 * 4) == 99
   test_math.py:8  ZeroDivisionError: division by zero</pre>
-    </div>
-  </div>
-
-  <div class="compare-meta">
-    <div class="compare-metric mono">262 → 56 tokens</div>
-    <div class="compare-note">Full log preserved on disk</div>
-  </div>
-</article>
+              </div>
+            </div>
+            <div class="compare-meta">
+              <div class="compare-metric mono">262 → 56 tokens</div>
+              <div class="compare-note">Full log preserved on disk</div>
+            </div>
+          </article>
+        </div>
       </div>
     </section>
 
-    <section id="pi-openrouter" class="section featured surface" aria-label="Featured package">
-      <div class="featured-copy">
-        <div class="section-kicker mono">Featured</div>
-        <h2 class="mono">pi-openrouter</h2>
-        <a class="readme-link" href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-openrouter">
-          README
-        </a>
-        <p>
-          Live OpenRouter visibility inside Pi: spend, credits, key limits, burn rate, model/provider usage, and automatic <code>session_id</code> tagging.
-        </p>
-        <div class="bullets mono" aria-label="pi-openrouter features">
-          <span>/openrouter usage</span>
-          <span>/openrouter account</span>
-          <span>/openrouter session</span>
-          <span>/openrouter models-sync</span>
-          <span>/openrouter models-status</span>
-          <span>/openrouter model-override-*</span>
-        </div>
-      </div>
+    <section id="control-plane" class="rail-section family control-family" aria-labelledby="control-title">
+      <div class="rail-label mono" aria-hidden="true">❯ control plane</div>
+      <div class="section-shell">
+        <header class="job-head">
+          <p class="section-kicker mono">Control plane</p>
+          <h2 id="control-title">Session Deck is the signature package.</h2>
+          <p>
+            Pi agents are most useful when they work independently. Session Deck keeps that independence from scattering context across terminal tabs, repos, and worktrees.
+          </p>
+        </header>
 
-      <div class="tui-grid">
-        <article class="terminal tui" aria-label="OpenRouter Account TUI preview">
-          <div class="terminal-head mono">
-            <span>◆ OpenRouter Account · /openrouter account</span>
-            <span class="terminal-dots" aria-hidden="true"><span></span><span></span><span></span></span>
+        <article id="pi-session-deck" class="module module-lead module-deck">
+          <div class="module-copy">
+            <div class="module-topline mono">
+              <span>pi-session-deck</span>
+              <a class="readme-link" href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-session-deck">README</a>
+            </div>
+            <h3>See, group, open, return, and launch Pi agents from one deck.</h3>
+            <p>
+              Open Session Deck as a native Pi TUI with <code>/session-deck</code>, or keep it visible as an always-on iTerm2 Toolbelt sidebar.
+            </p>
+            <ul class="feature-list">
+              <li><strong>Agents organized by repo.</strong> Collapse quiet repos and keep active work in project context.</li>
+              <li><strong>Detailed status at a glance.</strong> Branch, worktree, liveness, activity, and PR state stay together.</li>
+              <li><strong>A reliable way back.</strong> Focus an iTerm2 session or reattach to the existing tmux session.</li>
+              <li><strong>New isolated agents on demand.</strong> Launch Pi on a generated Git worktree in detached tmux.</li>
+            </ul>
           </div>
-          <div class="terminal-body">
-            <pre>usage      $39.22
-credits    $40.00
-status     <span class="red">● 2</span>  <span class="yellow">● 0</span>  <span class="green">● 1</span>
 
-<span class="accent">Selected key</span>
-  name      local-dev
-  key       sk-or-v1-929...f6b
-  status    <span class="red">danger</span>
-  used      $39.22 / $42.00
-  reset     monthly
-  byok      excl
-
-<span class="accent">All keys</span>
-  Workspace    Key name          Active   Spend    Used
-  ● dev        local-dev         <span class="green">✓</span>        $39.22   <span class="red">93%</span>
-  ○ Default    default-space-key <span class="green">✓</span>        $0.00    <span class="green">0%</span>
-
-<span class="muted">Esc to close · r to refresh · ↑/↓ to select</span></pre>
+          <div class="deck-screens" aria-label="More Session Deck screenshots">
+            <figure>
+              <img
+                src="../packages/pi-session-deck/img/session-deck-toolbelt-repos.png"
+                alt="Session Deck Toolbelt showing Pi agents organized across multiple repos"
+                loading="lazy"
+              />
+              <figcaption class="mono">multi-repo deck</figcaption>
+            </figure>
+            <figure>
+              <img
+                src="../packages/pi-session-deck/img/session-deck-toolbelt.png"
+                alt="Session Deck Toolbelt branch composer for launching a new Pi agent on a worktree"
+                loading="lazy"
+              />
+              <figcaption class="mono">worktree launch composer</figcaption>
+            </figure>
           </div>
         </article>
+      </div>
+    </section>
 
-        <article class="terminal tui" aria-label="OpenRouter Usage TUI preview">
-          <div class="terminal-head mono">
-            <span>◆ OpenRouter Usage · /openrouter usage</span>
-            <span class="terminal-dots" aria-hidden="true"><span></span><span></span><span></span></span>
-          </div>
-          <div class="terminal-body">
-            <pre>Month $39.25 / $40.00                    <span class="yellow">cap (98%)</span>
+    <section id="visibility" class="rail-section family" aria-labelledby="visibility-title">
+      <div class="rail-label mono" aria-hidden="true">❯ visibility</div>
+      <div class="section-shell">
+        <header class="job-head">
+          <p class="section-kicker mono">Visibility</p>
+          <h2 id="visibility-title">Know what the run is spending and when the session is getting heavy.</h2>
+        </header>
+
+        <div class="module-pair">
+          <article id="pi-openrouter" class="module">
+            <div class="module-topline mono">
+              <span>pi-openrouter</span>
+              <a class="readme-link" href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-openrouter">README</a>
+            </div>
+            <h3>Model and provider visibility inside Pi.</h3>
+            <p>
+              Live OpenRouter spend, credits, key limits, burn rate, model/provider usage, model sync, and automatic <code>session_id</code> tagging.
+            </p>
+            <div class="command-chips mono" aria-label="pi-openrouter commands">
+              <code>/openrouter usage</code>
+              <code>/openrouter account</code>
+              <code>/openrouter session</code>
+              <code>/openrouter models-status</code>
+            </div>
+            <div class="terminal compact" aria-label="OpenRouter Usage TUI preview">
+              <div class="terminal-head mono">
+                <span>OpenRouter Usage · /openrouter usage</span>
+                <span class="terminal-dots" aria-hidden="true">•••</span>
+              </div>
+              <div class="terminal-body">
+                <pre>Month $39.25 / $40.00                    <span class="yellow">cap (98%)</span>
 7d    $32.84                         <span class="red">burn ~$140.76</span>
 Today ~$1.11 · 281 reqs
 
 <span class="accent">Top models (7d)</span>
-  qwen/qwen3-coder-next      $25.67   302.7M   $0.08
-  moonshotai/kimi-k2.5       $6.06     33.4M   $0.18
+  qwen/qwen3-coder-next      $25.67   302.7M
+  moonshotai/kimi-k2.5       $6.06     33.4M</pre>
+              </div>
+            </div>
+          </article>
 
-<span class="accent">By provider (30d)</span>
-  ionstream/fp8              $20.09   207.4M
-  parasail/bf16              $11.30   150.6M
-  unknown                     $4.43    13.4M
+          <article id="pi-session-hygiene" class="module module-support">
+            <div class="module-topline mono">
+              <span>pi-session-hygiene</span>
+              <a class="readme-link" href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-session-hygiene">README</a>
+            </div>
+            <h3>Session health lights for long-running work.</h3>
+            <p>
+              Status bar indicators for cumulative assistant cost, context tokens, and optional cache-rate info, with <code>/session-hygiene</code> threshold configuration.
+            </p>
+            <div class="terminal compact" aria-label="Session hygiene status preview">
+              <div class="terminal-head mono">
+                <span>status bar</span>
+                <span class="terminal-dots" aria-hidden="true">•••</span>
+              </div>
+              <div class="terminal-body">
+                <pre>~/src/my-project (main)
+↑34 ↓18k R868k W175k $1.982 7.4%/1.0M
+<span class="yellow">🟡 session growing</span> · <span class="green">98% cache</span>
 
-<span class="accent">Daily spend (30d)</span>
- 8 |                        █ █
- 6 |                  █     █ █  █
- 4 |                  █   █ █ █ ██
- 2 |                  █ ███ █ ████
- 0 +------------------------------
-      Apr               May
-    25        30       04      08
-
-<span class="muted">Updated 11:56 PM · today from tracked turns</span></pre>
-          </div>
-        </article>
+<span class="accent">/session-hygiene</span>  <span class="muted">configure thresholds</span></pre>
+              </div>
+            </div>
+          </article>
+        </div>
       </div>
     </section>
 
-    <section id="packages" class="section packages" aria-label="Packages">
-      <article id="pi-merge-ready" class="package surface">
-        <h3 class="mono">pi-merge-ready</h3>
-        <a class="readme-link" href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-merge-ready">
-          README
-        </a>
-        <p>PR merge-readiness for Pi. Can you merge? Why not? Give an agent the context it needs to resolve all open items.</p>
-        <div class="terminal" aria-label="merge ready preview">
-          <div class="terminal-head mono">
-            <span>merge_ready_status</span>
-            <span class="terminal-dots" aria-hidden="true"><span></span><span></span><span></span></span>
-          </div>
-          <div class="terminal-body">
-            <pre><span class="accent">&gt;</span> /merge-ready
+    <section id="ship-with-proof" class="rail-section family" aria-labelledby="ship-title">
+      <div class="rail-label mono" aria-hidden="true">❯ ship with proof</div>
+      <div class="section-shell">
+        <header class="job-head">
+          <p class="section-kicker mono">Ship with proof</p>
+          <h2 id="ship-title">Give agents the merge state and command evidence they can act on.</h2>
+        </header>
+
+        <div class="module-pair">
+          <article id="pi-merge-ready" class="module">
+            <div class="module-topline mono">
+              <span>pi-merge-ready</span>
+              <a class="readme-link" href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-merge-ready">README</a>
+            </div>
+            <h3>PR merge-readiness for Pi.</h3>
+            <p>
+              Ask “can you merge?” and get the actionable list: failing checks, requested changes, out-of-date branches, missing PRs, or ready-to-merge status.
+            </p>
+            <div class="terminal compact" aria-label="merge ready preview">
+              <div class="terminal-head mono">
+                <span>merge_ready_status</span>
+                <span class="terminal-dots" aria-hidden="true">•••</span>
+              </div>
+              <div class="terminal-body">
+                <pre><span class="accent">&gt;</span> /merge-ready
 <span class="red">❌ Checks failing</span>
 <span class="muted">🔄 Out of date · ❔ No PR · ✅ Ready</span>
 
 <span class="accent">&gt;</span> merge_ready_status
 openItems:
  - Required checks are failing.
- - Changes requested.
-</pre>
-          </div>
-        </div>
-      </article>
+ - Changes requested.</pre>
+              </div>
+            </div>
+          </article>
 
-      <article id="pi-structured-return" class="package surface">
-        <h3 class="mono">pi-structured-return</h3>
-        <a class="readme-link" href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-structured-return">
-          README
-        </a>
-        <p>Explicit <code>structured_return</code> tool alongside bash. Compact parsed results with full logs preserved.</p>
-        <div class="terminal" aria-label="structured return preview">
-          <div class="terminal-head mono">
-            <span>structured_return</span>
-            <span class="terminal-dots" aria-hidden="true"><span></span><span></span><span></span></span>
-          </div>
-          <div class="terminal-body">
-            <pre><span class="accent">&gt;</span> structured_return pytest test_math.py
+          <article id="pi-structured-return" class="module module-support">
+            <div class="module-topline mono">
+              <span>pi-structured-return</span>
+              <a class="readme-link" href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-structured-return">README</a>
+            </div>
+            <h3>Compact command returns with full logs preserved.</h3>
+            <p>
+              Adds an explicit <code>structured_return</code> tool alongside bash for test, lint, build, and log workflows when raw output would be noisy.
+            </p>
+            <div class="terminal compact" aria-label="structured return preview">
+              <div class="terminal-head mono">
+                <span>structured_return</span>
+                <span class="terminal-dots" aria-hidden="true">•••</span>
+              </div>
+              <div class="terminal-body">
+                <pre><span class="accent">&gt;</span> structured_return pytest test_math.py
 
 <span class="red">2 failed</span>, <span class="green">1 passed</span>
   test_math.py:5  assert (3 * 4) == 99
-  test_math.py:8  ZeroDivisionError: division by zero
+  test_math.py:8  ZeroDivisionError
 
 <span class="green">60–95% fewer tokens</span></pre>
-          </div>
+              </div>
+            </div>
+          </article>
         </div>
-      </article>
+      </div>
+    </section>
 
-      <article id="session-hygiene" class="package surface">
-        <h3 class="mono">session-hygiene</h3>
-        <a class="readme-link" href="https://github.com/robhowley/pi-userland/tree/main/packages/session-hygiene">
-          README
-        </a>
-        <p>Status bar health light based on cumulative assistant cost, context tokens, and optional cache-rate info.</p>
-        <div class="terminal" aria-label="session hygiene status preview">
-          <div class="terminal-head mono">
-            <span>status bar</span>
-            <span class="terminal-dots" aria-hidden="true"><span></span><span></span><span></span></span>
-          </div>
-          <div class="terminal-body">
-            <pre>~/src/my-project (main)
-↑34 ↓18k R868k W175k $1.982 7.4%/1.0M (auto)
-<span class="yellow">🟡 session growing</span> · <span class="green">98% cache</span>
+    <section id="guardrails-voice" class="rail-section family" aria-labelledby="guardrails-title">
+      <div class="rail-label mono" aria-hidden="true">❯ guardrails + voice</div>
+      <div class="section-shell">
+        <header class="job-head">
+          <p class="section-kicker mono">Guardrails + voice</p>
+          <h2 id="guardrails-title">Keep the YOLO path sharp without making every session feel sterile.</h2>
+        </header>
 
-<span class="accent">/session-hygiene</span>  <span class="muted">configure thresholds</span></pre>
-          </div>
-        </div>
-      </article>
-
-      <article id="pi-yolo-seatbelt" class="package surface">
-        <h3 class="mono">pi-yolo-seatbelt</h3>
-        <a class="readme-link" href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-yolo-seatbelt">
-          README
-        </a>
-        <p>Configurable bash safety guard. Block catastrophic commands, ask on destructive ones, allow the rest.</p>
-        <div class="terminal" aria-label="yolo seatbelt preview">
-          <div class="terminal-head mono">
-            <span>bash guardrail</span>
-            <span class="terminal-dots" aria-hidden="true"><span></span><span></span><span></span></span>
-          </div>
-          <div class="terminal-body">
-            <pre><span class="accent">&gt;</span> rm -rf /
+        <div class="module-pair">
+          <article id="pi-yolo-seatbelt" class="module">
+            <div class="module-topline mono">
+              <span>pi-yolo-seatbelt</span>
+              <a class="readme-link" href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-yolo-seatbelt">README</a>
+            </div>
+            <h3>Bash safety guardrails for destructive commands.</h3>
+            <p>
+              Block catastrophic commands, ask on destructive ones, and allow the rest so agent work can move fast without filesystem roulette.
+            </p>
+            <div class="terminal compact" aria-label="yolo seatbelt preview">
+              <div class="terminal-head mono">
+                <span>bash guardrail</span>
+                <span class="terminal-dots" aria-hidden="true">•••</span>
+              </div>
+              <div class="terminal-body">
+                <pre><span class="accent">&gt;</span> rm -rf /
 <span class="red">BLOCK</span>  rm-rf-root
 <span class="muted">catastrophic filesystem delete</span>
 
 <span class="accent">&gt;</span> git push --force
 <span class="yellow">ASK</span>    git.push-force
-<span class="muted">confirm before history rewrite</span>
+<span class="muted">confirm before history rewrite</span></pre>
+              </div>
+            </div>
+          </article>
 
-<span class="accent">/yolo-seatbelt-rules</span></pre>
-          </div>
-        </div>
-      </article>
-
-      <article id="pi-spinner-verbs" class="package surface">
-        <h3 class="mono">pi-spinner-verbs</h3>
-        <a class="readme-link" href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-spinner-verbs">
-          README
-        </a>
-        <p>Replace default spinner text with themed verbs. Pick a theme, randomize each session, or point to your own verbs file.</p>
-        <div class="terminal" aria-label="spinner verbs preview">
-          <div class="terminal-head mono">
-            <span>spinner verbs</span>
-            <span class="terminal-dots" aria-hidden="true"><span></span><span></span><span></span></span>
-          </div>
-          <div class="terminal-body">
-            <pre><span class="accent">&gt;</span> /verbs
+          <article id="pi-spinner-verbs" class="module module-support">
+            <div class="module-topline mono">
+              <span>pi-spinner-verbs</span>
+              <a class="readme-link" href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-spinner-verbs">README</a>
+            </div>
+            <h3>Terminal-native progress language.</h3>
+            <p>
+              Replace default spinner text with themed verbs. Pick a theme, randomize each session, or point Pi to your own verbs file.
+            </p>
+            <div class="terminal compact" aria-label="spinner verbs preview">
+              <div class="terminal-head mono">
+                <span>spinner verbs</span>
+                <span class="terminal-dots" aria-hidden="true">•••</span>
+              </div>
+              <div class="terminal-body">
+                <pre><span class="accent">&gt;</span> /verbs
   game-of-thrones
   lord-of-the-rings
   doc-emrick
@@ -300,38 +385,53 @@ openItems:
 
 <span class="accent">&gt;</span> /verbs doc-emrick
 <span class="blue">Shunting...</span>
-<span class="blue">Fiddling...</span>
-
-<span class="accent">/verb-status</span></pre>
-          </div>
+<span class="blue">Fiddling...</span></pre>
+              </div>
+            </div>
+          </article>
         </div>
-      </article>
+      </div>
     </section>
 
-    <section class="section philosophy surface">
-      <strong>Independent packages.</strong> Shared taste. Install one or compose several.
-    </section>
+    <section id="install" class="rail-section install-section" aria-labelledby="install-title">
+      <div class="rail-label mono" aria-hidden="true">❯ install</div>
+      <div class="section-shell install-shell">
+        <header class="section-head">
+          <p class="section-kicker mono">Install your stack</p>
+          <h2 id="install-title">Pick the operator job, then wire in the real package.</h2>
+          <p>
+            There is no wrapper metapackage hiding the pieces. Compose the rail from direct npm installs and keep each module independently removable.
+          </p>
+        </header>
 
-    <section id="install" class="section install-section surface" aria-label="Install commands">
-      <div class="install-head">
-        <div>
-          <div class="section-kicker mono">Install</div>
-          <h2>Direct from npm into Pi</h2>
+        <div class="install-families">
+          <article id="install-control-plane" class="install-family">
+            <h3 class="mono">Control plane</h3>
+            <p>Start here when sessions, repos, and detached worktrees are the problem.</p>
+            <div class="cmd"><span class="prompt mono">❯</span><code>pi install npm:@robhowley/pi-session-deck</code></div>
+          </article>
+
+          <article class="install-family">
+            <h3 class="mono">Visibility</h3>
+            <p>Add spend/account overlays and session health signals.</p>
+            <div class="cmd"><span class="prompt mono">❯</span><code>pi install npm:@robhowley/pi-openrouter</code></div>
+            <div class="cmd"><span class="prompt mono">❯</span><code>pi install npm:@robhowley/pi-session-hygiene</code></div>
+          </article>
+
+          <article class="install-family">
+            <h3 class="mono">Ship with proof</h3>
+            <p>Let agents work from merge blockers and compact command evidence.</p>
+            <div class="cmd"><span class="prompt mono">❯</span><code>pi install npm:@robhowley/pi-merge-ready</code></div>
+            <div class="cmd"><span class="prompt mono">❯</span><code>pi install npm:@robhowley/pi-structured-return</code></div>
+          </article>
+
+          <article class="install-family">
+            <h3 class="mono">Guardrails + voice</h3>
+            <p>Keep dangerous bash calls controlled and long sessions less beige.</p>
+            <div class="cmd"><span class="prompt mono">❯</span><code>pi install npm:@robhowley/pi-yolo-seatbelt</code></div>
+            <div class="cmd"><span class="prompt mono">❯</span><code>pi install npm:@robhowley/pi-spinner-verbs</code></div>
+          </article>
         </div>
-        <p>Use one package at a time, or build your own stack.</p>
-      </div>
-
-      <div class="install-grid">
-        <div class="cmd"><span class="prompt mono">&gt;</span><code>pi install npm:@robhowley/pi-openrouter</code></div>
-        <div class="cmd"><span class="prompt mono">&gt;</span><code>pi install npm:@robhowley/pi-merge-ready</code></div>
-        <div class="cmd"><span class="prompt mono">&gt;</span><code>pi install npm:@robhowley/pi-structured-return</code></div>
-        <div class="cmd"><span class="prompt mono">&gt;</span><code>pi install npm:@robhowley/session-hygiene</code></div>
-        <div class="cmd"><span class="prompt mono">&gt;</span><code>pi install npm:@robhowley/pi-yolo-seatbelt</code></div>
-        <div class="cmd"><span class="prompt mono">&gt;</span><code>pi install npm:@robhowley/pi-spinner-verbs</code></div>
-      </div>
-
-      <div class="footer-note">
-        Built for Pi power users who want more visibility, clearer merge gates, less noise, and a few guardrails.
       </div>
     </section>
   </main>
