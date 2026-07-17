@@ -172,6 +172,99 @@ describe('activity reader', () => {
     expect(view.records[0]?.busy).toBe(false);
   });
 
+  it('normalizes activity input summaries and tool windows without preserving payload-like extras', async () => {
+    const readdir = vi
+      .fn()
+      .mockResolvedValue([{ name: 'rt-1.json', isFile: () => true } as unknown as Dirent]);
+    const readFile = vi.fn().mockResolvedValue(
+      JSON.stringify({
+        runtimeId: 'rt-1',
+        sessionId: 'session-abc',
+        activityState: 'idle',
+        idle: true,
+        busy: false,
+        currentTurnStartedAt: null,
+        currentToolName: null,
+        lastEventAt: '2026-06-17T12:09:18.000Z',
+        lastError: null,
+        inputSummary: {
+          lastSource: 'rpc',
+          lastInputAt: '2026-06-17T12:09:17.000Z',
+          counts: { interactive: 1, rpc: 2, unknown: 99 },
+        },
+        recentToolWindows: [
+          { toolCallId: '', toolName: 'bad', startedAt: '2026-06-17T12:09:10.000Z' },
+          {
+            toolCallId: 'tool-1',
+            toolName: 'bash',
+            startedAt: '2026-06-17T12:09:10.000Z',
+            endedAt: '2026-06-17T12:09:12.000Z',
+            isError: true,
+            args: { prompt: 'do not keep' },
+            result: 'do not keep',
+          },
+        ],
+        activityUpdatedAt: '2026-06-17T12:09:18.000Z',
+      }),
+    );
+
+    const view = await readSessionDeckView({
+      joinedView: buildJoinedView(),
+      now: new Date('2026-06-17T12:10:00.000Z'),
+      readdir,
+      readFile,
+    });
+
+    expect(view.records[0]?.inputSummary).toEqual({
+      lastSource: 'rpc',
+      lastInputAt: '2026-06-17T12:09:17.000Z',
+      counts: { interactive: 1, rpc: 2 },
+    });
+    expect(view.records[0]?.recentToolWindows).toEqual([
+      {
+        toolCallId: 'tool-1',
+        toolName: 'bash',
+        startedAt: '2026-06-17T12:09:10.000Z',
+        endedAt: '2026-06-17T12:09:12.000Z',
+        isError: true,
+      },
+    ]);
+    expect(JSON.stringify(view.records[0]?.recentToolWindows)).not.toContain('do not keep');
+  });
+
+  it('drops malformed activity input/tool summaries without breaking the record', async () => {
+    const readdir = vi
+      .fn()
+      .mockResolvedValue([{ name: 'rt-1.json', isFile: () => true } as unknown as Dirent]);
+    const readFile = vi.fn().mockResolvedValue(
+      JSON.stringify({
+        runtimeId: 'rt-1',
+        sessionId: 'session-abc',
+        activityState: 'idle',
+        idle: true,
+        busy: false,
+        currentTurnStartedAt: null,
+        currentToolName: null,
+        lastEventAt: '2026-06-17T12:09:18.000Z',
+        lastError: null,
+        inputSummary: { lastSource: 'prompt', counts: 'bad' },
+        recentToolWindows: [{ toolCallId: 'tool-1', toolName: 'bash' }],
+        activityUpdatedAt: '2026-06-17T12:09:18.000Z',
+      }),
+    );
+
+    const view = await readSessionDeckView({
+      joinedView: buildJoinedView(),
+      now: new Date('2026-06-17T12:10:00.000Z'),
+      readdir,
+      readFile,
+    });
+
+    expect(view.records[0]?.activityState).toBe('idle');
+    expect(view.records[0]?.inputSummary).toBeUndefined();
+    expect(view.records[0]?.recentToolWindows).toBeUndefined();
+  });
+
   it('ignores old-session activity and reports session_mismatch', async () => {
     const readdir = vi
       .fn()

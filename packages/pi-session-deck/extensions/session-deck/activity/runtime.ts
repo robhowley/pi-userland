@@ -3,13 +3,18 @@ import { createToolFailureError, sanitizeActivityError } from './derive.js';
 import { writeActivityRecord } from './writer.js';
 import type {
   ActivityDiagnostic,
+  ActivityInputSource,
+  ActivityInputSummary,
   ActivityMessageLike,
   ActivityRuntimeController,
+  ActivityToolWindow,
   SessionActivityRecord,
 } from './types.js';
 import type { SessionManagerLike } from '../identity/types.js';
 
 const ACTIVITY_RUNTIME_STATE_KEY = '__piSessionDeckActivityRuntimeState__';
+const MAX_RECENT_TOOL_WINDOWS = 20;
+const RECENT_TOOL_WINDOW_MAX_AGE_MS = 15 * 60 * 1000;
 
 export interface ActivityRuntimeConfig {
   runtimeId?: string;
@@ -39,6 +44,8 @@ interface ActivityRuntimeState {
   sessionManager: SessionManagerLike | null;
   lastSeenSessionId: string | null;
   activeToolCalls: Map<string, ActiveToolCall>;
+  inputSummary: ActivityInputSummary;
+  recentToolWindows: ActivityToolWindow[];
   hasActiveTurnError: boolean;
   runtimeDiagnostics: ActivityDiagnostic[];
   pendingMutation: Promise<void>;
@@ -65,6 +72,8 @@ function getActivityRuntimeState(): ActivityRuntimeState {
     sessionManager: null,
     lastSeenSessionId: null,
     activeToolCalls: new Map(),
+    inputSummary: {},
+    recentToolWindows: [],
     hasActiveTurnError: false,
     runtimeDiagnostics: [],
     pendingMutation: Promise.resolve(),
@@ -99,6 +108,8 @@ export async function ensureActivityRuntimeStarted(
           const sessionId = getCurrentSessionId(state);
           state.lastSeenSessionId = sessionId;
           state.activeToolCalls.clear();
+          state.inputSummary = {};
+          state.recentToolWindows = [];
           state.hasActiveTurnError = false;
 
           await writeSnapshot(
@@ -111,6 +122,20 @@ export async function ensureActivityRuntimeStarted(
               source,
             ),
           );
+        }),
+      recordInputSource: async (source: ActivityInputSource) =>
+        runSerialized(state, async () => {
+          const nowIso = getNowIso(config);
+          const current = getCurrentOrIdleRecord(state, nowIso);
+          state.inputSummary = recordInputSummarySource(state.inputSummary, source, nowIso);
+
+          await writeSnapshot(state, config, {
+            ...current,
+            lastEventAt: nowIso,
+            activityUpdatedAt: nowIso,
+            activitySource: 'input',
+            ...getRuntimeActivitySummaryFields(state, nowIso),
+          });
         }),
       recordMessageEnd: async (message: ActivityMessageLike) =>
         runSerialized(state, async () => {
@@ -180,9 +205,19 @@ export async function ensureActivityRuntimeStarted(
       recordToolExecutionStart: async ({ toolCallId, toolName }) =>
         runSerialized(state, async () => {
           const nowIso = getNowIso(config);
-          state.activeToolCalls.set(toolCallId, { toolName, startedAt: nowIso });
-
           const current = getCurrentOrIdleRecord(state, nowIso);
+          const sanitizedToolCallId = normalizeToolCallId(toolCallId);
+          state.activeToolCalls.set(sanitizedToolCallId, { toolName, startedAt: nowIso });
+          state.recentToolWindows = upsertToolWindow(
+            state.recentToolWindows,
+            {
+              toolCallId: sanitizedToolCallId,
+              toolName,
+              startedAt: nowIso,
+            },
+            nowIso,
+          );
+
           await writeSnapshot(state, config, {
             ...current,
             activityState: 'tool-running',
@@ -194,14 +229,28 @@ export async function ensureActivityRuntimeStarted(
             lastEventAt: nowIso,
             activityUpdatedAt: nowIso,
             activitySource: 'tool_start',
+            ...getRuntimeActivitySummaryFields(state, nowIso),
           });
         }),
       recordToolExecutionEnd: async ({ toolCallId, toolName, isError }) =>
         runSerialized(state, async () => {
           const nowIso = getNowIso(config);
-          state.activeToolCalls.delete(toolCallId);
-
           const current = getCurrentOrIdleRecord(state, nowIso);
+          const sanitizedToolCallId = normalizeToolCallId(toolCallId);
+          const activeToolCall = state.activeToolCalls.get(sanitizedToolCallId);
+          state.activeToolCalls.delete(sanitizedToolCallId);
+          state.recentToolWindows = upsertToolWindow(
+            state.recentToolWindows,
+            {
+              toolCallId: sanitizedToolCallId,
+              toolName: activeToolCall?.toolName ?? toolName,
+              startedAt: activeToolCall?.startedAt ?? nowIso,
+              endedAt: nowIso,
+              ...(isError ? { isError: true } : {}),
+            },
+            nowIso,
+          );
+
           const nextToolName = getMostRecentToolName(state.activeToolCalls);
           const hasActiveTurn = current.currentTurnStartedAt !== null;
 
@@ -218,6 +267,7 @@ export async function ensureActivityRuntimeStarted(
             ...(isError ? { lastErrorAt: nowIso } : {}),
             activityUpdatedAt: nowIso,
             activitySource: 'tool_end',
+            ...getRuntimeActivitySummaryFields(state, nowIso),
           });
         }),
       recordTurnEnd: async () =>
@@ -255,6 +305,8 @@ export async function ensureActivityRuntimeStarted(
           const sessionId = getCurrentSessionId(state);
           if (state.cachedActivity?.sessionId !== sessionId) {
             state.activeToolCalls.clear();
+            state.inputSummary = {};
+            state.recentToolWindows = [];
             state.hasActiveTurnError = false;
             await writeSnapshot(
               state,
@@ -269,6 +321,7 @@ export async function ensureActivityRuntimeStarted(
             ...current,
             activityUpdatedAt: nowIso,
             activitySource: 'periodic',
+            ...getRuntimeActivitySummaryFields(state, nowIso),
           });
         });
       }, DEFAULT_ACTIVITY_REFRESH_INTERVAL_MS);
@@ -299,6 +352,8 @@ export async function stopActivityRuntime(): Promise<void> {
   state.sessionManager = null;
   state.lastSeenSessionId = null;
   state.activeToolCalls.clear();
+  state.inputSummary = {};
+  state.recentToolWindows = [];
   state.hasActiveTurnError = false;
   state.runtimeDiagnostics = [];
   state.pendingMutation = Promise.resolve();
@@ -345,6 +400,8 @@ function getCurrentOrIdleRecord(
 
   state.lastSeenSessionId = sessionId;
   state.activeToolCalls.clear();
+  state.inputSummary = {};
+  state.recentToolWindows = [];
   state.hasActiveTurnError = false;
   return createIdleActivityRecord(runtimeId, sessionId, nowIso, 'new');
 }
@@ -370,6 +427,83 @@ function getRequiredRuntimeId(state: ActivityRuntimeState): string {
 
 function getNowIso(config: ActivityRuntimeConfig): string {
   return (config.now ?? (() => new Date()))().toISOString();
+}
+
+function recordInputSummarySource(
+  summary: ActivityInputSummary,
+  source: ActivityInputSource,
+  nowIso: string,
+): ActivityInputSummary {
+  const counts = { ...(summary.counts ?? {}) };
+  counts[source] = (counts[source] ?? 0) + 1;
+
+  return {
+    lastSource: source,
+    lastInputAt: nowIso,
+    counts,
+  };
+}
+
+function getRuntimeActivitySummaryFields(
+  state: ActivityRuntimeState,
+  nowIso: string,
+): Pick<SessionActivityRecord, 'inputSummary' | 'recentToolWindows'> {
+  state.recentToolWindows = trimRecentToolWindows(state.recentToolWindows, nowIso);
+  return {
+    ...(hasInputSummary(state.inputSummary) ? { inputSummary: state.inputSummary } : {}),
+    ...(state.recentToolWindows.length === 0
+      ? {}
+      : { recentToolWindows: state.recentToolWindows.map(copyToolWindow) }),
+  };
+}
+
+function hasInputSummary(summary: ActivityInputSummary): boolean {
+  return (
+    summary.lastSource !== undefined ||
+    summary.lastInputAt !== undefined ||
+    Object.values(summary.counts ?? {}).some((count) => count > 0)
+  );
+}
+
+function upsertToolWindow(
+  windows: ActivityToolWindow[],
+  window: ActivityToolWindow,
+  nowIso: string,
+): ActivityToolWindow[] {
+  const next = windows.filter((candidate) => candidate.toolCallId !== window.toolCallId);
+  next.push(copyToolWindow(window));
+  return trimRecentToolWindows(next, nowIso);
+}
+
+function trimRecentToolWindows(
+  windows: ActivityToolWindow[],
+  nowIso: string,
+): ActivityToolWindow[] {
+  const cutoffMs = Date.parse(nowIso) - RECENT_TOOL_WINDOW_MAX_AGE_MS;
+  const recent = windows.filter((window) => {
+    if (window.endedAt === undefined) {
+      return true;
+    }
+
+    const referenceMs = Date.parse(window.endedAt);
+    return !Number.isFinite(cutoffMs) || !Number.isFinite(referenceMs) || referenceMs >= cutoffMs;
+  });
+
+  return recent.slice(Math.max(0, recent.length - MAX_RECENT_TOOL_WINDOWS)).map(copyToolWindow);
+}
+
+function copyToolWindow(window: ActivityToolWindow): ActivityToolWindow {
+  return {
+    toolCallId: window.toolCallId,
+    toolName: window.toolName,
+    startedAt: window.startedAt,
+    ...(window.endedAt === undefined ? {} : { endedAt: window.endedAt }),
+    ...(window.isError === true ? { isError: true } : {}),
+  };
+}
+
+function normalizeToolCallId(toolCallId: string): string {
+  return toolCallId.length > 0 ? toolCallId : 'unknown-tool-call';
 }
 
 async function runSerialized<T>(

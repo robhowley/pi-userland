@@ -101,6 +101,15 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     },
   );
 
+  on('input', async (event: { source?: unknown }) => {
+    if (!isActivityInputSource(event.source)) {
+      return;
+    }
+
+    const activityRuntime = await ensureActivityRuntime();
+    await activityRuntime.recordInputSource(event.source);
+  });
+
   on('message_end', async (event: { message?: unknown }) => {
     const activityRuntime = await ensureActivityRuntime();
     await activityRuntime.recordMessageEnd(getActivityMessage(event));
@@ -190,6 +199,10 @@ function getActivityMessage(event: { message?: unknown }): {
       ? { errorMessage: message['errorMessage'] }
       : {}),
   };
+}
+
+function isActivityInputSource(value: unknown): value is 'interactive' | 'rpc' | 'extension' {
+  return value === 'interactive' || value === 'rpc' || value === 'extension';
 }
 
 function isObject(candidate: unknown): candidate is Record<string, unknown> {

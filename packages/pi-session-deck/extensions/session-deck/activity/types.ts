@@ -7,9 +7,26 @@ import type {
 
 export type ActivityState = 'idle' | 'thinking' | 'tool-running' | 'error' | 'unknown';
 
+export type ActivityInputSource = 'interactive' | 'rpc' | 'extension';
+
+export interface ActivityInputSummary {
+  lastSource?: ActivityInputSource;
+  lastInputAt?: string;
+  counts?: Partial<Record<ActivityInputSource, number>>;
+}
+
+export interface ActivityToolWindow {
+  toolCallId: string;
+  toolName: string;
+  startedAt: string;
+  endedAt?: string;
+  isError?: boolean;
+}
+
 export type ActivitySource =
   | 'startup'
   | 'new'
+  | 'input'
   | 'message_end'
   | 'turn_start'
   | 'tool_start'
@@ -33,6 +50,8 @@ export interface SessionActivityRecord {
   lastToolStartedAt?: string;
   lastToolEndedAt?: string;
   lastErrorAt?: string;
+  inputSummary?: ActivityInputSummary;
+  recentToolWindows?: ActivityToolWindow[];
   activityUpdatedAt?: string;
   activitySource?: ActivitySource;
 }
@@ -78,6 +97,7 @@ export interface ActivityRuntimeController {
     source: 'startup' | 'new',
     sessionManager?: SessionManagerLike,
   ) => Promise<void>;
+  recordInputSource: (source: ActivityInputSource) => Promise<void>;
   recordMessageEnd: (message: ActivityMessageLike) => Promise<void>;
   recordTurnStart: () => Promise<void>;
   recordToolExecutionStart: (event: { toolCallId: string; toolName: string }) => Promise<void>;
@@ -109,6 +129,8 @@ export interface SessionDeckRecord extends Omit<JoinedSessionRecord, 'diagnostic
   currentToolName: string | null;
   lastEventAt: string | null;
   lastError: string | null;
+  inputSummary?: ActivityInputSummary;
+  recentToolWindows?: ActivityToolWindow[];
   activityUpdatedAt: string | null;
   diagnostics: SessionDeckDiagnostic[];
 }

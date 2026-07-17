@@ -26,6 +26,9 @@ export function toPublicSessionDeckRecord(record: SessionDeckRecord): SessionDec
             lineage: record.derivedFacets.lineage,
             identityStrength: record.derivedFacets.identityStrength,
             headerConsistency: record.derivedFacets.headerConsistency,
+            ...(record.derivedFacets.childRuntime === undefined
+              ? {}
+              : { childRuntime: record.derivedFacets.childRuntime }),
           },
         }),
     activityState: record.activityState,

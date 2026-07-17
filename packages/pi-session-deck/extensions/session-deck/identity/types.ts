@@ -203,6 +203,32 @@ export type SessionHeaderConsistencyFacet =
   | 'mismatch'
   | 'unavailable';
 
+export type ChildRuntimeConfidence = 'none' | 'low' | 'medium' | 'high' | 'explicit' | 'unknown';
+
+export type ChildRuntimeEvidenceCode =
+  | 'explicit_header_parent'
+  | 'inherited_deck_runtime'
+  | 'process_ancestor_match'
+  | 'started_during_parent_tool'
+  | 'same_terminal'
+  | 'headless_in_memory'
+  | 'automation_input_source';
+
+export interface ChildRuntimeEvidence {
+  code: ChildRuntimeEvidenceCode;
+  confidence: ChildRuntimeConfidence;
+  parentRuntimeId?: string;
+  parentSessionId?: string;
+}
+
+export interface ChildRuntimeFacet {
+  candidate: boolean;
+  confidence: ChildRuntimeConfidence;
+  evidence: ChildRuntimeEvidence[];
+  parentRuntimeId?: string;
+  parentSessionId?: string;
+}
+
 export interface SessionDerivedFacets {
   persistence: SessionPersistenceFacet;
   interactivity: SessionInteractivityFacet;
@@ -210,6 +236,7 @@ export interface SessionDerivedFacets {
   lineage: SessionLineageFacet;
   identityStrength: SessionIdentityStrengthFacet;
   headerConsistency: SessionHeaderConsistencyFacet;
+  childRuntime?: ChildRuntimeFacet;
 }
 
 // ─── Joined session records ─────────────────────────────────────────

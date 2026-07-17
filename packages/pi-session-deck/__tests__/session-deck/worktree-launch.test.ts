@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildManagedTmuxSessionName,
   buildPiLauncherCommand,
+  buildTmuxEnvironmentArgs,
   launchDetachedTmuxPi,
 } from '../../extensions/session-deck/worktree/launch.js';
 import {
@@ -84,10 +85,33 @@ describe('session-deck detached tmux launch', () => {
     );
   });
 
+  it('passes current Session Deck handoff env through tmux-owned launches explicitly', async () => {
+    const env: NodeJS.ProcessEnv = {
+      PI_SESSION_DECK_RUNTIME_ID: 'rt-parent',
+      PI_SESSION_DECK_SESSION_ID: 'session-parent',
+      PI_SESSION_DECK_SESSION_FILE: '/tmp/session-parent.md',
+      PI_SESSION_DECK_RUNTIME_STARTED_AT: '2026-07-17T12:00:00.000Z',
+    };
+
+    expect(buildTmuxEnvironmentArgs(env)).toEqual([
+      '-e',
+      'PI_SESSION_DECK_RUNTIME_ID=rt-parent',
+      '-e',
+      'PI_SESSION_DECK_SESSION_ID=session-parent',
+      '-e',
+      'PI_SESSION_DECK_SESSION_FILE=/tmp/session-parent.md',
+      '-e',
+      'PI_SESSION_DECK_RUNTIME_STARTED_AT=2026-07-17T12:00:00.000Z',
+    ]);
+  });
+
   it('returns launched with one explicit environment and a symbolic pi command', async () => {
     const env: NodeJS.ProcessEnv = {
       HOME: '/Users/test',
       PATH: "/runtime/tools/bin:/tmp/with space:$HOME;`echo hi`:/tmp/O'Hare",
+      PI_SESSION_DECK_RUNTIME_ID: 'rt-parent',
+      PI_SESSION_DECK_SESSION_ID: 'session-parent',
+      PI_SESSION_DECK_RUNTIME_STARTED_AT: '2026-07-17T12:00:00.000Z',
     };
     const whichPiPath = '/custom/tools/pi';
     const calls: ExecCall[] = [];
@@ -137,6 +161,12 @@ describe('session-deck detached tmux launch', () => {
         file: 'tmux',
         args: [
           'new-session',
+          '-e',
+          'PI_SESSION_DECK_RUNTIME_ID=rt-parent',
+          '-e',
+          'PI_SESSION_DECK_SESSION_ID=session-parent',
+          '-e',
+          'PI_SESSION_DECK_RUNTIME_STARTED_AT=2026-07-17T12:00:00.000Z',
           '-d',
           '-s',
           result.tmuxSessionName,

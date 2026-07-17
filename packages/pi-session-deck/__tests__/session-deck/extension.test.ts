@@ -130,6 +130,7 @@ function setupMocks(
     activityMock ??
     vi.fn().mockResolvedValue({
       refreshActivity,
+      recordInputSource: vi.fn().mockResolvedValue(undefined),
       recordMessageEnd: vi.fn().mockResolvedValue(undefined),
       recordTurnStart: vi.fn().mockResolvedValue(undefined),
       recordToolExecutionStart: vi.fn().mockResolvedValue(undefined),
@@ -237,6 +238,7 @@ describe('pi-session-deck extension', () => {
 
     expect(vi.mocked(pi.on).mock.calls.map((c) => c[0])).toEqual([
       'session_start',
+      'input',
       'message_end',
       'turn_start',
       'tool_execution_start',
@@ -395,9 +397,7 @@ describe('pi-session-deck extension', () => {
         expect(process.env['PI_SESSION_DECK_RUNTIME_ID']).toBe('runtime-1');
         expect(process.env['PI_SESSION_DECK_SESSION_ID']).toBe('session-1');
         expect(process.env['PI_SESSION_DECK_SESSION_FILE']).toBe('/tmp/session-1.md');
-        expect(process.env['PI_SESSION_DECK_RUNTIME_STARTED_AT']).toBe(
-          '2026-06-12T12:00:00.000Z',
-        );
+        expect(process.env['PI_SESSION_DECK_RUNTIME_STARTED_AT']).toBe('2026-06-12T12:00:00.000Z');
       },
     );
   });
@@ -564,6 +564,7 @@ describe('pi-session-deck extension', () => {
   it('forwards runtime events into the activity runtime', async () => {
     const activityRuntime = {
       refreshActivity: vi.fn().mockResolvedValue(undefined),
+      recordInputSource: vi.fn().mockResolvedValue(undefined),
       recordMessageEnd: vi.fn().mockResolvedValue(undefined),
       recordTurnStart: vi.fn().mockResolvedValue(undefined),
       recordToolExecutionStart: vi.fn().mockResolvedValue(undefined),
@@ -576,6 +577,8 @@ describe('pi-session-deck extension', () => {
     setupMocks(undefined, undefined, vi.fn().mockResolvedValue(activityRuntime));
     const { handlers } = await installExtension();
 
+    await handlers.get('input')?.({ source: 'extension', text: 'do not persist me' }, {});
+    await handlers.get('input')?.({ source: 'unknown', text: 'ignored' }, {});
     await handlers.get('message_end')?.(
       { message: { role: 'assistant', stopReason: 'error', errorMessage: 'boom' } },
       {},
@@ -588,6 +591,8 @@ describe('pi-session-deck extension', () => {
     );
     await handlers.get('turn_end')?.({}, {});
 
+    expect(activityRuntime.recordInputSource).toHaveBeenCalledWith('extension');
+    expect(activityRuntime.recordInputSource).toHaveBeenCalledTimes(1);
     expect(activityRuntime.recordMessageEnd).toHaveBeenCalledWith({
       role: 'assistant',
       stopReason: 'error',

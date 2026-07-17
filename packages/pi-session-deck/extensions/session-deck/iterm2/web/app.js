@@ -1762,7 +1762,12 @@ function createRecordCard(record) {
     ]),
     createLine(
       'row-line2',
-      [getRepoLabel(record, title.source), formatPr(record.prUrl), record.branch]
+      [
+        getRepoLabel(record, title.source),
+        formatPr(record.prUrl),
+        record.branch,
+        formatChildRuntimeLabel(record),
+      ]
         .filter((value) => typeof value === 'string' && value.length > 0)
         .map((value) => createText('span', value, 'muted')),
     ),
@@ -2009,6 +2014,7 @@ function createStatusSection(record) {
 
   content.push(
     createDetailRow('Presence reason', humanizePresenceReason(record.presenceReason)),
+    createDetailRow('Child runtime', formatChildRuntimeDetail(record)),
     createDetailRow('Current tool', record.currentToolName),
     createDetailRow('Last error', record.lastError),
   );
@@ -2142,6 +2148,70 @@ function formatCheckout(record) {
     return 'primary';
   }
   return record.worktreeLabel ? `worktree · ${record.worktreeLabel}` : 'worktree';
+}
+
+function formatChildRuntimeLabel(record) {
+  const childRuntime = getUsefulChildRuntime(record);
+  if (!childRuntime) {
+    return null;
+  }
+
+  return `child: ${childRuntime.confidence}`;
+}
+
+function formatChildRuntimeDetail(record) {
+  const childRuntime = getUsefulChildRuntime(record);
+  if (!childRuntime) {
+    return null;
+  }
+
+  const evidenceLabels = childRuntime.evidence
+    .filter((evidence) => evidence.confidence !== 'low')
+    .map((evidence) => formatChildRuntimeEvidence(evidence.code))
+    .filter((label, index, labels) => labels.indexOf(label) === index)
+    .slice(0, 2);
+  const via = evidenceLabels.length === 0 ? '' : ` via ${evidenceLabels.join(' + ')}`;
+  const parent = childRuntime.parentRuntimeId
+    ? ` · parent ${formatShortId(childRuntime.parentRuntimeId)}`
+    : '';
+  return `${childRuntime.confidence}${via}${parent}`;
+}
+
+function getUsefulChildRuntime(record) {
+  const childRuntime = record.derivedFacets?.childRuntime;
+  if (
+    !childRuntime ||
+    !isUsefulChildRuntimeConfidence(childRuntime.confidence) ||
+    !Array.isArray(childRuntime.evidence)
+  ) {
+    return null;
+  }
+  return childRuntime;
+}
+
+function isUsefulChildRuntimeConfidence(confidence) {
+  return confidence === 'medium' || confidence === 'high' || confidence === 'explicit';
+}
+
+function formatChildRuntimeEvidence(code) {
+  switch (code) {
+    case 'explicit_header_parent':
+      return 'header parent';
+    case 'inherited_deck_runtime':
+      return 'deck env';
+    case 'process_ancestor_match':
+      return 'process ancestor';
+    case 'started_during_parent_tool':
+      return 'parent tool';
+    case 'same_terminal':
+      return 'same terminal';
+    case 'headless_in_memory':
+      return 'headless in-memory';
+    case 'automation_input_source':
+      return 'automation input';
+    default:
+      return String(code).replaceAll('_', ' ');
+  }
 }
 
 function formatPr(prUrl) {

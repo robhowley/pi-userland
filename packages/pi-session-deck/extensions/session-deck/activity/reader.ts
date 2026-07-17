@@ -4,9 +4,13 @@ import { join } from 'node:path';
 import { deriveActivity } from './derive.js';
 import { getActivityRuntimeDiagnostics } from './runtime.js';
 import { getDefaultActivityDirectory, isActivityRecordFile } from './store.js';
+import { attachChildRuntimeFacets } from '../parentage/derive.js';
 import type {
   ActivityDiagnostic,
+  ActivityInputSource,
+  ActivityInputSummary,
   ActivityThresholds,
+  ActivityToolWindow,
   SessionActivityRecord,
   SessionDeckDiagnostic,
   SessionDeckRecord,
@@ -62,8 +66,10 @@ export async function readSessionDeckView(
       ...(scan.diagnosticsByRuntimeId.get(joinedRecord.runtimeId) ?? []),
       ...(runtimeDiagnostics.get(joinedRecord.runtimeId) ?? []),
     ];
+    const activity = scan.records.get(joinedRecord.runtimeId) ?? null;
+    const activityForParentage = isActivityTrustedForParentage(activity, joinedRecord);
     const derived = deriveActivity({
-      activity: scan.records.get(joinedRecord.runtimeId) ?? null,
+      activity,
       sessionId: joinedRecord.sessionId,
       sessionIdentityVerified: joinedRecord.identityFreshness !== 'missing',
       ...(options.now === undefined ? {} : { now: options.now }),
@@ -86,6 +92,12 @@ export async function readSessionDeckView(
       currentToolName: derived.currentToolName,
       lastEventAt: derived.lastEventAt,
       lastError: derived.lastError,
+      ...(activityForParentage?.inputSummary === undefined
+        ? {}
+        : { inputSummary: activityForParentage.inputSummary }),
+      ...(activityForParentage?.recentToolWindows === undefined
+        ? {}
+        : { recentToolWindows: activityForParentage.recentToolWindows }),
       activityUpdatedAt: derived.activityUpdatedAt,
       diagnostics: recordDiagnostics,
     });
@@ -107,7 +119,7 @@ export async function readSessionDeckView(
     diagnostics.push(...activityDiagnostics.map(toSessionDeckDiagnostic));
   }
 
-  return { records, diagnostics };
+  return { records: attachChildRuntimeFacets(records), diagnostics };
 }
 
 async function scanActivityRecords(
@@ -188,6 +200,17 @@ async function scanActivityRecords(
   return { records, diagnosticsByRuntimeId, diagnostics };
 }
 
+function isActivityTrustedForParentage(
+  activity: SessionActivityRecord | null,
+  record: { sessionId: string | null; identityFreshness: string },
+): SessionActivityRecord | null {
+  if (activity === null || record.identityFreshness === 'missing') {
+    return null;
+  }
+
+  return activity.sessionId === record.sessionId ? activity : null;
+}
+
 function normalizeActivityRecord(candidate: unknown): SessionActivityRecord | null {
   if (!isObject(candidate)) {
     return null;
@@ -205,6 +228,8 @@ function normalizeActivityRecord(candidate: unknown): SessionActivityRecord | nu
   const lastErrorAt = normalizeStringField(candidate['lastErrorAt']);
   const activityUpdatedAt = normalizeStringField(candidate['activityUpdatedAt']);
   const activitySource = normalizeActivitySource(candidate['activitySource']);
+  const inputSummary = normalizeInputSummary(candidate['inputSummary']);
+  const recentToolWindows = normalizeRecentToolWindows(candidate['recentToolWindows']);
 
   return {
     runtimeId,
@@ -221,6 +246,8 @@ function normalizeActivityRecord(candidate: unknown): SessionActivityRecord | nu
     ...(lastToolStartedAt === null ? {} : { lastToolStartedAt }),
     ...(lastToolEndedAt === null ? {} : { lastToolEndedAt }),
     ...(lastErrorAt === null ? {} : { lastErrorAt }),
+    ...(inputSummary === undefined ? {} : { inputSummary }),
+    ...(recentToolWindows === undefined ? {} : { recentToolWindows }),
     ...(activityUpdatedAt === null ? {} : { activityUpdatedAt }),
     ...(activitySource === undefined ? {} : { activitySource }),
   };
@@ -244,6 +271,7 @@ function normalizeActivitySource(
   switch (value) {
     case 'startup':
     case 'new':
+    case 'input':
     case 'message_end':
     case 'turn_start':
     case 'tool_start':
@@ -257,6 +285,90 @@ function normalizeActivitySource(
   }
 }
 
+function normalizeInputSummary(value: unknown): ActivityInputSummary | undefined {
+  if (!isObject(value)) {
+    return undefined;
+  }
+
+  const lastSource = normalizeInputSource(value['lastSource']);
+  const lastInputAt = normalizeOptionalStringField(value['lastInputAt']);
+  const counts = normalizeInputCounts(value['counts']);
+  if (lastSource === undefined && lastInputAt === undefined && counts === undefined) {
+    return undefined;
+  }
+
+  return {
+    ...(lastSource === undefined ? {} : { lastSource }),
+    ...(lastInputAt === undefined ? {} : { lastInputAt }),
+    ...(counts === undefined ? {} : { counts }),
+  };
+}
+
+function normalizeInputCounts(value: unknown): ActivityInputSummary['counts'] | undefined {
+  if (!isObject(value)) {
+    return undefined;
+  }
+
+  const counts: Partial<Record<ActivityInputSource, number>> = {};
+  for (const source of ['interactive', 'rpc', 'extension'] as const) {
+    const count = value[source];
+    if (count === undefined) {
+      continue;
+    }
+    if (typeof count !== 'number' || !Number.isInteger(count) || count < 0) {
+      return undefined;
+    }
+    counts[source] = count;
+  }
+
+  return Object.keys(counts).length === 0 ? undefined : counts;
+}
+
+function normalizeInputSource(value: unknown): ActivityInputSource | undefined {
+  switch (value) {
+    case 'interactive':
+    case 'rpc':
+    case 'extension':
+      return value;
+    default:
+      return undefined;
+  }
+}
+
+function normalizeRecentToolWindows(value: unknown): ActivityToolWindow[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const windows = value
+    .map((entry) => normalizeRecentToolWindow(entry))
+    .filter((entry): entry is ActivityToolWindow => entry !== null)
+    .slice(-20);
+  return windows.length === 0 ? undefined : windows;
+}
+
+function normalizeRecentToolWindow(value: unknown): ActivityToolWindow | null {
+  if (!isObject(value)) {
+    return null;
+  }
+
+  const toolCallId = normalizeOptionalStringField(value['toolCallId']);
+  const toolName = normalizeOptionalStringField(value['toolName']);
+  const startedAt = normalizeOptionalStringField(value['startedAt']);
+  if (toolCallId === undefined || toolName === undefined || startedAt === undefined) {
+    return null;
+  }
+
+  const endedAt = normalizeOptionalStringField(value['endedAt']);
+  return {
+    toolCallId,
+    toolName,
+    startedAt,
+    ...(endedAt === undefined ? {} : { endedAt }),
+    ...(value['isError'] === true ? { isError: true } : {}),
+  };
+}
+
 function normalizeBooleanField(value: unknown): boolean {
   return value === true;
 }
@@ -267,6 +379,10 @@ function normalizeStringField(value: unknown): string | null {
   }
 
   return null;
+}
+
+function normalizeOptionalStringField(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 function groupDiagnosticsByRuntime(

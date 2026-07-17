@@ -921,6 +921,74 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(getCards(harness.elements.list)).toHaveLength(0);
   });
 
+  it('renders useful child runtime evidence and hides low-confidence child labels', async () => {
+    const harness = await setupApp([
+      buildSnapshot({
+        records: [
+          buildRecord({
+            runtimeId: 'rt-high-child',
+            sessionName: 'worker',
+            derivedFacets: {
+              persistence: 'in_memory',
+              interactivity: 'headless',
+              lifecycle: 'startup',
+              lineage: 'root',
+              identityStrength: 'weak',
+              headerConsistency: 'consistent',
+              childRuntime: {
+                candidate: true,
+                confidence: 'high',
+                parentRuntimeId: 'rt-parent',
+                evidence: [
+                  {
+                    code: 'inherited_deck_runtime',
+                    confidence: 'high',
+                    parentRuntimeId: 'rt-parent',
+                  },
+                  {
+                    code: 'process_ancestor_match',
+                    confidence: 'high',
+                    parentRuntimeId: 'rt-parent',
+                  },
+                ],
+              },
+            },
+          }),
+          buildRecord({
+            runtimeId: 'rt-low-candidate',
+            sessionId: 'session-low',
+            sessionName: 'maybe',
+            derivedFacets: {
+              persistence: 'in_memory',
+              interactivity: 'interactive',
+              lifecycle: 'startup',
+              lineage: 'root',
+              identityStrength: 'weak',
+              headerConsistency: 'consistent',
+              childRuntime: {
+                candidate: true,
+                confidence: 'low',
+                evidence: [{ code: 'same_terminal', confidence: 'low' }],
+              },
+            },
+          }),
+        ],
+      }),
+    ]);
+
+    expandRepoGroup(harness.elements.list, 'owner/project');
+    let cards = getCards(harness.elements.list);
+    expect(getCardLine(cards[0]!, 'row-line2').textContent).toContain('child: high');
+    expect(getCardLine(cards[1]!, 'row-line2').textContent).not.toContain('child: low');
+
+    getCardToggle(cards[0]!).click();
+    cards = getCards(harness.elements.list);
+    const status = getDetailSection(getCardDetail(cards[0]!), 'STATUS');
+    expect(getDetailRowValue(status, 'Child runtime').textContent).toContain(
+      'high via deck env + process ancestor · parent rt-paren',
+    );
+  });
+
   it('renders a sibling + New repo-row action and opens the compact composer', async () => {
     const harness = await setupApp([buildSnapshot(), buildBasePreview()]);
     const repoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');

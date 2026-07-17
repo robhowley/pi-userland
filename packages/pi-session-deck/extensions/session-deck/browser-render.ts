@@ -18,6 +18,7 @@ export interface SessionDeckBrowserRow {
   branchLabel: string | null;
   chipPreview: string;
   hasChips: boolean;
+  childLabel: string | null;
   terminalLabel: string | null;
   terminalOpenLabel: string | null;
 }
@@ -75,6 +76,11 @@ export function formatSessionDeckRecordLines(
     lines.push(`  ${contextLine}`);
   }
 
+  const childRuntimeLine = formatChildRuntimeLine(record);
+  if (childRuntimeLine !== null) {
+    lines.push(`  ${childRuntimeLine}`);
+  }
+
   if (record.chips.length > 0) {
     lines.push(`  ${formatTextChipSummary(record.chips)}`);
   }
@@ -115,6 +121,7 @@ export function formatSessionDeckBrowserRow(
     branchLabel: formatListBranch(record.branch),
     chipPreview: formatChipPreview(record.chips),
     hasChips: record.chips.length > 0,
+    childLabel: formatChildRuntimeLabel(record),
     terminalLabel: record.terminalDisplay?.detail ?? null,
     terminalOpenLabel: record.terminalDisplay?.openLabel ?? null,
   };
@@ -147,6 +154,11 @@ export function formatSessionDeckBrowserCardLines(
   }
 
   lines.push(formatCardStatusLine(record));
+
+  const childRuntimeLine = formatChildRuntimeLine(record);
+  if (childRuntimeLine !== null) {
+    lines.push(childRuntimeLine);
+  }
 
   if (record.terminalDisplay !== undefined) {
     lines.push(`terminal: ${record.terminalDisplay.detail}`);
@@ -442,6 +454,56 @@ function formatPr(prUrl: string | null): string | null {
 
   const prMatch = prUrl.match(/\/pull\/(\d+)$/);
   return prMatch ? `#${prMatch[1]}` : prUrl;
+}
+
+function formatChildRuntimeLine(record: SessionDeckRecord): string | null {
+  const label = formatChildRuntimeLabel(record);
+  return label === null ? null : `child runtime: ${label.replace(/^child: /u, '')}`;
+}
+
+function formatChildRuntimeLabel(record: SessionDeckRecord): string | null {
+  const childRuntime = record.derivedFacets?.childRuntime;
+  if (childRuntime === undefined || !isUsefulChildRuntimeConfidence(childRuntime.confidence)) {
+    return null;
+  }
+
+  const evidenceLabels = childRuntime.evidence
+    .filter((evidence) => evidence.confidence !== 'low')
+    .map((evidence) => formatChildRuntimeEvidence(evidence.code))
+    .filter((label, index, labels) => labels.indexOf(label) === index)
+    .slice(0, 2);
+  const via = evidenceLabels.length === 0 ? '' : ` via ${evidenceLabels.join(' + ')}`;
+  const parent =
+    childRuntime.parentRuntimeId === undefined
+      ? ''
+      : ` · parent ${formatShortId(childRuntime.parentRuntimeId)}`;
+
+  return `child: ${childRuntime.confidence}${via}${parent}`;
+}
+
+function isUsefulChildRuntimeConfidence(confidence: string): boolean {
+  return confidence === 'medium' || confidence === 'high' || confidence === 'explicit';
+}
+
+function formatChildRuntimeEvidence(code: string): string {
+  switch (code) {
+    case 'explicit_header_parent':
+      return 'header parent';
+    case 'inherited_deck_runtime':
+      return 'deck env';
+    case 'process_ancestor_match':
+      return 'process ancestor';
+    case 'started_during_parent_tool':
+      return 'parent tool';
+    case 'same_terminal':
+      return 'same terminal';
+    case 'headless_in_memory':
+      return 'headless in-memory';
+    case 'automation_input_source':
+      return 'automation input';
+    default:
+      return code.replaceAll('_', ' ');
+  }
 }
 
 function formatTextIdentityDetails(record: SessionDeckRecord): string | null {

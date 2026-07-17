@@ -625,6 +625,74 @@ describe('SessionDeckBrowser', () => {
     expect(output).not.toContain('│   - merge-ready clean');
   });
 
+  it('renders useful child runtime evidence without labeling low-confidence rows as children', () => {
+    const browser = createBrowser({
+      initialView: buildSnapshot({
+        records: [
+          buildSnapshotRecord({
+            runtimeId: 'rt-high-child',
+            sessionName: 'worker',
+            chips: [],
+            derivedFacets: {
+              persistence: 'in_memory',
+              interactivity: 'headless',
+              lifecycle: 'startup',
+              lineage: 'root',
+              identityStrength: 'weak',
+              headerConsistency: 'consistent',
+              childRuntime: {
+                candidate: true,
+                confidence: 'high',
+                parentRuntimeId: 'rt-parent',
+                evidence: [
+                  {
+                    code: 'inherited_deck_runtime',
+                    confidence: 'high',
+                    parentRuntimeId: 'rt-parent',
+                  },
+                  {
+                    code: 'process_ancestor_match',
+                    confidence: 'high',
+                    parentRuntimeId: 'rt-parent',
+                  },
+                ],
+              },
+            },
+          }),
+          buildSnapshotRecord({
+            runtimeId: 'rt-low-candidate',
+            sessionName: 'maybe',
+            chips: [],
+            derivedFacets: {
+              persistence: 'in_memory',
+              interactivity: 'interactive',
+              lifecycle: 'startup',
+              lineage: 'root',
+              identityStrength: 'weak',
+              headerConsistency: 'consistent',
+              childRuntime: {
+                candidate: true,
+                confidence: 'low',
+                evidence: [{ code: 'same_terminal', confidence: 'low' }],
+              },
+            },
+          }),
+        ],
+      }),
+    });
+
+    let output = renderText(browser);
+    expect(output).toContain('child: high via deck env + process ancestor · parent rt-paren');
+    expect(output).toContain(
+      '│ child runtime: high via deck env + process ancestor · parent rt-paren',
+    );
+
+    browser.handleInput('down');
+    output = renderText(browser);
+    expect(output).not.toContain('child: low');
+    expect(output).not.toContain('child runtime: low');
+  });
+
   it('uses the approved activity glyphs in top-pane rows without changing card presence text', () => {
     const browser = createBrowser({
       all: true,
