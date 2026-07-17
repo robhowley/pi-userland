@@ -921,7 +921,7 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(getCards(harness.elements.list)).toHaveLength(0);
   });
 
-  it('renders useful child runtime evidence and hides low-confidence child labels', async () => {
+  it('gates visible child runtime labeling on rowKind while keeping proven child detail', async () => {
     const harness = await setupApp([
       buildSnapshot({
         records: [
@@ -956,7 +956,7 @@ describe('Session Deck iTerm2 web UI', () => {
             },
           }),
           buildRecord({
-            runtimeId: 'rt-low-candidate',
+            runtimeId: 'rt-env-only',
             sessionId: 'session-low',
             sessionName: 'maybe',
             derivedFacets: {
@@ -969,8 +969,15 @@ describe('Session Deck iTerm2 web UI', () => {
               headerConsistency: 'consistent',
               childRuntime: {
                 candidate: true,
-                confidence: 'low',
-                evidence: [{ code: 'same_terminal', confidence: 'low' }],
+                confidence: 'high',
+                parentRuntimeId: 'rt-parent',
+                evidence: [
+                  {
+                    code: 'inherited_deck_runtime',
+                    confidence: 'high',
+                    parentRuntimeId: 'rt-parent',
+                  },
+                ],
               },
             },
           }),
@@ -981,14 +988,19 @@ describe('Session Deck iTerm2 web UI', () => {
     expandRepoGroup(harness.elements.list, 'owner/project');
     let cards = getCards(harness.elements.list);
     expect(getCardLine(cards[0]!, 'row-line2').textContent).toContain('child: high');
-    expect(getCardLine(cards[1]!, 'row-line2').textContent).not.toContain('child: low');
+    expect(getCardLine(cards[1]!, 'row-line2').textContent).not.toContain('child: high');
 
     getCardToggle(cards[0]!).click();
     cards = getCards(harness.elements.list);
-    const status = getDetailSection(getCardDetail(cards[0]!), 'STATUS');
+    let status = getDetailSection(getCardDetail(cards[0]!), 'STATUS');
     expect(getDetailRowValue(status, 'Child runtime').textContent).toContain(
       'high via deck env + process ancestor · parent rt-paren',
     );
+
+    getCardToggle(cards[1]!).click();
+    cards = getCards(harness.elements.list);
+    status = getDetailSection(getCardDetail(cards[1]!), 'STATUS');
+    expect(getDetailRowLabels(status)).not.toContain('Child runtime');
   });
 
   it('renders a sibling + New repo-row action and opens the compact composer', async () => {

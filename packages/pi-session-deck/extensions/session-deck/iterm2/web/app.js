@@ -2178,8 +2178,10 @@ function formatChildRuntimeDetail(record) {
 }
 
 function getUsefulChildRuntime(record) {
-  const childRuntime = record.derivedFacets?.childRuntime;
+  const derivedFacets = record.derivedFacets;
+  const childRuntime = derivedFacets?.childRuntime;
   if (
+    derivedFacets?.rowKind !== 'ephemeral_child_runtime' ||
     !childRuntime ||
     !isUsefulChildRuntimeConfidence(childRuntime.confidence) ||
     !Array.isArray(childRuntime.evidence)

@@ -462,7 +462,12 @@ function formatChildRuntimeLine(record: SessionDeckRecord): string | null {
 }
 
 function formatChildRuntimeLabel(record: SessionDeckRecord): string | null {
-  const childRuntime = record.derivedFacets?.childRuntime;
+  const derivedFacets = record.derivedFacets;
+  if (derivedFacets === undefined || derivedFacets.rowKind !== 'ephemeral_child_runtime') {
+    return null;
+  }
+
+  const childRuntime = derivedFacets.childRuntime;
   if (childRuntime === undefined || !isUsefulChildRuntimeConfidence(childRuntime.confidence)) {
     return null;
   }

@@ -625,7 +625,7 @@ describe('SessionDeckBrowser', () => {
     expect(output).not.toContain('│   - merge-ready clean');
   });
 
-  it('renders useful child runtime evidence without labeling low-confidence rows as children', () => {
+  it('gates visible child runtime labeling on rowKind while keeping proven child detail', () => {
     const browser = createBrowser({
       initialView: buildSnapshot({
         records: [
@@ -661,7 +661,7 @@ describe('SessionDeckBrowser', () => {
             },
           }),
           buildSnapshotRecord({
-            runtimeId: 'rt-low-candidate',
+            runtimeId: 'rt-env-only',
             sessionName: 'maybe',
             chips: [],
             derivedFacets: {
@@ -674,8 +674,15 @@ describe('SessionDeckBrowser', () => {
               headerConsistency: 'consistent',
               childRuntime: {
                 candidate: true,
-                confidence: 'low',
-                evidence: [{ code: 'same_terminal', confidence: 'low' }],
+                confidence: 'high',
+                parentRuntimeId: 'rt-parent',
+                evidence: [
+                  {
+                    code: 'inherited_deck_runtime',
+                    confidence: 'high',
+                    parentRuntimeId: 'rt-parent',
+                  },
+                ],
               },
             },
           }),
@@ -691,8 +698,8 @@ describe('SessionDeckBrowser', () => {
 
     browser.handleInput('down');
     output = renderText(browser);
-    expect(output).not.toContain('child: low');
-    expect(output).not.toContain('child runtime: low');
+    expect(output).not.toContain('child: high via deck env · parent rt-paren');
+    expect(output).not.toContain('child runtime: high via deck env · parent rt-paren');
   });
 
   it('uses the approved activity glyphs in top-pane rows without changing card presence text', () => {
