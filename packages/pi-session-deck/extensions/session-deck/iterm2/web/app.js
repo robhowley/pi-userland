@@ -489,10 +489,71 @@ function createRepoHeaderLabel(repoGroup) {
 }
 
 function render() {
+  const focusSnapshot = captureRenderFocus();
   renderSummary();
   renderBanner();
   renderList();
   renderDiagnostics();
+  restoreRenderFocus(focusSnapshot);
+}
+
+function captureRenderFocus() {
+  const activeElement = document.activeElement;
+  if (!(activeElement instanceof HTMLInputElement)) {
+    return null;
+  }
+
+  const ariaLabel = activeElement.getAttribute('aria-label');
+  if (ariaLabel !== 'Branch name' && ariaLabel !== 'Custom Pi config directory') {
+    return null;
+  }
+
+  return {
+    ariaLabel,
+    selectionStart:
+      typeof activeElement.selectionStart === 'number' ? activeElement.selectionStart : null,
+    selectionEnd:
+      typeof activeElement.selectionEnd === 'number' ? activeElement.selectionEnd : null,
+  };
+}
+
+function restoreRenderFocus(snapshot) {
+  if (snapshot === null) {
+    return;
+  }
+
+  const input = findInputByAriaLabel(elements.list, snapshot.ariaLabel);
+  if (input === null) {
+    return;
+  }
+
+  input.focus?.();
+  if (
+    typeof input.setSelectionRange === 'function' &&
+    typeof snapshot.selectionStart === 'number' &&
+    typeof snapshot.selectionEnd === 'number'
+  ) {
+    const valueLength = input.value.length;
+    input.setSelectionRange(
+      Math.min(snapshot.selectionStart, valueLength),
+      Math.min(snapshot.selectionEnd, valueLength),
+    );
+  }
+}
+
+function findInputByAriaLabel(node, ariaLabel) {
+  if (node instanceof HTMLInputElement && node.getAttribute('aria-label') === ariaLabel) {
+    return node;
+  }
+
+  for (const child of node.childNodes ?? []) {
+    const match = findInputByAriaLabel(child, ariaLabel);
+    if (match !== null) {
+      return match;
+    }
+  }
+
+  return null;
 }
 
 function renderSummary() {
@@ -1022,7 +1083,7 @@ function formatWorktreeAgentDirModeLabel(mode) {
 function formatWorktreeAgentDirOptionLabel(mode) {
   switch (mode) {
     case 'default':
-      return 'Pi default (~/.pi/agent)';
+      return 'Pi default';
     case 'custom':
       return 'Custom…';
     default:
