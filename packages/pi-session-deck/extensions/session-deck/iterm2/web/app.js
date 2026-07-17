@@ -1283,6 +1283,7 @@ function createRecordCard(record) {
     createLine('row-line1', [
       createActivityIcon(record),
       createText('span', title.text, 'row-title'),
+      createText('span', getRowActivityLabel(record), 'row-activity'),
       createText('span', formatDuration(getListAgeMs(record)), 'muted row-age'),
     ]),
     createLine(
@@ -1600,6 +1601,15 @@ function parsePullRequestNumber(prUrl) {
   }
   const match = prUrl.match(/\/pull\/(\d+)$/u);
   return match ? match[1] : null;
+}
+
+function getRowActivityLabel(record) {
+  if (record.presenceState !== 'live') {
+    return record.presenceState;
+  }
+
+  const activity = getActivityDisplay(record);
+  return activity.label === 'idle' ? 'live' : activity.label;
 }
 
 function getActivityDisplay(record) {

@@ -943,12 +943,20 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(buttons[0]?.disabled).toBe(false);
   });
 
-  it('ships one-row compact composer input and Create button styling', async () => {
+  it('ships Prompt Gutter rails and one-row compact composer styling', async () => {
     const css = await readFile(
       new URL('../../extensions/session-deck/iterm2/web/style.css', import.meta.url),
       'utf8',
     );
 
+    expect(css).toContain('--color-bg: #12161e;');
+    expect(css).toContain('--color-repo-row: #232936;');
+    expect(css).toContain('--color-rail: #8fbcbb;');
+    expect(css).toContain("--font-mono: 'SF Mono', 'Berkeley Mono'");
+    expect(css).toContain('.topbar-copy::before');
+    expect(css).toContain('.repo-header-row::before');
+    expect(css).toContain('.repo-group-records::before');
+    expect(css).toContain('.repo-group-records > .card::before');
     expect(css).toMatch(
       /\.worktree-form input\[type='text'\]::placeholder\s*\{[\s\S]*color:\s*rgba\(167, 176, 192, 0\.58\);/u,
     );
@@ -957,11 +965,12 @@ describe('Session Deck iTerm2 web UI', () => {
     );
     expect(css).toMatch(/\.worktree-branch-control\s*\{[\s\S]*height:\s*32px;/u);
     expect(css).toMatch(
-      /\.worktree-form input\[type='text'\]\s*\{[\s\S]*border-radius:\s*7px 0 0 7px;[\s\S]*font-family:\s*ui-monospace/u,
+      /\.worktree-form input\[type='text'\]\s*\{[\s\S]*border-radius:\s*7px 0 0 7px;[\s\S]*font-family:\s*var\(--font-mono\)/u,
     );
     expect(css).toMatch(
       /\.worktree-submit-button\s*\{[\s\S]*min-height:\s*32px;[\s\S]*border-radius:\s*0 7px 7px 0;/u,
     );
+    expect(css).toContain('.row-activity');
     expect(css).toContain('.worktree-form-feedback');
     expect(css).toContain('.pending-worktree-actions');
     expect(css).not.toContain('.worktree-form-actions');
@@ -2267,7 +2276,8 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(activityIcons[0]?.getAttribute('aria-label')).toBe('idle');
     expect(activityIcons[0]?.getAttribute('title')).toBe('idle');
     expect(findAllByClass(line1, 'status-icon')).toHaveLength(0);
-    expect(getChildTextContents(line1)).toEqual(['', 'gbt baseline', '5s']);
+    expect(getChildTextContents(line1)).toEqual(['', 'gbt baseline', 'live', '5s']);
+    expect(findAllByClass(line1, 'row-activity')[0]?.textContent).toBe('live');
     expect(line1.textContent).not.toContain('idle');
     expect(findAllByClass(line1, 'row-age')[0]?.textContent).toBe('5s');
     expect(getChildTextContents(line2)).toEqual(['shop-ml', '#22722', 'rh-baseline-gbdt']);
@@ -2638,8 +2648,8 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(activityIcons[0]?.getAttribute('data-activity')).toBe('thinking');
     expect(findAllByClass(line1, 'activity-icon-thinking-orbit')).toHaveLength(1);
     expect(findAllByClass(line1, 'status-icon')).toHaveLength(0);
-    expect(getChildTextContents(line1)).toEqual(['', 'alpha', '12s']);
-    expect(line1.textContent).not.toContain('thinking');
+    expect(getChildTextContents(line1)).toEqual(['', 'alpha', 'thinking', '12s']);
+    expect(findAllByClass(line1, 'row-activity')[0]?.textContent).toBe('thinking');
   });
 
   it('renders subsecond card ages as <1s and preserves larger duration units', async () => {
@@ -2708,8 +2718,8 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(activityIcons[0]?.getAttribute('data-activity')).toBe('tool-running');
     expect(findAllByClass(line1, 'activity-icon-thinking-orbit')).toHaveLength(0);
     expect(findAllByClass(line1, 'status-icon')).toHaveLength(0);
-    expect(getChildTextContents(line1)).toEqual(['', 'alpha', '12s']);
-    expect(line1.textContent).not.toContain('tool-running');
+    expect(getChildTextContents(line1)).toEqual(['', 'alpha', 'tool-running', '12s']);
+    expect(findAllByClass(line1, 'row-activity')[0]?.textContent).toBe('tool-running');
     expect(line1.textContent).not.toContain('bash');
     expect(line1.textContent.match(/12s/gu) ?? []).toHaveLength(1);
     expect(line2.textContent).not.toContain('12s');
