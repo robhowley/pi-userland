@@ -2,9 +2,19 @@
 
 A control plane for your Pi agents: live sessions organized by repo, detailed status tracking, terminal multiplexing, and new-agent launches in one place.
 
-<img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-session-deck/img/session-deck-toolbelt.png" alt="Session Deck iTerm2 Toolbelt showing live Pi agent sessions grouped by repo" width="720">
+Session Deck gives each Pi agent a live operating surface across the native Pi TUI and iTerm2 Toolbelt UI. Run it with `/session-deck` inside Pi, or install the iTerm2 Toolbelt view for an always-on sidebar.
 
-Session Deck gives each Pi agent a live operating surface across the TUI and iTerm2 Toolbelt. Run it as the native Pi TUI with `/session-deck`, or install the iTerm2 Toolbelt UI for an always-on sidebar. Launch new agents headlessly on generated Git worktrees as detached tmux sessions, then reattach to the right terminal when you need it. Use it to inspect liveness, branch context, PR state, status chips, and attached terminal targets without hunting through terminal tabs.
+<img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-session-deck/img/session-deck-toolbelt-overview.png" alt="Session Deck iTerm2 Toolbelt showing live Pi agent sessions grouped under pi-userland" width="720">
+
+Organize live agents by repository so each repo group carries its session count, quick launch action, and collapsed or expanded state.
+
+<img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-session-deck/img/session-deck-toolbelt-repos.png" alt="Session Deck iTerm2 Toolbelt showing Pi agents organized across betterby-bike and pi-userland repos" width="720">
+
+Track detailed status at a glance: liveness, current activity, branch context, PR state, safe status chips, and terminal-open affordances stay attached to each agent row.
+
+<img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-session-deck/img/session-deck-toolbelt.png" alt="Session Deck iTerm2 Toolbelt branch composer for launching a new Pi agent on a worktree" width="720">
+
+Launch new agents from **＋ New**. Session Deck creates or reuses a generated Git worktree and starts Pi headlessly in a detached tmux session, so the agent keeps running until you reattach to it.
 
 ## Installation
 
