@@ -957,7 +957,7 @@ describe('Session Deck iTerm2 web UI', () => {
     const form = findAllByClass(openedRepoGroup, 'worktree-form')[0];
     expect(form).toBeDefined();
     expect(form!.textContent).toContain('main →');
-    expect(form!.textContent).toContain('Pi config: ambient → ~/.pi/agent-or');
+    expect(form!.textContent).toContain('Pi config → ~/.pi/agent-or');
     expect(form!.textContent).toContain('Change');
     expect(form!.textContent).toContain('Create');
     expect(form!.textContent).not.toContain('Branch name');
@@ -1163,6 +1163,9 @@ describe('Session Deck iTerm2 web UI', () => {
     const loadingRepoGroup = getRepoGroupByLabel(harness.elements.list, 'owner/project');
     const form = findAllByClass(loadingRepoGroup, 'worktree-form')[0]!;
     expect(findAllByClass(form, 'worktree-field-meta')[0]?.textContent).toBe('Resolving…');
+    expect(findAllByClass(form, 'worktree-config-summary')[0]?.textContent).toBe(
+      'Pi config resolving…',
+    );
     const submitButton = findAllByTag(form, 'button')[0] as FakeButtonElement;
     expect(submitButton.textContent).toBe('Create');
     expect(submitButton.disabled).toBe(true);

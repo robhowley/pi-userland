@@ -817,7 +817,7 @@ function createWorktreeConfigRow(repoGroup, formState, launchPreview) {
 
   const summary = createText(
     'span',
-    `Pi config: ${formatWorktreeLaunchPreviewCopy(formState, launchPreview)}`,
+    formatWorktreeLaunchPreviewCopy(launchPreview),
     'worktree-field-meta worktree-config-summary',
   );
   summary.setAttribute('data-state', launchPreview?.status ?? 'loading');
@@ -1059,25 +1059,14 @@ function formatBaseRefLabel(baseRef) {
   return normalized.length > 0 ? normalized : trimmed;
 }
 
-function formatWorktreeLaunchPreviewCopy(formState, preview) {
+function formatWorktreeLaunchPreviewCopy(preview) {
   if (preview?.status === 'resolved') {
-    return `${formatWorktreeAgentDirModeLabel(preview.mode)} → ${preview.effectiveDisplay}`;
+    return `Pi config → ${preview.effectiveDisplay}`;
   }
   if (preview?.status === 'failed') {
-    return `${formatWorktreeAgentDirModeLabel(formState.agentDirSelection.mode)} unavailable`;
+    return 'Pi config unavailable';
   }
-  return `${formatWorktreeAgentDirModeLabel(formState.agentDirSelection.mode)} resolving…`;
-}
-
-function formatWorktreeAgentDirModeLabel(mode) {
-  switch (mode) {
-    case 'default':
-      return 'Pi default';
-    case 'custom':
-      return 'custom';
-    default:
-      return 'ambient';
-  }
+  return 'Pi config resolving…';
 }
 
 function formatWorktreeAgentDirOptionLabel(mode) {
