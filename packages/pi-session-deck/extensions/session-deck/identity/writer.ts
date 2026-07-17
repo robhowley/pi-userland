@@ -1,5 +1,8 @@
 import { mkdir, rename, writeFile } from 'node:fs/promises';
-import { normalizeSessionRuntimeSignalsMetadata, normalizeSessionTerminalMetadata } from './metadata.js';
+import {
+  normalizeSessionRuntimeSignalsMetadata,
+  normalizeSessionTerminalMetadata,
+} from './metadata.js';
 import {
   createIdentityTempPath,
   getDefaultIdentityDirectory,

@@ -243,9 +243,7 @@ function normalizeSessionRuntimeLaunchMetadata(
   };
 }
 
-function normalizeSessionRuntimeLaunchMode(
-  value: unknown,
-): SessionRuntimeLaunchMode | undefined {
+function normalizeSessionRuntimeLaunchMode(value: unknown): SessionRuntimeLaunchMode | undefined {
   switch (value) {
     case 'tui':
     case 'rpc':

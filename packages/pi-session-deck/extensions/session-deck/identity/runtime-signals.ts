@@ -117,7 +117,8 @@ export async function collectRuntimeProcessMetadata(
   const now = options.now ?? (() => new Date());
   const uptimeSeconds = options.uptimeSeconds ?? (() => process.uptime());
   const maxDepth = clampAncestorDepth(options.maxAncestorDepth);
-  const timeoutMs = normalizePositiveInteger(options.ancestorTimeoutMs) ?? DEFAULT_ANCESTOR_TIMEOUT_MS;
+  const timeoutMs =
+    normalizePositiveInteger(options.ancestorTimeoutMs) ?? DEFAULT_ANCESTOR_TIMEOUT_MS;
   const processStartedAt = deriveCurrentProcessStartedAt(now, uptimeSeconds);
 
   let ancestors: SessionRuntimeProcessAncestorMetadata[] = [];
@@ -271,7 +272,10 @@ function argvIncludesValueFlag(argv: readonly string[], flag: string): boolean {
   return argv.some((token) => token === flag || token.startsWith(`${flag}=`));
 }
 
-function deriveCurrentProcessStartedAt(now: () => Date, uptimeSeconds: () => number): string | undefined {
+function deriveCurrentProcessStartedAt(
+  now: () => Date,
+  uptimeSeconds: () => number,
+): string | undefined {
   const nowMs = now().getTime();
   const uptime = uptimeSeconds();
   if (!Number.isFinite(nowMs) || !Number.isFinite(uptime) || uptime < 0) {
@@ -303,11 +307,9 @@ function createPsRuntimeProcessInfoReader(
   const execImpl = execFileImpl ?? defaultExecFile;
 
   return async (pid: number, timeoutMs: number) => {
-    const result = await execImpl(
-      PS_COMMAND,
-      ['-o', 'pid=,ppid=,lstart=', '-p', String(pid)],
-      { timeout: timeoutMs },
-    );
+    const result = await execImpl(PS_COMMAND, ['-o', 'pid=,ppid=,lstart=', '-p', String(pid)], {
+      timeout: timeoutMs,
+    });
     const stdout = coerceStdout(result);
     const line = stdout
       .split('\n')
