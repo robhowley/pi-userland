@@ -258,9 +258,10 @@ function reconcileSelection() {
 
 function getVisibleRecords() {
   const records = state.snapshot?.records ?? [];
-  return state.showAll
-    ? records
-    : records.filter((record) => DEFAULT_VISIBLE_STATES.has(record.presenceState));
+  return records.filter(
+    (record) =>
+      !isTempSession(record) && (state.showAll || DEFAULT_VISIBLE_STATES.has(record.presenceState)),
+  );
 }
 
 function reconcileExpandedRepoKeys(repoGroups = createRepoGroups(getVisibleRecords())) {
@@ -603,19 +604,12 @@ function renderSummary() {
 
   const snapshot = state.snapshot ?? emptySnapshot('Snapshot unavailable.');
   const counts = countPresenceStates(snapshot.records);
-  const summaryLabels = [`${counts.live} live`];
-
-  if (counts.stale > 0) {
-    summaryLabels.push(`${counts.stale} stale`);
-  }
+  const tempLive = countLiveTempSessions(snapshot.records);
+  const visibleLive = counts.live - tempLive;
+  const summaryLabels = [`${visibleLive} live`, `${tempLive} temp`, `${counts.stale} stale`];
 
   if (state.showAll) {
-    if (counts.dead > 0) {
-      summaryLabels.push(`${counts.dead} dead`);
-    }
-    if (counts.unknown > 0) {
-      summaryLabels.push(`${counts.unknown} unknown`);
-    }
+    summaryLabels.push(`${counts.dead} dead`, `${counts.unknown} unknown`);
   }
 
   elements.summary.replaceChildren(
@@ -2106,6 +2100,15 @@ function countPresenceStates(records) {
     },
     { live: 0, stale: 0, dead: 0, unknown: 0 },
   );
+}
+
+function countLiveTempSessions(records) {
+  return records.filter((record) => record.presenceState === 'live' && isTempSession(record))
+    .length;
+}
+
+function isTempSession(record) {
+  return record.derivedFacets?.rowKind === 'ephemeral_child_runtime';
 }
 
 function getDisplayTitle(record) {
