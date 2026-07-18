@@ -136,6 +136,8 @@ function setupMocks(
       recordToolExecutionStart: vi.fn().mockResolvedValue(undefined),
       recordToolExecutionEnd: vi.fn().mockResolvedValue(undefined),
       recordTurnEnd: vi.fn().mockResolvedValue(undefined),
+      recordCompactionStart: vi.fn().mockResolvedValue(undefined),
+      clearCompaction: vi.fn().mockResolvedValue(undefined),
       getActivity: vi.fn().mockReturnValue(null),
       isRunning: vi.fn(() => true),
     });
@@ -159,6 +161,7 @@ function setupMocks(
     });
 
   const stopIdentityRuntime = vi.fn().mockResolvedValue(undefined);
+  const stopActivityRuntime = vi.fn().mockResolvedValue(undefined);
 
   vi.doMock('../../extensions/session-deck/presence/runtime.js', () => ({
     ensurePresenceRuntimeStarted,
@@ -169,6 +172,7 @@ function setupMocks(
   }));
   vi.doMock('../../extensions/session-deck/activity/runtime.js', () => ({
     ensureActivityRuntimeStarted: activityRuntime,
+    stopActivityRuntime,
   }));
   vi.doMock('../../extensions/session-deck/identity/runtime-signals.js', async () => {
     const actual = await vi.importActual<
@@ -192,6 +196,7 @@ function setupMocks(
     refreshActivity,
     collectRuntimeSignalsMetadata,
     stopIdentityRuntime,
+    stopActivityRuntime,
   };
 }
 
@@ -244,6 +249,8 @@ describe('pi-session-deck extension', () => {
       'tool_execution_start',
       'tool_execution_end',
       'turn_end',
+      'session_before_compact',
+      'session_compact',
       'session_shutdown',
     ]);
   });
@@ -524,14 +531,33 @@ describe('pi-session-deck extension', () => {
     });
   });
 
-  it('clears tracked entries on session_shutdown', async () => {
-    setupMocks();
+  it('clears compaction and tracked entries on session_shutdown', async () => {
+    const activityRuntime = {
+      refreshActivity: vi.fn().mockResolvedValue(undefined),
+      recordInputSource: vi.fn().mockResolvedValue(undefined),
+      recordMessageEnd: vi.fn().mockResolvedValue(undefined),
+      recordTurnStart: vi.fn().mockResolvedValue(undefined),
+      recordToolExecutionStart: vi.fn().mockResolvedValue(undefined),
+      recordToolExecutionEnd: vi.fn().mockResolvedValue(undefined),
+      recordTurnEnd: vi.fn().mockResolvedValue(undefined),
+      recordCompactionStart: vi.fn().mockResolvedValue(undefined),
+      clearCompaction: vi.fn().mockResolvedValue(undefined),
+      getActivity: vi.fn().mockReturnValue(null),
+      isRunning: vi.fn(() => true),
+    };
+    const { stopActivityRuntime } = setupMocks(
+      undefined,
+      undefined,
+      vi.fn().mockResolvedValue(activityRuntime),
+    );
     const { handlers } = await installExtension();
 
     MOCK_STATUS_MIRROR.clearTracked.mockClear();
     await handlers.get('session_shutdown')?.({}, {});
 
+    expect(activityRuntime.clearCompaction).toHaveBeenCalledWith('shutdown');
     expect(MOCK_STATUS_MIRROR.clearTracked).toHaveBeenCalledTimes(1);
+    expect(stopActivityRuntime).toHaveBeenCalledTimes(1);
   });
 
   it('surfaces degraded startup state through session-deck status', async () => {
@@ -570,6 +596,8 @@ describe('pi-session-deck extension', () => {
       recordToolExecutionStart: vi.fn().mockResolvedValue(undefined),
       recordToolExecutionEnd: vi.fn().mockResolvedValue(undefined),
       recordTurnEnd: vi.fn().mockResolvedValue(undefined),
+      recordCompactionStart: vi.fn().mockResolvedValue(undefined),
+      clearCompaction: vi.fn().mockResolvedValue(undefined),
       getActivity: vi.fn().mockReturnValue(null),
       isRunning: vi.fn(() => true),
     };
@@ -589,7 +617,13 @@ describe('pi-session-deck extension', () => {
       { toolCallId: 'tool-1', toolName: 'read', isError: true },
       {},
     );
+    const signal = new AbortController().signal;
     await handlers.get('turn_end')?.({}, {});
+    await handlers.get('session_before_compact')?.(
+      { reason: 'threshold', willRetry: true, signal },
+      {},
+    );
+    await handlers.get('session_compact')?.({ reason: 'threshold', willRetry: true }, {});
 
     expect(activityRuntime.recordInputSource).toHaveBeenCalledWith('extension');
     expect(activityRuntime.recordInputSource).toHaveBeenCalledTimes(1);
@@ -609,6 +643,12 @@ describe('pi-session-deck extension', () => {
       isError: true,
     });
     expect(activityRuntime.recordTurnEnd).toHaveBeenCalledTimes(1);
+    expect(activityRuntime.recordCompactionStart).toHaveBeenCalledWith({
+      reason: 'threshold',
+      willRetry: true,
+      signal,
+    });
+    expect(activityRuntime.clearCompaction).toHaveBeenCalledWith('completed');
   });
 
   it('session_deck own status is set on session_start', async () => {

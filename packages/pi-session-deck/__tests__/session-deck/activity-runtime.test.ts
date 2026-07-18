@@ -130,6 +130,9 @@ describe('activity runtime lifecycle', () => {
     expect(controller.getActivity()?.activityState).toBe('error');
     expect(controller.getActivity()?.lastError).toBe('bad stack');
 
+    await controller.recordCompactionStart({ reason: 'manual' });
+    expect(controller.getActivity()?.activityState).toBe('compacting');
+
     await controller.refreshActivity('new', {
       getSessionId: () => 'session-new',
       getSessionFile: () => '/tmp/session-new.json',
@@ -138,6 +141,7 @@ describe('activity runtime lifecycle', () => {
     expect(controller.getActivity()?.runtimeId).toBe('rt-1');
     expect(controller.getActivity()?.sessionId).toBe('session-new');
     expect(controller.getActivity()?.activityState).toBe('idle');
+    expect(controller.getActivity()?.compaction).toBeUndefined();
     expect(controller.getActivity()?.currentToolName).toBeNull();
     expect(controller.getActivity()?.lastError).toBeNull();
   });
@@ -164,6 +168,115 @@ describe('activity runtime lifecycle', () => {
     await controller.recordTurnStart();
     expect(controller.getActivity()?.activityState).toBe('thinking');
     expect(controller.getActivity()?.busy).toBe(true);
+  });
+
+  it('records compaction as primary activity until it clears to live runtime facts', async () => {
+    const controller = await ensureActivityRuntimeStarted('rt-1', {
+      writeRecord: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await controller.refreshActivity('startup', {
+      getSessionId: () => 'session-abc',
+      getSessionFile: () => '/tmp/session-abc.json',
+    });
+    await controller.recordTurnStart();
+    await controller.recordToolExecutionStart({ toolCallId: 'tool-1', toolName: 'read' });
+
+    vi.setSystemTime(new Date('2026-06-17T12:00:10.000Z'));
+    await controller.recordCompactionStart({ reason: 'threshold', willRetry: true });
+
+    expect(controller.getActivity()).toMatchObject({
+      activityState: 'compacting',
+      idle: false,
+      busy: true,
+      currentToolName: 'read',
+      activitySource: 'compaction_start',
+      compaction: {
+        state: 'running',
+        startedAt: '2026-06-17T12:00:10.000Z',
+        updatedAt: '2026-06-17T12:00:10.000Z',
+        reason: 'threshold',
+        willRetry: true,
+      },
+    });
+
+    vi.setSystemTime(new Date('2026-06-17T12:00:20.000Z'));
+    await controller.recordToolExecutionEnd({
+      toolCallId: 'tool-1',
+      toolName: 'read',
+      isError: false,
+    });
+
+    expect(controller.getActivity()).toMatchObject({
+      activityState: 'compacting',
+      currentToolName: null,
+      activityUpdatedAt: '2026-06-17T12:00:20.000Z',
+      compaction: {
+        startedAt: '2026-06-17T12:00:10.000Z',
+        updatedAt: '2026-06-17T12:00:10.000Z',
+      },
+    });
+
+    await controller.clearCompaction('completed');
+
+    expect(controller.getActivity()).toMatchObject({
+      activityState: 'thinking',
+      compaction: null,
+      activitySource: 'compaction_end',
+    });
+  });
+
+  it('ignores already-aborted compaction starts and clears aborts after a write', async () => {
+    const controller = await ensureActivityRuntimeStarted('rt-1', {
+      writeRecord: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await controller.refreshActivity('startup', {
+      getSessionId: () => 'session-abc',
+      getSessionFile: () => '/tmp/session-abc.json',
+    });
+
+    const abortedBefore = new AbortController();
+    abortedBefore.abort();
+    await controller.recordCompactionStart({ reason: 'manual', signal: abortedBefore.signal });
+    expect(controller.getActivity()?.activityState).toBe('idle');
+
+    const abortedAfter = new AbortController();
+    await controller.recordCompactionStart({ reason: 'manual', signal: abortedAfter.signal });
+    expect(controller.getActivity()?.activityState).toBe('compacting');
+
+    abortedAfter.abort();
+    await controller.recordInputSource('extension');
+
+    expect(controller.getActivity()?.activityState).toBe('idle');
+    expect(controller.getActivity()?.compaction).toBeNull();
+  });
+
+  it('expires compaction during periodic refresh without refreshing compaction timestamps', async () => {
+    const controller = await ensureActivityRuntimeStarted('rt-1', {
+      writeRecord: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await controller.refreshActivity('startup', {
+      getSessionId: () => 'session-abc',
+      getSessionFile: () => '/tmp/session-abc.json',
+    });
+    await controller.recordCompactionStart({ reason: 'overflow', willRetry: true });
+
+    expect(controller.getActivity()?.compaction?.updatedAt).toBe('2026-06-17T12:00:00.000Z');
+
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(controller.getActivity()).toMatchObject({
+      activityState: 'compacting',
+      compaction: { updatedAt: '2026-06-17T12:00:00.000Z' },
+    });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(controller.getActivity()).toMatchObject({
+      activityState: 'idle',
+      compaction: null,
+      activitySource: 'compaction_expired',
+    });
   });
 
   it('writes periodic safety refreshes without changing the last real event timestamp', async () => {

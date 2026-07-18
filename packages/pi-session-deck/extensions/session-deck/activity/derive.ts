@@ -78,6 +78,10 @@ export function deriveActivity(options: DeriveActivityOptions): DerivedActivity 
     return { ...createUnknownActivity(diagnostics), ...trustedFields };
   }
 
+  if (activity.activityState === 'compacting') {
+    return deriveCompactingActivity({ activity, nowMs, thresholds, diagnostics, trustedFields });
+  }
+
   if (activity.busy && activity.currentTurnStartedAt === null) {
     diagnostics.push({
       code: 'turn_started_missing',
@@ -208,7 +212,134 @@ function getTrustedFields(
     lastEventAt: activity.lastEventAt,
     lastError: activity.lastError,
     activityUpdatedAt: activity.activityUpdatedAt ?? activity.lastEventAt,
+    compaction: null,
   };
+}
+
+function deriveCompactingActivity(options: {
+  activity: SessionActivityRecord;
+  nowMs: number;
+  thresholds: ActivityThresholds;
+  diagnostics: ActivityDiagnostic[];
+  trustedFields: Omit<DerivedActivity, 'activityState' | 'activityAgeMs' | 'diagnostics'>;
+}): DerivedActivity {
+  const { activity, nowMs, thresholds, diagnostics, trustedFields } = options;
+  const metadata = activity.compaction;
+
+  if (metadata?.state !== 'running') {
+    diagnostics.push({
+      code: 'compaction_malformed',
+      message: 'Compacting activity record is missing valid compaction metadata',
+      runtimeId: activity.runtimeId,
+    });
+    return deriveFallbackActivityState(activity, nowMs, diagnostics, trustedFields, null);
+  }
+
+  const startedMs = parseTimestamp(metadata.startedAt);
+  const updatedMs = parseTimestamp(metadata.updatedAt);
+  if (
+    startedMs === null ||
+    updatedMs === null ||
+    startedMs - nowMs > thresholds.futureSkewMs ||
+    updatedMs - nowMs > thresholds.futureSkewMs
+  ) {
+    diagnostics.push({
+      code: 'compaction_malformed',
+      message: 'Compacting activity record has unusable compaction timestamps',
+      runtimeId: activity.runtimeId,
+    });
+    return deriveFallbackActivityState(activity, nowMs, diagnostics, trustedFields, null);
+  }
+
+  const updatedAgeMs = Math.max(0, nowMs - updatedMs);
+  const compactionAgeMs = Math.max(0, nowMs - startedMs);
+  const publicCompaction = {
+    state: 'running' as const,
+    ageMs: compactionAgeMs,
+    startedAt: metadata.startedAt,
+    reason: metadata.reason,
+    willRetry: metadata.willRetry,
+  };
+
+  if (updatedAgeMs > thresholds.compactionExpiredAfterMs) {
+    diagnostics.push({
+      code: 'compaction_expired',
+      message: 'Compaction activity expired before an end event arrived',
+      runtimeId: activity.runtimeId,
+    });
+    return deriveFallbackActivityState(activity, nowMs, diagnostics, trustedFields, null);
+  }
+
+  if (updatedAgeMs > thresholds.compactionStaleAfterMs) {
+    diagnostics.push({
+      code: 'compaction_stale',
+      message: 'Compaction activity is stale and no longer primary',
+      runtimeId: activity.runtimeId,
+    });
+    return deriveFallbackActivityState(activity, nowMs, diagnostics, trustedFields, {
+      ...publicCompaction,
+      state: 'stale',
+    });
+  }
+
+  return {
+    ...trustedFields,
+    activityState: 'compacting',
+    activityAgeMs: compactionAgeMs,
+    compaction: publicCompaction,
+    diagnostics,
+  };
+}
+
+function deriveFallbackActivityState(
+  activity: SessionActivityRecord,
+  nowMs: number,
+  diagnostics: ActivityDiagnostic[],
+  trustedFields: Omit<DerivedActivity, 'activityState' | 'activityAgeMs' | 'diagnostics'>,
+  compaction: DerivedActivity['compaction'],
+): DerivedActivity {
+  const withCompaction = { ...trustedFields, compaction };
+
+  if (activity.currentToolName !== null) {
+    return {
+      ...withCompaction,
+      activityState: 'tool-running',
+      activityAgeMs: computeAgeMs(
+        nowMs,
+        activity.lastToolStartedAt ?? activity.lastEventAt ?? activity.currentTurnStartedAt,
+      ),
+      diagnostics,
+    };
+  }
+
+  if (activity.currentTurnStartedAt !== null) {
+    return {
+      ...withCompaction,
+      activityState: 'thinking',
+      activityAgeMs: computeAgeMs(nowMs, activity.currentTurnStartedAt),
+      diagnostics,
+    };
+  }
+
+  if (activity.lastError !== null && !activity.idle) {
+    return {
+      ...withCompaction,
+      activityState: 'error',
+      activityAgeMs: null,
+      diagnostics,
+    };
+  }
+
+  if (activity.idle || !activity.busy) {
+    return {
+      ...withCompaction,
+      activityState: 'idle',
+      activityAgeMs: null,
+      diagnostics,
+    };
+  }
+
+  return { ...createUnknownActivity(diagnostics), ...withCompaction };
 }
 
 function createUnknownActivity(diagnostics: ActivityDiagnostic[]): DerivedActivity {
@@ -222,6 +353,7 @@ function createUnknownActivity(diagnostics: ActivityDiagnostic[]): DerivedActivi
     lastEventAt: null,
     lastError: null,
     activityUpdatedAt: null,
+    compaction: null,
     diagnostics,
   };
 }

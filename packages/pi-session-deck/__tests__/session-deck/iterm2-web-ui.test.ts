@@ -281,6 +281,7 @@ function buildRecord(overrides: Partial<SessionDeckRecord> = {}): SessionDeckRec
     activityAgeMs: null,
     currentToolName: null,
     lastError: null,
+    compaction: null,
     chips: ['merge-ready clean'],
     diagnostics: [],
     ...overrides,
@@ -3112,6 +3113,48 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(findAllByClass(line1, 'status-icon')).toHaveLength(0);
     expect(getChildTextContents(line1)).toEqual(['', 'alpha', 'thinking', '12s']);
     expect(findAllByClass(line1, 'row-activity')[0]?.textContent).toBe('thinking');
+  });
+
+  it('renders compacting as an accessible activity icon without chips', async () => {
+    const harness = await setupApp([
+      buildSnapshot({
+        records: [
+          buildRecord({
+            activityState: 'compacting',
+            activityAgeMs: 15_000,
+            chips: [],
+            compaction: {
+              state: 'running',
+              ageMs: 15_000,
+              startedAt: '2026-07-10T20:14:45.000Z',
+              reason: 'manual',
+              willRetry: false,
+            },
+          }),
+        ],
+      }),
+    ]);
+    expandAllRepoGroups(harness.elements.list);
+
+    const card = getCards(harness.elements.list)[0]!;
+    const line1 = getCardLine(card, 'row-line1');
+    const activityIcons = findAllByClass(line1, 'activity-icon');
+
+    expect(activityIcons).toHaveLength(1);
+    expect(activityIcons[0]?.getAttribute('role')).toBe('img');
+    expect(activityIcons[0]?.getAttribute('aria-label')).toBe('compacting');
+    expect(activityIcons[0]?.getAttribute('title')).toBe('compacting');
+    expect(activityIcons[0]?.getAttribute('data-activity')).toBe('compacting');
+    expect(getChildTextContents(line1)).toEqual(['', 'alpha', 'compacting', '15s']);
+    expect(findAllByClass(card, 'chips-inline')).toHaveLength(0);
+
+    getCardToggle(card).click();
+    const status = getDetailSection(
+      getCardDetail(getExpandedCards(harness.elements.list)[0]!),
+      'STATUS',
+    );
+    expect(getDetailRowLabels(status)).toEqual(['Activity', 'Compaction']);
+    expect(getDetailRowValues(status)).toEqual(['compacting', 'running · 15s · manual']);
   });
 
   it('renders subsecond card ages as <1s and preserves larger duration units', async () => {

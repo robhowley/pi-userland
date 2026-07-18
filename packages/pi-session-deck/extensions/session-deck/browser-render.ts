@@ -266,6 +266,8 @@ function formatActivityGlyph(state: SessionDeckRecord['activityState']): string 
       return '◒';
     case 'tool-running':
       return '◆';
+    case 'compacting':
+      return '↻';
     case 'error':
       return '!';
     case 'unknown':
@@ -278,7 +280,7 @@ interface SessionDeckActivityDisplay {
   detail: string | null;
   cardAgeLabel: string | null;
   summaryAgeLabel: string | null;
-  summaryDetailSeparator: ': ' | null;
+  summaryDetailSeparator: ': ' | ' · ' | null;
 }
 
 function formatListActivity(record: SessionDeckRecord): string {
@@ -317,6 +319,14 @@ function getActivityDisplay(record: SessionDeckRecord): SessionDeckActivityDispl
         cardAgeLabel: ageLabel,
         summaryAgeLabel: ageLabel,
         summaryDetailSeparator: ': ',
+      };
+    case 'compacting':
+      return {
+        label: 'compacting',
+        detail: record.compaction?.willRetry === true ? 'retrying' : null,
+        cardAgeLabel: ageLabel,
+        summaryAgeLabel: ageLabel,
+        summaryDetailSeparator: ' · ',
       };
     case 'error':
       return {
@@ -529,10 +539,11 @@ function formatShortId(id: string): string {
 
 function formatActivitySummary(record: SessionDeckRecord): string {
   const activity = getActivityDisplay(record);
+  const label = record.activityState === 'compacting' ? '↻ compacting' : activity.label;
   const lead =
     activity.detail === null || activity.summaryDetailSeparator === null
-      ? activity.label
-      : `${activity.label}${activity.summaryDetailSeparator}${activity.detail}`;
+      ? label
+      : `${label}${activity.summaryDetailSeparator}${activity.detail}`;
 
   return joinSpaceParts(lead, activity.summaryAgeLabel);
 }

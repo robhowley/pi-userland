@@ -96,6 +96,7 @@ function buildSnapshotRecord(overrides: Partial<SessionDeckRecord> = {}): Sessio
     activityAgeMs: null,
     currentToolName: null,
     lastError: null,
+    compaction: null,
     chips: [],
     diagnostics: [],
     ...overrides,
@@ -271,6 +272,19 @@ describe('session-deck joined command', () => {
             chips: ['status syncing', 'queue 2'],
           }),
           buildSnapshotRecord({
+            runtimeId: 'rt-cmpct',
+            activityState: 'compacting',
+            activityAgeMs: 15_000,
+            compaction: {
+              state: 'running',
+              ageMs: 15_000,
+              startedAt: '2026-06-17T12:09:45.000Z',
+              reason: 'manual',
+              willRetry: false,
+            },
+            chips: [],
+          }),
+          buildSnapshotRecord({
             runtimeId: 'rt-4',
             activityState: 'error',
             lastError: 'tool bash failed',
@@ -317,6 +331,7 @@ describe('session-deck joined command', () => {
     expect(defaultMessage).toContain('rt-2  thinking 3m  3m  stale  reason=heartbeat_expired');
     expect(defaultMessage).toContain('rt-3  tool-running: read 42s  5s');
     expect(defaultMessage).toContain('  status syncing | queue 2');
+    expect(defaultMessage).toContain('rt-cmpct  ↻ compacting 15s  5s');
     expect(defaultMessage).toContain('rt-4  error: tool bash failed  5s');
     expect(defaultMessage).toContain('  ~/scratch');
     expect(defaultMessage).not.toContain('rt-5');
@@ -411,6 +426,7 @@ describe('session-deck joined command', () => {
       activityAgeMs: publicRecord.activityAgeMs,
       currentToolName: publicRecord.currentToolName,
       lastError: publicRecord.lastError,
+      compaction: publicRecord.compaction,
       chips: publicRecord.chips,
       diagnostics: publicRecord.diagnostics,
     };

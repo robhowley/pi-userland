@@ -1,4 +1,8 @@
-import type { ActivityDiagnosticCode, ActivityState } from './activity/types.js';
+import type {
+  ActivityDiagnosticCode,
+  ActivityState,
+  DerivedSessionCompaction,
+} from './activity/types.js';
 import type { ChipDiagnosticCode } from './chips/types.js';
 import type { IdentityDiagnosticCode, SessionDerivedFacets } from './identity/types.js';
 import type { PresenceDiagnosticCode, PresenceState } from './presence/types.js';
@@ -36,6 +40,7 @@ export interface SessionDeckRecord {
   activityAgeMs: number | null;
   currentToolName: string | null;
   lastError: string | null;
+  compaction: DerivedSessionCompaction | null;
   chips: string[];
   diagnostics: SessionDeckDiagnostic[];
 }

@@ -182,6 +182,7 @@ function isSessionDeckRecord(candidate) {
     isNullableNumber(candidate.activityAgeMs) &&
     isNullableString(candidate.currentToolName) &&
     isNullableString(candidate.lastError) &&
+    isNullableCompaction(candidate.compaction) &&
     Array.isArray(candidate.chips) &&
     candidate.chips.every((chip) => typeof chip === 'string') &&
     Array.isArray(candidate.diagnostics) &&
@@ -204,7 +205,22 @@ function isPresenceState(value) {
 }
 
 function isActivityState(value) {
-  return ['idle', 'thinking', 'tool-running', 'error', 'unknown'].includes(value);
+  return ['idle', 'thinking', 'tool-running', 'compacting', 'error', 'unknown'].includes(value);
+}
+
+function isNullableCompaction(value) {
+  if (value === undefined || value === null) {
+    return true;
+  }
+
+  return (
+    isObject(value) &&
+    ['running', 'stale'].includes(value.state) &&
+    typeof value.ageMs === 'number' &&
+    typeof value.startedAt === 'string' &&
+    (value.reason === null || ['manual', 'threshold', 'overflow'].includes(value.reason)) &&
+    typeof value.willRetry === 'boolean'
+  );
 }
 
 function isNullableString(value) {
@@ -2013,6 +2029,8 @@ function createStatusSection(record) {
   }
 
   content.push(
+    createDetailRow('Activity', formatCompactingActivityDetail(record)),
+    createDetailRow('Compaction', formatCompactionDetail(record.compaction)),
     createDetailRow('Presence reason', humanizePresenceReason(record.presenceReason)),
     createDetailRow('Child runtime', formatChildRuntimeDetail(record)),
     createDetailRow('Current tool', record.currentToolName),
@@ -2020,6 +2038,30 @@ function createStatusSection(record) {
   );
 
   return createDetailSection('STATUS', content);
+}
+
+function formatCompactingActivityDetail(record) {
+  if (record.activityState !== 'compacting') {
+    return null;
+  }
+
+  const detail = record.compaction?.willRetry === true ? 'retrying' : null;
+  return detail === null ? 'compacting' : `compacting · ${detail}`;
+}
+
+function formatCompactionDetail(compaction) {
+  if (compaction === null || compaction === undefined) {
+    return null;
+  }
+
+  const parts = [compaction.state, formatDuration(compaction.ageMs)];
+  if (compaction.reason !== null) {
+    parts.push(compaction.reason);
+  }
+  if (compaction.willRetry) {
+    parts.push('retrying');
+  }
+  return parts.join(' · ');
 }
 
 function createDetailSection(title, children, options = {}) {
@@ -2272,6 +2314,12 @@ function getActivityDisplay(record) {
         detail: record.currentToolName,
         cardAgeLabel: ageLabel,
       };
+    case 'compacting':
+      return {
+        label: 'compacting',
+        detail: record.compaction?.willRetry === true ? 'retrying' : null,
+        cardAgeLabel: ageLabel,
+      };
     case 'error':
       return {
         label: 'error',
@@ -2354,6 +2402,13 @@ function createActivityIcon(record) {
       svg.append(
         createSvgPath(
           'M.1 2.2A3 3 0 0 0 3.8 5.9l6.3 6.3a3 3 0 0 0 3.7 3.7l-2.1-2.1a.5.5 0 0 1 .4-.9h1.4a.5.5 0 0 1 .4.1l2.1 2.1a3 3 0 0 0-3.7-3.7L5.9 5.1A3 3 0 0 0 2.2.1l2.1 2.1a.5.5 0 0 1-.4.9H2.5a.5.5 0 0 1-.4-.1L.1 2.2Z',
+        ),
+      );
+      break;
+    case 'compacting':
+      svg.append(
+        createSvgPath(
+          'M8 2a6 6 0 0 1 5.2 3H15l-2.8 3L9.4 5h1.7A4 4 0 0 0 4 6.6L2.3 5.5A6 6 0 0 1 8 2Zm5.7 8.5A6 6 0 0 1 2.8 11H1l2.8-3 2.8 3H4.9a4 4 0 0 0 7.1-1.6l1.7 1.1Z',
         ),
       );
       break;

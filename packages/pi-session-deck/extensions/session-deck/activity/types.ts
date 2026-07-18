@@ -5,7 +5,13 @@ import type {
   SessionManagerLike,
 } from '../identity/types.js';
 
-export type ActivityState = 'idle' | 'thinking' | 'tool-running' | 'error' | 'unknown';
+export type ActivityState =
+  | 'idle'
+  | 'thinking'
+  | 'tool-running'
+  | 'compacting'
+  | 'error'
+  | 'unknown';
 
 export type ActivityInputSource = 'interactive' | 'rpc' | 'extension';
 
@@ -33,7 +39,29 @@ export type ActivitySource =
   | 'tool_end'
   | 'turn_end'
   | 'assistant_error'
-  | 'periodic';
+  | 'periodic'
+  | 'compaction_start'
+  | 'compaction_end'
+  | 'compaction_abort'
+  | 'compaction_expired';
+
+export type SessionCompactionReason = 'manual' | 'threshold' | 'overflow' | null;
+
+export interface SessionActivityCompaction {
+  state: 'running';
+  startedAt: string;
+  updatedAt: string;
+  reason: SessionCompactionReason;
+  willRetry: boolean;
+}
+
+export interface DerivedSessionCompaction {
+  state: 'running' | 'stale';
+  ageMs: number;
+  startedAt: string;
+  reason: SessionCompactionReason;
+  willRetry: boolean;
+}
 
 export interface SessionActivityRecord {
   runtimeId: string;
@@ -54,6 +82,7 @@ export interface SessionActivityRecord {
   recentToolWindows?: ActivityToolWindow[];
   activityUpdatedAt?: string;
   activitySource?: ActivitySource;
+  compaction?: SessionActivityCompaction | null;
 }
 
 export type ActivityDiagnosticCode =
@@ -67,6 +96,9 @@ export type ActivityDiagnosticCode =
   | 'last_event_missing'
   | 'last_event_future'
   | 'last_error_active'
+  | 'compaction_malformed'
+  | 'compaction_stale'
+  | 'compaction_expired'
   | 'malformed_activity_record'
   | 'activity_write_error'
   | 'activity_read_error';
@@ -84,6 +116,8 @@ export interface ActivityThresholds {
   toolStuckAfterMs: number;
   veryStaleAfterMs: number;
   futureSkewMs: number;
+  compactionStaleAfterMs: number;
+  compactionExpiredAfterMs: number;
 }
 
 export interface ActivityMessageLike {
@@ -107,6 +141,14 @@ export interface ActivityRuntimeController {
     isError: boolean;
   }) => Promise<void>;
   recordTurnEnd: () => Promise<void>;
+  recordCompactionStart: (event: {
+    reason?: unknown;
+    willRetry?: unknown;
+    signal?: AbortSignal;
+  }) => Promise<void>;
+  clearCompaction: (
+    reason: 'completed' | 'aborted' | 'shutdown' | 'session-change' | 'expired',
+  ) => Promise<void>;
   getActivity: () => SessionActivityRecord | null;
   isRunning: () => boolean;
 }
@@ -132,6 +174,7 @@ export interface SessionDeckRecord extends Omit<JoinedSessionRecord, 'diagnostic
   inputSummary?: ActivityInputSummary;
   recentToolWindows?: ActivityToolWindow[];
   activityUpdatedAt: string | null;
+  compaction: DerivedSessionCompaction | null;
   diagnostics: SessionDeckDiagnostic[];
 }
 
@@ -150,5 +193,6 @@ export interface DerivedActivity {
   lastEventAt: string | null;
   lastError: string | null;
   activityUpdatedAt: string | null;
+  compaction: DerivedSessionCompaction | null;
   diagnostics: ActivityDiagnostic[];
 }

@@ -11,6 +11,7 @@ import type {
   ActivityInputSummary,
   ActivityThresholds,
   ActivityToolWindow,
+  SessionActivityCompaction,
   SessionActivityRecord,
   SessionDeckDiagnostic,
   SessionDeckRecord,
@@ -99,6 +100,7 @@ export async function readSessionDeckView(
         ? {}
         : { recentToolWindows: activityForParentage.recentToolWindows }),
       activityUpdatedAt: derived.activityUpdatedAt,
+      compaction: derived.compaction,
       diagnostics: recordDiagnostics,
     });
 
@@ -230,6 +232,7 @@ function normalizeActivityRecord(candidate: unknown): SessionActivityRecord | nu
   const activitySource = normalizeActivitySource(candidate['activitySource']);
   const inputSummary = normalizeInputSummary(candidate['inputSummary']);
   const recentToolWindows = normalizeRecentToolWindows(candidate['recentToolWindows']);
+  const compaction = normalizeCompaction(candidate['compaction']);
 
   return {
     runtimeId,
@@ -250,6 +253,7 @@ function normalizeActivityRecord(candidate: unknown): SessionActivityRecord | nu
     ...(recentToolWindows === undefined ? {} : { recentToolWindows }),
     ...(activityUpdatedAt === null ? {} : { activityUpdatedAt }),
     ...(activitySource === undefined ? {} : { activitySource }),
+    ...(compaction === undefined ? {} : { compaction }),
   };
 }
 
@@ -258,6 +262,7 @@ function normalizeActivityState(value: unknown): SessionActivityRecord['activity
     case 'idle':
     case 'thinking':
     case 'tool-running':
+    case 'compacting':
     case 'error':
       return value;
     default:
@@ -279,9 +284,49 @@ function normalizeActivitySource(
     case 'turn_end':
     case 'assistant_error':
     case 'periodic':
+    case 'compaction_start':
+    case 'compaction_end':
+    case 'compaction_abort':
+    case 'compaction_expired':
       return value;
     default:
       return undefined;
+  }
+}
+
+function normalizeCompaction(value: unknown): SessionActivityCompaction | null | undefined {
+  if (value === null) {
+    return null;
+  }
+
+  if (!isObject(value)) {
+    return undefined;
+  }
+
+  const state = value['state'];
+  const startedAt = normalizeOptionalStringField(value['startedAt']);
+  const updatedAt = normalizeOptionalStringField(value['updatedAt']);
+  if (state !== 'running' || startedAt === undefined || updatedAt === undefined) {
+    return undefined;
+  }
+
+  return {
+    state: 'running',
+    startedAt,
+    updatedAt,
+    reason: normalizeCompactionReason(value['reason']),
+    willRetry: value['willRetry'] === true,
+  };
+}
+
+function normalizeCompactionReason(value: unknown): SessionActivityCompaction['reason'] {
+  switch (value) {
+    case 'manual':
+    case 'threshold':
+    case 'overflow':
+      return value;
+    default:
+      return null;
   }
 }
 
