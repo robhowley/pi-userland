@@ -378,6 +378,7 @@ async function checkRuntimePaths(
     const requiredAssets = [
       { label: 'Web index', path: webAssets.indexPath },
       { label: 'Web app', path: webAssets.appPath },
+      { label: 'Web launch-context view helper', path: webAssets.launchContextViewPath },
       { label: 'Web stylesheet', path: webAssets.stylePath },
     ];
 

@@ -109,6 +109,11 @@ async function createRuntimePaths(
   if (options.includeAppJs !== false) {
     await writeFile(join(webRootPath, 'app.js'), 'console.log("app")\n', 'utf8');
   }
+  await writeFile(
+    join(webRootPath, 'launch-context-view.js'),
+    'export const labels = []\n',
+    'utf8',
+  );
   await writeFile(join(webRootPath, 'style.css'), 'body{}\n', 'utf8');
   if (options.includeSource !== false) {
     await writeFile(autolaunchSourcePath, AUTOLAUNCH_SOURCE);
@@ -302,6 +307,23 @@ describe('session-deck iterm2 install + doctor + uninstall', () => {
     expect(result).toEqual({
       level: 'error',
       message: `Kill-session helper not found: ${runtimePaths.killSessionHelperScriptPath}\nRun \`pnpm --dir packages/pi-session-deck run build\` and try again.`,
+    });
+  });
+
+  it('fails install when the launch-context web helper is missing', async () => {
+    const homeDirectory = await createTempHome();
+    const runtimePaths = await createRuntimePaths(join(homeDirectory, 'package-root'));
+    await rm(join(runtimePaths.webRootPath, 'launch-context-view.js'));
+
+    const result = await installSessionDeckIterm2({
+      homeDirectory,
+      platform: 'darwin',
+      runtimePaths,
+    });
+
+    expect(result).toEqual({
+      level: 'error',
+      message: `Web launch-context view helper not found: ${join(runtimePaths.webRootPath, 'launch-context-view.js')}\nRun \`pnpm --dir packages/pi-session-deck run build\` and try again.`,
     });
   });
 
