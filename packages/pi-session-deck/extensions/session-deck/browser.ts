@@ -11,6 +11,12 @@ import {
 import type { SessionDeckBrowserRow } from './browser-render.js';
 import type { SessionDeckBrowserRecord, SessionDeckBrowserSnapshot } from './browser-view.js';
 import {
+  LAUNCH_AGENT_DIR_MODE_OPTIONS,
+  formatLaunchAgentDirOptionLabel,
+  formatLaunchContextPreviewSummary,
+  getLaunchAgentDirModeIndex,
+} from './iterm2/web/launch-context-view.js';
+import {
   getPiDefaultAgentDirDisplay,
   normalizeLaunchAgentDirSelection,
   shortenHomeDir,
@@ -488,7 +494,7 @@ export class SessionDeckBrowser {
     if (matchesKey(data, 'enter') || matchesKey(data, 'return')) {
       if (prompt.focus === 'pi-config') {
         prompt.selectorOpen = true;
-        prompt.selectorIndex = agentDirModeIndex(prompt.agentDirSelection.mode);
+        prompt.selectorIndex = getLaunchAgentDirModeIndex(prompt.agentDirSelection.mode);
         prompt.feedback = null;
         this.bump();
         return;
@@ -516,26 +522,28 @@ export class SessionDeckBrowser {
   private handleWorktreePromptSelectorInput(prompt: SessionDeckWorktreePrompt, data: string): void {
     if (matchesKey(data, 'up') || matchesKey(data, 'left')) {
       prompt.selectorIndex =
-        (prompt.selectorIndex + AGENT_DIR_MODE_OPTIONS.length - 1) % AGENT_DIR_MODE_OPTIONS.length;
+        (prompt.selectorIndex + LAUNCH_AGENT_DIR_MODE_OPTIONS.length - 1) %
+        LAUNCH_AGENT_DIR_MODE_OPTIONS.length;
       prompt.feedback = null;
       this.bump();
       return;
     }
     if (matchesKey(data, 'down') || matchesKey(data, 'right') || isTabKey(data)) {
-      prompt.selectorIndex = (prompt.selectorIndex + 1) % AGENT_DIR_MODE_OPTIONS.length;
+      prompt.selectorIndex = (prompt.selectorIndex + 1) % LAUNCH_AGENT_DIR_MODE_OPTIONS.length;
       prompt.feedback = null;
       this.bump();
       return;
     }
     if (isShiftTabKey(data)) {
       prompt.selectorIndex =
-        (prompt.selectorIndex + AGENT_DIR_MODE_OPTIONS.length - 1) % AGENT_DIR_MODE_OPTIONS.length;
+        (prompt.selectorIndex + LAUNCH_AGENT_DIR_MODE_OPTIONS.length - 1) %
+        LAUNCH_AGENT_DIR_MODE_OPTIONS.length;
       prompt.feedback = null;
       this.bump();
       return;
     }
 
-    const selectedMode = AGENT_DIR_MODE_OPTIONS[prompt.selectorIndex] ?? 'ambient';
+    const selectedMode = LAUNCH_AGENT_DIR_MODE_OPTIONS[prompt.selectorIndex] ?? 'ambient';
     if (selectedMode === 'custom') {
       if (matchesKey(data, 'backspace') || data === '\u007f') {
         prompt.customDraft = prompt.customDraft.slice(0, -1);
@@ -553,7 +561,7 @@ export class SessionDeckBrowser {
 
     const quickMode = getAgentDirQuickMode(data);
     if (quickMode !== null) {
-      prompt.selectorIndex = agentDirModeIndex(quickMode);
+      prompt.selectorIndex = getLaunchAgentDirModeIndex(quickMode);
       this.applyWorktreePromptAgentDirSelection(prompt);
       return;
     }
@@ -564,7 +572,7 @@ export class SessionDeckBrowser {
   }
 
   private applyWorktreePromptAgentDirSelection(prompt: SessionDeckWorktreePrompt): void {
-    const selectedMode = AGENT_DIR_MODE_OPTIONS[prompt.selectorIndex] ?? 'ambient';
+    const selectedMode = LAUNCH_AGENT_DIR_MODE_OPTIONS[prompt.selectorIndex] ?? 'ambient';
     const candidate =
       selectedMode === 'custom'
         ? { mode: selectedMode, customDir: prompt.customDraft }
@@ -688,7 +696,7 @@ export class SessionDeckBrowser {
 
     if (prompt.selectorOpen) {
       lines.push(formatWorktreePromptSelector(prompt));
-      if ((AGENT_DIR_MODE_OPTIONS[prompt.selectorIndex] ?? 'ambient') === 'custom') {
+      if ((LAUNCH_AGENT_DIR_MODE_OPTIONS[prompt.selectorIndex] ?? 'ambient') === 'custom') {
         lines.push(
           `  Custom:    ${prompt.customDraft.length === 0 ? '<absolute-or-~/dir>' : prompt.customDraft}`,
         );
@@ -1036,8 +1044,6 @@ export class SessionDeckBrowser {
   }
 }
 
-const AGENT_DIR_MODE_OPTIONS: CreateWorktreeLaunchAgentDirMode[] = ['ambient', 'default', 'custom'];
-
 function createInitialWorktreePrompt(): SessionDeckWorktreePrompt {
   return {
     branchName: '',
@@ -1137,26 +1143,15 @@ function buildWorktreeRequest(
 }
 
 function formatWorktreePromptLaunchContext(prompt: SessionDeckWorktreePrompt): string {
-  if (prompt.launchContext.status === 'loading') {
-    return 'Pi config resolving…';
-  }
-  if (!prompt.launchContext.ok) {
-    return 'Pi config unavailable';
-  }
-
-  return `Pi config → ${prompt.launchContext.effectiveDisplay}`;
+  return formatLaunchContextPreviewSummary(prompt.launchContext);
 }
 
 function formatWorktreePromptSelector(prompt: SessionDeckWorktreePrompt): string {
-  const options = AGENT_DIR_MODE_OPTIONS.map((mode, index) => {
-    const label = mode === 'custom' ? 'Custom…' : mode === 'default' ? 'Pi default' : 'Current';
+  const options = LAUNCH_AGENT_DIR_MODE_OPTIONS.map((mode, index) => {
+    const label = formatLaunchAgentDirOptionLabel(mode);
     return index === prompt.selectorIndex ? `› ${label}` : label;
   });
   return `  Choose:    ${options.join('  ·  ')}`;
-}
-
-function agentDirModeIndex(mode: CreateWorktreeLaunchAgentDirMode): number {
-  return Math.max(0, AGENT_DIR_MODE_OPTIONS.indexOf(mode));
 }
 
 function getAgentDirQuickMode(data: string): CreateWorktreeLaunchAgentDirMode | null {

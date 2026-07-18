@@ -321,6 +321,28 @@ function buildLaunchPreview(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function buildLaunchPreviewForAgentDir(agentDir?: { mode?: string; customDir?: string }) {
+  if (agentDir?.mode !== 'custom') {
+    return buildLaunchPreview();
+  }
+  const customDir = agentDir.customDir ?? '';
+  if (!customDir.startsWith('/') && !customDir.startsWith('~/')) {
+    return {
+      ok: false,
+      status: 'failed',
+      reason: 'invalid-request',
+      message: 'launch.agentDir.customDir must be absolute or start with ~/.',
+      recoverable: true,
+    };
+  }
+  return buildLaunchPreview({
+    mode: 'custom',
+    envAction: 'set',
+    effectiveDisplay: customDir,
+    provenance: 'request',
+  });
+}
+
 function buildJsonResponse(payload: unknown, ok = true, status = 200) {
   return {
     ok,
@@ -335,9 +357,13 @@ async function setupApp(snapshots: unknown[]): Promise<AppHarness> {
   const queue = [...snapshots];
   const fetchMock = vi.fn(async (url: string, init?: { body?: string }) => {
     if (url === '/actions/create-worktree-preview') {
-      const body = JSON.parse(init?.body ?? '{}') as { action?: string };
+      const body = JSON.parse(init?.body ?? '{}') as {
+        action?: string;
+        launch?: { agentDir?: { mode?: string; customDir?: string } };
+      };
       if (body.action === 'preview-launch-context') {
-        return buildJsonResponse(buildLaunchPreview());
+        const payload = buildLaunchPreviewForAgentDir(body.launch?.agentDir);
+        return buildJsonResponse(payload, payload.ok !== false, payload.ok === false ? 400 : 200);
       }
     }
 
@@ -1582,7 +1608,7 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(JSON.parse(requestInit.body ?? '{}')).not.toHaveProperty('label');
   });
 
-  it('changes Pi config to custom, validates locally, and preserves the branch draft', async () => {
+  it('changes Pi config to custom through server preview and submits raw custom intent', async () => {
     const harness = await setupApp([
       buildSnapshot(),
       buildBasePreview(),
@@ -1659,7 +1685,9 @@ describe('Session Deck iTerm2 web UI', () => {
       (input) => input.getAttribute('aria-label') === 'Custom Pi config directory',
     );
     expect(harness.document.activeElement).toBe(focusedInvalidCustomInput);
+    expect((findAllByTag(form, 'button')[0] as FakeButtonElement).disabled).toBe(true);
     await flushMicrotasks();
+
     form = findAllByClass(
       getRepoGroupByLabel(harness.elements.list, 'owner/project'),
       'worktree-form',
@@ -1668,7 +1696,10 @@ describe('Session Deck iTerm2 web UI', () => {
       (input) => input.getAttribute('aria-label') === 'Custom Pi config directory',
     );
     expect(harness.document.activeElement).toBe(focusedInvalidCustomInputAfterPreview);
-    expect(form.textContent).toContain('Custom Pi config must be absolute or start with ~/.');
+    expect(form.textContent).toContain(
+      'launch.agentDir.customDir must be absolute or start with ~/.',
+    );
+    expect(form.textContent).not.toContain('Custom Pi config must be absolute or start with ~/.');
     expect((findAllByTag(form, 'button')[0] as FakeButtonElement).disabled).toBe(true);
     expect(
       (
@@ -1681,7 +1712,7 @@ describe('Session Deck iTerm2 web UI', () => {
     const fixedCustomInput = findAllByTag(form, 'input').find(
       (input) => input.getAttribute('aria-label') === 'Custom Pi config directory',
     ) as FakeInputElement;
-    fixedCustomInput.value = '~/agent-work';
+    fixedCustomInput.value = '/tmp/pi/../agent-work';
     fixedCustomInput.dispatchEvent({ type: 'input' });
     form = findAllByClass(
       getRepoGroupByLabel(harness.elements.list, 'owner/project'),
@@ -1691,8 +1722,45 @@ describe('Session Deck iTerm2 web UI', () => {
       (input) => input.getAttribute('aria-label') === 'Custom Pi config directory',
     );
     expect(harness.document.activeElement).toBe(focusedValidCustomInput);
+    expect((findAllByTag(form, 'button')[0] as FakeButtonElement).disabled).toBe(true);
     form.dispatchEvent({ type: 'submit' });
     await flushMicrotasks();
+    expect(
+      harness.fetchMock.mock.calls.filter(([url]) => url === '/actions/create-worktree'),
+    ).toHaveLength(0);
+
+    form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'owner/project'),
+      'worktree-form',
+    )[0]!;
+    expect(findAllByClass(form, 'worktree-config-summary')[0]?.textContent).toBe(
+      'Pi config → /tmp/pi/../agent-work',
+    );
+    expect((findAllByTag(form, 'button')[0] as FakeButtonElement).disabled).toBe(false);
+    form.dispatchEvent({ type: 'submit' });
+    await flushMicrotasks();
+
+    const previewRequests = harness.fetchMock.mock.calls
+      .filter(([url]) => url === '/actions/create-worktree-preview')
+      .map(([, init]) => JSON.parse((init as { body?: string }).body ?? '{}'));
+    expect(previewRequests).toContainEqual(
+      expect.objectContaining({
+        action: 'preview-launch-context',
+        launch: {
+          mode: 'tmux-detached',
+          agentDir: { mode: 'custom', customDir: 'relative' },
+        },
+      }),
+    );
+    expect(previewRequests).toContainEqual(
+      expect.objectContaining({
+        action: 'preview-launch-context',
+        launch: {
+          mode: 'tmux-detached',
+          agentDir: { mode: 'custom', customDir: '/tmp/pi/../agent-work' },
+        },
+      }),
+    );
 
     const actionCall = harness.fetchMock.mock.calls.find(
       ([url]) => url === '/actions/create-worktree',
@@ -1702,7 +1770,7 @@ describe('Session Deck iTerm2 web UI', () => {
       branchName: 'rh/custom-agent',
       launch: {
         mode: 'tmux-detached',
-        agentDir: { mode: 'custom', customDir: '~/agent-work' },
+        agentDir: { mode: 'custom', customDir: '/tmp/pi/../agent-work' },
       },
     });
   });

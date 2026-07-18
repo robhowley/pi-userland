@@ -62,6 +62,9 @@ class TempRuntime:
         self.web_root.mkdir()
         (self.web_root / "index.html").write_text("<main>Session Deck</main>", encoding="utf-8")
         (self.web_root / "app.js").write_text("console.log('session deck');", encoding="utf-8")
+        (self.web_root / "launch-context-view.js").write_text(
+            "export const labels = [];", encoding="utf-8"
+        )
         (self.web_root / "style.css").write_text("body { color: black; }", encoding="utf-8")
         self.socket_path = self.root / "socket-parent" / "iterm2.sock"
         self.state_path = self.root / "install.json"

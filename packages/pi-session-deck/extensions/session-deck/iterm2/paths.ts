@@ -25,6 +25,7 @@ export const SESSION_DECK_ITERM2_AUTOLAUNCH_SOURCE_RELATIVE_PATH =
   'extensions/session-deck/iterm2/autolaunch.py';
 export const SESSION_DECK_ITERM2_WEB_INDEX_FILENAME = 'index.html';
 export const SESSION_DECK_ITERM2_WEB_APP_FILENAME = 'app.js';
+export const SESSION_DECK_ITERM2_WEB_LAUNCH_CONTEXT_VIEW_FILENAME = 'launch-context-view.js';
 export const SESSION_DECK_ITERM2_WEB_STYLE_FILENAME = 'style.css';
 
 export interface SessionDeckIterm2RuntimePaths {
@@ -79,11 +80,13 @@ export function getSessionDeckIterm2BridgeSocketPath(
 export function getSessionDeckIterm2WebAssetPaths(webRootPath: string): {
   indexPath: string;
   appPath: string;
+  launchContextViewPath: string;
   stylePath: string;
 } {
   return {
     indexPath: join(webRootPath, SESSION_DECK_ITERM2_WEB_INDEX_FILENAME),
     appPath: join(webRootPath, SESSION_DECK_ITERM2_WEB_APP_FILENAME),
+    launchContextViewPath: join(webRootPath, SESSION_DECK_ITERM2_WEB_LAUNCH_CONTEXT_VIEW_FILENAME),
     stylePath: join(webRootPath, SESSION_DECK_ITERM2_WEB_STYLE_FILENAME),
   };
 }
