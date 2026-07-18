@@ -29,7 +29,9 @@ export function getSessionDeckListHeading(all: boolean): string {
 
 export function getSessionDeckBrowserTitle(view: SessionDeckSnapshot, all: boolean): string {
   const counts = countPresenceStates(view.records);
-  const parts = ['Pi sessions', `${counts.live} live`, `${counts.stale} stale`];
+  const tempLive = countLiveTempSessions(view.records);
+  const visibleLive = counts.live - tempLive;
+  const parts = ['Pi sessions', `${visibleLive} live`, `${tempLive} temp`, `${counts.stale} stale`];
 
   if (all) {
     parts.push(`${counts.dead} dead`, `${counts.unknown} unknown`);
@@ -208,6 +210,15 @@ function countPresenceStates(
       unknown: 0,
     },
   );
+}
+
+function countLiveTempSessions(records: SessionDeckRecord[]): number {
+  return records.filter((record) => record.presenceState === 'live' && isTempSession(record))
+    .length;
+}
+
+function isTempSession(record: SessionDeckRecord): boolean {
+  return record.derivedFacets?.rowKind === 'ephemeral_child_runtime';
 }
 
 function getDisplayTitle(record: SessionDeckBrowserRecord): {

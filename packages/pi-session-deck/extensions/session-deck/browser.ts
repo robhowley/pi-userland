@@ -30,6 +30,14 @@ const AUTO_REFRESH_INTERVAL_MS = 15_000;
 const ALL_REPO_FILTER_KEY = Symbol('all-repo-filter');
 const NO_REPO_FILTER_KEY = Symbol('no-repo-filter');
 
+function isTempSession(record: SessionDeckBrowserRecord): boolean {
+  return record.derivedFacets?.rowKind === 'ephemeral_child_runtime';
+}
+
+function getVisibleSessionRecords(records: SessionDeckBrowserRecord[]): SessionDeckBrowserRecord[] {
+  return records.filter((record) => !isTempSession(record));
+}
+
 type SessionDeckRefreshMode = 'manual' | 'auto';
 type SessionDeckRepoKey = string | typeof ALL_REPO_FILTER_KEY | typeof NO_REPO_FILTER_KEY;
 type SessionDeckNamedRepoFilter = {
@@ -180,7 +188,7 @@ export class SessionDeckBrowser {
     this.reapLines = options.reapLines ?? [];
     this.theme = options.theme;
     this.view = options.initialView;
-    this.selectedIndex = clampIndex(0, this.view.records.length);
+    this.selectedIndex = clampIndex(0, getVisibleSessionRecords(this.view.records).length);
     this.startAutoRefresh();
   }
 
@@ -224,7 +232,7 @@ export class SessionDeckBrowser {
       return;
     }
 
-    if (this.view.records.length === 0) {
+    if (selection.records.length === 0) {
       return;
     }
 
@@ -330,7 +338,7 @@ export class SessionDeckBrowser {
       }
     }
 
-    if (this.view.records.length === 0) {
+    if (selection.records.length === 0) {
       lines.push('');
       pushWrappedLine(lines, getSessionDeckEmptyMessage(this.all), width);
     } else {
@@ -962,7 +970,8 @@ export class SessionDeckBrowser {
     selectedRuntimeId: string | null,
   ): void {
     const selection = this.getSelection();
-    const nextRepoState = buildRepoState(nextView.records);
+    const nextVisibleRecords = getVisibleSessionRecords(nextView.records);
+    const nextRepoState = buildRepoState(nextVisibleRecords);
     const nextRepoOption = getPreservedRepoOption(nextRepoState, selection.repoOption.filter);
 
     this.view = nextView;
@@ -974,7 +983,7 @@ export class SessionDeckBrowser {
 
     if (
       this.killConfirm !== null &&
-      !nextView.records.some((record) => record.runtimeId === this.killConfirm?.runtimeId)
+      !nextVisibleRecords.some((record) => record.runtimeId === this.killConfirm?.runtimeId)
     ) {
       this.killConfirm = null;
       this.killStatus = {
@@ -1016,7 +1025,10 @@ export class SessionDeckBrowser {
   }
 
   private getSelection(): SessionDeckBrowserSelection {
-    return getRepoSelection(buildRepoState(this.view.records), this.selectedRepoKey);
+    return getRepoSelection(
+      buildRepoState(getVisibleSessionRecords(this.view.records)),
+      this.selectedRepoKey,
+    );
   }
 
   private clearStatus(): void {
