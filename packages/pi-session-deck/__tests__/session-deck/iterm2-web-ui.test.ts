@@ -827,7 +827,7 @@ describe('Session Deck iTerm2 web UI', () => {
 
     await harness.resolveSnapshot(buildSnapshot());
 
-    expect(getSummaryCountTexts(harness.elements.summary)).toEqual(['1 live', '0 temp', '0 stale']);
+    expect(getSummaryCountTexts(harness.elements.summary)).toEqual(['1 live', '0 temp']);
     expect(harness.elements.summary.childNodes.every((child) => child instanceof FakeElement)).toBe(
       true,
     );
@@ -845,7 +845,7 @@ describe('Session Deck iTerm2 web UI', () => {
       },
     ]);
 
-    expect(getSummaryCountTexts(harness.elements.summary)).toEqual(['0 live', '0 temp', '0 stale']);
+    expect(getSummaryCountTexts(harness.elements.summary)).toEqual(['0 live', '0 temp']);
     expect(harness.elements.banner.classList.contains('hidden')).toBe(false);
     expect(harness.elements.banner.textContent).toBe(
       'Snapshot payload does not match SessionDeckSnapshot.',
@@ -990,7 +990,7 @@ describe('Session Deck iTerm2 web UI', () => {
       }),
     ]);
 
-    expect(getSummaryCountTexts(harness.elements.summary)).toEqual(['1 live', '1 temp', '0 stale']);
+    expect(getSummaryCountTexts(harness.elements.summary)).toEqual(['1 live', '1 temp']);
     expect(getRepoHeaderTexts(harness.elements.list)).toEqual(['owner/project · 1']);
 
     expandRepoGroup(harness.elements.list, 'owner/project');
@@ -1010,7 +1010,6 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(getSummaryCountTexts(harness.elements.summary)).toEqual([
       '1 live',
       '1 temp',
-      '0 stale',
       '0 dead',
       '0 unknown',
     ]);
@@ -1036,7 +1035,7 @@ describe('Session Deck iTerm2 web UI', () => {
       }),
     ]);
 
-    expect(getSummaryCountTexts(harness.elements.summary)).toEqual(['0 live', '1 temp', '0 stale']);
+    expect(getSummaryCountTexts(harness.elements.summary)).toEqual(['0 live', '1 temp']);
     expect(getRepoHeaderTexts(harness.elements.list)).toEqual([]);
     expect(getCards(harness.elements.list)).toHaveLength(0);
     expect(harness.elements.empty.classList.contains('hidden')).toBe(false);
@@ -1047,7 +1046,6 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(getSummaryCountTexts(harness.elements.summary)).toEqual([
       '0 live',
       '1 temp',
-      '0 stale',
       '0 dead',
       '0 unknown',
     ]);
@@ -2495,14 +2493,13 @@ describe('Session Deck iTerm2 web UI', () => {
     const harness = await setupApp([buildSnapshot()]);
     expandAllRepoGroups(harness.elements.list);
 
-    expect(getSummaryCountTexts(harness.elements.summary)).toEqual(['1 live', '0 temp', '0 stale']);
+    expect(getSummaryCountTexts(harness.elements.summary)).toEqual(['1 live', '0 temp']);
 
     setShowAll(harness.elements, true);
 
     expect(getSummaryCountTexts(harness.elements.summary)).toEqual([
       '1 live',
       '0 temp',
-      '0 stale',
       '0 dead',
       '0 unknown',
     ]);

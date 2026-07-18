@@ -31,7 +31,11 @@ export function getSessionDeckBrowserTitle(view: SessionDeckSnapshot, all: boole
   const counts = countPresenceStates(view.records);
   const tempLive = countLiveTempSessions(view.records);
   const visibleLive = counts.live - tempLive;
-  const parts = ['Pi sessions', `${visibleLive} live`, `${tempLive} temp`, `${counts.stale} stale`];
+  const parts = ['Pi sessions', `${visibleLive} live`, `${tempLive} temp`];
+
+  if (counts.stale > 0) {
+    parts.push(`${counts.stale} stale`);
+  }
 
   if (all) {
     parts.push(`${counts.dead} dead`, `${counts.unknown} unknown`);

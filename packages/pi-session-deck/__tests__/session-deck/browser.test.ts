@@ -266,7 +266,7 @@ describe('SessionDeckBrowser', () => {
 
     const output = renderText(browser);
 
-    expect(output).toContain('Pi sessions · 0 live · 1 temp · 0 stale');
+    expect(output).toContain('Pi sessions · 0 live · 1 temp');
     expect(output).toContain('No live or stale Pi sessions found.');
     expect(output).toContain('No selected session.');
     expect(output).not.toContain('temp-only');
@@ -644,7 +644,7 @@ describe('SessionDeckBrowser', () => {
     let output = renderText(browser);
     const repoRow = getRepoRow(renderLines(browser), ['all', 'alpha', 'gamma']);
 
-    expect(output).toContain('Pi sessions · 2 live · 2 temp · 0 stale');
+    expect(output).toContain('Pi sessions · 2 live · 2 temp');
     expect(repoRow).not.toContain('beta');
     expect(repoRow).not.toContain('N/A');
     expect(output).toContain('alpha-session');
@@ -824,7 +824,7 @@ describe('SessionDeckBrowser', () => {
 
     const output = renderText(browser);
 
-    expect(output).toContain('Pi sessions · 1 live · 1 temp · 0 stale');
+    expect(output).toContain('Pi sessions · 1 live · 1 temp');
     expect(output).toContain('› ○ idle  maybe  project · #42 · 5s · main');
     expect(output).toContain('│ maybe');
     expect(output).not.toContain('worker');
@@ -1014,7 +1014,7 @@ describe('SessionDeckBrowser', () => {
 
     const output = renderText(browser);
 
-    expect(output).toContain('Pi sessions · 10 live · 3 temp · 0 stale');
+    expect(output).toContain('Pi sessions · 10 live · 3 temp');
     expect(output).toContain('Showing 1-8 of 10');
     expect(output).toContain('visible-8');
     expect(output).not.toContain('visible-9');
@@ -1965,7 +1965,7 @@ describe('SessionDeckBrowser', () => {
     await vi.waitFor(() => {
       expect(reload).toHaveBeenCalledTimes(1);
       const output = renderText(browser);
-      expect(output).toContain('Pi sessions · 3 live · 1 temp · 0 stale');
+      expect(output).toContain('Pi sessions · 3 live · 1 temp');
       expect(output).toContain('  ○ idle  alpha-one refreshed  alpha · #1 · 5s · main');
       expect(output).toContain('› ○ idle  alpha-two refreshed  alpha · #1 · 5s · main');
       expect(output).toContain('│ alpha-two refreshed');

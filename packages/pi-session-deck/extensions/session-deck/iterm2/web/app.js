@@ -606,7 +606,11 @@ function renderSummary() {
   const counts = countPresenceStates(snapshot.records);
   const tempLive = countLiveTempSessions(snapshot.records);
   const visibleLive = counts.live - tempLive;
-  const summaryLabels = [`${visibleLive} live`, `${tempLive} temp`, `${counts.stale} stale`];
+  const summaryLabels = [`${visibleLive} live`, `${tempLive} temp`];
+
+  if (counts.stale > 0) {
+    summaryLabels.push(`${counts.stale} stale`);
+  }
 
   if (state.showAll) {
     summaryLabels.push(`${counts.dead} dead`, `${counts.unknown} unknown`);
