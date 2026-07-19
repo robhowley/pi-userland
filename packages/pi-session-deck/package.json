@@ -2,7 +2,7 @@
   "name": "@robhowley/pi-session-deck",
   "version": "0.9.1",
   "type": "module",
-  "description": "A repo-aware control plane for Pi agents: launch, monitor, reattach, and track live status, PRs, branches, and worktrees.",
+  "description": "Organize live Pi agents by repo, inspect activity and worktree context, and launch in tmux, reopen, or end them from a TUI or iTerm2 Toolbelt.",
   "files": [
     "dist",
     "extensions",
@@ -14,9 +14,19 @@
   },
   "keywords": [
     "pi-package",
+    "pi-extension",
     "pi-userland",
-    "sessions",
-    "status"
+    "pi-coding-agent",
+    "coding-agent",
+    "session-management",
+    "agent-monitoring",
+    "agent-dashboard",
+    "tui",
+    "iterm2",
+    "iterm2-toolbelt",
+    "tmux",
+    "git-worktree",
+    "terminal"
   ],
   "pi": {
     "extensions": [
