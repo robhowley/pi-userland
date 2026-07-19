@@ -62,6 +62,7 @@ function getActivityRuntimeState(): ActivityRuntimeState {
   const globalState = globalThis as ActivityRuntimeGlobalState;
   const existingState = globalState[ACTIVITY_RUNTIME_STATE_KEY];
   if (existingState !== undefined) {
+    migrateActivityRuntimeState(existingState);
     return existingState;
   }
 
@@ -93,7 +94,13 @@ export async function ensureActivityRuntimeStarted(
 ): Promise<ActivityRuntimeController> {
   const state = getActivityRuntimeState();
   if (state.activeStartPromise !== null) {
-    return state.activeStartPromise;
+    const controller = await state.activeStartPromise;
+    if (hasCurrentActivityRuntimeControllerApi(controller)) {
+      return controller;
+    }
+
+    stopActivityRuntimeTimer(state);
+    state.activeStartPromise = null;
   }
 
   state.runtimeId = runtimeId;
@@ -389,10 +396,7 @@ export function getActivityRuntimeDiagnostics(): ActivityDiagnostic[] {
 
 export async function stopActivityRuntime(): Promise<void> {
   const state = getActivityRuntimeState();
-  if (state.activeTimer !== null) {
-    state.activeClearInterval(state.activeTimer);
-    state.activeTimer = null;
-  }
+  stopActivityRuntimeTimer(state);
 
   state.activeStartPromise = null;
   state.activeDirectory = undefined;
@@ -413,6 +417,27 @@ export async function resetActivityRuntimeForTests(): Promise<void> {
   const state = getActivityRuntimeState();
   await stopActivityRuntime();
   state.cachedActivity = null;
+}
+
+function migrateActivityRuntimeState(state: ActivityRuntimeState): void {
+  state.pendingMutation ??= Promise.resolve();
+  state.compactionToken ??= 0;
+  state.compactionAbortCleanup ??= null;
+}
+
+function hasCurrentActivityRuntimeControllerApi(controller: ActivityRuntimeController): boolean {
+  const candidate = controller as Partial<ActivityRuntimeController>;
+  return (
+    typeof candidate.recordCompactionStart === 'function' &&
+    typeof candidate.clearCompaction === 'function'
+  );
+}
+
+function stopActivityRuntimeTimer(state: ActivityRuntimeState): void {
+  if (state.activeTimer !== null) {
+    state.activeClearInterval(state.activeTimer);
+    state.activeTimer = null;
+  }
 }
 
 function createIdleActivityRecord(

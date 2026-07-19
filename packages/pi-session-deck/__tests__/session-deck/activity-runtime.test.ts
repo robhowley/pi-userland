@@ -6,6 +6,8 @@ import {
 } from '../../extensions/session-deck/activity/runtime.js';
 import type { SessionActivityRecord } from '../../extensions/session-deck/activity/types.js';
 
+const ACTIVITY_RUNTIME_STATE_KEY = '__piSessionDeckActivityRuntimeState__';
+
 afterEach(async () => {
   await resetActivityRuntimeForTests();
 });
@@ -18,6 +20,60 @@ describe('activity runtime lifecycle', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('recreates cached controllers that predate compaction methods', async () => {
+    const legacyTimer = setInterval(() => undefined, 1_000);
+    const clearIntervalSpy = vi.fn((timer: ReturnType<typeof setInterval>) => {
+      clearInterval(timer);
+    });
+    const legacyController = {
+      refreshActivity: vi.fn().mockResolvedValue(undefined),
+      recordInputSource: vi.fn().mockResolvedValue(undefined),
+      recordMessageEnd: vi.fn().mockResolvedValue(undefined),
+      recordTurnStart: vi.fn().mockResolvedValue(undefined),
+      recordToolExecutionStart: vi.fn().mockResolvedValue(undefined),
+      recordToolExecutionEnd: vi.fn().mockResolvedValue(undefined),
+      recordTurnEnd: vi.fn().mockResolvedValue(undefined),
+      getActivity: vi.fn().mockReturnValue(null),
+      isRunning: vi.fn(() => true),
+    };
+    const writes: SessionActivityRecord[] = [];
+
+    (globalThis as Record<string, unknown>)[ACTIVITY_RUNTIME_STATE_KEY] = {
+      cachedActivity: null,
+      activeStartPromise: Promise.resolve(legacyController),
+      activeTimer: legacyTimer,
+      activeDirectory: undefined,
+      activeClearInterval: clearIntervalSpy,
+      runtimeId: 'rt-old',
+      sessionManager: null,
+      lastSeenSessionId: null,
+      activeToolCalls: new Map(),
+      inputSummary: {},
+      recentToolWindows: [],
+      hasActiveTurnError: false,
+      runtimeDiagnostics: [],
+      pendingMutation: Promise.resolve(),
+    };
+
+    const controller = await ensureActivityRuntimeStarted('rt-new', {
+      writeRecord: vi.fn(async (record: SessionActivityRecord) => {
+        writes.push(record);
+      }),
+    });
+
+    expect(controller).not.toBe(legacyController);
+    expect(clearIntervalSpy).toHaveBeenCalledWith(legacyTimer);
+
+    await controller.recordCompactionStart({ reason: 'manual' });
+
+    expect(writes.at(-1)).toMatchObject({
+      runtimeId: 'rt-new',
+      activityState: 'compacting',
+      activitySource: 'compaction_start',
+      compaction: { reason: 'manual' },
+    });
   });
 
   it('tracks overlapping tools and keeps the most recent active tool', async () => {
