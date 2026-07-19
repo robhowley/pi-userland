@@ -10,7 +10,7 @@ Open Session Deck as a native Pi TUI with `/session-deck`, or keep it visible as
 
 ## What you get
 
-- **Agents organized by repo.** See all of your live sessions in their project context. Collapse repos that do not need attention. Temp child-runtime sessions are counted separately in the summary.
+- **Agents organized by repo.** See all of your live sessions in their project context. Collapse repos that do not need attention. Temp child-runtime sessions stay hidden, with active spawned counts shown on their parent detail.
 - **Detailed status at a glance.** Names, liveness, current activity, branch and worktree context, PR state, and safe status chips stay together.
 - **A reliable way back.** Focus an active iTerm2 session or reattach to an existing tmux session from the deck.
 - **End sessions safely.** Preserve session history when an agent is done.
