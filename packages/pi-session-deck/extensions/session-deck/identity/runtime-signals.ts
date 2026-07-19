@@ -401,6 +401,16 @@ function normalizePositiveInteger(value: unknown): number | undefined {
     return value;
   }
 
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (/^\d+$/.test(trimmed)) {
+      const parsed = Number(trimmed);
+      if (Number.isInteger(parsed) && parsed > 0) {
+        return parsed;
+      }
+    }
+  }
+
   return undefined;
 }
 

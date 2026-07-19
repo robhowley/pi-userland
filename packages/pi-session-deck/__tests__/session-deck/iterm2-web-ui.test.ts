@@ -300,6 +300,21 @@ function buildSnapshot(
   };
 }
 
+function buildDerivedFacets(
+  overrides: Partial<NonNullable<SessionDeckRecord['derivedFacets']>> = {},
+): NonNullable<SessionDeckRecord['derivedFacets']> {
+  return {
+    persistence: 'in_memory',
+    rowKind: 'durable_session',
+    interactivity: 'interactive',
+    lifecycle: 'startup',
+    lineage: 'root',
+    identityStrength: 'weak',
+    headerConsistency: 'consistent',
+    ...overrides,
+  };
+}
+
 function buildBasePreview(baseRef = 'origin/main') {
   return {
     ok: true,
@@ -947,21 +962,17 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(getCards(harness.elements.list)).toHaveLength(0);
   });
 
-  it('gates visible child runtime labeling on rowKind while keeping proven child detail', async () => {
+  it('hides temp child-runtime rows while keeping rowKind-vs-childRuntime visibility distinct', async () => {
     const harness = await setupApp([
       buildSnapshot({
         records: [
           buildRecord({
             runtimeId: 'rt-high-child',
+            sessionId: 'session-high-child',
             sessionName: 'worker',
-            derivedFacets: {
-              persistence: 'in_memory',
+            derivedFacets: buildDerivedFacets({
               rowKind: 'ephemeral_child_runtime',
               interactivity: 'headless',
-              lifecycle: 'startup',
-              lineage: 'root',
-              identityStrength: 'weak',
-              headerConsistency: 'consistent',
               childRuntime: {
                 candidate: true,
                 confidence: 'high',
@@ -979,20 +990,14 @@ describe('Session Deck iTerm2 web UI', () => {
                   },
                 ],
               },
-            },
+            }),
           }),
           buildRecord({
             runtimeId: 'rt-env-only',
             sessionId: 'session-low',
             sessionName: 'maybe',
-            derivedFacets: {
-              persistence: 'in_memory',
+            derivedFacets: buildDerivedFacets({
               rowKind: 'ephemeral_runtime',
-              interactivity: 'interactive',
-              lifecycle: 'startup',
-              lineage: 'root',
-              identityStrength: 'weak',
-              headerConsistency: 'consistent',
               childRuntime: {
                 candidate: true,
                 confidence: 'high',
@@ -1005,7 +1010,188 @@ describe('Session Deck iTerm2 web UI', () => {
                   },
                 ],
               },
-            },
+            }),
+          }),
+        ],
+      }),
+    ]);
+
+    expect(getSummaryCountTexts(harness.elements.summary)).toEqual(['1 live']);
+    expect(getRepoHeaderTexts(harness.elements.list)).toEqual(['owner/project · 1']);
+
+    expandRepoGroup(harness.elements.list, 'owner/project');
+    let cards = getCards(harness.elements.list);
+    expect(cards).toHaveLength(1);
+    expect(cards[0]!.textContent).toContain('maybe');
+    expect(cards[0]!.textContent).not.toContain('worker');
+    expect(getCardLine(cards[0]!, 'row-line2').textContent).not.toContain('child: high');
+
+    getCardToggle(cards[0]!).click();
+    cards = getCards(harness.elements.list);
+    const status = getDetailSection(getCardDetail(cards[0]!), 'STATUS');
+    expect(getDetailRowLabels(status)).not.toContain('Child runtime');
+
+    setShowAll(harness.elements, true);
+
+    expect(getSummaryCountTexts(harness.elements.summary)).toEqual([
+      '1 live',
+      '0 dead',
+      '0 unknown',
+    ]);
+    expect(getRepoHeaderTexts(harness.elements.list)).toEqual(['owner/project · 1']);
+    expect(getCards(harness.elements.list)).toHaveLength(1);
+    expect(harness.elements.list.textContent).not.toContain('worker');
+  });
+
+  it('shows active spawned child-runtime counts in expanded identity detail', async () => {
+    const harness = await setupApp([
+      buildSnapshot({
+        records: [
+          buildRecord({
+            runtimeId: 'rt-parent',
+            sessionId: 'session-parent',
+            sessionName: 'parent',
+          }),
+          buildRecord({
+            runtimeId: 'rt-child-live',
+            sessionId: 'session-child-live',
+            sessionName: 'child live',
+            derivedFacets: buildDerivedFacets({
+              rowKind: 'ephemeral_child_runtime',
+              interactivity: 'headless',
+              childRuntime: {
+                candidate: true,
+                confidence: 'high',
+                parentRuntimeId: 'rt-parent',
+                evidence: [
+                  {
+                    code: 'inherited_deck_runtime',
+                    confidence: 'high',
+                    parentRuntimeId: 'rt-parent',
+                  },
+                ],
+              },
+            }),
+          }),
+          buildRecord({
+            runtimeId: 'rt-child-dead',
+            sessionId: 'session-child-dead',
+            sessionName: 'child dead',
+            presenceState: 'dead',
+            presenceReason: 'process_exited',
+            derivedFacets: buildDerivedFacets({
+              rowKind: 'ephemeral_child_runtime',
+              interactivity: 'headless',
+              childRuntime: {
+                candidate: true,
+                confidence: 'high',
+                parentRuntimeId: 'rt-parent',
+                evidence: [
+                  {
+                    code: 'process_ancestor_match',
+                    confidence: 'high',
+                    parentRuntimeId: 'rt-parent',
+                  },
+                ],
+              },
+            }),
+          }),
+          buildRecord({
+            runtimeId: 'rt-candidate',
+            sessionId: 'session-candidate',
+            sessionName: 'candidate',
+            derivedFacets: buildDerivedFacets({
+              rowKind: 'ephemeral_runtime',
+              childRuntime: {
+                candidate: true,
+                confidence: 'high',
+                parentRuntimeId: 'rt-parent',
+                evidence: [
+                  {
+                    code: 'inherited_deck_runtime',
+                    confidence: 'high',
+                    parentRuntimeId: 'rt-parent',
+                  },
+                ],
+              },
+            }),
+          }),
+        ],
+      }),
+    ]);
+
+    expect(getSummaryCountTexts(harness.elements.summary)).toEqual(['2 live']);
+
+    expandRepoGroup(harness.elements.list, 'owner/project');
+    let cards = getCards(harness.elements.list);
+    expect(cards).toHaveLength(2);
+    expect(harness.elements.list.textContent).toContain('parent');
+    expect(harness.elements.list.textContent).toContain('candidate');
+    expect(harness.elements.list.textContent).not.toContain('child live');
+    expect(harness.elements.list.textContent).not.toContain('child dead');
+
+    getCardToggle(cards[0]!).click();
+    cards = getCards(harness.elements.list);
+    const identity = getDetailSection(getCardDetail(cards[0]!), 'IDENTITY');
+    expect(getDetailRowLabels(identity)).toEqual(['Session ID', 'Runtime ID', 'PID', 'Spawned']);
+    const spawnedRow = getDetailRow(identity, 'Spawned');
+    const spawnedLabel = findAllByClass(spawnedRow, 'detail-label')[0]!;
+    const spawnedValue = getDetailRowValue(identity, 'Spawned');
+    expect(spawnedLabel.getAttribute('title')).toBe(
+      'Ephemeral child sessions excluded from the deck.',
+    );
+    expect(spawnedValue.textContent).toBe('1');
+    expect(spawnedValue.getAttribute('title')).toBe(
+      'Ephemeral child sessions excluded from the deck.',
+    );
+    expect(getCopyButtonLabels(identity)).toEqual([
+      'Copy Session ID',
+      'Copy Runtime ID',
+      'Copy PID',
+    ]);
+
+    setShowAll(harness.elements, true);
+
+    expect(getSummaryCountTexts(harness.elements.summary)).toEqual([
+      '2 live',
+      '0 dead',
+      '0 unknown',
+    ]);
+    expect(harness.elements.list.textContent).not.toContain('child live');
+    expect(harness.elements.list.textContent).not.toContain('child dead');
+  });
+
+  it('hides spawned child-runtime counts after child runtimes end', async () => {
+    const harness = await setupApp([
+      buildSnapshot({
+        records: [
+          buildRecord({
+            runtimeId: 'rt-parent',
+            sessionId: 'session-parent',
+            sessionName: 'parent',
+          }),
+          buildRecord({
+            runtimeId: 'rt-child-dead',
+            sessionId: 'session-child-dead',
+            sessionName: 'child dead',
+            presenceState: 'dead',
+            presenceReason: 'heartbeat_expired',
+            derivedFacets: buildDerivedFacets({
+              rowKind: 'ephemeral_child_runtime',
+              interactivity: 'headless',
+              childRuntime: {
+                candidate: true,
+                confidence: 'high',
+                parentRuntimeId: 'rt-parent',
+                evidence: [
+                  {
+                    code: 'process_ancestor_match',
+                    confidence: 'high',
+                    parentRuntimeId: 'rt-parent',
+                  },
+                ],
+              },
+            }),
           }),
         ],
       }),
@@ -1013,20 +1199,97 @@ describe('Session Deck iTerm2 web UI', () => {
 
     expandRepoGroup(harness.elements.list, 'owner/project');
     let cards = getCards(harness.elements.list);
-    expect(getCardLine(cards[0]!, 'row-line2').textContent).toContain('child: high');
-    expect(getCardLine(cards[1]!, 'row-line2').textContent).not.toContain('child: high');
+    expect(cards).toHaveLength(1);
+    expect(harness.elements.list.textContent).not.toContain('child dead');
 
     getCardToggle(cards[0]!).click();
     cards = getCards(harness.elements.list);
-    let status = getDetailSection(getCardDetail(cards[0]!), 'STATUS');
-    expect(getDetailRowValue(status, 'Child runtime').textContent).toContain(
-      'high via deck env + process ancestor · parent rt-paren',
-    );
+    const identity = getDetailSection(getCardDetail(cards[0]!), 'IDENTITY');
+    expect(getDetailRowLabels(identity)).toEqual(['Session ID', 'Runtime ID', 'PID']);
+    expect(identity.textContent).not.toContain('Spawned');
+  });
 
-    getCardToggle(cards[1]!).click();
-    cards = getCards(harness.elements.list);
-    status = getDetailSection(getCardDetail(cards[1]!), 'STATUS');
-    expect(getDetailRowLabels(status)).not.toContain('Child runtime');
+  it('shows the empty state when only temp live rows are present', async () => {
+    const harness = await setupApp([
+      buildSnapshot({
+        records: [
+          buildRecord({
+            runtimeId: 'rt-temp-only',
+            sessionId: 'session-temp-only',
+            sessionName: 'temp only',
+            derivedFacets: buildDerivedFacets({
+              rowKind: 'ephemeral_child_runtime',
+              interactivity: 'headless',
+            }),
+          }),
+        ],
+      }),
+    ]);
+
+    expect(getSummaryCountTexts(harness.elements.summary)).toEqual(['0 live']);
+    expect(getRepoHeaderTexts(harness.elements.list)).toEqual([]);
+    expect(getCards(harness.elements.list)).toHaveLength(0);
+    expect(harness.elements.empty.classList.contains('hidden')).toBe(false);
+    expect(harness.elements.empty.textContent).toBe('No live or stale Pi sessions found.');
+
+    setShowAll(harness.elements, true);
+
+    expect(getSummaryCountTexts(harness.elements.summary)).toEqual([
+      '0 live',
+      '0 dead',
+      '0 unknown',
+    ]);
+    expect(getRepoHeaderTexts(harness.elements.list)).toEqual([]);
+    expect(getCards(harness.elements.list)).toHaveLength(0);
+    expect(harness.elements.empty.classList.contains('hidden')).toBe(false);
+    expect(harness.elements.empty.textContent).toBe('No session records found.');
+  });
+
+  it('keeps repo counts tied to visible records when temp rows share a repo', async () => {
+    const harness = await setupApp([
+      buildSnapshot({
+        records: [
+          buildRecord({
+            runtimeId: 'rt-live',
+            sessionId: 'session-live',
+            sessionName: 'live',
+          }),
+          buildRecord({
+            runtimeId: 'rt-temp',
+            sessionId: 'session-temp',
+            sessionName: 'temp child',
+            derivedFacets: buildDerivedFacets({
+              rowKind: 'ephemeral_child_runtime',
+              interactivity: 'headless',
+            }),
+          }),
+          buildRecord({
+            runtimeId: 'rt-dead',
+            sessionId: 'session-dead',
+            sessionName: 'dead',
+            presenceState: 'dead',
+          }),
+        ],
+      }),
+    ]);
+
+    expect(getRepoHeaderTexts(harness.elements.list)).toEqual(['owner/project · 1']);
+
+    expandRepoGroup(harness.elements.list, 'owner/project');
+
+    expect(getCards(harness.elements.list)).toHaveLength(1);
+    expect(harness.elements.list.textContent).toContain('live');
+    expect(harness.elements.list.textContent).not.toContain('temp child');
+
+    setShowAll(harness.elements, true);
+
+    expect(getRepoHeaderTexts(harness.elements.list)).toEqual(['owner/project · 2']);
+    expect(
+      getRepoHeaderByLabel(harness.elements.list, 'owner/project').getAttribute('aria-expanded'),
+    ).toBe('true');
+    expect(getCards(harness.elements.list)).toHaveLength(2);
+    expect(harness.elements.list.textContent).toContain('dead');
+    expect(harness.elements.list.textContent).not.toContain('temp child');
   });
 
   it('renders a sibling + New repo-row action and opens the compact composer', async () => {
@@ -2458,7 +2721,7 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(getExpandedCards(harness.elements.list)[0]!.textContent).toContain('rt-2');
   });
 
-  it('hides zero summary states in all mode', async () => {
+  it('shows zero dead and unknown summary states in all mode', async () => {
     const harness = await setupApp([buildSnapshot()]);
     expandAllRepoGroups(harness.elements.list);
 
@@ -2466,15 +2729,28 @@ describe('Session Deck iTerm2 web UI', () => {
 
     setShowAll(harness.elements, true);
 
-    expect(getSummaryCountTexts(harness.elements.summary)).toEqual(['1 live']);
+    expect(getSummaryCountTexts(harness.elements.summary)).toEqual([
+      '1 live',
+      '0 dead',
+      '0 unknown',
+    ]);
     expect(getCards(harness.elements.list)).toHaveLength(1);
   });
 
-  it('renders summary counts from DOM nodes and keeps updated meta visible', async () => {
+  it('renders summary counts from visible non-temp rows and keeps updated meta visible', async () => {
     const harness = await setupApp([
       buildSnapshot({
         records: [
           buildRecord(),
+          buildRecord({
+            runtimeId: 'rt-temp',
+            sessionId: 'session-temp',
+            sessionName: 'temp-session',
+            derivedFacets: buildDerivedFacets({
+              rowKind: 'ephemeral_child_runtime',
+              interactivity: 'headless',
+            }),
+          }),
           buildRecord({
             runtimeId: 'rt-stale',
             sessionId: 'session-stale',

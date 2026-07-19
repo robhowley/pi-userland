@@ -5,6 +5,7 @@ import type { SessionDeckDiagnostic, SessionDeckRecord, SessionDeckSnapshot } fr
 export interface SessionDeckRecordRenderOptions {
   all: boolean;
   showIdentity: boolean;
+  spawnedCount?: number;
 }
 
 export interface SessionDeckBrowserRow {
@@ -28,8 +29,13 @@ export function getSessionDeckListHeading(all: boolean): string {
 }
 
 export function getSessionDeckBrowserTitle(view: SessionDeckSnapshot, all: boolean): string {
-  const counts = countPresenceStates(view.records);
-  const parts = ['Pi sessions', `${counts.live} live`, `${counts.stale} stale`];
+  const visibleRecords = view.records.filter((record) => !isTempSession(record));
+  const counts = countPresenceStates(visibleRecords);
+  const parts = ['Pi sessions', `${counts.live} live`];
+
+  if (counts.stale > 0) {
+    parts.push(`${counts.stale} stale`);
+  }
 
   if (all) {
     parts.push(`${counts.dead} dead`, `${counts.unknown} unknown`);
@@ -175,6 +181,9 @@ export function formatSessionDeckBrowserCardLines(
     lines.push(sessionAndPidLine);
   }
   lines.push(formatRuntimeLine(record));
+  if ((options.spawnedCount ?? 0) > 0) {
+    lines.push(`Spawned: ${options.spawnedCount}`);
+  }
 
   const diagnosticsLine = options.all ? formatRecordDiagnostics(record.diagnostics) : null;
   if (diagnosticsLine !== null) {
@@ -208,6 +217,10 @@ function countPresenceStates(
       unknown: 0,
     },
   );
+}
+
+function isTempSession(record: SessionDeckRecord): boolean {
+  return record.derivedFacets?.rowKind === 'ephemeral_child_runtime';
 }
 
 function getDisplayTitle(record: SessionDeckBrowserRecord): {

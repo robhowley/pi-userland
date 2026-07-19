@@ -130,6 +130,24 @@ function buildRepoRecord(
   });
 }
 
+type SessionDerivedFacets = NonNullable<SessionDeckRecord['derivedFacets']>;
+
+function buildDerivedFacets(
+  rowKind: SessionDerivedFacets['rowKind'],
+  overrides: Partial<Omit<SessionDerivedFacets, 'rowKind'>> = {},
+): SessionDerivedFacets {
+  return {
+    persistence: rowKind === 'durable_session' ? 'file_backed' : 'in_memory',
+    rowKind,
+    interactivity: 'interactive',
+    lifecycle: 'startup',
+    lineage: 'root',
+    identityStrength: 'strong',
+    headerConsistency: 'consistent',
+    ...overrides,
+  };
+}
+
 function findLineIndex(
   lines: string[],
   predicate: (line: string) => boolean,
@@ -231,6 +249,87 @@ describe('SessionDeckBrowser', () => {
     });
 
     expect(renderText(browser)).toContain('No live or stale Pi sessions found.');
+  });
+
+  it('renders the empty-state fallback when only temp sessions are present', () => {
+    const browser = createBrowser({
+      initialView: buildSnapshot({
+        records: [
+          buildSnapshotRecord({
+            runtimeId: 'rt-temp-only',
+            sessionName: 'temp-only',
+            derivedFacets: buildDerivedFacets('ephemeral_child_runtime'),
+          }),
+        ],
+      }),
+    });
+
+    const output = renderText(browser);
+
+    expect(output).toContain('Pi sessions · 0 live');
+    expect(output).toContain('No live or stale Pi sessions found.');
+    expect(output).toContain('No selected session.');
+    expect(output).not.toContain('temp-only');
+  });
+
+  it('counts only visible non-temp rows in the all-mode summary', () => {
+    const browser = createBrowser({
+      all: true,
+      initialView: buildSnapshot({
+        records: [
+          buildSnapshotRecord({ runtimeId: 'rt-live-1', sessionName: 'visible-one' }),
+          buildSnapshotRecord({
+            runtimeId: 'rt-live-2',
+            pid: 202,
+            sessionId: 'session-live-2',
+            sessionName: 'visible-two',
+          }),
+          buildSnapshotRecord({
+            runtimeId: 'rt-temp-live',
+            pid: 303,
+            sessionId: 'session-temp-live',
+            sessionName: 'temp-live',
+            derivedFacets: buildDerivedFacets('ephemeral_child_runtime'),
+          }),
+          buildSnapshotRecord({
+            runtimeId: 'rt-stale',
+            pid: 404,
+            sessionId: 'session-stale',
+            sessionName: 'stale-visible',
+            presenceState: 'stale',
+            presenceReason: 'heartbeat_expired',
+          }),
+          buildSnapshotRecord({
+            runtimeId: 'rt-temp-stale',
+            pid: 505,
+            sessionId: 'session-temp-stale',
+            sessionName: 'temp-stale',
+            presenceState: 'stale',
+            presenceReason: 'heartbeat_expired',
+            derivedFacets: buildDerivedFacets('ephemeral_child_runtime'),
+          }),
+          buildSnapshotRecord({
+            runtimeId: 'rt-temp-dead',
+            pid: 606,
+            sessionId: 'session-temp-dead',
+            sessionName: 'temp-dead',
+            presenceState: 'dead',
+            presenceReason: 'pid_missing',
+            derivedFacets: buildDerivedFacets('ephemeral_child_runtime'),
+          }),
+          buildSnapshotRecord({
+            runtimeId: 'rt-unknown',
+            pid: 707,
+            sessionId: 'session-unknown',
+            sessionName: 'unknown-visible',
+            presenceState: 'unknown',
+            presenceReason: 'heartbeat_unreadable',
+          }),
+        ],
+      }),
+    });
+
+    expect(renderText(browser)).toContain('Pi sessions · 2 live · 1 stale · 0 dead · 1 unknown');
   });
 
   it('renders reap summary lines above the browser list when provided', () => {
@@ -521,6 +620,49 @@ describe('SessionDeckBrowser', () => {
     expect(repoRow).not.toContain('N/A');
   });
 
+  it('omits temp sessions from the main list and repo buckets', () => {
+    const browser = createBrowser({
+      initialView: buildSnapshot({
+        records: [
+          buildRepoRecord('rt-alpha', 'alpha-session', 'alpha', 'org/alpha'),
+          buildRepoRecord('rt-temp-beta', 'temp-beta', 'beta', 'org/beta', {
+            derivedFacets: buildDerivedFacets('ephemeral_child_runtime'),
+          }),
+          buildRepoRecord('rt-temp-scratch', 'temp-scratch', null, null, {
+            cwd: null,
+            branch: null,
+            prUrl: null,
+            derivedFacets: buildDerivedFacets('ephemeral_child_runtime'),
+          }),
+          buildRepoRecord('rt-gamma', 'gamma-session', 'gamma', 'org/gamma'),
+        ],
+      }),
+    });
+
+    let output = renderText(browser);
+    const repoRow = getRepoRow(renderLines(browser), ['all', 'alpha', 'gamma']);
+
+    expect(output).toContain('Pi sessions · 2 live');
+    expect(repoRow).not.toContain('beta');
+    expect(repoRow).not.toContain('N/A');
+    expect(output).toContain('alpha-session');
+    expect(output).toContain('gamma-session');
+    expect(output).not.toContain('temp-beta');
+    expect(output).not.toContain('temp-scratch');
+
+    browser.handleInput('right');
+    output = renderText(browser);
+    expect(output).toContain('› ○ idle  alpha-session  alpha · #1 · 5s · main');
+    expect(output).not.toContain('gamma-session');
+    expect(output).not.toContain('temp-beta');
+
+    browser.handleInput('right');
+    output = renderText(browser);
+    expect(output).toContain('› ○ idle  gamma-session  gamma · #1 · 5s · main');
+    expect(output).not.toContain('alpha-session');
+    expect(output).not.toContain('temp-scratch');
+  });
+
   it('keeps real __all__ and __no-repo__ repo names distinct from special filters', () => {
     const browser = createBrowser({
       initialView: buildSnapshot({
@@ -569,7 +711,7 @@ describe('SessionDeckBrowser', () => {
     expect(output).not.toContain('no-name-session');
   });
 
-  it('keeps the top-pane dashboard unchanged and shows session ids by default only in the selected card', () => {
+  it('keeps the top-pane list shape and shows session ids by default only in the selected card', () => {
     const browser = createBrowser({
       all: true,
       initialView: buildSnapshot({
@@ -625,7 +767,7 @@ describe('SessionDeckBrowser', () => {
     expect(output).not.toContain('│   - merge-ready clean');
   });
 
-  it('gates visible child runtime labeling on rowKind while keeping proven child detail', () => {
+  it('keeps the temp filter tied to rowKind instead of childRuntime confidence', () => {
     const browser = createBrowser({
       initialView: buildSnapshot({
         records: [
@@ -633,14 +775,9 @@ describe('SessionDeckBrowser', () => {
             runtimeId: 'rt-high-child',
             sessionName: 'worker',
             chips: [],
-            derivedFacets: {
-              persistence: 'in_memory',
-              rowKind: 'ephemeral_child_runtime',
+            derivedFacets: buildDerivedFacets('ephemeral_child_runtime', {
               interactivity: 'headless',
-              lifecycle: 'startup',
-              lineage: 'root',
               identityStrength: 'weak',
-              headerConsistency: 'consistent',
               childRuntime: {
                 candidate: true,
                 confidence: 'high',
@@ -658,20 +795,13 @@ describe('SessionDeckBrowser', () => {
                   },
                 ],
               },
-            },
+            }),
           }),
           buildSnapshotRecord({
             runtimeId: 'rt-env-only',
             sessionName: 'maybe',
             chips: [],
-            derivedFacets: {
-              persistence: 'in_memory',
-              rowKind: 'ephemeral_runtime',
-              interactivity: 'interactive',
-              lifecycle: 'startup',
-              lineage: 'root',
-              identityStrength: 'weak',
-              headerConsistency: 'consistent',
+            derivedFacets: buildDerivedFacets('ephemeral_runtime', {
               childRuntime: {
                 candidate: true,
                 confidence: 'high',
@@ -684,22 +814,113 @@ describe('SessionDeckBrowser', () => {
                   },
                 ],
               },
-            },
+            }),
           }),
         ],
       }),
     });
 
-    let output = renderText(browser);
-    expect(output).toContain('child: high via deck env + process ancestor · parent rt-paren');
-    expect(output).toContain(
-      '│ child runtime: high via deck env + process ancestor · parent rt-paren',
-    );
+    const output = renderText(browser);
 
-    browser.handleInput('down');
-    output = renderText(browser);
-    expect(output).not.toContain('child: high via deck env · parent rt-paren');
-    expect(output).not.toContain('child runtime: high via deck env · parent rt-paren');
+    expect(output).toContain('Pi sessions · 1 live');
+    expect(output).toContain('› ○ idle  maybe  project · #42 · 5s · main');
+    expect(output).toContain('│ maybe');
+    expect(output).not.toContain('worker');
+    expect(output).not.toContain('child: high via deck env');
+    expect(output).not.toContain('child runtime: high via deck env');
+  });
+
+  it('shows active spawned child-runtime counts in the selected detail without leaking hidden child states into summary', () => {
+    const browser = createBrowser({
+      all: true,
+      initialView: buildSnapshot({
+        records: [
+          buildSnapshotRecord({
+            runtimeId: 'rt-parent',
+            sessionId: 'session-parent',
+            sessionName: 'parent',
+            chips: [],
+          }),
+          buildSnapshotRecord({
+            runtimeId: 'rt-child-live',
+            sessionId: 'session-child-live',
+            sessionName: 'child-live',
+            chips: [],
+            derivedFacets: buildDerivedFacets('ephemeral_child_runtime', {
+              interactivity: 'headless',
+              childRuntime: {
+                candidate: true,
+                confidence: 'high',
+                parentRuntimeId: 'rt-parent',
+                evidence: [
+                  {
+                    code: 'inherited_deck_runtime',
+                    confidence: 'high',
+                    parentRuntimeId: 'rt-parent',
+                  },
+                ],
+              },
+            }),
+          }),
+          buildSnapshotRecord({
+            runtimeId: 'rt-child-dead',
+            pid: 303,
+            sessionId: 'session-child-dead',
+            sessionName: 'child-dead',
+            presenceState: 'dead',
+            presenceReason: 'pid_missing',
+            chips: [],
+            derivedFacets: buildDerivedFacets('ephemeral_child_runtime', {
+              interactivity: 'headless',
+              childRuntime: {
+                candidate: true,
+                confidence: 'high',
+                parentRuntimeId: 'rt-parent',
+                evidence: [
+                  {
+                    code: 'process_ancestor_match',
+                    confidence: 'high',
+                    parentRuntimeId: 'rt-parent',
+                  },
+                ],
+              },
+            }),
+          }),
+          buildSnapshotRecord({
+            runtimeId: 'rt-candidate',
+            pid: 404,
+            sessionId: 'session-candidate',
+            sessionName: 'candidate',
+            chips: [],
+            derivedFacets: buildDerivedFacets('ephemeral_runtime', {
+              childRuntime: {
+                candidate: true,
+                confidence: 'high',
+                parentRuntimeId: 'rt-parent',
+                evidence: [
+                  {
+                    code: 'inherited_deck_runtime',
+                    confidence: 'high',
+                    parentRuntimeId: 'rt-parent',
+                  },
+                ],
+              },
+            }),
+          }),
+        ],
+      }),
+    });
+
+    const lines = renderLines(browser);
+    const output = lines.join('\n');
+
+    expect(lines[0]).toBe('Pi sessions · 2 live · 0 dead · 0 unknown');
+    expect(output).toContain('candidate');
+    expect(output).not.toContain('child-live');
+    expect(output).not.toContain('child-dead');
+    expect(output).toContain('│ Spawned: 1');
+    expect(output).not.toContain('│ Spawned: 2');
+    expect(output).not.toContain('Ephemeral child sessions excluded from the deck.');
   });
 
   it('uses the approved activity glyphs in top-pane rows without changing card presence text', () => {
@@ -852,6 +1073,43 @@ describe('SessionDeckBrowser', () => {
     expect(output).toContain('Showing 1-8 of 13');
     expect(output).toContain('session-8');
     expect(output).not.toContain('session-9');
+  });
+
+  it('paginates the visible non-temp subset when temp sessions are present', () => {
+    const visibleRecords = Array.from({ length: 10 }, (_, index) =>
+      buildSnapshotRecord({
+        runtimeId: `rt-visible-${index + 1}`,
+        pid: 100 + index,
+        sessionId: `session-visible-${index + 1}`,
+        sessionName: `visible-${index + 1}`,
+        chips: [],
+        branch: null,
+        prUrl: null,
+      }),
+    );
+    const tempRecords = Array.from({ length: 3 }, (_, index) =>
+      buildSnapshotRecord({
+        runtimeId: `rt-temp-${index + 1}`,
+        pid: 300 + index,
+        sessionId: `session-temp-${index + 1}`,
+        sessionName: `temp-${index + 1}`,
+        chips: [],
+        branch: null,
+        prUrl: null,
+        derivedFacets: buildDerivedFacets('ephemeral_child_runtime'),
+      }),
+    );
+    const browser = createBrowser({
+      initialView: buildSnapshot({ records: [...visibleRecords, ...tempRecords] }),
+    });
+
+    const output = renderText(browser);
+
+    expect(output).toContain('Pi sessions · 10 live');
+    expect(output).toContain('Showing 1-8 of 10');
+    expect(output).toContain('visible-8');
+    expect(output).not.toContain('visible-9');
+    expect(output).not.toContain('temp-1');
   });
 
   it('keeps the 8-row session paging inside the active repo filter', () => {
@@ -1756,6 +2014,55 @@ describe('SessionDeckBrowser', () => {
     });
 
     expect(requestRender).toHaveBeenCalled();
+  });
+
+  it('manual refresh preserves selection against the visible subset when temp rows are present', async () => {
+    const reload = vi.fn<() => Promise<SessionDeckSnapshot>>().mockResolvedValue(
+      buildSnapshot({
+        records: [
+          buildRepoRecord('rt-temp-alpha-next', 'temp-alpha-next', 'alpha', 'org/alpha', {
+            derivedFacets: buildDerivedFacets('ephemeral_child_runtime'),
+          }),
+          buildRepoRecord('rt-alpha-1', 'alpha-one refreshed', 'alpha', 'org/alpha'),
+          buildRepoRecord('rt-alpha-2', 'alpha-two refreshed', 'alpha', 'org/alpha', {
+            pid: 202,
+            sessionId: 'session-alpha-2',
+          }),
+          buildRepoRecord('rt-gamma', 'gamma-one', 'gamma', 'org/gamma'),
+        ],
+      }),
+    );
+    const browser = createBrowser({
+      reload,
+      initialView: buildSnapshot({
+        records: [
+          buildRepoRecord('rt-alpha-1', 'alpha-one', 'alpha', 'org/alpha'),
+          buildRepoRecord('rt-temp-alpha', 'temp-alpha', 'alpha', 'org/alpha', {
+            derivedFacets: buildDerivedFacets('ephemeral_child_runtime'),
+          }),
+          buildRepoRecord('rt-alpha-2', 'alpha-two', 'alpha', 'org/alpha', {
+            pid: 202,
+            sessionId: 'session-alpha-2',
+          }),
+          buildRepoRecord('rt-beta', 'beta-one', 'beta', 'org/beta'),
+        ],
+      }),
+    });
+
+    browser.handleInput('right');
+    browser.handleInput('down');
+    browser.handleInput('r');
+
+    await vi.waitFor(() => {
+      expect(reload).toHaveBeenCalledTimes(1);
+      const output = renderText(browser);
+      expect(output).toContain('Pi sessions · 3 live');
+      expect(output).toContain('  ○ idle  alpha-one refreshed  alpha · #1 · 5s · main');
+      expect(output).toContain('› ○ idle  alpha-two refreshed  alpha · #1 · 5s · main');
+      expect(output).toContain('│ alpha-two refreshed');
+      expect(output).not.toContain('temp-alpha-next');
+      expect(output).not.toContain('gamma-one');
+    });
   });
 
   it('preserves the active repo when refresh enriches it with a first qualified identity', async () => {

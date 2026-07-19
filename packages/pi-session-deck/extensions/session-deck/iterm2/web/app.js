@@ -17,6 +17,7 @@ const OPEN_TERMINAL_SUCCESS_TTL_MS = 4_000;
 const KILL_SESSION_SUCCESS_TTL_MS = 6_000;
 const DEFAULT_OPEN_TERMINAL_FAILURE_MESSAGE = 'Could not request terminal open.';
 const DEFAULT_KILL_SESSION_FAILURE_MESSAGE = 'Could not request session end.';
+const SPAWNED_CHILD_RUNTIME_TOOLTIP = 'Ephemeral child sessions excluded from the deck.';
 const KILL_SESSION_FAILURE_MESSAGES = {
   'invalid-runtime-id': 'Session runtime metadata is invalid.',
   'presence-missing': 'Session runtime metadata is no longer available.',
@@ -263,9 +264,10 @@ function reconcileSelection() {
 
 function getVisibleRecords() {
   const records = state.snapshot?.records ?? [];
-  return state.showAll
-    ? records
-    : records.filter((record) => DEFAULT_VISIBLE_STATES.has(record.presenceState));
+  return records.filter(
+    (record) =>
+      !isTempSession(record) && (state.showAll || DEFAULT_VISIBLE_STATES.has(record.presenceState)),
+  );
 }
 
 function reconcileExpandedRepoKeys(repoGroups = createRepoGroups(getVisibleRecords())) {
@@ -607,7 +609,8 @@ function renderSummary() {
   }
 
   const snapshot = state.snapshot ?? emptySnapshot('Snapshot unavailable.');
-  const counts = countPresenceStates(snapshot.records);
+  const records = snapshot.records.filter((record) => !isTempSession(record));
+  const counts = countPresenceStates(records);
   const summaryLabels = [`${counts.live} live`];
 
   if (counts.stale > 0) {
@@ -615,12 +618,7 @@ function renderSummary() {
   }
 
   if (state.showAll) {
-    if (counts.dead > 0) {
-      summaryLabels.push(`${counts.dead} dead`);
-    }
-    if (counts.unknown > 0) {
-      summaryLabels.push(`${counts.unknown} unknown`);
-    }
+    summaryLabels.push(`${counts.dead} dead`, `${counts.unknown} unknown`);
   }
 
   elements.summary.replaceChildren(
@@ -1804,23 +1802,36 @@ function createRecordDetail(record) {
   const workspacePrHref = getPullRequestHref(record);
   const checkout = formatCheckout(record);
 
+  const identityRows = [
+    createDetailRow('Session ID', record.sessionId, {
+      copyLabel: 'Session ID',
+      copyValue: record.sessionId,
+      middleTruncateTail: 12,
+    }),
+    createDetailRow('Runtime ID', record.runtimeId, {
+      copyLabel: 'Runtime ID',
+      copyValue: record.runtimeId,
+      middleTruncateTail: 12,
+    }),
+    createDetailRow('PID', record.pid === null ? null : String(record.pid), {
+      copyLabel: 'PID',
+      copyValue: record.pid === null ? null : String(record.pid),
+    }),
+  ];
+
+  const spawnedCount = countSpawnedChildRuntimeSessions(state.snapshot?.records ?? [], record);
+  if (spawnedCount > 0) {
+    identityRows.push(
+      createDetailRow('Spawned', String(spawnedCount), {
+        labelTitle: SPAWNED_CHILD_RUNTIME_TOOLTIP,
+        valueTitle: SPAWNED_CHILD_RUNTIME_TOOLTIP,
+        copyValue: null,
+      }),
+    );
+  }
+
   detail.append(
-    createDetailSection('IDENTITY', [
-      createDetailRow('Session ID', record.sessionId, {
-        copyLabel: 'Session ID',
-        copyValue: record.sessionId,
-        middleTruncateTail: 12,
-      }),
-      createDetailRow('Runtime ID', record.runtimeId, {
-        copyLabel: 'Runtime ID',
-        copyValue: record.runtimeId,
-        middleTruncateTail: 12,
-      }),
-      createDetailRow('PID', record.pid === null ? null : String(record.pid), {
-        copyLabel: 'PID',
-        copyValue: record.pid === null ? null : String(record.pid),
-      }),
-    ]),
+    createDetailSection('IDENTITY', identityRows),
     createDetailSection('WORKSPACE', [
       createDetailRow('CWD', record.cwd === null ? null : shortenHomePath(record.cwd), {
         copyLabel: 'CWD',
@@ -2006,12 +2017,26 @@ function createDetailRow(label, value, options = {}) {
 
   const row = document.createElement('div');
   row.className = 'detail-row';
+
+  const labelElement = createText('div', label, 'detail-label');
+  if (options.labelTitle) {
+    labelElement.setAttribute('title', options.labelTitle);
+  }
+
   row.append(
-    createText('div', label, 'detail-label'),
-    createDetailValue(value, options.linkHref ?? null, options.middleTruncateTail ?? null),
+    labelElement,
+    createDetailValue(
+      value,
+      options.linkHref ?? null,
+      options.middleTruncateTail ?? null,
+      options.valueTitle ?? null,
+    ),
   );
 
-  const copyButton = createCopyButton(options.copyLabel ?? label, options.copyValue ?? value);
+  const copyButton =
+    options.copyValue === null
+      ? null
+      : createCopyButton(options.copyLabel ?? label, options.copyValue ?? value);
   if (copyButton) {
     row.append(copyButton);
   }
@@ -2061,6 +2086,26 @@ function countPresenceStates(records) {
     },
     { live: 0, stale: 0, dead: 0, unknown: 0 },
   );
+}
+
+function countSpawnedChildRuntimeSessions(records, parent) {
+  return records.filter((record) => isSpawnedChildRuntimeForParent(record, parent)).length;
+}
+
+function isSpawnedChildRuntimeForParent(record, parent) {
+  return (
+    isTempSession(record) &&
+    isActiveSession(record) &&
+    record.derivedFacets?.childRuntime?.parentRuntimeId === parent.runtimeId
+  );
+}
+
+function isActiveSession(record) {
+  return DEFAULT_VISIBLE_STATES.has(record.presenceState);
+}
+
+function isTempSession(record) {
+  return record.derivedFacets?.rowKind === 'ephemeral_child_runtime';
 }
 
 function getDisplayTitle(record) {
@@ -2454,7 +2499,7 @@ function createText(tagName, text, className) {
   return element;
 }
 
-function createDetailValue(text, linkHref, middleTruncateTail) {
+function createDetailValue(text, linkHref, middleTruncateTail, valueTitle) {
   const value = document.createElement(linkHref ? 'a' : 'div');
   value.className = linkHref ? 'detail-value detail-link' : 'detail-value';
 
@@ -2468,6 +2513,10 @@ function createDetailValue(text, linkHref, middleTruncateTail) {
       createText('span', head, 'detail-value-head'),
       createText('span', tail, 'detail-value-tail'),
     );
+  }
+
+  if (valueTitle !== null) {
+    value.setAttribute('title', valueTitle);
   }
 
   if (linkHref) {
