@@ -1,6 +1,6 @@
 {
   "name": "@robhowley/pi-session-deck",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "type": "module",
   "description": "Organize live Pi agents by repo, inspect activity and worktree context, and launch in tmux, reopen, or end them from a TUI or iTerm2 Toolbelt.",
   "files": [
