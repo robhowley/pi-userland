@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="dark" />
-  <title>pi-userland · Operations Prompt Rail</title>
+  <title>pi-userland · Session Deck and operator tools for Pi</title>
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
@@ -17,10 +17,10 @@
         <span>userland</span>
       </a>
       <nav class="nav-links mono" aria-label="Primary navigation">
-        <a href="#control-plane">control plane</a>
-        <a href="#visibility">visibility</a>
+        <a href="#control-plane">sessions</a>
+        <a href="#visibility">spend + health</a>
         <a href="#ship-with-proof">ship with proof</a>
-        <a href="#guardrails-voice">guardrails + voice</a>
+        <a href="#guardrails-voice">safety + tone</a>
         <a href="#install">install</a>
         <a href="https://github.com/robhowley/pi-userland">github</a>
       </nav>
@@ -33,26 +33,26 @@
 
       <div class="hero-grid">
         <div class="hero-main">
-          <p class="eyebrow mono">operations prompt rail</p>
-          <h1 id="hero-title">❯ userland is the operations rail for Pi agent work.</h1>
+          <p class="eyebrow mono">see sessions. jump back in. launch worktrees.</p>
+          <h1 id="hero-title">See your Pi work, jump back in, and launch the next agent from one deck.</h1>
           <p class="hero-copy">
-            <strong>Session Deck</strong> gives you the control plane to see running work, return to the right session, and launch the next isolated agent. The rest of pi-userland adds visibility, proof, guardrails, and voice around that rail.
+            <strong>Session Deck</strong> lets you see live sessions by repo, reopen or reattach the right terminal, and launch a fresh isolated worktree. Then add spend visibility, merge proof, guardrails, and terminal voice where the run needs them.
           </p>
           <div class="hero-actions" aria-label="Primary actions">
             <a class="button primary" href="#install-control-plane">❯ install pi-session-deck</a>
-            <a class="button" href="#control-plane">see the control plane</a>
+            <a class="button" href="#control-plane">browse the stack</a>
           </div>
-          <ul class="rail-legend mono" aria-label="Operations rail jobs">
-            <li>control plane</li>
-            <li>visibility</li>
-            <li>ship with proof</li>
-            <li>guardrails + voice</li>
+          <ul class="rail-legend mono" aria-label="What pi-userland adds">
+            <li>sessions</li>
+            <li>spend + session health</li>
+            <li>merge + command proof</li>
+            <li>safety + tone</li>
           </ul>
         </div>
 
         <aside class="deck-hero proof-surface" aria-labelledby="deck-hero-title">
           <div class="proof-chrome mono">
-            <span>signature package</span>
+            <span>start here</span>
             <span>/session-deck</span>
           </div>
           <figure class="deck-figure">
@@ -65,12 +65,12 @@
           <div class="deck-hero-copy">
             <h2 id="deck-hero-title" class="mono">pi-session-deck</h2>
             <p>
-              A control plane for your Pi agents: live sessions organized by repo, detailed status tracking, terminal multiplexing, and new-agent launches in one place.
+              Your Pi agent deck: live sessions organized by repo, detailed status tracking, terminal return paths, and new-agent launches in one place.
             </p>
           </div>
-          <ol class="deck-steps mono" aria-label="Session Deck operator loop">
+          <ol class="deck-steps mono" aria-label="Session Deck basics">
             <li><strong>see</strong><span>live sessions by repo</span></li>
-            <li><strong>return</strong><span>focus or reattach</span></li>
+            <li><strong>return</strong><span>open or reattach the right terminal</span></li>
             <li><strong>launch</strong><span>isolated worktrees</span></li>
           </ol>
         </aside>
@@ -81,10 +81,10 @@
       <div class="rail-label mono" aria-hidden="true">❯ proof</div>
       <div class="section-shell">
         <header class="section-head">
-          <p class="section-kicker mono">Secondary evidence</p>
-          <h2 id="proof-title">structured_return keeps tool output useful without flooding the session.</h2>
+          <p class="section-kicker mono">Command proof</p>
+          <h2 id="proof-title">structured_return keeps failures short enough to act on and logs long enough to inspect.</h2>
           <p>
-            The rail is not just launch control. It preserves proof: compact parsed failures for the agent, full logs on disk for the operator.
+            Agents get the short failure report they can act on. You keep the full log on disk when you need to inspect the run.
           </p>
         </header>
 
@@ -144,13 +144,13 @@ E       ZeroDivisionError: division by zero</pre>
     </section>
 
     <section id="control-plane" class="rail-section family control-family" aria-labelledby="control-title">
-      <div class="rail-label mono" aria-hidden="true">❯ control plane</div>
+      <div class="rail-label mono" aria-hidden="true">❯ sessions</div>
       <div class="section-shell">
         <header class="job-head">
-          <p class="section-kicker mono">Control plane</p>
-          <h2 id="control-title">Session Deck is the signature package.</h2>
+          <p class="section-kicker mono">Sessions</p>
+          <h2 id="control-title">Find every live session before you open another terminal.</h2>
           <p>
-            Pi agents are most useful when they work independently. Session Deck keeps that independence from scattering context across terminal tabs, repos, and worktrees.
+            Independent agents are useful until you lose track of them. Session Deck keeps repo, branch, worktree, and the way back to the right terminal in one place.
           </p>
         </header>
 
@@ -160,14 +160,14 @@ E       ZeroDivisionError: division by zero</pre>
               <span>pi-session-deck</span>
               <a class="readme-link" href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-session-deck">README</a>
             </div>
-            <h3>See, group, open, return, and launch Pi agents from one deck.</h3>
+            <h3>See sessions by repo, jump back in, and launch the next Pi agent from one deck.</h3>
             <p>
               Open Session Deck as a native Pi TUI with <code>/session-deck</code>, or keep it visible as an always-on iTerm2 Toolbelt sidebar.
             </p>
             <ul class="feature-list">
               <li><strong>Agents organized by repo.</strong> Collapse quiet repos and keep active work in project context.</li>
               <li><strong>Detailed status at a glance.</strong> Branch, worktree, liveness, activity, and PR state stay together.</li>
-              <li><strong>A reliable way back.</strong> Focus an iTerm2 session or reattach to the existing tmux session.</li>
+              <li><strong>Open the right terminal again.</strong> Focus an iTerm2 session or reattach to the existing tmux session.</li>
               <li><strong>New isolated agents on demand.</strong> Launch Pi on a generated Git worktree in detached tmux.</li>
             </ul>
           </div>
@@ -195,10 +195,10 @@ E       ZeroDivisionError: division by zero</pre>
     </section>
 
     <section id="visibility" class="rail-section family" aria-labelledby="visibility-title">
-      <div class="rail-label mono" aria-hidden="true">❯ visibility</div>
+      <div class="rail-label mono" aria-hidden="true">❯ spend + health</div>
       <div class="section-shell">
         <header class="job-head">
-          <p class="section-kicker mono">Visibility</p>
+          <p class="section-kicker mono">Spend + session health</p>
           <h2 id="visibility-title">Know what the run is spending and when the session is getting heavy.</h2>
         </header>
 
@@ -328,11 +328,11 @@ openItems:
     </section>
 
     <section id="guardrails-voice" class="rail-section family" aria-labelledby="guardrails-title">
-      <div class="rail-label mono" aria-hidden="true">❯ guardrails + voice</div>
+      <div class="rail-label mono" aria-hidden="true">❯ safety + tone</div>
       <div class="section-shell">
         <header class="job-head">
-          <p class="section-kicker mono">Guardrails + voice</p>
-          <h2 id="guardrails-title">Keep the YOLO path sharp without making every session feel sterile.</h2>
+          <p class="section-kicker mono">Safety + tone</p>
+          <h2 id="guardrails-title">Move fast without dangerous bash calls or bland terminal defaults.</h2>
         </header>
 
         <div class="module-pair">
@@ -397,22 +397,22 @@ openItems:
       <div class="rail-label mono" aria-hidden="true">❯ install</div>
       <div class="section-shell install-shell">
         <header class="section-head">
-          <p class="section-kicker mono">Install your stack</p>
-          <h2 id="install-title">Pick the operator job, then wire in the real package.</h2>
+          <p class="section-kicker mono">Install what you need</p>
+          <h2 id="install-title">Pick the job, then install the package.</h2>
           <p>
-            There is no wrapper metapackage hiding the pieces. Compose the rail from direct npm installs and keep each module independently removable.
+            Install each package directly with npm so you can add only what you need and remove anything later.
           </p>
         </header>
 
         <div class="install-families">
           <article id="install-control-plane" class="install-family">
-            <h3 class="mono">Control plane</h3>
-            <p>Start here when sessions, repos, and detached worktrees are the problem.</p>
+            <h3 class="mono">Sessions</h3>
+            <p>Start here to see sessions, reopen the right terminal, and launch detached worktrees.</p>
             <div class="cmd"><span class="prompt mono">❯</span><code>pi install npm:@robhowley/pi-session-deck</code></div>
           </article>
 
           <article class="install-family">
-            <h3 class="mono">Visibility</h3>
+            <h3 class="mono">Spend + session health</h3>
             <p>Add spend/account overlays and session health signals.</p>
             <div class="cmd"><span class="prompt mono">❯</span><code>pi install npm:@robhowley/pi-openrouter</code></div>
             <div class="cmd"><span class="prompt mono">❯</span><code>pi install npm:@robhowley/pi-session-hygiene</code></div>
@@ -426,8 +426,8 @@ openItems:
           </article>
 
           <article class="install-family">
-            <h3 class="mono">Guardrails + voice</h3>
-            <p>Keep dangerous bash calls controlled and long sessions less beige.</p>
+            <h3 class="mono">Safety + tone</h3>
+            <p>Control dangerous bash calls and swap the default spinner voice.</p>
             <div class="cmd"><span class="prompt mono">❯</span><code>pi install npm:@robhowley/pi-yolo-seatbelt</code></div>
             <div class="cmd"><span class="prompt mono">❯</span><code>pi install npm:@robhowley/pi-spinner-verbs</code></div>
           </article>
