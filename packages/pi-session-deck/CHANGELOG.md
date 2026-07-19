@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.10.0](https://github.com/robhowley/pi-userland/compare/pi-session-deck-v0.9.1...pi-session-deck-v0.10.0) (2026-07-19)
+
+
+### Features
+
+* **pi-session-deck:** add one-shot Pi config selection ([#127](https://github.com/robhowley/pi-userland/issues/127)) ([475d393](https://github.com/robhowley/pi-userland/commit/475d3939084677970423bc73a6f09abecdbf7e4e))
+* **pi-session-deck:** add selected session stop ([#126](https://github.com/robhowley/pi-userland/issues/126)) ([48274e5](https://github.com/robhowley/pi-userland/commit/48274e5d040fa51d360bfde2b8e00a60173cee99))
+* **pi-session-deck:** derive child runtime evidence ([#125](https://github.com/robhowley/pi-userland/issues/125)) ([75fda1d](https://github.com/robhowley/pi-userland/commit/75fda1d1113d09d8dfb58afe82ab106c97828566))
+* **pi-session-deck:** hide temp child runtimes in deck UIs ([#135](https://github.com/robhowley/pi-userland/issues/135)) ([3bf17f1](https://github.com/robhowley/pi-userland/commit/3bf17f1d3d135c7f41c8d1cd6619b0d74b2f3fc0))
+
+
+### Bug Fixes
+
+* **pi-session-deck:** fix readme, update package json ([#137](https://github.com/robhowley/pi-userland/issues/137)) ([f1db712](https://github.com/robhowley/pi-userland/commit/f1db712d12035d1be30951d407f777d1064c83f6))
+* **pi-session-deck:** share launch-context projection ([#134](https://github.com/robhowley/pi-userland/issues/134)) ([d09dd73](https://github.com/robhowley/pi-userland/commit/d09dd7331e4127db7f1116c8a402a244b67298da))
+
 ## [0.9.1](https://github.com/robhowley/pi-userland/compare/pi-session-deck-v0.9.0...pi-session-deck-v0.9.1) (2026-07-17)
 
 
