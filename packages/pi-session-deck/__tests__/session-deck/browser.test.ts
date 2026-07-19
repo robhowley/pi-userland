@@ -266,13 +266,13 @@ describe('SessionDeckBrowser', () => {
 
     const output = renderText(browser);
 
-    expect(output).toContain('Pi sessions · 0 live · 1 temp');
+    expect(output).toContain('Pi sessions · 0 live');
     expect(output).toContain('No live or stale Pi sessions found.');
     expect(output).toContain('No selected session.');
     expect(output).not.toContain('temp-only');
   });
 
-  it('splits the live title count into visible live and temp while keeping stale/dead/unknown global', () => {
+  it('counts only visible non-temp rows in the all-mode summary', () => {
     const browser = createBrowser({
       all: true,
       initialView: buildSnapshot({
@@ -330,7 +330,7 @@ describe('SessionDeckBrowser', () => {
     });
 
     expect(renderText(browser)).toContain(
-      'Pi sessions · 2 live · 1 temp · 2 stale · 1 dead · 1 unknown',
+      'Pi sessions · 2 live · 1 stale · 0 dead · 1 unknown',
     );
   });
 
@@ -644,7 +644,7 @@ describe('SessionDeckBrowser', () => {
     let output = renderText(browser);
     const repoRow = getRepoRow(renderLines(browser), ['all', 'alpha', 'gamma']);
 
-    expect(output).toContain('Pi sessions · 2 live · 2 temp');
+    expect(output).toContain('Pi sessions · 2 live');
     expect(repoRow).not.toContain('beta');
     expect(repoRow).not.toContain('N/A');
     expect(output).toContain('alpha-session');
@@ -742,7 +742,7 @@ describe('SessionDeckBrowser', () => {
 
     const output = renderText(browser);
 
-    expect(output).toContain('Pi sessions · 1 live · 0 temp · 1 stale · 0 dead · 0 unknown');
+    expect(output).toContain('Pi sessions · 1 live · 1 stale · 0 dead · 0 unknown');
     expect(output).toContain('› ○ idle  alpha  project · #42 · 5s · main');
     expect(output).toContain('  │ merge-ready clean · queue 2');
     expect(output).toContain('  ◒ thinking  bravo  project · #42 · 4m · main');
@@ -824,12 +824,105 @@ describe('SessionDeckBrowser', () => {
 
     const output = renderText(browser);
 
-    expect(output).toContain('Pi sessions · 1 live · 1 temp');
+    expect(output).toContain('Pi sessions · 1 live');
     expect(output).toContain('› ○ idle  maybe  project · #42 · 5s · main');
     expect(output).toContain('│ maybe');
     expect(output).not.toContain('worker');
     expect(output).not.toContain('child: high via deck env');
     expect(output).not.toContain('child runtime: high via deck env');
+  });
+
+  it('shows active spawned child-runtime counts in the selected detail without leaking hidden child states into summary', () => {
+    const browser = createBrowser({
+      all: true,
+      initialView: buildSnapshot({
+        records: [
+          buildSnapshotRecord({
+            runtimeId: 'rt-parent',
+            sessionId: 'session-parent',
+            sessionName: 'parent',
+            chips: [],
+          }),
+          buildSnapshotRecord({
+            runtimeId: 'rt-child-live',
+            sessionId: 'session-child-live',
+            sessionName: 'child-live',
+            chips: [],
+            derivedFacets: buildDerivedFacets('ephemeral_child_runtime', {
+              interactivity: 'headless',
+              childRuntime: {
+                candidate: true,
+                confidence: 'high',
+                parentRuntimeId: 'rt-parent',
+                evidence: [
+                  {
+                    code: 'inherited_deck_runtime',
+                    confidence: 'high',
+                    parentRuntimeId: 'rt-parent',
+                  },
+                ],
+              },
+            }),
+          }),
+          buildSnapshotRecord({
+            runtimeId: 'rt-child-dead',
+            pid: 303,
+            sessionId: 'session-child-dead',
+            sessionName: 'child-dead',
+            presenceState: 'dead',
+            presenceReason: 'pid_missing',
+            chips: [],
+            derivedFacets: buildDerivedFacets('ephemeral_child_runtime', {
+              interactivity: 'headless',
+              childRuntime: {
+                candidate: true,
+                confidence: 'high',
+                parentRuntimeId: 'rt-parent',
+                evidence: [
+                  {
+                    code: 'process_ancestor_match',
+                    confidence: 'high',
+                    parentRuntimeId: 'rt-parent',
+                  },
+                ],
+              },
+            }),
+          }),
+          buildSnapshotRecord({
+            runtimeId: 'rt-candidate',
+            pid: 404,
+            sessionId: 'session-candidate',
+            sessionName: 'candidate',
+            chips: [],
+            derivedFacets: buildDerivedFacets('ephemeral_runtime', {
+              childRuntime: {
+                candidate: true,
+                confidence: 'high',
+                parentRuntimeId: 'rt-parent',
+                evidence: [
+                  {
+                    code: 'inherited_deck_runtime',
+                    confidence: 'high',
+                    parentRuntimeId: 'rt-parent',
+                  },
+                ],
+              },
+            }),
+          }),
+        ],
+      }),
+    });
+
+    const lines = renderLines(browser);
+    const output = lines.join('\n');
+
+    expect(lines[0]).toBe('Pi sessions · 2 live · 0 dead · 0 unknown');
+    expect(output).toContain('candidate');
+    expect(output).not.toContain('child-live');
+    expect(output).not.toContain('child-dead');
+    expect(output).toContain('│ Spawned: 1');
+    expect(output).not.toContain('│ Spawned: 2');
+    expect(output).not.toContain('Ephemeral child sessions excluded from the deck.');
   });
 
   it('uses the approved activity glyphs in top-pane rows without changing card presence text', () => {
@@ -1014,7 +1107,7 @@ describe('SessionDeckBrowser', () => {
 
     const output = renderText(browser);
 
-    expect(output).toContain('Pi sessions · 10 live · 3 temp');
+    expect(output).toContain('Pi sessions · 10 live');
     expect(output).toContain('Showing 1-8 of 10');
     expect(output).toContain('visible-8');
     expect(output).not.toContain('visible-9');
@@ -1965,7 +2058,7 @@ describe('SessionDeckBrowser', () => {
     await vi.waitFor(() => {
       expect(reload).toHaveBeenCalledTimes(1);
       const output = renderText(browser);
-      expect(output).toContain('Pi sessions · 3 live · 1 temp');
+      expect(output).toContain('Pi sessions · 3 live');
       expect(output).toContain('  ○ idle  alpha-one refreshed  alpha · #1 · 5s · main');
       expect(output).toContain('› ○ idle  alpha-two refreshed  alpha · #1 · 5s · main');
       expect(output).toContain('│ alpha-two refreshed');

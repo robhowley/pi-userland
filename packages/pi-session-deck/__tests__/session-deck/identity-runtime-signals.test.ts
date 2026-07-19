@@ -83,6 +83,39 @@ describe('identity runtime signals', () => {
     expect(ancestors[7]).toEqual({ pid: 207, ppid: 208 });
   });
 
+  it('parses digit pids from ps stdout when collecting ancestors', async () => {
+    const startedAt = 'Wed Jul 16 12:00:00 2026';
+    const execFile = vi.fn(async () => ({ stdout: `  200   100 ${startedAt}   \n` }));
+
+    const processMetadata = await collectRuntimeProcessMetadata({
+      pid: 321,
+      ppid: 200,
+      now: () => new Date('2026-07-16T12:05:00.000Z'),
+      uptimeSeconds: () => 5,
+      maxAncestorDepth: 1,
+      ancestorTimeoutMs: 50,
+      execFile,
+    });
+
+    expect(execFile).toHaveBeenCalledWith(
+      'ps',
+      ['-o', 'pid=,ppid=,lstart=', '-p', '200'],
+      { timeout: 50 },
+    );
+    expect(processMetadata).toEqual({
+      pid: 321,
+      ppid: 200,
+      processStartedAt: '2026-07-16T12:04:55.000Z',
+      ancestors: [
+        {
+          pid: 200,
+          ppid: 100,
+          processStartedAt: new Date(Date.parse(startedAt)).toISOString(),
+        },
+      ],
+    });
+  });
+
   it('fails open on ancestor lookup errors and keeps only the current pid/ppid', async () => {
     const processMetadata = await collectRuntimeProcessMetadata({
       pid: 321,

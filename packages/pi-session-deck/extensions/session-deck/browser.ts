@@ -38,6 +38,28 @@ function getVisibleSessionRecords(records: SessionDeckBrowserRecord[]): SessionD
   return records.filter((record) => !isTempSession(record));
 }
 
+function countSpawnedChildRuntimeSessions(
+  records: readonly SessionDeckBrowserRecord[],
+  parent: SessionDeckBrowserRecord,
+): number {
+  return records.filter((record) => isSpawnedChildRuntimeForParent(record, parent)).length;
+}
+
+function isSpawnedChildRuntimeForParent(
+  record: SessionDeckBrowserRecord,
+  parent: SessionDeckBrowserRecord,
+): boolean {
+  return (
+    isTempSession(record) &&
+    isActiveSession(record) &&
+    record.derivedFacets?.childRuntime?.parentRuntimeId === parent.runtimeId
+  );
+}
+
+function isActiveSession(record: SessionDeckBrowserRecord): boolean {
+  return record.presenceState === 'live' || record.presenceState === 'stale';
+}
+
 type SessionDeckRefreshMode = 'manual' | 'auto';
 type SessionDeckRepoKey = string | typeof ALL_REPO_FILTER_KEY | typeof NO_REPO_FILTER_KEY;
 type SessionDeckNamedRepoFilter = {
@@ -387,9 +409,11 @@ export class SessionDeckBrowser {
       if (selected === null) {
         pushWrappedLine(lines, this.theme.fg('dim', 'No selected session.'), width);
       } else {
+        const spawnedCount = countSpawnedChildRuntimeSessions(this.view.records, selected);
         const cardLines = formatSessionDeckBrowserCardLines(selected, {
           all: this.all,
           showIdentity: this.showIdentity,
+          spawnedCount,
         });
         if (cardLines.length > 0) {
           cardLines[0] = this.theme.fg('accent', this.theme.bold(cardLines[0]!));
