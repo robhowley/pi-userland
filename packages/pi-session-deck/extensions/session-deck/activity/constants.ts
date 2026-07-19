@@ -8,6 +8,8 @@ export const DEFAULT_ACTIVITY_THRESHOLDS: ActivityThresholds = {
   toolStuckAfterMs: 10 * 60_000,
   veryStaleAfterMs: 30 * 60_000,
   futureSkewMs: 5_000,
+  compactionStaleAfterMs: 2 * 60_000,
+  compactionExpiredAfterMs: 10 * 60_000,
 };
 
 export const DEFAULT_ACTIVITY_REFRESH_INTERVAL_MS = 30_000;

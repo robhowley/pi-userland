@@ -34,6 +34,7 @@ describe('runSessionDeckSnapshotCli', () => {
           activityAgeMs: null,
           currentToolName: null,
           lastError: null,
+          compaction: null,
           chips: ['merge-ready clean'],
           diagnostics: [],
         },

@@ -1,5 +1,9 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
-import { ensureActivityRuntimeStarted, type ActivityRuntimeConfig } from './activity/runtime.js';
+import {
+  ensureActivityRuntimeStarted,
+  stopActivityRuntime,
+  type ActivityRuntimeConfig,
+} from './activity/runtime.js';
 import { SESSION_DECK_COMMAND_NAME } from './presence/constants.js';
 import { registerSessionDeckCommand, type PresenceCommandAPI } from './identity/command.js';
 import {
@@ -143,7 +147,27 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     await activityRuntime.recordTurnEnd();
   });
 
+  on(
+    'session_before_compact',
+    async (event: { reason?: unknown; willRetry?: unknown; signal?: AbortSignal }) => {
+      const activityRuntime = await ensureActivityRuntime();
+      await activityRuntime.recordCompactionStart({
+        ...(event.reason === undefined ? {} : { reason: event.reason }),
+        ...(event.willRetry === undefined ? {} : { willRetry: event.willRetry }),
+        ...(event.signal === undefined ? {} : { signal: event.signal }),
+      });
+    },
+  );
+
+  on('session_compact', async (_event: unknown) => {
+    const activityRuntime = await ensureActivityRuntime();
+    await activityRuntime.clearCompaction('completed');
+  });
+
   on('session_shutdown', async () => {
+    const activityRuntime = await ensureActivityRuntime();
+    await activityRuntime.clearCompaction('shutdown');
+    await stopActivityRuntime();
     await statusMirror.clearTracked();
     await stopIdentityRuntime();
   });

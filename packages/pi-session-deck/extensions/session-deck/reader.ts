@@ -92,6 +92,7 @@ export async function readSessionDeckSnapshot(
         activityAgeMs: record.activityAgeMs,
         currentToolName: record.currentToolName,
         lastError: record.lastError,
+        compaction: record.compaction,
         chips: chipRecord?.chips ?? [],
         diagnostics: [
           ...record.diagnostics.map(toSessionDeckDiagnostic),

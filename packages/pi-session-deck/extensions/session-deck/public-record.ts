@@ -36,6 +36,16 @@ export function toPublicSessionDeckRecord(record: SessionDeckRecord): SessionDec
     activityAgeMs: record.activityAgeMs,
     currentToolName: record.currentToolName,
     lastError: record.lastError,
+    compaction:
+      record.compaction === null
+        ? null
+        : {
+            state: record.compaction.state,
+            ageMs: record.compaction.ageMs,
+            startedAt: record.compaction.startedAt,
+            reason: record.compaction.reason,
+            willRetry: record.compaction.willRetry,
+          },
     chips: [...record.chips],
     diagnostics: record.diagnostics.map(toPublicSessionDeckDiagnostic),
   };

@@ -638,7 +638,8 @@ button.card-toggle[aria-expanded='true']::after {
 }
 
 .activity-icon[data-activity='thinking'] ~ .row-activity,
-.activity-icon[data-activity='tool-running'] ~ .row-activity {
+.activity-icon[data-activity='tool-running'] ~ .row-activity,
+.activity-icon[data-activity='compacting'] ~ .row-activity {
   color: var(--color-accent);
 }
 
@@ -702,7 +703,8 @@ button.card-toggle[aria-expanded='true']::after {
 }
 
 .card.live .activity-icon[data-activity='thinking'],
-.card.live .activity-icon[data-activity='tool-running'] {
+.card.live .activity-icon[data-activity='tool-running'],
+.card.live .activity-icon[data-activity='compacting'] {
   color: var(--color-accent);
   border-color: rgba(136, 192, 208, 0.68);
 }

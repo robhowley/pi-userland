@@ -209,6 +209,7 @@ describe('readSessionDeckSnapshot', () => {
         activityAgeMs: null,
         currentToolName: null,
         lastError: null,
+        compaction: null,
         chips: ['merge ready', 'queue 2'],
         diagnostics: [],
       },
@@ -248,6 +249,52 @@ describe('readSessionDeckSnapshot', () => {
     ]) {
       expect(record).not.toHaveProperty(field);
     }
+  });
+
+  it('projects compacting as activity state with metadata even when chips are empty', async () => {
+    const directories = await createSnapshotDirectories();
+
+    await writePresenceRecord(buildPresenceRecord(), { directory: directories.presenceDirectory });
+    await writeIdentityRecord(buildIdentityRecord(), { directory: directories.identityDirectory });
+    await writeActivityRecord(
+      buildActivityRecord({
+        activityState: 'compacting',
+        idle: false,
+        busy: true,
+        lastEventAt: '2026-06-23T12:09:58.000Z',
+        activityUpdatedAt: '2026-06-23T12:09:58.000Z',
+        activitySource: 'compaction_start',
+        compaction: {
+          state: 'running',
+          startedAt: '2026-06-23T12:09:45.000Z',
+          updatedAt: '2026-06-23T12:09:45.000Z',
+          reason: 'manual',
+          willRetry: false,
+        },
+      }),
+      { directory: directories.activityDirectory },
+    );
+
+    const snapshot = await readSessionDeckSnapshot({
+      directory: directories.presenceDirectory,
+      identityDirectory: directories.identityDirectory,
+      activityDirectory: directories.activityDirectory,
+      chipsDirectory: directories.chipsDirectory,
+      now: new Date('2026-06-23T12:10:00.000Z'),
+      inspectPid: vi.fn().mockResolvedValue({ status: 'matches' }),
+    });
+
+    expect(snapshot.records[0]).toMatchObject({
+      activityState: 'compacting',
+      chips: [],
+      compaction: {
+        state: 'running',
+        ageMs: 15_000,
+        startedAt: '2026-06-23T12:09:45.000Z',
+        reason: 'manual',
+        willRetry: false,
+      },
+    });
   });
 
   it('projects only sanitized child runtime evidence into the public snapshot', async () => {

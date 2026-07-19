@@ -45,6 +45,7 @@ function buildRecord(overrides: Partial<SessionDeckRecord> = {}): SessionDeckRec
     lastEventAt: '2026-07-17T12:05:00.000Z',
     lastError: null,
     activityUpdatedAt: '2026-07-17T12:05:00.000Z',
+    compaction: null,
     diagnostics: [],
     ...overrides,
   };

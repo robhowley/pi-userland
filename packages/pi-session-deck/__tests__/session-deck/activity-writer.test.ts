@@ -32,6 +32,42 @@ describe('activity writer', () => {
     expect(parsed.activitySource).toBe('tool_start');
   });
 
+  it('serializes compaction metadata without special transport fields', async () => {
+    const { serializeActivityRecord } =
+      await import('../../extensions/session-deck/activity/writer.js');
+
+    const parsed = JSON.parse(
+      serializeActivityRecord(
+        buildRecord({
+          activityState: 'compacting',
+          activitySource: 'compaction_start',
+          idle: false,
+          busy: true,
+          currentToolName: null,
+          compaction: {
+            state: 'running',
+            startedAt: '2026-06-17T12:00:42.000Z',
+            updatedAt: '2026-06-17T12:00:42.000Z',
+            reason: 'threshold',
+            willRetry: true,
+          },
+        }),
+      ),
+    ) as SessionActivityRecord;
+
+    expect(parsed.activityState).toBe('compacting');
+    expect(parsed.activitySource).toBe('compaction_start');
+    expect(parsed.compaction).toEqual({
+      state: 'running',
+      startedAt: '2026-06-17T12:00:42.000Z',
+      updatedAt: '2026-06-17T12:00:42.000Z',
+      reason: 'threshold',
+      willRetry: true,
+    });
+    expect(JSON.stringify(parsed)).not.toContain('setStatus');
+    expect(JSON.stringify(parsed)).not.toContain('chip');
+  });
+
   it('serializes nullable fields correctly', async () => {
     const { serializeActivityRecord } =
       await import('../../extensions/session-deck/activity/writer.js');

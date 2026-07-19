@@ -140,6 +140,86 @@ describe('activity reader', () => {
     expect(view.records[0]?.activityAgeMs).toBe(42_000);
   });
 
+  it('accepts compacting records with metadata and exposes public compaction details', async () => {
+    const readdir = vi
+      .fn()
+      .mockResolvedValue([{ name: 'rt-1.json', isFile: () => true } as unknown as Dirent]);
+    const readFile = vi.fn().mockResolvedValue(
+      JSON.stringify({
+        runtimeId: 'rt-1',
+        sessionId: 'session-abc',
+        activityState: 'compacting',
+        idle: false,
+        busy: true,
+        currentTurnStartedAt: null,
+        currentToolName: null,
+        lastEventAt: '2026-06-17T12:09:50.000Z',
+        lastError: null,
+        activityUpdatedAt: '2026-06-17T12:09:50.000Z',
+        activitySource: 'compaction_start',
+        compaction: {
+          state: 'running',
+          startedAt: '2026-06-17T12:09:40.000Z',
+          updatedAt: '2026-06-17T12:09:40.000Z',
+          reason: 'overflow',
+          willRetry: true,
+          prompt: 'do not keep',
+        },
+      }),
+    );
+
+    const view = await readSessionDeckView({
+      joinedView: buildJoinedView(),
+      now: new Date('2026-06-17T12:10:00.000Z'),
+      readdir,
+      readFile,
+    });
+
+    expect(view.records[0]?.activityState).toBe('compacting');
+    expect(view.records[0]?.compaction).toEqual({
+      state: 'running',
+      ageMs: 20_000,
+      startedAt: '2026-06-17T12:09:40.000Z',
+      reason: 'overflow',
+      willRetry: true,
+    });
+    expect(JSON.stringify(view.records[0]?.compaction)).not.toContain('do not keep');
+  });
+
+  it('diagnoses compacting records with missing metadata without dropping base fields', async () => {
+    const readdir = vi
+      .fn()
+      .mockResolvedValue([{ name: 'rt-1.json', isFile: () => true } as unknown as Dirent]);
+    const readFile = vi.fn().mockResolvedValue(
+      JSON.stringify({
+        runtimeId: 'rt-1',
+        sessionId: 'session-abc',
+        activityState: 'compacting',
+        idle: true,
+        busy: false,
+        currentTurnStartedAt: null,
+        currentToolName: null,
+        lastEventAt: '2026-06-17T12:09:50.000Z',
+        lastError: null,
+        activityUpdatedAt: '2026-06-17T12:09:50.000Z',
+      }),
+    );
+
+    const view = await readSessionDeckView({
+      joinedView: buildJoinedView(),
+      now: new Date('2026-06-17T12:10:00.000Z'),
+      readdir,
+      readFile,
+    });
+
+    expect(view.records[0]?.activityState).toBe('idle');
+    expect(view.records[0]?.idle).toBe(true);
+    expect(view.records[0]?.compaction).toBeNull();
+    expect(view.records[0]?.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
+      'compaction_malformed',
+    );
+  });
+
   it('derives idle from unrecognized quiescent activityState values when idle/busy flags stay authoritative', async () => {
     const unrecognizedQuiescentState = 'quiescent-state';
     const readdir = vi

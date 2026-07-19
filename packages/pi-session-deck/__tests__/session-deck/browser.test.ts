@@ -78,6 +78,7 @@ function buildSnapshotRecord(overrides: Partial<SessionDeckRecord> = {}): Sessio
     activityAgeMs: null,
     currentToolName: null,
     lastError: null,
+    compaction: null,
     chips: ['merge-ready clean'],
     diagnostics: [],
     ...overrides,
@@ -952,8 +953,24 @@ describe('SessionDeckBrowser', () => {
             chips: [],
           }),
           buildSnapshotRecord({
-            runtimeId: 'rt-error',
+            runtimeId: 'rt-compact',
             pid: 404,
+            sessionId: 'session-compact',
+            sessionName: 'compact-row',
+            activityState: 'compacting',
+            activityAgeMs: 15_000,
+            compaction: {
+              state: 'running',
+              ageMs: 15_000,
+              startedAt: '2026-06-23T12:09:45.000Z',
+              reason: 'manual',
+              willRetry: false,
+            },
+            chips: [],
+          }),
+          buildSnapshotRecord({
+            runtimeId: 'rt-error',
+            pid: 405,
             sessionId: 'session-error',
             sessionName: 'error-row',
             activityState: 'error',
@@ -981,6 +998,7 @@ describe('SessionDeckBrowser', () => {
     expect(output).toContain('› ○ idle  idle-row  project · #42 · 5s · main');
     expect(output).toContain('  ◒ thinking  thinking-row  project · #42 · 4m · main');
     expect(output).toContain('  ◆ tool-running  tool-row  project · #42 · 12s · main');
+    expect(output).toContain('  ↻ compacting  compact-row  project · #42 · 15s · main');
     expect(output).toContain('  ! error  error-row  project · #42 · 42s · main');
     expect(output).toContain('  ? unknown  unknown-row  project · #42 · 9m · main');
     expect(output).toContain('│ presence: ● live · activity: idle · heartbeat: 5s ago');

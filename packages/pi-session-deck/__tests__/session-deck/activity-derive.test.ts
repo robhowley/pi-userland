@@ -78,6 +78,108 @@ describe('deriveActivity', () => {
     expect(error.diagnostics.map((diagnostic) => diagnostic.code)).toContain('last_error_active');
   });
 
+  it('derives compacting only while compaction metadata is fresh', () => {
+    const fresh = deriveActivity({
+      activity: buildRecord({
+        activityState: 'compacting',
+        idle: false,
+        busy: true,
+        lastEventAt: '2026-06-17T12:09:50.000Z',
+        activityUpdatedAt: '2026-06-17T12:09:50.000Z',
+        compaction: {
+          state: 'running',
+          startedAt: '2026-06-17T12:09:30.000Z',
+          updatedAt: '2026-06-17T12:09:30.000Z',
+          reason: 'manual',
+          willRetry: false,
+        },
+      }),
+      sessionId: 'session-abc',
+      now: NOW,
+    });
+
+    expect(fresh.activityState).toBe('compacting');
+    expect(fresh.activityAgeMs).toBe(30_000);
+    expect(fresh.compaction).toEqual({
+      state: 'running',
+      ageMs: 30_000,
+      startedAt: '2026-06-17T12:09:30.000Z',
+      reason: 'manual',
+      willRetry: false,
+    });
+
+    const stale = deriveActivity({
+      activity: buildRecord({
+        activityState: 'compacting',
+        idle: false,
+        busy: true,
+        currentTurnStartedAt: '2026-06-17T12:08:00.000Z',
+        lastEventAt: '2026-06-17T12:09:50.000Z',
+        activityUpdatedAt: '2026-06-17T12:09:50.000Z',
+        compaction: {
+          state: 'running',
+          startedAt: '2026-06-17T12:07:00.000Z',
+          updatedAt: '2026-06-17T12:07:30.000Z',
+          reason: 'threshold',
+          willRetry: true,
+        },
+      }),
+      sessionId: 'session-abc',
+      now: NOW,
+    });
+
+    expect(stale.activityState).toBe('thinking');
+    expect(stale.compaction?.state).toBe('stale');
+    expect(stale.diagnostics.map((diagnostic) => diagnostic.code)).toContain('compaction_stale');
+
+    const expired = deriveActivity({
+      activity: buildRecord({
+        activityState: 'compacting',
+        idle: false,
+        busy: true,
+        currentTurnStartedAt: '2026-06-17T12:08:00.000Z',
+        currentToolName: 'bash',
+        lastToolStartedAt: '2026-06-17T12:08:30.000Z',
+        lastEventAt: '2026-06-17T12:09:50.000Z',
+        activityUpdatedAt: '2026-06-17T12:09:50.000Z',
+        compaction: {
+          state: 'running',
+          startedAt: '2026-06-17T11:58:00.000Z',
+          updatedAt: '2026-06-17T11:59:00.000Z',
+          reason: 'overflow',
+          willRetry: true,
+        },
+      }),
+      sessionId: 'session-abc',
+      now: NOW,
+    });
+
+    expect(expired.activityState).toBe('tool-running');
+    expect(expired.compaction).toBeNull();
+    expect(expired.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
+      'compaction_expired',
+    );
+  });
+
+  it('falls back when compacting metadata is missing or malformed', () => {
+    const result = deriveActivity({
+      activity: buildRecord({
+        activityState: 'compacting',
+        idle: true,
+        busy: false,
+        compaction: null,
+      }),
+      sessionId: 'session-abc',
+      now: NOW,
+    });
+
+    expect(result.activityState).toBe('idle');
+    expect(result.compaction).toBeNull();
+    expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
+      'compaction_malformed',
+    );
+  });
+
   it('returns unknown with activity_missing when there is no sidecar', () => {
     const result = deriveActivity({ activity: null, sessionId: 'session-abc', now: NOW });
     expect(result.activityState).toBe('unknown');

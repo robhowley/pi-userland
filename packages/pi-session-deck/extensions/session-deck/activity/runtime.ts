@@ -1,4 +1,4 @@
-import { DEFAULT_ACTIVITY_REFRESH_INTERVAL_MS } from './constants.js';
+import { DEFAULT_ACTIVITY_REFRESH_INTERVAL_MS, DEFAULT_ACTIVITY_THRESHOLDS } from './constants.js';
 import { createToolFailureError, sanitizeActivityError } from './derive.js';
 import { writeActivityRecord } from './writer.js';
 import type {
@@ -9,6 +9,7 @@ import type {
   ActivityRuntimeController,
   ActivityToolWindow,
   SessionActivityRecord,
+  SessionCompactionReason,
 } from './types.js';
 import type { SessionManagerLike } from '../identity/types.js';
 
@@ -49,6 +50,8 @@ interface ActivityRuntimeState {
   hasActiveTurnError: boolean;
   runtimeDiagnostics: ActivityDiagnostic[];
   pendingMutation: Promise<void>;
+  compactionToken: number;
+  compactionAbortCleanup: (() => void) | null;
 }
 
 type ActivityRuntimeGlobalState = typeof globalThis & {
@@ -59,6 +62,7 @@ function getActivityRuntimeState(): ActivityRuntimeState {
   const globalState = globalThis as ActivityRuntimeGlobalState;
   const existingState = globalState[ACTIVITY_RUNTIME_STATE_KEY];
   if (existingState !== undefined) {
+    migrateActivityRuntimeState(existingState);
     return existingState;
   }
 
@@ -77,6 +81,8 @@ function getActivityRuntimeState(): ActivityRuntimeState {
     hasActiveTurnError: false,
     runtimeDiagnostics: [],
     pendingMutation: Promise.resolve(),
+    compactionToken: 0,
+    compactionAbortCleanup: null,
   };
   globalState[ACTIVITY_RUNTIME_STATE_KEY] = createdState;
   return createdState;
@@ -88,7 +94,13 @@ export async function ensureActivityRuntimeStarted(
 ): Promise<ActivityRuntimeController> {
   const state = getActivityRuntimeState();
   if (state.activeStartPromise !== null) {
-    return state.activeStartPromise;
+    const controller = await state.activeStartPromise;
+    if (hasCurrentActivityRuntimeControllerApi(controller)) {
+      return controller;
+    }
+
+    stopActivityRuntimeTimer(state);
+    state.activeStartPromise = null;
   }
 
   state.runtimeId = runtimeId;
@@ -107,6 +119,7 @@ export async function ensureActivityRuntimeStarted(
 
           const sessionId = getCurrentSessionId(state);
           state.lastSeenSessionId = sessionId;
+          resetCompactionLifecycle(state);
           state.activeToolCalls.clear();
           state.inputSummary = {};
           state.recentToolWindows = [];
@@ -288,6 +301,48 @@ export async function ensureActivityRuntimeStarted(
             activitySource: 'turn_end',
           });
         }),
+      recordCompactionStart: async (event) => {
+        if (isAbortSignalAborted(event.signal)) {
+          return;
+        }
+
+        await runSerialized(state, async () => {
+          if (isAbortSignalAborted(event.signal)) {
+            return;
+          }
+
+          const nowIso = getNowIso(config);
+          const current = getCurrentOrIdleRecord(state, nowIso);
+          const token = startCompactionLifecycle(state, event.signal, () => {
+            void clearCompactionForToken(state, config, token, 'aborted');
+          });
+
+          await writeSnapshot(state, config, {
+            ...current,
+            activityState: 'compacting',
+            idle: false,
+            busy: true,
+            lastEventAt: nowIso,
+            activityUpdatedAt: nowIso,
+            activitySource: 'compaction_start',
+            compaction: {
+              state: 'running',
+              startedAt: nowIso,
+              updatedAt: nowIso,
+              reason: normalizeCompactionReason(event.reason),
+              willRetry: event.willRetry === true,
+            },
+          });
+
+          if (isAbortSignalAborted(event.signal) && state.compactionToken === token) {
+            await clearCompactionWithinMutation(state, config, 'aborted');
+          }
+        });
+      },
+      clearCompaction: async (reason) =>
+        runSerialized(state, async () => {
+          await clearCompactionWithinMutation(state, config, reason);
+        }),
       getActivity: () => state.cachedActivity,
       isRunning: () => getActivityRuntimeState().activeTimer !== null,
     };
@@ -304,6 +359,7 @@ export async function ensureActivityRuntimeStarted(
           const nowIso = getNowIso(config);
           const sessionId = getCurrentSessionId(state);
           if (state.cachedActivity?.sessionId !== sessionId) {
+            resetCompactionLifecycle(state);
             state.activeToolCalls.clear();
             state.inputSummary = {};
             state.recentToolWindows = [];
@@ -340,10 +396,7 @@ export function getActivityRuntimeDiagnostics(): ActivityDiagnostic[] {
 
 export async function stopActivityRuntime(): Promise<void> {
   const state = getActivityRuntimeState();
-  if (state.activeTimer !== null) {
-    state.activeClearInterval(state.activeTimer);
-    state.activeTimer = null;
-  }
+  stopActivityRuntimeTimer(state);
 
   state.activeStartPromise = null;
   state.activeDirectory = undefined;
@@ -356,6 +409,7 @@ export async function stopActivityRuntime(): Promise<void> {
   state.recentToolWindows = [];
   state.hasActiveTurnError = false;
   state.runtimeDiagnostics = [];
+  resetCompactionLifecycle(state);
   state.pendingMutation = Promise.resolve();
 }
 
@@ -363,6 +417,27 @@ export async function resetActivityRuntimeForTests(): Promise<void> {
   const state = getActivityRuntimeState();
   await stopActivityRuntime();
   state.cachedActivity = null;
+}
+
+function migrateActivityRuntimeState(state: ActivityRuntimeState): void {
+  state.pendingMutation ??= Promise.resolve();
+  state.compactionToken ??= 0;
+  state.compactionAbortCleanup ??= null;
+}
+
+function hasCurrentActivityRuntimeControllerApi(controller: ActivityRuntimeController): boolean {
+  const candidate = controller as Partial<ActivityRuntimeController>;
+  return (
+    typeof candidate.recordCompactionStart === 'function' &&
+    typeof candidate.clearCompaction === 'function'
+  );
+}
+
+function stopActivityRuntimeTimer(state: ActivityRuntimeState): void {
+  if (state.activeTimer !== null) {
+    state.activeClearInterval(state.activeTimer);
+    state.activeTimer = null;
+  }
 }
 
 function createIdleActivityRecord(
@@ -386,6 +461,94 @@ function createIdleActivityRecord(
   };
 }
 
+async function clearCompactionForToken(
+  state: ActivityRuntimeState,
+  config: ActivityRuntimeConfig,
+  token: number,
+  reason: 'aborted' | 'expired',
+): Promise<void> {
+  await runSerialized(state, async () => {
+    if (state.compactionToken !== token) {
+      return;
+    }
+
+    await clearCompactionWithinMutation(state, config, reason);
+  });
+}
+
+async function clearCompactionWithinMutation(
+  state: ActivityRuntimeState,
+  config: ActivityRuntimeConfig,
+  reason: 'completed' | 'aborted' | 'shutdown' | 'session-change' | 'expired',
+): Promise<void> {
+  const nowIso = getNowIso(config);
+  const current = getCurrentOrIdleRecord(state, nowIso);
+  resetCompactionLifecycle(state);
+
+  await writeSnapshot(state, config, {
+    ...current,
+    ...deriveRuntimeActivityFields(state, current, nowIso),
+    lastEventAt: nowIso,
+    activityUpdatedAt: nowIso,
+    activitySource: getCompactionClearSource(reason),
+    compaction: null,
+  });
+}
+
+function isAbortSignalAborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true;
+}
+
+function startCompactionLifecycle(
+  state: ActivityRuntimeState,
+  signal: AbortSignal | undefined,
+  onAbort: () => void,
+): number {
+  resetCompactionLifecycle(state);
+  const token = state.compactionToken + 1;
+  state.compactionToken = token;
+
+  if (signal !== undefined) {
+    const abortHandler = (): void => onAbort();
+    signal.addEventListener('abort', abortHandler, { once: true });
+    state.compactionAbortCleanup = () => signal.removeEventListener('abort', abortHandler);
+  }
+
+  return token;
+}
+
+function resetCompactionLifecycle(state: ActivityRuntimeState): void {
+  state.compactionToken += 1;
+  state.compactionAbortCleanup?.();
+  state.compactionAbortCleanup = null;
+}
+
+function getCompactionClearSource(
+  reason: 'completed' | 'aborted' | 'shutdown' | 'session-change' | 'expired',
+): NonNullable<SessionActivityRecord['activitySource']> {
+  switch (reason) {
+    case 'completed':
+      return 'compaction_end';
+    case 'expired':
+      return 'compaction_expired';
+    case 'aborted':
+    case 'shutdown':
+    case 'session-change':
+      return 'compaction_abort';
+  }
+}
+
+function normalizeCompactionReason(value: unknown): SessionCompactionReason {
+  switch (value) {
+    case 'manual':
+    case 'threshold':
+    case 'overflow':
+      return value;
+    default:
+      return null;
+  }
+}
+
 function getCurrentOrIdleRecord(
   state: ActivityRuntimeState,
   nowIso: string,
@@ -399,6 +562,7 @@ function getCurrentOrIdleRecord(
   }
 
   state.lastSeenSessionId = sessionId;
+  resetCompactionLifecycle(state);
   state.activeToolCalls.clear();
   state.inputSummary = {};
   state.recentToolWindows = [];
@@ -506,6 +670,114 @@ function normalizeToolCallId(toolCallId: string): string {
   return toolCallId.length > 0 ? toolCallId : 'unknown-tool-call';
 }
 
+function applyCompactionRetention(
+  state: ActivityRuntimeState,
+  record: SessionActivityRecord,
+): SessionActivityRecord {
+  if (isCompactionLifecycleSource(record.activitySource)) {
+    return record;
+  }
+
+  const compaction = record.compaction;
+  if (compaction?.state !== 'running') {
+    return record;
+  }
+
+  const referenceMs = parseTimestamp(record.activityUpdatedAt ?? record.lastEventAt);
+  const updatedMs = parseTimestamp(compaction.updatedAt);
+  if (
+    referenceMs === null ||
+    updatedMs === null ||
+    referenceMs - updatedMs > DEFAULT_ACTIVITY_THRESHOLDS.compactionStaleAfterMs
+  ) {
+    resetCompactionLifecycle(state);
+    const nowIso = record.activityUpdatedAt ?? record.lastEventAt ?? compaction.updatedAt;
+    return {
+      ...record,
+      ...deriveRuntimeActivityFields(state, record, nowIso),
+      activitySource: 'compaction_expired',
+      compaction: null,
+    };
+  }
+
+  return {
+    ...record,
+    activityState: 'compacting',
+    idle: false,
+    busy: true,
+    compaction,
+  };
+}
+
+function deriveRuntimeActivityFields(
+  state: ActivityRuntimeState,
+  current: SessionActivityRecord,
+  nowIso: string,
+): Pick<
+  SessionActivityRecord,
+  'activityState' | 'idle' | 'busy' | 'currentTurnStartedAt' | 'currentToolName'
+> {
+  const activeToolName = getMostRecentToolName(state.activeToolCalls);
+  if (activeToolName !== null) {
+    return {
+      activityState: 'tool-running',
+      idle: false,
+      busy: true,
+      currentTurnStartedAt: current.currentTurnStartedAt ?? nowIso,
+      currentToolName: activeToolName,
+    };
+  }
+
+  if (current.currentTurnStartedAt !== null && !state.hasActiveTurnError) {
+    return {
+      activityState: 'thinking',
+      idle: false,
+      busy: true,
+      currentTurnStartedAt: current.currentTurnStartedAt,
+      currentToolName: null,
+    };
+  }
+
+  if (
+    state.hasActiveTurnError ||
+    (current.activityState === 'error' && current.lastError !== null)
+  ) {
+    return {
+      activityState: 'error',
+      idle: false,
+      busy: false,
+      currentTurnStartedAt: null,
+      currentToolName: null,
+    };
+  }
+
+  return {
+    activityState: 'idle',
+    idle: true,
+    busy: false,
+    currentTurnStartedAt: null,
+    currentToolName: null,
+  };
+}
+
+function isCompactionLifecycleSource(source: SessionActivityRecord['activitySource']): boolean {
+  return (
+    source === 'compaction_start' ||
+    source === 'compaction_end' ||
+    source === 'compaction_abort' ||
+    source === 'compaction_expired'
+  );
+}
+
+function parseTimestamp(value: string | null | undefined): number | null {
+  if (typeof value !== 'string' || value.length === 0) {
+    return null;
+  }
+
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 async function runSerialized<T>(
   state: ActivityRuntimeState,
   operation: () => Promise<T>,
@@ -523,10 +795,11 @@ async function writeSnapshot(
   config: ActivityRuntimeConfig,
   record: SessionActivityRecord,
 ): Promise<void> {
-  state.cachedActivity = record;
+  const recordToWrite = applyCompactionRetention(state, record);
+  state.cachedActivity = recordToWrite;
 
   try {
-    await (config.writeRecord ?? writeActivityRecord)(record, {
+    await (config.writeRecord ?? writeActivityRecord)(recordToWrite, {
       ...(state.activeDirectory === undefined ? {} : { directory: state.activeDirectory }),
     });
     state.runtimeDiagnostics = [];
@@ -534,7 +807,7 @@ async function writeSnapshot(
     const diagnostic: ActivityDiagnostic = {
       code: 'activity_write_error',
       message: `Failed to write activity record: ${getErrorMessage(error)}`,
-      runtimeId: record.runtimeId,
+      runtimeId: recordToWrite.runtimeId,
     };
     state.runtimeDiagnostics = [diagnostic];
     try {
