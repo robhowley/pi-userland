@@ -605,6 +605,7 @@ class ImportAndConfigTests(unittest.TestCase):
             health["killSessionHelperScriptPath"],
             str(config.runtime.kill_session_helper_path),
         )
+        self.assertIn("create-session", health["actionCapabilities"])
         self.assertIn("kill-session", health["actionCapabilities"])
         self.assertNotIn(effective_command_path.value, json.dumps(health))
 
@@ -664,6 +665,81 @@ class ImportAndConfigTests(unittest.TestCase):
         with self.assertRaises(HTTPError) as raised:
             urlopen(missing_token, timeout=1.0)
         self.assertEqual(raised.exception.code, 403)
+
+    def test_toolbelt_create_session_action_requires_token_and_runs_existing_helper(self):
+        fixture = TempRuntime(self)
+        fixture.write_helper(
+            "import json, sys\n"
+            "payload = json.loads(sys.stdin.read())\n"
+            "print(json.dumps({'ok': True, 'status': 'launched', 'action': payload['action'], 'cwd': payload['cwd']}))\n"
+        )
+        fixture.payload["runtime"]["nodeExecutablePath"] = sys.executable
+        fixture.write_state()
+        config = fixture.config()
+        http = AUTO.start_http_server(config, make_effective_command_path())
+        self.addCleanup(http.close)
+        base_url = f"http://127.0.0.1:{http.port}"
+
+        token = http.server.session_deck_action_token
+        payload = json.dumps({"action": "create-session", "cwd": str(fixture.root)}).encode(
+            "utf-8"
+        )
+        request = Request(
+            f"{base_url}/actions/create-session",
+            data=payload,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "X-Session-Deck-Action-Token": token,
+            },
+        )
+
+        with urlopen(request, timeout=1.0) as response:
+            action_result = json.loads(response.read().decode("utf-8"))
+        self.assertEqual(
+            action_result,
+            {"ok": True, "status": "launched", "action": "create-session", "cwd": str(fixture.root)},
+        )
+
+        missing_token = Request(
+            f"{base_url}/actions/create-session",
+            data=payload,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with self.assertRaises(HTTPError) as raised:
+            urlopen(missing_token, timeout=1.0)
+        self.assertEqual(raised.exception.code, 403)
+
+    def test_toolbelt_create_session_route_uses_session_unavailable_message(self):
+        fixture = TempRuntime(self)
+        fixture.payload["runtime"]["nodeExecutablePath"] = sys.executable
+        fixture.write_state()
+        config = fixture.config()
+        http = AUTO.start_http_server(config, make_effective_command_path())
+        self.addCleanup(http.close)
+        base_url = f"http://127.0.0.1:{http.port}"
+
+        token = http.server.session_deck_action_token
+        request = Request(
+            f"{base_url}/actions/create-session",
+            data=b"{}",
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "X-Session-Deck-Action-Token": token,
+            },
+        )
+
+        with self.assertRaises(HTTPError) as raised:
+            urlopen(request, timeout=1.0)
+        self.assertEqual(raised.exception.code, 503)
+        payload = json.loads(raised.exception.read().decode("utf-8"))
+        self.assertEqual(
+            payload,
+            AUTO.helper_failure_payload(AUTO.CREATE_SESSION_HELPER_UNAVAILABLE_MESSAGE),
+        )
+        self.assertNotIn("Create-worktree", payload["message"])
 
     def test_toolbelt_create_worktree_preview_route_runs_helper(self):
         fixture = TempRuntime(self)
@@ -1189,6 +1265,63 @@ class ImportAndConfigTests(unittest.TestCase):
         assert_browser_safe_payload(
             self, non_object_payload, str(fixture.root), str(fixture.helper_path)
         )
+
+    def test_run_create_session_action_uses_session_specific_bridge_failures(self):
+        fixture = TempRuntime(self)
+        fixture.payload["runtime"]["nodeExecutablePath"] = sys.executable
+        fixture.write_state()
+
+        missing_status, missing_payload = AUTO.run_create_session_action(
+            fixture.config(), "{}", make_effective_command_path()
+        )
+        self.assertEqual(missing_status, 503)
+        self.assertEqual(
+            missing_payload,
+            AUTO.helper_failure_payload(AUTO.CREATE_SESSION_HELPER_UNAVAILABLE_MESSAGE),
+        )
+
+        fixture.write_helper("print('/private/tmp/helper-output')\n")
+        invalid_status, invalid_payload = AUTO.run_create_session_action(
+            fixture.config(), "{}", make_effective_command_path()
+        )
+        self.assertEqual(invalid_status, 500)
+        self.assertEqual(
+            invalid_payload,
+            AUTO.helper_failure_payload(AUTO.CREATE_SESSION_HELPER_INVALID_RESPONSE_MESSAGE),
+        )
+
+        fixture.write_helper(
+            "import json, sys\n"
+            "print(json.dumps({'ok': False, 'status': 'failed', 'message': 'bad /private/tmp/secret', 'path': '/Users/example/private'}))\n"
+            "raise SystemExit(1)\n"
+        )
+        failed_status, failed_payload = AUTO.run_create_session_action(
+            fixture.config(), "{}", make_effective_command_path()
+        )
+        self.assertEqual(failed_status, 400)
+        self.assertEqual(
+            failed_payload,
+            AUTO.helper_failure_payload(AUTO.CREATE_SESSION_HELPER_FAILED_MESSAGE),
+        )
+
+        fixture.write_helper("import time\ntime.sleep(0.05)\nprint('{}')\n")
+        original_timeout = AUTO.ACTION_HELPER_TIMEOUT_SECONDS
+        AUTO.ACTION_HELPER_TIMEOUT_SECONDS = 0.01
+        self.addCleanup(setattr, AUTO, "ACTION_HELPER_TIMEOUT_SECONDS", original_timeout)
+        timeout_status, timeout_payload = AUTO.run_create_session_action(
+            fixture.config(), "{}", make_effective_command_path()
+        )
+        self.assertEqual(timeout_status, 504)
+        self.assertEqual(
+            timeout_payload,
+            AUTO.helper_failure_payload(AUTO.CREATE_SESSION_HELPER_TIMEOUT_MESSAGE),
+        )
+
+        for payload in (missing_payload, invalid_payload, failed_payload, timeout_payload):
+            self.assertIn("Create-session", payload["message"])
+            self.assertNotIn("Create-worktree", payload["message"])
+            self.assertNotIn("git worktrees", payload["message"])
+            assert_browser_safe_payload(self, payload, str(fixture.root), str(fixture.helper_path))
 
     def test_toolbelt_create_worktree_route_rejects_invalid_content_type_and_large_body(self):
         fixture = TempRuntime(self)

@@ -47,6 +47,7 @@ const state = {
   expandedRepoKeys: new Set(),
   activeWorktreeFormRepoKey: null,
   worktreeForms: new Map(),
+  noRepoSessionForms: new Map(),
   worktreeBasePreviews: new Map(),
   worktreeLaunchPreviews: new Map(),
   nextWorktreeBasePreviewRequestId: 0,
@@ -301,7 +302,7 @@ function reconcilePendingWorktrees(repoGroups = createRepoGroups(getVisibleRecor
       continue;
     }
 
-    if (hasObservedPendingWorktreeSuccess(pending, repoGroups)) {
+    if (hasObservedPendingActionSuccess(pending, repoGroups)) {
       clearPendingWorktree(repoKey);
     }
   }
@@ -335,17 +336,33 @@ function reconcileKillSessionAction() {
   }
 }
 
-function hasObservedPendingWorktreeSuccess(pending, repoGroups) {
+function hasObservedPendingActionSuccess(pending, repoGroups) {
   return repoGroups.some((repoGroup) =>
-    repoGroup.records.some((record) => doesRecordMatchPendingWorktree(record, pending)),
+    repoGroup.records.some((record) => doesRecordMatchPendingAction(record, pending)),
   );
 }
 
-function doesRecordMatchPendingWorktree(record, pending) {
+function doesRecordMatchPendingAction(record, pending) {
   if (typeof pending.runtimeId === 'string' && record.runtimeId === pending.runtimeId) {
     return true;
   }
 
+  return pending.sessionKind === 'cwd'
+    ? doesRecordMatchPendingCwdSession(record, pending)
+    : doesRecordMatchPendingWorktree(record, pending);
+}
+
+function doesRecordMatchPendingCwdSession(record, pending) {
+  if (!isNonEmptyString(record.cwd)) {
+    return false;
+  }
+
+  return [pending.cwd, pending.resultCwd].some(
+    (cwd) => isNonEmptyString(cwd) && record.cwd === cwd,
+  );
+}
+
+function doesRecordMatchPendingWorktree(record, pending) {
   const request = pending.request;
   if (
     !request ||
@@ -566,7 +583,11 @@ function captureRenderFocus() {
   }
 
   const ariaLabel = activeElement.getAttribute('aria-label');
-  if (ariaLabel !== 'Branch name' && ariaLabel !== 'Custom Pi config directory') {
+  if (
+    ariaLabel !== 'Branch name' &&
+    ariaLabel !== 'Working directory' &&
+    ariaLabel !== 'Custom Pi config directory'
+  ) {
     return null;
   }
 
@@ -699,14 +720,16 @@ function createRepoGroup(repoGroup) {
   headerRow.className = 'repo-header-row';
   headerRow.append(header);
 
-  if (repoGroup.kind !== 'no-repo') {
-    headerRow.append(createRepoActionButton(repoGroup));
-  }
+  headerRow.append(createRepoActionButton(repoGroup));
 
   section.append(headerRow);
 
   if (state.activeWorktreeFormRepoKey === repoGroup.key) {
-    section.append(createWorktreeForm(repoGroup));
+    section.append(
+      repoGroup.kind === 'no-repo'
+        ? createNoRepoSessionForm(repoGroup)
+        : createWorktreeForm(repoGroup),
+    );
   }
 
   if (isExpanded) {
@@ -755,6 +778,15 @@ function createRepoActionButton(repoGroup) {
     }
 
     state.activeWorktreeFormRepoKey = repoGroup.key;
+    if (repoGroup.kind === 'no-repo') {
+      if (!state.noRepoSessionForms.has(repoGroup.key)) {
+        state.noRepoSessionForms.set(repoGroup.key, createInitialNoRepoSessionFormState());
+      }
+      requestNoRepoSessionLaunchPreview(repoGroup);
+      render();
+      return;
+    }
+
     if (!state.worktreeForms.has(repoGroup.key)) {
       state.worktreeForms.set(repoGroup.key, createInitialWorktreeFormState());
     }
@@ -772,6 +804,7 @@ function closeWorktreeForm(repoKey) {
 
 function clearWorktreeFormState(repoKey) {
   state.worktreeForms.delete(repoKey);
+  state.noRepoSessionForms.delete(repoKey);
   state.worktreeBasePreviews.delete(repoKey);
   state.worktreeLaunchPreviews.delete(repoKey);
   if (state.activeWorktreeFormRepoKey === repoKey) {
@@ -837,9 +870,11 @@ function createWorktreeForm(repoGroup) {
   composeRow.className = 'worktree-compose-row';
   composeRow.append(fieldMeta, branchControl);
 
-  form.append(composeRow, createWorktreeConfigRow(repoGroup, formState, launchPreview));
+  form.append(composeRow, createWorktreeConfigRow(formState, launchPreview));
   if (formState.configDrawerOpen) {
-    form.append(createWorktreeConfigDrawer(repoGroup, formState));
+    form.append(
+      createWorktreeConfigDrawer(formState, () => requestWorktreeLaunchPreview(repoGroup)),
+    );
   }
   if (inlineMessage) {
     form.append(createText('div', inlineMessage, 'worktree-form-feedback worktree-form-error'));
@@ -867,7 +902,109 @@ function getWorktreeFormState(repoKey) {
   return created;
 }
 
-function createWorktreeConfigRow(repoGroup, formState, launchPreview) {
+function createNoRepoSessionForm(repoGroup) {
+  const formState = getNoRepoSessionFormState(repoGroup.key);
+  const launchPreview = state.worktreeLaunchPreviews.get(repoGroup.key);
+  const inlineMessage = getNoRepoSessionFormInlineMessage(formState, launchPreview);
+  const form = document.createElement('form');
+  form.className = 'worktree-form';
+  form.addEventListener('submit', (event) => {
+    event.preventDefault?.();
+    submitNoRepoSessionForm(repoGroup, formState);
+  });
+  form.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') {
+      return;
+    }
+    event.preventDefault?.();
+    event.stopPropagation?.();
+    if (formState.configDrawerOpen) {
+      formState.configDrawerOpen = false;
+      render();
+      return;
+    }
+    closeWorktreeForm(repoGroup.key);
+  });
+
+  const cwdInput = document.createElement('input');
+  cwdInput.type = 'text';
+  cwdInput.value = formState.cwd;
+  cwdInput.setAttribute('aria-label', 'Working directory');
+  cwdInput.setAttribute('placeholder', '~/scratch');
+
+  const submit = document.createElement('button');
+  submit.type = 'submit';
+  submit.className = 'worktree-submit-button';
+  submit.textContent = 'Create';
+  submit.disabled = !isNoRepoSessionSubmitReady(repoGroup.key, formState, launchPreview);
+
+  cwdInput.addEventListener('input', () => {
+    formState.cwd = cwdInput.value;
+    submit.disabled = !isNoRepoSessionSubmitReady(repoGroup.key, formState, launchPreview);
+  });
+
+  const fieldMeta = createText('span', 'cwd →', 'worktree-field-meta');
+  fieldMeta.setAttribute('data-state', 'resolved');
+
+  const cwdControl = document.createElement('div');
+  cwdControl.className = 'worktree-branch-control';
+  cwdControl.append(cwdInput, submit);
+
+  const composeRow = document.createElement('div');
+  composeRow.className = 'worktree-compose-row';
+  composeRow.append(fieldMeta, cwdControl);
+
+  form.append(composeRow, createWorktreeConfigRow(formState, launchPreview));
+  if (formState.configDrawerOpen) {
+    form.append(
+      createWorktreeConfigDrawer(formState, () => requestNoRepoSessionLaunchPreview(repoGroup)),
+    );
+  }
+  if (inlineMessage) {
+    form.append(createText('div', inlineMessage, 'worktree-form-feedback worktree-form-error'));
+  }
+  return form;
+}
+
+function createInitialNoRepoSessionFormState() {
+  return {
+    cwd: '',
+    errorMessage: null,
+    agentDirSelection: { mode: 'ambient' },
+    customDraft: '',
+    configDrawerOpen: false,
+  };
+}
+
+function getNoRepoSessionFormState(repoKey) {
+  const existing = state.noRepoSessionForms.get(repoKey);
+  if (existing) {
+    return existing;
+  }
+  const created = createInitialNoRepoSessionFormState();
+  state.noRepoSessionForms.set(repoKey, created);
+  return created;
+}
+
+function isNoRepoSessionSubmitReady(repoKey, formState, launchPreview) {
+  return (
+    formState.cwd.trim().length > 0 &&
+    !state.pendingWorktrees.has(repoKey) &&
+    isWorktreeLaunchSubmitReady(formState, launchPreview)
+  );
+}
+
+function getNoRepoSessionFormInlineMessage(formState, launchPreview) {
+  if (isNonEmptyString(formState.errorMessage)) {
+    return formState.errorMessage;
+  }
+  if (launchPreview?.status === 'failed' && isNonEmptyString(launchPreview.message)) {
+    return launchPreview.message;
+  }
+  return null;
+}
+
+function createWorktreeConfigRow(formState, launchPreview) {
   const row = document.createElement('div');
   row.className = 'worktree-config-row';
   row.setAttribute('aria-label', 'Pi config');
@@ -895,7 +1032,7 @@ function createWorktreeConfigRow(repoGroup, formState, launchPreview) {
   return row;
 }
 
-function createWorktreeConfigDrawer(repoGroup, formState) {
+function createWorktreeConfigDrawer(formState, requestLaunchPreview) {
   const drawer = document.createElement('div');
   drawer.className = 'worktree-config-drawer';
   drawer.setAttribute('role', 'radiogroup');
@@ -912,7 +1049,7 @@ function createWorktreeConfigDrawer(repoGroup, formState) {
       event.preventDefault?.();
       formState.agentDirSelection =
         mode === 'custom' ? { mode, customDir: formState.customDraft } : { mode };
-      requestWorktreeLaunchPreview(repoGroup);
+      requestLaunchPreview();
       render();
     });
     drawer.append(option);
@@ -927,7 +1064,7 @@ function createWorktreeConfigDrawer(repoGroup, formState) {
     formState.customDraft = customInput.value;
     if (formState.agentDirSelection.mode === 'custom') {
       formState.agentDirSelection = { mode: 'custom', customDir: formState.customDraft };
-      requestWorktreeLaunchPreview(repoGroup);
+      requestLaunchPreview();
     }
     render();
   });
@@ -1053,22 +1190,29 @@ function getWorktreeBasePreviewFailureMessage(result) {
 }
 
 function requestWorktreeLaunchPreview(repoGroup) {
-  const formState = getWorktreeFormState(repoGroup.key);
+  requestLaunchPreviewForForm(repoGroup.key, getWorktreeFormState(repoGroup.key));
+}
+
+function requestNoRepoSessionLaunchPreview(repoGroup) {
+  requestLaunchPreviewForForm(repoGroup.key, getNoRepoSessionFormState(repoGroup.key));
+}
+
+function requestLaunchPreviewForForm(repoKey, formState) {
   const requestId = state.nextWorktreeLaunchPreviewRequestId + 1;
   state.nextWorktreeLaunchPreviewRequestId = requestId;
-  state.worktreeLaunchPreviews.set(repoGroup.key, { status: 'loading', requestId });
+  state.worktreeLaunchPreviews.set(repoKey, { status: 'loading', requestId });
 
   void postWorktreeLaunchPreview(formState)
     .then((result) => {
-      const activePreview = state.worktreeLaunchPreviews.get(repoGroup.key);
+      const activePreview = state.worktreeLaunchPreviews.get(repoKey);
       if (activePreview?.requestId !== requestId) {
         return;
       }
 
       if (result?.ok && result.status === 'resolved') {
-        state.worktreeLaunchPreviews.set(repoGroup.key, result);
+        state.worktreeLaunchPreviews.set(repoKey, result);
       } else {
-        state.worktreeLaunchPreviews.set(repoGroup.key, {
+        state.worktreeLaunchPreviews.set(repoKey, {
           status: 'failed',
           message: isNonEmptyString(result?.message) ? result.message : 'Pi config unavailable.',
         });
@@ -1076,11 +1220,11 @@ function requestWorktreeLaunchPreview(repoGroup) {
       render();
     })
     .catch((error) => {
-      const activePreview = state.worktreeLaunchPreviews.get(repoGroup.key);
+      const activePreview = state.worktreeLaunchPreviews.get(repoKey);
       if (activePreview?.requestId !== requestId) {
         return;
       }
-      state.worktreeLaunchPreviews.set(repoGroup.key, {
+      state.worktreeLaunchPreviews.set(repoKey, {
         status: 'failed',
         message: getErrorMessage(error) || 'Pi config unavailable.',
       });
@@ -1158,6 +1302,7 @@ function submitWorktreeForm(repoGroup, formState) {
   formState.branchName = branchName;
   formState.errorMessage = null;
   setPendingWorktree(repoGroup.key, {
+    sessionKind: 'worktree',
     kind: 'pending',
     title: 'New session',
     message: 'Creating worktree…',
@@ -1192,9 +1337,70 @@ function submitWorktreeForm(repoGroup, formState) {
     .catch((error) => {
       clearWorktreeFormState(repoGroup.key);
       setPendingWorktree(repoGroup.key, {
+        sessionKind: 'worktree',
         kind: 'failure',
         title: 'New session failed',
         message: `Create worktree failed: ${error instanceof Error ? error.message : String(error)}`,
+        tone: 'failed',
+      });
+      render();
+    });
+}
+
+function submitNoRepoSessionForm(repoGroup, formState) {
+  const cwd = formState.cwd.trim();
+  const launchPreview = state.worktreeLaunchPreviews.get(repoGroup.key);
+  if (!isNoRepoSessionSubmitReady(repoGroup.key, { ...formState, cwd }, launchPreview)) {
+    return;
+  }
+
+  formState.cwd = cwd;
+  formState.errorMessage = null;
+  const request = buildCreateSessionRequest(formState);
+  setPendingWorktree(repoGroup.key, {
+    sessionKind: 'cwd',
+    kind: 'pending',
+    title: 'New session',
+    message: 'Starting Pi session…',
+    tone: 'pending',
+    cwd,
+  });
+  state.expandedRepoKeys.add(repoGroup.key);
+  state.activeWorktreeFormRepoKey = null;
+  render();
+
+  void postCreateSessionAction(request)
+    .then(async (result) => {
+      const inlineFailureMessage = getRecoverableInlineCreateSessionFailureMessage(result);
+      if (inlineFailureMessage !== null) {
+        clearPendingWorktree(repoGroup.key);
+        state.noRepoSessionForms.set(repoGroup.key, {
+          ...formState,
+          cwd,
+          errorMessage: inlineFailureMessage,
+        });
+        state.activeWorktreeFormRepoKey = repoGroup.key;
+        render();
+        if (shouldRefreshAfterCreateSessionActionResult(result)) {
+          await refreshSnapshot({ source: 'manual' });
+        }
+        return;
+      }
+
+      clearWorktreeFormState(repoGroup.key);
+      applyCreateSessionActionResult(repoGroup.key, request, result);
+      render();
+      if (shouldRefreshAfterCreateSessionActionResult(result)) {
+        await refreshSnapshot({ source: 'manual' });
+      }
+    })
+    .catch((error) => {
+      clearWorktreeFormState(repoGroup.key);
+      setPendingWorktree(repoGroup.key, {
+        sessionKind: 'cwd',
+        kind: 'failure',
+        title: 'New session failed',
+        message: `Create session failed: ${error instanceof Error ? error.message : String(error)}`,
         tone: 'failed',
       });
       render();
@@ -1215,6 +1421,17 @@ function buildCreateWorktreeRequest(repoGroup, branchName, baseRef, agentDir) {
     branchName,
     baseRef,
     launch: { mode: 'tmux-detached', agentDir },
+  };
+}
+
+function buildCreateSessionRequest(formState) {
+  return {
+    action: 'create-session',
+    cwd: formState.cwd.trim(),
+    launch: {
+      mode: 'tmux-detached',
+      agentDir: getWorktreeLaunchAgentDirIntent(formState),
+    },
   };
 }
 
@@ -1287,6 +1504,25 @@ async function postCreateWorktreeAction(request) {
   return payload;
 }
 
+async function postCreateSessionAction(request) {
+  const response = await fetch('/actions/create-session', {
+    method: 'POST',
+    cache: 'no-store',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'X-Session-Deck-Action-Token': getActionToken(),
+    },
+    body: JSON.stringify(request),
+  });
+
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload?.message ?? `HTTP ${response.status}`);
+  }
+  return payload;
+}
+
 async function postOpenTerminalAction(runtimeId) {
   const response = await fetch('/actions/open-terminal', {
     method: 'POST',
@@ -1340,8 +1576,25 @@ function getRecoverableInlineWorktreeFailureMessage(result) {
     : null;
 }
 
+function getRecoverableInlineCreateSessionFailureMessage(result) {
+  if (result?.ok === false && result?.status === 'preflight-failed') {
+    return getCreateSessionPreflightFailureMessage(result.preflight);
+  }
+  return result?.ok === false && result?.status === 'failed'
+    ? (result.message ?? 'Working directory is not valid.')
+    : null;
+}
+
 function applyWorktreeActionResult(repoKey, request, result) {
   setPendingWorktree(repoKey, summarizeWorktreeActionResult(repoKey, request, result));
+  const runtimeId = getActionResultRuntimeId(result);
+  if (runtimeId) {
+    state.highlightedRuntimeId = runtimeId;
+  }
+}
+
+function applyCreateSessionActionResult(repoKey, request, result) {
+  setPendingWorktree(repoKey, summarizeCreateSessionActionResult(repoKey, request, result));
   const runtimeId = getActionResultRuntimeId(result);
   if (runtimeId) {
     state.highlightedRuntimeId = runtimeId;
@@ -1352,8 +1605,13 @@ function shouldRefreshAfterWorktreeActionResult(result) {
   return result?.status !== 'preflight-failed';
 }
 
+function shouldRefreshAfterCreateSessionActionResult(result) {
+  return !(result?.ok === false && result?.status === 'failed');
+}
+
 function retryWorktreeAction(repoKey, request) {
   setPendingWorktree(repoKey, {
+    sessionKind: 'worktree',
     kind: 'pending',
     title: 'Retrying launch',
     message: 'Retrying Pi launch…',
@@ -1372,6 +1630,7 @@ function retryWorktreeAction(repoKey, request) {
     })
     .catch((error) => {
       setPendingWorktree(repoKey, {
+        sessionKind: 'worktree',
         kind: 'failure',
         title: 'Retry failed',
         message: `Create worktree failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -1381,9 +1640,42 @@ function retryWorktreeAction(repoKey, request) {
     });
 }
 
+function retryCreateSessionAction(repoKey, request) {
+  setPendingWorktree(repoKey, {
+    sessionKind: 'cwd',
+    kind: 'pending',
+    title: 'Retrying launch',
+    message: 'Retrying Pi launch…',
+    tone: 'pending',
+    cwd: request.cwd,
+  });
+  state.expandedRepoKeys.add(repoKey);
+  render();
+
+  void postCreateSessionAction(request)
+    .then(async (result) => {
+      applyCreateSessionActionResult(repoKey, request, result);
+      render();
+      if (shouldRefreshAfterCreateSessionActionResult(result)) {
+        await refreshSnapshot({ source: 'manual' });
+      }
+    })
+    .catch((error) => {
+      setPendingWorktree(repoKey, {
+        sessionKind: 'cwd',
+        kind: 'failure',
+        title: 'Retry failed',
+        message: `Create session failed: ${error instanceof Error ? error.message : String(error)}`,
+        tone: 'failed',
+      });
+      render();
+    });
+}
+
 function summarizeWorktreeActionResult(repoKey, request, result) {
   if (result?.status === 'preflight-failed') {
     return {
+      sessionKind: 'worktree',
       kind: 'failure',
       title: 'New session blocked',
       message: getPreflightFailureMessage(result.preflight),
@@ -1393,6 +1685,7 @@ function summarizeWorktreeActionResult(repoKey, request, result) {
 
   if (result?.status === 'partial-launch-failed') {
     return {
+      sessionKind: 'worktree',
       kind: 'partial',
       title: 'Worktree ready · Pi did not start',
       message: getPartialLaunchFailureMessage(result.launch),
@@ -1403,6 +1696,7 @@ function summarizeWorktreeActionResult(repoKey, request, result) {
 
   if (!result?.ok) {
     return {
+      sessionKind: 'worktree',
       kind: 'failure',
       title: 'New session failed',
       message: result.worktree?.message ?? 'New session failed.',
@@ -1412,6 +1706,7 @@ function summarizeWorktreeActionResult(repoKey, request, result) {
 
   if (!result.launch?.requested) {
     return {
+      sessionKind: 'worktree',
       kind: 'success',
       title: 'Worktree ready',
       message: 'Worktree created.',
@@ -1422,6 +1717,7 @@ function summarizeWorktreeActionResult(repoKey, request, result) {
   }
 
   return {
+    sessionKind: 'worktree',
     kind: 'success',
     title:
       result.status === 'reused-and-launched' || result.launch.status === 'reused-existing'
@@ -1433,6 +1729,51 @@ function summarizeWorktreeActionResult(repoKey, request, result) {
         : 'Pi session launched. Session Deck will pick it up automatically.',
     tone: 'ready',
     request,
+    runtimeId: getActionResultRuntimeId(result),
+    autoDismissAfterMs: SUCCESS_PENDING_WORKTREE_TTL_MS,
+  };
+}
+
+function summarizeCreateSessionActionResult(repoKey, request, result) {
+  if (result?.status === 'launch-failed') {
+    return {
+      sessionKind: 'cwd',
+      kind: 'failure',
+      title: 'New session failed',
+      message: getCreateSessionLaunchFailureMessage(result.launch),
+      tone: 'failed',
+      request,
+      cwd: request.cwd,
+      resultCwd: result.cwd,
+      actions: buildCreateSessionRetryActions(repoKey, request),
+    };
+  }
+
+  if (!result?.ok) {
+    return {
+      sessionKind: 'cwd',
+      kind: 'failure',
+      title: 'New session failed',
+      message: result?.message ?? 'New session failed.',
+      tone: 'failed',
+      request,
+      cwd: request.cwd,
+      resultCwd: result?.cwd,
+    };
+  }
+
+  const reused = result.status === 'reused-existing' || result.launch?.status === 'reused-existing';
+  return {
+    sessionKind: 'cwd',
+    kind: 'success',
+    title: reused ? 'Session reused' : 'Session launched',
+    message: reused
+      ? 'Reused the managed Pi session. Session Deck will pick it up automatically.'
+      : 'Pi session launched. Session Deck will pick it up automatically.',
+    tone: 'ready',
+    request,
+    cwd: request.cwd,
+    resultCwd: result.cwd,
     runtimeId: getActionResultRuntimeId(result),
     autoDismissAfterMs: SUCCESS_PENDING_WORKTREE_TTL_MS,
   };
@@ -1457,6 +1798,19 @@ function getPreflightFailureMessage(preflight) {
   }
 }
 
+function getCreateSessionPreflightFailureMessage(preflight) {
+  switch (preflight?.reason) {
+    case 'tmux-unavailable':
+      return `New Pi session requires tmux on PATH; no session was launched. Run ${DOCTOR_COMMAND} or install tmux.`;
+    case 'pi-command-unavailable':
+      return `New Pi session requires the pi executable on PATH; no session was launched. Run ${DOCTOR_COMMAND} or install Pi.`;
+    default:
+      return isNonEmptyString(preflight?.message)
+        ? preflight.message
+        : `New Pi session prerequisites are unavailable; no session was launched. Run ${DOCTOR_COMMAND}.`;
+  }
+}
+
 function getPartialLaunchFailureMessage(launch) {
   switch (launch?.reason) {
     case 'tmux-unavailable':
@@ -1478,6 +1832,25 @@ function getPartialLaunchFailureMessage(launch) {
   }
 }
 
+function getCreateSessionLaunchFailureMessage(launch) {
+  switch (launch?.reason) {
+    case 'tmux-name-collision':
+      return 'Pi did not start because the generated tmux session name is already in use for a different cwd.';
+    case 'launch-context-mismatch':
+      return 'Existing managed tmux session cannot be verified against the requested Pi config.';
+    case 'presence-timeout':
+      return 'Pi did not remain running in tmux. Retry after confirming the session can start.';
+    case 'cwd-mismatch':
+      return 'The launched tmux pane is not in the requested cwd. Retry after fixing the launch issue.';
+    case 'spawn-failed':
+      return 'tmux could not start Pi. Retry after fixing the launch issue.';
+    default:
+      return isNonEmptyString(launch?.message)
+        ? `${launch.message} Retry after fixing the launch issue.`
+        : 'Pi did not start. Retry after fixing the launch issue.';
+  }
+}
+
 function buildPartialLaunchActions(repoKey, request) {
   return [
     {
@@ -1485,6 +1858,18 @@ function buildPartialLaunchActions(repoKey, request) {
       kind: 'primary',
       onClick: () => {
         retryWorktreeAction(repoKey, request);
+      },
+    },
+  ];
+}
+
+function buildCreateSessionRetryActions(repoKey, request) {
+  return [
+    {
+      label: 'Retry',
+      kind: 'primary',
+      onClick: () => {
+        retryCreateSessionAction(repoKey, request);
       },
     },
   ];

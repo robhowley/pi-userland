@@ -63,6 +63,20 @@ HELPER_TIMEOUT_MESSAGE = (
     "Refresh Session Deck, run /session-deck iterm2 doctor, and check git worktrees before retrying."
 )
 HELPER_FAILED_MESSAGE = "Create-worktree action failed. Run /session-deck iterm2 doctor if this keeps happening."
+CREATE_SESSION_HELPER_UNAVAILABLE_MESSAGE = (
+    "Create-session action is unavailable. Run /session-deck iterm2 doctor."
+)
+CREATE_SESSION_HELPER_INVALID_RESPONSE_MESSAGE = (
+    "Create-session action failed because the helper returned an invalid response. "
+    "Refresh Session Deck, run /session-deck iterm2 doctor, and check the session before retrying."
+)
+CREATE_SESSION_HELPER_TIMEOUT_MESSAGE = (
+    "Create-session action did not finish before the helper timeout. "
+    "Refresh Session Deck and check Session Deck before retrying."
+)
+CREATE_SESSION_HELPER_FAILED_MESSAGE = (
+    "Create-session action failed. Run /session-deck iterm2 doctor if this keeps happening."
+)
 OPEN_TERMINAL_BRIDGE_SOCKET_ENV = "PI_SESSION_DECK_ITERM2_BRIDGE_SOCKET_PATH"
 OPEN_TERMINAL_HELPER_UNAVAILABLE_MESSAGE = (
     "Open-terminal action is unavailable. Run /session-deck iterm2 doctor."
@@ -182,6 +196,14 @@ class SocketIdentity:
 class EffectiveCommandPath:
     value: str
     provenance: str
+
+
+@dataclass(frozen=True)
+class ActionHelperMessages:
+    unavailable: str
+    invalid_response: str
+    timeout: str
+    failed: str
 
 
 @dataclass
@@ -571,6 +593,20 @@ def helper_failure_payload(message: str) -> dict[str, Any]:
     return {"ok": False, "status": "failed", "message": message}
 
 
+CREATE_WORKTREE_HELPER_MESSAGES = ActionHelperMessages(
+    unavailable=HELPER_UNAVAILABLE_MESSAGE,
+    invalid_response=HELPER_INVALID_RESPONSE_MESSAGE,
+    timeout=HELPER_TIMEOUT_MESSAGE,
+    failed=HELPER_FAILED_MESSAGE,
+)
+CREATE_SESSION_HELPER_MESSAGES = ActionHelperMessages(
+    unavailable=CREATE_SESSION_HELPER_UNAVAILABLE_MESSAGE,
+    invalid_response=CREATE_SESSION_HELPER_INVALID_RESPONSE_MESSAGE,
+    timeout=CREATE_SESSION_HELPER_TIMEOUT_MESSAGE,
+    failed=CREATE_SESSION_HELPER_FAILED_MESSAGE,
+)
+
+
 def sanitize_helper_failure_payload(
     payload: dict[str, Any], fallback_message: str = HELPER_FAILED_MESSAGE
 ) -> dict[str, Any]:
@@ -619,14 +655,15 @@ def redact_private_paths(text: str) -> str:
     return PRIVATE_PATH_RE.sub("[private path]", text)
 
 
-def run_create_worktree_action(
+def run_create_action_helper(
     config: InstallConfig,
+    helper_path: Path,
     payload: str,
     effective_command_path: EffectiveCommandPath,
+    messages: ActionHelperMessages,
 ) -> tuple[int, dict[str, Any]]:
-    helper_path = config.runtime.create_worktree_helper_path
     if not helper_path.exists():
-        return 503, helper_failure_payload(HELPER_UNAVAILABLE_MESSAGE)
+        return 503, helper_failure_payload(messages.unavailable)
 
     try:
         completed = subprocess.run(
@@ -639,22 +676,50 @@ def run_create_worktree_action(
             env=build_child_process_env(effective_command_path),
         )
     except subprocess.TimeoutExpired:
-        return 504, helper_failure_payload(HELPER_TIMEOUT_MESSAGE)
+        return 504, helper_failure_payload(messages.timeout)
     except Exception:
-        return 500, helper_failure_payload(HELPER_UNAVAILABLE_MESSAGE)
+        return 500, helper_failure_payload(messages.unavailable)
 
     try:
         response_payload = json.loads(completed.stdout)
     except Exception:
-        return 500, helper_failure_payload(HELPER_INVALID_RESPONSE_MESSAGE)
+        return 500, helper_failure_payload(messages.invalid_response)
 
     if not isinstance(response_payload, dict):
-        return 500, helper_failure_payload(HELPER_INVALID_RESPONSE_MESSAGE)
+        return 500, helper_failure_payload(messages.invalid_response)
 
     if completed.returncode != 0:
-        return 400, sanitize_helper_failure_payload(response_payload)
+        return 400, sanitize_helper_failure_payload(response_payload, messages.failed)
 
     return 200, response_payload
+
+
+def run_create_worktree_action(
+    config: InstallConfig,
+    payload: str,
+    effective_command_path: EffectiveCommandPath,
+) -> tuple[int, dict[str, Any]]:
+    return run_create_action_helper(
+        config,
+        config.runtime.create_worktree_helper_path,
+        payload,
+        effective_command_path,
+        CREATE_WORKTREE_HELPER_MESSAGES,
+    )
+
+
+def run_create_session_action(
+    config: InstallConfig,
+    payload: str,
+    effective_command_path: EffectiveCommandPath,
+) -> tuple[int, dict[str, Any]]:
+    return run_create_action_helper(
+        config,
+        config.runtime.create_worktree_helper_path,
+        payload,
+        effective_command_path,
+        CREATE_SESSION_HELPER_MESSAGES,
+    )
 
 
 OPEN_TERMINAL_SAFE_SUCCESS_MESSAGE = "Terminal open requested."
@@ -876,6 +941,7 @@ class SessionDeckToolbeltHandler(BaseHTTPRequestHandler):
                     "actionCapabilities": [
                         "create-worktree",
                         "create-worktree-preview",
+                        "create-session",
                         "open-terminal",
                         "kill-session",
                     ],
@@ -910,6 +976,7 @@ class SessionDeckToolbeltHandler(BaseHTTPRequestHandler):
         if parsed.path not in (
             "/actions/create-worktree",
             "/actions/create-worktree-preview",
+            "/actions/create-session",
             "/actions/open-terminal",
             "/actions/kill-session",
         ):
@@ -950,6 +1017,12 @@ class SessionDeckToolbeltHandler(BaseHTTPRequestHandler):
             )
         elif parsed.path == "/actions/kill-session":
             status_code, response_payload = run_kill_session_action(
+                config,
+                body,
+                effective_command_path,
+            )
+        elif parsed.path == "/actions/create-session":
+            status_code, response_payload = run_create_session_action(
                 config,
                 body,
                 effective_command_path,

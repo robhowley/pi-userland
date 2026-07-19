@@ -4,6 +4,7 @@ import {
   buildPiLauncherCommand,
   buildTmuxEnvironmentArgs,
   launchDetachedTmuxPi,
+  launchDetachedTmuxPiForCwd,
 } from '../../extensions/session-deck/worktree/launch.js';
 import {
   defaultWorktreeExecFile,
@@ -391,6 +392,191 @@ describe('session-deck detached tmux launch', () => {
       status: 'failed',
       reason: 'presence-timeout',
       message: 'Created worktree, but Pi did not remain running in tmux.',
+    });
+  });
+
+  it('launchDetachedTmuxPiForCwd launches tmux with the cwd target and custom agent dir', async () => {
+    const env: NodeJS.ProcessEnv = { PATH: '/runtime/bin' };
+    const calls: ExecCall[] = [];
+    const execFile: WorktreeExecFile = async (file, args, options) => {
+      calls.push({ file, args, options });
+      if (file === 'tmux' && args[0] === '-V') {
+        return { stdout: 'tmux 3.4\n', stderr: '', exitCode: 0 };
+      }
+      if (file === 'which') {
+        return { stdout: '/runtime/pi/bin/pi\n', stderr: '', exitCode: 0 };
+      }
+      if (file === 'tmux' && args[0] === 'has-session') {
+        return { stdout: '', stderr: '', exitCode: 1 };
+      }
+      if (file === 'tmux' && args[0] === 'new-session') {
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
+      if (file === 'tmux' && args[0] === 'display-message') {
+        return { stdout: '/tmp/scratch\n', stderr: '', exitCode: 0 };
+      }
+      return { stdout: '', stderr: `unexpected ${file} ${args.join(' ')}`, exitCode: 1 };
+    };
+
+    const result = await launchDetachedTmuxPiForCwd(
+      { cwd: '/tmp/scratch', repoName: null },
+      'scratch',
+      {
+        execFile,
+        env,
+        postLaunchVerifyDelayMs: 0,
+        agentDir: { mode: 'custom', customDir: '/Users/test/.pi/agent-custom' },
+      },
+    );
+
+    expect(result).toMatchObject({
+      requested: true,
+      ok: true,
+      mode: 'tmux-detached',
+      status: 'launched',
+    });
+    if (!result.requested || !result.ok) {
+      throw new Error('Expected successful launch result.');
+    }
+    expect(calls.map(({ file, args }) => ({ file, args }))).toEqual([
+      { file: 'tmux', args: ['-V'] },
+      { file: 'which', args: ['pi'] },
+      { file: 'tmux', args: ['has-session', '-t', `=${result.tmuxSessionName}`] },
+      {
+        file: 'tmux',
+        args: [
+          'new-session',
+          '-d',
+          '-s',
+          result.tmuxSessionName,
+          '-c',
+          '/tmp/scratch',
+          '-n',
+          'scratch',
+          buildPiLauncherCommand('scratch', '/runtime/bin', {
+            mode: 'custom',
+            customDir: '/Users/test/.pi/agent-custom',
+          }),
+        ],
+      },
+      {
+        file: 'tmux',
+        args: [
+          'display-message',
+          '-p',
+          '-t',
+          `=${result.tmuxSessionName}:0.0`,
+          '#{pane_current_path}',
+        ],
+      },
+    ]);
+  });
+
+  it('launchDetachedTmuxPiForCwd reuses an existing session when cwd matches', async () => {
+    const calls: ExecCall[] = [];
+    let expectedSessionName = '';
+    const execFile: WorktreeExecFile = async (file, args, options) => {
+      calls.push({ file, args, options });
+      if (file === 'tmux' && args[0] === '-V') {
+        return { stdout: 'tmux 3.4\n', stderr: '', exitCode: 0 };
+      }
+      if (file === 'which') {
+        return { stdout: '/runtime/pi/bin/pi\n', stderr: '', exitCode: 0 };
+      }
+      if (file === 'tmux' && args[0] === 'has-session') {
+        expect(args[2]).toBe(`=${expectedSessionName}`);
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
+      if (file === 'tmux' && args[0] === 'display-message') {
+        return { stdout: '/tmp/scratch\n', stderr: '', exitCode: 0 };
+      }
+      return { stdout: '', stderr: `unexpected ${file} ${args.join(' ')}`, exitCode: 1 };
+    };
+
+    expectedSessionName = buildManagedTmuxSessionName({
+      repoName: null,
+      worktreePath: '/tmp/scratch',
+      label: 'scratch',
+    });
+
+    const result = await launchDetachedTmuxPiForCwd(
+      { cwd: '/tmp/scratch', repoName: null },
+      'scratch',
+      { execFile },
+    );
+
+    expect(result).toMatchObject({
+      requested: true,
+      ok: true,
+      mode: 'tmux-detached',
+      status: 'reused-existing',
+      tmuxSessionName: expectedSessionName,
+    });
+    expect(calls.some((call) => call.args[0] === 'new-session')).toBe(false);
+  });
+
+  it('launchDetachedTmuxPiForCwd uses session-specific collision copy', async () => {
+    const execFile: WorktreeExecFile = async (file, args) => {
+      if (file === 'tmux' && args[0] === '-V') {
+        return { stdout: 'tmux 3.4\n', stderr: '', exitCode: 0 };
+      }
+      if (file === 'which') {
+        return { stdout: '/runtime/pi/bin/pi\n', stderr: '', exitCode: 0 };
+      }
+      if (file === 'tmux' && args[0] === 'has-session') {
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
+      if (file === 'tmux' && args[0] === 'display-message') {
+        return { stdout: '/tmp/other\n', stderr: '', exitCode: 0 };
+      }
+      return { stdout: '', stderr: `unexpected ${file} ${args.join(' ')}`, exitCode: 1 };
+    };
+
+    await expect(
+      launchDetachedTmuxPiForCwd({ cwd: '/tmp/scratch', repoName: null }, 'scratch', { execFile }),
+    ).resolves.toMatchObject({
+      requested: true,
+      ok: false,
+      mode: 'tmux-detached',
+      status: 'failed',
+      reason: 'tmux-name-collision',
+      message:
+        'Pi did not start because the generated tmux session name is already in use for a different cwd.',
+    });
+  });
+
+  it('launchDetachedTmuxPiForCwd uses session-specific verification copy', async () => {
+    const execFile: WorktreeExecFile = async (file, args) => {
+      if (file === 'tmux' && args[0] === '-V') {
+        return { stdout: 'tmux 3.4\n', stderr: '', exitCode: 0 };
+      }
+      if (file === 'which') {
+        return { stdout: '/runtime/pi/bin/pi\n', stderr: '', exitCode: 0 };
+      }
+      if (file === 'tmux' && args[0] === 'has-session') {
+        return { stdout: '', stderr: '', exitCode: 1 };
+      }
+      if (file === 'tmux' && args[0] === 'new-session') {
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
+      if (file === 'tmux' && args[0] === 'display-message') {
+        return { stdout: '/tmp/other\n', stderr: '', exitCode: 0 };
+      }
+      return { stdout: '', stderr: `unexpected ${file} ${args.join(' ')}`, exitCode: 1 };
+    };
+
+    await expect(
+      launchDetachedTmuxPiForCwd({ cwd: '/tmp/scratch', repoName: null }, 'scratch', {
+        execFile,
+        postLaunchVerifyDelayMs: 0,
+      }),
+    ).resolves.toMatchObject({
+      requested: true,
+      ok: false,
+      mode: 'tmux-detached',
+      status: 'failed',
+      reason: 'presence-timeout',
+      message: 'The launched tmux pane is not in the requested cwd.',
     });
   });
 });
