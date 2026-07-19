@@ -329,9 +329,7 @@ describe('SessionDeckBrowser', () => {
       }),
     });
 
-    expect(renderText(browser)).toContain(
-      'Pi sessions · 2 live · 1 stale · 0 dead · 1 unknown',
-    );
+    expect(renderText(browser)).toContain('Pi sessions · 2 live · 1 stale · 0 dead · 1 unknown');
   });
 
   it('renders reap summary lines above the browser list when provided', () => {

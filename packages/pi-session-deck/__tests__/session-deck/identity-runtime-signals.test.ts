@@ -97,11 +97,9 @@ describe('identity runtime signals', () => {
       execFile,
     });
 
-    expect(execFile).toHaveBeenCalledWith(
-      'ps',
-      ['-o', 'pid=,ppid=,lstart=', '-p', '200'],
-      { timeout: 50 },
-    );
+    expect(execFile).toHaveBeenCalledWith('ps', ['-o', 'pid=,ppid=,lstart=', '-p', '200'], {
+      timeout: 50,
+    });
     expect(processMetadata).toEqual({
       pid: 321,
       ppid: 200,

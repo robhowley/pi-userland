@@ -1118,7 +1118,11 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(spawnedValue.getAttribute('title')).toBe(
       'Ephemeral child sessions excluded from the deck.',
     );
-    expect(getCopyButtonLabels(identity)).toEqual(['Copy Session ID', 'Copy Runtime ID', 'Copy PID']);
+    expect(getCopyButtonLabels(identity)).toEqual([
+      'Copy Session ID',
+      'Copy Runtime ID',
+      'Copy PID',
+    ]);
 
     setShowAll(harness.elements, true);
 
