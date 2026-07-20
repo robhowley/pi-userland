@@ -1451,16 +1451,17 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(form.textContent).not.toContain('Base unavailable');
 
     const cwdInput = getInputByAriaLabel(form, 'Working directory');
+    expect(cwdInput.value).toBe('~');
     expect(cwdInput.getAttribute('placeholder')).toBe('~/scratch');
     expect(
       findAllByTag(form, 'input').some(
         (input) => input.getAttribute('aria-label') === 'Branch name',
       ),
     ).toBe(false);
-    expect(getButtonByText(form, 'Create').disabled).toBe(true);
+    expect(getButtonByText(form, 'Create').disabled).toBe(false);
   });
 
-  it('submits No repo create-session from cwd without create-worktree', async () => {
+  it('submits No repo create-session from the home default without create-worktree', async () => {
     const initialSnapshot = buildSnapshot({
       records: [buildNoRepoRecord({ cwd: `${HOME}/existing` })],
     });
@@ -1469,7 +1470,7 @@ describe('Session Deck iTerm2 web UI', () => {
       {
         ok: true,
         status: 'launched',
-        cwd: `${HOME}/scratch`,
+        cwd: HOME,
         launch: {
           requested: true,
           ok: true,
@@ -1489,9 +1490,7 @@ describe('Session Deck iTerm2 web UI', () => {
       getRepoGroupByLabel(harness.elements.list, 'No repo'),
       'worktree-form',
     )[0]!;
-    const cwdInput = getInputByAriaLabel(form, 'Working directory');
-    cwdInput.value = '  ~/scratch  ';
-    cwdInput.dispatchEvent({ type: 'input' });
+    expect(getInputByAriaLabel(form, 'Working directory').value).toBe('~');
     expect(getButtonByText(form, 'Create').disabled).toBe(false);
     form.dispatchEvent({ type: 'submit' });
     await flushMicrotasks();
@@ -1502,7 +1501,7 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(createSessionCalls).toHaveLength(1);
     expect(JSON.parse((createSessionCalls[0]![1] as { body?: string }).body ?? '{}')).toEqual({
       action: 'create-session',
-      cwd: '~/scratch',
+      cwd: '~',
       launch: { mode: 'tmux-detached', agentDir: { mode: 'ambient' } },
     });
     expect(
@@ -1620,7 +1619,7 @@ describe('Session Deck iTerm2 web UI', () => {
     });
   });
 
-  it('does not submit No repo create-session with empty cwd', async () => {
+  it('does not submit No repo create-session after the cwd is cleared', async () => {
     const harness = await setupApp([
       buildSnapshot({ records: [buildNoRepoRecord({ cwd: `${HOME}/existing` })] }),
     ]);
@@ -1632,8 +1631,7 @@ describe('Session Deck iTerm2 web UI', () => {
       getRepoGroupByLabel(harness.elements.list, 'No repo'),
       'worktree-form',
     )[0]!;
-    expect(getButtonByText(form, 'Create').disabled).toBe(true);
-    form.dispatchEvent({ type: 'submit' });
+    expect(getButtonByText(form, 'Create').disabled).toBe(false);
 
     const cwdInput = getInputByAriaLabel(form, 'Working directory');
     cwdInput.value = '   ';

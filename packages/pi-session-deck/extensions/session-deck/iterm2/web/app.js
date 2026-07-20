@@ -968,7 +968,7 @@ function createNoRepoSessionForm(repoGroup) {
 
 function createInitialNoRepoSessionFormState() {
   return {
-    cwd: '',
+    cwd: '~',
     errorMessage: null,
     agentDirSelection: { mode: 'ambient' },
     customDraft: '',
