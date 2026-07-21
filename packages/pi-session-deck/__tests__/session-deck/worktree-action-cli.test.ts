@@ -1,12 +1,235 @@
 import { describe, expect, it } from 'vitest';
+import { normalizeCreateSessionActionRequest } from '../../extensions/session-deck/session/create.js';
+import type { CreateSessionActionResult } from '../../extensions/session-deck/session/types.js';
 import {
+  getRequestedAction,
   normalizeActionRequest,
   normalizeLaunchContextPreviewRequest,
+  runCreateSessionAction,
+  toBrowserSafeCreateSessionActionResult,
   toBrowserSafeCreateWorktreeActionResult,
 } from '../../extensions/session-deck/worktree/action-cli.js';
 import type { CreateWorktreeActionResult } from '../../extensions/session-deck/worktree/types.js';
 
 describe('session-deck worktree action cli', () => {
+  it('detects create-session while keeping absent action as create-worktree', () => {
+    expect(getRequestedAction({ cwd: '/tmp/scratch' })).toEqual({
+      ok: true,
+      action: 'create-worktree',
+    });
+    expect(getRequestedAction({ action: 'create-session', cwd: '/tmp/scratch' })).toEqual({
+      ok: true,
+      action: 'create-session',
+    });
+  });
+
+  it('normalizes create-session cwd and launch agent dir without repo intent', () => {
+    expect(
+      normalizeCreateSessionActionRequest({
+        action: 'create-session',
+        cwd: '/tmp/scratch/../scratch',
+      }),
+    ).toEqual({
+      ok: true,
+      request: {
+        action: 'create-session',
+        cwd: '/tmp/scratch',
+        launch: { mode: 'tmux-detached', agentDir: { mode: 'ambient' } },
+      },
+    });
+
+    expect(
+      normalizeCreateSessionActionRequest(
+        {
+          action: 'create-session',
+          cwd: '~/scratch',
+          launch: {
+            mode: 'tmux-detached',
+            agentDir: { mode: 'custom', customDir: '~/agent-work' },
+          },
+        },
+        { homeDir: '/Users/test' },
+      ),
+    ).toEqual({
+      ok: true,
+      request: {
+        action: 'create-session',
+        cwd: '/Users/test/scratch',
+        launch: {
+          mode: 'tmux-detached',
+          agentDir: { mode: 'custom', customDir: '/Users/test/agent-work' },
+        },
+      },
+    });
+
+    expect(
+      normalizeCreateSessionActionRequest(
+        { action: 'create-session', cwd: '~' },
+        { homeDir: '/Users/test' },
+      ),
+    ).toMatchObject({ ok: true, request: { cwd: '/Users/test' } });
+  });
+
+  it.each([
+    ['missing cwd', { action: 'create-session' }, 'cwd is required.'],
+    ['empty cwd', { action: 'create-session', cwd: '   ' }, 'Working directory is required.'],
+    [
+      'relative cwd',
+      { action: 'create-session', cwd: 'scratch' },
+      'Working directory must be absolute, ~, or start with ~/.',
+    ],
+    [
+      'tilde user cwd',
+      { action: 'create-session', cwd: '~other/scratch' },
+      'Working directory must be absolute, ~, or start with ~/.',
+    ],
+    [
+      'newline cwd',
+      { action: 'create-session', cwd: '/tmp/scratch\nnext' },
+      'Working directory must not contain newlines or NUL bytes.',
+    ],
+    [
+      'nul cwd',
+      { action: 'create-session', cwd: '/tmp/scratch\0next' },
+      'Working directory must not contain newlines or NUL bytes.',
+    ],
+  ])('rejects create-session %s', (_label, payload, message) => {
+    expect(normalizeCreateSessionActionRequest(payload)).toMatchObject({
+      ok: false,
+      message,
+    });
+  });
+
+  it.each([
+    'repoIntent',
+    'branchName',
+    'baseRef',
+    'path',
+    'manualCommand',
+    'manualAttachCommand',
+    'tmuxSessionName',
+    'tmuxTarget',
+    'sessionFile',
+  ])('rejects create-session field %s', (field) => {
+    expect(
+      normalizeCreateSessionActionRequest({
+        action: 'create-session',
+        cwd: '/tmp/scratch',
+        [field]: 'private',
+      }),
+    ).toEqual({
+      ok: false,
+      reason: 'invalid-request',
+      message: `Field is not accepted by this action boundary: ${field}`,
+    });
+  });
+
+  it('keeps launch-context preview cwd-free', () => {
+    expect(
+      normalizeLaunchContextPreviewRequest({
+        action: 'preview-launch-context',
+        cwd: '/tmp/scratch',
+        launch: { mode: 'tmux-detached', agentDir: { mode: 'default' } },
+      }),
+    ).toEqual({
+      ok: false,
+      message: 'Field is not accepted by this action boundary: cwd',
+    });
+  });
+
+  it('returns create-session cwd syntax errors as browser-safe validation results', async () => {
+    await expect(
+      runCreateSessionAction({ action: 'create-session', cwd: 'relative' }),
+    ).resolves.toEqual({
+      ok: false,
+      status: 'failed',
+      failurePhase: 'validation',
+      reason: 'invalid-cwd',
+      message: 'Working directory must be absolute, ~, or start with ~/.',
+      recoverable: true,
+    });
+  });
+
+  it('maps create-session results without worktree fields or copy', () => {
+    const preflight: CreateSessionActionResult = {
+      ok: false,
+      status: 'preflight-failed',
+      failurePhase: 'preflight',
+      preflight: { reason: 'tmux-unavailable', recoverable: true, message: 'internal' },
+      launch: { requested: false, mode: 'tmux-detached', status: 'not-started' },
+    };
+    const launchFailed: CreateSessionActionResult = {
+      ok: false,
+      status: 'launch-failed',
+      failurePhase: 'launch',
+      cwd: '/tmp/scratch',
+      launch: {
+        requested: true,
+        ok: false,
+        mode: 'tmux-detached',
+        status: 'failed',
+        reason: 'spawn-failed',
+        recoverable: true,
+        message: 'internal failure /tmp/private',
+        manualCommand: 'cd /tmp/private && pi',
+      },
+    };
+    const success: CreateSessionActionResult = {
+      ok: true,
+      status: 'launched',
+      cwd: '/tmp/scratch',
+      launch: {
+        requested: true,
+        ok: true,
+        mode: 'tmux-detached',
+        status: 'launched',
+        tmuxSessionName: 'pi-private',
+        tmuxTarget: '=pi-private',
+        message: 'Started a detached tmux Pi session.',
+        manualAttachCommand: 'tmux attach-session -t =pi-private',
+      },
+    };
+
+    expect(toBrowserSafeCreateSessionActionResult(preflight)).toEqual({
+      ok: false,
+      status: 'preflight-failed',
+      failurePhase: 'preflight',
+      preflight: {
+        reason: 'tmux-unavailable',
+        recoverable: true,
+        message: 'New Pi session requires tmux on PATH; no session was launched.',
+      },
+      launch: { requested: false, mode: 'tmux-detached', status: 'not-started' },
+    });
+    expect(toBrowserSafeCreateSessionActionResult(launchFailed)).toEqual({
+      ok: false,
+      status: 'launch-failed',
+      failurePhase: 'launch',
+      cwd: '/tmp/scratch',
+      launch: {
+        requested: true,
+        ok: false,
+        mode: 'tmux-detached',
+        status: 'failed',
+        reason: 'spawn-failed',
+        recoverable: true,
+        message: 'tmux could not start Pi.',
+      },
+    });
+    expect(toBrowserSafeCreateSessionActionResult(success)).toEqual({
+      ok: true,
+      status: 'launched',
+      cwd: '/tmp/scratch',
+      launch: {
+        requested: true,
+        ok: true,
+        mode: 'tmux-detached',
+        status: 'launched',
+        message: 'Started a detached tmux Pi session.',
+      },
+    });
+  });
+
   it('defaults an absent launch block to tmux-detached', () => {
     expect(
       normalizeActionRequest({

@@ -288,6 +288,23 @@ function buildRecord(overrides: Partial<SessionDeckRecord> = {}): SessionDeckRec
   };
 }
 
+function buildNoRepoRecord(overrides: Partial<SessionDeckRecord> = {}): SessionDeckRecord {
+  return buildRecord({
+    runtimeId: 'rt-no-repo',
+    sessionId: 'session-no-repo',
+    sessionName: 'scratch',
+    repoName: null,
+    qualifiedRepoName: null,
+    cwd: `${HOME}/scratch`,
+    branch: null,
+    prUrl: null,
+    isLinkedWorktree: null,
+    worktreeLabel: null,
+    chips: [],
+    ...overrides,
+  });
+}
+
 function buildSnapshot(
   options: {
     records?: SessionDeckRecord[];
@@ -655,6 +672,34 @@ function getRepoActionButton(repoGroup: FakeElement): FakeButtonElement {
     throw new Error('Expected repo action button.');
   }
   return actionButton;
+}
+
+function getInputByAriaLabel(root: FakeNode, ariaLabel: string): FakeInputElement {
+  const input = findAllByTag(root, 'input').find(
+    (candidate) => candidate.getAttribute('aria-label') === ariaLabel,
+  );
+  if (!(input instanceof FakeInputElement)) {
+    throw new Error(`Expected input ${ariaLabel}.`);
+  }
+  return input;
+}
+
+function getButtonByText(root: FakeNode, text: string): FakeButtonElement {
+  const button = findAllByTag(root, 'button').find((candidate) => candidate.textContent === text);
+  if (!(button instanceof FakeButtonElement)) {
+    throw new Error(`Expected button ${text}.`);
+  }
+  return button;
+}
+
+function getButtonByAriaLabel(root: FakeNode, ariaLabel: string): FakeButtonElement {
+  const button = findAllByTag(root, 'button').find(
+    (candidate) => candidate.getAttribute('aria-label') === ariaLabel,
+  );
+  if (!(button instanceof FakeButtonElement)) {
+    throw new Error(`Expected button ${ariaLabel}.`);
+  }
+  return button;
 }
 
 function getRepoHeaders(list: FakeElement): FakeButtonElement[] {
@@ -1366,6 +1411,530 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(buttons[0]?.parentNode).toBe(branchControl);
     expect(buttons[0]?.classList.contains('worktree-submit-button')).toBe(true);
     expect(buttons[0]?.disabled).toBe(false);
+  });
+
+  it('renders + New for No repo and opens a cwd composer', async () => {
+    const harness = await setupApp([
+      buildSnapshot({ records: [buildNoRepoRecord({ cwd: `${HOME}/existing` })] }),
+    ]);
+    const repoGroup = getRepoGroupByLabel(harness.elements.list, 'No repo');
+    const actionButton = getRepoActionButton(repoGroup);
+
+    expect(actionButton.textContent).toBe('+ New');
+    expect(actionButton.parentNode).toBe(getRepoHeaderRow(repoGroup));
+
+    actionButton.click();
+    await flushMicrotasks();
+
+    const previewRequests = harness.fetchMock.mock.calls
+      .filter(([url]) => url === '/actions/create-worktree-preview')
+      .map(([, init]) => JSON.parse((init as { body?: string }).body ?? '{}'));
+    expect(previewRequests).toEqual([
+      {
+        action: 'preview-launch-context',
+        launch: { mode: 'tmux-detached', agentDir: { mode: 'ambient' } },
+      },
+    ]);
+    expect(previewRequests[0]).not.toHaveProperty('cwd');
+
+    const openedRepoGroup = getRepoGroupByLabel(harness.elements.list, 'No repo');
+    expect(getRepoActionButton(openedRepoGroup).textContent).toBe('Cancel');
+    expect(getRepoHeader(openedRepoGroup).getAttribute('aria-expanded')).toBe('false');
+
+    const form = findAllByClass(openedRepoGroup, 'worktree-form')[0]!;
+    expect(form.textContent).toContain('cwd →');
+    expect(form.textContent).toContain('Pi config → ~/.pi/agent-or');
+    expect(form.textContent).toContain('Change');
+    expect(form.textContent).toContain('Create');
+    expect(form.textContent).not.toContain('main →');
+    expect(form.textContent).not.toContain('Branch name');
+    expect(form.textContent).not.toContain('Base unavailable');
+
+    const cwdInput = getInputByAriaLabel(form, 'Working directory');
+    expect(cwdInput.value).toBe('~');
+    expect(cwdInput.getAttribute('placeholder')).toBe('~/scratch');
+    expect(
+      findAllByTag(form, 'input').some(
+        (input) => input.getAttribute('aria-label') === 'Branch name',
+      ),
+    ).toBe(false);
+    expect(getButtonByText(form, 'Create').disabled).toBe(false);
+  });
+
+  it('submits No repo create-session from the home default without create-worktree', async () => {
+    const initialSnapshot = buildSnapshot({
+      records: [buildNoRepoRecord({ cwd: `${HOME}/existing` })],
+    });
+    const harness = await setupApp([
+      initialSnapshot,
+      {
+        ok: true,
+        status: 'launched',
+        cwd: HOME,
+        launch: {
+          requested: true,
+          ok: true,
+          mode: 'tmux-detached',
+          status: 'launched',
+          runtimeId: 'rt-new-session',
+          message: 'Started a detached tmux Pi session.',
+        },
+      },
+      initialSnapshot,
+    ]);
+
+    getRepoActionButton(getRepoGroupByLabel(harness.elements.list, 'No repo')).click();
+    await flushMicrotasks();
+
+    const form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'No repo'),
+      'worktree-form',
+    )[0]!;
+    expect(getInputByAriaLabel(form, 'Working directory').value).toBe('~');
+    expect(getButtonByText(form, 'Create').disabled).toBe(false);
+    form.dispatchEvent({ type: 'submit' });
+    await flushMicrotasks();
+
+    const createSessionCalls = harness.fetchMock.mock.calls.filter(
+      ([url]) => url === '/actions/create-session',
+    );
+    expect(createSessionCalls).toHaveLength(1);
+    expect(JSON.parse((createSessionCalls[0]![1] as { body?: string }).body ?? '{}')).toEqual({
+      action: 'create-session',
+      cwd: '~',
+      launch: { mode: 'tmux-detached', agentDir: { mode: 'ambient' } },
+    });
+    expect(
+      harness.fetchMock.mock.calls.filter(([url]) => url === '/actions/create-worktree'),
+    ).toHaveLength(0);
+    expect(harness.elements.list.textContent).toContain('Session launched');
+  });
+
+  it('changes Pi config for No repo through launch preview and submits custom intent', async () => {
+    const initialSnapshot = buildSnapshot({
+      records: [buildNoRepoRecord({ cwd: `${HOME}/existing` })],
+    });
+    const harness = await setupApp([
+      initialSnapshot,
+      {
+        ok: true,
+        status: 'launched',
+        cwd: `${HOME}/scratch`,
+        launch: {
+          requested: true,
+          ok: true,
+          mode: 'tmux-detached',
+          status: 'launched',
+          message: 'Started a detached tmux Pi session.',
+        },
+      },
+      initialSnapshot,
+    ]);
+
+    getRepoActionButton(getRepoGroupByLabel(harness.elements.list, 'No repo')).click();
+    await flushMicrotasks();
+
+    let form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'No repo'),
+      'worktree-form',
+    )[0]!;
+    const cwdInput = getInputByAriaLabel(form, 'Working directory');
+    cwdInput.value = '~/scratch';
+    cwdInput.dispatchEvent({ type: 'input' });
+    getButtonByAriaLabel(form, 'Change Pi config').click();
+
+    form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'No repo'),
+      'worktree-form',
+    )[0]!;
+    expect(findAllByClass(form, 'worktree-config-drawer')).toHaveLength(1);
+    expect(findAllByTag(form, 'button').map((button) => button.textContent)).toEqual([
+      'Create',
+      'Change',
+      'Current',
+      'Pi default',
+      'Custom…',
+    ]);
+    getButtonByText(form, 'Custom…').click();
+
+    form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'No repo'),
+      'worktree-form',
+    )[0]!;
+    let customInput = getInputByAriaLabel(form, 'Custom Pi config directory');
+    customInput.value = 'relative';
+    customInput.dispatchEvent({ type: 'input' });
+    await flushMicrotasks();
+
+    form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'No repo'),
+      'worktree-form',
+    )[0]!;
+    expect(form.textContent).toContain(
+      'launch.agentDir.customDir must be absolute or start with ~/.',
+    );
+    expect(getButtonByText(form, 'Create').disabled).toBe(true);
+
+    customInput = getInputByAriaLabel(form, 'Custom Pi config directory');
+    customInput.value = '/tmp/pi/agent-work';
+    customInput.dispatchEvent({ type: 'input' });
+    await flushMicrotasks();
+
+    form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'No repo'),
+      'worktree-form',
+    )[0]!;
+    expect(findAllByClass(form, 'worktree-config-summary')[0]?.textContent).toBe(
+      'Pi config → /tmp/pi/agent-work',
+    );
+    expect(getButtonByText(form, 'Create').disabled).toBe(false);
+    form.dispatchEvent({ type: 'submit' });
+    await flushMicrotasks();
+
+    const previewRequests = harness.fetchMock.mock.calls
+      .filter(([url]) => url === '/actions/create-worktree-preview')
+      .map(([, init]) => JSON.parse((init as { body?: string }).body ?? '{}'));
+    expect(previewRequests.every((request) => !('cwd' in request))).toBe(true);
+    expect(previewRequests).toContainEqual(
+      expect.objectContaining({
+        action: 'preview-launch-context',
+        launch: {
+          mode: 'tmux-detached',
+          agentDir: { mode: 'custom', customDir: '/tmp/pi/agent-work' },
+        },
+      }),
+    );
+
+    const createSessionCall = harness.fetchMock.mock.calls.find(
+      ([url]) => url === '/actions/create-session',
+    );
+    expect(createSessionCall).toBeDefined();
+    expect(JSON.parse((createSessionCall?.[1] as { body?: string })?.body ?? '{}')).toEqual({
+      action: 'create-session',
+      cwd: '~/scratch',
+      launch: {
+        mode: 'tmux-detached',
+        agentDir: { mode: 'custom', customDir: '/tmp/pi/agent-work' },
+      },
+    });
+  });
+
+  it('does not submit No repo create-session after the cwd is cleared', async () => {
+    const harness = await setupApp([
+      buildSnapshot({ records: [buildNoRepoRecord({ cwd: `${HOME}/existing` })] }),
+    ]);
+
+    getRepoActionButton(getRepoGroupByLabel(harness.elements.list, 'No repo')).click();
+    await flushMicrotasks();
+
+    const form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'No repo'),
+      'worktree-form',
+    )[0]!;
+    expect(getButtonByText(form, 'Create').disabled).toBe(false);
+
+    const cwdInput = getInputByAriaLabel(form, 'Working directory');
+    cwdInput.value = '   ';
+    cwdInput.dispatchEvent({ type: 'input' });
+    expect(getButtonByText(form, 'Create').disabled).toBe(true);
+    form.dispatchEvent({ type: 'submit' });
+    await flushMicrotasks();
+
+    expect(
+      harness.fetchMock.mock.calls.filter(([url]) => url === '/actions/create-session'),
+    ).toHaveLength(0);
+    expect(
+      harness.fetchMock.mock.calls.filter(([url]) => url === '/actions/create-worktree'),
+    ).toHaveLength(0);
+  });
+
+  it('closes No repo composer from Cancel and Escape without posting', async () => {
+    const harness = await setupApp([
+      buildSnapshot({ records: [buildNoRepoRecord({ cwd: `${HOME}/existing` })] }),
+    ]);
+
+    getRepoActionButton(getRepoGroupByLabel(harness.elements.list, 'No repo')).click();
+    await flushMicrotasks();
+    getRepoActionButton(getRepoGroupByLabel(harness.elements.list, 'No repo')).click();
+    await flushMicrotasks();
+
+    expect(
+      findAllByClass(getRepoGroupByLabel(harness.elements.list, 'No repo'), 'worktree-form'),
+    ).toHaveLength(0);
+    expect(
+      getRepoActionButton(getRepoGroupByLabel(harness.elements.list, 'No repo')).textContent,
+    ).toBe('+ New');
+
+    getRepoActionButton(getRepoGroupByLabel(harness.elements.list, 'No repo')).click();
+    await flushMicrotasks();
+    const form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'No repo'),
+      'worktree-form',
+    )[0]!;
+    form.dispatchEvent({ type: 'keydown', key: 'Escape' });
+    await flushMicrotasks();
+
+    expect(
+      findAllByClass(getRepoGroupByLabel(harness.elements.list, 'No repo'), 'worktree-form'),
+    ).toHaveLength(0);
+    expect(
+      harness.fetchMock.mock.calls.filter(([url]) => url === '/actions/create-session'),
+    ).toHaveLength(0);
+    expect(
+      harness.fetchMock.mock.calls.filter(([url]) => url === '/actions/create-worktree'),
+    ).toHaveLength(0);
+  });
+
+  it('shows inline No repo cwd validation failure and keeps the form open', async () => {
+    const harness = await setupApp([
+      buildSnapshot({ records: [buildNoRepoRecord({ cwd: `${HOME}/existing` })] }),
+      {
+        ok: false,
+        status: 'failed',
+        failurePhase: 'validation',
+        reason: 'cwd-not-found',
+        message: 'Working directory does not exist.',
+        recoverable: true,
+      },
+    ]);
+
+    getRepoActionButton(getRepoGroupByLabel(harness.elements.list, 'No repo')).click();
+    await flushMicrotasks();
+
+    let form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'No repo'),
+      'worktree-form',
+    )[0]!;
+    const cwdInput = getInputByAriaLabel(form, 'Working directory');
+    cwdInput.value = ' ~/missing ';
+    cwdInput.dispatchEvent({ type: 'input' });
+    form.dispatchEvent({ type: 'submit' });
+    await flushMicrotasks();
+
+    form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'No repo'),
+      'worktree-form',
+    )[0]!;
+    expect(getInputByAriaLabel(form, 'Working directory').value).toBe('~/missing');
+    expect(form.textContent).toContain('Working directory does not exist.');
+    expect(getPendingWorktreeCards(harness.elements.list)).toHaveLength(0);
+  });
+
+  it('shows inline No repo preflight failure and keeps the form open', async () => {
+    const initialSnapshot = buildSnapshot({
+      records: [buildNoRepoRecord({ cwd: `${HOME}/existing` })],
+    });
+    const harness = await setupApp([
+      initialSnapshot,
+      {
+        ok: false,
+        status: 'preflight-failed',
+        failurePhase: 'preflight',
+        preflight: {
+          requested: true,
+          ok: false,
+          mode: 'tmux-detached',
+          status: 'failed',
+          reason: 'tmux-unavailable',
+          recoverable: true,
+          message: 'New Pi session requires tmux on PATH; no session was launched.',
+        },
+        launch: { requested: false, mode: 'tmux-detached', status: 'not-started' },
+      },
+      initialSnapshot,
+    ]);
+
+    getRepoActionButton(getRepoGroupByLabel(harness.elements.list, 'No repo')).click();
+    await flushMicrotasks();
+
+    let form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'No repo'),
+      'worktree-form',
+    )[0]!;
+    const cwdInput = getInputByAriaLabel(form, 'Working directory');
+    cwdInput.value = '~/scratch';
+    cwdInput.dispatchEvent({ type: 'input' });
+    form.dispatchEvent({ type: 'submit' });
+    await flushMicrotasks();
+
+    form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'No repo'),
+      'worktree-form',
+    )[0]!;
+    expect(form.textContent).toContain('no session was launched');
+    expect(form.textContent).not.toContain('worktree');
+    expect(getPendingWorktreeCards(harness.elements.list)).toHaveLength(0);
+  });
+
+  it('shows a No repo launch failure retry card and retry posts create-session', async () => {
+    const initialSnapshot = buildSnapshot({
+      records: [buildNoRepoRecord({ cwd: `${HOME}/existing` })],
+    });
+    const harness = await setupApp([
+      initialSnapshot,
+      {
+        ok: false,
+        status: 'launch-failed',
+        failurePhase: 'launch',
+        cwd: `${HOME}/other`,
+        launch: {
+          requested: true,
+          ok: false,
+          mode: 'tmux-detached',
+          status: 'failed',
+          reason: 'spawn-failed',
+          recoverable: true,
+          message: 'tmux could not start Pi.',
+        },
+      },
+      initialSnapshot,
+      {
+        ok: true,
+        status: 'reused-existing',
+        cwd: `${HOME}/other`,
+        launch: {
+          requested: true,
+          ok: true,
+          mode: 'tmux-detached',
+          status: 'reused-existing',
+          message: 'Reused an existing detached tmux Pi session.',
+        },
+      },
+      initialSnapshot,
+    ]);
+
+    getRepoActionButton(getRepoGroupByLabel(harness.elements.list, 'No repo')).click();
+    await flushMicrotasks();
+
+    const form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'No repo'),
+      'worktree-form',
+    )[0]!;
+    const cwdInput = getInputByAriaLabel(form, 'Working directory');
+    cwdInput.value = '~/other';
+    cwdInput.dispatchEvent({ type: 'input' });
+    form.dispatchEvent({ type: 'submit' });
+    await flushMicrotasks();
+
+    expect(harness.elements.list.textContent).toContain('New session failed');
+    expect(harness.elements.list.textContent).toContain('tmux could not start Pi');
+    const retryActions = getPendingWorktreeActions(harness.elements.list);
+    expect(retryActions.map((button) => button.textContent)).toEqual(['Retry']);
+    const firstRequest = JSON.parse(
+      (
+        harness.fetchMock.mock.calls.find(([url]) => url === '/actions/create-session')?.[1] as {
+          body?: string;
+        }
+      )?.body ?? '{}',
+    );
+
+    retryActions[0]!.click();
+    await flushMicrotasks();
+
+    const createSessionCalls = harness.fetchMock.mock.calls.filter(
+      ([url]) => url === '/actions/create-session',
+    );
+    expect(createSessionCalls).toHaveLength(2);
+    expect(JSON.parse((createSessionCalls[1]![1] as { body?: string }).body ?? '{}')).toEqual(
+      firstRequest,
+    );
+    expect(harness.elements.list.textContent).toContain('Session reused');
+  });
+
+  it('clears successful No repo pending card when refreshed snapshot contains matching cwd', async () => {
+    const initialSnapshot = buildSnapshot({
+      records: [buildNoRepoRecord({ cwd: `${HOME}/existing` })],
+    });
+    const harness = await setupApp([
+      initialSnapshot,
+      {
+        ok: true,
+        status: 'launched',
+        cwd: `${HOME}/scratch`,
+        launch: {
+          requested: true,
+          ok: true,
+          mode: 'tmux-detached',
+          status: 'launched',
+          message: 'Started a detached tmux Pi session.',
+        },
+      },
+      buildSnapshot({
+        records: [
+          buildNoRepoRecord({
+            runtimeId: 'rt-launched-cwd',
+            sessionName: 'scratch launched',
+            cwd: `${HOME}/scratch`,
+          }),
+        ],
+      }),
+    ]);
+
+    getRepoActionButton(getRepoGroupByLabel(harness.elements.list, 'No repo')).click();
+    await flushMicrotasks();
+
+    const form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'No repo'),
+      'worktree-form',
+    )[0]!;
+    const cwdInput = getInputByAriaLabel(form, 'Working directory');
+    cwdInput.value = '~/scratch';
+    cwdInput.dispatchEvent({ type: 'input' });
+    form.dispatchEvent({ type: 'submit' });
+    await flushMicrotasks();
+
+    expect(getPendingWorktreeCards(harness.elements.list)).toHaveLength(0);
+    expect(harness.elements.list.textContent).toContain('scratch launched');
+  });
+
+  it('clears successful No repo pending card when matching cwd regroups under a named repo', async () => {
+    const initialSnapshot = buildSnapshot({
+      records: [buildNoRepoRecord({ cwd: `${HOME}/existing` })],
+    });
+    const harness = await setupApp([
+      initialSnapshot,
+      {
+        ok: true,
+        status: 'launched',
+        cwd: `${HOME}/project`,
+        launch: {
+          requested: true,
+          ok: true,
+          mode: 'tmux-detached',
+          status: 'launched',
+          message: 'Started a detached tmux Pi session.',
+        },
+      },
+      buildSnapshot({
+        records: [
+          buildRecord({
+            runtimeId: 'rt-regrouped',
+            sessionName: 'regrouped',
+            cwd: `${HOME}/project`,
+            repoName: 'project',
+            qualifiedRepoName: 'owner/project',
+          }),
+        ],
+      }),
+    ]);
+
+    getRepoActionButton(getRepoGroupByLabel(harness.elements.list, 'No repo')).click();
+    await flushMicrotasks();
+
+    const form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'No repo'),
+      'worktree-form',
+    )[0]!;
+    const cwdInput = getInputByAriaLabel(form, 'Working directory');
+    cwdInput.value = `${HOME}/project`;
+    cwdInput.dispatchEvent({ type: 'input' });
+    form.dispatchEvent({ type: 'submit' });
+    await flushMicrotasks();
+
+    expect(getPendingWorktreeCards(harness.elements.list)).toHaveLength(0);
+    expect(getRepoHeaderTexts(harness.elements.list)).toEqual(['owner/project · 1']);
+    expandRepoGroup(harness.elements.list, 'owner/project');
+    expect(harness.elements.list.textContent).toContain('regrouped');
   });
 
   it('ships Prompt Gutter rails and one-row compact composer styling', async () => {

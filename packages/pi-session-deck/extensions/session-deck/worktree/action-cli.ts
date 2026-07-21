@@ -1,6 +1,13 @@
 #!/usr/bin/env node
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { orchestrateCreateSession } from '../session/create.js';
+import type {
+  BrowserSafeCreateSessionActionResult,
+  CreateSessionActionRequest,
+  CreateSessionActionResult,
+  CreateSessionFailureReason,
+} from '../session/types.js';
 import { normalizeLaunchAgentDirSelection } from './agent-dir.js';
 import { orchestrateCreateWorktree } from './orchestrate.js';
 import { resolveWorktreeBasePreview, resolveWorktreeLaunchContextPreview } from './preview.js';
@@ -85,6 +92,11 @@ async function main(): Promise<void> {
 
     const result = await resolveWorktreeLaunchContextPreview(request.request);
     writeJson(toBrowserSafeWorktreeLaunchContextPreviewResult(result));
+    return;
+  }
+
+  if (action.action === 'create-session') {
+    writeJson(await runCreateSessionAction(parsed));
     return;
   }
 
@@ -182,10 +194,11 @@ export function normalizeLaunchContextPreviewRequest(
   return { ok: true, request: { agentDir: agentDir.agentDir } };
 }
 
-function getRequestedAction(
-  parsed: unknown,
-):
-  | { ok: true; action: 'create-worktree' | 'preview-base-ref' | 'preview-launch-context' }
+export function getRequestedAction(parsed: unknown):
+  | {
+      ok: true;
+      action: 'create-worktree' | 'create-session' | 'preview-base-ref' | 'preview-launch-context';
+    }
   | { ok: false; message: string } {
   if (!isRecord(parsed)) {
     return { ok: false, message: 'Request body must be a JSON object.' };
@@ -197,6 +210,7 @@ function getRequestedAction(
   }
   if (
     action === 'create-worktree' ||
+    action === 'create-session' ||
     action === 'preview-base-ref' ||
     action === 'preview-launch-context'
   ) {
@@ -300,6 +314,54 @@ export function toBrowserSafeCreateWorktreeActionResult(
   throw new Error('Unhandled worktree action result status.');
 }
 
+export async function runCreateSessionAction(
+  parsed: unknown,
+): Promise<BrowserSafeCreateSessionActionResult> {
+  const result = await orchestrateCreateSession(parsed as CreateSessionActionRequest);
+  return toBrowserSafeCreateSessionActionResult(result);
+}
+
+export function toBrowserSafeCreateSessionActionResult(
+  result: CreateSessionActionResult,
+): BrowserSafeCreateSessionActionResult {
+  if (result.status === 'failed') {
+    return {
+      ...result,
+      message: toBrowserSafeCreateSessionValidationFailureMessage(result.reason),
+    };
+  }
+
+  if (result.status === 'preflight-failed') {
+    return {
+      ...result,
+      preflight: {
+        ...result.preflight,
+        message: toBrowserSafeCreateSessionPreflightFailureMessage(result.preflight.reason),
+      },
+    };
+  }
+
+  if (result.status === 'launch-failed') {
+    return {
+      ...result,
+      launch: {
+        requested: result.launch.requested,
+        ok: result.launch.ok,
+        mode: result.launch.mode,
+        status: result.launch.status,
+        reason: result.launch.reason,
+        recoverable: result.launch.recoverable,
+        message: toBrowserSafeCreateSessionLaunchFailureMessage(result.launch.reason),
+      },
+    };
+  }
+
+  return {
+    ...result,
+    launch: toBrowserSafeLaunchSuccess(result.launch),
+  };
+}
+
 export function toBrowserSafeWorktreeBasePreviewResult(
   result: WorktreeBasePreviewResult,
 ): BrowserSafeWorktreeBasePreviewResult {
@@ -338,6 +400,53 @@ function toBrowserSafePreflightFailureMessage(
       return 'New Pi session requires tmux on PATH; no worktree was created.';
     case 'pi-command-unavailable':
       return 'New Pi session requires the pi executable on PATH; no worktree was created.';
+  }
+}
+
+function toBrowserSafeCreateSessionValidationFailureMessage(
+  reason: CreateSessionFailureReason,
+): string {
+  switch (reason) {
+    case 'invalid-request':
+      return 'Create-session request is invalid.';
+    case 'invalid-cwd':
+      return 'Working directory must be absolute, ~, or start with ~/.';
+    case 'cwd-not-found':
+      return 'Working directory does not exist.';
+    case 'cwd-not-directory':
+      return 'Working directory is not a directory.';
+    case 'cwd-unavailable':
+      return 'Working directory could not be checked.';
+  }
+}
+
+function toBrowserSafeCreateSessionPreflightFailureMessage(
+  reason: Extract<CreateWorktreeLaunchFailureReason, 'tmux-unavailable' | 'pi-command-unavailable'>,
+): string {
+  switch (reason) {
+    case 'tmux-unavailable':
+      return 'New Pi session requires tmux on PATH; no session was launched.';
+    case 'pi-command-unavailable':
+      return 'New Pi session requires the pi executable on PATH; no session was launched.';
+  }
+}
+
+function toBrowserSafeCreateSessionLaunchFailureMessage(
+  reason: CreateWorktreeLaunchFailureReason,
+): string {
+  switch (reason) {
+    case 'tmux-unavailable':
+      return 'New Pi session requires tmux on PATH; no session was launched.';
+    case 'pi-command-unavailable':
+      return 'New Pi session requires the pi executable on PATH; no session was launched.';
+    case 'tmux-name-collision':
+      return 'Pi did not start because the generated tmux session name is already in use for a different cwd.';
+    case 'launch-context-mismatch':
+      return 'Existing managed tmux session cannot be verified against the requested Pi config.';
+    case 'spawn-failed':
+      return 'tmux could not start Pi.';
+    case 'presence-timeout':
+      return 'Pi did not remain running in tmux.';
   }
 }
 

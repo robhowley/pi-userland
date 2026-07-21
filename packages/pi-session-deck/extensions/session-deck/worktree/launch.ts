@@ -26,6 +26,13 @@ export interface LaunchDetachedTmuxPiOptions {
   agentDir?: CreateWorktreeLaunchAgentDir;
 }
 
+export interface DetachedTmuxPiLaunchTarget {
+  cwd: string;
+  repoName: string | null;
+}
+
+type DetachedTmuxPiLaunchCopyMode = 'worktree' | 'session';
+
 interface ResolvedLaunchDetachedTmuxPiOptions extends LaunchDetachedTmuxPiOptions {
   env: NodeJS.ProcessEnv;
   postLaunchVerifyDelayMs: number;
@@ -70,6 +77,28 @@ export async function launchDetachedTmuxPi(
   displayName: string,
   options: LaunchDetachedTmuxPiOptions = {},
 ): Promise<CreateWorktreeLaunchSuccess | CreateWorktreeLaunchFailure> {
+  return await launchDetachedTmuxPiForTarget(
+    { cwd: worktree.path, repoName: worktree.repoName },
+    displayName,
+    options,
+    'worktree',
+  );
+}
+
+export async function launchDetachedTmuxPiForCwd(
+  target: DetachedTmuxPiLaunchTarget,
+  displayName: string,
+  options: LaunchDetachedTmuxPiOptions = {},
+): Promise<CreateWorktreeLaunchSuccess | CreateWorktreeLaunchFailure> {
+  return await launchDetachedTmuxPiForTarget(target, displayName, options, 'session');
+}
+
+async function launchDetachedTmuxPiForTarget(
+  target: DetachedTmuxPiLaunchTarget,
+  displayName: string,
+  options: LaunchDetachedTmuxPiOptions,
+  copyMode: DetachedTmuxPiLaunchCopyMode,
+): Promise<CreateWorktreeLaunchSuccess | CreateWorktreeLaunchFailure> {
   const resolvedOptions = resolveLaunchOptions(options);
   const launchCommand = buildPiLauncherCommand(
     displayName,
@@ -78,23 +107,23 @@ export async function launchDetachedTmuxPi(
   );
   const deckHandoffEnvArgs = buildTmuxEnvironmentArgs(resolvedOptions.env);
   const sessionName = buildManagedTmuxSessionName({
-    repoName: worktree.repoName,
-    worktreePath: worktree.path,
+    repoName: target.repoName,
+    worktreePath: target.cwd,
     label: displayName,
   });
   const tmuxTarget = `=${sessionName}`;
   const manualAttachCommand = formatPosixCommand(['tmux', 'attach-session', '-t', tmuxTarget]);
-  const manualCommand = `cd ${quotePosixArg(worktree.path)} && ${launchCommand}`;
+  const manualCommand = `cd ${quotePosixArg(target.cwd)} && ${launchCommand}`;
 
   const preflight = await preflightDetachedTmuxPi(resolvedOptions);
   if (!preflight.ok) {
-    return prereqLaunchFailure(preflight.reason, manualCommand);
+    return prereqLaunchFailure(preflight.reason, manualCommand, copyMode);
   }
 
   const existing = await tmuxHasSession(sessionName, resolvedOptions);
   if (existing) {
     const cwd = await readTmuxSessionCwd(sessionName, resolvedOptions);
-    if (cwd !== worktree.path) {
+    if (cwd !== target.cwd) {
       return {
         requested: true,
         ok: false,
@@ -102,7 +131,7 @@ export async function launchDetachedTmuxPi(
         status: 'failed',
         reason: 'tmux-name-collision',
         recoverable: true,
-        message: `Created worktree, but tmux session ${sessionName} already exists for a different cwd.`,
+        message: nameCollisionMessage(sessionName, copyMode),
         manualCommand,
       };
     }
@@ -115,7 +144,7 @@ export async function launchDetachedTmuxPi(
         status: 'failed',
         reason: 'launch-context-mismatch',
         recoverable: true,
-        message: `Created worktree, but existing tmux session ${sessionName} cannot be verified against the requested Pi config.`,
+        message: launchContextMismatchMessage(sessionName, copyMode),
         manualCommand,
       };
     }
@@ -139,7 +168,7 @@ export async function launchDetachedTmuxPi(
     '-s',
     sessionName,
     '-c',
-    worktree.path,
+    target.cwd,
     '-n',
     safeTmuxWindowName(displayName),
     launchCommand,
@@ -152,14 +181,14 @@ export async function launchDetachedTmuxPi(
       status: 'failed',
       reason: 'spawn-failed',
       recoverable: true,
-      message: `Created worktree, but tmux could not start Pi: ${formatCommandError(launchResult)}`,
+      message: spawnFailureMessage(launchResult, copyMode),
       manualCommand,
     };
   }
 
-  const verification = await verifyLaunchedTmuxSession(sessionName, worktree.path, resolvedOptions);
+  const verification = await verifyLaunchedTmuxSession(sessionName, target.cwd, resolvedOptions);
   if (!verification.ok) {
-    return postLaunchVerificationFailure(verification.observedCwd, manualCommand);
+    return postLaunchVerificationFailure(verification.observedCwd, manualCommand, copyMode);
   }
 
   return {
@@ -286,6 +315,7 @@ function resolveLaunchOptions(
 function prereqLaunchFailure(
   reason: LaunchPrereqFailureReason,
   manualCommand: string,
+  copyMode: DetachedTmuxPiLaunchCopyMode,
 ): CreateWorktreeLaunchFailure {
   return {
     requested: true,
@@ -294,10 +324,7 @@ function prereqLaunchFailure(
     status: 'failed',
     reason,
     recoverable: true,
-    message:
-      reason === 'tmux-unavailable'
-        ? 'Created worktree, but tmux is not available on PATH.'
-        : 'Created worktree, but the pi executable is not available on PATH.',
+    message: prereqFailureMessage(reason, copyMode),
     manualCommand,
   };
 }
@@ -305,6 +332,7 @@ function prereqLaunchFailure(
 function postLaunchVerificationFailure(
   observedCwd: string | null,
   manualCommand: string,
+  copyMode: DetachedTmuxPiLaunchCopyMode,
 ): CreateWorktreeLaunchFailure {
   return {
     requested: true,
@@ -313,12 +341,63 @@ function postLaunchVerificationFailure(
     status: 'failed',
     reason: 'presence-timeout',
     recoverable: true,
-    message:
-      observedCwd === null
-        ? 'Created worktree, but Pi did not remain running in tmux.'
-        : 'Created worktree, but the launched tmux pane is not in the worktree.',
+    message: postLaunchVerificationMessage(observedCwd, copyMode),
     manualCommand,
   };
+}
+
+function prereqFailureMessage(
+  reason: LaunchPrereqFailureReason,
+  copyMode: DetachedTmuxPiLaunchCopyMode,
+): string {
+  if (copyMode === 'session') {
+    return reason === 'tmux-unavailable'
+      ? 'New Pi session requires tmux on PATH; no session was launched.'
+      : 'New Pi session requires the pi executable on PATH; no session was launched.';
+  }
+
+  return reason === 'tmux-unavailable'
+    ? 'Created worktree, but tmux is not available on PATH.'
+    : 'Created worktree, but the pi executable is not available on PATH.';
+}
+
+function nameCollisionMessage(sessionName: string, copyMode: DetachedTmuxPiLaunchCopyMode): string {
+  return copyMode === 'session'
+    ? 'Pi did not start because the generated tmux session name is already in use for a different cwd.'
+    : `Created worktree, but tmux session ${sessionName} already exists for a different cwd.`;
+}
+
+function launchContextMismatchMessage(
+  sessionName: string,
+  copyMode: DetachedTmuxPiLaunchCopyMode,
+): string {
+  return copyMode === 'session'
+    ? 'Existing managed tmux session cannot be verified against the requested Pi config.'
+    : `Created worktree, but existing tmux session ${sessionName} cannot be verified against the requested Pi config.`;
+}
+
+function spawnFailureMessage(
+  result: ExecFileResult,
+  copyMode: DetachedTmuxPiLaunchCopyMode,
+): string {
+  return copyMode === 'session'
+    ? 'tmux could not start Pi.'
+    : `Created worktree, but tmux could not start Pi: ${formatCommandError(result)}`;
+}
+
+function postLaunchVerificationMessage(
+  observedCwd: string | null,
+  copyMode: DetachedTmuxPiLaunchCopyMode,
+): string {
+  if (copyMode === 'session') {
+    return observedCwd === null
+      ? 'Pi did not remain running in tmux.'
+      : 'The launched tmux pane is not in the requested cwd.';
+  }
+
+  return observedCwd === null
+    ? 'Created worktree, but Pi did not remain running in tmux.'
+    : 'Created worktree, but the launched tmux pane is not in the worktree.';
 }
 
 function safeTmuxWindowName(displayName: string): string {
