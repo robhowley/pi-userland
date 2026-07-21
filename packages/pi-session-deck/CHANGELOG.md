@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.11.0](https://github.com/robhowley/pi-userland/compare/pi-session-deck-v0.10.0...pi-session-deck-v0.11.0) (2026-07-21)
+
+
+### Features
+
+* **pi-session-deck:** add compacting activity state ([#136](https://github.com/robhowley/pi-userland/issues/136)) ([75ebc82](https://github.com/robhowley/pi-userland/commit/75ebc8204a92623971034754e9d3cd4673b327e4))
+* **pi-session-deck:** add no repo session creation ([#139](https://github.com/robhowley/pi-userland/issues/139)) ([93a0270](https://github.com/robhowley/pi-userland/commit/93a027029aaff2b19f3634fdf9d72a56e39a72b6))
+
 ## [0.10.0](https://github.com/robhowley/pi-userland/compare/pi-session-deck-v0.9.1...pi-session-deck-v0.10.0) (2026-07-19)
 
 

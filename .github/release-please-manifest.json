@@ -1,7 +1,7 @@
 {
   "packages/pi-merge-ready": "0.12.0",
   "packages/pi-openrouter": "0.13.0",
-  "packages/pi-session-deck": "0.10.0",
+  "packages/pi-session-deck": "0.11.0",
   "packages/pi-session-hygiene": "0.2.2",
   "packages/pi-spinner-verbs": "3.4.0",
   "packages/pi-structured-return": "1.10.1",
