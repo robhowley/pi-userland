@@ -23,6 +23,31 @@ const INSTALLED_APP_PATH = join(homedir(), 'Applications', APP_BUNDLE_NAME);
 const INSTALLED_STATE_PATH = join(homedir(), '.pi/session-deck/desktop/install.json');
 const STATE_ENV = 'PI_SESSION_DECK_DESKTOP_STATE_PATH';
 
+/**
+ * @typedef {'dev' | 'bundle'} LaunchMode
+ *
+ * @typedef {{
+ *   mode: LaunchMode,
+ *   openBundle: boolean,
+ *   help: boolean,
+ * }} LaunchOptions
+ *
+ * @typedef {{ code: number }} CommandResult
+ *
+ * @typedef {{
+ *   cwd: string,
+ *   env?: NodeJS.ProcessEnv,
+ *   label: string,
+ *   allowFailure?: boolean,
+ * }} RunOptions
+ *
+ * @typedef {{ level: string, message: string }} CommandMessage
+ */
+
+/**
+ * @param {string[]} argv
+ * @returns {Promise<number>}
+ */
 async function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
   if (options.help) {
@@ -46,7 +71,12 @@ async function main(argv = process.argv.slice(2)) {
   return options.mode === 'bundle' ? bundleMode(options) : devMode(version);
 }
 
+/**
+ * @param {string[]} argv
+ * @returns {LaunchOptions}
+ */
 function parseArgs(argv) {
+  /** @type {LaunchOptions} */
   const options = { mode: 'dev', openBundle: true, help: false };
   for (const arg of argv) {
     switch (arg) {
@@ -89,6 +119,10 @@ function usage() {
   ].join('\n');
 }
 
+/**
+ * @param {string} version
+ * @returns {Promise<number>}
+ */
 async function devMode(version) {
   const statePath = await writeBranchState(version);
   const command = ['--filter', DESKTOP_FILTER, 'dev'];
@@ -109,6 +143,10 @@ async function devMode(version) {
   return result.code;
 }
 
+/**
+ * @param {LaunchOptions} options
+ * @returns {Promise<number>}
+ */
 async function bundleMode(options) {
   if (process.platform !== 'darwin') {
     console.error(`Bundle mode is only supported on macOS, not ${process.platform}.`);
@@ -159,12 +197,20 @@ async function bundleMode(options) {
   return opened.level === 'error' ? 1 : 0;
 }
 
+/**
+ * @param {string} relativePath
+ * @returns {Promise<any>}
+ */
 async function importDist(relativePath) {
   return import(
     pathToFileURL(resolve(PACKAGE_ROOT, 'dist/extensions/session-deck', relativePath)).href
   );
 }
 
+/**
+ * @param {string} version
+ * @returns {Promise<string>}
+ */
 async function writeBranchState(version) {
   const dir = join(
     tmpdir(),
@@ -222,6 +268,12 @@ async function packageVersion() {
   return packageJson.version;
 }
 
+/**
+ * @param {string} command
+ * @param {string[]} args
+ * @param {RunOptions} options
+ * @returns {Promise<CommandResult>}
+ */
 async function run(command, args, options) {
   console.log(`$ ${formatCommand(command, args)}`);
   return new Promise((resolvePromise, reject) => {
@@ -250,6 +302,11 @@ async function run(command, args, options) {
   });
 }
 
+/**
+ * @param {string} command
+ * @param {string[]} args
+ * @returns {Promise<string | null>}
+ */
 async function capture(command, args) {
   return new Promise((resolvePromise) => {
     let stdout = '';
@@ -265,6 +322,10 @@ async function capture(command, args) {
   });
 }
 
+/**
+ * @param {string} path
+ * @returns {Promise<boolean>}
+ */
 async function exists(path) {
   try {
     await access(path);
@@ -274,18 +335,36 @@ async function exists(path) {
   }
 }
 
+/**
+ * @param {string} text
+ * @returns {string}
+ */
 function hash(text) {
   return createHash('sha256').update(text).digest('hex');
 }
 
+/**
+ * @param {string} command
+ * @param {string[]} args
+ * @returns {string}
+ */
 function formatCommand(command, args) {
   return [command, ...args.map(quoteArg)].join(' ');
 }
 
+/**
+ * @param {string} arg
+ * @returns {string}
+ */
 function quoteArg(arg) {
   return /^[A-Za-z0-9_./:=@-]+$/u.test(arg) ? arg : JSON.stringify(arg);
 }
 
+/**
+ * @param {string} label
+ * @param {CommandMessage} result
+ * @returns {void}
+ */
 function printResult(label, result) {
   const text = `${label}: ${result.message}`;
   if (result.level === 'error') {
@@ -297,6 +376,10 @@ function printResult(label, result) {
   }
 }
 
+/**
+ * @param {unknown} error
+ * @returns {string}
+ */
 function message(error) {
   return error instanceof Error ? error.message : String(error);
 }
