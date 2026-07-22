@@ -7,6 +7,7 @@
   "scripts": {
     "sync:web": "node ./scripts/sync-web-assets.js",
     "dev": "pnpm run sync:web && node ./scripts/run-tauri.js dev",
+    "launch:branch": "node ./scripts/launch-branch.js",
     "build": "pnpm run sync:web && node ./scripts/run-tauri.js build --no-bundle --ci",
     "bundle:macos": "node ./scripts/run-tauri.js build --bundles app,dmg --ci --no-sign",
     "artifact:macos": "node ./scripts/build-macos-artifacts.js",
