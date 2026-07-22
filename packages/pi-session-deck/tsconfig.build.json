@@ -11,7 +11,9 @@
     "extensions/session-deck/iterm2/snapshot-cli.ts",
     "extensions/session-deck/iterm2/open-action-cli.ts",
     "extensions/session-deck/iterm2/kill-action-cli.ts",
-    "extensions/session-deck/worktree/action-cli.ts"
+    "extensions/session-deck/worktree/action-cli.ts",
+    "extensions/session-deck/desktop/install.ts",
+    "extensions/session-deck/desktop/open.ts"
   ],
   "exclude": ["__tests__"]
 }

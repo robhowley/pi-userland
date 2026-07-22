@@ -14,6 +14,7 @@ use wait_timeout::ChildExt;
 pub const DOCTOR_COMMAND: &str = "/session-deck desktop doctor";
 pub const OPEN_TERMINAL_ACTION_BRIDGE_SOCKET_ENV: &str =
     "PI_SESSION_DECK_ITERM2_BRIDGE_SOCKET_PATH";
+const DESKTOP_STATE_PATH_ENV: &str = "PI_SESSION_DECK_DESKTOP_STATE_PATH";
 const DESKTOP_INSTALL_COMMAND: &str = "/session-deck desktop install";
 const DESKTOP_STATE_SCHEMA_VERSION: u64 = 1;
 const DESKTOP_STATE_PRODUCT: &str = "session-deck-desktop";
@@ -199,6 +200,19 @@ struct RawIterm2RuntimeState {
 }
 
 pub fn default_desktop_state_path() -> Result<PathBuf, String> {
+    if let Some(raw_state_path) = std::env::var_os(DESKTOP_STATE_PATH_ENV) {
+        let state_path = PathBuf::from(raw_state_path);
+        if state_path.as_os_str().is_empty() {
+            return Err(format!("{DESKTOP_STATE_PATH_ENV} must not be empty."));
+        }
+        if !state_path.is_absolute() {
+            return Err(format!(
+                "{DESKTOP_STATE_PATH_ENV} must be an absolute path."
+            ));
+        }
+        return Ok(state_path);
+    }
+
     let home = home_dir().ok_or_else(|| String::from("Could not determine the home directory."))?;
     Ok(home.join(".pi/session-deck/desktop/install.json"))
 }
