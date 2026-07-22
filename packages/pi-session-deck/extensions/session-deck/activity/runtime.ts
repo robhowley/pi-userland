@@ -14,6 +14,7 @@ import type {
 import type { SessionManagerLike } from '../identity/types.js';
 
 const ACTIVITY_RUNTIME_STATE_KEY = '__piSessionDeckActivityRuntimeState__';
+const ACTIVITY_RUNTIME_CONTROLLER_API_VERSION = 2;
 const MAX_RECENT_TOOL_WINDOWS = 20;
 const RECENT_TOOL_WINDOW_MAX_AGE_MS = 15 * 60 * 1000;
 
@@ -112,7 +113,7 @@ export async function ensureActivityRuntimeStarted(
   state.activeClearInterval = config.clearInterval ?? globalThis.clearInterval;
 
   state.activeStartPromise = (async () => {
-    const controller: ActivityRuntimeController = {
+    const controller = {
       refreshActivity: async (source, sessionManager) =>
         runSerialized(state, async () => {
           if (sessionManager !== undefined) {
@@ -248,12 +249,8 @@ export async function ensureActivityRuntimeStarted(
             ...getRuntimeActivitySummaryFields(state, nowIso),
           });
         }),
-      recordToolExecutionUpdate: async ({ toolCallId, partialResult }) =>
+      recordToolExecutionUpdate: async ({ toolCallId }) =>
         runSerialized(state, async () => {
-          if (!isMeaningfulToolExecutionUpdate(partialResult)) {
-            return;
-          }
-
           const nowIso = getNowIso(config);
           const current = getCurrentOrIdleRecord(state, nowIso);
           const sanitizedToolCallId = normalizeToolCallId(toolCallId);
@@ -386,7 +383,10 @@ export async function ensureActivityRuntimeStarted(
         }),
       getActivity: () => state.cachedActivity,
       isRunning: () => getActivityRuntimeState().activeTimer !== null,
-    };
+    } satisfies ActivityRuntimeController;
+    Object.assign(controller, {
+      activityRuntimeApiVersion: ACTIVITY_RUNTIME_CONTROLLER_API_VERSION,
+    });
 
     if (state.activeTimer === null) {
       const setIntervalImpl = config.setInterval ?? globalThis.setInterval;
@@ -470,8 +470,11 @@ function migrateActivityRuntimeState(state: ActivityRuntimeState): void {
 }
 
 function hasCurrentActivityRuntimeControllerApi(controller: ActivityRuntimeController): boolean {
-  const candidate = controller as Partial<ActivityRuntimeController>;
+  const candidate = controller as Partial<ActivityRuntimeController> & {
+    activityRuntimeApiVersion?: number;
+  };
   return (
+    candidate.activityRuntimeApiVersion === ACTIVITY_RUNTIME_CONTROLLER_API_VERSION &&
     typeof candidate.recordToolExecutionUpdate === 'function' &&
     typeof candidate.recordCompactionStart === 'function' &&
     typeof candidate.clearCompaction === 'function'
@@ -726,91 +729,6 @@ function shouldWriteToolUpdate(state: ActivityRuntimeState, nowIso: string): boo
   return nowMs - lastWriteMs >= DEFAULT_ACTIVITY_REFRESH_INTERVAL_MS;
 }
 
-function isMeaningfulToolExecutionUpdate(partialResult: unknown): boolean {
-  if (!isObject(partialResult)) {
-    return hasMeaningfulToolUpdateValue(partialResult);
-  }
-
-  return (
-    hasMeaningfulToolUpdateContent(partialResult['content']) ||
-    hasMeaningfulToolUpdateValue(partialResult['details']) ||
-    partialResult['terminate'] === true ||
-    partialResult['completed'] === true ||
-    partialResult['complete'] === true ||
-    partialResult['done'] === true ||
-    partialResult['finished'] === true ||
-    partialResult['final'] === true ||
-    partialResult['isFinal'] === true ||
-    partialResult['progress'] === true
-  );
-}
-
-function hasMeaningfulToolUpdateContent(value: unknown): boolean {
-  if (Array.isArray(value)) {
-    return value.some(hasMeaningfulToolUpdateContentEntry);
-  }
-
-  return hasMeaningfulToolUpdateContentEntry(value);
-}
-
-function hasMeaningfulToolUpdateContentEntry(value: unknown): boolean {
-  if (typeof value === 'string') {
-    return value.trim().length > 0;
-  }
-
-  if (!isObject(value)) {
-    return false;
-  }
-
-  const type = value['type'];
-  if (type === 'text') {
-    return hasMeaningfulToolUpdateValue(value['text']);
-  }
-
-  if (type === 'image' || type === 'image_url') {
-    return (
-      hasMeaningfulToolUpdateValue(value['image']) ||
-      hasMeaningfulToolUpdateValue(value['imageUrl']) ||
-      hasMeaningfulToolUpdateValue(value['url']) ||
-      hasMeaningfulToolUpdateValue(value['data'])
-    );
-  }
-
-  return (
-    hasMeaningfulToolUpdateValue(value['text']) ||
-    hasMeaningfulToolUpdateValue(value['image']) ||
-    hasMeaningfulToolUpdateValue(value['data'])
-  );
-}
-
-function hasMeaningfulToolUpdateValue(value: unknown): boolean {
-  if (value === undefined || value === null) {
-    return false;
-  }
-
-  if (typeof value === 'string') {
-    return value.trim().length > 0;
-  }
-
-  if (typeof value === 'boolean') {
-    return value;
-  }
-
-  if (typeof value === 'number') {
-    return Number.isFinite(value);
-  }
-
-  if (Array.isArray(value)) {
-    return value.some(hasMeaningfulToolUpdateValue);
-  }
-
-  if (!isObject(value)) {
-    return false;
-  }
-
-  return Object.values(value).some(hasMeaningfulToolUpdateValue);
-}
-
 function applyCompactionRetention(
   state: ActivityRuntimeState,
   record: SessionActivityRecord,
@@ -965,10 +883,6 @@ async function writeSnapshot(
       // Fail-open on diagnostic sink errors.
     }
   }
-}
-
-function isObject(candidate: unknown): candidate is Record<string, unknown> {
-  return typeof candidate === 'object' && candidate !== null;
 }
 
 function safeCall<T>(callback: () => T, fallback: T): T {

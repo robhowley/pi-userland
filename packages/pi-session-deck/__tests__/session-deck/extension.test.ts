@@ -652,8 +652,6 @@ describe('pi-session-deck extension', () => {
     });
     expect(activityRuntime.recordToolExecutionUpdate).toHaveBeenCalledWith({
       toolCallId: 'tool-1',
-      toolName: 'read',
-      partialResult: { content: [{ type: 'text', text: 'working' }] },
     });
     expect(activityRuntime.recordToolExecutionEnd).toHaveBeenCalledWith({
       toolCallId: 'tool-1',
@@ -667,6 +665,68 @@ describe('pi-session-deck extension', () => {
       signal,
     });
     expect(activityRuntime.clearCompaction).toHaveBeenCalledWith('completed');
+  });
+
+  it('filters raw tool update payloads at ingress', async () => {
+    const activityRuntime = {
+      refreshActivity: vi.fn().mockResolvedValue(undefined),
+      recordInputSource: vi.fn().mockResolvedValue(undefined),
+      recordMessageEnd: vi.fn().mockResolvedValue(undefined),
+      recordTurnStart: vi.fn().mockResolvedValue(undefined),
+      recordToolExecutionStart: vi.fn().mockResolvedValue(undefined),
+      recordToolExecutionUpdate: vi.fn().mockResolvedValue(undefined),
+      recordToolExecutionEnd: vi.fn().mockResolvedValue(undefined),
+      recordTurnEnd: vi.fn().mockResolvedValue(undefined),
+      recordCompactionStart: vi.fn().mockResolvedValue(undefined),
+      clearCompaction: vi.fn().mockResolvedValue(undefined),
+      getActivity: vi.fn().mockReturnValue(null),
+      isRunning: vi.fn(() => true),
+    };
+    const ensureActivityRuntimeStarted = vi.fn().mockResolvedValue(activityRuntime);
+
+    setupMocks(undefined, undefined, ensureActivityRuntimeStarted);
+    const { handlers } = await installExtension();
+    const handler = handlers.get('tool_execution_update');
+
+    for (const partialResult of [
+      undefined,
+      null,
+      '',
+      '   ',
+      false,
+      [],
+      {},
+      { content: [], details: undefined },
+      { content: [{ type: 'text', text: '   ' }], details: {} },
+    ]) {
+      await handler?.({ toolCallId: 'tool-ignored', partialResult }, {});
+    }
+
+    expect(ensureActivityRuntimeStarted).not.toHaveBeenCalled();
+    expect(activityRuntime.recordToolExecutionUpdate).not.toHaveBeenCalled();
+
+    await handler?.(
+      {
+        toolCallId: 'tool-1',
+        toolName: 'read',
+        args: { path: '/tmp/secret' },
+        partialResult: { content: [{ type: 'text', text: 'working' }] },
+      },
+      {},
+    );
+    await handler?.({ toolCallId: 'tool-2', partialResult: { details: { bytes: 10 } } }, {});
+    await handler?.({ toolCallId: 'tool-3', partialResult: { progress: true } }, {});
+
+    expect(activityRuntime.recordToolExecutionUpdate).toHaveBeenCalledTimes(3);
+    expect(activityRuntime.recordToolExecutionUpdate).toHaveBeenNthCalledWith(1, {
+      toolCallId: 'tool-1',
+    });
+    expect(activityRuntime.recordToolExecutionUpdate).toHaveBeenNthCalledWith(2, {
+      toolCallId: 'tool-2',
+    });
+    expect(activityRuntime.recordToolExecutionUpdate).toHaveBeenNthCalledWith(3, {
+      toolCallId: 'tool-3',
+    });
   });
 
   it('session_deck own status is set on session_start', async () => {

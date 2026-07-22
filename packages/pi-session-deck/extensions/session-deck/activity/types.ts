@@ -136,11 +136,7 @@ export interface ActivityRuntimeController {
   recordMessageEnd: (message: ActivityMessageLike) => Promise<void>;
   recordTurnStart: () => Promise<void>;
   recordToolExecutionStart: (event: { toolCallId: string; toolName: string }) => Promise<void>;
-  recordToolExecutionUpdate: (event: {
-    toolCallId: string;
-    toolName: string;
-    partialResult?: unknown;
-  }) => Promise<void>;
+  recordToolExecutionUpdate: (event: { toolCallId: string }) => Promise<void>;
   recordToolExecutionEnd: (event: {
     toolCallId: string;
     toolName: string;

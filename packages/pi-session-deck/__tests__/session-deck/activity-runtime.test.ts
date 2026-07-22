@@ -23,7 +23,7 @@ describe('activity runtime lifecycle', () => {
     vi.useRealTimers();
   });
 
-  it('recreates cached controllers that predate tool update handling', async () => {
+  it('recreates cached controllers that predate the current tool update API', async () => {
     const legacyTimer = setInterval(() => undefined, 1_000);
     const clearIntervalSpy = vi.fn((timer: ReturnType<typeof setInterval>) => {
       clearInterval(timer);
@@ -34,6 +34,7 @@ describe('activity runtime lifecycle', () => {
       recordMessageEnd: vi.fn().mockResolvedValue(undefined),
       recordTurnStart: vi.fn().mockResolvedValue(undefined),
       recordToolExecutionStart: vi.fn().mockResolvedValue(undefined),
+      recordToolExecutionUpdate: vi.fn().mockResolvedValue(undefined),
       recordToolExecutionEnd: vi.fn().mockResolvedValue(undefined),
       recordTurnEnd: vi.fn().mockResolvedValue(undefined),
       recordCompactionStart: vi.fn().mockResolvedValue(undefined),
@@ -121,7 +122,7 @@ describe('activity runtime lifecycle', () => {
     expect(writes.at(-1)?.activityState).toBe('thinking');
   });
 
-  it('records meaningful active tool updates as progress without storing partial payloads', async () => {
+  it('records active tool updates as progress while preserving metadata', async () => {
     const writes: SessionActivityRecord[] = [];
     const controller = await ensureActivityRuntimeStarted('rt-1', {
       writeRecord: vi.fn(async (record: SessionActivityRecord) => {
@@ -149,11 +150,7 @@ describe('activity runtime lifecycle', () => {
     await controller.recordToolExecutionStart({ toolCallId: 'tool-2', toolName: 'bash' });
 
     vi.setSystemTime(new Date('2026-06-17T12:00:08.000Z'));
-    await controller.recordToolExecutionUpdate({
-      toolCallId: 'tool-1',
-      toolName: 'read',
-      partialResult: { content: [{ type: 'text', text: 'partial output to drop' }] },
-    });
+    await controller.recordToolExecutionUpdate({ toolCallId: 'tool-1' });
 
     const updated = controller.getActivity();
     expect(updated).toMatchObject({
@@ -181,11 +178,9 @@ describe('activity runtime lifecycle', () => {
       ],
     });
     expect(writes.at(-1)?.activitySource).toBe('tool_update');
-    expect(JSON.stringify(updated)).not.toContain('partial output to drop');
-    expect(JSON.stringify(writes.at(-1))).not.toContain('partialResult');
   });
 
-  it('ignores empty, unknown, and ended tool updates', async () => {
+  it('ignores unknown and ended tool updates', async () => {
     const writes: SessionActivityRecord[] = [];
     const controller = await ensureActivityRuntimeStarted('rt-1', {
       writeRecord: vi.fn(async (record: SessionActivityRecord) => {
@@ -203,16 +198,7 @@ describe('activity runtime lifecycle', () => {
     const lastEventAtAfterStart = controller.getActivity()?.lastEventAt;
 
     vi.setSystemTime(new Date('2026-06-17T12:00:05.000Z'));
-    await controller.recordToolExecutionUpdate({
-      toolCallId: 'tool-1',
-      toolName: 'bash',
-      partialResult: { content: [], details: undefined },
-    });
-    await controller.recordToolExecutionUpdate({
-      toolCallId: 'tool-unknown',
-      toolName: 'bash',
-      partialResult: { content: [{ type: 'text', text: 'ignored output' }] },
-    });
+    await controller.recordToolExecutionUpdate({ toolCallId: 'tool-unknown' });
 
     expect(writes).toHaveLength(writesAfterStart);
     expect(controller.getActivity()?.lastEventAt).toBe(lastEventAtAfterStart);
@@ -226,11 +212,7 @@ describe('activity runtime lifecycle', () => {
     const writesAfterEnd = writes.length;
 
     vi.setSystemTime(new Date('2026-06-17T12:00:08.000Z'));
-    await controller.recordToolExecutionUpdate({
-      toolCallId: 'tool-1',
-      toolName: 'bash',
-      partialResult: { content: [{ type: 'text', text: 'late output' }] },
-    });
+    await controller.recordToolExecutionUpdate({ toolCallId: 'tool-1' });
 
     expect(writes).toHaveLength(writesAfterEnd);
     expect(controller.getActivity()).toMatchObject({
@@ -256,18 +238,10 @@ describe('activity runtime lifecycle', () => {
     await controller.recordToolExecutionStart({ toolCallId: 'tool-1', toolName: 'bash' });
 
     vi.setSystemTime(new Date('2026-06-17T12:00:01.000Z'));
-    await controller.recordToolExecutionUpdate({
-      toolCallId: 'tool-1',
-      toolName: 'bash',
-      partialResult: { content: [{ type: 'text', text: 'first' }] },
-    });
+    await controller.recordToolExecutionUpdate({ toolCallId: 'tool-1' });
 
     vi.setSystemTime(new Date('2026-06-17T12:00:02.000Z'));
-    await controller.recordToolExecutionUpdate({
-      toolCallId: 'tool-1',
-      toolName: 'bash',
-      partialResult: { content: [{ type: 'text', text: 'second' }] },
-    });
+    await controller.recordToolExecutionUpdate({ toolCallId: 'tool-1' });
 
     expect(writes.filter((record) => record.activitySource === 'tool_update')).toHaveLength(1);
     expect(writes.at(-1)?.lastEventAt).toBe('2026-06-17T12:00:01.000Z');
@@ -279,11 +253,7 @@ describe('activity runtime lifecycle', () => {
     vi.setSystemTime(
       new Date(Date.parse('2026-06-17T12:00:02.000Z') + DEFAULT_ACTIVITY_REFRESH_INTERVAL_MS),
     );
-    await controller.recordToolExecutionUpdate({
-      toolCallId: 'tool-1',
-      toolName: 'bash',
-      partialResult: { content: [{ type: 'text', text: 'third' }] },
-    });
+    await controller.recordToolExecutionUpdate({ toolCallId: 'tool-1' });
 
     expect(writes.filter((record) => record.activitySource === 'tool_update')).toHaveLength(2);
     expect(writes.at(-1)?.lastEventAt).toBe('2026-06-17T12:00:32.000Z');
