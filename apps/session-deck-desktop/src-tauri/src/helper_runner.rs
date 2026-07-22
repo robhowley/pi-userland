@@ -303,11 +303,9 @@ fn run_helper(
     };
 
     if let Some(stdin_payload) = helper_spec.stdin_payload {
-        if let Err(error) = write_helper_stdin(
-            &mut child,
-            &stdin_payload,
-            helper_spec.public_error_message,
-        ) {
+        if let Err(error) =
+            write_helper_stdin(&mut child, &stdin_payload, helper_spec.public_error_message)
+        {
             terminate_child(&mut child);
             return Err(error);
         }
