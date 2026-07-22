@@ -132,6 +132,20 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   });
 
   on(
+    'tool_execution_update',
+    async (event: { toolCallId?: unknown; toolName?: unknown; partialResult?: unknown }) => {
+      const toolCallId = typeof event.toolCallId === 'string' ? event.toolCallId : '';
+      const toolName = typeof event.toolName === 'string' ? event.toolName : 'tool';
+      const activityRuntime = await ensureActivityRuntime();
+      await activityRuntime.recordToolExecutionUpdate({
+        toolCallId,
+        toolName,
+        partialResult: event.partialResult,
+      });
+    },
+  );
+
+  on(
     'tool_execution_end',
     async (event: { toolCallId?: unknown; toolName?: unknown; isError?: unknown }) => {
       const toolCallId = typeof event.toolCallId === 'string' ? event.toolCallId : '';

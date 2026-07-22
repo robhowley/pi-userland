@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { DEFAULT_ACTIVITY_REFRESH_INTERVAL_MS } from '../../extensions/session-deck/activity/constants.js';
 import {
   ensureActivityRuntimeStarted,
   getActivityRuntimeDiagnostics,
@@ -22,7 +23,7 @@ describe('activity runtime lifecycle', () => {
     vi.useRealTimers();
   });
 
-  it('recreates cached controllers that predate compaction methods', async () => {
+  it('recreates cached controllers that predate tool update handling', async () => {
     const legacyTimer = setInterval(() => undefined, 1_000);
     const clearIntervalSpy = vi.fn((timer: ReturnType<typeof setInterval>) => {
       clearInterval(timer);
@@ -35,6 +36,8 @@ describe('activity runtime lifecycle', () => {
       recordToolExecutionStart: vi.fn().mockResolvedValue(undefined),
       recordToolExecutionEnd: vi.fn().mockResolvedValue(undefined),
       recordTurnEnd: vi.fn().mockResolvedValue(undefined),
+      recordCompactionStart: vi.fn().mockResolvedValue(undefined),
+      clearCompaction: vi.fn().mockResolvedValue(undefined),
       getActivity: vi.fn().mockReturnValue(null),
       isRunning: vi.fn(() => true),
     };
@@ -116,6 +119,174 @@ describe('activity runtime lifecycle', () => {
     expect(controller.getActivity()?.currentToolName).toBeNull();
     expect(controller.getActivity()?.activityState).toBe('thinking');
     expect(writes.at(-1)?.activityState).toBe('thinking');
+  });
+
+  it('records meaningful active tool updates as progress without storing partial payloads', async () => {
+    const writes: SessionActivityRecord[] = [];
+    const controller = await ensureActivityRuntimeStarted('rt-1', {
+      writeRecord: vi.fn(async (record: SessionActivityRecord) => {
+        writes.push(record);
+      }),
+    });
+
+    await controller.refreshActivity('startup', {
+      getSessionId: () => 'session-abc',
+      getSessionFile: () => '/tmp/session-abc.json',
+    });
+    await controller.recordMessageEnd({
+      role: 'assistant',
+      stopReason: 'error',
+      errorMessage: 'previous error',
+    });
+
+    vi.setSystemTime(new Date('2026-06-17T12:00:01.000Z'));
+    await controller.recordTurnStart();
+
+    vi.setSystemTime(new Date('2026-06-17T12:00:05.000Z'));
+    await controller.recordToolExecutionStart({ toolCallId: 'tool-1', toolName: 'read' });
+
+    vi.setSystemTime(new Date('2026-06-17T12:00:07.000Z'));
+    await controller.recordToolExecutionStart({ toolCallId: 'tool-2', toolName: 'bash' });
+
+    vi.setSystemTime(new Date('2026-06-17T12:00:08.000Z'));
+    await controller.recordToolExecutionUpdate({
+      toolCallId: 'tool-1',
+      toolName: 'read',
+      partialResult: { content: [{ type: 'text', text: 'partial output to drop' }] },
+    });
+
+    const updated = controller.getActivity();
+    expect(updated).toMatchObject({
+      activityState: 'tool-running',
+      idle: false,
+      busy: true,
+      currentTurnStartedAt: '2026-06-17T12:00:01.000Z',
+      currentToolName: 'bash',
+      lastToolStartedAt: '2026-06-17T12:00:07.000Z',
+      lastEventAt: '2026-06-17T12:00:08.000Z',
+      lastError: 'previous error',
+      activityUpdatedAt: '2026-06-17T12:00:08.000Z',
+      activitySource: 'tool_update',
+      recentToolWindows: [
+        {
+          toolCallId: 'tool-1',
+          toolName: 'read',
+          startedAt: '2026-06-17T12:00:05.000Z',
+        },
+        {
+          toolCallId: 'tool-2',
+          toolName: 'bash',
+          startedAt: '2026-06-17T12:00:07.000Z',
+        },
+      ],
+    });
+    expect(writes.at(-1)?.activitySource).toBe('tool_update');
+    expect(JSON.stringify(updated)).not.toContain('partial output to drop');
+    expect(JSON.stringify(writes.at(-1))).not.toContain('partialResult');
+  });
+
+  it('ignores empty, unknown, and ended tool updates', async () => {
+    const writes: SessionActivityRecord[] = [];
+    const controller = await ensureActivityRuntimeStarted('rt-1', {
+      writeRecord: vi.fn(async (record: SessionActivityRecord) => {
+        writes.push(record);
+      }),
+    });
+
+    await controller.refreshActivity('startup', {
+      getSessionId: () => 'session-abc',
+      getSessionFile: () => '/tmp/session-abc.json',
+    });
+    await controller.recordTurnStart();
+    await controller.recordToolExecutionStart({ toolCallId: 'tool-1', toolName: 'bash' });
+    const writesAfterStart = writes.length;
+    const lastEventAtAfterStart = controller.getActivity()?.lastEventAt;
+
+    vi.setSystemTime(new Date('2026-06-17T12:00:05.000Z'));
+    await controller.recordToolExecutionUpdate({
+      toolCallId: 'tool-1',
+      toolName: 'bash',
+      partialResult: { content: [], details: undefined },
+    });
+    await controller.recordToolExecutionUpdate({
+      toolCallId: 'tool-unknown',
+      toolName: 'bash',
+      partialResult: { content: [{ type: 'text', text: 'ignored output' }] },
+    });
+
+    expect(writes).toHaveLength(writesAfterStart);
+    expect(controller.getActivity()?.lastEventAt).toBe(lastEventAtAfterStart);
+
+    vi.setSystemTime(new Date('2026-06-17T12:00:07.000Z'));
+    await controller.recordToolExecutionEnd({
+      toolCallId: 'tool-1',
+      toolName: 'bash',
+      isError: false,
+    });
+    const writesAfterEnd = writes.length;
+
+    vi.setSystemTime(new Date('2026-06-17T12:00:08.000Z'));
+    await controller.recordToolExecutionUpdate({
+      toolCallId: 'tool-1',
+      toolName: 'bash',
+      partialResult: { content: [{ type: 'text', text: 'late output' }] },
+    });
+
+    expect(writes).toHaveLength(writesAfterEnd);
+    expect(controller.getActivity()).toMatchObject({
+      activitySource: 'tool_end',
+      lastEventAt: '2026-06-17T12:00:07.000Z',
+      currentToolName: null,
+    });
+  });
+
+  it('coalesces frequent tool update writes to the activity refresh interval', async () => {
+    const writes: SessionActivityRecord[] = [];
+    const controller = await ensureActivityRuntimeStarted('rt-1', {
+      writeRecord: vi.fn(async (record: SessionActivityRecord) => {
+        writes.push(record);
+      }),
+    });
+
+    await controller.refreshActivity('startup', {
+      getSessionId: () => 'session-abc',
+      getSessionFile: () => '/tmp/session-abc.json',
+    });
+    await controller.recordTurnStart();
+    await controller.recordToolExecutionStart({ toolCallId: 'tool-1', toolName: 'bash' });
+
+    vi.setSystemTime(new Date('2026-06-17T12:00:01.000Z'));
+    await controller.recordToolExecutionUpdate({
+      toolCallId: 'tool-1',
+      toolName: 'bash',
+      partialResult: { content: [{ type: 'text', text: 'first' }] },
+    });
+
+    vi.setSystemTime(new Date('2026-06-17T12:00:02.000Z'));
+    await controller.recordToolExecutionUpdate({
+      toolCallId: 'tool-1',
+      toolName: 'bash',
+      partialResult: { content: [{ type: 'text', text: 'second' }] },
+    });
+
+    expect(writes.filter((record) => record.activitySource === 'tool_update')).toHaveLength(1);
+    expect(writes.at(-1)?.lastEventAt).toBe('2026-06-17T12:00:01.000Z');
+    expect(controller.getActivity()).toMatchObject({
+      activitySource: 'tool_update',
+      lastEventAt: '2026-06-17T12:00:02.000Z',
+    });
+
+    vi.setSystemTime(
+      new Date(Date.parse('2026-06-17T12:00:02.000Z') + DEFAULT_ACTIVITY_REFRESH_INTERVAL_MS),
+    );
+    await controller.recordToolExecutionUpdate({
+      toolCallId: 'tool-1',
+      toolName: 'bash',
+      partialResult: { content: [{ type: 'text', text: 'third' }] },
+    });
+
+    expect(writes.filter((record) => record.activitySource === 'tool_update')).toHaveLength(2);
+    expect(writes.at(-1)?.lastEventAt).toBe('2026-06-17T12:00:32.000Z');
   });
 
   it('records input summaries and a bounded sanitized tool-window ring', async () => {

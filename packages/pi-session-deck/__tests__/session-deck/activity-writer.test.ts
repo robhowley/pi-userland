@@ -32,6 +32,24 @@ describe('activity writer', () => {
     expect(parsed.activitySource).toBe('tool_start');
   });
 
+  it('serializes tool_update activity sources', async () => {
+    const { serializeActivityRecord } =
+      await import('../../extensions/session-deck/activity/writer.js');
+
+    const parsed = JSON.parse(
+      serializeActivityRecord(
+        buildRecord({
+          lastEventAt: '2026-06-17T12:00:52.000Z',
+          activityUpdatedAt: '2026-06-17T12:00:52.000Z',
+          activitySource: 'tool_update',
+        }),
+      ),
+    ) as SessionActivityRecord;
+
+    expect(parsed.activitySource).toBe('tool_update');
+    expect(JSON.stringify(parsed)).not.toContain('partialResult');
+  });
+
   it('serializes compaction metadata without special transport fields', async () => {
     const { serializeActivityRecord } =
       await import('../../extensions/session-deck/activity/writer.js');

@@ -47,6 +47,7 @@ interface ActivityRuntimeState {
   activeToolCalls: Map<string, ActiveToolCall>;
   inputSummary: ActivityInputSummary;
   recentToolWindows: ActivityToolWindow[];
+  lastToolUpdateWrittenAtMs: number | null;
   hasActiveTurnError: boolean;
   runtimeDiagnostics: ActivityDiagnostic[];
   pendingMutation: Promise<void>;
@@ -78,6 +79,7 @@ function getActivityRuntimeState(): ActivityRuntimeState {
     activeToolCalls: new Map(),
     inputSummary: {},
     recentToolWindows: [],
+    lastToolUpdateWrittenAtMs: null,
     hasActiveTurnError: false,
     runtimeDiagnostics: [],
     pendingMutation: Promise.resolve(),
@@ -123,6 +125,7 @@ export async function ensureActivityRuntimeStarted(
           state.activeToolCalls.clear();
           state.inputSummary = {};
           state.recentToolWindows = [];
+          state.lastToolUpdateWrittenAtMs = null;
           state.hasActiveTurnError = false;
 
           await writeSnapshot(
@@ -245,6 +248,40 @@ export async function ensureActivityRuntimeStarted(
             ...getRuntimeActivitySummaryFields(state, nowIso),
           });
         }),
+      recordToolExecutionUpdate: async ({ toolCallId, partialResult }) =>
+        runSerialized(state, async () => {
+          if (!isMeaningfulToolExecutionUpdate(partialResult)) {
+            return;
+          }
+
+          const nowIso = getNowIso(config);
+          const current = getCurrentOrIdleRecord(state, nowIso);
+          const sanitizedToolCallId = normalizeToolCallId(toolCallId);
+          if (!state.activeToolCalls.has(sanitizedToolCallId)) {
+            return;
+          }
+
+          const nextRecord: SessionActivityRecord = {
+            ...current,
+            activityState: 'tool-running',
+            idle: false,
+            busy: true,
+            currentTurnStartedAt: current.currentTurnStartedAt ?? nowIso,
+            currentToolName: getMostRecentToolName(state.activeToolCalls),
+            lastEventAt: nowIso,
+            activityUpdatedAt: nowIso,
+            activitySource: 'tool_update',
+            ...getRuntimeActivitySummaryFields(state, nowIso),
+          };
+
+          if (!shouldWriteToolUpdate(state, nowIso)) {
+            cacheSnapshot(state, nextRecord);
+            return;
+          }
+
+          await writeSnapshot(state, config, nextRecord);
+          state.lastToolUpdateWrittenAtMs = parseTimestamp(nowIso);
+        }),
       recordToolExecutionEnd: async ({ toolCallId, toolName, isError }) =>
         runSerialized(state, async () => {
           const nowIso = getNowIso(config);
@@ -252,6 +289,9 @@ export async function ensureActivityRuntimeStarted(
           const sanitizedToolCallId = normalizeToolCallId(toolCallId);
           const activeToolCall = state.activeToolCalls.get(sanitizedToolCallId);
           state.activeToolCalls.delete(sanitizedToolCallId);
+          if (state.activeToolCalls.size === 0) {
+            state.lastToolUpdateWrittenAtMs = null;
+          }
           state.recentToolWindows = upsertToolWindow(
             state.recentToolWindows,
             {
@@ -287,6 +327,7 @@ export async function ensureActivityRuntimeStarted(
         runSerialized(state, async () => {
           const nowIso = getNowIso(config);
           state.activeToolCalls.clear();
+          state.lastToolUpdateWrittenAtMs = null;
 
           const current = getCurrentOrIdleRecord(state, nowIso);
           await writeSnapshot(state, config, {
@@ -363,6 +404,7 @@ export async function ensureActivityRuntimeStarted(
             state.activeToolCalls.clear();
             state.inputSummary = {};
             state.recentToolWindows = [];
+            state.lastToolUpdateWrittenAtMs = null;
             state.hasActiveTurnError = false;
             await writeSnapshot(
               state,
@@ -407,6 +449,7 @@ export async function stopActivityRuntime(): Promise<void> {
   state.activeToolCalls.clear();
   state.inputSummary = {};
   state.recentToolWindows = [];
+  state.lastToolUpdateWrittenAtMs = null;
   state.hasActiveTurnError = false;
   state.runtimeDiagnostics = [];
   resetCompactionLifecycle(state);
@@ -421,6 +464,7 @@ export async function resetActivityRuntimeForTests(): Promise<void> {
 
 function migrateActivityRuntimeState(state: ActivityRuntimeState): void {
   state.pendingMutation ??= Promise.resolve();
+  state.lastToolUpdateWrittenAtMs ??= null;
   state.compactionToken ??= 0;
   state.compactionAbortCleanup ??= null;
 }
@@ -428,6 +472,7 @@ function migrateActivityRuntimeState(state: ActivityRuntimeState): void {
 function hasCurrentActivityRuntimeControllerApi(controller: ActivityRuntimeController): boolean {
   const candidate = controller as Partial<ActivityRuntimeController>;
   return (
+    typeof candidate.recordToolExecutionUpdate === 'function' &&
     typeof candidate.recordCompactionStart === 'function' &&
     typeof candidate.clearCompaction === 'function'
   );
@@ -566,6 +611,7 @@ function getCurrentOrIdleRecord(
   state.activeToolCalls.clear();
   state.inputSummary = {};
   state.recentToolWindows = [];
+  state.lastToolUpdateWrittenAtMs = null;
   state.hasActiveTurnError = false;
   return createIdleActivityRecord(runtimeId, sessionId, nowIso, 'new');
 }
@@ -668,6 +714,101 @@ function copyToolWindow(window: ActivityToolWindow): ActivityToolWindow {
 
 function normalizeToolCallId(toolCallId: string): string {
   return toolCallId.length > 0 ? toolCallId : 'unknown-tool-call';
+}
+
+function shouldWriteToolUpdate(state: ActivityRuntimeState, nowIso: string): boolean {
+  const nowMs = parseTimestamp(nowIso);
+  const lastWriteMs = state.lastToolUpdateWrittenAtMs;
+  if (nowMs === null || lastWriteMs === null || nowMs < lastWriteMs) {
+    return true;
+  }
+
+  return nowMs - lastWriteMs >= DEFAULT_ACTIVITY_REFRESH_INTERVAL_MS;
+}
+
+function isMeaningfulToolExecutionUpdate(partialResult: unknown): boolean {
+  if (!isObject(partialResult)) {
+    return hasMeaningfulToolUpdateValue(partialResult);
+  }
+
+  return (
+    hasMeaningfulToolUpdateContent(partialResult['content']) ||
+    hasMeaningfulToolUpdateValue(partialResult['details']) ||
+    partialResult['terminate'] === true ||
+    partialResult['completed'] === true ||
+    partialResult['complete'] === true ||
+    partialResult['done'] === true ||
+    partialResult['finished'] === true ||
+    partialResult['final'] === true ||
+    partialResult['isFinal'] === true ||
+    partialResult['progress'] === true
+  );
+}
+
+function hasMeaningfulToolUpdateContent(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some(hasMeaningfulToolUpdateContentEntry);
+  }
+
+  return hasMeaningfulToolUpdateContentEntry(value);
+}
+
+function hasMeaningfulToolUpdateContentEntry(value: unknown): boolean {
+  if (typeof value === 'string') {
+    return value.trim().length > 0;
+  }
+
+  if (!isObject(value)) {
+    return false;
+  }
+
+  const type = value['type'];
+  if (type === 'text') {
+    return hasMeaningfulToolUpdateValue(value['text']);
+  }
+
+  if (type === 'image' || type === 'image_url') {
+    return (
+      hasMeaningfulToolUpdateValue(value['image']) ||
+      hasMeaningfulToolUpdateValue(value['imageUrl']) ||
+      hasMeaningfulToolUpdateValue(value['url']) ||
+      hasMeaningfulToolUpdateValue(value['data'])
+    );
+  }
+
+  return (
+    hasMeaningfulToolUpdateValue(value['text']) ||
+    hasMeaningfulToolUpdateValue(value['image']) ||
+    hasMeaningfulToolUpdateValue(value['data'])
+  );
+}
+
+function hasMeaningfulToolUpdateValue(value: unknown): boolean {
+  if (value === undefined || value === null) {
+    return false;
+  }
+
+  if (typeof value === 'string') {
+    return value.trim().length > 0;
+  }
+
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  if (typeof value === 'number') {
+    return Number.isFinite(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.some(hasMeaningfulToolUpdateValue);
+  }
+
+  if (!isObject(value)) {
+    return false;
+  }
+
+  return Object.values(value).some(hasMeaningfulToolUpdateValue);
 }
 
 function applyCompactionRetention(
@@ -790,13 +931,21 @@ async function runSerialized<T>(
   return run;
 }
 
+function cacheSnapshot(
+  state: ActivityRuntimeState,
+  record: SessionActivityRecord,
+): SessionActivityRecord {
+  const recordToWrite = applyCompactionRetention(state, record);
+  state.cachedActivity = recordToWrite;
+  return recordToWrite;
+}
+
 async function writeSnapshot(
   state: ActivityRuntimeState,
   config: ActivityRuntimeConfig,
   record: SessionActivityRecord,
 ): Promise<void> {
-  const recordToWrite = applyCompactionRetention(state, record);
-  state.cachedActivity = recordToWrite;
+  const recordToWrite = cacheSnapshot(state, record);
 
   try {
     await (config.writeRecord ?? writeActivityRecord)(recordToWrite, {
@@ -816,6 +965,10 @@ async function writeSnapshot(
       // Fail-open on diagnostic sink errors.
     }
   }
+}
+
+function isObject(candidate: unknown): candidate is Record<string, unknown> {
+  return typeof candidate === 'object' && candidate !== null;
 }
 
 function safeCall<T>(callback: () => T, fallback: T): T {

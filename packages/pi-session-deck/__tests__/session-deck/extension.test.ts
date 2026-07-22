@@ -134,6 +134,7 @@ function setupMocks(
       recordMessageEnd: vi.fn().mockResolvedValue(undefined),
       recordTurnStart: vi.fn().mockResolvedValue(undefined),
       recordToolExecutionStart: vi.fn().mockResolvedValue(undefined),
+      recordToolExecutionUpdate: vi.fn().mockResolvedValue(undefined),
       recordToolExecutionEnd: vi.fn().mockResolvedValue(undefined),
       recordTurnEnd: vi.fn().mockResolvedValue(undefined),
       recordCompactionStart: vi.fn().mockResolvedValue(undefined),
@@ -247,6 +248,7 @@ describe('pi-session-deck extension', () => {
       'message_end',
       'turn_start',
       'tool_execution_start',
+      'tool_execution_update',
       'tool_execution_end',
       'turn_end',
       'session_before_compact',
@@ -538,6 +540,7 @@ describe('pi-session-deck extension', () => {
       recordMessageEnd: vi.fn().mockResolvedValue(undefined),
       recordTurnStart: vi.fn().mockResolvedValue(undefined),
       recordToolExecutionStart: vi.fn().mockResolvedValue(undefined),
+      recordToolExecutionUpdate: vi.fn().mockResolvedValue(undefined),
       recordToolExecutionEnd: vi.fn().mockResolvedValue(undefined),
       recordTurnEnd: vi.fn().mockResolvedValue(undefined),
       recordCompactionStart: vi.fn().mockResolvedValue(undefined),
@@ -594,6 +597,7 @@ describe('pi-session-deck extension', () => {
       recordMessageEnd: vi.fn().mockResolvedValue(undefined),
       recordTurnStart: vi.fn().mockResolvedValue(undefined),
       recordToolExecutionStart: vi.fn().mockResolvedValue(undefined),
+      recordToolExecutionUpdate: vi.fn().mockResolvedValue(undefined),
       recordToolExecutionEnd: vi.fn().mockResolvedValue(undefined),
       recordTurnEnd: vi.fn().mockResolvedValue(undefined),
       recordCompactionStart: vi.fn().mockResolvedValue(undefined),
@@ -613,6 +617,15 @@ describe('pi-session-deck extension', () => {
     );
     await handlers.get('turn_start')?.({}, {});
     await handlers.get('tool_execution_start')?.({ toolCallId: 'tool-1', toolName: 'read' }, {});
+    await handlers.get('tool_execution_update')?.(
+      {
+        toolCallId: 'tool-1',
+        toolName: 'read',
+        args: { path: '/tmp/secret' },
+        partialResult: { content: [{ type: 'text', text: 'working' }] },
+      },
+      {},
+    );
     await handlers.get('tool_execution_end')?.(
       { toolCallId: 'tool-1', toolName: 'read', isError: true },
       {},
@@ -636,6 +649,11 @@ describe('pi-session-deck extension', () => {
     expect(activityRuntime.recordToolExecutionStart).toHaveBeenCalledWith({
       toolCallId: 'tool-1',
       toolName: 'read',
+    });
+    expect(activityRuntime.recordToolExecutionUpdate).toHaveBeenCalledWith({
+      toolCallId: 'tool-1',
+      toolName: 'read',
+      partialResult: { content: [{ type: 'text', text: 'working' }] },
     });
     expect(activityRuntime.recordToolExecutionEnd).toHaveBeenCalledWith({
       toolCallId: 'tool-1',

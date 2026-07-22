@@ -280,6 +280,7 @@ function normalizeActivitySource(
     case 'message_end':
     case 'turn_start':
     case 'tool_start':
+    case 'tool_update':
     case 'tool_end':
     case 'turn_end':
     case 'assistant_error':
