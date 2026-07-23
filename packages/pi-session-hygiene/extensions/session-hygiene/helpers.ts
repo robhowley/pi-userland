@@ -136,7 +136,7 @@ export function formatCacheRate(inputTokens: number, cacheReadTokens: number): s
   if (total === 0) return null;
 
   const rate = Math.round((cacheReadTokens / total) * 100);
-  return `${rate}% cache`;
+  return `cache ${rate}%`;
 }
 
 export function updateStatusIndicator(
@@ -145,14 +145,9 @@ export function updateStatusIndicator(
   cacheStats: Pick<SessionState, 'inputTokens' | 'cacheReadTokens'>,
 ) {
   const emoji = health === 'green' ? '🟢' : health === 'yellow' ? '🟡' : '🔴';
-  const label =
-    health === 'green'
-      ? 'session healthy'
-      : health === 'yellow'
-        ? 'session growing'
-        : 'session critical';
-  const cacheSuffix = formatCacheRate(cacheStats.inputTokens, cacheStats.cacheReadTokens);
-  const status = cacheSuffix ? `${emoji} ${label} · ${cacheSuffix}` : `${emoji} ${label}`;
+  const label = health === 'green' ? 'ctx ok' : health === 'yellow' ? 'ctx watch' : 'ctx compact';
+  const cacheStatus = formatCacheRate(cacheStats.inputTokens, cacheStats.cacheReadTokens);
 
-  ctx.ui.setStatus('session-hygiene', status);
+  ctx.ui.setStatus('session-hygiene', `${emoji} ${label}`);
+  ctx.ui.setStatus('session-hygiene-cache', cacheStatus ?? undefined);
 }

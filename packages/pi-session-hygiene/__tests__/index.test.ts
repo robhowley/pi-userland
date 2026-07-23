@@ -76,6 +76,13 @@ function createCtx(
   } as any;
 }
 
+function lastStatusCall(ctx: ExtensionContext, statusKey = 'session-hygiene') {
+  return vi
+    .mocked(ctx.ui.setStatus)
+    .mock.calls.filter(([key]) => key === statusKey)
+    .at(-1);
+}
+
 function createMockAPI(): ExtensionAPI {
   const eventHandlers = new Map<string, Function[]>();
 
@@ -162,11 +169,11 @@ describe('session-hygiene', () => {
 
     it('formats cache hit rate', () => {
       expect(formatCacheRate(0, 0)).toBeNull();
-      expect(formatCacheRate(100, 0)).toBe('0% cache');
-      expect(formatCacheRate(200, 800)).toBe('80% cache');
+      expect(formatCacheRate(100, 0)).toBe('cache 0%');
+      expect(formatCacheRate(200, 800)).toBe('cache 80%');
     });
 
-    it('updates the status indicator for all health levels', () => {
+    it('updates the context and cache status chips for all health levels', () => {
       const ctx = createCtx();
 
       updateStatusIndicator('green', ctx, { inputTokens: 0, cacheReadTokens: 0 });
@@ -174,9 +181,12 @@ describe('session-hygiene', () => {
       updateStatusIndicator('red', ctx, { inputTokens: 100, cacheReadTokens: 0 });
 
       expect(vi.mocked(ctx.ui.setStatus).mock.calls).toEqual([
-        ['session-hygiene', '🟢 session healthy'],
-        ['session-hygiene', '🟡 session growing · 80% cache'],
-        ['session-hygiene', '🔴 session critical · 0% cache'],
+        ['session-hygiene', '🟢 ctx ok'],
+        ['session-hygiene-cache', undefined],
+        ['session-hygiene', '🟡 ctx watch'],
+        ['session-hygiene-cache', 'cache 80%'],
+        ['session-hygiene', '🔴 ctx compact'],
+        ['session-hygiene-cache', 'cache 0%'],
       ]);
     });
 
@@ -281,7 +291,7 @@ describe('session-hygiene', () => {
 
       await sessionStart(ctx);
 
-      expect(ctx.ui.setStatus).toHaveBeenCalledWith('session-hygiene', '🟡 session growing');
+      expect(ctx.ui.setStatus).toHaveBeenCalledWith('session-hygiene', '🟡 ctx watch');
     });
 
     it('handles missing context usage', async () => {
@@ -291,7 +301,7 @@ describe('session-hygiene', () => {
 
       await sessionStart(ctx);
 
-      expect(ctx.ui.setStatus).toHaveBeenCalledWith('session-hygiene', '🟢 session healthy');
+      expect(ctx.ui.setStatus).toHaveBeenCalledWith('session-hygiene', '🟢 ctx ok');
     });
   });
 
@@ -301,9 +311,10 @@ describe('session-hygiene', () => {
 
       await turnEnd(turnEndEvent(6.0, { input: 200, cacheRead: 800 }), ctx);
 
-      expect(vi.mocked(ctx.ui.setStatus).mock.calls.at(-1)).toEqual([
-        'session-hygiene',
-        '🟡 session growing · 80% cache',
+      expect(lastStatusCall(ctx)).toEqual(['session-hygiene', '🟡 ctx watch']);
+      expect(lastStatusCall(ctx, 'session-hygiene-cache')).toEqual([
+        'session-hygiene-cache',
+        'cache 80%',
       ]);
       expect(ctx.ui.confirm).not.toHaveBeenCalled();
       expect(ctx.compact).not.toHaveBeenCalled();
@@ -315,9 +326,10 @@ describe('session-hygiene', () => {
       await turnEnd(turnEndEvent(0.1, { input: 100, cacheRead: 0 }), ctx);
       await turnEnd(turnEndEvent(0.1, { input: 0, cacheRead: 900 }), ctx);
 
-      expect(vi.mocked(ctx.ui.setStatus).mock.calls.at(-1)).toEqual([
-        'session-hygiene',
-        '🟢 session healthy · 90% cache',
+      expect(lastStatusCall(ctx)).toEqual(['session-hygiene', '🟢 ctx ok']);
+      expect(lastStatusCall(ctx, 'session-hygiene-cache')).toEqual([
+        'session-hygiene-cache',
+        'cache 90%',
       ]);
     });
 
@@ -329,9 +341,10 @@ describe('session-hygiene', () => {
       await turnEnd({ message: null }, ctx);
       await turnEnd({ message: undefined }, ctx);
 
-      expect(vi.mocked(ctx.ui.setStatus).mock.calls.at(-1)).toEqual([
-        'session-hygiene',
-        '🟢 session healthy',
+      expect(lastStatusCall(ctx)).toEqual(['session-hygiene', '🟢 ctx ok']);
+      expect(lastStatusCall(ctx, 'session-hygiene-cache')).toEqual([
+        'session-hygiene-cache',
+        undefined,
       ]);
       expect(ctx.ui.confirm).not.toHaveBeenCalled();
     });
@@ -369,10 +382,7 @@ describe('session-hygiene', () => {
         expect.stringContaining('Configuration saved'),
         'info',
       );
-      expect(vi.mocked(ctx.ui.setStatus).mock.calls.at(-1)).toEqual([
-        'session-hygiene',
-        '🟢 session healthy',
-      ]);
+      expect(lastStatusCall(ctx)).toEqual(['session-hygiene', '🟢 ctx ok']);
     });
 
     it('saves valid custom thresholds', async () => {
@@ -475,10 +485,7 @@ describe('session-hygiene', () => {
         expect.stringContaining('Applied in this session but could not save to disk'),
         'warning',
       );
-      expect(vi.mocked(ctx.ui.setStatus).mock.calls.at(-1)).toEqual([
-        'session-hygiene',
-        '🟡 session growing',
-      ]);
+      expect(lastStatusCall(ctx)).toEqual(['session-hygiene', '🟡 ctx watch']);
     });
   });
 
@@ -489,15 +496,18 @@ describe('session-hygiene', () => {
 
       await ext.sessionStart(ctx);
       await ext.turnEnd(turnEndEvent(0.5, { input: 200, cacheRead: 800 }), ctx);
-      expect(vi.mocked(ctx.ui.setStatus).mock.calls.at(-1)?.[1]).toBe(
-        '🟢 session healthy · 80% cache',
-      );
+      expect(lastStatusCall(ctx)).toEqual(['session-hygiene', '🟢 ctx ok']);
+      expect(lastStatusCall(ctx, 'session-hygiene-cache')).toEqual([
+        'session-hygiene-cache',
+        'cache 80%',
+      ]);
 
       await ext.sessionCompact({}, ctx);
 
-      expect(vi.mocked(ctx.ui.setStatus).mock.calls.at(-1)).toEqual([
-        'session-hygiene',
-        '🟢 session healthy',
+      expect(lastStatusCall(ctx)).toEqual(['session-hygiene', '🟢 ctx ok']);
+      expect(lastStatusCall(ctx, 'session-hygiene-cache')).toEqual([
+        'session-hygiene-cache',
+        undefined,
       ]);
       expect(ctx.ui.confirm).not.toHaveBeenCalled();
     });
@@ -508,7 +518,7 @@ describe('session-hygiene', () => {
 
       await sessionCompact({}, ctx);
 
-      expect(ctx.ui.setStatus).toHaveBeenCalledWith('session-hygiene', '🔴 session critical');
+      expect(ctx.ui.setStatus).toHaveBeenCalledWith('session-hygiene', '🔴 ctx compact');
     });
   });
 });
