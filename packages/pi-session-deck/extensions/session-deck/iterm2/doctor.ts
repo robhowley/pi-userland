@@ -377,7 +377,9 @@ async function checkRuntimePaths(
     const webAssets = getSessionDeckIterm2WebAssetPaths(runtimePaths.webRootPath);
     const requiredAssets = [
       { label: 'Web index', path: webAssets.indexPath },
-      { label: 'Web app', path: webAssets.appPath },
+      { label: 'Web bootstrap', path: webAssets.appPath },
+      { label: 'Web shared UI', path: webAssets.sharedUiPath },
+      { label: 'Web iTerm2 host', path: webAssets.hostPath },
       { label: 'Web launch-context view helper', path: webAssets.launchContextViewPath },
       { label: 'Web stylesheet', path: webAssets.stylePath },
     ];

@@ -109,6 +109,8 @@ async function createRuntimePaths(
   if (options.includeAppJs !== false) {
     await writeFile(join(webRootPath, 'app.js'), 'console.log("app")\n', 'utf8');
   }
+  await writeFile(join(webRootPath, 'session-deck-ui.js'), 'console.log("ui")\n', 'utf8');
+  await writeFile(join(webRootPath, 'iterm2-host.js'), 'console.log("host")\n', 'utf8');
   await writeFile(
     join(webRootPath, 'launch-context-view.js'),
     'export const labels = []\n',
@@ -391,7 +393,7 @@ describe('session-deck iterm2 install + doctor + uninstall', () => {
       'Canonical AutoLaunch source hash differs from recorded state',
     );
     expect(result.message).toContain(
-      `Web app is missing: ${join(runtimePaths.webRootPath, 'app.js')}`,
+      `Web bootstrap is missing: ${join(runtimePaths.webRootPath, 'app.js')}`,
     );
     expect(result.message).toContain(
       `Open-terminal helper is missing: ${runtimePaths.openTerminalHelperScriptPath}`,

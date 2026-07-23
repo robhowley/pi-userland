@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "checkJs": true,
+    "declaration": false,
+    "declarationMap": false,
+    "lib": ["ES2022", "DOM"],
+    "types": ["node", "vitest/globals"]
+  },
+  "include": ["web/**/*.js", "scripts/**/*.js", "__tests__/**/*.ts"],
+  "exclude": ["web/session-deck-ui.js"]
+}

@@ -12,6 +12,11 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    outputs:
+      paths_released: ${{ steps.release.outputs.paths_released }}
+      pi_session_deck_released: ${{ steps.release.outputs['packages/pi-session-deck--release_created'] }}
+      pi_session_deck_tag_name: ${{ steps.release.outputs['packages/pi-session-deck--tag_name'] }}
+      pi_session_deck_version: ${{ steps.release.outputs['packages/pi-session-deck--version'] }}
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
@@ -43,7 +48,7 @@ jobs:
         if: steps.release.outputs.releases_created == 'true'
         run: pnpm install --frozen-lockfile
 
-      - name: Build packages
+      - name: Build publishable packages
         if: steps.release.outputs.releases_created == 'true'
         run: pnpm -r --filter './packages/*' --if-present build
 
@@ -55,3 +60,51 @@ jobs:
             echo "Publishing $pkg"
             (cd "$pkg" && npm publish)
           done
+
+  session-deck-desktop-artifacts:
+    needs: release
+    if: ${{ needs.release.outputs.pi_session_deck_released == 'true' || contains(needs.release.outputs.paths_released, 'packages/pi-session-deck') }}
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout pi-session-deck release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release.outputs.pi_session_deck_tag_name }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate release metadata
+        run: |
+          test -n "$SESSION_DECK_RELEASE_TAG"
+          test -n "$SESSION_DECK_VERSION"
+        env:
+          SESSION_DECK_RELEASE_TAG: ${{ needs.release.outputs.pi_session_deck_tag_name }}
+          SESSION_DECK_VERSION: ${{ needs.release.outputs.pi_session_deck_version }}
+
+      - name: Build macOS desktop artifacts
+        run: |
+          # Signing/notarization is not configured yet. The artifact script passes --no-sign
+          # unless SESSION_DECK_DESKTOP_SIGN=true and Developer ID/notarization env is added.
+          pnpm --filter ./apps/session-deck-desktop artifact:macos -- --version "$SESSION_DECK_VERSION"
+        env:
+          SESSION_DECK_VERSION: ${{ needs.release.outputs.pi_session_deck_version }}
+
+      - name: Upload desktop artifacts to pi-session-deck release
+        run: gh release upload "$SESSION_DECK_RELEASE_TAG" apps/session-deck-desktop/dist/artifacts/* --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SESSION_DECK_RELEASE_TAG: ${{ needs.release.outputs.pi_session_deck_tag_name }}
