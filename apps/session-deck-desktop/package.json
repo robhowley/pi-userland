@@ -1,0 +1,28 @@
+{
+  "name": "@robhowley/pi-session-deck-desktop",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Tauri desktop companion for Session Deck using installed desktop runtime metadata.",
+  "scripts": {
+    "sync:web": "node ./scripts/sync-web-assets.js",
+    "dev": "pnpm run sync:web && node ./scripts/run-tauri.js dev",
+    "build": "pnpm run sync:web && node ./scripts/run-tauri.js build --no-bundle --ci",
+    "bundle:macos": "node ./scripts/run-tauri.js build --bundles app,dmg --ci --no-sign",
+    "artifact:macos": "node ./scripts/build-macos-artifacts.js",
+    "artifact:checksum": "node ./scripts/checksum-artifacts.js",
+    "tauri": "node ./scripts/run-tauri.js",
+    "test": "vitest run __tests__ && node ./scripts/run-cargo.js test --manifest-path src-tauri/Cargo.toml",
+    "typecheck": "tsc --noEmit -p tsconfig.json && node ./scripts/run-cargo.js check --manifest-path src-tauri/Cargo.toml",
+    "lint": "eslint web/ scripts/ __tests__/",
+    "format:check": "prettier --check README.md package.json tsconfig.json web/ scripts/ __tests__/ src-tauri/tauri.conf.json src-tauri/capabilities/default.json && node ./scripts/run-cargo.js fmt --check --manifest-path src-tauri/Cargo.toml",
+    "format:write": "prettier --write README.md package.json tsconfig.json web/ scripts/ __tests__/ src-tauri/tauri.conf.json src-tauri/capabilities/default.json && node ./scripts/run-cargo.js fmt --manifest-path src-tauri/Cargo.toml"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0",
+    "@types/node": "^22.15.17"
+  }
+}

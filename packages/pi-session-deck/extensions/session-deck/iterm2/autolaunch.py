@@ -150,7 +150,14 @@ STATIC_CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".js": "text/javascript; charset=utf-8",
 }
-REQUIRED_WEB_ASSETS = ("index.html", "app.js", "launch-context-view.js", "style.css")
+REQUIRED_WEB_ASSETS = (
+    "index.html",
+    "app.js",
+    "session-deck-ui.js",
+    "iterm2-host.js",
+    "launch-context-view.js",
+    "style.css",
+)
 REQUEST_OPERATIONS = ("ping", "itermSessionId", "launchPrereqs", "tmuxAttachArgv")
 
 STARTED_AT = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")

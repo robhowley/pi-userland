@@ -65,6 +65,7 @@ benchmarks/test-runners/dotnet/obj/
 # Rust / Cargo
 benchmarks/test-runners/cargo/target/
 benchmarks/test-runners/cargo-build/target/
+apps/session-deck-desktop/src-tauri/target/
 
 # PHPUnit / Pest
 benchmarks/test-runners/phpunit/vendor/

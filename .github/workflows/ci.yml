@@ -24,17 +24,42 @@ jobs:
           node-version: 20
           cache: 'pnpm'
 
+      - name: Install Tauri Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libglib2.0-dev \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev
+
       - name: Install dependencies
         run: pnpm install
 
-      - name: Build packages
+      - name: Build publishable packages
         run: pnpm -r --filter './packages/*' --if-present build
 
-      - name: Run lint
+      - name: Build Session Deck desktop app
+        run: pnpm --filter ./apps/session-deck-desktop build
+
+      - name: Run package lint
         run: pnpm lint
 
-      - name: Run format check
+      - name: Run Session Deck desktop lint
+        run: pnpm --filter ./apps/session-deck-desktop lint
+
+      - name: Run package format check
         run: pnpm format:check
 
-      - name: Run typecheck
+      - name: Run Session Deck desktop format check
+        run: pnpm --filter ./apps/session-deck-desktop format:check
+
+      - name: Run package typecheck
         run: pnpm typecheck
+
+      - name: Run Session Deck desktop typecheck
+        run: pnpm --filter ./apps/session-deck-desktop typecheck

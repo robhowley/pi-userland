@@ -1,0 +1,30 @@
+[package]
+name = "pi-session-deck-desktop"
+version = "0.0.0"
+description = "Tauri desktop companion for Session Deck"
+edition = "2021"
+
+[lib]
+name = "pi_session_deck_desktop"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pi-session-deck-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+arboard = "3"
+dirs = "5"
+libc = "0.2"
+open = "5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+url = "2"
+wait-timeout = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

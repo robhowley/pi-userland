@@ -7,7 +7,7 @@
 
 Monorepo of independently publishable Pi packages.
 
-Small, focused packages to augment your Pi environment without adding unnecessary overhead.
+Small, focused packages to augment your Pi environment without adding unnecessary overhead. Private apps and release builders live under `apps/` so `packages/*` remains independently installable.
 
 ## Packages
 
@@ -62,6 +62,14 @@ Requirements:
 - independently publishable
 - narrow scope
 - minimal cross-package dependencies
+
+### Add a private app or release builder
+
+```bash
+apps/<name>/
+```
+
+Private apps can be pnpm workspaces for CI/build coverage, but they are not added to release-please manifests or published to npm.
 
 ## Releasing
 
