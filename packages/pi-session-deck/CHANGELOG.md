@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.1](https://github.com/robhowley/pi-userland/compare/pi-session-deck-v0.11.0...pi-session-deck-v0.11.1) (2026-07-23)
+
+
+### Bug Fixes
+
+* **pi-session-deck:** handle tool execution updates ([#140](https://github.com/robhowley/pi-userland/issues/140)) ([57e29c4](https://github.com/robhowley/pi-userland/commit/57e29c4bea4847629fedb65d2a3eaab4673e51f1))
+
 ## [0.11.0](https://github.com/robhowley/pi-userland/compare/pi-session-deck-v0.10.0...pi-session-deck-v0.11.0) (2026-07-21)
 
 
