@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.3](https://github.com/robhowley/pi-userland/compare/pi-session-hygiene-v0.2.2...pi-session-hygiene-v0.2.3) (2026-07-23)
+
+
+### Bug Fixes
+
+* **pi-session-hygiene:** split cache status chip ([#142](https://github.com/robhowley/pi-userland/issues/142)) ([4500bb1](https://github.com/robhowley/pi-userland/commit/4500bb11d8ed27bd6e867affd47bb91f5802b913))
+
 ## [0.2.2](https://github.com/robhowley/pi-userland/compare/pi-session-hygiene-v0.2.1...pi-session-hygiene-v0.2.2) (2026-06-09)
 
 
