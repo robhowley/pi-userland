@@ -3,9 +3,9 @@
 A tiny Pi extension that adds a session-health light to the status bar.
 
 ```text
-🟢 session healthy
-🟡 session growing
-🔴 session critical
+🟢 ctx ok
+🟡 ctx watch
+🔴 ctx compact
 ```
 
 Health is based on:
@@ -13,9 +13,9 @@ Health is based on:
 - **Cumulative assistant cost** for the current session branch
 - **Current context tokens** from `ctx.getContextUsage()`
 
-The status can also append cache-rate info:
+The extension also publishes a separate cache chip when token usage data is available:
 
-- **Prompt cache hit rate** as `cacheRead / (input + cacheRead)`
+- **Prompt cache hit rate** as `cache <percent>` from `cacheRead / (input + cacheRead)`
 
 It only updates the status bar. It does **not** prompt, auto-compact, or inject guidance into responses.
 
@@ -24,15 +24,16 @@ It only updates the status bar. It does **not** prompt, auto-compact, or inject 
 ```text
 ~/src/my-project (main)
 ↑34 ↓18k R868k W175k $1.982 7.4%/1.0M (auto)
-🟡 session growing · 98% cache
+🟡 ctx watch
+cache 98%
 ```
 
 ## Default Thresholds
 
-| Level | Cost | Context |
-|-------|------|---------|
-| 🟡 Yellow | $5 | 100K tokens |
-| 🔴 Red | $15 | 200K tokens |
+| Level     | Cost | Context     |
+| --------- | ---- | ----------- |
+| 🟡 Yellow | $5   | 100K tokens |
+| 🔴 Red    | $15  | 200K tokens |
 
 ## Command
 
@@ -55,12 +56,12 @@ If the file is missing or invalid, the extension falls back to the Default prese
 
 ### Presets
 
-| Preset | Yellow | Red |
-|--------|--------|-----|
-| **Conservative** | $2 / 60K tokens | $8 / 120K tokens |
-| **Default** | $5 / 100K tokens | $15 / 200K tokens |
-| **Relaxed** | $10 / 150K tokens | $25 / 250K tokens |
-| **Custom** | you decide | you decide |
+| Preset           | Yellow            | Red               |
+| ---------------- | ----------------- | ----------------- |
+| **Conservative** | $2 / 60K tokens   | $8 / 120K tokens  |
+| **Default**      | $5 / 100K tokens  | $15 / 200K tokens |
+| **Relaxed**      | $10 / 150K tokens | $25 / 250K tokens |
+| **Custom**       | you decide        | you decide        |
 
 Validation rejects non-positive or non-numeric values, and any config where yellow is not strictly below red.
 
