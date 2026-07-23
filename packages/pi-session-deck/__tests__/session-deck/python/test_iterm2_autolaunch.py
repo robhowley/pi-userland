@@ -929,6 +929,7 @@ class ImportAndConfigTests(unittest.TestCase):
             "import json\nprint(json.dumps(['not', 'an', 'object']))\n",
             "import json\nprint(json.dumps({'ok': True, 'status': 'requested', 'message': 'ok', 'socketPath': '/tmp/private.sock'}))\n",
             "import json\nprint(json.dumps({'ok': False, 'status': 'failed', 'reason': 'terminal-missing', 'message': '/tmp/private.sock'}))\n",
+            "import json\nprint(json.dumps({'ok': False, 'status': 'failed', 'reason': 'terminal-api-unavailable', 'message': 'Terminal app scripting is unavailable.', 'terminalId': 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'}))\n",
         ):
             with self.subTest(source=source):
                 fixture.write_open_helper(source)
@@ -948,6 +949,7 @@ class ImportAndConfigTests(unittest.TestCase):
                     str(fixture.open_helper_path),
                     "/private/tmp/helper-output",
                     "/tmp/private.sock",
+                    "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
                 )
 
     def test_run_open_terminal_action_maps_nonzero_validation_and_semantic_failures(self):
@@ -979,6 +981,16 @@ class ImportAndConfigTests(unittest.TestCase):
         self.assertEqual(semantic_status, 200)
         self.assertEqual(semantic_payload["ok"], False)
         self.assertEqual(semantic_payload["reason"], "terminal-missing")
+
+        fixture.write_open_helper(
+            "import json\n"
+            "print(json.dumps({'ok': False, 'status': 'failed', 'reason': 'terminal-api-unavailable', 'message': 'Terminal app scripting is unavailable.'}))\n"
+        )
+        api_status, api_payload = AUTO.run_open_terminal_action(
+            fixture.config(), "{}", make_effective_command_path()
+        )
+        self.assertEqual(api_status, 200)
+        self.assertEqual(api_payload["reason"], "terminal-api-unavailable")
 
     def test_toolbelt_open_terminal_route_rejects_invalid_content_type_and_body_size(self):
         fixture = TempRuntime(self)

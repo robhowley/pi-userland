@@ -120,6 +120,8 @@ BROWSER_FORBIDDEN_FIELDS = {
     "tmuxSessionName",
     "tmuxTarget",
     "paneId",
+    "ghosttyTerminalId",
+    "host",
     "itermSessionId",
     "iterm",
     "iTerm",
@@ -139,6 +141,7 @@ BROWSER_FORBIDDEN_FIELDS = {
     "socketPath",
     "socketName",
     "sessionFile",
+    "terminalId",
 }
 PRIVATE_PATH_RE = re.compile(r"(?<![A-Za-z0-9._-])(/(?:[^/\s]+/)+[^/\s]+)")
 
@@ -735,8 +738,9 @@ OPEN_TERMINAL_SAFE_FAILURE_MESSAGES = {
     "tmux-preflight-failed": "Could not verify the tmux session before opening.",
     "python-bridge-disabled": "Terminal opening through the iTerm2 runtime is disabled.",
     "python-bridge-unavailable": "The iTerm2 runtime is unavailable.",
-    "automation-denied": "iTerm2 automation is not authorized.",
-    "terminal-target-missing": "The iTerm2 session is no longer available.",
+    "automation-denied": "Terminal automation is not authorized.",
+    "terminal-api-unavailable": "Terminal app scripting is unavailable.",
+    "terminal-target-missing": "The terminal target is no longer available.",
     "open-failed": "Could not request terminal open.",
 }
 

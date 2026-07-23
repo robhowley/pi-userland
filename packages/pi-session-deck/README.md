@@ -30,6 +30,8 @@ When you are ready to return, use `o` or **↗ Open** to focus or reattach to th
 
 When an agent is done, end it with `k` in the Pi TUI or **End session** in the Toolbelt.
 
+Ghostty exact focus is supported on macOS with Ghostty 1.3 or newer when Ghostty AppleScript is enabled (`macos-applescript` is not `false`). macOS may ask for Automation permission for the terminal or Node process to control Ghostty; if the prompt appears during first startup and the session is not captured, grant permission and restart that Pi session.
+
 ## Installation
 
 ```shell
@@ -92,4 +94,14 @@ Session Deck observes current operational state, not conversation history.
 - It does not persist prompts, transcript content, tool arguments, or tool output.
 - Status chips contain sanitized visible text only.
 - Tool and assistant errors are reduced to compact, safe summaries.
-- JSON output and the Toolbelt view omit raw terminal metadata and tmux attach details.
+- Public JSON and the Toolbelt view omit raw terminal metadata and tmux attach details.
+- Ghostty focus stores only a private terminal UUID in the identity sidecar. Ghostty window/tab IDs, titles, cwd, and commands are not stored in public JSON, Toolbelt requests, or browser records.
+
+## Terminal focus smoke checks
+
+1. In Ghostty on macOS, verify AppleScript returns `{version, id}` for the focused terminal.
+2. Plain Ghostty: start Pi, open `/session-deck`, select the session, press `o`, and confirm the existing Ghostty surface focuses.
+3. Ghostty + attached tmux: start Pi inside an attached Ghostty tmux pane; `o` should focus the host surface. If that host is gone while tmux is still alive, `o` falls back to the existing tmux attach path.
+4. Detached tmux from Session Deck (`w` / Toolbelt New): Open should attach through the existing tmux path and not focus an unrelated Ghostty window.
+5. Plain iTerm2 and tmux+iTerm2 should keep their existing focus/attach behavior.
+6. `/session-deck --json`, Toolbelt snapshots, and browser records should contain no Ghostty UUIDs or raw terminal metadata.

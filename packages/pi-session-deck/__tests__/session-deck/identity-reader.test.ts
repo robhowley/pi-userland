@@ -126,10 +126,65 @@ describe('identity terminal metadata normalization', () => {
     });
   });
 
+  it('normalizes Ghostty terminal UUIDs and ignores non-identity fields', () => {
+    expect(
+      normalizeSessionTerminalMetadata({
+        kind: 'ghostty',
+        terminalId: '  AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE  ',
+        version: '1.3.1',
+        windowId: 'window-1',
+        tabId: 'tab-1',
+        title: 'secret title',
+        cwd: '/tmp/private',
+        command: 'pi',
+      }),
+    ).toEqual({
+      kind: 'ghostty',
+      terminalId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+    });
+  });
+
+  it('normalizes a valid Ghostty tmux host and drops invalid hosts without dropping tmux', () => {
+    expect(
+      normalizeSessionTerminalMetadata({
+        kind: 'tmux',
+        socketPath: '/tmp/tmux/default',
+        sessionName: 'prod',
+        host: {
+          kind: 'ghostty',
+          terminalId: 'AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE',
+          captureMethod: 'frontmost-focused-terminal-v1',
+        },
+      }),
+    ).toEqual({
+      kind: 'tmux',
+      socketPath: '/tmp/tmux/default',
+      sessionName: 'prod',
+      host: {
+        kind: 'ghostty',
+        terminalId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+      },
+    });
+
+    expect(
+      normalizeSessionTerminalMetadata({
+        kind: 'tmux',
+        socketPath: '/tmp/tmux/default',
+        sessionName: 'prod',
+        host: { kind: 'ghostty', terminalId: 'not-a-uuid' },
+      }),
+    ).toEqual({
+      kind: 'tmux',
+      socketPath: '/tmp/tmux/default',
+      sessionName: 'prod',
+    });
+  });
+
   it.each([
     ['missing', undefined],
     ['non-object', 'w0t0p0'],
     ['wrong kind', { kind: 'terminal', sessionId: 'w0t0p0' }],
+    ['invalid Ghostty UUID', { kind: 'ghostty', terminalId: 'not-a-uuid' }],
     ['empty sessionId', { kind: 'iterm2', sessionId: '' }],
     ['trimmed-empty sessionId', { kind: 'iterm2', sessionId: '   ' }],
     ['tmux without sessionName', { kind: 'tmux', socketPath: '/tmp/tmux/default' }],

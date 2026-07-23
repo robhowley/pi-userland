@@ -4,6 +4,11 @@ import { getIdentityRecordPath } from './store.js';
 import type { IdentityFileReader } from './reader.js';
 import type { SessionTerminalMetadata, SessionTmuxTerminalMetadata } from './types.js';
 
+export interface TerminalGhosttyFocusTarget {
+  kind: 'ghostty-terminal';
+  terminalId: string;
+}
+
 export type IdentityTerminalFocusLookupFailureReason =
   | 'identity-missing'
   | 'identity-read-error'
@@ -18,12 +23,14 @@ export type TerminalFocusTarget =
       itermSessionId: string;
       revealUrl: string;
     }
+  | TerminalGhosttyFocusTarget
   | {
       kind: 'tmux-session';
       socketName?: string;
       socketPath?: string;
       sessionName: string;
       sessionTarget: string;
+      host?: TerminalGhosttyFocusTarget;
     };
 
 export type IdentityTerminalFocusLookupResult =
@@ -140,6 +147,11 @@ export function toTerminalFocusTarget(
         itermSessionId: terminal.sessionId,
         revealUrl: terminal.revealUrl,
       };
+    case 'ghostty':
+      return {
+        kind: 'ghostty-terminal',
+        terminalId: terminal.terminalId,
+      };
     case 'tmux': {
       const sessionTarget = buildTmuxSessionTarget(terminal);
       const target = {
@@ -150,6 +162,14 @@ export function toTerminalFocusTarget(
           : { socketName: terminal.socketName }),
         sessionName: terminal.sessionName,
         sessionTarget,
+        ...(terminal.host === undefined
+          ? {}
+          : {
+              host: {
+                kind: 'ghostty-terminal' as const,
+                terminalId: terminal.host.terminalId,
+              },
+            }),
       };
 
       return buildTmuxAttachSessionArgv(target) === null ? null : target;
