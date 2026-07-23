@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Session Deck Desktop",
+  "version": "0.0.0",
+  "identifier": "dev.pi-userland.session-deck.desktop",
+  "build": {
+    "beforeBuildCommand": "pnpm run sync:web",
+    "beforeDevCommand": "pnpm run sync:web",
+    "frontendDist": "../web"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self' 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'"
+    },
+    "windows": [
+      {
+        "label": "main",
+        "title": "Session Deck",
+        "width": 420,
+        "height": 920,
+        "resizable": true,
+        "visible": true
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg"],
+    "icon": ["icons/icon.png"],
+    "publisher": "Rob Howley",
+    "category": "DeveloperTool",
+    "shortDescription": "Desktop companion for Session Deck.",
+    "longDescription": "A private Tauri desktop companion distributed as a GitHub Release artifact for @robhowley/pi-session-deck.",
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    }
+  }
+}

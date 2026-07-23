@@ -607,16 +607,22 @@ function restoreGlobal(name: string, value: unknown): void {
 }
 
 async function importFreshApp(): Promise<void> {
-  const moduleUrl = new URL('../../extensions/session-deck/iterm2/web/app.js', import.meta.url);
-  moduleUrl.searchParams.set('t', `${Date.now()}-${Math.random()}`);
-  await import(moduleUrl.href);
+  const cacheBust = `${Date.now()}-${Math.random()}`;
+  for (const relativePath of [
+    '../../extensions/session-deck/iterm2/web/session-deck-ui.js',
+    '../../extensions/session-deck/iterm2/web/iterm2-host.js',
+    '../../extensions/session-deck/iterm2/web/app.js',
+  ]) {
+    const moduleUrl = new URL(relativePath, import.meta.url);
+    moduleUrl.searchParams.set('t', cacheBust);
+    await import(moduleUrl.href);
+  }
 }
 
 async function flushMicrotasks(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let index = 0; index < 10; index += 1) {
+    await Promise.resolve();
+  }
 }
 
 function findById(node: FakeNode, id: string): FakeElement | null {

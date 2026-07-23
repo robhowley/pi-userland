@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default capability for the Session Deck desktop window.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

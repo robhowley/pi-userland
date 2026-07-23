@@ -205,7 +205,7 @@ describe('session-deck joined command', () => {
     });
   });
 
-  it('offers --all, --reap, --identity, --json, --session-id, and iterm2 completions', () => {
+  it('offers --all, --reap, --identity, --json, --session-id, desktop, and iterm2 completions', () => {
     const { api, getRegistration } = createMockAPI();
 
     registerSessionDeckCommand(api, {
@@ -218,13 +218,42 @@ describe('session-deck joined command', () => {
       { value: '--identity', label: '--identity' },
       { value: '--json', label: '--json' },
       { value: '--session-id', label: '--session-id' },
+      { value: 'desktop', label: 'desktop' },
       { value: 'iterm2', label: 'iterm2' },
+    ]);
+    expect(getRegistration()?.getArgumentCompletions?.('desktop ')).toEqual([
+      { value: 'desktop install', label: 'install' },
+      { value: 'desktop open', label: 'open' },
+      { value: 'desktop uninstall', label: 'uninstall' },
+      { value: 'desktop doctor', label: 'doctor' },
     ]);
     expect(getRegistration()?.getArgumentCompletions?.('iterm2 ')).toEqual([
       { value: 'iterm2 install', label: 'install' },
       { value: 'iterm2 uninstall', label: 'uninstall' },
       { value: 'iterm2 doctor', label: 'doctor' },
     ]);
+  });
+
+  it('routes /session-deck desktop ... through the dedicated app flow before flag parsing', async () => {
+    const { api, getHandler } = createMockAPI();
+    const runSessionDeckDesktopCommand = vi.fn(async () => ({
+      level: 'info' as const,
+      message: 'opened desktop',
+    }));
+
+    registerSessionDeckCommand(api, {
+      isSessionDeckDesktopCommand: (args) => args.startsWith('desktop'),
+      readSessionDeckSnapshot: vi.fn(async () => buildSnapshot()),
+      runSessionDeckDesktopCommand,
+    });
+
+    const handler = getHandler();
+    const ctx = createCommandContext({ mode: 'rpc' });
+
+    await handler?.('desktop open', ctx);
+
+    expect(runSessionDeckDesktopCommand).toHaveBeenCalledWith('desktop open');
+    expect(vi.mocked(ctx.ui.notify)).toHaveBeenCalledWith('opened desktop', 'info');
   });
 
   it('routes /session-deck iterm2 ... through the dedicated installer flow before flag parsing', async () => {
