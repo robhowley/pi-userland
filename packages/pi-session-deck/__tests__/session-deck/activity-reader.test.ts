@@ -140,6 +140,39 @@ describe('activity reader', () => {
     expect(view.records[0]?.activityAgeMs).toBe(42_000);
   });
 
+  it('accepts tool_update activity sources', async () => {
+    const readdir = vi
+      .fn()
+      .mockResolvedValue([{ name: 'rt-1.json', isFile: () => true } as unknown as Dirent]);
+    const readFile = vi.fn().mockResolvedValue(
+      JSON.stringify({
+        runtimeId: 'rt-1',
+        sessionId: 'session-abc',
+        activityState: 'tool-running',
+        idle: false,
+        busy: true,
+        currentTurnStartedAt: '2026-06-17T12:08:00.000Z',
+        currentToolName: 'bash',
+        lastToolStartedAt: '2026-06-17T12:08:30.000Z',
+        lastEventAt: '2026-06-17T12:09:50.000Z',
+        lastError: null,
+        activityUpdatedAt: '2026-06-17T12:09:50.000Z',
+        activitySource: 'tool_update',
+      }),
+    );
+
+    const view = await readSessionDeckView({
+      joinedView: buildJoinedView(),
+      now: new Date('2026-06-17T12:10:00.000Z'),
+      readdir,
+      readFile,
+    });
+
+    expect(view.records[0]?.activityState).toBe('tool-running');
+    expect(view.records[0]?.currentToolName).toBe('bash');
+    expect(view.records[0]?.diagnostics).toEqual([]);
+  });
+
   it('accepts compacting records with metadata and exposes public compaction details', async () => {
     const readdir = vi
       .fn()

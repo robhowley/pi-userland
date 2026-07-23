@@ -14,6 +14,7 @@ import type {
 import type { SessionManagerLike } from '../identity/types.js';
 
 const ACTIVITY_RUNTIME_STATE_KEY = '__piSessionDeckActivityRuntimeState__';
+const ACTIVITY_RUNTIME_CONTROLLER_API_VERSION = 2;
 const MAX_RECENT_TOOL_WINDOWS = 20;
 const RECENT_TOOL_WINDOW_MAX_AGE_MS = 15 * 60 * 1000;
 
@@ -47,6 +48,7 @@ interface ActivityRuntimeState {
   activeToolCalls: Map<string, ActiveToolCall>;
   inputSummary: ActivityInputSummary;
   recentToolWindows: ActivityToolWindow[];
+  lastToolUpdateWrittenAtMs: number | null;
   hasActiveTurnError: boolean;
   runtimeDiagnostics: ActivityDiagnostic[];
   pendingMutation: Promise<void>;
@@ -78,6 +80,7 @@ function getActivityRuntimeState(): ActivityRuntimeState {
     activeToolCalls: new Map(),
     inputSummary: {},
     recentToolWindows: [],
+    lastToolUpdateWrittenAtMs: null,
     hasActiveTurnError: false,
     runtimeDiagnostics: [],
     pendingMutation: Promise.resolve(),
@@ -110,7 +113,7 @@ export async function ensureActivityRuntimeStarted(
   state.activeClearInterval = config.clearInterval ?? globalThis.clearInterval;
 
   state.activeStartPromise = (async () => {
-    const controller: ActivityRuntimeController = {
+    const controller = {
       refreshActivity: async (source, sessionManager) =>
         runSerialized(state, async () => {
           if (sessionManager !== undefined) {
@@ -123,6 +126,7 @@ export async function ensureActivityRuntimeStarted(
           state.activeToolCalls.clear();
           state.inputSummary = {};
           state.recentToolWindows = [];
+          state.lastToolUpdateWrittenAtMs = null;
           state.hasActiveTurnError = false;
 
           await writeSnapshot(
@@ -245,6 +249,36 @@ export async function ensureActivityRuntimeStarted(
             ...getRuntimeActivitySummaryFields(state, nowIso),
           });
         }),
+      recordToolExecutionUpdate: async ({ toolCallId }) =>
+        runSerialized(state, async () => {
+          const nowIso = getNowIso(config);
+          const current = getCurrentOrIdleRecord(state, nowIso);
+          const sanitizedToolCallId = normalizeToolCallId(toolCallId);
+          if (!state.activeToolCalls.has(sanitizedToolCallId)) {
+            return;
+          }
+
+          const nextRecord: SessionActivityRecord = {
+            ...current,
+            activityState: 'tool-running',
+            idle: false,
+            busy: true,
+            currentTurnStartedAt: current.currentTurnStartedAt ?? nowIso,
+            currentToolName: getMostRecentToolName(state.activeToolCalls),
+            lastEventAt: nowIso,
+            activityUpdatedAt: nowIso,
+            activitySource: 'tool_update',
+            ...getRuntimeActivitySummaryFields(state, nowIso),
+          };
+
+          if (!shouldWriteToolUpdate(state, nowIso)) {
+            cacheSnapshot(state, nextRecord);
+            return;
+          }
+
+          await writeSnapshot(state, config, nextRecord);
+          state.lastToolUpdateWrittenAtMs = parseTimestamp(nowIso);
+        }),
       recordToolExecutionEnd: async ({ toolCallId, toolName, isError }) =>
         runSerialized(state, async () => {
           const nowIso = getNowIso(config);
@@ -252,6 +286,9 @@ export async function ensureActivityRuntimeStarted(
           const sanitizedToolCallId = normalizeToolCallId(toolCallId);
           const activeToolCall = state.activeToolCalls.get(sanitizedToolCallId);
           state.activeToolCalls.delete(sanitizedToolCallId);
+          if (state.activeToolCalls.size === 0) {
+            state.lastToolUpdateWrittenAtMs = null;
+          }
           state.recentToolWindows = upsertToolWindow(
             state.recentToolWindows,
             {
@@ -287,6 +324,7 @@ export async function ensureActivityRuntimeStarted(
         runSerialized(state, async () => {
           const nowIso = getNowIso(config);
           state.activeToolCalls.clear();
+          state.lastToolUpdateWrittenAtMs = null;
 
           const current = getCurrentOrIdleRecord(state, nowIso);
           await writeSnapshot(state, config, {
@@ -345,7 +383,10 @@ export async function ensureActivityRuntimeStarted(
         }),
       getActivity: () => state.cachedActivity,
       isRunning: () => getActivityRuntimeState().activeTimer !== null,
-    };
+    } satisfies ActivityRuntimeController;
+    Object.assign(controller, {
+      activityRuntimeApiVersion: ACTIVITY_RUNTIME_CONTROLLER_API_VERSION,
+    });
 
     if (state.activeTimer === null) {
       const setIntervalImpl = config.setInterval ?? globalThis.setInterval;
@@ -363,6 +404,7 @@ export async function ensureActivityRuntimeStarted(
             state.activeToolCalls.clear();
             state.inputSummary = {};
             state.recentToolWindows = [];
+            state.lastToolUpdateWrittenAtMs = null;
             state.hasActiveTurnError = false;
             await writeSnapshot(
               state,
@@ -407,6 +449,7 @@ export async function stopActivityRuntime(): Promise<void> {
   state.activeToolCalls.clear();
   state.inputSummary = {};
   state.recentToolWindows = [];
+  state.lastToolUpdateWrittenAtMs = null;
   state.hasActiveTurnError = false;
   state.runtimeDiagnostics = [];
   resetCompactionLifecycle(state);
@@ -421,13 +464,18 @@ export async function resetActivityRuntimeForTests(): Promise<void> {
 
 function migrateActivityRuntimeState(state: ActivityRuntimeState): void {
   state.pendingMutation ??= Promise.resolve();
+  state.lastToolUpdateWrittenAtMs ??= null;
   state.compactionToken ??= 0;
   state.compactionAbortCleanup ??= null;
 }
 
 function hasCurrentActivityRuntimeControllerApi(controller: ActivityRuntimeController): boolean {
-  const candidate = controller as Partial<ActivityRuntimeController>;
+  const candidate = controller as Partial<ActivityRuntimeController> & {
+    activityRuntimeApiVersion?: number;
+  };
   return (
+    candidate.activityRuntimeApiVersion === ACTIVITY_RUNTIME_CONTROLLER_API_VERSION &&
+    typeof candidate.recordToolExecutionUpdate === 'function' &&
     typeof candidate.recordCompactionStart === 'function' &&
     typeof candidate.clearCompaction === 'function'
   );
@@ -566,6 +614,7 @@ function getCurrentOrIdleRecord(
   state.activeToolCalls.clear();
   state.inputSummary = {};
   state.recentToolWindows = [];
+  state.lastToolUpdateWrittenAtMs = null;
   state.hasActiveTurnError = false;
   return createIdleActivityRecord(runtimeId, sessionId, nowIso, 'new');
 }
@@ -668,6 +717,16 @@ function copyToolWindow(window: ActivityToolWindow): ActivityToolWindow {
 
 function normalizeToolCallId(toolCallId: string): string {
   return toolCallId.length > 0 ? toolCallId : 'unknown-tool-call';
+}
+
+function shouldWriteToolUpdate(state: ActivityRuntimeState, nowIso: string): boolean {
+  const nowMs = parseTimestamp(nowIso);
+  const lastWriteMs = state.lastToolUpdateWrittenAtMs;
+  if (nowMs === null || lastWriteMs === null || nowMs < lastWriteMs) {
+    return true;
+  }
+
+  return nowMs - lastWriteMs >= DEFAULT_ACTIVITY_REFRESH_INTERVAL_MS;
 }
 
 function applyCompactionRetention(
@@ -790,13 +849,21 @@ async function runSerialized<T>(
   return run;
 }
 
+function cacheSnapshot(
+  state: ActivityRuntimeState,
+  record: SessionActivityRecord,
+): SessionActivityRecord {
+  const recordToWrite = applyCompactionRetention(state, record);
+  state.cachedActivity = recordToWrite;
+  return recordToWrite;
+}
+
 async function writeSnapshot(
   state: ActivityRuntimeState,
   config: ActivityRuntimeConfig,
   record: SessionActivityRecord,
 ): Promise<void> {
-  const recordToWrite = applyCompactionRetention(state, record);
-  state.cachedActivity = recordToWrite;
+  const recordToWrite = cacheSnapshot(state, record);
 
   try {
     await (config.writeRecord ?? writeActivityRecord)(recordToWrite, {

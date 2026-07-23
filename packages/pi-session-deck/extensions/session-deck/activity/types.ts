@@ -36,6 +36,7 @@ export type ActivitySource =
   | 'message_end'
   | 'turn_start'
   | 'tool_start'
+  | 'tool_update'
   | 'tool_end'
   | 'turn_end'
   | 'assistant_error'
@@ -135,6 +136,7 @@ export interface ActivityRuntimeController {
   recordMessageEnd: (message: ActivityMessageLike) => Promise<void>;
   recordTurnStart: () => Promise<void>;
   recordToolExecutionStart: (event: { toolCallId: string; toolName: string }) => Promise<void>;
+  recordToolExecutionUpdate: (event: { toolCallId: string }) => Promise<void>;
   recordToolExecutionEnd: (event: {
     toolCallId: string;
     toolName: string;

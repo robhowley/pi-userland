@@ -200,6 +200,28 @@ describe('deriveActivity', () => {
     expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toContain('activity_stale');
   });
 
+  it('keeps a running tool visible when tool updates refresh the last real event', () => {
+    const result = deriveActivity({
+      activity: buildRecord({
+        activityState: 'tool-running',
+        idle: false,
+        busy: true,
+        currentTurnStartedAt: '2026-06-17T11:50:00.000Z',
+        currentToolName: 'bash',
+        lastToolStartedAt: '2026-06-17T11:59:00.000Z',
+        lastEventAt: '2026-06-17T12:09:50.000Z',
+        activityUpdatedAt: '2026-06-17T12:09:50.000Z',
+        activitySource: 'tool_update',
+      }),
+      sessionId: 'session-abc',
+      now: NOW,
+    });
+
+    expect(result.activityState).toBe('tool-running');
+    expect(result.activityAgeMs).toBe(660_000);
+    expect(result.diagnostics.map((diagnostic) => diagnostic.code)).not.toContain('tool_stuck');
+  });
+
   it('ignores busy activity whose last real event is too old even if periodic refreshes continue', () => {
     const result = deriveActivity({
       activity: buildRecord({

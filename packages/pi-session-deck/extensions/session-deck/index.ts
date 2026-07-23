@@ -131,6 +131,16 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     await activityRuntime.recordToolExecutionStart({ toolCallId, toolName });
   });
 
+  on('tool_execution_update', async (event: { toolCallId?: unknown; partialResult?: unknown }) => {
+    if (!isMeaningfulToolExecutionUpdate(event.partialResult)) {
+      return;
+    }
+
+    const toolCallId = typeof event.toolCallId === 'string' ? event.toolCallId : '';
+    const activityRuntime = await ensureActivityRuntime();
+    await activityRuntime.recordToolExecutionUpdate({ toolCallId });
+  });
+
   on(
     'tool_execution_end',
     async (event: { toolCallId?: unknown; toolName?: unknown; isError?: unknown }) => {
@@ -227,6 +237,91 @@ function getActivityMessage(event: { message?: unknown }): {
 
 function isActivityInputSource(value: unknown): value is 'interactive' | 'rpc' | 'extension' {
   return value === 'interactive' || value === 'rpc' || value === 'extension';
+}
+
+function isMeaningfulToolExecutionUpdate(partialResult: unknown): boolean {
+  if (!isObject(partialResult)) {
+    return hasMeaningfulToolUpdateValue(partialResult);
+  }
+
+  return (
+    hasMeaningfulToolUpdateContent(partialResult['content']) ||
+    hasMeaningfulToolUpdateValue(partialResult['details']) ||
+    partialResult['terminate'] === true ||
+    partialResult['completed'] === true ||
+    partialResult['complete'] === true ||
+    partialResult['done'] === true ||
+    partialResult['finished'] === true ||
+    partialResult['final'] === true ||
+    partialResult['isFinal'] === true ||
+    partialResult['progress'] === true
+  );
+}
+
+function hasMeaningfulToolUpdateContent(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some(hasMeaningfulToolUpdateContentEntry);
+  }
+
+  return hasMeaningfulToolUpdateContentEntry(value);
+}
+
+function hasMeaningfulToolUpdateContentEntry(value: unknown): boolean {
+  if (typeof value === 'string') {
+    return value.trim().length > 0;
+  }
+
+  if (!isObject(value)) {
+    return false;
+  }
+
+  const type = value['type'];
+  if (type === 'text') {
+    return hasMeaningfulToolUpdateValue(value['text']);
+  }
+
+  if (type === 'image' || type === 'image_url') {
+    return (
+      hasMeaningfulToolUpdateValue(value['image']) ||
+      hasMeaningfulToolUpdateValue(value['imageUrl']) ||
+      hasMeaningfulToolUpdateValue(value['url']) ||
+      hasMeaningfulToolUpdateValue(value['data'])
+    );
+  }
+
+  return (
+    hasMeaningfulToolUpdateValue(value['text']) ||
+    hasMeaningfulToolUpdateValue(value['image']) ||
+    hasMeaningfulToolUpdateValue(value['data'])
+  );
+}
+
+function hasMeaningfulToolUpdateValue(value: unknown): boolean {
+  if (value === undefined || value === null) {
+    return false;
+  }
+
+  if (typeof value === 'string') {
+    return value.trim().length > 0;
+  }
+
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  if (typeof value === 'number') {
+    return Number.isFinite(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.some(hasMeaningfulToolUpdateValue);
+  }
+
+  if (!isObject(value)) {
+    return false;
+  }
+
+  return Object.values(value).some(hasMeaningfulToolUpdateValue);
 }
 
 function isObject(candidate: unknown): candidate is Record<string, unknown> {
