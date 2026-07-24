@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.4](https://github.com/robhowley/pi-userland/compare/pi-session-hygiene-v0.2.3...pi-session-hygiene-v0.2.4) (2026-07-24)
+
+
+### Bug Fixes
+
+* **pi-session-hygiene:** correct repository metadata ([#144](https://github.com/robhowley/pi-userland/issues/144)) ([7a63c32](https://github.com/robhowley/pi-userland/commit/7a63c327677c1cab473d0a0b4a2fc400bca6827c))
+
 ## [0.2.3](https://github.com/robhowley/pi-userland/compare/pi-session-hygiene-v0.2.2...pi-session-hygiene-v0.2.3) (2026-07-23)
 
 
