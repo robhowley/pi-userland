@@ -953,6 +953,16 @@ describe('SessionDeckBrowser', () => {
             chips: [],
           }),
           buildSnapshotRecord({
+            runtimeId: 'rt-input',
+            pid: 304,
+            sessionId: 'session-input',
+            sessionName: 'input-row',
+            activityState: 'awaiting-input',
+            activityAgeMs: 9_000,
+            currentToolName: 'should-not-render',
+            chips: [],
+          }),
+          buildSnapshotRecord({
             runtimeId: 'rt-compact',
             pid: 404,
             sessionId: 'session-compact',
@@ -998,7 +1008,9 @@ describe('SessionDeckBrowser', () => {
     expect(output).toContain('› ○ idle  idle-row  project · #42 · 5s · main');
     expect(output).toContain('  ◒ thinking  thinking-row  project · #42 · 4m · main');
     expect(output).toContain('  ◆ tool-running  tool-row  project · #42 · 12s · main');
+    expect(output).toContain('  ◉ needs input  input-row  project · #42 · 9s · main');
     expect(output).toContain('  ↻ compacting  compact-row  project · #42 · 15s · main');
+    expect(output).not.toContain('should-not-render');
     expect(output).toContain('  ! error  error-row  project · #42 · 42s · main');
     expect(output).toContain('  ? unknown  unknown-row  project · #42 · 9m · main');
     expect(output).toContain('│ presence: ● live · activity: idle · heartbeat: 5s ago');

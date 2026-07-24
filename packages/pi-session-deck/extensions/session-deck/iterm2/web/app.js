@@ -215,7 +215,15 @@ function isPresenceState(value) {
 }
 
 function isActivityState(value) {
-  return ['idle', 'thinking', 'tool-running', 'compacting', 'error', 'unknown'].includes(value);
+  return [
+    'idle',
+    'thinking',
+    'tool-running',
+    'compacting',
+    'awaiting-input',
+    'error',
+    'unknown',
+  ].includes(value);
 }
 
 function isNullableCompaction(value) {
@@ -2435,7 +2443,7 @@ function createStatusSection(record) {
   }
 
   content.push(
-    createDetailRow('Activity', formatCompactingActivityDetail(record)),
+    createDetailRow('Activity', formatStatusActivityDetail(record)),
     createDetailRow('Compaction', formatCompactionDetail(record.compaction)),
     createDetailRow('Presence reason', humanizePresenceReason(record.presenceReason)),
     createDetailRow('Child runtime', formatChildRuntimeDetail(record)),
@@ -2446,7 +2454,11 @@ function createStatusSection(record) {
   return createDetailSection('STATUS', content);
 }
 
-function formatCompactingActivityDetail(record) {
+function formatStatusActivityDetail(record) {
+  if (record.activityState === 'awaiting-input') {
+    return 'needs input';
+  }
+
   if (record.activityState !== 'compacting') {
     return null;
   }
@@ -2754,6 +2766,12 @@ function getActivityDisplay(record) {
         detail: record.currentToolName,
         cardAgeLabel: ageLabel,
       };
+    case 'awaiting-input':
+      return {
+        label: 'needs input',
+        detail: null,
+        cardAgeLabel: ageLabel,
+      };
     case 'compacting':
       return {
         label: 'compacting',
@@ -2842,6 +2860,13 @@ function createActivityIcon(record) {
       svg.append(
         createSvgPath(
           'M.1 2.2A3 3 0 0 0 3.8 5.9l6.3 6.3a3 3 0 0 0 3.7 3.7l-2.1-2.1a.5.5 0 0 1 .4-.9h1.4a.5.5 0 0 1 .4.1l2.1 2.1a3 3 0 0 0-3.7-3.7L5.9 5.1A3 3 0 0 0 2.2.1l2.1 2.1a.5.5 0 0 1-.4.9H2.5a.5.5 0 0 1-.4-.1L.1 2.2Z',
+        ),
+      );
+      break;
+    case 'awaiting-input':
+      svg.append(
+        createSvgPath(
+          'M3 4a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H8.6l-3.1 3.1A.9.9 0 0 1 4 12.5V10a2 2 0 0 1-1-1.7V4Zm3 1.4v1.4h4V5.4H6Zm0 2.4v1.4h2.8V7.8H6Z',
         ),
       );
       break;

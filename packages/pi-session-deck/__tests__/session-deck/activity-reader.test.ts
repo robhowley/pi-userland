@@ -173,6 +173,40 @@ describe('activity reader', () => {
     expect(view.records[0]?.diagnostics).toEqual([]);
   });
 
+  it('accepts awaiting-input records and UI dialog sources', async () => {
+    const readdir = vi
+      .fn()
+      .mockResolvedValue([{ name: 'rt-1.json', isFile: () => true } as unknown as Dirent]);
+    const readFile = vi.fn().mockResolvedValue(
+      JSON.stringify({
+        runtimeId: 'rt-1',
+        sessionId: 'session-abc',
+        activityState: 'awaiting-input',
+        idle: false,
+        busy: true,
+        currentTurnStartedAt: null,
+        currentToolName: null,
+        lastEventAt: '2026-06-17T12:09:50.000Z',
+        lastError: null,
+        activityUpdatedAt: '2026-06-17T12:09:50.000Z',
+        activitySource: 'ui_dialog_start',
+        prompt: 'do not keep',
+        result: 'do not keep',
+      }),
+    );
+
+    const view = await readSessionDeckView({
+      joinedView: buildJoinedView(),
+      now: new Date('2026-06-17T12:10:00.000Z'),
+      readdir,
+      readFile,
+    });
+
+    expect(view.records[0]?.activityState).toBe('awaiting-input');
+    expect(view.records[0]?.activityAgeMs).toBe(10_000);
+    expect(JSON.stringify(view.records[0])).not.toContain('do not keep');
+  });
+
   it('accepts compacting records with metadata and exposes public compaction details', async () => {
     const readdir = vi
       .fn()

@@ -11,6 +11,7 @@ import {
   type PresenceRuntimeController,
 } from './presence/runtime.js';
 import { ensureIdentityRuntimeStarted, stopIdentityRuntime } from './identity/runtime.js';
+import { createUiDialogMirror } from './activity/ui-dialogs.js';
 import { createSetStatusMirror } from './chips/mirror.js';
 import {
   normalizeSessionHeaderMetadata,
@@ -50,12 +51,29 @@ interface SessionStartContext {
   };
   ui: {
     setStatus: (key: string, text: string | undefined) => void;
+    select?: (...args: unknown[]) => unknown;
+    input?: (...args: unknown[]) => unknown;
+    editor?: (...args: unknown[]) => unknown;
   };
 }
 
 export default async function (pi: ExtensionAPI): Promise<void> {
   registerSessionDeckCommand(pi as unknown as PresenceCommandAPI);
   const statusMirror = createSetStatusMirror();
+  const uiDialogMirror = createUiDialogMirror({
+    recordStart: async (event) => {
+      const activityRuntime = await ensureActivityRuntime();
+      await activityRuntime.recordUiDialogStart(event);
+    },
+    recordEnd: async (event) => {
+      const activityRuntime = await ensureActivityRuntime();
+      await activityRuntime.recordUiDialogEnd(event);
+    },
+    clear: async () => {
+      const activityRuntime = await ensureActivityRuntime();
+      await activityRuntime.clearUiDialogs();
+    },
+  });
 
   function on<TArgs extends unknown[]>(
     event: string,
@@ -79,8 +97,9 @@ export default async function (pi: ExtensionAPI): Promise<void> {
       ]);
       const sessionManager = createSessionManager(ctx, event, terminal, runtimeSignals);
 
-      // Install setStatus wrapper before session-deck sets its own status
+      // Install UI wrappers before session-deck sets its own status
       statusMirror.install(ctx.ui);
+      uiDialogMirror.install(ctx.ui);
       statusMirror.reconfigure({
         runtimeId: presenceRuntime.runtime.runtimeId,
         getSessionId: sessionManager.getSessionId,
@@ -176,6 +195,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 
   on('session_shutdown', async () => {
     const activityRuntime = await ensureActivityRuntime();
+    await uiDialogMirror.clearTracked();
     await activityRuntime.clearCompaction('shutdown');
     await stopActivityRuntime();
     await statusMirror.clearTracked();

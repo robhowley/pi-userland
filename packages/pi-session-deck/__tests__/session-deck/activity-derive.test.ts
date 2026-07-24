@@ -78,6 +78,41 @@ describe('deriveActivity', () => {
     expect(error.diagnostics.map((diagnostic) => diagnostic.code)).toContain('last_error_active');
   });
 
+  it('derives awaiting-input after active error and before generic tool-running', () => {
+    const awaiting = deriveActivity({
+      activity: buildRecord({
+        activityState: 'awaiting-input',
+        idle: false,
+        busy: true,
+        currentTurnStartedAt: null,
+        currentToolName: 'bash',
+        lastEventAt: '2026-06-17T12:09:45.000Z',
+        activityUpdatedAt: '2026-06-17T12:09:45.000Z',
+      }),
+      sessionId: 'session-abc',
+      now: NOW,
+    });
+
+    expect(awaiting.activityState).toBe('awaiting-input');
+    expect(awaiting.activityAgeMs).toBe(15_000);
+    expect(awaiting.currentToolName).toBe('bash');
+    expect(awaiting.diagnostics).toEqual([]);
+
+    const error = deriveActivity({
+      activity: buildRecord({
+        activityState: 'error',
+        idle: false,
+        busy: false,
+        currentToolName: 'bash',
+        lastError: 'assistant aborted',
+      }),
+      sessionId: 'session-abc',
+      now: NOW,
+    });
+
+    expect(error.activityState).toBe('error');
+  });
+
   it('derives compacting only while compaction metadata is fresh', () => {
     const fresh = deriveActivity({
       activity: buildRecord({

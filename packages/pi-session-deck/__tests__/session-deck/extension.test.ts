@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 afterEach(() => {
   vi.doUnmock('../../extensions/session-deck/identity/runtime-signals.js');
   vi.doUnmock('../../extensions/session-deck/identity/terminal-collect.js');
+  vi.doUnmock('../../extensions/session-deck/activity/ui-dialogs.js');
   vi.restoreAllMocks();
   vi.resetModules();
 });
@@ -11,6 +12,11 @@ type RegisteredHandler = (event: any, ctx: any) => Promise<void>;
 
 const MOCK_STATUS_MIRROR = {
   reconfigure: vi.fn(),
+  install: vi.fn(),
+  clearTracked: vi.fn().mockResolvedValue(undefined),
+};
+
+const MOCK_UI_DIALOG_MIRROR = {
   install: vi.fn(),
   clearTracked: vi.fn().mockResolvedValue(undefined),
 };
@@ -138,6 +144,9 @@ function setupMocks(
       recordToolExecutionEnd: vi.fn().mockResolvedValue(undefined),
       recordTurnEnd: vi.fn().mockResolvedValue(undefined),
       recordCompactionStart: vi.fn().mockResolvedValue(undefined),
+      recordUiDialogStart: vi.fn().mockResolvedValue(undefined),
+      recordUiDialogEnd: vi.fn().mockResolvedValue(undefined),
+      clearUiDialogs: vi.fn().mockResolvedValue(undefined),
       clearCompaction: vi.fn().mockResolvedValue(undefined),
       getActivity: vi.fn().mockReturnValue(null),
       isRunning: vi.fn(() => true),
@@ -189,6 +198,9 @@ function setupMocks(
   }));
   vi.doMock('../../extensions/session-deck/chips/mirror.js', () => ({
     createSetStatusMirror: vi.fn(() => MOCK_STATUS_MIRROR),
+  }));
+  vi.doMock('../../extensions/session-deck/activity/ui-dialogs.js', () => ({
+    createUiDialogMirror: vi.fn(() => MOCK_UI_DIALOG_MIRROR),
   }));
 
   return {
@@ -257,7 +269,7 @@ describe('pi-session-deck extension', () => {
     ]);
   });
 
-  it('installs setStatus mirror, refreshes identity/activity on session_start, does not touch setFooter', async () => {
+  it('installs UI mirrors and refreshes identity/activity on session_start', async () => {
     const { refreshIdentity, refreshActivity } = setupMocks();
     const { handlers } = await installExtension();
 
@@ -267,6 +279,7 @@ describe('pi-session-deck extension', () => {
     await handlers.get('session_start')?.({ reason: 'new' }, ctx);
 
     expect(MOCK_STATUS_MIRROR.install).toHaveBeenCalledWith(ctx.ui);
+    expect(MOCK_UI_DIALOG_MIRROR.install).toHaveBeenCalledWith(ctx.ui);
     expect(MOCK_STATUS_MIRROR.reconfigure).toHaveBeenCalledWith({
       runtimeId: 'runtime-1',
       getSessionId: expect.any(Function),
@@ -544,6 +557,9 @@ describe('pi-session-deck extension', () => {
       recordToolExecutionEnd: vi.fn().mockResolvedValue(undefined),
       recordTurnEnd: vi.fn().mockResolvedValue(undefined),
       recordCompactionStart: vi.fn().mockResolvedValue(undefined),
+      recordUiDialogStart: vi.fn().mockResolvedValue(undefined),
+      recordUiDialogEnd: vi.fn().mockResolvedValue(undefined),
+      clearUiDialogs: vi.fn().mockResolvedValue(undefined),
       clearCompaction: vi.fn().mockResolvedValue(undefined),
       getActivity: vi.fn().mockReturnValue(null),
       isRunning: vi.fn(() => true),
@@ -556,11 +572,18 @@ describe('pi-session-deck extension', () => {
     const { handlers } = await installExtension();
 
     MOCK_STATUS_MIRROR.clearTracked.mockClear();
+    MOCK_UI_DIALOG_MIRROR.clearTracked.mockClear();
     await handlers.get('session_shutdown')?.({}, {});
 
+    expect(MOCK_UI_DIALOG_MIRROR.clearTracked).toHaveBeenCalledTimes(1);
     expect(activityRuntime.clearCompaction).toHaveBeenCalledWith('shutdown');
     expect(MOCK_STATUS_MIRROR.clearTracked).toHaveBeenCalledTimes(1);
     expect(stopActivityRuntime).toHaveBeenCalledTimes(1);
+    const clearOrder = MOCK_UI_DIALOG_MIRROR.clearTracked.mock.invocationCallOrder[0];
+    const stopOrder = stopActivityRuntime.mock.invocationCallOrder[0];
+    expect(clearOrder).toBeDefined();
+    expect(stopOrder).toBeDefined();
+    expect(clearOrder!).toBeLessThan(stopOrder!);
   });
 
   it('surfaces degraded startup state through session-deck status', async () => {
@@ -601,6 +624,9 @@ describe('pi-session-deck extension', () => {
       recordToolExecutionEnd: vi.fn().mockResolvedValue(undefined),
       recordTurnEnd: vi.fn().mockResolvedValue(undefined),
       recordCompactionStart: vi.fn().mockResolvedValue(undefined),
+      recordUiDialogStart: vi.fn().mockResolvedValue(undefined),
+      recordUiDialogEnd: vi.fn().mockResolvedValue(undefined),
+      clearUiDialogs: vi.fn().mockResolvedValue(undefined),
       clearCompaction: vi.fn().mockResolvedValue(undefined),
       getActivity: vi.fn().mockReturnValue(null),
       isRunning: vi.fn(() => true),
@@ -678,6 +704,9 @@ describe('pi-session-deck extension', () => {
       recordToolExecutionEnd: vi.fn().mockResolvedValue(undefined),
       recordTurnEnd: vi.fn().mockResolvedValue(undefined),
       recordCompactionStart: vi.fn().mockResolvedValue(undefined),
+      recordUiDialogStart: vi.fn().mockResolvedValue(undefined),
+      recordUiDialogEnd: vi.fn().mockResolvedValue(undefined),
+      clearUiDialogs: vi.fn().mockResolvedValue(undefined),
       clearCompaction: vi.fn().mockResolvedValue(undefined),
       getActivity: vi.fn().mockReturnValue(null),
       isRunning: vi.fn(() => true),

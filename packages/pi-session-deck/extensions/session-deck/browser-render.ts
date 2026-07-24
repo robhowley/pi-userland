@@ -279,6 +279,8 @@ function formatActivityGlyph(state: SessionDeckRecord['activityState']): string 
       return '◒';
     case 'tool-running':
       return '◆';
+    case 'awaiting-input':
+      return '◉';
     case 'compacting':
       return '↻';
     case 'error':
@@ -332,6 +334,14 @@ function getActivityDisplay(record: SessionDeckRecord): SessionDeckActivityDispl
         cardAgeLabel: ageLabel,
         summaryAgeLabel: ageLabel,
         summaryDetailSeparator: ': ',
+      };
+    case 'awaiting-input':
+      return {
+        label: 'needs input',
+        detail: null,
+        cardAgeLabel: ageLabel,
+        summaryAgeLabel: ageLabel,
+        summaryDetailSeparator: null,
       };
     case 'compacting':
       return {

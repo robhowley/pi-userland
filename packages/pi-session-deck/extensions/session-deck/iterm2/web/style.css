@@ -657,6 +657,10 @@ button.card-toggle[aria-expanded='true']::after {
   color: var(--color-accent);
 }
 
+.activity-icon[data-activity='awaiting-input'] ~ .row-activity {
+  color: var(--color-warn);
+}
+
 .card.stale .row-activity {
   color: var(--color-warn);
 }
@@ -721,6 +725,11 @@ button.card-toggle[aria-expanded='true']::after {
 .card.live .activity-icon[data-activity='compacting'] {
   color: var(--color-accent);
   border-color: rgba(136, 192, 208, 0.68);
+}
+
+.card.live .activity-icon[data-activity='awaiting-input'] {
+  color: var(--color-warn);
+  border-color: rgba(235, 203, 139, 0.68);
 }
 
 .activity-icon svg {
