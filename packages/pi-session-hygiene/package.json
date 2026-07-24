@@ -21,10 +21,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/roberthowley/pi-userland.git",
+    "url": "https://github.com/robhowley/pi-userland.git",
     "directory": "packages/pi-session-hygiene"
   },
-  "homepage": "https://github.com/roberthowley/pi-userland/tree/main/packages/pi-session-hygiene",
+  "homepage": "https://pi-userland.dev",
   "scripts": {
     "lint": "eslint extensions/session-hygiene/ __tests__/",
     "format:check": "prettier --check extensions/session-hygiene/ __tests__/",
