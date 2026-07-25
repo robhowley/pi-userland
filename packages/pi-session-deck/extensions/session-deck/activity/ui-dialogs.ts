@@ -48,11 +48,11 @@ export function createUiDialogMirror(options: UiDialogMirrorOptions): UiDialogMi
     },
 
     async clearTracked() {
+      await recordOrThrow(() => recorders.clear(), 'clear UI dialog waits');
+
       for (const patch of installedPatches) {
         patch.activeWaitIds.clear();
       }
-
-      await safelyRecord(() => recorders.clear(), 'clear UI dialog waits');
     },
   };
 
@@ -87,14 +87,22 @@ export function createUiDialogMirror(options: UiDialogMirrorOptions): UiDialogMi
     target[kind] = async (...args: unknown[]) => {
       const waitId = createWaitId(kind);
       patch.activeWaitIds.add(waitId);
-      await safelyRecord(() => patch.recorders.recordStart({ waitId, kind }), `start ${kind}`);
+      const startRecorded = scheduleRecord(async () => {
+        if (!patch.activeWaitIds.has(waitId)) {
+          return;
+        }
+
+        await patch.recorders.recordStart({ waitId, kind });
+      }, `start ${kind}`);
 
       try {
         return await Reflect.apply(original, target, args);
       } finally {
         const wasTracked = patch.activeWaitIds.delete(waitId);
         if (wasTracked) {
-          await safelyRecord(() => patch.recorders.recordEnd({ waitId }), `end ${kind}`);
+          const recordEnd = () =>
+            scheduleRecord(() => patch.recorders.recordEnd({ waitId }), `end ${kind}`);
+          void startRecorded.then(recordEnd, recordEnd);
         }
       }
     };
@@ -105,11 +113,32 @@ export function createUiDialogMirror(options: UiDialogMirrorOptions): UiDialogMi
     return `${kind}-${nextWaitId}`;
   }
 
+  function scheduleRecord(operation: () => Promise<void>, action: string): Promise<void> {
+    return Promise.resolve().then(() => safelyRecord(operation, action));
+  }
+
   async function safelyRecord(operation: () => Promise<void>, action: string): Promise<void> {
     try {
       await operation();
     } catch (error) {
+      reportFailure(action, error);
+    }
+  }
+
+  async function recordOrThrow(operation: () => Promise<void>, action: string): Promise<void> {
+    try {
+      await operation();
+    } catch (error) {
+      reportFailure(action, error);
+      throw error;
+    }
+  }
+
+  function reportFailure(action: string, error: unknown): void {
+    try {
       onDiagnostic(`Failed to ${action}: ${getErrorMessage(error)}`);
+    } catch {
+      // Fail-open on diagnostic sink errors.
     }
   }
 }

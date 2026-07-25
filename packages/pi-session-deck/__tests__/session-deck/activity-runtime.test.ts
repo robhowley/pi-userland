@@ -168,6 +168,33 @@ describe('activity runtime lifecycle', () => {
     expect(JSON.stringify(writes)).not.toContain('result');
   });
 
+  it('returns from UI dialog wait to thinking when no tool is active', async () => {
+    const writes: SessionActivityRecord[] = [];
+    const controller = await ensureActivityRuntimeStarted('rt-1', {
+      writeRecord: vi.fn(async (record: SessionActivityRecord) => {
+        writes.push(record);
+      }),
+    });
+
+    await controller.refreshActivity('startup', {
+      getSessionId: () => 'session-abc',
+      getSessionFile: () => '/tmp/session-abc.json',
+    });
+    await controller.recordTurnStart();
+    await controller.recordUiDialogStart({ waitId: 'input-1', kind: 'input' });
+    expect(controller.getActivity()?.activityState).toBe('awaiting-input');
+
+    vi.setSystemTime(new Date('2026-06-17T12:00:09.000Z'));
+    await controller.recordUiDialogEnd({ waitId: 'input-1' });
+
+    expect(controller.getActivity()).toMatchObject({
+      activityState: 'thinking',
+      currentToolName: null,
+      activitySource: 'ui_dialog_end',
+    });
+    expect(writes.at(-1)?.activityState).toBe('thinking');
+  });
+
   it('clears active UI waits without ending active tools', async () => {
     const controller = await ensureActivityRuntimeStarted('rt-1', {
       writeRecord: vi.fn().mockResolvedValue(undefined),
