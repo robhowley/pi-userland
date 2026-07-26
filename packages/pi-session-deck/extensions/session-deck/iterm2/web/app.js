@@ -2455,16 +2455,12 @@ function createStatusSection(record) {
 }
 
 function formatStatusActivityDetail(record) {
-  if (record.activityState === 'awaiting-input') {
-    return 'needs input';
-  }
-
-  if (record.activityState !== 'compacting') {
+  if (record.activityState !== 'awaiting-input' && record.activityState !== 'compacting') {
     return null;
   }
 
-  const detail = record.compaction?.willRetry === true ? 'retrying' : null;
-  return detail === null ? 'compacting' : `compacting · ${detail}`;
+  const activity = getActivityDisplay(record);
+  return activity.detail === null ? activity.label : `${activity.label} · ${activity.detail}`;
 }
 
 function formatCompactionDetail(compaction) {

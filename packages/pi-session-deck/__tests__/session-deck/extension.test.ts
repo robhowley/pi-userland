@@ -102,6 +102,28 @@ async function withDeckEnv(
   await withManagedEnv(DECK_ENV_KEYS, overrides, run);
 }
 
+function createActivityRuntimeControllerMock(
+  refreshActivity = vi.fn().mockResolvedValue(undefined),
+) {
+  return {
+    refreshActivity,
+    recordInputSource: vi.fn().mockResolvedValue(undefined),
+    recordMessageEnd: vi.fn().mockResolvedValue(undefined),
+    recordTurnStart: vi.fn().mockResolvedValue(undefined),
+    recordToolExecutionStart: vi.fn().mockResolvedValue(undefined),
+    recordToolExecutionUpdate: vi.fn().mockResolvedValue(undefined),
+    recordToolExecutionEnd: vi.fn().mockResolvedValue(undefined),
+    recordTurnEnd: vi.fn().mockResolvedValue(undefined),
+    recordCompactionStart: vi.fn().mockResolvedValue(undefined),
+    recordUiDialogStart: vi.fn().mockResolvedValue(undefined),
+    recordUiDialogEnd: vi.fn().mockResolvedValue(undefined),
+    clearUiDialogs: vi.fn().mockResolvedValue(undefined),
+    clearCompaction: vi.fn().mockResolvedValue(undefined),
+    getActivity: vi.fn().mockReturnValue(null),
+    isRunning: vi.fn(() => true),
+  };
+}
+
 function setupMocks(
   presenceMock?: unknown,
   identityMock?: unknown,
@@ -133,24 +155,7 @@ function setupMocks(
     });
 
   const activityRuntime =
-    activityMock ??
-    vi.fn().mockResolvedValue({
-      refreshActivity,
-      recordInputSource: vi.fn().mockResolvedValue(undefined),
-      recordMessageEnd: vi.fn().mockResolvedValue(undefined),
-      recordTurnStart: vi.fn().mockResolvedValue(undefined),
-      recordToolExecutionStart: vi.fn().mockResolvedValue(undefined),
-      recordToolExecutionUpdate: vi.fn().mockResolvedValue(undefined),
-      recordToolExecutionEnd: vi.fn().mockResolvedValue(undefined),
-      recordTurnEnd: vi.fn().mockResolvedValue(undefined),
-      recordCompactionStart: vi.fn().mockResolvedValue(undefined),
-      recordUiDialogStart: vi.fn().mockResolvedValue(undefined),
-      recordUiDialogEnd: vi.fn().mockResolvedValue(undefined),
-      clearUiDialogs: vi.fn().mockResolvedValue(undefined),
-      clearCompaction: vi.fn().mockResolvedValue(undefined),
-      getActivity: vi.fn().mockReturnValue(null),
-      isRunning: vi.fn(() => true),
-    });
+    activityMock ?? vi.fn().mockResolvedValue(createActivityRuntimeControllerMock(refreshActivity));
 
   const collectRuntimeSignalsMetadata =
     runtimeSignalsMock ??
@@ -547,23 +552,7 @@ describe('pi-session-deck extension', () => {
   });
 
   it('clears compaction and tracked entries on session_shutdown', async () => {
-    const activityRuntime = {
-      refreshActivity: vi.fn().mockResolvedValue(undefined),
-      recordInputSource: vi.fn().mockResolvedValue(undefined),
-      recordMessageEnd: vi.fn().mockResolvedValue(undefined),
-      recordTurnStart: vi.fn().mockResolvedValue(undefined),
-      recordToolExecutionStart: vi.fn().mockResolvedValue(undefined),
-      recordToolExecutionUpdate: vi.fn().mockResolvedValue(undefined),
-      recordToolExecutionEnd: vi.fn().mockResolvedValue(undefined),
-      recordTurnEnd: vi.fn().mockResolvedValue(undefined),
-      recordCompactionStart: vi.fn().mockResolvedValue(undefined),
-      recordUiDialogStart: vi.fn().mockResolvedValue(undefined),
-      recordUiDialogEnd: vi.fn().mockResolvedValue(undefined),
-      clearUiDialogs: vi.fn().mockResolvedValue(undefined),
-      clearCompaction: vi.fn().mockResolvedValue(undefined),
-      getActivity: vi.fn().mockReturnValue(null),
-      isRunning: vi.fn(() => true),
-    };
+    const activityRuntime = createActivityRuntimeControllerMock();
     const { stopActivityRuntime } = setupMocks(
       undefined,
       undefined,
@@ -614,23 +603,7 @@ describe('pi-session-deck extension', () => {
   });
 
   it('forwards runtime events into the activity runtime', async () => {
-    const activityRuntime = {
-      refreshActivity: vi.fn().mockResolvedValue(undefined),
-      recordInputSource: vi.fn().mockResolvedValue(undefined),
-      recordMessageEnd: vi.fn().mockResolvedValue(undefined),
-      recordTurnStart: vi.fn().mockResolvedValue(undefined),
-      recordToolExecutionStart: vi.fn().mockResolvedValue(undefined),
-      recordToolExecutionUpdate: vi.fn().mockResolvedValue(undefined),
-      recordToolExecutionEnd: vi.fn().mockResolvedValue(undefined),
-      recordTurnEnd: vi.fn().mockResolvedValue(undefined),
-      recordCompactionStart: vi.fn().mockResolvedValue(undefined),
-      recordUiDialogStart: vi.fn().mockResolvedValue(undefined),
-      recordUiDialogEnd: vi.fn().mockResolvedValue(undefined),
-      clearUiDialogs: vi.fn().mockResolvedValue(undefined),
-      clearCompaction: vi.fn().mockResolvedValue(undefined),
-      getActivity: vi.fn().mockReturnValue(null),
-      isRunning: vi.fn(() => true),
-    };
+    const activityRuntime = createActivityRuntimeControllerMock();
 
     setupMocks(undefined, undefined, vi.fn().mockResolvedValue(activityRuntime));
     const { handlers } = await installExtension();
@@ -694,23 +667,7 @@ describe('pi-session-deck extension', () => {
   });
 
   it('filters raw tool update payloads at ingress', async () => {
-    const activityRuntime = {
-      refreshActivity: vi.fn().mockResolvedValue(undefined),
-      recordInputSource: vi.fn().mockResolvedValue(undefined),
-      recordMessageEnd: vi.fn().mockResolvedValue(undefined),
-      recordTurnStart: vi.fn().mockResolvedValue(undefined),
-      recordToolExecutionStart: vi.fn().mockResolvedValue(undefined),
-      recordToolExecutionUpdate: vi.fn().mockResolvedValue(undefined),
-      recordToolExecutionEnd: vi.fn().mockResolvedValue(undefined),
-      recordTurnEnd: vi.fn().mockResolvedValue(undefined),
-      recordCompactionStart: vi.fn().mockResolvedValue(undefined),
-      recordUiDialogStart: vi.fn().mockResolvedValue(undefined),
-      recordUiDialogEnd: vi.fn().mockResolvedValue(undefined),
-      clearUiDialogs: vi.fn().mockResolvedValue(undefined),
-      clearCompaction: vi.fn().mockResolvedValue(undefined),
-      getActivity: vi.fn().mockReturnValue(null),
-      isRunning: vi.fn(() => true),
-    };
+    const activityRuntime = createActivityRuntimeControllerMock();
     const ensureActivityRuntimeStarted = vi.fn().mockResolvedValue(activityRuntime);
 
     setupMocks(undefined, undefined, ensureActivityRuntimeStarted);
