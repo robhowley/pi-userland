@@ -4,9 +4,11 @@ import { pathToFileURL } from 'node:url';
 import { orchestrateCreateSession } from '../session/create.js';
 import type {
   BrowserSafeCreateSessionActionResult,
+  BrowserSafeCreateSessionLaunchFailure,
   CreateSessionActionRequest,
   CreateSessionActionResult,
   CreateSessionFailureReason,
+  CreateSessionLaunchFailure,
 } from '../session/types.js';
 import { normalizeLaunchAgentDirSelection } from './agent-dir.js';
 import { orchestrateCreateWorktree } from './orchestrate.js';
@@ -344,15 +346,7 @@ export function toBrowserSafeCreateSessionActionResult(
   if (result.status === 'launch-failed') {
     return {
       ...result,
-      launch: {
-        requested: result.launch.requested,
-        ok: result.launch.ok,
-        mode: result.launch.mode,
-        status: result.launch.status,
-        reason: result.launch.reason,
-        recoverable: result.launch.recoverable,
-        message: toBrowserSafeCreateSessionLaunchFailureMessage(result.launch.reason),
-      },
+      launch: toBrowserSafeCreateSessionLaunchFailure(result.launch),
     };
   }
 
@@ -431,8 +425,35 @@ function toBrowserSafeCreateSessionPreflightFailureMessage(
   }
 }
 
+function toBrowserSafeCreateSessionLaunchFailure(
+  launch: CreateSessionLaunchFailure,
+): BrowserSafeCreateSessionLaunchFailure {
+  if (launch.reason === 'cleanup-failed') {
+    return {
+      requested: launch.requested,
+      ok: launch.ok,
+      mode: launch.mode,
+      status: launch.status,
+      reason: launch.reason,
+      recoverable: launch.recoverable,
+      runtimeId: launch.runtimeId,
+      message: toBrowserSafeCreateSessionLaunchFailureMessage(launch.reason),
+    };
+  }
+
+  return {
+    requested: launch.requested,
+    ok: launch.ok,
+    mode: launch.mode,
+    status: launch.status,
+    reason: launch.reason,
+    recoverable: launch.recoverable,
+    message: toBrowserSafeCreateSessionLaunchFailureMessage(launch.reason),
+  };
+}
+
 function toBrowserSafeCreateSessionLaunchFailureMessage(
-  reason: CreateWorktreeLaunchFailureReason,
+  reason: CreateSessionLaunchFailure['reason'],
 ): string {
   switch (reason) {
     case 'tmux-unavailable':
@@ -447,6 +468,8 @@ function toBrowserSafeCreateSessionLaunchFailureMessage(
       return 'tmux could not start Pi.';
     case 'presence-timeout':
       return 'Pi did not remain running in tmux.';
+    case 'cleanup-failed':
+      return 'Pi launch cleanup could not be confirmed; check the session before retrying.';
   }
 }
 

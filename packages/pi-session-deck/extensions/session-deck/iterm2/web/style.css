@@ -42,6 +42,7 @@
 body {
   margin: 0;
   min-height: 100vh;
+  overflow: hidden;
   background: var(--color-bg);
   color: var(--color-text);
 }
@@ -96,9 +97,11 @@ h2 {
 }
 
 .app {
-  min-height: 100vh;
-  display: grid;
-  align-content: start;
+  height: 100vh;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .topbar {
@@ -255,8 +258,19 @@ h2 {
 }
 
 .list-shell {
-  min-height: 360px;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
   padding: 0 0 12px;
+}
+
+.list {
+  align-content: start;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .list,
@@ -1003,6 +1017,37 @@ button.card-toggle[aria-expanded='true']::after {
   background: transparent;
   color: var(--color-text-strong);
   opacity: 1;
+}
+
+.new-session {
+  display: grid;
+  flex: 0 0 auto;
+  border-top: 1px solid var(--color-divider-strong);
+  border-bottom: 1px solid var(--color-divider);
+  background: var(--color-chrome);
+}
+
+.new-session-button {
+  justify-self: start;
+  margin: 8px 12px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+}
+
+.new-session-button:hover:not(:disabled),
+.new-session-button:focus-visible:not(:disabled) {
+  border-color: transparent;
+  background: transparent;
+  color: var(--color-text-strong);
+}
+
+.new-session-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 .worktree-form {

@@ -671,7 +671,7 @@ class ImportAndConfigTests(unittest.TestCase):
         fixture.write_helper(
             "import json, sys\n"
             "payload = json.loads(sys.stdin.read())\n"
-            "print(json.dumps({'ok': True, 'status': 'launched', 'action': payload['action'], 'cwd': payload['cwd']}))\n"
+            "print(json.dumps({'ok': True, 'status': 'launched', 'action': payload['action'], 'cwd': payload['cwd'], 'launch': {'runtimeId': '123e4567-e89b-42d3-a456-426614174000'}}))\n"
         )
         fixture.payload["runtime"]["nodeExecutablePath"] = sys.executable
         fixture.write_state()
@@ -698,7 +698,13 @@ class ImportAndConfigTests(unittest.TestCase):
             action_result = json.loads(response.read().decode("utf-8"))
         self.assertEqual(
             action_result,
-            {"ok": True, "status": "launched", "action": "create-session", "cwd": str(fixture.root)},
+            {
+                "ok": True,
+                "status": "launched",
+                "action": "create-session",
+                "cwd": str(fixture.root),
+                "launch": {"runtimeId": "123e4567-e89b-42d3-a456-426614174000"},
+            },
         )
 
         missing_token = Request(

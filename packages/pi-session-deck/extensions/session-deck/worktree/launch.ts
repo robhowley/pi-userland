@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID as nodeRandomUUID } from 'node:crypto';
 import { basename } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import {
@@ -8,6 +8,8 @@ import {
   PI_SESSION_DECK_SESSION_ID_ENV,
 } from '../identity/runtime-signals.js';
 import { formatPosixCommand, quotePosixArg } from '../identity/terminal-focus.js';
+import { PI_SESSION_DECK_ASSIGNED_RUNTIME_ID_ENV } from '../presence/constants.js';
+import { isValidAssignedPresenceRuntimeId } from '../presence/store.js';
 import { buildLaunchAgentDirEnvPlan, normalizeLaunchAgentDirSelection } from './agent-dir.js';
 import { defaultWorktreeExecFile, type ExecFileResult, type WorktreeExecFile } from './git.js';
 import { slugifyWorktreeLabel } from './create.js';
@@ -16,6 +18,8 @@ import type {
   CreateWorktreeLaunchFailure,
   CreateWorktreeLaunchSuccess,
   CreateWorktreeSuccess,
+  FreshDetachedTmuxPiCleanupFailure,
+  FreshDetachedTmuxPiLaunchResult,
   LaunchPrereqFailureReason,
 } from './types.js';
 
@@ -24,6 +28,7 @@ export interface LaunchDetachedTmuxPiOptions {
   env?: NodeJS.ProcessEnv;
   postLaunchVerifyDelayMs?: number;
   agentDir?: CreateWorktreeLaunchAgentDir;
+  randomUUID?: () => string;
 }
 
 export interface DetachedTmuxPiLaunchTarget {
@@ -32,6 +37,7 @@ export interface DetachedTmuxPiLaunchTarget {
 }
 
 type DetachedTmuxPiLaunchCopyMode = 'worktree' | 'session';
+type DetachedTmuxPiLaunchPolicy = { kind: 'managed' } | { kind: 'fresh'; runtimeId: string };
 
 interface ResolvedLaunchDetachedTmuxPiOptions extends LaunchDetachedTmuxPiOptions {
   env: NodeJS.ProcessEnv;
@@ -82,6 +88,7 @@ export async function launchDetachedTmuxPi(
     displayName,
     options,
     'worktree',
+    { kind: 'managed' },
   );
 }
 
@@ -90,7 +97,25 @@ export async function launchDetachedTmuxPiForCwd(
   displayName: string,
   options: LaunchDetachedTmuxPiOptions = {},
 ): Promise<CreateWorktreeLaunchSuccess | CreateWorktreeLaunchFailure> {
-  return await launchDetachedTmuxPiForTarget(target, displayName, options, 'session');
+  return await launchDetachedTmuxPiForTarget(target, displayName, options, 'session', {
+    kind: 'managed',
+  });
+}
+
+export async function launchFreshDetachedTmuxPiForCwd(
+  target: DetachedTmuxPiLaunchTarget,
+  displayName: string,
+  options: LaunchDetachedTmuxPiOptions = {},
+): Promise<FreshDetachedTmuxPiLaunchResult> {
+  const runtimeId = (options.randomUUID ?? nodeRandomUUID)();
+  if (!isValidAssignedPresenceRuntimeId(runtimeId)) {
+    throw new Error('Fresh runtime identity generator must return a safe UUID v4.');
+  }
+
+  return await launchDetachedTmuxPiForTarget(target, displayName, options, 'session', {
+    kind: 'fresh',
+    runtimeId,
+  });
 }
 
 async function launchDetachedTmuxPiForTarget(
@@ -98,19 +123,44 @@ async function launchDetachedTmuxPiForTarget(
   displayName: string,
   options: LaunchDetachedTmuxPiOptions,
   copyMode: DetachedTmuxPiLaunchCopyMode,
-): Promise<CreateWorktreeLaunchSuccess | CreateWorktreeLaunchFailure> {
+  policy: { kind: 'fresh'; runtimeId: string },
+): Promise<FreshDetachedTmuxPiLaunchResult>;
+async function launchDetachedTmuxPiForTarget(
+  target: DetachedTmuxPiLaunchTarget,
+  displayName: string,
+  options: LaunchDetachedTmuxPiOptions,
+  copyMode: DetachedTmuxPiLaunchCopyMode,
+  policy: { kind: 'managed' },
+): Promise<CreateWorktreeLaunchSuccess | CreateWorktreeLaunchFailure>;
+async function launchDetachedTmuxPiForTarget(
+  target: DetachedTmuxPiLaunchTarget,
+  displayName: string,
+  options: LaunchDetachedTmuxPiOptions,
+  copyMode: DetachedTmuxPiLaunchCopyMode,
+  policy: DetachedTmuxPiLaunchPolicy,
+): Promise<
+  CreateWorktreeLaunchSuccess | CreateWorktreeLaunchFailure | FreshDetachedTmuxPiCleanupFailure
+> {
   const resolvedOptions = resolveLaunchOptions(options);
   const launchCommand = buildPiLauncherCommand(
     displayName,
     resolvedOptions.env['PATH'] ?? '',
     resolvedOptions.agentDir,
+    policy.kind === 'fresh' ? policy.runtimeId : undefined,
   );
   const deckHandoffEnvArgs = buildTmuxEnvironmentArgs(resolvedOptions.env);
-  const sessionName = buildManagedTmuxSessionName({
-    repoName: target.repoName,
-    worktreePath: target.cwd,
-    label: displayName,
-  });
+  const sessionName =
+    policy.kind === 'fresh'
+      ? buildFreshTmuxSessionName({
+          cwd: target.cwd,
+          label: displayName,
+          runtimeId: policy.runtimeId,
+        })
+      : buildManagedTmuxSessionName({
+          repoName: target.repoName,
+          worktreePath: target.cwd,
+          label: displayName,
+        });
   const tmuxTarget = `=${sessionName}`;
   const manualAttachCommand = formatPosixCommand(['tmux', 'attach-session', '-t', tmuxTarget]);
   const manualCommand = `cd ${quotePosixArg(target.cwd)} && ${launchCommand}`;
@@ -122,6 +172,19 @@ async function launchDetachedTmuxPiForTarget(
 
   const existing = await tmuxHasSession(sessionName, resolvedOptions);
   if (existing) {
+    if (policy.kind === 'fresh') {
+      return {
+        requested: true,
+        ok: false,
+        mode: 'tmux-detached',
+        status: 'failed',
+        reason: 'tmux-name-collision',
+        recoverable: true,
+        message: nameCollisionMessage(sessionName, copyMode),
+        manualCommand,
+      };
+    }
+
     const cwd = await readTmuxSessionCwd(sessionName, resolvedOptions);
     if (cwd !== target.cwd) {
       return {
@@ -163,6 +226,7 @@ async function launchDetachedTmuxPiForTarget(
 
   const launchResult = await run(resolvedOptions, 'tmux', [
     'new-session',
+    ...(policy.kind === 'fresh' ? ['-P', '-F', '#{session_id}'] : []),
     ...deckHandoffEnvArgs,
     '-d',
     '-s',
@@ -186,8 +250,17 @@ async function launchDetachedTmuxPiForTarget(
     };
   }
 
+  const freshTmuxSessionId =
+    policy.kind === 'fresh' ? parseTmuxSessionId(launchResult.stdout) : null;
   const verification = await verifyLaunchedTmuxSession(sessionName, target.cwd, resolvedOptions);
   if (!verification.ok) {
+    if (policy.kind === 'fresh') {
+      const cleanupTarget = freshTmuxSessionId ?? `=${sessionName}`;
+      const cleanupConfirmed = await killTmuxSession(cleanupTarget, resolvedOptions);
+      if (!cleanupConfirmed) {
+        return postLaunchCleanupFailure(policy.runtimeId, manualCommand, copyMode);
+      }
+    }
     return postLaunchVerificationFailure(verification.observedCwd, manualCommand, copyMode);
   }
 
@@ -198,6 +271,7 @@ async function launchDetachedTmuxPiForTarget(
     status: 'launched',
     tmuxSessionName: sessionName,
     tmuxTarget,
+    ...(policy.kind === 'fresh' ? { runtimeId: policy.runtimeId } : {}),
     message: 'Started a detached tmux Pi session.',
     manualAttachCommand,
   };
@@ -219,22 +293,43 @@ export function buildManagedTmuxSessionName(input: {
   return `${boundedPrefix}-${hash}`;
 }
 
+export function buildFreshTmuxSessionName(input: {
+  cwd: string;
+  label: string;
+  runtimeId: string;
+}): string {
+  const cwdSlug = slugifyWorktreeLabel(basename(input.cwd)) ?? 'cwd';
+  const labelSlug = slugifyWorktreeLabel(input.label) ?? 'session';
+  const prefix = sanitizeTmuxName(`pi-${cwdSlug}-${labelSlug}`);
+  const boundedPrefix = prefix.slice(
+    0,
+    Math.max(1, TMUX_SESSION_NAME_LIMIT - input.runtimeId.length - 1),
+  );
+  return `${boundedPrefix}-${input.runtimeId}`;
+}
+
 export function buildPiLauncherCommand(
   displayName: string,
   pathValue: string,
   agentDir: CreateWorktreeLaunchAgentDir = { mode: 'ambient' },
+  assignedRuntimeId?: string,
 ): string {
   const normalized = normalizeLaunchAgentDirSelection(agentDir);
   if (!normalized.ok) {
     throw new Error(normalized.message);
   }
   const envPlan = buildLaunchAgentDirEnvPlan(normalized.agentDir);
+  const assignedRuntimeEnv =
+    assignedRuntimeId === undefined
+      ? []
+      : [`${PI_SESSION_DECK_ASSIGNED_RUNTIME_ID_ENV}=${assignedRuntimeId}`];
   const envArgs =
     envPlan.envAction === 'unset'
-      ? ['-u', 'PI_CODING_AGENT_DIR', `PATH=${pathValue}`]
+      ? ['-u', 'PI_CODING_AGENT_DIR', `PATH=${pathValue}`, ...assignedRuntimeEnv]
       : [
           `PATH=${pathValue}`,
           ...(envPlan.envAssignment === undefined ? [] : [envPlan.envAssignment]),
+          ...assignedRuntimeEnv,
         ];
   return `exec ${formatPosixCommand(['/usr/bin/env', ...envArgs, 'pi', '--name', displayName])}`;
 }
@@ -252,6 +347,23 @@ async function tmuxHasSession(
 ): Promise<boolean> {
   const result = await run(options, 'tmux', ['has-session', '-t', `=${sessionName}`]);
   return result.exitCode === 0;
+}
+
+function parseTmuxSessionId(value: string): string | null {
+  const sessionId = value.trim();
+  return /^\$[0-9]+$/u.test(sessionId) ? sessionId : null;
+}
+
+async function killTmuxSession(
+  target: string,
+  options: ResolvedLaunchDetachedTmuxPiOptions,
+): Promise<boolean> {
+  try {
+    const result = await run(options, 'tmux', ['kill-session', '-t', target]);
+    return result.exitCode === 0;
+  } catch {
+    return false;
+  }
 }
 
 async function verifyLaunchedTmuxSession(
@@ -342,6 +454,27 @@ function postLaunchVerificationFailure(
     reason: 'presence-timeout',
     recoverable: true,
     message: postLaunchVerificationMessage(observedCwd, copyMode),
+    manualCommand,
+  };
+}
+
+function postLaunchCleanupFailure(
+  runtimeId: string,
+  manualCommand: string,
+  copyMode: DetachedTmuxPiLaunchCopyMode,
+): FreshDetachedTmuxPiCleanupFailure {
+  return {
+    requested: true,
+    ok: false,
+    mode: 'tmux-detached',
+    status: 'failed',
+    reason: 'cleanup-failed',
+    recoverable: false,
+    runtimeId,
+    message:
+      copyMode === 'session'
+        ? 'Pi launch verification failed and tmux cleanup could not be confirmed.'
+        : 'Created worktree, but tmux cleanup after launch verification could not be confirmed.',
     manualCommand,
   };
 }

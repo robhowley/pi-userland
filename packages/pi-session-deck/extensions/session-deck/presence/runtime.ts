@@ -1,5 +1,6 @@
 import { randomUUID as nodeRandomUUID } from 'node:crypto';
-import { resolvePresenceThresholds } from './constants.js';
+import { PI_SESSION_DECK_ASSIGNED_RUNTIME_ID_ENV, resolvePresenceThresholds } from './constants.js';
+import { isValidAssignedPresenceRuntimeId } from './store.js';
 import { writePresenceRecord } from './writer.js';
 import type { PresenceDiagnostic, PresenceRecord, PresenceThresholds } from './types.js';
 
@@ -25,6 +26,7 @@ export interface PresenceRuntimeStartOptions {
   now?: () => Date;
   pid?: number;
   randomUUID?: () => string;
+  env?: NodeJS.ProcessEnv;
   thresholds?: Partial<PresenceThresholds>;
   setInterval?: typeof globalThis.setInterval;
   clearInterval?: typeof globalThis.clearInterval;
@@ -75,6 +77,7 @@ export function getPresenceRuntimeIdentity(
     now?: () => Date;
     pid?: number;
     randomUUID?: () => string;
+    env?: NodeJS.ProcessEnv;
   } = {},
 ): PresenceRuntimeIdentity {
   const state = getPresenceRuntimeState();
@@ -85,9 +88,10 @@ export function getPresenceRuntimeIdentity(
   const now = options.now ?? (() => new Date());
   const pid = options.pid ?? process.pid;
   const randomUUID = options.randomUUID ?? nodeRandomUUID;
+  const runtimeId = consumeAssignedRuntimeId(options.env ?? process.env) ?? randomUUID();
 
   state.cachedRuntimeIdentity = {
-    runtimeId: randomUUID(),
+    runtimeId,
     pid,
     startedAt: now().toISOString(),
   };
@@ -186,6 +190,15 @@ export async function resetPresenceRuntimeForTests(): Promise<void> {
   const state = getPresenceRuntimeState();
   await stopPresenceRuntime();
   state.cachedRuntimeIdentity = null;
+}
+
+function consumeAssignedRuntimeId(env: NodeJS.ProcessEnv): string | null {
+  const candidate = env[PI_SESSION_DECK_ASSIGNED_RUNTIME_ID_ENV];
+  delete env[PI_SESSION_DECK_ASSIGNED_RUNTIME_ID_ENV];
+
+  return typeof candidate === 'string' && isValidAssignedPresenceRuntimeId(candidate)
+    ? candidate
+    : null;
 }
 
 function createWriteErrorDiagnostic(

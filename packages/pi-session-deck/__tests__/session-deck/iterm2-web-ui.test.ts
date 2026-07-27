@@ -238,8 +238,10 @@ interface HarnessElements {
   showAll: FakeInputElement;
   refresh: FakeButtonElement;
   banner: FakeElement;
+  listShell: FakeElement;
   list: FakeElement;
   empty: FakeElement;
+  newSession: FakeElement;
   diagnosticsPanel: FakeElement;
   diagnostics: FakeElement;
 }
@@ -384,6 +386,22 @@ function buildJsonResponse(payload: unknown, ok = true, status = 200) {
   };
 }
 
+function buildCreateSessionSuccess(cwd: string, runtimeId = 'rt-new-session') {
+  return {
+    ok: true,
+    status: 'launched',
+    cwd,
+    launch: {
+      requested: true,
+      ok: true,
+      mode: 'tmux-detached',
+      status: 'launched',
+      runtimeId,
+      message: 'Started a detached tmux Pi session.',
+    },
+  };
+}
+
 async function setupApp(snapshots: unknown[]): Promise<AppHarness> {
   const document = new FakeDocument();
   const elements = buildElements(document);
@@ -525,10 +543,14 @@ function buildElements(document: FakeDocument): HarnessElements {
   const refresh = withId(document.createElement('button'), 'refresh');
   const banner = withId(document.createElement('section'), 'banner');
   banner.className = 'banner hidden';
+  const listShell = withId(document.createElement('section'), 'list-shell');
+  listShell.className = 'list-shell';
   const list = withId(document.createElement('div'), 'list');
   list.setAttribute('role', 'list');
   const empty = withId(document.createElement('p'), 'empty');
   empty.className = 'empty hidden';
+  const newSession = withId(document.createElement('div'), 'new-session');
+  listShell.append(list, empty, newSession);
   const diagnosticsPanel = withId(document.createElement('section'), 'diagnostics-panel');
   diagnosticsPanel.className = 'diagnostics-panel hidden';
   const diagnostics = withId(document.createElement('ul'), 'diagnostics');
@@ -536,15 +558,17 @@ function buildElements(document: FakeDocument): HarnessElements {
   const actionToken = withId(document.createElement('meta'), 'session-deck-action-token');
   actionToken.setAttribute('content', 'test-token');
 
-  document.append(summary, showAll, refresh, banner, list, empty, diagnosticsPanel, actionToken);
+  document.append(summary, showAll, refresh, banner, listShell, diagnosticsPanel, actionToken);
 
   return {
     summary,
     showAll,
     refresh,
     banner,
+    listShell,
     list,
     empty,
+    newSession,
     diagnosticsPanel,
     diagnostics,
   };
@@ -672,6 +696,45 @@ function getRepoActionButton(repoGroup: FakeElement): FakeButtonElement {
     throw new Error('Expected repo action button.');
   }
   return actionButton;
+}
+
+function getFooterActionButton(newSession: FakeElement): FakeButtonElement {
+  const actionButton = findAllByTag(newSession, 'button').find((button) =>
+    ['+ New session', 'Cancel'].includes(button.textContent),
+  );
+  if (!(actionButton instanceof FakeButtonElement)) {
+    throw new Error('Expected footer action button.');
+  }
+  return actionButton;
+}
+
+function getCwdComposer(root: FakeNode): FakeElement {
+  const form = findAllByClass(root, 'worktree-form')[0];
+  if (!form) {
+    throw new Error('Expected cwd composer.');
+  }
+  return form;
+}
+
+async function configureCwdComposer(
+  getRoot: () => FakeNode,
+  cwd: string,
+  customDir: string,
+): Promise<void> {
+  let form = getCwdComposer(getRoot());
+  const cwdInput = getInputByAriaLabel(form, 'Working directory');
+  cwdInput.value = cwd;
+  cwdInput.dispatchEvent({ type: 'input' });
+  getButtonByAriaLabel(form, 'Change Pi config').click();
+
+  form = getCwdComposer(getRoot());
+  getButtonByText(form, 'Custom…').click();
+
+  form = getCwdComposer(getRoot());
+  const customInput = getInputByAriaLabel(form, 'Custom Pi config directory');
+  customInput.value = customDir;
+  customInput.dispatchEvent({ type: 'input' });
+  await flushMicrotasks();
 }
 
 function getInputByAriaLabel(root: FakeNode, ariaLabel: string): FakeInputElement {
@@ -1413,6 +1476,406 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(buttons[0]?.disabled).toBe(false);
   });
 
+  it.each(['loading', 'error', 'empty', 'filtered', 'populated', 'expanded'])(
+    'keeps the footer last and visible while the deck is %s',
+    async (deckState) => {
+      let elements: HarnessElements;
+
+      if (deckState === 'loading') {
+        ({ elements } = await setupPendingApp());
+      } else if (deckState === 'error') {
+        const fetchMock = vi.fn(async () => buildJsonResponse({}, false, 503));
+        ({ elements } = await setupAppWithFetch(fetchMock));
+      } else {
+        const records =
+          deckState === 'empty'
+            ? []
+            : [
+                buildRecord({
+                  presenceState: deckState === 'filtered' ? 'dead' : 'live',
+                }),
+              ];
+        ({ elements } = await setupApp([buildSnapshot({ records })]));
+        if (deckState === 'expanded') {
+          expandRepoGroup(elements.list, 'owner/project');
+        }
+      }
+
+      expect(elements.listShell.classList.contains('list-shell')).toBe(true);
+      expect(elements.listShell.childNodes).toEqual([
+        elements.list,
+        elements.empty,
+        elements.newSession,
+      ]);
+      expect(elements.newSession.classList.contains('hidden')).toBe(false);
+      expect(getFooterActionButton(elements.newSession).textContent).toBe('+ New session');
+      expect(getFooterActionButton(elements.newSession).parentNode).toBe(elements.newSession);
+    },
+  );
+
+  it('opens and cancels the footer without changing repo or session disclosures or creating', async () => {
+    const harness = await setupApp([buildSnapshot()]);
+    expandRepoGroup(harness.elements.list, 'owner/project');
+    getCardToggle(getCards(harness.elements.list)[0]!).click();
+
+    getFooterActionButton(harness.elements.newSession).click();
+    await flushMicrotasks();
+
+    expect(getFooterActionButton(harness.elements.newSession).textContent).toBe('Cancel');
+    expect(
+      getRepoHeaderByLabel(harness.elements.list, 'owner/project').getAttribute('aria-expanded'),
+    ).toBe('true');
+    expect(getExpandedCardTitles(harness.elements.list)).toEqual(['alpha']);
+
+    getFooterActionButton(harness.elements.newSession).click();
+    await flushMicrotasks();
+
+    expect(getFooterActionButton(harness.elements.newSession).textContent).toBe('+ New session');
+    expect(findAllByClass(harness.elements.newSession, 'worktree-form')).toHaveLength(0);
+    expect(
+      getRepoHeaderByLabel(harness.elements.list, 'owner/project').getAttribute('aria-expanded'),
+    ).toBe('true');
+    expect(getExpandedCardTitles(harness.elements.list)).toEqual(['alpha']);
+    expect(
+      harness.fetchMock.mock.calls.filter(([url]) => url === '/actions/create-session'),
+    ).toHaveLength(0);
+    expect(
+      harness.fetchMock.mock.calls.filter(([url]) => url === '/actions/create-worktree'),
+    ).toHaveLength(0);
+  });
+
+  it('preserves the open footer draft, config, focus selection, and disclosures across refresh', async () => {
+    const harness = await setupApp([buildSnapshot()]);
+    expandRepoGroup(harness.elements.list, 'owner/project');
+    getCardToggle(getCards(harness.elements.list)[0]!).click();
+    getFooterActionButton(harness.elements.newSession).click();
+    await flushMicrotasks();
+
+    await configureCwdComposer(
+      () => harness.elements.newSession,
+      `${HOME}/project/footer-draft`,
+      '/tmp/pi/footer-config',
+    );
+    const cwdInput = getInputByAriaLabel(
+      getCwdComposer(harness.elements.newSession),
+      'Working directory',
+    );
+    cwdInput.focus();
+    cwdInput.setSelectionRange(2, 11);
+
+    harness.pushSnapshot(
+      buildSnapshot({ records: [buildRecord({ sessionName: 'alpha refreshed' })] }),
+    );
+    harness.elements.refresh.click();
+    await flushMicrotasks();
+
+    const refreshedForm = getCwdComposer(harness.elements.newSession);
+    const refreshedCwdInput = getInputByAriaLabel(refreshedForm, 'Working directory');
+    expect(getFooterActionButton(harness.elements.newSession).textContent).toBe('Cancel');
+    expect(refreshedCwdInput.value).toBe(`${HOME}/project/footer-draft`);
+    expect(findAllByClass(refreshedForm, 'worktree-config-summary')[0]?.textContent).toBe(
+      'Pi config → /tmp/pi/footer-config',
+    );
+    expect(findAllByClass(refreshedForm, 'worktree-config-drawer')).toHaveLength(1);
+    expect(harness.document.activeElement).toBe(refreshedCwdInput);
+    expect([refreshedCwdInput.selectionStart, refreshedCwdInput.selectionEnd]).toEqual([2, 11]);
+    expect(
+      getRepoHeaderByLabel(harness.elements.list, 'owner/project').getAttribute('aria-expanded'),
+    ).toBe('true');
+    expect(getExpandedCardTitles(harness.elements.list)).toEqual(['alpha refreshed']);
+  });
+
+  it('isolates footer and No repo drafts, previews, and footer result', async () => {
+    const initialSnapshot = buildSnapshot({
+      records: [buildRecord(), buildNoRepoRecord({ cwd: `${HOME}/row-existing` })],
+    });
+    const harness = await setupApp([
+      initialSnapshot,
+      buildCreateSessionSuccess(`${HOME}/footer`, 'rt-footer'),
+      initialSnapshot,
+    ]);
+
+    getFooterActionButton(harness.elements.newSession).click();
+    await flushMicrotasks();
+    await configureCwdComposer(
+      () => harness.elements.newSession,
+      '~/footer',
+      '/tmp/pi/footer-config',
+    );
+
+    getRepoActionButton(getRepoGroupByLabel(harness.elements.list, 'No repo')).click();
+    await flushMicrotasks();
+    await configureCwdComposer(
+      () => getRepoGroupByLabel(harness.elements.list, 'No repo'),
+      '~/row',
+      '/tmp/pi/row-config',
+    );
+    const noRepoForm = getCwdComposer(getRepoGroupByLabel(harness.elements.list, 'No repo'));
+    expect(getInputByAriaLabel(noRepoForm, 'Working directory').value).toBe('~/row');
+    expect(findAllByClass(noRepoForm, 'worktree-config-summary')[0]?.textContent).toBe(
+      'Pi config → /tmp/pi/row-config',
+    );
+
+    getFooterActionButton(harness.elements.newSession).click();
+    await flushMicrotasks();
+    const footerForm = getCwdComposer(harness.elements.newSession);
+    expect(getInputByAriaLabel(footerForm, 'Working directory').value).toBe('~/footer');
+    expect(findAllByClass(footerForm, 'worktree-config-summary')[0]?.textContent).toBe(
+      'Pi config → /tmp/pi/footer-config',
+    );
+    const previewRequests = harness.fetchMock.mock.calls
+      .filter(([url]) => url === '/actions/create-worktree-preview')
+      .map(([, init]) => JSON.parse((init as { body?: string }).body ?? '{}'));
+    expect(previewRequests).toContainEqual(
+      expect.objectContaining({
+        launch: {
+          mode: 'tmux-detached',
+          agentDir: { mode: 'custom', customDir: '/tmp/pi/footer-config' },
+        },
+      }),
+    );
+    expect(previewRequests).toContainEqual(
+      expect.objectContaining({
+        launch: {
+          mode: 'tmux-detached',
+          agentDir: { mode: 'custom', customDir: '/tmp/pi/row-config' },
+        },
+      }),
+    );
+
+    footerForm.dispatchEvent({ type: 'submit' });
+    await flushMicrotasks();
+
+    getRepoActionButton(getRepoGroupByLabel(harness.elements.list, 'No repo')).click();
+    await flushMicrotasks();
+    const preservedNoRepoForm = getCwdComposer(
+      getRepoGroupByLabel(harness.elements.list, 'No repo'),
+    );
+    expect(getInputByAriaLabel(preservedNoRepoForm, 'Working directory').value).toBe('~/row');
+    expect(getPendingWorktreeCards(harness.elements.newSession)).toHaveLength(1);
+    expect(harness.elements.newSession.textContent).toContain('Session launched');
+    expect(
+      getPendingWorktreeCards(getRepoGroupByLabel(harness.elements.list, 'No repo')),
+    ).toHaveLength(0);
+  });
+
+  it('posts exact create-session JSON for a repo-contained footer cwd without create-worktree', async () => {
+    const cwd = `${HOME}/project/packages/pi-session-deck`;
+    const initialSnapshot = buildSnapshot();
+    const harness = await setupApp([
+      initialSnapshot,
+      buildCreateSessionSuccess(cwd, 'rt-repo-contained'),
+      initialSnapshot,
+    ]);
+
+    getFooterActionButton(harness.elements.newSession).click();
+    await flushMicrotasks();
+    const form = getCwdComposer(harness.elements.newSession);
+    const cwdInput = getInputByAriaLabel(form, 'Working directory');
+    cwdInput.value = cwd;
+    cwdInput.dispatchEvent({ type: 'input' });
+    form.dispatchEvent({ type: 'submit' });
+    await flushMicrotasks();
+
+    const createSessionCalls = harness.fetchMock.mock.calls.filter(
+      ([url]) => url === '/actions/create-session',
+    );
+    expect(createSessionCalls).toHaveLength(1);
+    expect(JSON.parse((createSessionCalls[0]![1] as { body?: string }).body ?? '{}')).toEqual({
+      action: 'create-session',
+      cwd,
+      launch: { mode: 'tmux-detached', agentDir: { mode: 'ambient' } },
+    });
+    expect(
+      harness.fetchMock.mock.calls.filter(([url]) => url === '/actions/create-worktree'),
+    ).toHaveLength(0);
+  });
+
+  it.each(['footer', 'No repo'])(
+    'prevents a second cwd-only submission while the %s request is in flight',
+    async (firstEntryPoint) => {
+      const initialSnapshot = buildSnapshot({ records: [buildRecord(), buildNoRepoRecord()] });
+      let resolveCreateSession!: (response: ReturnType<typeof buildJsonResponse>) => void;
+      const fetchMock = vi.fn((url: string, init?: { body?: string }) => {
+        if (url === '/snapshot.json') {
+          return Promise.resolve(buildJsonResponse(initialSnapshot));
+        }
+        if (url === '/actions/create-worktree-preview') {
+          const body = JSON.parse(init?.body ?? '{}') as { action?: string };
+          if (body.action === 'preview-launch-context') {
+            return Promise.resolve(buildJsonResponse(buildLaunchPreview()));
+          }
+        }
+        if (url === '/actions/create-session') {
+          return new Promise<ReturnType<typeof buildJsonResponse>>((resolve) => {
+            resolveCreateSession = resolve;
+          });
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      });
+      const harness = await setupAppWithFetch(fetchMock);
+
+      getFooterActionButton(harness.elements.newSession).click();
+      await flushMicrotasks();
+      const footerForm = getCwdComposer(harness.elements.newSession);
+      const footerInput = getInputByAriaLabel(footerForm, 'Working directory');
+      footerInput.value = firstEntryPoint === 'footer' ? '~/footer-first' : '~/footer-second';
+      footerInput.dispatchEvent({ type: 'input' });
+
+      getRepoActionButton(getRepoGroupByLabel(harness.elements.list, 'No repo')).click();
+      await flushMicrotasks();
+      const noRepoForm = getCwdComposer(getRepoGroupByLabel(harness.elements.list, 'No repo'));
+      const noRepoInput = getInputByAriaLabel(noRepoForm, 'Working directory');
+      noRepoInput.value = firstEntryPoint === 'footer' ? '~/row-second' : '~/row-first';
+      noRepoInput.dispatchEvent({ type: 'input' });
+
+      const firstCwd = firstEntryPoint === 'footer' ? '~/footer-first' : '~/row-first';
+      const secondFormBeforeSubmit = firstEntryPoint === 'footer' ? noRepoForm : footerForm;
+      if (firstEntryPoint === 'footer') {
+        getFooterActionButton(harness.elements.newSession).click();
+        await flushMicrotasks();
+        getCwdComposer(harness.elements.newSession).dispatchEvent({ type: 'submit' });
+
+        getRepoActionButton(getRepoGroupByLabel(harness.elements.list, 'No repo')).click();
+        const blockedForm = getCwdComposer(getRepoGroupByLabel(harness.elements.list, 'No repo'));
+        expect(getButtonByText(blockedForm, 'Create').disabled).toBe(true);
+      } else {
+        noRepoForm.dispatchEvent({ type: 'submit' });
+        expect(getFooterActionButton(harness.elements.newSession).disabled).toBe(true);
+      }
+
+      secondFormBeforeSubmit.dispatchEvent({ type: 'submit' });
+      expect(
+        fetchMock.mock.calls.filter(([url]) => url === '/actions/create-session'),
+      ).toHaveLength(1);
+
+      resolveCreateSession(
+        buildJsonResponse(
+          buildCreateSessionSuccess(
+            firstCwd === '~/footer-first' ? `${HOME}/footer-first` : `${HOME}/row-first`,
+          ),
+        ),
+      );
+      await flushMicrotasks();
+    },
+  );
+
+  it.each(['footer', 'No repo'])(
+    'allows a second settled same-cwd %s create',
+    async (entryPoint) => {
+      const cwd = `${HOME}/repeat`;
+      const initialSnapshot = buildSnapshot({
+        records: [buildRecord(), buildNoRepoRecord({ cwd: `${HOME}/existing` })],
+      });
+      const harness = await setupApp([
+        initialSnapshot,
+        buildCreateSessionSuccess(cwd, 'rt-first'),
+        initialSnapshot,
+        buildCreateSessionSuccess(cwd, 'rt-second'),
+        initialSnapshot,
+      ]);
+
+      const openEntry = async (): Promise<FakeElement> => {
+        if (entryPoint === 'footer') {
+          getFooterActionButton(harness.elements.newSession).click();
+          await flushMicrotasks();
+          return harness.elements.newSession;
+        }
+
+        getRepoActionButton(getRepoGroupByLabel(harness.elements.list, 'No repo')).click();
+        await flushMicrotasks();
+        return getRepoGroupByLabel(harness.elements.list, 'No repo');
+      };
+
+      const submit = async (root: FakeNode): Promise<void> => {
+        const form = getCwdComposer(root);
+        const cwdInput = getInputByAriaLabel(form, 'Working directory');
+        cwdInput.value = cwd;
+        cwdInput.dispatchEvent({ type: 'input' });
+        form.dispatchEvent({ type: 'submit' });
+        await flushMicrotasks();
+      };
+
+      await submit(await openEntry());
+      expect(
+        harness.fetchMock.mock.calls.filter(([url]) => url === '/actions/create-session'),
+      ).toHaveLength(1);
+      expect(
+        (entryPoint === 'footer'
+          ? harness.elements.newSession
+          : getRepoGroupByLabel(harness.elements.list, 'No repo')
+        ).textContent,
+      ).toContain('Session launched');
+
+      await submit(await openEntry());
+      const createSessionCalls = harness.fetchMock.mock.calls.filter(
+        ([url]) => url === '/actions/create-session',
+      );
+      expect(createSessionCalls).toHaveLength(2);
+      expect(JSON.parse((createSessionCalls[1]![1] as { body?: string }).body ?? '{}')).toEqual(
+        JSON.parse((createSessionCalls[0]![1] as { body?: string }).body ?? '{}'),
+      );
+      expect(
+        (entryPoint === 'footer'
+          ? harness.elements.newSession
+          : getRepoGroupByLabel(harness.elements.list, 'No repo')
+        ).textContent,
+      ).toContain('Session launched');
+    },
+  );
+
+  it('keeps fresh footer success pending past old same-cwd rows, then clears on exact runtime', async () => {
+    const initialSnapshot = buildSnapshot();
+    const harness = await setupApp([
+      initialSnapshot,
+      buildCreateSessionSuccess(`${HOME}/footer-target`, 'rt-footer-success'),
+      buildSnapshot({
+        records: [
+          buildRecord({
+            runtimeId: 'rt-old-live',
+            cwd: `${HOME}/footer-target`,
+          }),
+          buildRecord({
+            runtimeId: 'rt-old-closed',
+            cwd: `${HOME}/footer-target`,
+            presenceState: 'dead',
+            presenceReason: 'process_exited',
+          }),
+        ],
+      }),
+      buildSnapshot({
+        records: [
+          buildRecord({
+            runtimeId: 'rt-footer-success',
+            cwd: `${HOME}/other-cwd`,
+            repoName: 'other-project',
+            qualifiedRepoName: 'owner/other-project',
+          }),
+        ],
+      }),
+    ]);
+
+    getFooterActionButton(harness.elements.newSession).click();
+    await flushMicrotasks();
+    const form = getCwdComposer(harness.elements.newSession);
+    const cwdInput = getInputByAriaLabel(form, 'Working directory');
+    cwdInput.value = `${HOME}/footer-target`;
+    cwdInput.dispatchEvent({ type: 'input' });
+    form.dispatchEvent({ type: 'submit' });
+    await flushMicrotasks();
+
+    expect(getPendingWorktreeCards(harness.elements.newSession)).toHaveLength(1);
+    expect(harness.elements.newSession.textContent).toContain('Session launched');
+
+    setShowAll(harness.elements, true);
+    expect(getPendingWorktreeCards(harness.elements.newSession)).toHaveLength(1);
+
+    harness.elements.refresh.click();
+    await flushMicrotasks();
+
+    expect(getPendingWorktreeCards(harness.elements.newSession)).toHaveLength(0);
+  });
+
   it('renders + New for No repo and opens a cwd composer', async () => {
     const harness = await setupApp([
       buildSnapshot({ records: [buildNoRepoRecord({ cwd: `${HOME}/existing` })] }),
@@ -1766,9 +2229,13 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(getPendingWorktreeCards(harness.elements.list)).toHaveLength(0);
   });
 
-  it('shows a No repo launch failure retry card and retry posts create-session', async () => {
+  it('locks a No repo retry while a footer create-session request is in flight', async () => {
     const initialSnapshot = buildSnapshot({
       records: [buildNoRepoRecord({ cwd: `${HOME}/existing` })],
+    });
+    let resolveFooterCreate!: (result: unknown) => void;
+    const footerCreate = new Promise<unknown>((resolve) => {
+      resolveFooterCreate = resolve;
     });
     const harness = await setupApp([
       initialSnapshot,
@@ -1788,6 +2255,8 @@ describe('Session Deck iTerm2 web UI', () => {
         },
       },
       initialSnapshot,
+      footerCreate,
+      initialSnapshot,
       {
         ok: true,
         status: 'reused-existing',
@@ -1806,20 +2275,18 @@ describe('Session Deck iTerm2 web UI', () => {
     getRepoActionButton(getRepoGroupByLabel(harness.elements.list, 'No repo')).click();
     await flushMicrotasks();
 
-    const form = findAllByClass(
-      getRepoGroupByLabel(harness.elements.list, 'No repo'),
-      'worktree-form',
-    )[0]!;
-    const cwdInput = getInputByAriaLabel(form, 'Working directory');
-    cwdInput.value = '~/other';
-    cwdInput.dispatchEvent({ type: 'input' });
-    form.dispatchEvent({ type: 'submit' });
+    const noRepoForm = getCwdComposer(getRepoGroupByLabel(harness.elements.list, 'No repo'));
+    const noRepoInput = getInputByAriaLabel(noRepoForm, 'Working directory');
+    noRepoInput.value = '~/other';
+    noRepoInput.dispatchEvent({ type: 'input' });
+    noRepoForm.dispatchEvent({ type: 'submit' });
     await flushMicrotasks();
 
     expect(harness.elements.list.textContent).toContain('New session failed');
     expect(harness.elements.list.textContent).toContain('tmux could not start Pi');
-    const retryActions = getPendingWorktreeActions(harness.elements.list);
-    expect(retryActions.map((button) => button.textContent)).toEqual(['Retry']);
+    const staleRetry = getPendingWorktreeActions(harness.elements.list)[0]!;
+    expect(staleRetry.textContent).toBe('Retry');
+    expect(staleRetry.disabled).toBe(false);
     const firstRequest = JSON.parse(
       (
         harness.fetchMock.mock.calls.find(([url]) => url === '/actions/create-session')?.[1] as {
@@ -1828,14 +2295,34 @@ describe('Session Deck iTerm2 web UI', () => {
       )?.body ?? '{}',
     );
 
-    retryActions[0]!.click();
+    getFooterActionButton(harness.elements.newSession).click();
+    await flushMicrotasks();
+    const footerForm = getCwdComposer(harness.elements.newSession);
+    const footerInput = getInputByAriaLabel(footerForm, 'Working directory');
+    footerInput.value = '~/footer-lock';
+    footerInput.dispatchEvent({ type: 'input' });
+    footerForm.dispatchEvent({ type: 'submit' });
+
+    const liveRetry = getPendingWorktreeActions(harness.elements.list)[0]!;
+    expect(liveRetry.disabled).toBe(true);
+    staleRetry.click();
+    expect(
+      harness.fetchMock.mock.calls.filter(([url]) => url === '/actions/create-session'),
+    ).toHaveLength(2);
+
+    resolveFooterCreate(buildCreateSessionSuccess(`${HOME}/footer-lock`, 'rt-footer-lock'));
+    await flushMicrotasks();
+
+    const unlockedRetry = getPendingWorktreeActions(harness.elements.list)[0]!;
+    expect(unlockedRetry.disabled).toBe(false);
+    unlockedRetry.click();
     await flushMicrotasks();
 
     const createSessionCalls = harness.fetchMock.mock.calls.filter(
       ([url]) => url === '/actions/create-session',
     );
-    expect(createSessionCalls).toHaveLength(2);
-    expect(JSON.parse((createSessionCalls[1]![1] as { body?: string }).body ?? '{}')).toEqual(
+    expect(createSessionCalls).toHaveLength(3);
+    expect(JSON.parse((createSessionCalls[2]![1] as { body?: string }).body ?? '{}')).toEqual(
       firstRequest,
     );
     expect(harness.elements.list.textContent).toContain('Session reused');
@@ -1935,6 +2422,24 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(getRepoHeaderTexts(harness.elements.list)).toEqual(['owner/project · 1']);
     expandRepoGroup(harness.elements.list, 'owner/project');
     expect(harness.elements.list.textContent).toContain('regrouped');
+  });
+
+  it('keeps the footer outside the session list scroll area', async () => {
+    const css = await readFile(
+      new URL('../../extensions/session-deck/iterm2/web/style.css', import.meta.url),
+      'utf8',
+    );
+
+    expect(css).toMatch(/\.app\s*\{[^}]*height:\s*100vh;[^}]*overflow:\s*hidden;/u);
+    expect(css).toMatch(
+      /\.list-shell\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;[^}]*min-height:\s*0;[^}]*overflow:\s*hidden;/u,
+    );
+    expect(css).toMatch(
+      /\.list\s*\{[^}]*align-content:\s*start;[^}]*flex:\s*1 1 auto;[^}]*min-height:\s*0;[^}]*overflow-y:\s*auto;/u,
+    );
+    expect(css).toMatch(
+      /\.new-session\s*\{[^}]*flex:\s*0 0 auto;[^}]*border-top:\s*1px solid var\(--color-divider-strong\);[^}]*background:\s*var\(--color-chrome\);/u,
+    );
   });
 
   it('ships Prompt Gutter rails and one-row compact composer styling', async () => {
@@ -3579,6 +4084,12 @@ describe('Session Deck iTerm2 web UI', () => {
     });
     expect(JSON.parse(requestInit.body ?? '{}')).toEqual({ runtimeId: 'rt-1' });
     expect(Object.keys(JSON.parse(requestInit.body ?? '{}'))).toEqual(['runtimeId']);
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/actions/create-session')).toHaveLength(
+      0,
+    );
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/actions/create-worktree')).toHaveLength(
+      0,
+    );
   });
 
   it('renders End session only in expanded details and posts exact authenticated Kill requests after confirmation', async () => {

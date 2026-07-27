@@ -4,6 +4,8 @@ export const PRESENCE_PATH_SEGMENTS = ['.pi', 'session-deck', 'presence'] as con
 
 export const SESSION_DECK_COMMAND_NAME = 'session-deck';
 
+export const PI_SESSION_DECK_ASSIGNED_RUNTIME_ID_ENV = 'PI_SESSION_DECK_ASSIGNED_RUNTIME_ID';
+
 export const DEFAULT_PRESENCE_THRESHOLDS: PresenceThresholds = {
   heartbeatIntervalMs: 10_000,
   liveAfterMs: 30_000,
