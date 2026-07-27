@@ -2352,7 +2352,9 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(css).toMatch(
       /\.list\s*\{[^}]*align-content:\s*start;[^}]*flex:\s*1 1 auto;[^}]*min-height:\s*0;[^}]*overflow-y:\s*auto;/u,
     );
-    expect(css).toMatch(/\.new-session\s*\{[^}]*flex:\s*0 0 auto;/u);
+    expect(css).toMatch(
+      /\.new-session\s*\{[^}]*flex:\s*0 0 auto;[^}]*border-top:\s*1px solid var\(--color-divider-strong\);[^}]*background:\s*var\(--color-chrome\);/u,
+    );
   });
 
   it('ships Prompt Gutter rails and one-row compact composer styling', async () => {
