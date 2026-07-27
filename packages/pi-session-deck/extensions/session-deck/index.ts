@@ -196,7 +196,11 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 
   on('session_shutdown', async () => {
     const activityRuntime = await ensureActivityRuntime();
-    await uiDialogMirror.clearTracked();
+    try {
+      await uiDialogMirror.clearTracked();
+    } catch {
+      // clearTracked reports its failure before rejecting.
+    }
     await activityRuntime.clearCompaction('shutdown');
     await stopActivityRuntime();
     await statusMirror.clearTracked();

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { UiDialogMirrorOptions } from '../../extensions/session-deck/activity/ui-dialogs.js';
 
 afterEach(() => {
   vi.doUnmock('../../extensions/session-deck/identity/runtime-signals.js');
@@ -177,6 +178,7 @@ function setupMocks(
 
   const stopIdentityRuntime = vi.fn().mockResolvedValue(undefined);
   const stopActivityRuntime = vi.fn().mockResolvedValue(undefined);
+  const createUiDialogMirror = vi.fn((_options: UiDialogMirrorOptions) => MOCK_UI_DIALOG_MIRROR);
 
   vi.doMock('../../extensions/session-deck/presence/runtime.js', () => ({
     ensurePresenceRuntimeStarted,
@@ -205,7 +207,7 @@ function setupMocks(
     createSetStatusMirror: vi.fn(() => MOCK_STATUS_MIRROR),
   }));
   vi.doMock('../../extensions/session-deck/activity/ui-dialogs.js', () => ({
-    createUiDialogMirror: vi.fn(() => MOCK_UI_DIALOG_MIRROR),
+    createUiDialogMirror,
   }));
 
   return {
@@ -215,6 +217,7 @@ function setupMocks(
     collectRuntimeSignalsMetadata,
     stopIdentityRuntime,
     stopActivityRuntime,
+    createUiDialogMirror,
   };
 }
 
@@ -553,7 +556,7 @@ describe('pi-session-deck extension', () => {
 
   it('clears compaction and tracked entries on session_shutdown', async () => {
     const activityRuntime = createActivityRuntimeControllerMock();
-    const { stopActivityRuntime } = setupMocks(
+    const { stopActivityRuntime, stopIdentityRuntime } = setupMocks(
       undefined,
       undefined,
       vi.fn().mockResolvedValue(activityRuntime),
@@ -568,11 +571,31 @@ describe('pi-session-deck extension', () => {
     expect(activityRuntime.clearCompaction).toHaveBeenCalledWith('shutdown');
     expect(MOCK_STATUS_MIRROR.clearTracked).toHaveBeenCalledTimes(1);
     expect(stopActivityRuntime).toHaveBeenCalledTimes(1);
+    expect(stopIdentityRuntime).toHaveBeenCalledTimes(1);
     const clearOrder = MOCK_UI_DIALOG_MIRROR.clearTracked.mock.invocationCallOrder[0];
     const stopOrder = stopActivityRuntime.mock.invocationCallOrder[0];
     expect(clearOrder).toBeDefined();
     expect(stopOrder).toBeDefined();
     expect(clearOrder!).toBeLessThan(stopOrder!);
+  });
+
+  it('continues session_shutdown cleanup when clearing UI dialogs fails', async () => {
+    const activityRuntime = createActivityRuntimeControllerMock();
+    const { stopActivityRuntime, stopIdentityRuntime } = setupMocks(
+      undefined,
+      undefined,
+      vi.fn().mockResolvedValue(activityRuntime),
+    );
+    const { handlers } = await installExtension();
+
+    MOCK_UI_DIALOG_MIRROR.clearTracked.mockRejectedValueOnce(new Error('clear failed'));
+
+    await expect(handlers.get('session_shutdown')?.({}, {})).resolves.toBeUndefined();
+
+    expect(activityRuntime.clearCompaction).toHaveBeenCalledWith('shutdown');
+    expect(stopActivityRuntime).toHaveBeenCalledTimes(1);
+    expect(MOCK_STATUS_MIRROR.clearTracked).toHaveBeenCalledTimes(1);
+    expect(stopIdentityRuntime).toHaveBeenCalledTimes(1);
   });
 
   it('surfaces degraded startup state through session-deck status', async () => {
@@ -600,6 +623,31 @@ describe('pi-session-deck extension', () => {
       'session-deck',
       'session-deck degraded: Failed to write presence record: permission denied',
     );
+  });
+
+  it('delegates UI dialog mirror events to the activity runtime', async () => {
+    const activityRuntime = createActivityRuntimeControllerMock();
+    const { createUiDialogMirror } = setupMocks(
+      undefined,
+      undefined,
+      vi.fn().mockResolvedValue(activityRuntime),
+    );
+    await installExtension();
+
+    const options = createUiDialogMirror.mock.calls[0]?.[0];
+    expect(options).toBeDefined();
+
+    const startEvent = { waitId: 'select-1', kind: 'select' } as const;
+    const endEvent = { waitId: 'select-1' };
+    await options!.recordStart(startEvent);
+    await options!.recordEnd(endEvent);
+    await options!.clear();
+
+    expect(activityRuntime.recordUiDialogStart).toHaveBeenCalledTimes(1);
+    expect(activityRuntime.recordUiDialogStart).toHaveBeenCalledWith(startEvent);
+    expect(activityRuntime.recordUiDialogEnd).toHaveBeenCalledTimes(1);
+    expect(activityRuntime.recordUiDialogEnd).toHaveBeenCalledWith(endEvent);
+    expect(activityRuntime.clearUiDialogs).toHaveBeenCalledTimes(1);
   });
 
   it('forwards runtime events into the activity runtime', async () => {

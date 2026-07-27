@@ -108,6 +108,47 @@ describe('UI dialog mirror', () => {
     await flushRecorderTasks();
   });
 
+  it('keeps overlapping dialogs of one kind on separate wait ids', async () => {
+    const firstPrompt = createDeferred<string>();
+    const secondPrompt = createDeferred<string>();
+    const recordStart = vi.fn().mockResolvedValue(undefined);
+    const recordEnd = vi.fn().mockResolvedValue(undefined);
+    const ui = {
+      input: vi
+        .fn()
+        .mockReturnValueOnce(firstPrompt.promise)
+        .mockReturnValueOnce(secondPrompt.promise),
+    };
+    const mirror = createUiDialogMirror({
+      recordStart,
+      recordEnd,
+      clear: vi.fn().mockResolvedValue(undefined),
+    });
+
+    mirror.install(ui);
+    const firstResult = ui.input() as Promise<string>;
+    const secondResult = ui.input() as Promise<string>;
+    await flushRecorderTasks();
+
+    expect(recordStart).toHaveBeenCalledTimes(2);
+    expect(recordStart).toHaveBeenNthCalledWith(1, { waitId: 'input-1', kind: 'input' });
+    expect(recordStart).toHaveBeenNthCalledWith(2, { waitId: 'input-2', kind: 'input' });
+
+    firstPrompt.resolve('first');
+    await expectResolvesBeforeNextTick(firstResult, 'first');
+    await flushRecorderTasks();
+
+    expect(recordEnd).toHaveBeenCalledTimes(1);
+    expect(recordEnd).toHaveBeenCalledWith({ waitId: 'input-1' });
+
+    secondPrompt.resolve('second');
+    await expectResolvesBeforeNextTick(secondResult, 'second');
+    await flushRecorderTasks();
+
+    expect(recordEnd).toHaveBeenCalledTimes(2);
+    expect(recordEnd).toHaveBeenNthCalledWith(2, { waitId: 'input-2' });
+  });
+
   it('does not wait for end recording before returning prompt results', async () => {
     const end = createDeferred<void>();
     const recordEnd = vi.fn(() => end.promise);
