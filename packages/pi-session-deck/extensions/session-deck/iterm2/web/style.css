@@ -42,6 +42,7 @@
 body {
   margin: 0;
   min-height: 100vh;
+  overflow: hidden;
   background: var(--color-bg);
   color: var(--color-text);
 }
@@ -96,9 +97,11 @@ h2 {
 }
 
 .app {
-  min-height: 100vh;
-  display: grid;
-  align-content: start;
+  height: 100vh;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .topbar {
@@ -255,8 +258,19 @@ h2 {
 }
 
 .list-shell {
-  min-height: 360px;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
   padding: 0 0 12px;
+}
+
+.list {
+  align-content: start;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .list,
@@ -1007,6 +1021,7 @@ button.card-toggle[aria-expanded='true']::after {
 
 .new-session {
   display: grid;
+  flex: 0 0 auto;
   border-bottom: 1px solid var(--color-divider);
 }
 

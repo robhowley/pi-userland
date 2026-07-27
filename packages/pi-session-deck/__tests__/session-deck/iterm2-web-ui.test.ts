@@ -2339,6 +2339,22 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(harness.elements.list.textContent).toContain('regrouped');
   });
 
+  it('keeps the footer outside the session list scroll area', async () => {
+    const css = await readFile(
+      new URL('../../extensions/session-deck/iterm2/web/style.css', import.meta.url),
+      'utf8',
+    );
+
+    expect(css).toMatch(/\.app\s*\{[^}]*height:\s*100vh;[^}]*overflow:\s*hidden;/u);
+    expect(css).toMatch(
+      /\.list-shell\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;[^}]*min-height:\s*0;[^}]*overflow:\s*hidden;/u,
+    );
+    expect(css).toMatch(
+      /\.list\s*\{[^}]*align-content:\s*start;[^}]*flex:\s*1 1 auto;[^}]*min-height:\s*0;[^}]*overflow-y:\s*auto;/u,
+    );
+    expect(css).toMatch(/\.new-session\s*\{[^}]*flex:\s*0 0 auto;/u);
+  });
+
   it('ships Prompt Gutter rails and one-row compact composer styling', async () => {
     const css = await readFile(
       new URL('../../extensions/session-deck/iterm2/web/style.css', import.meta.url),
