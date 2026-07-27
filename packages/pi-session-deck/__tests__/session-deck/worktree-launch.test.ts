@@ -1,16 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildFreshTmuxSessionName,
   buildManagedTmuxSessionName,
   buildPiLauncherCommand,
   buildTmuxEnvironmentArgs,
   launchDetachedTmuxPi,
   launchDetachedTmuxPiForCwd,
+  launchFreshDetachedTmuxPiForCwd,
 } from '../../extensions/session-deck/worktree/launch.js';
 import {
   defaultWorktreeExecFile,
   type WorktreeExecFile,
   type WorktreeExecFileOptions,
 } from '../../extensions/session-deck/worktree/git.js';
+
+const FRESH_RUNTIME_IDS = [
+  '123e4567-e89b-42d3-a456-426614174000',
+  '223e4567-e89b-42d3-a456-426614174000',
+  '323e4567-e89b-42d3-a456-426614174000',
+] as const;
 
 const CREATED_WORKTREE = {
   ok: true as const,
@@ -66,6 +74,20 @@ describe('session-deck detached tmux launch', () => {
     expect(sessionName).toMatch(/^pi-owner-repo-feature-o-hare-[a-f0-9]{8}$/u);
     expect(sessionName.length).toBeLessThanOrEqual(80);
     expect(
+      buildFreshTmuxSessionName({
+        cwd: '/tmp/repo-wt-feature',
+        label: "Feature O'Hare",
+        runtimeId: FRESH_RUNTIME_IDS[0],
+      }),
+    ).toMatch(/^pi-repo-wt-feature-feature-o-hare-123e4567-e89b-42d3-a456-426614174000$/u);
+    expect(
+      buildFreshTmuxSessionName({
+        cwd: `/tmp/${'long-name-'.repeat(20)}`,
+        label: 'long session name',
+        runtimeId: FRESH_RUNTIME_IDS[0],
+      }).length,
+    ).toBeLessThanOrEqual(80);
+    expect(
       buildPiLauncherCommand(
         "Feature O'Hare",
         "/runtime/tools/bin:/tmp/with space:$HOME;`echo hi`:/tmp/O'Hare",
@@ -86,12 +108,172 @@ describe('session-deck detached tmux launch', () => {
     );
   });
 
+  it('starts every fresh same-cwd request with its one UUID in the private name and child command', async () => {
+    const env: NodeJS.ProcessEnv = {
+      PATH: '/runtime/bin',
+      PI_SESSION_DECK_RUNTIME_ID: 'parent-runtime',
+    };
+    const newSessionArgs: (readonly string[])[] = [];
+    const execFile: WorktreeExecFile = async (file, args) => {
+      if (file === 'tmux' && args[0] === '-V') {
+        return { stdout: 'tmux 3.4\n', stderr: '', exitCode: 0 };
+      }
+      if (file === 'which') {
+        return { stdout: '/runtime/pi/bin/pi\n', stderr: '', exitCode: 0 };
+      }
+      if (file === 'tmux' && args[0] === 'has-session') {
+        return { stdout: '', stderr: '', exitCode: 1 };
+      }
+      if (file === 'tmux' && args[0] === 'new-session') {
+        newSessionArgs.push(args);
+        return { stdout: `$${newSessionArgs.length}\n`, stderr: '', exitCode: 0 };
+      }
+      if (file === 'tmux' && args[0] === 'display-message') {
+        return { stdout: '/tmp/scratch\n', stderr: '', exitCode: 0 };
+      }
+      return { stdout: '', stderr: `unexpected ${file} ${args.join(' ')}`, exitCode: 1 };
+    };
+
+    const results = [];
+    for (const runtimeId of FRESH_RUNTIME_IDS) {
+      results.push(
+        await launchFreshDetachedTmuxPiForCwd({ cwd: '/tmp/scratch', repoName: null }, 'scratch', {
+          execFile,
+          env,
+          postLaunchVerifyDelayMs: 0,
+          randomUUID: () => runtimeId,
+        }),
+      );
+    }
+
+    expect(results.map((result) => result.ok && result.runtimeId)).toEqual(FRESH_RUNTIME_IDS);
+    const names = results.map((result) => result.ok && result.tmuxSessionName);
+    expect(new Set(names).size).toBe(3);
+    expect(names).toEqual(FRESH_RUNTIME_IDS.map((runtimeId) => `pi-scratch-scratch-${runtimeId}`));
+    expect(newSessionArgs).toHaveLength(3);
+    for (const [index, args] of newSessionArgs.entries()) {
+      const command = args.at(-1) ?? '';
+      const assignment = `PI_SESSION_DECK_ASSIGNED_RUNTIME_ID=${FRESH_RUNTIME_IDS[index]}`;
+      expect(command.split(assignment)).toHaveLength(2);
+      expect(args.slice(0, 4)).toEqual(['new-session', '-P', '-F', '#{session_id}']);
+      expect(args).toContain('PI_SESSION_DECK_RUNTIME_ID=parent-runtime');
+      expect(args.slice(0, -1).join(' ')).not.toContain('PI_SESSION_DECK_ASSIGNED_RUNTIME_ID');
+    }
+  });
+
+  it('rejects an invalid fresh runtime identity before touching tmux', async () => {
+    const execFile: WorktreeExecFile = async () => {
+      throw new Error('tmux must not run');
+    };
+
+    await expect(
+      launchFreshDetachedTmuxPiForCwd({ cwd: '/tmp/scratch', repoName: null }, 'scratch', {
+        execFile,
+        randomUUID: () => '../not-a-uuid',
+      }),
+    ).rejects.toThrow('Fresh runtime identity generator must return a safe UUID v4.');
+  });
+
+  it('fails a fresh generated-name collision without inspecting, reusing, or killing it', async () => {
+    const operations: string[] = [];
+    const execFile: WorktreeExecFile = async (file, args) => {
+      operations.push(`${file} ${args[0] ?? ''}`);
+      if (file === 'tmux' && args[0] === '-V') {
+        return { stdout: 'tmux 3.4\n', stderr: '', exitCode: 0 };
+      }
+      if (file === 'which') {
+        return { stdout: '/runtime/pi/bin/pi\n', stderr: '', exitCode: 0 };
+      }
+      if (file === 'tmux' && args[0] === 'has-session') {
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
+      return { stdout: '', stderr: 'unexpected', exitCode: 1 };
+    };
+
+    await expect(
+      launchFreshDetachedTmuxPiForCwd({ cwd: '/tmp/scratch', repoName: null }, 'scratch', {
+        execFile,
+        randomUUID: () => FRESH_RUNTIME_IDS[0],
+      }),
+    ).resolves.toMatchObject({ ok: false, reason: 'tmux-name-collision' });
+    expect(operations).toEqual(['tmux -V', 'which pi', 'tmux has-session']);
+  });
+
+  it('does not kill a fresh target when tmux spawn fails', async () => {
+    const operations: string[] = [];
+    const execFile: WorktreeExecFile = async (file, args) => {
+      operations.push(`${file} ${args[0] ?? ''}`);
+      if (file === 'tmux' && args[0] === '-V') {
+        return { stdout: 'tmux 3.4\n', stderr: '', exitCode: 0 };
+      }
+      if (file === 'which') {
+        return { stdout: '/runtime/pi/bin/pi\n', stderr: '', exitCode: 0 };
+      }
+      if (file === 'tmux' && args[0] === 'has-session') {
+        return { stdout: '', stderr: '', exitCode: 1 };
+      }
+      if (file === 'tmux' && args[0] === 'new-session') {
+        return { stdout: '', stderr: 'spawn failed', exitCode: 1 };
+      }
+      return { stdout: '', stderr: 'unexpected', exitCode: 1 };
+    };
+
+    await expect(
+      launchFreshDetachedTmuxPiForCwd({ cwd: '/tmp/scratch', repoName: null }, 'scratch', {
+        execFile,
+        randomUUID: () => FRESH_RUNTIME_IDS[0],
+      }),
+    ).resolves.toMatchObject({ ok: false, reason: 'spawn-failed' });
+    expect(operations).not.toContain('tmux kill-session');
+  });
+
+  it('best-effort kills only its owned tmux session ID after verification fails', async () => {
+    const calls: ExecCall[] = [];
+    const execFile: WorktreeExecFile = async (file, args, options) => {
+      calls.push({ file, args, options });
+      if (file === 'tmux' && args[0] === '-V') {
+        return { stdout: 'tmux 3.4\n', stderr: '', exitCode: 0 };
+      }
+      if (file === 'which') {
+        return { stdout: '/runtime/pi/bin/pi\n', stderr: '', exitCode: 0 };
+      }
+      if (file === 'tmux' && args[0] === 'has-session') {
+        return { stdout: '', stderr: '', exitCode: 1 };
+      }
+      if (file === 'tmux' && args[0] === 'new-session') {
+        return { stdout: '$42\n', stderr: '', exitCode: 0 };
+      }
+      if (file === 'tmux' && args[0] === 'display-message') {
+        return { stdout: '/tmp/wrong\n', stderr: '', exitCode: 0 };
+      }
+      if (file === 'tmux' && args[0] === 'kill-session') {
+        throw new Error('cleanup unavailable');
+      }
+      return { stdout: '', stderr: 'unexpected', exitCode: 1 };
+    };
+
+    await expect(
+      launchFreshDetachedTmuxPiForCwd({ cwd: '/tmp/scratch', repoName: null }, 'scratch', {
+        execFile,
+        postLaunchVerifyDelayMs: 0,
+        randomUUID: () => FRESH_RUNTIME_IDS[0],
+      }),
+    ).resolves.toMatchObject({ ok: false, reason: 'presence-timeout' });
+    expect(calls.filter((call) => call.args[0] === 'kill-session')).toEqual([
+      expect.objectContaining({
+        file: 'tmux',
+        args: ['kill-session', '-t', '$42'],
+      }),
+    ]);
+  });
+
   it('passes current Session Deck handoff env through tmux-owned launches explicitly', async () => {
     const env: NodeJS.ProcessEnv = {
       PI_SESSION_DECK_RUNTIME_ID: 'rt-parent',
       PI_SESSION_DECK_SESSION_ID: 'session-parent',
       PI_SESSION_DECK_SESSION_FILE: '/tmp/session-parent.md',
       PI_SESSION_DECK_RUNTIME_STARTED_AT: '2026-07-17T12:00:00.000Z',
+      PI_SESSION_DECK_ASSIGNED_RUNTIME_ID: 'not-a-parent-handoff',
     };
 
     expect(buildTmuxEnvironmentArgs(env)).toEqual([

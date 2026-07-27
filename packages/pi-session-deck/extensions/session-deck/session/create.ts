@@ -2,8 +2,10 @@ import { stat as defaultStat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, isAbsolute, resolve } from 'node:path';
 import { normalizeLaunchAgentDirSelection } from '../worktree/agent-dir.js';
+import { resolveGitTopLevel } from '../worktree/git.js';
 import {
   launchDetachedTmuxPiForCwd,
+  launchFreshDetachedTmuxPiForCwd,
   preflightDetachedTmuxPi,
   type LaunchDetachedTmuxPiOptions,
 } from '../worktree/launch.js';
@@ -192,6 +194,16 @@ export async function orchestrateCreateSession(
     return validationFailure(cwd.reason, cwd.message);
   }
 
+  let gitTopLevel: string | null;
+  try {
+    gitTopLevel = await resolveGitTopLevel(
+      cwd.value,
+      options.execFile === undefined ? {} : { execFile: options.execFile },
+    );
+  } catch {
+    gitTopLevel = null;
+  }
+
   const launchOptions = buildLaunchOptions(options, normalized.request.launch.agentDir);
   const preflight = await preflightDetachedTmuxPi(launchOptions);
   if (!preflight.ok) {
@@ -205,11 +217,9 @@ export async function orchestrateCreateSession(
   }
 
   const displayName = basename(cwd.value) || 'No repo';
-  const launch = await launchDetachedTmuxPiForCwd(
-    { cwd: cwd.value, repoName: null },
-    displayName,
-    launchOptions,
-  );
+  const launch = await (
+    gitTopLevel === null ? launchFreshDetachedTmuxPiForCwd : launchDetachedTmuxPiForCwd
+  )({ cwd: cwd.value, repoName: null }, displayName, launchOptions);
   if (!launch.ok) {
     return {
       ok: false,
@@ -238,6 +248,7 @@ function buildLaunchOptions(
     ...(options.postLaunchVerifyDelayMs === undefined
       ? {}
       : { postLaunchVerifyDelayMs: options.postLaunchVerifyDelayMs }),
+    ...(options.randomUUID === undefined ? {} : { randomUUID: options.randomUUID }),
     agentDir,
   };
 }

@@ -181,6 +181,15 @@ export type CreateWorktreeLaunchFailure = Extract<
   { requested: true; ok: false }
 >;
 
+export type FreshDetachedTmuxPiLaunchSuccess = CreateWorktreeLaunchSuccess & {
+  status: 'launched';
+  runtimeId: string;
+};
+
+export type FreshDetachedTmuxPiLaunchResult =
+  | FreshDetachedTmuxPiLaunchSuccess
+  | CreateWorktreeLaunchFailure;
+
 export type CreateWorktreeActionResult =
   | {
       ok: true;

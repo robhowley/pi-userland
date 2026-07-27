@@ -183,6 +183,7 @@ describe('session-deck worktree action cli', () => {
         ok: true,
         mode: 'tmux-detached',
         status: 'launched',
+        runtimeId: '123e4567-e89b-42d3-a456-426614174000',
         tmuxSessionName: 'pi-private',
         tmuxTarget: '=pi-private',
         message: 'Started a detached tmux Pi session.',
@@ -225,6 +226,7 @@ describe('session-deck worktree action cli', () => {
         ok: true,
         mode: 'tmux-detached',
         status: 'launched',
+        runtimeId: '123e4567-e89b-42d3-a456-426614174000',
         message: 'Started a detached tmux Pi session.',
       },
     });

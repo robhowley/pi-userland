@@ -1760,12 +1760,99 @@ describe('Session Deck iTerm2 web UI', () => {
     },
   );
 
-  it('keeps footer success for unrelated records, then clears it for a matching runtime', async () => {
+  it.each(['footer', 'No repo'])(
+    'allows a second settled same-cwd %s create',
+    async (entryPoint) => {
+      const cwd = `${HOME}/repeat`;
+      const initialSnapshot = buildSnapshot({
+        records: [buildRecord(), buildNoRepoRecord({ cwd: `${HOME}/existing` })],
+      });
+      const harness = await setupApp([
+        initialSnapshot,
+        buildCreateSessionSuccess(cwd, 'rt-first'),
+        initialSnapshot,
+        buildCreateSessionSuccess(cwd, 'rt-second'),
+        initialSnapshot,
+      ]);
+
+      const openEntry = async (): Promise<FakeElement> => {
+        if (entryPoint === 'footer') {
+          getFooterActionButton(harness.elements.newSession).click();
+          await flushMicrotasks();
+          return harness.elements.newSession;
+        }
+
+        getRepoActionButton(getRepoGroupByLabel(harness.elements.list, 'No repo')).click();
+        await flushMicrotasks();
+        return getRepoGroupByLabel(harness.elements.list, 'No repo');
+      };
+
+      const submit = async (root: FakeNode): Promise<void> => {
+        const form = getCwdComposer(root);
+        const cwdInput = getInputByAriaLabel(form, 'Working directory');
+        cwdInput.value = cwd;
+        cwdInput.dispatchEvent({ type: 'input' });
+        form.dispatchEvent({ type: 'submit' });
+        await flushMicrotasks();
+      };
+
+      await submit(await openEntry());
+      expect(
+        harness.fetchMock.mock.calls.filter(([url]) => url === '/actions/create-session'),
+      ).toHaveLength(1);
+      expect(
+        (entryPoint === 'footer'
+          ? harness.elements.newSession
+          : getRepoGroupByLabel(harness.elements.list, 'No repo')
+        ).textContent,
+      ).toContain('Session launched');
+
+      await submit(await openEntry());
+      const createSessionCalls = harness.fetchMock.mock.calls.filter(
+        ([url]) => url === '/actions/create-session',
+      );
+      expect(createSessionCalls).toHaveLength(2);
+      expect(JSON.parse((createSessionCalls[1]![1] as { body?: string }).body ?? '{}')).toEqual(
+        JSON.parse((createSessionCalls[0]![1] as { body?: string }).body ?? '{}'),
+      );
+      expect(
+        (entryPoint === 'footer'
+          ? harness.elements.newSession
+          : getRepoGroupByLabel(harness.elements.list, 'No repo')
+        ).textContent,
+      ).toContain('Session launched');
+    },
+  );
+
+  it('keeps fresh footer success pending past old same-cwd rows, then clears on exact runtime', async () => {
     const initialSnapshot = buildSnapshot();
     const harness = await setupApp([
       initialSnapshot,
       buildCreateSessionSuccess(`${HOME}/footer-target`, 'rt-footer-success'),
-      initialSnapshot,
+      buildSnapshot({
+        records: [
+          buildRecord({
+            runtimeId: 'rt-old-live',
+            cwd: `${HOME}/footer-target`,
+          }),
+          buildRecord({
+            runtimeId: 'rt-old-closed',
+            cwd: `${HOME}/footer-target`,
+            presenceState: 'dead',
+            presenceReason: 'process_exited',
+          }),
+        ],
+      }),
+      buildSnapshot({
+        records: [
+          buildRecord({
+            runtimeId: 'rt-footer-success',
+            cwd: `${HOME}/other-cwd`,
+            repoName: 'other-project',
+            qualifiedRepoName: 'owner/other-project',
+          }),
+        ],
+      }),
     ]);
 
     getFooterActionButton(harness.elements.newSession).click();
@@ -1780,11 +1867,9 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(getPendingWorktreeCards(harness.elements.newSession)).toHaveLength(1);
     expect(harness.elements.newSession.textContent).toContain('Session launched');
 
-    harness.pushSnapshot(
-      buildSnapshot({
-        records: [buildRecord({ runtimeId: 'rt-footer-success', cwd: `${HOME}/other-cwd` })],
-      }),
-    );
+    setShowAll(harness.elements, true);
+    expect(getPendingWorktreeCards(harness.elements.newSession)).toHaveLength(1);
+
     harness.elements.refresh.click();
     await flushMicrotasks();
 
@@ -3999,6 +4084,12 @@ describe('Session Deck iTerm2 web UI', () => {
     });
     expect(JSON.parse(requestInit.body ?? '{}')).toEqual({ runtimeId: 'rt-1' });
     expect(Object.keys(JSON.parse(requestInit.body ?? '{}'))).toEqual(['runtimeId']);
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/actions/create-session')).toHaveLength(
+      0,
+    );
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/actions/create-worktree')).toHaveLength(
+      0,
+    );
   });
 
   it('renders End session only in expanded details and posts exact authenticated Kill requests after confirmation', async () => {

@@ -346,8 +346,8 @@ function hasObservedPendingActionSuccess(pending, repoGroups) {
 }
 
 function doesRecordMatchPendingAction(record, pending) {
-  if (typeof pending.runtimeId === 'string' && record.runtimeId === pending.runtimeId) {
-    return true;
+  if (isNonEmptyString(pending.runtimeId)) {
+    return record.runtimeId === pending.runtimeId;
   }
 
   return pending.sessionKind === 'cwd'
