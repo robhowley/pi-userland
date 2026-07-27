@@ -12,6 +12,7 @@ const DEFAULT_VISIBLE_STATES = new Set(['live', 'stale']);
 const HOME_PREFIXES = ['/Users/', '/home/'];
 const NO_REPO_GROUP_KEY = 'no-repo';
 const NO_REPO_LABEL = 'No repo';
+const NEW_SESSION_OWNER_KEY = 'new-session-footer';
 const SUCCESS_PENDING_WORKTREE_TTL_MS = 12_000;
 const OPEN_TERMINAL_SUCCESS_TTL_MS = 4_000;
 const KILL_SESSION_SUCCESS_TTL_MS = 6_000;
@@ -63,8 +64,10 @@ const elements = {
   showAll: document.getElementById('show-all'),
   refresh: document.getElementById('refresh'),
   banner: document.getElementById('banner'),
+  listShell: document.getElementById('list-shell'),
   list: document.getElementById('list'),
   empty: document.getElementById('empty'),
+  newSession: document.getElementById('new-session'),
   diagnosticsPanel: document.getElementById('diagnostics-panel'),
   diagnostics: document.getElementById('diagnostics'),
 };
@@ -572,6 +575,7 @@ function render() {
   renderSummary();
   renderBanner();
   renderList();
+  renderNewSessionAction();
   renderDiagnostics();
   restoreRenderFocus(focusSnapshot);
 }
@@ -605,7 +609,7 @@ function restoreRenderFocus(snapshot) {
     return;
   }
 
-  const input = findInputByAriaLabel(elements.list, snapshot.ariaLabel);
+  const input = findInputByAriaLabel(elements.listShell, snapshot.ariaLabel);
   if (input === null) {
     return;
   }
@@ -695,6 +699,45 @@ function renderList() {
   }
 }
 
+function renderNewSessionAction() {
+  const isOpen = state.activeWorktreeFormRepoKey === NEW_SESSION_OWNER_KEY;
+  const cwdRequestPending = isCwdSessionRequestPending();
+  const trigger = document.createElement('button');
+  trigger.type = 'button';
+  trigger.className = 'new-session-button';
+  trigger.textContent = isOpen ? 'Cancel' : '+ New session';
+  trigger.disabled = cwdRequestPending;
+  trigger.setAttribute('aria-label', isOpen ? 'cancel new session' : 'create new session');
+  trigger.addEventListener('click', (event) => {
+    event.preventDefault?.();
+
+    if (isOpen) {
+      closeWorktreeForm(NEW_SESSION_OWNER_KEY);
+      return;
+    }
+
+    if (cwdRequestPending) {
+      return;
+    }
+
+    state.activeWorktreeFormRepoKey = NEW_SESSION_OWNER_KEY;
+    requestNoRepoSessionLaunchPreview(NEW_SESSION_OWNER_KEY);
+    render();
+  });
+
+  const children = [trigger];
+  if (isOpen) {
+    children.push(createNoRepoSessionForm(NEW_SESSION_OWNER_KEY));
+  }
+
+  const pending = state.pendingWorktrees.get(NEW_SESSION_OWNER_KEY);
+  if (pending) {
+    children.push(createPendingWorktreeCard(NEW_SESSION_OWNER_KEY, pending));
+  }
+
+  elements.newSession.replaceChildren(...children);
+}
+
 function createRepoGroup(repoGroup) {
   const isExpanded = state.expandedRepoKeys.has(repoGroup.key);
   const section = document.createElement('section');
@@ -727,7 +770,7 @@ function createRepoGroup(repoGroup) {
   if (state.activeWorktreeFormRepoKey === repoGroup.key) {
     section.append(
       repoGroup.kind === 'no-repo'
-        ? createNoRepoSessionForm(repoGroup)
+        ? createNoRepoSessionForm(repoGroup.key)
         : createWorktreeForm(repoGroup),
     );
   }
@@ -779,10 +822,7 @@ function createRepoActionButton(repoGroup) {
 
     state.activeWorktreeFormRepoKey = repoGroup.key;
     if (repoGroup.kind === 'no-repo') {
-      if (!state.noRepoSessionForms.has(repoGroup.key)) {
-        state.noRepoSessionForms.set(repoGroup.key, createInitialNoRepoSessionFormState());
-      }
-      requestNoRepoSessionLaunchPreview(repoGroup);
+      requestNoRepoSessionLaunchPreview(repoGroup.key);
       render();
       return;
     }
@@ -902,15 +942,15 @@ function getWorktreeFormState(repoKey) {
   return created;
 }
 
-function createNoRepoSessionForm(repoGroup) {
-  const formState = getNoRepoSessionFormState(repoGroup.key);
-  const launchPreview = state.worktreeLaunchPreviews.get(repoGroup.key);
+function createNoRepoSessionForm(ownerKey) {
+  const formState = getNoRepoSessionFormState(ownerKey);
+  const launchPreview = state.worktreeLaunchPreviews.get(ownerKey);
   const inlineMessage = getNoRepoSessionFormInlineMessage(formState, launchPreview);
   const form = document.createElement('form');
   form.className = 'worktree-form';
   form.addEventListener('submit', (event) => {
     event.preventDefault?.();
-    submitNoRepoSessionForm(repoGroup, formState);
+    submitNoRepoSessionForm(ownerKey, formState);
   });
   form.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') {
@@ -923,7 +963,7 @@ function createNoRepoSessionForm(repoGroup) {
       render();
       return;
     }
-    closeWorktreeForm(repoGroup.key);
+    closeWorktreeForm(ownerKey);
   });
 
   const cwdInput = document.createElement('input');
@@ -936,11 +976,11 @@ function createNoRepoSessionForm(repoGroup) {
   submit.type = 'submit';
   submit.className = 'worktree-submit-button';
   submit.textContent = 'Create';
-  submit.disabled = !isNoRepoSessionSubmitReady(repoGroup.key, formState, launchPreview);
+  submit.disabled = !isNoRepoSessionSubmitReady(formState, launchPreview);
 
   cwdInput.addEventListener('input', () => {
     formState.cwd = cwdInput.value;
-    submit.disabled = !isNoRepoSessionSubmitReady(repoGroup.key, formState, launchPreview);
+    submit.disabled = !isNoRepoSessionSubmitReady(formState, launchPreview);
   });
 
   const fieldMeta = createText('span', 'cwd →', 'worktree-field-meta');
@@ -957,7 +997,7 @@ function createNoRepoSessionForm(repoGroup) {
   form.append(composeRow, createWorktreeConfigRow(formState, launchPreview));
   if (formState.configDrawerOpen) {
     form.append(
-      createWorktreeConfigDrawer(formState, () => requestNoRepoSessionLaunchPreview(repoGroup)),
+      createWorktreeConfigDrawer(formState, () => requestNoRepoSessionLaunchPreview(ownerKey)),
     );
   }
   if (inlineMessage) {
@@ -986,11 +1026,17 @@ function getNoRepoSessionFormState(repoKey) {
   return created;
 }
 
-function isNoRepoSessionSubmitReady(repoKey, formState, launchPreview) {
+function isNoRepoSessionSubmitReady(formState, launchPreview) {
   return (
     formState.cwd.trim().length > 0 &&
-    !state.pendingWorktrees.has(repoKey) &&
+    !isCwdSessionRequestPending() &&
     isWorktreeLaunchSubmitReady(formState, launchPreview)
+  );
+}
+
+function isCwdSessionRequestPending() {
+  return [...state.pendingWorktrees.values()].some(
+    (pending) => pending.sessionKind === 'cwd' && pending.kind === 'pending',
   );
 }
 
@@ -1136,7 +1182,7 @@ function createPendingWorktreeActionButton(action) {
     ? `pending-worktree-action ${action.kind}`
     : 'pending-worktree-action';
   button.textContent = action.label;
-  button.disabled = action.disabled === true;
+  button.disabled = action.disabled === true || action.isDisabled?.() === true;
   if (isNonEmptyString(action.title)) {
     button.setAttribute('title', action.title);
   }
@@ -1193,8 +1239,8 @@ function requestWorktreeLaunchPreview(repoGroup) {
   requestLaunchPreviewForForm(repoGroup.key, getWorktreeFormState(repoGroup.key));
 }
 
-function requestNoRepoSessionLaunchPreview(repoGroup) {
-  requestLaunchPreviewForForm(repoGroup.key, getNoRepoSessionFormState(repoGroup.key));
+function requestNoRepoSessionLaunchPreview(ownerKey) {
+  requestLaunchPreviewForForm(ownerKey, getNoRepoSessionFormState(ownerKey));
 }
 
 function requestLaunchPreviewForForm(repoKey, formState) {
@@ -1347,17 +1393,17 @@ function submitWorktreeForm(repoGroup, formState) {
     });
 }
 
-function submitNoRepoSessionForm(repoGroup, formState) {
+function submitNoRepoSessionForm(ownerKey, formState) {
   const cwd = formState.cwd.trim();
-  const launchPreview = state.worktreeLaunchPreviews.get(repoGroup.key);
-  if (!isNoRepoSessionSubmitReady(repoGroup.key, { ...formState, cwd }, launchPreview)) {
+  const launchPreview = state.worktreeLaunchPreviews.get(ownerKey);
+  if (!isNoRepoSessionSubmitReady({ ...formState, cwd }, launchPreview)) {
     return;
   }
 
   formState.cwd = cwd;
   formState.errorMessage = null;
   const request = buildCreateSessionRequest(formState);
-  setPendingWorktree(repoGroup.key, {
+  setPendingWorktree(ownerKey, {
     sessionKind: 'cwd',
     kind: 'pending',
     title: 'New session',
@@ -1365,7 +1411,9 @@ function submitNoRepoSessionForm(repoGroup, formState) {
     tone: 'pending',
     cwd,
   });
-  state.expandedRepoKeys.add(repoGroup.key);
+  if (ownerKey === NO_REPO_GROUP_KEY) {
+    state.expandedRepoKeys.add(ownerKey);
+  }
   state.activeWorktreeFormRepoKey = null;
   render();
 
@@ -1373,13 +1421,13 @@ function submitNoRepoSessionForm(repoGroup, formState) {
     .then(async (result) => {
       const inlineFailureMessage = getRecoverableInlineCreateSessionFailureMessage(result);
       if (inlineFailureMessage !== null) {
-        clearPendingWorktree(repoGroup.key);
-        state.noRepoSessionForms.set(repoGroup.key, {
+        clearPendingWorktree(ownerKey);
+        state.noRepoSessionForms.set(ownerKey, {
           ...formState,
           cwd,
           errorMessage: inlineFailureMessage,
         });
-        state.activeWorktreeFormRepoKey = repoGroup.key;
+        state.activeWorktreeFormRepoKey = ownerKey;
         render();
         if (shouldRefreshAfterCreateSessionActionResult(result)) {
           await refreshSnapshot({ source: 'manual' });
@@ -1387,16 +1435,16 @@ function submitNoRepoSessionForm(repoGroup, formState) {
         return;
       }
 
-      clearWorktreeFormState(repoGroup.key);
-      applyCreateSessionActionResult(repoGroup.key, request, result);
+      clearWorktreeFormState(ownerKey);
+      applyCreateSessionActionResult(ownerKey, request, result);
       render();
       if (shouldRefreshAfterCreateSessionActionResult(result)) {
         await refreshSnapshot({ source: 'manual' });
       }
     })
     .catch((error) => {
-      clearWorktreeFormState(repoGroup.key);
-      setPendingWorktree(repoGroup.key, {
+      clearWorktreeFormState(ownerKey);
+      setPendingWorktree(ownerKey, {
         sessionKind: 'cwd',
         kind: 'failure',
         title: 'New session failed',
@@ -1641,6 +1689,10 @@ function retryWorktreeAction(repoKey, request) {
 }
 
 function retryCreateSessionAction(repoKey, request) {
+  if (isCwdSessionRequestPending()) {
+    return;
+  }
+
   setPendingWorktree(repoKey, {
     sessionKind: 'cwd',
     kind: 'pending',
@@ -1649,7 +1701,9 @@ function retryCreateSessionAction(repoKey, request) {
     tone: 'pending',
     cwd: request.cwd,
   });
-  state.expandedRepoKeys.add(repoKey);
+  if (repoKey === NO_REPO_GROUP_KEY) {
+    state.expandedRepoKeys.add(repoKey);
+  }
   render();
 
   void postCreateSessionAction(request)
@@ -1868,6 +1922,7 @@ function buildCreateSessionRetryActions(repoKey, request) {
     {
       label: 'Retry',
       kind: 'primary',
+      isDisabled: isCwdSessionRequestPending,
       onClick: () => {
         retryCreateSessionAction(repoKey, request);
       },

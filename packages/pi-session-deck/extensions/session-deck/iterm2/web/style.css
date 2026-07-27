@@ -1005,6 +1005,34 @@ button.card-toggle[aria-expanded='true']::after {
   opacity: 1;
 }
 
+.new-session {
+  display: grid;
+  border-bottom: 1px solid var(--color-divider);
+}
+
+.new-session-button {
+  justify-self: start;
+  margin: 8px 12px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+}
+
+.new-session-button:hover:not(:disabled),
+.new-session-button:focus-visible:not(:disabled) {
+  border-color: transparent;
+  background: transparent;
+  color: var(--color-text-strong);
+}
+
+.new-session-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
 .worktree-form {
   position: relative;
   display: block;
