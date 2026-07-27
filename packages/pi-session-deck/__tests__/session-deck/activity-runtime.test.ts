@@ -138,7 +138,7 @@ describe('activity runtime lifecycle', () => {
     await controller.recordToolExecutionStart({ toolCallId: 'tool-1', toolName: 'bash' });
 
     vi.setSystemTime(new Date('2026-06-17T12:00:05.000Z'));
-    await controller.recordUiDialogStart({ waitId: 'input-1', kind: 'input' });
+    await controller.recordUiDialogStart({ waitId: 'confirm-1', kind: 'confirm' });
     expect(controller.getActivity()).toMatchObject({
       activityState: 'awaiting-input',
       busy: true,
@@ -151,7 +151,7 @@ describe('activity runtime lifecycle', () => {
     expect(controller.getActivity()?.activityState).toBe('awaiting-input');
 
     vi.setSystemTime(new Date('2026-06-17T12:00:07.000Z'));
-    await controller.recordUiDialogEnd({ waitId: 'input-1' });
+    await controller.recordUiDialogEnd({ waitId: 'confirm-1' });
     expect(controller.getActivity()).toMatchObject({
       activityState: 'awaiting-input',
       activitySource: 'ui_dialog_end',

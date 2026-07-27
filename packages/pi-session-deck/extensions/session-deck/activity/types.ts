@@ -15,7 +15,7 @@ export type ActivityState =
   | 'unknown';
 
 export type ActivityInputSource = 'interactive' | 'rpc' | 'extension';
-export type UiDialogKind = 'select' | 'input' | 'editor';
+export type UiDialogKind = 'select' | 'input' | 'editor' | 'confirm';
 
 export interface ActivityInputSummary {
   lastSource?: ActivityInputSource;

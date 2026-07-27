@@ -26,7 +26,7 @@ interface UiDialogMirrorPatch {
   recorders: UiDialogRecorder;
 }
 
-const UI_DIALOG_KINDS: readonly UiDialogKind[] = ['select', 'input', 'editor'];
+const UI_DIALOG_KINDS: readonly UiDialogKind[] = ['select', 'input', 'editor', 'confirm'];
 
 export function createUiDialogMirror(options: UiDialogMirrorOptions): UiDialogMirror {
   const installedPatches = new Set<UiDialogMirrorPatch>();

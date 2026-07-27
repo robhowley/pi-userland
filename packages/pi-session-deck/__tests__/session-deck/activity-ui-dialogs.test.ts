@@ -32,11 +32,12 @@ async function expectResolvesBeforeNextTick<T>(promise: Promise<T>, expected: T)
 const DIALOG_CASES: Array<{
   kind: UiDialogKind;
   args: unknown[];
-  result: string;
+  result: unknown;
 }> = [
   { kind: 'select', args: ['pick one'], result: 'selected' },
   { kind: 'input', args: [{ prompt: 'name' }], result: 'typed' },
   { kind: 'editor', args: ['draft'], result: 'edited' },
+  { kind: 'confirm', args: ['Run command?', 'This needs confirmation'], result: true },
 ];
 
 describe('UI dialog mirror', () => {
@@ -55,7 +56,7 @@ describe('UI dialog mirror', () => {
 
       mirror.install(ui);
 
-      const callDialog = ui[kind] as (...callArgs: unknown[]) => Promise<string>;
+      const callDialog = ui[kind] as (...callArgs: unknown[]) => Promise<unknown>;
       await expect(callDialog(...args)).resolves.toBe(result);
       await flushRecorderTasks();
 

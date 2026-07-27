@@ -54,6 +54,7 @@ interface SessionStartContext {
     select?: (...args: unknown[]) => unknown;
     input?: (...args: unknown[]) => unknown;
     editor?: (...args: unknown[]) => unknown;
+    confirm?: (...args: unknown[]) => unknown;
   };
 }
 
