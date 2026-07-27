@@ -18,6 +18,7 @@ import type {
   CreateWorktreeLaunchFailure,
   CreateWorktreeLaunchSuccess,
   CreateWorktreeSuccess,
+  FreshDetachedTmuxPiCleanupFailure,
   FreshDetachedTmuxPiLaunchResult,
   LaunchPrereqFailureReason,
 } from './types.js';
@@ -137,7 +138,9 @@ async function launchDetachedTmuxPiForTarget(
   options: LaunchDetachedTmuxPiOptions,
   copyMode: DetachedTmuxPiLaunchCopyMode,
   policy: DetachedTmuxPiLaunchPolicy,
-): Promise<CreateWorktreeLaunchSuccess | CreateWorktreeLaunchFailure> {
+): Promise<
+  CreateWorktreeLaunchSuccess | CreateWorktreeLaunchFailure | FreshDetachedTmuxPiCleanupFailure
+> {
   const resolvedOptions = resolveLaunchOptions(options);
   const launchCommand = buildPiLauncherCommand(
     displayName,
@@ -251,8 +254,12 @@ async function launchDetachedTmuxPiForTarget(
     policy.kind === 'fresh' ? parseTmuxSessionId(launchResult.stdout) : null;
   const verification = await verifyLaunchedTmuxSession(sessionName, target.cwd, resolvedOptions);
   if (!verification.ok) {
-    if (freshTmuxSessionId !== null) {
-      await killTmuxSession(freshTmuxSessionId, resolvedOptions);
+    if (policy.kind === 'fresh') {
+      const cleanupTarget = freshTmuxSessionId ?? `=${sessionName}`;
+      const cleanupConfirmed = await killTmuxSession(cleanupTarget, resolvedOptions);
+      if (!cleanupConfirmed) {
+        return postLaunchCleanupFailure(policy.runtimeId, manualCommand, copyMode);
+      }
     }
     return postLaunchVerificationFailure(verification.observedCwd, manualCommand, copyMode);
   }
@@ -348,13 +355,14 @@ function parseTmuxSessionId(value: string): string | null {
 }
 
 async function killTmuxSession(
-  sessionId: string,
+  target: string,
   options: ResolvedLaunchDetachedTmuxPiOptions,
-): Promise<void> {
+): Promise<boolean> {
   try {
-    await run(options, 'tmux', ['kill-session', '-t', sessionId]);
+    const result = await run(options, 'tmux', ['kill-session', '-t', target]);
+    return result.exitCode === 0;
   } catch {
-    // Verification failure owns the result; cleanup remains best-effort.
+    return false;
   }
 }
 
@@ -446,6 +454,27 @@ function postLaunchVerificationFailure(
     reason: 'presence-timeout',
     recoverable: true,
     message: postLaunchVerificationMessage(observedCwd, copyMode),
+    manualCommand,
+  };
+}
+
+function postLaunchCleanupFailure(
+  runtimeId: string,
+  manualCommand: string,
+  copyMode: DetachedTmuxPiLaunchCopyMode,
+): FreshDetachedTmuxPiCleanupFailure {
+  return {
+    requested: true,
+    ok: false,
+    mode: 'tmux-detached',
+    status: 'failed',
+    reason: 'cleanup-failed',
+    recoverable: false,
+    runtimeId,
+    message:
+      copyMode === 'session'
+        ? 'Pi launch verification failed and tmux cleanup could not be confirmed.'
+        : 'Created worktree, but tmux cleanup after launch verification could not be confirmed.',
     manualCommand,
   };
 }

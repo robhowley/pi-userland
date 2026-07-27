@@ -186,9 +186,22 @@ export type FreshDetachedTmuxPiLaunchSuccess = CreateWorktreeLaunchSuccess & {
   runtimeId: string;
 };
 
+export type FreshDetachedTmuxPiCleanupFailure = {
+  requested: true;
+  ok: false;
+  mode: 'tmux-detached';
+  status: 'failed';
+  reason: 'cleanup-failed';
+  recoverable: false;
+  runtimeId: string;
+  message: string;
+  manualCommand: string;
+};
+
 export type FreshDetachedTmuxPiLaunchResult =
   | FreshDetachedTmuxPiLaunchSuccess
-  | CreateWorktreeLaunchFailure;
+  | CreateWorktreeLaunchFailure
+  | FreshDetachedTmuxPiCleanupFailure;
 
 export type CreateWorktreeActionResult =
   | {

@@ -174,6 +174,23 @@ describe('session-deck worktree action cli', () => {
         manualCommand: 'cd /tmp/private && pi',
       },
     };
+    const cleanupFailed: CreateSessionActionResult = {
+      ok: false,
+      status: 'launch-failed',
+      failurePhase: 'launch',
+      cwd: '/tmp/scratch',
+      launch: {
+        requested: true,
+        ok: false,
+        mode: 'tmux-detached',
+        status: 'failed',
+        reason: 'cleanup-failed',
+        recoverable: false,
+        runtimeId: '123e4567-e89b-42d3-a456-426614174000',
+        message: 'internal cleanup failure',
+        manualCommand: 'tmux attach-session -t =pi-private',
+      },
+    };
     const success: CreateSessionActionResult = {
       ok: true,
       status: 'launched',
@@ -215,6 +232,22 @@ describe('session-deck worktree action cli', () => {
         reason: 'spawn-failed',
         recoverable: true,
         message: 'tmux could not start Pi.',
+      },
+    });
+    expect(toBrowserSafeCreateSessionActionResult(cleanupFailed)).toEqual({
+      ok: false,
+      status: 'launch-failed',
+      failurePhase: 'launch',
+      cwd: '/tmp/scratch',
+      launch: {
+        requested: true,
+        ok: false,
+        mode: 'tmux-detached',
+        status: 'failed',
+        reason: 'cleanup-failed',
+        recoverable: false,
+        runtimeId: '123e4567-e89b-42d3-a456-426614174000',
+        message: 'Pi launch cleanup could not be confirmed; check the session before retrying.',
       },
     });
     expect(toBrowserSafeCreateSessionActionResult(success)).toEqual({

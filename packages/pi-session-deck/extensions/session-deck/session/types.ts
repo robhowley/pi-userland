@@ -3,8 +3,19 @@ import type {
   CreateWorktreeLaunchAgentDir,
   CreateWorktreeLaunchFailure,
   CreateWorktreeLaunchSuccess,
+  FreshDetachedTmuxPiCleanupFailure,
+  FreshDetachedTmuxPiLaunchResult,
   LaunchPrereqFailure,
 } from '../worktree/types.js';
+
+export type CreateSessionLaunchFailure = Extract<
+  FreshDetachedTmuxPiLaunchResult,
+  { requested: true; ok: false }
+>;
+
+export type BrowserSafeCreateSessionLaunchFailure =
+  | Omit<CreateWorktreeLaunchFailure, 'manualCommand'>
+  | Omit<FreshDetachedTmuxPiCleanupFailure, 'manualCommand'>;
 
 export interface CreateSessionActionRequest {
   action: 'create-session';
@@ -49,7 +60,7 @@ export type CreateSessionActionResult =
       status: 'launch-failed';
       failurePhase: 'launch';
       cwd: string;
-      launch: CreateWorktreeLaunchFailure;
+      launch: CreateSessionLaunchFailure;
     };
 
 export type BrowserSafeCreateSessionActionResult =
@@ -79,5 +90,5 @@ export type BrowserSafeCreateSessionActionResult =
       status: 'launch-failed';
       failurePhase: 'launch';
       cwd: string;
-      launch: Extract<BrowserSafeCreateWorktreeLaunchResult, { requested: true; ok: false }>;
+      launch: BrowserSafeCreateSessionLaunchFailure;
     };

@@ -227,45 +227,113 @@ describe('session-deck detached tmux launch', () => {
     expect(operations).not.toContain('tmux kill-session');
   });
 
-  it('best-effort kills only its owned tmux session ID after verification fails', async () => {
-    const calls: ExecCall[] = [];
-    const execFile: WorktreeExecFile = async (file, args, options) => {
-      calls.push({ file, args, options });
-      if (file === 'tmux' && args[0] === '-V') {
-        return { stdout: 'tmux 3.4\n', stderr: '', exitCode: 0 };
-      }
-      if (file === 'which') {
-        return { stdout: '/runtime/pi/bin/pi\n', stderr: '', exitCode: 0 };
-      }
-      if (file === 'tmux' && args[0] === 'has-session') {
-        return { stdout: '', stderr: '', exitCode: 1 };
-      }
-      if (file === 'tmux' && args[0] === 'new-session') {
-        return { stdout: '$42\n', stderr: '', exitCode: 0 };
-      }
-      if (file === 'tmux' && args[0] === 'display-message') {
-        return { stdout: '/tmp/wrong\n', stderr: '', exitCode: 0 };
-      }
-      if (file === 'tmux' && args[0] === 'kill-session') {
-        throw new Error('cleanup unavailable');
-      }
-      return { stdout: '', stderr: 'unexpected', exitCode: 1 };
-    };
+  it.each(['throws', 'exits nonzero'] as const)(
+    'returns a non-retryable cleanup failure when cleanup %s',
+    async (cleanupMode) => {
+      const calls: ExecCall[] = [];
+      const execFile: WorktreeExecFile = async (file, args, options) => {
+        calls.push({ file, args, options });
+        if (file === 'tmux' && args[0] === '-V') {
+          return { stdout: 'tmux 3.4\n', stderr: '', exitCode: 0 };
+        }
+        if (file === 'which') {
+          return { stdout: '/runtime/pi/bin/pi\n', stderr: '', exitCode: 0 };
+        }
+        if (file === 'tmux' && args[0] === 'has-session') {
+          return { stdout: '', stderr: '', exitCode: 1 };
+        }
+        if (file === 'tmux' && args[0] === 'new-session') {
+          return { stdout: '$42\n', stderr: '', exitCode: 0 };
+        }
+        if (file === 'tmux' && args[0] === 'display-message') {
+          return { stdout: '/tmp/wrong\n', stderr: '', exitCode: 0 };
+        }
+        if (file === 'tmux' && args[0] === 'kill-session') {
+          if (cleanupMode === 'throws') {
+            throw new Error('cleanup unavailable');
+          }
+          return { stdout: '', stderr: 'cleanup unavailable', exitCode: 1 };
+        }
+        return { stdout: '', stderr: 'unexpected', exitCode: 1 };
+      };
 
-    await expect(
-      launchFreshDetachedTmuxPiForCwd({ cwd: '/tmp/scratch', repoName: null }, 'scratch', {
-        execFile,
-        postLaunchVerifyDelayMs: 0,
-        randomUUID: () => FRESH_RUNTIME_IDS[0],
-      }),
-    ).resolves.toMatchObject({ ok: false, reason: 'presence-timeout' });
-    expect(calls.filter((call) => call.args[0] === 'kill-session')).toEqual([
-      expect.objectContaining({
-        file: 'tmux',
-        args: ['kill-session', '-t', '$42'],
-      }),
-    ]);
-  });
+      await expect(
+        launchFreshDetachedTmuxPiForCwd({ cwd: '/tmp/scratch', repoName: null }, 'scratch', {
+          execFile,
+          postLaunchVerifyDelayMs: 0,
+          randomUUID: () => FRESH_RUNTIME_IDS[0],
+        }),
+      ).resolves.toMatchObject({
+        ok: false,
+        reason: 'cleanup-failed',
+        recoverable: false,
+        runtimeId: FRESH_RUNTIME_IDS[0],
+      });
+      expect(calls.filter((call) => call.args[0] === 'kill-session')).toEqual([
+        expect.objectContaining({
+          file: 'tmux',
+          args: ['kill-session', '-t', '$42'],
+        }),
+      ]);
+    },
+  );
+
+  it.each(['\n', 'not-a-session-id\n'] as const)(
+    'uses the exact generated session name when tmux reports an invalid session ID (%j)',
+    async (stdout) => {
+      const calls: ExecCall[] = [];
+      const execFile: WorktreeExecFile = async (file, args, options) => {
+        calls.push({ file, args, options });
+        if (file === 'tmux' && args[0] === '-V') {
+          return { stdout: 'tmux 3.4\n', stderr: '', exitCode: 0 };
+        }
+        if (file === 'which') {
+          return { stdout: '/runtime/pi/bin/pi\n', stderr: '', exitCode: 0 };
+        }
+        if (file === 'tmux' && args[0] === 'has-session') {
+          return { stdout: '', stderr: '', exitCode: 1 };
+        }
+        if (file === 'tmux' && args[0] === 'new-session') {
+          return { stdout, stderr: '', exitCode: 0 };
+        }
+        if (file === 'tmux' && args[0] === 'display-message') {
+          return { stdout: '/tmp/wrong\n', stderr: '', exitCode: 0 };
+        }
+        if (file === 'tmux' && args[0] === 'kill-session') {
+          return { stdout: '', stderr: '', exitCode: 0 };
+        }
+        return { stdout: '', stderr: 'unexpected', exitCode: 1 };
+      };
+
+      const result = await launchFreshDetachedTmuxPiForCwd(
+        { cwd: '/tmp/scratch', repoName: null },
+        'scratch',
+        {
+          execFile,
+          postLaunchVerifyDelayMs: 0,
+          randomUUID: () => FRESH_RUNTIME_IDS[0],
+        },
+      );
+
+      expect(result).toMatchObject({
+        ok: false,
+        reason: 'presence-timeout',
+        recoverable: true,
+      });
+      expect(result).not.toHaveProperty('runtimeId');
+      const sessionName = buildFreshTmuxSessionName({
+        cwd: '/tmp/scratch',
+        label: 'scratch',
+        runtimeId: FRESH_RUNTIME_IDS[0],
+      });
+      expect(calls.filter((call) => call.args[0] === 'kill-session')).toEqual([
+        expect.objectContaining({
+          file: 'tmux',
+          args: ['kill-session', '-t', `=${sessionName}`],
+        }),
+      ]);
+    },
+  );
 
   it('passes current Session Deck handoff env through tmux-owned launches explicitly', async () => {
     const env: NodeJS.ProcessEnv = {
