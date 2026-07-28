@@ -92,6 +92,67 @@ describe('lookupIdentityTerminalFocusTarget', () => {
     expect(JSON.stringify(result)).not.toContain('attachCommand');
   });
 
+  it('maps Ghostty sidecars and hosted tmux sidecars to private focus targets', async () => {
+    const ghosttyResult = await lookupIdentityTerminalFocusTarget(RUNTIME_ID, {
+      identityDirectory: IDENTITY_DIRECTORY,
+      readFile: createReadFile(
+        JSON.stringify(
+          buildIdentitySidecar({
+            terminal: {
+              kind: 'ghostty',
+              terminalId: 'AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE',
+              version: 'ignored',
+            },
+          }),
+        ),
+      ),
+    });
+
+    expect(ghosttyResult).toEqual({
+      ok: true,
+      target: {
+        kind: 'ghostty-terminal',
+        terminalId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+      },
+    });
+
+    const tmuxResult = await lookupIdentityTerminalFocusTarget(RUNTIME_ID, {
+      identityDirectory: IDENTITY_DIRECTORY,
+      readFile: createReadFile(
+        JSON.stringify(
+          buildIdentitySidecar({
+            terminal: {
+              kind: 'tmux',
+              socketPath: '/tmp/tmux socket/default',
+              sessionName: 'prod',
+              sessionId: '$1',
+              host: {
+                kind: 'ghostty',
+                terminalId: 'AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE',
+              },
+              attachCommand: 'exec pi',
+            },
+          }),
+        ),
+      ),
+    });
+
+    expect(tmuxResult).toEqual({
+      ok: true,
+      target: {
+        kind: 'tmux-session',
+        socketPath: '/tmp/tmux socket/default',
+        sessionName: 'prod',
+        sessionTarget: '$1',
+        host: {
+          kind: 'ghostty-terminal',
+          terminalId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+        },
+      },
+    });
+    expect(JSON.stringify(tmuxResult)).not.toContain('attachCommand');
+  });
+
   it('uses exact session-name target when tmux session ids are unavailable', async () => {
     const result = await lookupIdentityTerminalFocusTarget(RUNTIME_ID, {
       identityDirectory: IDENTITY_DIRECTORY,

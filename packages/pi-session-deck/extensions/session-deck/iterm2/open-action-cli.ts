@@ -19,6 +19,8 @@ const HELPER_FAILED_MESSAGE =
 const FORBIDDEN_OPEN_ACTION_FIELDS = new Set([
   'attachCommand',
   'command',
+  'ghosttyTerminalId',
+  'host',
   'itermSessionId',
   'paneId',
   'revealUrl',
@@ -27,6 +29,7 @@ const FORBIDDEN_OPEN_ACTION_FIELDS = new Set([
   'socketName',
   'socketPath',
   'terminalDisplay',
+  'terminalId',
   'tmuxArgv',
   'tmuxAttachArgv',
   'tmuxCommand',
@@ -245,6 +248,7 @@ function normalizeOpenTerminalFailureReason(
     case 'python-bridge-disabled':
     case 'python-bridge-unavailable':
     case 'automation-denied':
+    case 'terminal-api-unavailable':
     case 'terminal-target-missing':
     case 'open-failed':
       return reason;
@@ -276,9 +280,11 @@ function getBrowserSafeFailureMessage(reason: OpenTerminalActionFailureReason): 
     case 'python-bridge-unavailable':
       return 'The iTerm2 runtime is unavailable.';
     case 'automation-denied':
-      return 'iTerm2 automation is not authorized.';
+      return 'Terminal automation is not authorized.';
+    case 'terminal-api-unavailable':
+      return 'Terminal app scripting is unavailable.';
     case 'terminal-target-missing':
-      return 'The iTerm2 session is no longer available.';
+      return 'The terminal target is no longer available.';
     case 'open-failed':
       return 'Could not request terminal open.';
   }

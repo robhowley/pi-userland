@@ -21,6 +21,7 @@ const SENSITIVE_STRINGS = [
   "exec tmux -S '/tmp/tmux socket/default' attach-session -E -t prod-secret",
   '/Users/example/.pi/session-deck/iterm2/install.json',
   '/package/dist/extensions/session-deck/iterm2/open-action-cli.js',
+  'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
 ];
 
 async function withRuntimeServer(
@@ -109,6 +110,11 @@ describe('open-terminal action helper request boundary', () => {
       { runtimeId: 123 },
       { runtimeId: 'rt-1', extra: true },
       { runtimeId: 'rt-1', socketPath: '/tmp/private.sock' },
+      { runtimeId: 'rt-1', terminalId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' },
+      {
+        runtimeId: 'rt-1',
+        terminal: { host: { terminalId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' } },
+      },
       { runtimeId: 'rt-1', terminal: { tmuxAttachArgv: ['tmux'] } },
       { runtimeId: 'rt-1', revealUrl: 'iterm2:///reveal?sessionid=secret' },
       { runtimeId: 'rt-1', attachCommand: 'exec tmux attach-session -t prod' },
@@ -153,6 +159,7 @@ describe('open-terminal action helper request boundary', () => {
       'python-bridge-disabled',
       'python-bridge-unavailable',
       'automation-denied',
+      'terminal-api-unavailable',
       'terminal-target-missing',
       'open-failed',
     ];

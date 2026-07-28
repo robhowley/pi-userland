@@ -559,6 +559,10 @@ function getTerminalClusterKey(terminal: SessionTerminalMetadata | undefined): s
     return `iterm2:${terminal.sessionId}`;
   }
 
+  if (terminal.kind === 'ghostty') {
+    return `ghostty:${terminal.terminalId}`;
+  }
+
   const socket = terminal.socketPath ?? terminal.socketName ?? '';
   const location = terminal.paneId ?? terminal.windowId ?? terminal.sessionId ?? '';
   if (socket.length === 0 || location.length === 0) {

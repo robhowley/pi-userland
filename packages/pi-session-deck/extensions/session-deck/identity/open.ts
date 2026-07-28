@@ -46,6 +46,9 @@ export async function openTerminalForRuntime(
     ...(options.tmuxPreflightTimeoutMs === undefined
       ? {}
       : { tmuxPreflightTimeoutMs: options.tmuxPreflightTimeoutMs }),
+    ...(options.ghosttyFocusTimeoutMs === undefined
+      ? {}
+      : { ghosttyFocusTimeoutMs: options.ghosttyFocusTimeoutMs }),
   });
 }
 

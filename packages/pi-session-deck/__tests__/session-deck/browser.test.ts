@@ -1396,6 +1396,10 @@ describe('SessionDeckBrowser', () => {
           sessionId: '$1',
           windowName: 'editor',
           paneId: '%12',
+          host: {
+            kind: 'ghostty',
+            terminalId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+          },
           attachCommand,
           sessionTarget: 'prod:editor',
         },
@@ -1435,6 +1439,8 @@ describe('SessionDeckBrowser', () => {
     expect(publicRecord?.sessionId).toBe('public-session');
     expect(publicRecord).not.toHaveProperty('terminal');
     expect(publicRecord).not.toHaveProperty('socketPath');
+    expect(publicRecord).not.toHaveProperty('terminalId');
+    expect(publicRecord).not.toHaveProperty('host');
     expect(publicRecord).not.toHaveProperty('paneId');
     expect(publicRecord).not.toHaveProperty('attachCommand');
     expect(publicRecord).not.toHaveProperty('sessionTarget');
@@ -1442,6 +1448,7 @@ describe('SessionDeckBrowser', () => {
     const serialized = JSON.stringify(publicRecord ?? {});
     expect(serialized).not.toContain(socketPath);
     expect(serialized).not.toContain(attachCommand);
+    expect(serialized).not.toContain('aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee');
   });
 
   it('keeps browser hint snapshots free of accidental raw terminal fields', async () => {
@@ -1453,6 +1460,7 @@ describe('SessionDeckBrowser', () => {
         sessionName: 'prod',
         sessionTarget: '$1',
         paneId: '%12',
+        host: { kind: 'ghostty', terminalId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' },
         attachCommand: 'exec tmux attach-session -t prod',
       },
       terminalDisplay: {
@@ -1463,6 +1471,8 @@ describe('SessionDeckBrowser', () => {
       },
       socketPath: '/tmp/tmux/default',
       paneId: '%12',
+      terminalId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+      host: { kind: 'ghostty', terminalId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' },
       attachCommand: 'exec tmux attach-session -t prod',
       sessionTarget: '$1',
     } as SessionDeckRecord;
@@ -1474,9 +1484,12 @@ describe('SessionDeckBrowser', () => {
     expect(view.records[0]).not.toHaveProperty('terminal');
     expect(view.records[0]).not.toHaveProperty('terminalDisplay');
     expect(view.records[0]).not.toHaveProperty('socketPath');
+    expect(view.records[0]).not.toHaveProperty('terminalId');
+    expect(view.records[0]).not.toHaveProperty('host');
     expect(view.records[0]).not.toHaveProperty('paneId');
     expect(view.records[0]).not.toHaveProperty('attachCommand');
     expect(view.records[0]).not.toHaveProperty('sessionTarget');
+    expect(JSON.stringify(view.records[0])).not.toContain('aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee');
   });
 
   it('warns when w is used outside an active named repo filter', () => {

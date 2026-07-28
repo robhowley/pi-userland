@@ -29,6 +29,15 @@ const TMUX_TARGET: TerminalFocusTarget = {
   sessionName: 'prod',
   sessionTarget: '$1',
 };
+const GHOSTTY_TERMINAL_ID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+const GHOSTTY_TARGET: TerminalFocusTarget = {
+  kind: 'ghostty-terminal',
+  terminalId: GHOSTTY_TERMINAL_ID,
+};
+const HOSTED_TMUX_TARGET: TerminalFocusTarget = {
+  ...TMUX_TARGET,
+  host: GHOSTTY_TARGET,
+};
 
 function createTmuxAppleScriptExecFile(resolvedTmuxPath = ABSOLUTE_TMUX_PATH) {
   return vi.fn(async (file: string, _args: readonly string[], _options?: unknown) => ({
@@ -223,6 +232,109 @@ describe('openTerminalFocusTarget iTerm2 session support', () => {
   });
 });
 
+describe('openTerminalFocusTarget Ghostty support', () => {
+  it('uses osascript with the terminal id as argv and not script source', async () => {
+    const execFile = vi.fn(async (_file: string, _args: readonly string[], _options?: unknown) => ({
+      stdout: 'requested\n',
+      stderr: '',
+    }));
+
+    const result = await openTerminalFocusTarget(GHOSTTY_TARGET, {
+      platform: 'darwin',
+      execFile,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      reason: 'requested',
+      message: 'Requested Ghostty focus for selected session.',
+    });
+    expect(execFile).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(execFile).mock.calls[0];
+    expect(call).toBeDefined();
+    const [file, args, options] = call!;
+    expect(file).toBe('/usr/bin/osascript');
+    expect(args).toEqual([
+      '-e',
+      expect.stringContaining('terminal id targetId'),
+      GHOSTTY_TERMINAL_ID,
+    ]);
+    expect(String(args?.[1] ?? '')).not.toContain(GHOSTTY_TERMINAL_ID);
+    expect(String(args?.[1] ?? '')).not.toContain('activate');
+    expect(options).toEqual({ timeout: 3000 });
+  });
+
+  it('returns unsupported-platform without spawning outside macOS', async () => {
+    const execFile = vi.fn(async () => ({ stdout: 'requested\n', stderr: '' }));
+
+    const result = await openTerminalFocusTarget(GHOSTTY_TARGET, {
+      platform: 'linux',
+      execFile,
+    });
+
+    expect(result).toMatchObject({ ok: false, reason: 'unsupported-platform' });
+    expect(execFile).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'Automation denied',
+      'error\t-1743\tNot authorized to send Apple events to Ghostty\n',
+      'automation-denied',
+    ],
+    [
+      'API unavailable',
+      'error\t-1708\tGhostty doesn’t understand the terminal id message\n',
+      'terminal-api-unavailable',
+    ],
+    [
+      'stale target',
+      'missing\tCan’t get terminal id aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee\n',
+      'terminal-target-missing',
+    ],
+    ['app missing', 'missing\tGhostty is not running\n', 'terminal-target-missing'],
+    [
+      'post-focus target-looking error',
+      'focus-error\t-1728\tCan’t get terminal id aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee\n',
+      'open-failed',
+    ],
+    [
+      'unknown target-looking error',
+      'error\t999\tCan’t get terminal id aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee\n',
+      'open-failed',
+    ],
+    ['malformed response', 'ok\n', 'open-failed'],
+  ] as const)('maps Ghostty %s to %s', async (_label, stdout, reason) => {
+    const execFile = vi.fn(async () => ({ stdout, stderr: '' }));
+
+    const result = await openTerminalFocusTarget(GHOSTTY_TARGET, {
+      platform: 'darwin',
+      execFile,
+    });
+
+    expect(result).toMatchObject({ ok: false, reason });
+    expect(JSON.stringify(result)).not.toContain(GHOSTTY_TERMINAL_ID);
+  });
+
+  it('maps rejected unknown osascript failures to open-failed without leaking UUIDs', async () => {
+    const execFile = vi.fn(async () => {
+      throw new Error(`boom ${GHOSTTY_TERMINAL_ID}`);
+    });
+
+    const result = await openTerminalFocusTarget(GHOSTTY_TARGET, {
+      platform: 'darwin',
+      execFile,
+      ghosttyFocusTimeoutMs: 42,
+    });
+
+    expect(result).toMatchObject({ ok: false, reason: 'open-failed' });
+    expect(JSON.stringify(result)).not.toContain(GHOSTTY_TERMINAL_ID);
+    expect(execFile).toHaveBeenCalledWith('/usr/bin/osascript', expect.any(Array), {
+      timeout: 42,
+    });
+  });
+});
+
 describe('openTerminalFocusTarget tmux support', () => {
   it('preflights tmux and uses the iTerm2 runtime as the auto-mode primary opener', async () => {
     const execFile = vi.fn(async () => ({ stdout: '', stderr: '' }));
@@ -253,6 +365,118 @@ describe('openTerminalFocusTarget tmux support', () => {
     expect(Object.keys(iterm2RuntimeClient.mock.calls[0]?.[0] ?? {})).toEqual(['tmuxAttachArgv']);
     expect(JSON.stringify(execFile.mock.calls)).not.toContain('new-session');
   });
+
+  it('focuses a captured Ghostty host before trying tmux attach', async () => {
+    const execFile = vi.fn(async (_file: string, _args: readonly string[], _options?: unknown) => ({
+      stdout: 'requested\n',
+      stderr: '',
+    }));
+    const iterm2RuntimeClient = vi.fn(async () => ({
+      ok: true as const,
+      reason: 'requested' as const,
+      message: 'should not be used',
+    }));
+
+    const result = await openTerminalFocusTarget(HOSTED_TMUX_TARGET, {
+      platform: 'darwin',
+      execFile,
+      iterm2RuntimeClient,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      reason: 'requested',
+      message: 'Requested Ghostty focus for selected session.',
+    });
+    expect(execFile).toHaveBeenCalledTimes(1);
+    expect(execFile.mock.calls[0]?.[0]).toBe('/usr/bin/osascript');
+    expect(iterm2RuntimeClient).not.toHaveBeenCalled();
+  });
+
+  it('falls back to existing tmux attach only when the captured Ghostty host is stale', async () => {
+    const execFile = vi.fn(async (file: string) => {
+      if (file === '/usr/bin/osascript') {
+        return { stdout: 'missing\tCan’t get terminal id\n', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+    const iterm2RuntimeClient = vi.fn(async (_request: Iterm2RuntimeOpenRequest) => ({
+      ok: true as const,
+      reason: 'requested' as const,
+      message: 'Requested tmux attach in a new iTerm2 tab.',
+    }));
+
+    const result = await openTerminalFocusTarget(HOSTED_TMUX_TARGET, {
+      platform: 'darwin',
+      execFile,
+      iterm2RuntimeClient,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      reason: 'requested',
+      message: 'Requested tmux attach in a new iTerm2 tab.',
+    });
+    expect(execFile).toHaveBeenNthCalledWith(
+      1,
+      '/usr/bin/osascript',
+      expect.arrayContaining([GHOSTTY_TERMINAL_ID]),
+      { timeout: 3000 },
+    );
+    expect(execFile).toHaveBeenNthCalledWith(
+      2,
+      'tmux',
+      ['-S', '/tmp/tmux socket/default', 'has-session', '-t', '$1'],
+      { timeout: 500 },
+    );
+    expect(iterm2RuntimeClient).toHaveBeenCalledWith({ tmuxAttachArgv: TMUX_ATTACH_ARGV });
+  });
+
+  it.each([
+    ['automation denial', 'error\t-1743\tNot authorized to control Ghostty\n', 'automation-denied'],
+    [
+      'API unavailable',
+      'error\t-1708\tGhostty doesn’t understand terminal id\n',
+      'terminal-api-unavailable',
+    ],
+    [
+      'post-focus target-looking failure',
+      'focus-error\t-1728\tCan’t get terminal id aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee\n',
+      'open-failed',
+    ],
+    [
+      'unknown target-looking failure',
+      'error\t999\tCan’t get terminal id aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee\n',
+      'open-failed',
+    ],
+    ['unknown failure', 'not-json\nextra\n', 'open-failed'],
+  ] as const)(
+    'does not fall back to tmux attach on Ghostty host %s',
+    async (_label, stdout, reason) => {
+      const execFile = vi.fn(
+        async (_file: string, _args: readonly string[], _options?: unknown) => ({
+          stdout,
+          stderr: '',
+        }),
+      );
+      const iterm2RuntimeClient = vi.fn(async () => ({
+        ok: true as const,
+        reason: 'requested' as const,
+        message: 'should not be used',
+      }));
+
+      const result = await openTerminalFocusTarget(HOSTED_TMUX_TARGET, {
+        platform: 'darwin',
+        execFile,
+        iterm2RuntimeClient,
+      });
+
+      expect(result).toMatchObject({ ok: false, reason });
+      expect(execFile).toHaveBeenCalledTimes(1);
+      expect(execFile.mock.calls[0]?.[0]).toBe('/usr/bin/osascript');
+      expect(iterm2RuntimeClient).not.toHaveBeenCalled();
+    },
+  );
 
   it('uses an exact session-name target for preflight and attach when tmux ids are unavailable', async () => {
     const nameOnlyTarget: TerminalFocusTarget = {
