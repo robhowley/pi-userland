@@ -212,8 +212,10 @@ interface HarnessElements {
   showAll: FakeInputElement;
   refresh: FakeButtonElement;
   banner: FakeElement;
+  listShell: FakeElement;
   list: FakeElement;
   empty: FakeElement;
+  newSession: FakeElement;
   diagnosticsPanel: FakeElement;
   diagnostics: FakeElement;
 }
@@ -292,24 +294,30 @@ function buildElements(document: FakeDocument): HarnessElements {
   const refresh = withId(document.createElement('button'), 'refresh');
   const banner = withId(document.createElement('section'), 'banner');
   banner.className = 'banner hidden';
+  const listShell = withId(document.createElement('section'), 'list-shell');
+  listShell.className = 'list-shell';
   const list = withId(document.createElement('div'), 'list');
   list.setAttribute('role', 'list');
   const empty = withId(document.createElement('p'), 'empty');
   empty.className = 'empty hidden';
+  const newSession = withId(document.createElement('div'), 'new-session');
+  listShell.append(list, empty, newSession);
   const diagnosticsPanel = withId(document.createElement('section'), 'diagnostics-panel');
   diagnosticsPanel.className = 'diagnostics-panel hidden';
   const diagnostics = withId(document.createElement('ul'), 'diagnostics');
   diagnosticsPanel.append(diagnostics);
 
-  document.append(summary, showAll, refresh, banner, list, empty, diagnosticsPanel);
+  document.append(summary, showAll, refresh, banner, listShell, diagnosticsPanel);
 
   return {
     summary,
     showAll,
     refresh,
     banner,
+    listShell,
     list,
     empty,
+    newSession,
     diagnosticsPanel,
     diagnostics,
   };
