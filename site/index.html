@@ -1,439 +1,441 @@
 <!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="color-scheme" content="dark" />
-  <title>pi-userland · Session Deck and operator tools for Pi</title>
-  <link rel="stylesheet" href="./styles.css" />
-</head>
-<body>
-  <a class="skip-link" href="#main">Skip to content</a>
+<html lang="en" xmlns="http://www.w3.org/1999/html">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>pi-userland</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to main content</a>
 
-  <header class="site-header">
-    <div class="wrap nav">
-      <a class="brand" href="#top" aria-label="pi-userland home">
-        <span aria-hidden="true">❯</span>
-        <span>userland</span>
-      </a>
-      <nav class="nav-links mono" aria-label="Primary navigation">
-        <a href="#control-plane">sessions</a>
-        <a href="#visibility">spend + health</a>
-        <a href="#ship-with-proof">ship with proof</a>
-        <a href="#guardrails-voice">safety + tone</a>
-        <a href="#install">install</a>
-        <a href="https://github.com/robhowley/pi-userland">github</a>
-      </nav>
-    </div>
-  </header>
+    <header class="site-header">
+      <div class="wrap nav">
+        <a class="brand" href="#top">pi-userland</a>
+        <nav class="nav-links" aria-label="Primary navigation">
+          <a href="#packages">Packages</a>
+          <a
+            href="https://www.npmjs.com/search?page=0&amp;q=keywords%3Api-userland&amp;sortBy=downloads_monthly"
+            >npm</a
+          >
+          <a href="https://pi.dev/">Pi</a>
+          <a href="https://github.com/robhowley/pi-userland">GitHub</a>
+          <a class="install-link" href="#install">Install</a>
+        </nav>
+      </div>
+    </header>
 
-  <main id="main" class="wrap ops-rail">
-    <section id="top" class="rail-section hero-section" aria-labelledby="hero-title">
-      <div class="rail-label mono" aria-hidden="true">❯ userland</div>
-
-      <div class="hero-grid">
+    <main id="main" class="wrap">
+      <section id="top" class="hero" aria-labelledby="hero-title">
         <div class="hero-main">
-          <p class="eyebrow mono">see sessions. jump back in. launch worktrees.</p>
-          <h1 id="hero-title">See your Pi work, jump back in, and launch the next agent from one deck.</h1>
+          <p class="eyebrow mono">&gt; Session Deck for Pi</p>
+          <h1 id="hero-title">Stop hunting for the agent that’s already running.</h1>
           <p class="hero-copy">
-            <strong>Session Deck</strong> lets you see live sessions by repo, reopen or reattach the right terminal, and launch a fresh isolated worktree. Then add spend visibility, merge proof, guardrails, and terminal voice where the run needs them.
+            See live sessions by repo, return to the right terminal, and launch the next agent in an
+            isolated worktree.
           </p>
-          <div class="hero-actions" aria-label="Primary actions">
-            <a class="button primary" href="#install-control-plane">❯ install pi-session-deck</a>
-            <a class="button" href="#control-plane">browse the stack</a>
+          <div class="hero-actions">
+            <div class="cmd hero-command" data-command-row>
+              <span class="prompt mono" aria-hidden="true">&gt;</span>
+              <code>pi install npm:@robhowley/pi-session-deck</code>
+              <button
+                class="copy-button"
+                type="button"
+                data-copy="pi install npm:@robhowley/pi-session-deck"
+                aria-label="Copy install command"
+                hidden
+              >
+                Copy install command
+              </button>
+            </div>
+            <code class="hero-run">Run /session-deck</code>
           </div>
-          <ul class="rail-legend mono" aria-label="What pi-userland adds">
-            <li>sessions</li>
-            <li>spend + session health</li>
-            <li>merge + command proof</li>
-            <li>safety + tone</li>
-          </ul>
+          <nav class="hero-trust" aria-label="Session Deck trust links">
+            <a href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-session-deck"
+              >Session Deck README</a
+            >
+            <a href="https://github.com/robhowley/pi-userland">Source repository</a>
+          </nav>
         </div>
 
-        <aside class="deck-hero proof-surface" aria-labelledby="deck-hero-title">
-          <div class="proof-chrome mono">
-            <span>start here</span>
-            <span>/session-deck</span>
-          </div>
-          <figure class="deck-figure">
+        <figure class="hero-proof surface">
+          <div class="proof-media">
             <img
-              src="../packages/pi-session-deck/img/session-deck-toolbelt-overview.png"
-              alt="Session Deck iTerm2 Toolbelt showing live Pi agent sessions grouped under pi-userland"
+              src="./assets/session-deck-toolbelt-overview.png"
+              width="1016"
+              height="604"
+              alt="Session Deck overview of the pi-userland repository with branch, worktree, and pull request state"
+              loading="eager"
+              decoding="async"
             />
-            <figcaption class="mono">real Session Deck Toolbelt view · repo-grouped Pi agents</figcaption>
-          </figure>
-          <div class="deck-hero-copy">
-            <h2 id="deck-hero-title" class="mono">pi-session-deck</h2>
-            <p>
-              Your Pi agent deck: live sessions organized by repo, detailed status tracking, terminal return paths, and new-agent launches in one place.
-            </p>
           </div>
-          <ol class="deck-steps mono" aria-label="Session Deck basics">
-            <li><strong>see</strong><span>live sessions by repo</span></li>
-            <li><strong>return</strong><span>open or reattach the right terminal</span></li>
-            <li><strong>launch</strong><span>isolated worktrees</span></li>
-          </ol>
-        </aside>
-      </div>
-    </section>
+          <figcaption class="proof-caption">
+            Session Deck overview showing repo, branch/worktree context, and PR state.
+            <a href="./assets/session-deck-toolbelt-overview.png"
+              >View full Session Deck overview</a
+            >
+          </figcaption>
+        </figure>
+      </section>
 
-    <section id="proof" class="rail-section proof-section" aria-labelledby="proof-title">
-      <div class="rail-label mono" aria-hidden="true">❯ proof</div>
-      <div class="section-shell">
-        <header class="section-head">
-          <p class="section-kicker mono">Command proof</p>
-          <h2 id="proof-title">structured_return keeps failures short enough to act on and logs long enough to inspect.</h2>
-          <p>
-            Agents get the short failure report they can act on. You keep the full log on disk when you need to inspect the run.
-          </p>
-        </header>
+      <aside class="relationship surface">
+        Session Deck is the starting point, OpenRouter is its main companion, and the rest are
+        independently installable utilities.
+      </aside>
 
-        <div class="compare" aria-label="Structured return before and after comparison">
-          <article class="compare-card">
-            <div class="label mono">before · raw pytest</div>
-            <div class="terminal">
-              <div class="terminal-head mono">
-                <span>pytest</span>
-                <span class="terminal-dots" aria-hidden="true">•••</span>
-              </div>
-              <div class="terminal-body">
-                <pre>================ test session starts ================
-collected 3 items
-
-test_math.py::test_adds_two_numbers_correctly PASSED
-test_math.py::test_multiplies_two_numbers_correctly FAILED
-test_math.py::test_does_not_divide_by_zero FAILED
-
-____________ test_multiplies_two_numbers_correctly ____________
-&gt;       assert 3 * 4 == 99
-E       assert (3 * 4) == 99
-
-test_math.py:5: AssertionError
-____________ test_does_not_divide_by_zero ____________
-&gt;       result = 1 / 0
-E       ZeroDivisionError: division by zero</pre>
-              </div>
-            </div>
+      <section id="packages" class="section" aria-labelledby="packages-title">
+        <h2 id="packages-title">Choose the utility your work needs.</h2>
+        <div class="packages">
+          <article class="package package--session surface">
+            <h3 class="mono">pi-session-deck</h3>
+            <p>
+              Live Pi sessions by repo, fast return to the right terminal, and new isolated worktree
+              launches from one deck.
+            </p>
+            <p class="package-evidence mono">/session-deck</p>
+            <a
+              class="readme-link"
+              href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-session-deck"
+              >README</a
+            >
           </article>
 
-          <div class="compare-arrow mono" aria-hidden="true">❯</div>
-
-          <article class="compare-card compare-after">
-            <div class="label mono">after · structured_return</div>
-            <div class="terminal">
-              <div class="terminal-head mono">
-                <span>structured_return</span>
-                <span class="terminal-dots" aria-hidden="true">•••</span>
-              </div>
-              <div class="terminal-body">
-                <pre><span class="accent">&gt;</span> pytest test_math.py --junitxml=.tmp/report.xml
-<span class="muted">cwd: project</span>
-
-<span class="red">2 failed</span>, <span class="green">1 passed</span>
-  test_math.py:5  assert (3 * 4) == 99
-  test_math.py:8  ZeroDivisionError: division by zero</pre>
-              </div>
-            </div>
-            <div class="compare-meta">
-              <div class="compare-metric mono">262 → 56 tokens</div>
-              <div class="compare-note">Full log preserved on disk</div>
-            </div>
-          </article>
-        </div>
-      </div>
-    </section>
-
-    <section id="control-plane" class="rail-section family control-family" aria-labelledby="control-title">
-      <div class="rail-label mono" aria-hidden="true">❯ sessions</div>
-      <div class="section-shell">
-        <header class="job-head">
-          <p class="section-kicker mono">Sessions</p>
-          <h2 id="control-title">Find every live session before you open another terminal.</h2>
-          <p>
-            Independent agents are useful until you lose track of them. Session Deck keeps repo, branch, worktree, and the way back to the right terminal in one place.
-          </p>
-        </header>
-
-        <article id="pi-session-deck" class="module module-lead module-deck">
-          <div class="module-copy">
-            <div class="module-topline mono">
-              <span>pi-session-deck</span>
-              <a class="readme-link" href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-session-deck">README</a>
-            </div>
-            <h3>See sessions by repo, jump back in, and launch the next Pi agent from one deck.</h3>
+          <article class="package package--openrouter surface">
+            <h3 class="mono">pi-openrouter</h3>
             <p>
-              Open Session Deck as a native Pi TUI with <code>/session-deck</code>, or keep it visible as an always-on iTerm2 Toolbelt sidebar.
+              OpenRouter usage/account overlays, model sync, API key management, and session tagging
+              for Pi.
             </p>
-            <ul class="feature-list">
-              <li><strong>Agents organized by repo.</strong> Collapse quiet repos and keep active work in project context.</li>
-              <li><strong>Detailed status at a glance.</strong> Branch, worktree, liveness, activity, and PR state stay together.</li>
-              <li><strong>Open the right terminal again.</strong> Focus an iTerm2 session or reattach to the existing tmux session.</li>
-              <li><strong>New isolated agents on demand.</strong> Launch Pi on a generated Git worktree in detached tmux.</li>
-            </ul>
-          </div>
-
-          <div class="deck-screens" aria-label="More Session Deck screenshots">
-            <figure>
+            <figure class="package-proof">
               <img
-                src="../packages/pi-session-deck/img/session-deck-toolbelt-repos.png"
-                alt="Session Deck Toolbelt showing Pi agents organized across multiple repos"
+                src="./assets/openrouter-account-tui.png"
+                width="556"
+                height="475"
+                alt="OpenRouter Account overlay showing usage, credits, key status, selected-key details, and visible keys"
                 loading="lazy"
+                decoding="async"
               />
-              <figcaption class="mono">multi-repo deck</figcaption>
+              <figcaption>
+                Usage, credits, key status, selected-key details, and visible keys.
+                <a href="./assets/openrouter-account-tui.png">View full OpenRouter account image</a>
+              </figcaption>
             </figure>
-            <figure>
-              <img
-                src="../packages/pi-session-deck/img/session-deck-toolbelt.png"
-                alt="Session Deck Toolbelt branch composer for launching a new Pi agent on a worktree"
-                loading="lazy"
-              />
-              <figcaption class="mono">worktree launch composer</figcaption>
-            </figure>
-          </div>
-        </article>
-      </div>
-    </section>
-
-    <section id="visibility" class="rail-section family" aria-labelledby="visibility-title">
-      <div class="rail-label mono" aria-hidden="true">❯ spend + health</div>
-      <div class="section-shell">
-        <header class="job-head">
-          <p class="section-kicker mono">Spend + session health</p>
-          <h2 id="visibility-title">Know what the run is spending and when the session is getting heavy.</h2>
-        </header>
-
-        <div class="module-pair">
-          <article id="pi-openrouter" class="module">
-            <div class="module-topline mono">
-              <span>pi-openrouter</span>
-              <a class="readme-link" href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-openrouter">README</a>
-            </div>
-            <h3>Model and provider visibility inside Pi.</h3>
-            <p>
-              Live OpenRouter spend, credits, key limits, burn rate, model/provider usage, model sync, and automatic <code>session_id</code> tagging.
-            </p>
-            <div class="command-chips mono" aria-label="pi-openrouter commands">
-              <code>/openrouter usage</code>
-              <code>/openrouter account</code>
-              <code>/openrouter session</code>
-              <code>/openrouter models-status</code>
-            </div>
-            <div class="terminal compact" aria-label="OpenRouter Usage TUI preview">
-              <div class="terminal-head mono">
-                <span>OpenRouter Usage · /openrouter usage</span>
-                <span class="terminal-dots" aria-hidden="true">•••</span>
-              </div>
-              <div class="terminal-body">
-                <pre>Month $39.25 / $40.00                    <span class="yellow">cap (98%)</span>
-7d    $32.84                         <span class="red">burn ~$140.76</span>
-Today ~$1.11 · 281 reqs
-
-<span class="accent">Top models (7d)</span>
-  qwen/qwen3-coder-next      $25.67   302.7M
-  moonshotai/kimi-k2.5       $6.06     33.4M</pre>
-              </div>
-            </div>
+            <p class="package-evidence mono">/openrouter usage · /openrouter account</p>
+            <a
+              class="readme-link"
+              href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-openrouter"
+              >README</a
+            >
           </article>
 
-          <article id="pi-session-hygiene" class="module module-support">
-            <div class="module-topline mono">
-              <span>pi-session-hygiene</span>
-              <a class="readme-link" href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-session-hygiene">README</a>
-            </div>
-            <h3>Session health lights for long-running work.</h3>
-            <p>
-              Status bar indicators for cumulative assistant cost, context tokens, and optional cache-rate info, with <code>/session-hygiene</code> threshold configuration.
-            </p>
-            <div class="terminal compact" aria-label="Session hygiene status preview">
-              <div class="terminal-head mono">
-                <span>status bar</span>
-                <span class="terminal-dots" aria-hidden="true">•••</span>
-              </div>
-              <div class="terminal-body">
-                <pre>~/src/my-project (main)
-↑34 ↓18k R868k W175k $1.982 7.4%/1.0M
-<span class="yellow">🟡 session growing</span> · <span class="green">98% cache</span>
+          <article class="package package--utility surface">
+            <h3 class="mono">pi-session-hygiene</h3>
+            <p>Show session cost/context health and cache rate in the Pi status bar.</p>
+            <p class="package-evidence mono">README example · 🟡 ctx watch · cache 98%</p>
+            <a
+              class="readme-link"
+              href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-session-hygiene"
+              >README</a
+            >
+          </article>
 
-<span class="accent">/session-hygiene</span>  <span class="muted">configure thresholds</span></pre>
-              </div>
-            </div>
+          <article class="package package--utility surface">
+            <h3 class="mono">pi-merge-ready</h3>
+            <p>Report exact-PR merge readiness and watch supported repair states.</p>
+            <p class="package-evidence mono">
+              /merge-ready watch --url https://github.com/OWNER/REPO/pull/64
+            </p>
+            <a
+              class="readme-link"
+              href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-merge-ready"
+              >README</a
+            >
+          </article>
+
+          <article class="package package--utility surface">
+            <h3 class="mono">pi-structured-return</h3>
+            <p>Parse noisy command output into compact results while preserving full logs.</p>
+            <p class="package-evidence mono">
+              README pytest fixture · 3 tests · 262 raw tokens → 56 structured tokens
+            </p>
+            <a
+              class="readme-link"
+              href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-structured-return"
+              >README</a
+            >
+          </article>
+
+          <article class="package package--utility package--half surface">
+            <h3 class="mono">pi-yolo-seatbelt</h3>
+            <p>Apply configurable block, ask, or allow decisions to destructive bash commands.</p>
+            <p class="package-evidence mono">Seatbelt rule outcomes · BLOCK · ASK · ALLOW</p>
+            <a
+              class="readme-link"
+              href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-yolo-seatbelt"
+              >README</a
+            >
+          </article>
+
+          <article class="package package--utility package--half surface">
+            <h3 class="mono">pi-spinner-verbs</h3>
+            <p>Replace thinking text with built-in themes or a custom verbs file.</p>
+            <p class="package-evidence mono">
+              doc-emrick examples · Shunting… · Sliding… · Fiddling…
+            </p>
+            <a
+              class="readme-link"
+              href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-spinner-verbs"
+              >README</a
+            >
           </article>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <section id="ship-with-proof" class="rail-section family" aria-labelledby="ship-title">
-      <div class="rail-label mono" aria-hidden="true">❯ ship with proof</div>
-      <div class="section-shell">
-        <header class="job-head">
-          <p class="section-kicker mono">Ship with proof</p>
-          <h2 id="ship-title">Give agents the merge state and command evidence they can act on.</h2>
+      <section id="install" class="section install-section surface" aria-labelledby="install-title">
+        <header class="install-head">
+          <h2 id="install-title">Install from npm into Pi.</h2>
+          <p>Copy a command below and run it in your terminal.</p>
         </header>
 
-        <div class="module-pair">
-          <article id="pi-merge-ready" class="module">
-            <div class="module-topline mono">
-              <span>pi-merge-ready</span>
-              <a class="readme-link" href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-merge-ready">README</a>
-            </div>
-            <h3>PR merge-readiness for Pi.</h3>
-            <p>
-              Ask “can you merge?” and get the actionable list: failing checks, requested changes, out-of-date branches, missing PRs, or ready-to-merge status.
-            </p>
-            <div class="terminal compact" aria-label="merge ready preview">
-              <div class="terminal-head mono">
-                <span>merge_ready_status</span>
-                <span class="terminal-dots" aria-hidden="true">•••</span>
-              </div>
-              <div class="terminal-body">
-                <pre><span class="accent">&gt;</span> /merge-ready
-<span class="red">❌ Checks failing</span>
-<span class="muted">🔄 Out of date · ❔ No PR · ✅ Ready</span>
+        <section class="install-prereqs" aria-labelledby="prereq-title">
+          <h3 id="prereq-title">Before you install</h3>
+          <ul>
+            <li>
+              <strong>Pi</strong> — All packages install into Pi and expect Pi extension support.
+            </li>
+            <li>
+              <strong>Merge Ready</strong> — Requires <code>git</code> and authenticated
+              <code>gh</code>; check with <code>gh auth status</code>.
+            </li>
+            <li>
+              <strong>OpenRouter</strong> — Set <code>OPENROUTER_MANAGEMENT_KEY</code> or
+              <code>OPENROUTER_API_KEY</code>.
+            </li>
+            <li>
+              <strong>Optional Toolbelt</strong> — The iTerm2 Python API is only for Session Deck’s
+              optional Toolbelt; <code>/session-deck</code> does not require iTerm2 setup.
+            </li>
+          </ul>
+        </section>
 
-<span class="accent">&gt;</span> merge_ready_status
-openItems:
- - Required checks are failing.
- - Changes requested.</pre>
-              </div>
+        <div class="install-list" aria-label="Package install commands">
+          <article class="install-row">
+            <h3 class="install-package mono">pi-session-deck</h3>
+            <div class="cmd" data-command-row>
+              <span class="prompt mono" aria-hidden="true">&gt;</span>
+              <code>pi install npm:@robhowley/pi-session-deck</code>
+              <button
+                class="copy-button"
+                type="button"
+                data-copy="pi install npm:@robhowley/pi-session-deck"
+                aria-label="Copy pi-session-deck install command"
+                hidden
+              >
+                Copy
+              </button>
             </div>
+            <p class="install-links">
+              <a href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-session-deck"
+                >README</a
+              ><a href="https://www.npmjs.com/package/@robhowley%2Fpi-session-deck">npm</a>
+            </p>
           </article>
 
-          <article id="pi-structured-return" class="module module-support">
-            <div class="module-topline mono">
-              <span>pi-structured-return</span>
-              <a class="readme-link" href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-structured-return">README</a>
+          <article class="install-row">
+            <h3 class="install-package mono">pi-openrouter</h3>
+            <div class="cmd" data-command-row>
+              <span class="prompt mono" aria-hidden="true">&gt;</span>
+              <code>pi install npm:@robhowley/pi-openrouter</code>
+              <button
+                class="copy-button"
+                type="button"
+                data-copy="pi install npm:@robhowley/pi-openrouter"
+                aria-label="Copy pi-openrouter install command"
+                hidden
+              >
+                Copy
+              </button>
             </div>
-            <h3>Compact command returns with full logs preserved.</h3>
-            <p>
-              Adds an explicit <code>structured_return</code> tool alongside bash for test, lint, build, and log workflows when raw output would be noisy.
+            <p class="install-links">
+              <a href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-openrouter"
+                >README</a
+              ><a href="https://www.npmjs.com/package/@robhowley%2Fpi-openrouter">npm</a>
             </p>
-            <div class="terminal compact" aria-label="structured return preview">
-              <div class="terminal-head mono">
-                <span>structured_return</span>
-                <span class="terminal-dots" aria-hidden="true">•••</span>
-              </div>
-              <div class="terminal-body">
-                <pre><span class="accent">&gt;</span> structured_return pytest test_math.py
+          </article>
 
-<span class="red">2 failed</span>, <span class="green">1 passed</span>
-  test_math.py:5  assert (3 * 4) == 99
-  test_math.py:8  ZeroDivisionError
-
-<span class="green">60–95% fewer tokens</span></pre>
-              </div>
+          <article class="install-row">
+            <h3 class="install-package mono">pi-session-hygiene</h3>
+            <div class="cmd" data-command-row>
+              <span class="prompt mono" aria-hidden="true">&gt;</span>
+              <code>pi install npm:@robhowley/pi-session-hygiene</code>
+              <button
+                class="copy-button"
+                type="button"
+                data-copy="pi install npm:@robhowley/pi-session-hygiene"
+                aria-label="Copy pi-session-hygiene install command"
+                hidden
+              >
+                Copy
+              </button>
             </div>
+            <p class="install-links">
+              <a
+                href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-session-hygiene"
+                >README</a
+              ><a href="https://www.npmjs.com/package/@robhowley%2Fpi-session-hygiene">npm</a>
+            </p>
+          </article>
+
+          <article class="install-row">
+            <h3 class="install-package mono">pi-merge-ready</h3>
+            <div class="cmd" data-command-row>
+              <span class="prompt mono" aria-hidden="true">&gt;</span>
+              <code>pi install npm:@robhowley/pi-merge-ready</code>
+              <button
+                class="copy-button"
+                type="button"
+                data-copy="pi install npm:@robhowley/pi-merge-ready"
+                aria-label="Copy pi-merge-ready install command"
+                hidden
+              >
+                Copy
+              </button>
+            </div>
+            <p class="install-links">
+              <a href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-merge-ready"
+                >README</a
+              ><a href="https://www.npmjs.com/package/@robhowley%2Fpi-merge-ready">npm</a>
+            </p>
+          </article>
+
+          <article class="install-row">
+            <h3 class="install-package mono">pi-structured-return</h3>
+            <div class="cmd" data-command-row>
+              <span class="prompt mono" aria-hidden="true">&gt;</span>
+              <code>pi install npm:@robhowley/pi-structured-return</code>
+              <button
+                class="copy-button"
+                type="button"
+                data-copy="pi install npm:@robhowley/pi-structured-return"
+                aria-label="Copy pi-structured-return install command"
+                hidden
+              >
+                Copy
+              </button>
+            </div>
+            <p class="install-links">
+              <a
+                href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-structured-return"
+                >README</a
+              ><a href="https://www.npmjs.com/package/@robhowley%2Fpi-structured-return">npm</a>
+            </p>
+          </article>
+
+          <article class="install-row">
+            <h3 class="install-package mono">pi-yolo-seatbelt</h3>
+            <div class="cmd" data-command-row>
+              <span class="prompt mono" aria-hidden="true">&gt;</span>
+              <code>pi install npm:@robhowley/pi-yolo-seatbelt</code>
+              <button
+                class="copy-button"
+                type="button"
+                data-copy="pi install npm:@robhowley/pi-yolo-seatbelt"
+                aria-label="Copy pi-yolo-seatbelt install command"
+                hidden
+              >
+                Copy
+              </button>
+            </div>
+            <p class="install-links">
+              <a href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-yolo-seatbelt"
+                >README</a
+              ><a href="https://www.npmjs.com/package/@robhowley%2Fpi-yolo-seatbelt">npm</a>
+            </p>
+          </article>
+
+          <article class="install-row">
+            <h3 class="install-package mono">pi-spinner-verbs</h3>
+            <div class="cmd" data-command-row>
+              <span class="prompt mono" aria-hidden="true">&gt;</span>
+              <code>pi install npm:@robhowley/pi-spinner-verbs</code>
+              <button
+                class="copy-button"
+                type="button"
+                data-copy="pi install npm:@robhowley/pi-spinner-verbs"
+                aria-label="Copy pi-spinner-verbs install command"
+                hidden
+              >
+                Copy
+              </button>
+            </div>
+            <p class="install-links">
+              <a href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-spinner-verbs"
+                >README</a
+              ><a href="https://www.npmjs.com/package/@robhowley%2Fpi-spinner-verbs">npm</a>
+            </p>
           </article>
         </div>
-      </div>
-    </section>
 
-    <section id="guardrails-voice" class="rail-section family" aria-labelledby="guardrails-title">
-      <div class="rail-label mono" aria-hidden="true">❯ safety + tone</div>
-      <div class="section-shell">
-        <header class="job-head">
-          <p class="section-kicker mono">Safety + tone</p>
-          <h2 id="guardrails-title">Move fast without dangerous bash calls or bland terminal defaults.</h2>
-        </header>
+        <p id="copy-status" class="copy-status" role="status" aria-live="polite"></p>
 
-        <div class="module-pair">
-          <article id="pi-yolo-seatbelt" class="module">
-            <div class="module-topline mono">
-              <span>pi-yolo-seatbelt</span>
-              <a class="readme-link" href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-yolo-seatbelt">README</a>
-            </div>
-            <h3>Bash safety guardrails for destructive commands.</h3>
-            <p>
-              Block catastrophic commands, ask on destructive ones, and allow the rest so agent work can move fast without filesystem roulette.
-            </p>
-            <div class="terminal compact" aria-label="yolo seatbelt preview">
-              <div class="terminal-head mono">
-                <span>bash guardrail</span>
-                <span class="terminal-dots" aria-hidden="true">•••</span>
-              </div>
-              <div class="terminal-body">
-                <pre><span class="accent">&gt;</span> rm -rf /
-<span class="red">BLOCK</span>  rm-rf-root
-<span class="muted">catastrophic filesystem delete</span>
+        <footer class="site-footer">
+          <span>pi-userland · MIT licensed</span>
+          <nav class="footer-links" aria-label="Repository trust links">
+            <a href="https://github.com/robhowley/pi-userland">GitHub repository</a>
+            <a href="https://github.com/robhowley/pi-userland/actions/workflows/ci.yml"
+              >CI checks</a
+            >
+            <a href="https://github.com/robhowley/pi-userland/blob/main/LICENSE">MIT license</a>
+            <a href="https://github.com/robhowley/pi-userland/tree/main/site">Site source</a>
+          </nav>
+        </footer>
+      </section>
+    </main>
 
-<span class="accent">&gt;</span> git push --force
-<span class="yellow">ASK</span>    git.push-force
-<span class="muted">confirm before history rewrite</span></pre>
-              </div>
-            </div>
-          </article>
+    <script>
+      (() => {
+        const status = document.querySelector('#copy-status');
+        const buttons = document.querySelectorAll('button[data-copy]');
 
-          <article id="pi-spinner-verbs" class="module module-support">
-            <div class="module-topline mono">
-              <span>pi-spinner-verbs</span>
-              <a class="readme-link" href="https://github.com/robhowley/pi-userland/tree/main/packages/pi-spinner-verbs">README</a>
-            </div>
-            <h3>Terminal-native progress language.</h3>
-            <p>
-              Replace default spinner text with themed verbs. Pick a theme, randomize each session, or point Pi to your own verbs file.
-            </p>
-            <div class="terminal compact" aria-label="spinner verbs preview">
-              <div class="terminal-head mono">
-                <span>spinner verbs</span>
-                <span class="terminal-dots" aria-hidden="true">•••</span>
-              </div>
-              <div class="terminal-body">
-                <pre><span class="accent">&gt;</span> /verbs
-  game-of-thrones
-  lord-of-the-rings
-  doc-emrick
-  weird-legalese
+        const selectCommand = (button) => {
+          const code = button.closest('[data-command-row]').querySelector('code');
+          const selection = window.getSelection();
+          const range = document.createRange();
+          range.selectNodeContents(code);
+          selection.removeAllRanges();
+          selection.addRange(range);
+        };
 
-<span class="accent">&gt;</span> /verbs doc-emrick
-<span class="blue">Shunting...</span>
-<span class="blue">Fiddling...</span></pre>
-              </div>
-            </div>
-          </article>
-        </div>
-      </div>
-    </section>
+        buttons.forEach((button) => {
+          const idleText = button.textContent.trim();
+          const idleLabel = button.getAttribute('aria-label');
+          let resetTimer;
 
-    <section id="install" class="rail-section install-section" aria-labelledby="install-title">
-      <div class="rail-label mono" aria-hidden="true">❯ install</div>
-      <div class="section-shell install-shell">
-        <header class="section-head">
-          <p class="section-kicker mono">Install what you need</p>
-          <h2 id="install-title">Pick the job, then install the package.</h2>
-          <p>
-            Install each package directly with npm so you can add only what you need and remove anything later.
-          </p>
-        </header>
+          button.hidden = false;
+          button.addEventListener('click', async () => {
+            window.clearTimeout(resetTimer);
 
-        <div class="install-families">
-          <article id="install-control-plane" class="install-family">
-            <h3 class="mono">Sessions</h3>
-            <p>Start here to see sessions, reopen the right terminal, and launch detached worktrees.</p>
-            <div class="cmd"><span class="prompt mono">❯</span><code>pi install npm:@robhowley/pi-session-deck</code></div>
-          </article>
+            try {
+              await navigator.clipboard.writeText(button.dataset.copy);
+              button.textContent = 'Copied';
+              button.setAttribute('aria-label', 'Copied');
+              status.textContent = 'Copied';
+            } catch {
+              selectCommand(button);
+              button.textContent = 'Select command';
+              button.setAttribute('aria-label', 'Select command');
+              status.textContent = 'Copy failed. Command selected; copy it manually.';
+            }
 
-          <article class="install-family">
-            <h3 class="mono">Spend + session health</h3>
-            <p>Add spend/account overlays and session health signals.</p>
-            <div class="cmd"><span class="prompt mono">❯</span><code>pi install npm:@robhowley/pi-openrouter</code></div>
-            <div class="cmd"><span class="prompt mono">❯</span><code>pi install npm:@robhowley/pi-session-hygiene</code></div>
-          </article>
-
-          <article class="install-family">
-            <h3 class="mono">Ship with proof</h3>
-            <p>Let agents work from merge blockers and compact command evidence.</p>
-            <div class="cmd"><span class="prompt mono">❯</span><code>pi install npm:@robhowley/pi-merge-ready</code></div>
-            <div class="cmd"><span class="prompt mono">❯</span><code>pi install npm:@robhowley/pi-structured-return</code></div>
-          </article>
-
-          <article class="install-family">
-            <h3 class="mono">Safety + tone</h3>
-            <p>Control dangerous bash calls and swap the default spinner voice.</p>
-            <div class="cmd"><span class="prompt mono">❯</span><code>pi install npm:@robhowley/pi-yolo-seatbelt</code></div>
-            <div class="cmd"><span class="prompt mono">❯</span><code>pi install npm:@robhowley/pi-spinner-verbs</code></div>
-          </article>
-        </div>
-      </div>
-    </section>
-  </main>
-</body>
+            resetTimer = window.setTimeout(() => {
+              button.textContent = idleText;
+              button.setAttribute('aria-label', idleLabel);
+              status.textContent = '';
+            }, 1800);
+          });
+        });
+      })();
+    </script>
+  </body>
 </html>
