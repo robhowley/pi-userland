@@ -1,9 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { deriveAppleSigningIdentity } from '../scripts/derive-apple-signing-identity.js';
 
 const workflow = readFileSync(
   new URL('../../../.github/workflows/release-please.yml', import.meta.url),
+  'utf8',
+);
+const builder = readFileSync(
+  new URL('../scripts/build-macos-artifacts.js', import.meta.url),
   'utf8',
 );
 const runbook = readFileSync(new URL('../RELEASE.md', import.meta.url), 'utf8');
@@ -16,101 +19,66 @@ const buildJob = workflow.slice(
   workflow.indexOf('  session-deck-publish:\n'),
 );
 const publicationJob = workflow.slice(workflow.indexOf('  session-deck-publish:\n'));
-const fingerprint = 'A'.repeat(40);
-
-function identityLine(identity: string, index = 1): string {
-  return `  ${index}) ${fingerprint} "${identity}"`;
-}
-
-describe('Apple signing identity derivation', () => {
-  it('exports the exact Developer ID identity and its Team ID', () => {
-    const identity = 'Developer ID Application: Example Company, Inc. (TEAMID1234)';
-    const output = `${identityLine(identity)}\n     1 valid identities found\n`;
-
-    expect(deriveAppleSigningIdentity(output)).toEqual({
-      APPLE_SIGNING_IDENTITY: identity,
-      APPLE_TEAM_ID: 'TEAMID1234',
-    });
-  });
-
-  it.each([
-    {
-      case: 'zero identities',
-      output: '     0 valid identities found\n',
-      error: 'Expected exactly one codesigning identity',
-    },
-    {
-      case: 'multiple identities',
-      output: `${identityLine('Developer ID Application: One (TEAMID1234)')}\n${identityLine(
-        'Developer ID Application: Two (OTHER12345)',
-        2,
-      )}\n     2 valid identities found\n`,
-      error: 'Expected exactly one codesigning identity',
-    },
-    {
-      case: 'malformed Team ID',
-      output: `${identityLine('Developer ID Application: Example (TEAMID123)')}\n`,
-      error: 'ten-character Team ID',
-    },
-    {
-      case: 'unrelated identity',
-      output: `${identityLine('Apple Development: Example (TEAMID1234)')}\n`,
-      error: 'Developer ID Application identity',
-    },
-  ])('rejects $case', ({ output, error }) => {
-    expect(() => deriveAppleSigningIdentity(output)).toThrow(error);
-  });
-});
 
 describe('Session Deck release workflow contract', () => {
-  it('uses exactly the five repository Apple settings and derives signer details internally', () => {
-    const secretNames = [
-      ...new Set(
-        [...workflow.matchAll(/\$\{\{\s*secrets\.([A-Z0-9_]+)\s*\}\}/gu)].map((match) => match[1]),
-      ),
-    ].sort();
-    const variableNames = [
-      ...new Set(
-        [...workflow.matchAll(/\$\{\{\s*vars\.([A-Z0-9_]+)\s*\}\}/gu)].map((match) => match[1]),
-      ),
-    ].sort();
-
-    expect(secretNames).toEqual([
-      'APPLE_API_PRIVATE_KEY',
-      'APPLE_CERTIFICATE',
-      'APPLE_CERTIFICATE_PASSWORD',
-    ]);
-    expect(variableNames).toEqual(['APPLE_API_ISSUER', 'APPLE_API_KEY']);
-    expect(workflow).not.toMatch(/^\s+environment:/mu);
-    expect(`${workflow}\n${runbook}`).not.toMatch(
-      /session-deck-release|immutable-releases|isImmutable/iu,
+  it('has no credential-backed desktop release inputs or alternate release mode', () => {
+    const secretNames = [...workflow.matchAll(/\$\{\{\s*secrets\.([A-Z0-9_]+)\s*\}\}/gu)].map(
+      (match) => match[1],
     );
-    expect(buildJob).toContain('derive-apple-signing-identity.js >> "$GITHUB_ENV"');
-    expect(buildJob).toContain('if: always()');
+    const variableNames = [...workflow.matchAll(/\$\{\{\s*vars\.([A-Z0-9_]+)\s*\}\}/gu)].map(
+      (match) => match[1],
+    );
+
+    expect(secretNames).toEqual([]);
+    expect(variableNames).toEqual([]);
+    expect(builder).not.toMatch(/process\.env\[[^\]]+\]/u);
+    expect(buildJob).not.toMatch(/^\s+environment:/mu);
   });
 
-  it('preserves native targets, draft no-clobber staging, and publication order', () => {
+  it('builds and stages one native app ZIP and checksum per architecture', () => {
     expect(buildJob).toContain('runner: macos-15\n            target: aarch64-apple-darwin');
     expect(buildJob).toContain('runner: macos-15-intel\n            target: x86_64-apple-darwin');
-    expect(publicationJob).toContain('artifact:validate');
+    expect(buildJob).toContain('--target "${{ matrix.target }}"');
+    expect(buildJob).toContain('--artifact-dir "dist/artifacts-${{ matrix.arch }}"');
+    expect(buildJob).toContain('-macos-${{ matrix.arch }}.zip');
+    expect(buildJob).toContain('-macos-${{ matrix.arch }}.zip.sha256');
+    expect(buildJob).not.toContain('dist/artifacts-${{ matrix.arch }}/*');
+  });
+
+  it('fans in and validates exactly four named non-empty files and both checksums', () => {
+    for (const suffix of [
+      '${stem}-arm64.zip',
+      '${stem}-arm64.zip.sha256',
+      '${stem}-x64.zip',
+      '${stem}-x64.zip.sha256',
+    ]) {
+      expect(publicationJob).toContain(`"${suffix}"`);
+    }
+    expect(publicationJob).toContain('diff -u "$RUNNER_TEMP/expected-assets.txt"');
+    expect(publicationJob).toContain('test -f "$artifact_dir/$name"');
+    expect(publicationJob).toContain('test ! -L "$artifact_dir/$name"');
+    expect(publicationJob).toContain('test -s "$artifact_dir/$name"');
+    expect(publicationJob.match(/sha256sum "\$\{stem\}/gu)).toHaveLength(2);
+    expect(publicationJob.match(/\| cmp -/gu)).toHaveLength(2);
+    expect(publicationJob).toContain('expected_tag="pi-session-deck-v${SESSION_DECK_VERSION}"');
+    expect(publicationJob).toContain("require('./packages/pi-session-deck/package.json').version");
+  });
+
+  it('requires an empty draft, uploads without clobbering, and publishes GitHub first', () => {
     expect(publicationJob).toContain('\'.isDraft\' "$RUNNER_TEMP/release-before.json")" = true');
     expect(publicationJob).toContain(
       '\'.assets | length\' "$RUNNER_TEMP/release-before.json")" = 0',
     );
     expect(publicationJob).toContain('Refusing to overwrite preexisting release assets');
     expect(publicationJob).not.toContain('--clobber');
-    expect(publicationJob).toContain(
-      '\'.assets | length\' "$RUNNER_TEMP/release-after.json")" = 12',
-    );
-    expect(publicationJob).toContain(
-      '\'.isDraft\' "$RUNNER_TEMP/release-published.json")" = false',
-    );
+    expect(publicationJob).not.toContain('npm view');
+    expect(publicationJob).not.toContain('npm pack');
 
     const orderedMarkers = [
-      'artifact:validate',
+      'name: Validate four desktop release files',
+      'name: Require an empty draft and prepare release notes',
       'gh release upload',
       'gh release edit',
-      'release-published.json")" = false',
       'name: Publish pi-session-deck after public release',
       'npm publish',
     ];
@@ -119,11 +87,23 @@ describe('Session Deck release workflow contract', () => {
     expect(positions).toEqual([...positions].sort((left, right) => left - right));
   });
 
-  it('uses the trusted-publishing runtime floor in both npm publication jobs', () => {
+  it('discloses the ad-hoc trust model and safe first-launch override', () => {
+    for (const text of [workflow, runbook]) {
+      expect(text).toContain('ad-hoc signed');
+      expect(text).toContain('not Developer ID signed');
+      expect(text).toContain('not notarized');
+      expect(text).toContain('System Settings → Privacy & Security → Open Anyway');
+    }
+    expect(`${workflow}\n${runbook}`).not.toMatch(/xattr|spctl\s+--master-disable/iu);
+  });
+
+  it('keeps npm trusted publishing runtime and OIDC permissions', () => {
     expect(workflow.match(/npm publish/gu)).toHaveLength(2);
     expect(releaseJob).toContain("node-version: '22.14'");
     expect(publicationJob).toContain("node-version: '22.14'");
     expect(releaseJob).toContain('npm install -g npm@11');
     expect(publicationJob).toContain('npm install -g npm@11');
+    expect(publicationJob).toContain('id-token: write');
+    expect(workflow).not.toMatch(/NPM_TOKEN|NODE_AUTH_TOKEN/u);
   });
 });

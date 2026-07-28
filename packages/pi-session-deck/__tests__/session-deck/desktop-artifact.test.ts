@@ -51,6 +51,25 @@ function toArrayBuffer(value: Buffer): ArrayBuffer {
   return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength) as ArrayBuffer;
 }
 
+const FOUR_RELEASE_ASSETS = [
+  {
+    name: 'session-deck-desktop-v0.9.0-macos-arm64.zip',
+    browser_download_url: 'https://example.test/app-arm64.zip',
+  },
+  {
+    name: 'session-deck-desktop-v0.9.0-macos-arm64.zip.sha256',
+    browser_download_url: 'https://example.test/app-arm64.zip.sha256',
+  },
+  {
+    name: 'session-deck-desktop-v0.9.0-macos-x64.zip',
+    browser_download_url: 'https://example.test/app-x64.zip',
+  },
+  {
+    name: 'session-deck-desktop-v0.9.0-macos-x64.zip.sha256',
+    browser_download_url: 'https://example.test/app-x64.zip.sha256',
+  },
+];
+
 describe('session-deck desktop artifacts', () => {
   it('uses deterministic release tags and macOS asset names', () => {
     expect(getSessionDeckDesktopReleaseTag('0.9.0')).toBe('pi-session-deck-v0.9.0');
@@ -65,64 +84,27 @@ describe('session-deck desktop artifacts', () => {
     ).toThrow('only available for macOS');
   });
 
-  it('resolves matching artifact and checksum release assets', async () => {
+  it.each([
+    ['arm64', 'app-arm64.zip'],
+    ['x64', 'app-x64.zip'],
+  ] as const)('resolves the %s ZIP and checksum from the four-file release', async (arch, file) => {
     const fetch = vi.fn<SessionDeckDesktopFetch>(async () =>
-      okJson({
-        assets: [
-          {
-            name: 'session-deck-desktop-v0.9.0-macos-arm64.zip',
-            browser_download_url: 'https://example.test/app.zip',
-          },
-          {
-            name: 'session-deck-desktop-v0.9.0-macos-arm64.zip.sha256',
-            browser_download_url: 'https://example.test/app.zip.sha256',
-          },
-        ],
-      }),
+      okJson({ assets: FOUR_RELEASE_ASSETS }),
     );
 
     await expect(
       resolveSessionDeckDesktopReleaseArtifact({
         version: '0.9.0',
         platform: 'darwin',
-        arch: 'arm64',
+        arch,
         fetch,
       }),
     ).resolves.toEqual({
       releaseTag: 'pi-session-deck-v0.9.0',
-      assetName: 'session-deck-desktop-v0.9.0-macos-arm64.zip',
-      assetUrl: 'https://example.test/app.zip',
-      checksumAssetName: 'session-deck-desktop-v0.9.0-macos-arm64.zip.sha256',
-      checksumUrl: 'https://example.test/app.zip.sha256',
-    });
-  });
-
-  it('resolves x64 artifact and checksum release assets', async () => {
-    const fetch = vi.fn<SessionDeckDesktopFetch>(async () =>
-      okJson({
-        assets: [
-          {
-            name: 'session-deck-desktop-v0.9.0-macos-x64.zip',
-            browser_download_url: 'https://example.test/app-x64.zip',
-          },
-          {
-            name: 'session-deck-desktop-v0.9.0-macos-x64.zip.sha256',
-            browser_download_url: 'https://example.test/app-x64.zip.sha256',
-          },
-        ],
-      }),
-    );
-
-    await expect(
-      resolveSessionDeckDesktopReleaseArtifact({
-        version: '0.9.0',
-        platform: 'darwin',
-        arch: 'x64',
-        fetch,
-      }),
-    ).resolves.toMatchObject({
-      assetName: 'session-deck-desktop-v0.9.0-macos-x64.zip',
-      checksumAssetName: 'session-deck-desktop-v0.9.0-macos-x64.zip.sha256',
+      assetName: `session-deck-desktop-v0.9.0-macos-${arch}.zip`,
+      assetUrl: `https://example.test/${file}`,
+      checksumAssetName: `session-deck-desktop-v0.9.0-macos-${arch}.zip.sha256`,
+      checksumUrl: `https://example.test/${file}.sha256`,
     });
   });
 

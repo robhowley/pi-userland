@@ -18,13 +18,12 @@ Private Tauri desktop companion for Session Deck. This app lives under `apps/` s
 - `pnpm --filter ./apps/session-deck-desktop build`
 - `pnpm --filter ./apps/session-deck-desktop dev:isolated` — build the local helper and launch from temporary checkout-specific metadata without replacing the installed app
 - `pnpm --filter ./apps/session-deck-desktop tauri dev`
-- `pnpm --filter ./apps/session-deck-desktop artifact:macos -- --version <pi-session-deck-version>`
-- `pnpm --filter ./apps/session-deck-desktop artifact:validate -- --version <version> --artifact-dir <directory>`
+- `pnpm --filter ./apps/session-deck-desktop artifact:macos --version <version> --target <aarch64-apple-darwin|x86_64-apple-darwin>`
 
-## Notes
+## Release artifacts
 
-`sync:web` copies the canonical `index.html`, `style.css`, and `session-deck-ui.js` assets from `packages/pi-session-deck/extensions/session-deck/iterm2/web/`, then overlays the desktop-specific Tauri bootstrap.
+`artifact:macos` builds one native Tauri `.app`, verifies that its executable contains only the target architecture, and packages the app with `ditto`. It emits one deterministic `session-deck-desktop-v<version>-macos-<arch>.zip` and its `.sha256` sidecar.
 
-`artifact:macos` builds Tauri `app`/`dmg` bundles, zips the `.app`, writes deterministic `session-deck-desktop-v<version>-macos-<arch>` artifact names, and emits `.sha256` sidecars. Local builds are unsigned. Production CI uses explicit `--trusted-release` mode and fails unless signing, notarization, architecture, Gatekeeper, staple, and DMG checks pass.
+The app is ad-hoc signed with Tauri's `-` identity. It is not Developer ID signed and is not notarized. No Apple credentials are required. macOS may block the first launch; first try to open the app, then, only if you trust the release, use **System Settings → Privacy & Security → Open Anyway**.
 
-See [RELEASE.md](./RELEASE.md) for the dual-architecture release contract, external credential setup, failure policy, and first-release checks.
+See [RELEASE.md](./RELEASE.md) for the dual-architecture release and publication contract.

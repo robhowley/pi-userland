@@ -184,7 +184,7 @@ async function bundleMode(options) {
   console.log(`appPath: ${INSTALLED_APP_PATH}`);
   console.log(`statePath: ${INSTALLED_STATE_PATH}`);
   console.log(
-    'signing: this branch bundle is unsigned; macOS Gatekeeper/AMFI may quit it after Launch Services opens it. Dev mode avoids that.',
+    'signing: this branch bundle is ad-hoc signed, not Developer ID signed or notarized; macOS may require System Settings → Privacy & Security → Open Anyway.',
   );
 
   if (!options.openBundle) {

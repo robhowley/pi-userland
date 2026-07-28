@@ -27,14 +27,15 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg"],
+    "targets": ["app"],
     "icon": ["icons/icon.png"],
     "publisher": "Rob Howley",
     "category": "DeveloperTool",
     "shortDescription": "Desktop companion for Session Deck.",
     "longDescription": "A private Tauri desktop companion distributed as a GitHub Release artifact for @robhowley/pi-session-deck.",
     "macOS": {
-      "minimumSystemVersion": "11.0"
+      "minimumSystemVersion": "11.0",
+      "signingIdentity": "-"
     }
   }
 }
