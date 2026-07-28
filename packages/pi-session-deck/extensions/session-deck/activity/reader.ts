@@ -263,6 +263,7 @@ function normalizeActivityState(value: unknown): SessionActivityRecord['activity
     case 'thinking':
     case 'tool-running':
     case 'compacting':
+    case 'awaiting-input':
     case 'error':
       return value;
     default:
@@ -285,6 +286,9 @@ function normalizeActivitySource(
     case 'turn_end':
     case 'assistant_error':
     case 'periodic':
+    case 'ui_dialog_start':
+    case 'ui_dialog_end':
+    case 'ui_dialog_clear':
     case 'compaction_start':
     case 'compaction_end':
     case 'compaction_abort':

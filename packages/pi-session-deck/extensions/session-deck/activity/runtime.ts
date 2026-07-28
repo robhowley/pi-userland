@@ -10,11 +10,12 @@ import type {
   ActivityToolWindow,
   SessionActivityRecord,
   SessionCompactionReason,
+  UiDialogKind,
 } from './types.js';
 import type { SessionManagerLike } from '../identity/types.js';
 
 const ACTIVITY_RUNTIME_STATE_KEY = '__piSessionDeckActivityRuntimeState__';
-const ACTIVITY_RUNTIME_CONTROLLER_API_VERSION = 2;
+const ACTIVITY_RUNTIME_CONTROLLER_API_VERSION = 3;
 const MAX_RECENT_TOOL_WINDOWS = 20;
 const RECENT_TOOL_WINDOW_MAX_AGE_MS = 15 * 60 * 1000;
 
@@ -36,6 +37,11 @@ interface ActiveToolCall {
   startedAt: string;
 }
 
+interface ActiveUiDialogWait {
+  kind: UiDialogKind;
+  startedAt: string;
+}
+
 interface ActivityRuntimeState {
   cachedActivity: SessionActivityRecord | null;
   activeStartPromise: Promise<ActivityRuntimeController> | null;
@@ -46,6 +52,7 @@ interface ActivityRuntimeState {
   sessionManager: SessionManagerLike | null;
   lastSeenSessionId: string | null;
   activeToolCalls: Map<string, ActiveToolCall>;
+  activeUiDialogWaits: Map<string, ActiveUiDialogWait>;
   inputSummary: ActivityInputSummary;
   recentToolWindows: ActivityToolWindow[];
   lastToolUpdateWrittenAtMs: number | null;
@@ -78,6 +85,7 @@ function getActivityRuntimeState(): ActivityRuntimeState {
     sessionManager: null,
     lastSeenSessionId: null,
     activeToolCalls: new Map(),
+    activeUiDialogWaits: new Map(),
     inputSummary: {},
     recentToolWindows: [],
     lastToolUpdateWrittenAtMs: null,
@@ -124,6 +132,7 @@ export async function ensureActivityRuntimeStarted(
           state.lastSeenSessionId = sessionId;
           resetCompactionLifecycle(state);
           state.activeToolCalls.clear();
+          state.activeUiDialogWaits.clear();
           state.inputSummary = {};
           state.recentToolWindows = [];
           state.lastToolUpdateWrittenAtMs = null;
@@ -207,16 +216,19 @@ export async function ensureActivityRuntimeStarted(
         runSerialized(state, async () => {
           state.hasActiveTurnError = false;
           const nowIso = getNowIso(config);
-          await writeSnapshot(state, config, {
-            ...getCurrentOrIdleRecord(state, nowIso),
-            activityState: 'thinking',
-            idle: false,
-            busy: true,
+          const current = getCurrentOrIdleRecord(state, nowIso);
+          const nextRecord: SessionActivityRecord = {
+            ...current,
             currentTurnStartedAt: nowIso,
             currentToolName: null,
             lastEventAt: nowIso,
             activityUpdatedAt: nowIso,
             activitySource: 'turn_start',
+          };
+
+          await writeSnapshot(state, config, {
+            ...nextRecord,
+            ...deriveRuntimeActivityFields(state, nextRecord, nowIso),
           });
         }),
       recordToolExecutionStart: async ({ toolCallId, toolName }) =>
@@ -235,18 +247,18 @@ export async function ensureActivityRuntimeStarted(
             nowIso,
           );
 
-          await writeSnapshot(state, config, {
+          const nextRecord: SessionActivityRecord = {
             ...current,
-            activityState: 'tool-running',
-            idle: false,
-            busy: true,
-            currentTurnStartedAt: current.currentTurnStartedAt ?? nowIso,
-            currentToolName: getMostRecentToolName(state.activeToolCalls),
             lastToolStartedAt: nowIso,
             lastEventAt: nowIso,
             activityUpdatedAt: nowIso,
             activitySource: 'tool_start',
             ...getRuntimeActivitySummaryFields(state, nowIso),
+          };
+
+          await writeSnapshot(state, config, {
+            ...nextRecord,
+            ...deriveRuntimeActivityFields(state, nextRecord, nowIso),
           });
         }),
       recordToolExecutionUpdate: async ({ toolCallId }) =>
@@ -258,17 +270,16 @@ export async function ensureActivityRuntimeStarted(
             return;
           }
 
-          const nextRecord: SessionActivityRecord = {
+          const nextRecordBase: SessionActivityRecord = {
             ...current,
-            activityState: 'tool-running',
-            idle: false,
-            busy: true,
-            currentTurnStartedAt: current.currentTurnStartedAt ?? nowIso,
-            currentToolName: getMostRecentToolName(state.activeToolCalls),
             lastEventAt: nowIso,
             activityUpdatedAt: nowIso,
             activitySource: 'tool_update',
             ...getRuntimeActivitySummaryFields(state, nowIso),
+          };
+          const nextRecord: SessionActivityRecord = {
+            ...nextRecordBase,
+            ...deriveRuntimeActivityFields(state, nextRecordBase, nowIso),
           };
 
           if (!shouldWriteToolUpdate(state, nowIso)) {
@@ -301,16 +312,8 @@ export async function ensureActivityRuntimeStarted(
             nowIso,
           );
 
-          const nextToolName = getMostRecentToolName(state.activeToolCalls);
-          const hasActiveTurn = current.currentTurnStartedAt !== null;
-
-          await writeSnapshot(state, config, {
+          const nextRecord: SessionActivityRecord = {
             ...current,
-            activityState:
-              nextToolName !== null ? 'tool-running' : hasActiveTurn ? 'thinking' : 'idle',
-            idle: !hasActiveTurn,
-            busy: hasActiveTurn,
-            currentToolName: nextToolName,
             lastToolEndedAt: nowIso,
             lastEventAt: nowIso,
             lastError: isError ? createToolFailureError(toolName) : current.lastError,
@@ -318,6 +321,11 @@ export async function ensureActivityRuntimeStarted(
             activityUpdatedAt: nowIso,
             activitySource: 'tool_end',
             ...getRuntimeActivitySummaryFields(state, nowIso),
+          };
+
+          await writeSnapshot(state, config, {
+            ...nextRecord,
+            ...deriveRuntimeActivityFields(state, nextRecord, nowIso),
           });
         }),
       recordTurnEnd: async () =>
@@ -327,16 +335,18 @@ export async function ensureActivityRuntimeStarted(
           state.lastToolUpdateWrittenAtMs = null;
 
           const current = getCurrentOrIdleRecord(state, nowIso);
-          await writeSnapshot(state, config, {
+          const nextRecord: SessionActivityRecord = {
             ...current,
-            activityState: state.hasActiveTurnError ? 'error' : 'idle',
-            idle: !state.hasActiveTurnError,
-            busy: false,
             currentTurnStartedAt: null,
             currentToolName: null,
             lastEventAt: nowIso,
             activityUpdatedAt: nowIso,
             activitySource: 'turn_end',
+          };
+
+          await writeSnapshot(state, config, {
+            ...nextRecord,
+            ...deriveRuntimeActivityFields(state, nextRecord, nowIso),
           });
         }),
       recordCompactionStart: async (event) => {
@@ -377,6 +387,60 @@ export async function ensureActivityRuntimeStarted(
           }
         });
       },
+      recordUiDialogStart: async ({ waitId, kind }) =>
+        runSerialized(state, async () => {
+          const nowIso = getNowIso(config);
+          const current = getCurrentOrIdleRecord(state, nowIso);
+          state.activeUiDialogWaits.set(normalizeUiDialogWaitId(waitId), {
+            kind,
+            startedAt: nowIso,
+          });
+
+          await writeSnapshot(state, config, {
+            ...current,
+            ...deriveRuntimeActivityFields(state, current, nowIso),
+            lastEventAt: nowIso,
+            activityUpdatedAt: nowIso,
+            activitySource: 'ui_dialog_start',
+            ...getRuntimeActivitySummaryFields(state, nowIso),
+          });
+        }),
+      recordUiDialogEnd: async ({ waitId }) =>
+        runSerialized(state, async () => {
+          const removed = state.activeUiDialogWaits.delete(normalizeUiDialogWaitId(waitId));
+          if (!removed) {
+            return;
+          }
+
+          const nowIso = getNowIso(config);
+          const current = getCurrentOrIdleRecord(state, nowIso);
+          await writeSnapshot(state, config, {
+            ...current,
+            ...deriveRuntimeActivityFields(state, current, nowIso),
+            lastEventAt: nowIso,
+            activityUpdatedAt: nowIso,
+            activitySource: 'ui_dialog_end',
+            ...getRuntimeActivitySummaryFields(state, nowIso),
+          });
+        }),
+      clearUiDialogs: async () =>
+        runSerialized(state, async () => {
+          if (state.activeUiDialogWaits.size === 0) {
+            return;
+          }
+
+          state.activeUiDialogWaits.clear();
+          const nowIso = getNowIso(config);
+          const current = getCurrentOrIdleRecord(state, nowIso);
+          await writeSnapshot(state, config, {
+            ...current,
+            ...deriveRuntimeActivityFields(state, current, nowIso),
+            lastEventAt: nowIso,
+            activityUpdatedAt: nowIso,
+            activitySource: 'ui_dialog_clear',
+            ...getRuntimeActivitySummaryFields(state, nowIso),
+          });
+        }),
       clearCompaction: async (reason) =>
         runSerialized(state, async () => {
           await clearCompactionWithinMutation(state, config, reason);
@@ -402,6 +466,7 @@ export async function ensureActivityRuntimeStarted(
           if (state.cachedActivity?.sessionId !== sessionId) {
             resetCompactionLifecycle(state);
             state.activeToolCalls.clear();
+            state.activeUiDialogWaits.clear();
             state.inputSummary = {};
             state.recentToolWindows = [];
             state.lastToolUpdateWrittenAtMs = null;
@@ -415,11 +480,16 @@ export async function ensureActivityRuntimeStarted(
           }
 
           const current = getCurrentOrIdleRecord(state, nowIso);
-          await writeSnapshot(state, config, {
+          const nextRecord: SessionActivityRecord = {
             ...current,
             activityUpdatedAt: nowIso,
             activitySource: 'periodic',
             ...getRuntimeActivitySummaryFields(state, nowIso),
+          };
+
+          await writeSnapshot(state, config, {
+            ...nextRecord,
+            ...deriveRuntimeActivityFields(state, nextRecord, nowIso),
           });
         });
       }, DEFAULT_ACTIVITY_REFRESH_INTERVAL_MS);
@@ -447,6 +517,7 @@ export async function stopActivityRuntime(): Promise<void> {
   state.sessionManager = null;
   state.lastSeenSessionId = null;
   state.activeToolCalls.clear();
+  state.activeUiDialogWaits.clear();
   state.inputSummary = {};
   state.recentToolWindows = [];
   state.lastToolUpdateWrittenAtMs = null;
@@ -465,6 +536,7 @@ export async function resetActivityRuntimeForTests(): Promise<void> {
 function migrateActivityRuntimeState(state: ActivityRuntimeState): void {
   state.pendingMutation ??= Promise.resolve();
   state.lastToolUpdateWrittenAtMs ??= null;
+  state.activeUiDialogWaits ??= new Map();
   state.compactionToken ??= 0;
   state.compactionAbortCleanup ??= null;
 }
@@ -477,6 +549,9 @@ function hasCurrentActivityRuntimeControllerApi(controller: ActivityRuntimeContr
     candidate.activityRuntimeApiVersion === ACTIVITY_RUNTIME_CONTROLLER_API_VERSION &&
     typeof candidate.recordToolExecutionUpdate === 'function' &&
     typeof candidate.recordCompactionStart === 'function' &&
+    typeof candidate.recordUiDialogStart === 'function' &&
+    typeof candidate.recordUiDialogEnd === 'function' &&
+    typeof candidate.clearUiDialogs === 'function' &&
     typeof candidate.clearCompaction === 'function'
   );
 }
@@ -612,6 +687,7 @@ function getCurrentOrIdleRecord(
   state.lastSeenSessionId = sessionId;
   resetCompactionLifecycle(state);
   state.activeToolCalls.clear();
+  state.activeUiDialogWaits.clear();
   state.inputSummary = {};
   state.recentToolWindows = [];
   state.lastToolUpdateWrittenAtMs = null;
@@ -719,6 +795,10 @@ function normalizeToolCallId(toolCallId: string): string {
   return toolCallId.length > 0 ? toolCallId : 'unknown-tool-call';
 }
 
+function normalizeUiDialogWaitId(waitId: string): string {
+  return waitId.length > 0 ? waitId : 'unknown-ui-dialog';
+}
+
 function shouldWriteToolUpdate(state: ActivityRuntimeState, nowIso: string): boolean {
   const nowMs = parseTimestamp(nowIso);
   const lastWriteMs = state.lastToolUpdateWrittenAtMs;
@@ -777,6 +857,27 @@ function deriveRuntimeActivityFields(
   'activityState' | 'idle' | 'busy' | 'currentTurnStartedAt' | 'currentToolName'
 > {
   const activeToolName = getMostRecentToolName(state.activeToolCalls);
+
+  if (state.hasActiveTurnError) {
+    return {
+      activityState: 'error',
+      idle: false,
+      busy: false,
+      currentTurnStartedAt: null,
+      currentToolName: null,
+    };
+  }
+
+  if (state.activeUiDialogWaits.size > 0) {
+    return {
+      activityState: 'awaiting-input',
+      idle: false,
+      busy: true,
+      currentTurnStartedAt: current.currentTurnStartedAt,
+      currentToolName: null,
+    };
+  }
+
   if (activeToolName !== null) {
     return {
       activityState: 'tool-running',
@@ -787,25 +888,12 @@ function deriveRuntimeActivityFields(
     };
   }
 
-  if (current.currentTurnStartedAt !== null && !state.hasActiveTurnError) {
+  if (current.currentTurnStartedAt !== null) {
     return {
       activityState: 'thinking',
       idle: false,
       busy: true,
       currentTurnStartedAt: current.currentTurnStartedAt,
-      currentToolName: null,
-    };
-  }
-
-  if (
-    state.hasActiveTurnError ||
-    (current.activityState === 'error' && current.lastError !== null)
-  ) {
-    return {
-      activityState: 'error',
-      idle: false,
-      busy: false,
-      currentTurnStartedAt: null,
       currentToolName: null,
     };
   }

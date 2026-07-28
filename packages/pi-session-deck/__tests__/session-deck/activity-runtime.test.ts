@@ -122,6 +122,100 @@ describe('activity runtime lifecycle', () => {
     expect(writes.at(-1)?.activityState).toBe('thinking');
   });
 
+  it('tracks overlapping UI dialogs until every wait ends', async () => {
+    const writes: SessionActivityRecord[] = [];
+    const controller = await ensureActivityRuntimeStarted('rt-1', {
+      writeRecord: vi.fn(async (record: SessionActivityRecord) => {
+        writes.push(record);
+      }),
+    });
+
+    await controller.refreshActivity('startup', {
+      getSessionId: () => 'session-abc',
+      getSessionFile: () => '/tmp/session-abc.json',
+    });
+    await controller.recordTurnStart();
+    await controller.recordToolExecutionStart({ toolCallId: 'tool-1', toolName: 'bash' });
+
+    vi.setSystemTime(new Date('2026-06-17T12:00:05.000Z'));
+    await controller.recordUiDialogStart({ waitId: 'confirm-1', kind: 'confirm' });
+    expect(controller.getActivity()).toMatchObject({
+      activityState: 'awaiting-input',
+      busy: true,
+      currentToolName: null,
+      activitySource: 'ui_dialog_start',
+    });
+
+    vi.setSystemTime(new Date('2026-06-17T12:00:06.000Z'));
+    await controller.recordUiDialogStart({ waitId: 'select-1', kind: 'select' });
+    expect(controller.getActivity()?.activityState).toBe('awaiting-input');
+
+    vi.setSystemTime(new Date('2026-06-17T12:00:07.000Z'));
+    await controller.recordUiDialogEnd({ waitId: 'confirm-1' });
+    expect(controller.getActivity()).toMatchObject({
+      activityState: 'awaiting-input',
+      activitySource: 'ui_dialog_end',
+    });
+
+    vi.setSystemTime(new Date('2026-06-17T12:00:08.000Z'));
+    await controller.recordUiDialogEnd({ waitId: 'select-1' });
+    expect(controller.getActivity()).toMatchObject({
+      activityState: 'tool-running',
+      currentToolName: 'bash',
+      activitySource: 'ui_dialog_end',
+    });
+    expect(JSON.stringify(writes)).not.toContain('prompt');
+    expect(JSON.stringify(writes)).not.toContain('result');
+  });
+
+  it('returns from UI dialog wait to thinking when no tool is active', async () => {
+    const writes: SessionActivityRecord[] = [];
+    const controller = await ensureActivityRuntimeStarted('rt-1', {
+      writeRecord: vi.fn(async (record: SessionActivityRecord) => {
+        writes.push(record);
+      }),
+    });
+
+    await controller.refreshActivity('startup', {
+      getSessionId: () => 'session-abc',
+      getSessionFile: () => '/tmp/session-abc.json',
+    });
+    await controller.recordTurnStart();
+    await controller.recordUiDialogStart({ waitId: 'input-1', kind: 'input' });
+    expect(controller.getActivity()?.activityState).toBe('awaiting-input');
+
+    vi.setSystemTime(new Date('2026-06-17T12:00:09.000Z'));
+    await controller.recordUiDialogEnd({ waitId: 'input-1' });
+
+    expect(controller.getActivity()).toMatchObject({
+      activityState: 'thinking',
+      currentToolName: null,
+      activitySource: 'ui_dialog_end',
+    });
+    expect(writes.at(-1)?.activityState).toBe('thinking');
+  });
+
+  it('clears active UI waits without ending active tools', async () => {
+    const controller = await ensureActivityRuntimeStarted('rt-1', {
+      writeRecord: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await controller.refreshActivity('startup', {
+      getSessionId: () => 'session-abc',
+      getSessionFile: () => '/tmp/session-abc.json',
+    });
+    await controller.recordToolExecutionStart({ toolCallId: 'tool-1', toolName: 'read' });
+    await controller.recordUiDialogStart({ waitId: 'editor-1', kind: 'editor' });
+    expect(controller.getActivity()?.activityState).toBe('awaiting-input');
+
+    await controller.clearUiDialogs();
+    expect(controller.getActivity()).toMatchObject({
+      activityState: 'tool-running',
+      currentToolName: 'read',
+      activitySource: 'ui_dialog_clear',
+    });
+  });
+
   it('records active tool updates as progress while preserving metadata', async () => {
     const writes: SessionActivityRecord[] = [];
     const controller = await ensureActivityRuntimeStarted('rt-1', {

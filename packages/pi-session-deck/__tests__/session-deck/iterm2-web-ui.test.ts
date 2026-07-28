@@ -2470,6 +2470,7 @@ describe('Session Deck iTerm2 web UI', () => {
       /\.worktree-submit-button\s*\{[\s\S]*min-height:\s*32px;[\s\S]*border-radius:\s*0 7px 7px 0;/u,
     );
     expect(css).toContain('.row-activity');
+    expect(css).toContain(".activity-icon[data-activity='awaiting-input']");
     expect(css).toContain('.worktree-form-feedback');
     expect(css).toContain('.pending-worktree-actions');
     expect(css).not.toContain('.worktree-form-actions');
@@ -4537,6 +4538,43 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(findAllByClass(line1, 'status-icon')).toHaveLength(0);
     expect(getChildTextContents(line1)).toEqual(['', 'alpha', 'thinking', '12s']);
     expect(findAllByClass(line1, 'row-activity')[0]?.textContent).toBe('thinking');
+  });
+
+  it('renders awaiting-input as needs input without exposing prompt payloads', async () => {
+    const harness = await setupApp([
+      buildSnapshot({
+        records: [
+          buildRecord({
+            activityState: 'awaiting-input',
+            activityAgeMs: 12_000,
+            heartbeatAgeMs: 4_000,
+            currentToolName: null,
+            chips: [],
+          }),
+        ],
+      }),
+    ]);
+    expandAllRepoGroups(harness.elements.list);
+
+    const card = getCards(harness.elements.list)[0]!;
+    const line1 = getCardLine(card, 'row-line1');
+    const activityIcons = findAllByClass(line1, 'activity-icon');
+
+    expect(activityIcons).toHaveLength(1);
+    expect(activityIcons[0]?.getAttribute('role')).toBe('img');
+    expect(activityIcons[0]?.getAttribute('aria-label')).toBe('needs input');
+    expect(activityIcons[0]?.getAttribute('title')).toBe('needs input');
+    expect(activityIcons[0]?.getAttribute('data-activity')).toBe('awaiting-input');
+    expect(getChildTextContents(line1)).toEqual(['', 'alpha', 'needs input', '12s']);
+    expect(findAllByClass(line1, 'row-activity')[0]?.textContent).toBe('needs input');
+
+    getCardToggle(card).click();
+    const status = getDetailSection(
+      getCardDetail(getExpandedCards(harness.elements.list)[0]!),
+      'STATUS',
+    );
+    expect(getDetailRowLabels(status)).toEqual(['Activity']);
+    expect(getDetailRowValues(status)).toEqual(['needs input']);
   });
 
   it('renders compacting as an accessible activity icon without chips', async () => {

@@ -10,10 +10,12 @@ export type ActivityState =
   | 'thinking'
   | 'tool-running'
   | 'compacting'
+  | 'awaiting-input'
   | 'error'
   | 'unknown';
 
 export type ActivityInputSource = 'interactive' | 'rpc' | 'extension';
+export type UiDialogKind = 'select' | 'input' | 'editor' | 'confirm';
 
 export interface ActivityInputSummary {
   lastSource?: ActivityInputSource;
@@ -41,6 +43,9 @@ export type ActivitySource =
   | 'turn_end'
   | 'assistant_error'
   | 'periodic'
+  | 'ui_dialog_start'
+  | 'ui_dialog_end'
+  | 'ui_dialog_clear'
   | 'compaction_start'
   | 'compaction_end'
   | 'compaction_abort'
@@ -148,6 +153,9 @@ export interface ActivityRuntimeController {
     willRetry?: unknown;
     signal?: AbortSignal;
   }) => Promise<void>;
+  recordUiDialogStart: (event: { waitId: string; kind: UiDialogKind }) => Promise<void>;
+  recordUiDialogEnd: (event: { waitId: string }) => Promise<void>;
+  clearUiDialogs: () => Promise<void>;
   clearCompaction: (
     reason: 'completed' | 'aborted' | 'shutdown' | 'session-change' | 'expired',
   ) => Promise<void>;

@@ -82,7 +82,11 @@ export function deriveActivity(options: DeriveActivityOptions): DerivedActivity 
     return deriveCompactingActivity({ activity, nowMs, thresholds, diagnostics, trustedFields });
   }
 
-  if (activity.busy && activity.currentTurnStartedAt === null) {
+  if (
+    activity.busy &&
+    activity.currentTurnStartedAt === null &&
+    activity.activityState !== 'awaiting-input'
+  ) {
     diagnostics.push({
       code: 'turn_started_missing',
       message: 'Busy activity record is missing currentTurnStartedAt',
@@ -110,7 +114,7 @@ export function deriveActivity(options: DeriveActivityOptions): DerivedActivity 
     return { ...createUnknownActivity(diagnostics), ...trustedFields };
   }
 
-  if (activity.busy) {
+  if (activity.busy && activity.activityState !== 'awaiting-input') {
     const eventMs = parseTimestamp(activity.lastEventAt);
     if (eventMs === null) {
       diagnostics.push({
@@ -145,6 +149,15 @@ export function deriveActivity(options: DeriveActivityOptions): DerivedActivity 
       ...trustedFields,
       activityState: 'error',
       activityAgeMs: null,
+      diagnostics,
+    };
+  }
+
+  if (activity.activityState === 'awaiting-input') {
+    return {
+      ...trustedFields,
+      activityState: 'awaiting-input',
+      activityAgeMs: computeAgeMs(nowMs, activity.lastEventAt ?? activity.activityUpdatedAt),
       diagnostics,
     };
   }
@@ -299,6 +312,24 @@ function deriveFallbackActivityState(
   compaction: DerivedActivity['compaction'],
 ): DerivedActivity {
   const withCompaction = { ...trustedFields, compaction };
+
+  if (activity.activityState === 'error' && activity.lastError !== null) {
+    return {
+      ...withCompaction,
+      activityState: 'error',
+      activityAgeMs: null,
+      diagnostics,
+    };
+  }
+
+  if (activity.activityState === 'awaiting-input') {
+    return {
+      ...withCompaction,
+      activityState: 'awaiting-input',
+      activityAgeMs: computeAgeMs(nowMs, activity.lastEventAt ?? activity.activityUpdatedAt),
+      diagnostics,
+    };
+  }
 
   if (activity.currentToolName !== null) {
     return {
