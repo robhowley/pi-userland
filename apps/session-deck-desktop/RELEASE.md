@@ -50,7 +50,7 @@ Store exactly these two ordinary repository Actions variables:
 | `APPLE_API_ISSUER` | App Store Connect API issuer UUID |
 | `APPLE_API_KEY`    | App Store Connect API key ID      |
 
-No deployment environment is required. Do not configure signer identity or Team ID as repository settings.
+No deployment environment is required; removing the GitHub Environment removes its approval and protection boundary. Do not configure signer identity or Team ID as repository settings.
 
 ### Derived and internal values
 
@@ -70,6 +70,7 @@ Configure an npm trusted publisher for `@robhowley/pi-session-deck` with:
 - organization/user: `robhowley`;
 - repository: `pi-userland`;
 - workflow filename: `release-please.yml`;
+- Allowed actions: `npm publish`;
 - no environment restriction.
 
 Both workflow jobs that can call `npm publish` use Node 22.14 and npm 11, satisfying the current documented trusted-publishing floors of Node 22.14+ and npm 11.5.1+. Keep `id-token: write`; do not add a long-lived npm token fallback.
@@ -116,6 +117,8 @@ Metadata must identify the package version and architecture, report `signed: tru
 9. Only then does it publish the exact package version to npm.
 
 The process fails closed on missing inputs, identity derivation failure, wrong architecture, signing/notarization/verification failure, a failed matrix leg, inventory mismatch, preexisting assets, unavailable npm preflight, upload mismatch, or a release that does not complete the required draft-to-public transition.
+
+GitHub does not enforce immutable release assets after publication. The draft-state, zero-existing-assets, no-clobber, and remote checks protect only the initial publication; maintainers and other workflows can later replace or delete assets.
 
 GitHub and npm publication are not atomic. If GitHub publication succeeds but npm publication fails, verify the public 12-file inventory, fix trusted-publisher access, and publish the same package version from the original tag. Never replace uploaded bytes. A partial draft upload intentionally blocks an automatic retry; investigate it rather than adding clobber behavior.
 
