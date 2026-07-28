@@ -13,6 +13,5 @@
     "packages/pi-yolo-seatbelt": {}
   },
   "separate-pull-requests": false,
-  "pull-request-title-style": "conventional-commit",
   "release-type": "node"
 }

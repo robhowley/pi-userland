@@ -218,6 +218,8 @@ export async function preflightTrustedReleaseEnvironment(env = process.env) {
       `Trusted release credentials are incomplete: ${missingEnvironment.join(', ')}.`,
     );
   }
+  const teamId = /** @type {string} */ (env['APPLE_TEAM_ID']);
+  validateAppleTeamId(teamId);
   const apiKeyPath = /** @type {string} */ (env['APPLE_API_KEY_PATH']);
   const [apiKeyStats, apiKeyText] = await Promise.all([
     stat(apiKeyPath),
@@ -386,20 +388,63 @@ async function writeArtifactChecksum(artifactPath) {
   return { name: basename(artifactPath), sha256, bytes: artifactStats.size };
 }
 
-/** @param {string} path @param {string} expectedTeamId */
-async function verifyDeveloperIdSignature(path, expectedTeamId) {
-  await runCommand('/usr/bin/codesign', ['--verify', '--deep', '--strict', '--verbose=2', path]);
-  const details = await runCommandOutput('/usr/bin/codesign', ['-dv', '--verbose=4', path]);
-  if (!details.includes('Authority=Developer ID Application:')) {
-    throw new Error(`${path} is not signed with a Developer ID Application certificate.`);
-  }
-  if (!details.includes(`TeamIdentifier=${expectedTeamId}`)) {
-    throw new Error(`${path} is not signed by expected Apple team ${expectedTeamId}.`);
+/** @param {string} teamId */
+function validateAppleTeamId(teamId) {
+  if (!/^[A-Z0-9]{10}$/u.test(teamId)) {
+    throw new Error('APPLE_TEAM_ID must be exactly 10 uppercase letters or digits.');
   }
 }
 
-/** @param {string} appBundlePath @param {'arm64' | 'x64'} arch @param {string} teamId */
-async function verifyAppBundle(appBundlePath, arch, teamId) {
+/**
+ * @param {string} details
+ * @param {string} expectedSigningIdentity
+ * @param {string} expectedTeamId
+ * @param {string} path
+ */
+export function assertDeveloperIdSignatureDetails(
+  details,
+  expectedSigningIdentity,
+  expectedTeamId,
+  path = 'Signed artifact',
+) {
+  validateAppleTeamId(expectedTeamId);
+  const lines = details.split(/\r?\n/u);
+  const authorityLines = lines.filter((line) => line.startsWith('Authority='));
+  const leafAuthorityLine = authorityLines[0];
+  if (!leafAuthorityLine?.startsWith('Authority=Developer ID Application:')) {
+    throw new Error(`${path} is not signed with a Developer ID Application certificate.`);
+  }
+  if (leafAuthorityLine !== `Authority=${expectedSigningIdentity}`) {
+    throw new Error(`${path} leaf authority does not exactly match APPLE_SIGNING_IDENTITY.`);
+  }
+
+  const teamIdentifierLines = lines.filter((line) => line.startsWith('TeamIdentifier='));
+  if (
+    teamIdentifierLines.length !== 1 ||
+    teamIdentifierLines[0] !== `TeamIdentifier=${expectedTeamId}`
+  ) {
+    throw new Error(`${path} TeamIdentifier does not exactly match APPLE_TEAM_ID.`);
+  }
+}
+
+/**
+ * @param {string} path
+ * @param {string} expectedSigningIdentity
+ * @param {string} expectedTeamId
+ */
+async function verifyDeveloperIdSignature(path, expectedSigningIdentity, expectedTeamId) {
+  await runCommand('/usr/bin/codesign', ['--verify', '--deep', '--strict', '--verbose=2', path]);
+  const details = await runCommandOutput('/usr/bin/codesign', ['-dv', '--verbose=4', path]);
+  assertDeveloperIdSignatureDetails(details, expectedSigningIdentity, expectedTeamId, path);
+}
+
+/**
+ * @param {string} appBundlePath
+ * @param {'arm64' | 'x64'} arch
+ * @param {string} signingIdentity
+ * @param {string} teamId
+ */
+async function verifyAppBundle(appBundlePath, arch, signingIdentity, teamId) {
   const executableName = await runCommandOutput('/usr/libexec/PlistBuddy', [
     '-c',
     'Print :CFBundleExecutable',
@@ -421,7 +466,7 @@ async function verifyAppBundle(appBundlePath, arch, teamId) {
     );
   }
 
-  await verifyDeveloperIdSignature(appBundlePath, teamId);
+  await verifyDeveloperIdSignature(appBundlePath, signingIdentity, teamId);
   await runCommand('/usr/sbin/spctl', [
     '--assess',
     '--type',
@@ -432,10 +477,15 @@ async function verifyAppBundle(appBundlePath, arch, teamId) {
   await runCommand('/usr/bin/xcrun', ['stapler', 'validate', appBundlePath]);
 }
 
-/** @param {string} dmgPath @param {'arm64' | 'x64'} arch @param {string} teamId */
-async function verifyDmg(dmgPath, arch, teamId) {
+/**
+ * @param {string} dmgPath
+ * @param {'arm64' | 'x64'} arch
+ * @param {string} signingIdentity
+ * @param {string} teamId
+ */
+async function verifyDmg(dmgPath, arch, signingIdentity, teamId) {
   await runCommand('/usr/bin/hdiutil', ['verify', dmgPath]);
-  await verifyDeveloperIdSignature(dmgPath, teamId);
+  await verifyDeveloperIdSignature(dmgPath, signingIdentity, teamId);
   await runCommand('/usr/sbin/spctl', [
     '--assess',
     '--type',
@@ -459,7 +509,7 @@ async function verifyDmg(dmgPath, arch, teamId) {
     ]);
     const mountedApp = join(mountPoint, `${PRODUCT_NAME}.app`);
     await stat(mountedApp);
-    await verifyAppBundle(mountedApp, arch, teamId);
+    await verifyAppBundle(mountedApp, arch, signingIdentity, teamId);
   } finally {
     await runCommand('/usr/bin/hdiutil', ['detach', mountPoint]).catch(() => undefined);
     await rm(mountPoint, { recursive: true, force: true });
@@ -514,9 +564,10 @@ export async function buildMacosArtifactsFromOptions(options) {
 
   let postBuildVerified = false;
   if (options.trustedRelease) {
+    const signingIdentity = /** @type {string} */ (process.env['APPLE_SIGNING_IDENTITY']);
     const teamId = /** @type {string} */ (process.env['APPLE_TEAM_ID']);
-    await verifyAppBundle(appBundlePath, options.arch, teamId);
-    await verifyDmg(/** @type {string} */ (dmgArtifactPath), options.arch, teamId);
+    await verifyAppBundle(appBundlePath, options.arch, signingIdentity, teamId);
+    await verifyDmg(/** @type {string} */ (dmgArtifactPath), options.arch, signingIdentity, teamId);
     postBuildVerified = true;
   }
   const trust = releaseTrustMetadata(options.trustedRelease, postBuildVerified);

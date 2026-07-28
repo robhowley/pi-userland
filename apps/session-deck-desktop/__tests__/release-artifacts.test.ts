@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   applyDesktopReleaseVersion,
   artifactArchForTarget,
+  assertDeveloperIdSignatureDetails,
   bundleRootForTarget,
   macosArtifactStem,
   missingTrustedReleaseEnvironment,
@@ -26,6 +27,21 @@ import {
 } from '../scripts/validate-macos-artifact-set.js';
 
 const temporaryDirectories: string[] = [];
+const APPLE_TEAM_ID = 'TEAMID1234';
+const APPLE_SIGNING_IDENTITY = `Developer ID Application: Example (${APPLE_TEAM_ID})`;
+
+function codesignDetails(
+  authority = APPLE_SIGNING_IDENTITY,
+  teamIdentifier = APPLE_TEAM_ID,
+): string {
+  return [
+    'Executable=/Applications/Session Deck Desktop.app/Contents/MacOS/session-deck-desktop',
+    `Authority=${authority}`,
+    'Authority=Developer ID Certification Authority',
+    'Authority=Apple Root CA',
+    `TeamIdentifier=${teamIdentifier}`,
+  ].join('\n');
+}
 
 afterEach(async () => {
   await Promise.all(
@@ -138,13 +154,13 @@ describe('release artifact builder contract', () => {
     ).toEqual([]);
   });
 
-  it('preflights the App Store Connect private key without real credentials', async () => {
+  it('preflights trusted release credentials without real secrets', async () => {
     const root = await mkdtemp(join(tmpdir(), 'session-deck-credentials-'));
     temporaryDirectories.push(root);
     const apiKeyPath = join(root, 'AuthKey_TEST.p8');
     const env = {
-      APPLE_SIGNING_IDENTITY: 'Developer ID Application: Example (TEAMID1234)',
-      APPLE_TEAM_ID: 'TEAMID1234',
+      APPLE_SIGNING_IDENTITY,
+      APPLE_TEAM_ID,
       APPLE_API_ISSUER: 'issuer',
       APPLE_API_KEY: 'key-id',
       APPLE_API_KEY_PATH: apiKeyPath,
@@ -154,11 +170,65 @@ describe('release artifact builder contract', () => {
       '-----BEGIN PRIVATE KEY-----\ntest-only\n-----END PRIVATE KEY-----\n',
     );
     await expect(preflightTrustedReleaseEnvironment(env)).resolves.toBeUndefined();
+    await expect(
+      preflightTrustedReleaseEnvironment({ ...env, APPLE_TEAM_ID: 'TEAMID123' }),
+    ).rejects.toThrow('exactly 10 uppercase letters or digits');
 
     await writeFile(apiKeyPath, 'not a private key');
     await expect(preflightTrustedReleaseEnvironment(env)).rejects.toThrow(
       'must reference a non-empty App Store Connect private API key',
     );
+  });
+
+  it('accepts only the exact leaf signing identity and TeamIdentifier', () => {
+    expect(() =>
+      assertDeveloperIdSignatureDetails(codesignDetails(), APPLE_SIGNING_IDENTITY, APPLE_TEAM_ID),
+    ).not.toThrow();
+  });
+
+  it.each([
+    {
+      name: 'different authority',
+      details: codesignDetails(`Developer ID Application: Other (${APPLE_TEAM_ID})`),
+      error: 'leaf authority does not exactly match APPLE_SIGNING_IDENTITY',
+    },
+    {
+      name: 'matching non-leaf authority',
+      details: codesignDetails(`Developer ID Application: Other (${APPLE_TEAM_ID})`).replace(
+        'Authority=Developer ID Certification Authority',
+        `Authority=${APPLE_SIGNING_IDENTITY}`,
+      ),
+      error: 'leaf authority does not exactly match APPLE_SIGNING_IDENTITY',
+    },
+    {
+      name: 'authority prefix impostor',
+      details: codesignDetails(`${APPLE_SIGNING_IDENTITY} impostor`),
+      error: 'leaf authority does not exactly match APPLE_SIGNING_IDENTITY',
+    },
+    {
+      name: 'authority suffix impostor',
+      details: codesignDetails(`Developer ID Application: Impostor ${APPLE_SIGNING_IDENTITY}`),
+      error: 'leaf authority does not exactly match APPLE_SIGNING_IDENTITY',
+    },
+    {
+      name: 'different TeamIdentifier',
+      details: codesignDetails(APPLE_SIGNING_IDENTITY, 'OTHER12345'),
+      error: 'TeamIdentifier does not exactly match APPLE_TEAM_ID',
+    },
+    {
+      name: 'TeamIdentifier prefix impostor',
+      details: codesignDetails(APPLE_SIGNING_IDENTITY, `${APPLE_TEAM_ID}X`),
+      error: 'TeamIdentifier does not exactly match APPLE_TEAM_ID',
+    },
+    {
+      name: 'TeamIdentifier suffix impostor',
+      details: codesignDetails(APPLE_SIGNING_IDENTITY, `X${APPLE_TEAM_ID}`),
+      error: 'TeamIdentifier does not exactly match APPLE_TEAM_ID',
+    },
+  ])('rejects $name', ({ details, error }) => {
+    expect(() =>
+      assertDeveloperIdSignatureDetails(details, APPLE_SIGNING_IDENTITY, APPLE_TEAM_ID),
+    ).toThrow(error);
   });
 
   it('signs only explicit trusted builds and marks trust after post-build verification', () => {
