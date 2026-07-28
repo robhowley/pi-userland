@@ -10,6 +10,13 @@
   },
   "app": {
     "withGlobalTauri": true,
+    "trayIcon": {
+      "id": "session-deck",
+      "iconPath": "icons/tray-icon.png",
+      "iconAsTemplate": true,
+      "tooltip": "Session Deck",
+      "showMenuOnLeftClick": false
+    },
     "security": {
       "csp": "default-src 'self'; connect-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self' 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'"
     },
@@ -28,7 +35,7 @@
   "bundle": {
     "active": true,
     "targets": ["app"],
-    "icon": ["icons/icon.png"],
+    "icon": ["icons/icon.png", "icons/icon.icns"],
     "publisher": "Rob Howley",
     "category": "DeveloperTool",
     "shortDescription": "Desktop companion for Session Deck.",
