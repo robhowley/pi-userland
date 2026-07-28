@@ -19,9 +19,12 @@ Private Tauri desktop companion for Session Deck. This app lives under `apps/` s
 - `pnpm --filter ./apps/session-deck-desktop dev:isolated` — build the local helper and launch from temporary checkout-specific metadata without replacing the installed app
 - `pnpm --filter ./apps/session-deck-desktop tauri dev`
 - `pnpm --filter ./apps/session-deck-desktop artifact:macos -- --version <pi-session-deck-version>`
+- `pnpm --filter ./apps/session-deck-desktop artifact:validate -- --version <version> --artifact-dir <directory>`
 
 ## Notes
 
 `sync:web` copies the canonical `index.html`, `style.css`, and `session-deck-ui.js` assets from `packages/pi-session-deck/extensions/session-deck/iterm2/web/`, then overlays the desktop-specific Tauri bootstrap.
 
-`artifact:macos` builds Tauri `app`/`dmg` bundles, zips the `.app`, writes deterministic `session-deck-desktop-v<version>-macos-<arch>` artifact names, and emits `.sha256` sidecars. It currently builds unsigned artifacts (`--no-sign`) unless `SESSION_DECK_DESKTOP_SIGN=true` is set and signing/notarization is configured in CI.
+`artifact:macos` builds Tauri `app`/`dmg` bundles, zips the `.app`, writes deterministic `session-deck-desktop-v<version>-macos-<arch>` artifact names, and emits `.sha256` sidecars. Local builds are unsigned. Production CI uses explicit `--trusted-release` mode and fails unless signing, notarization, architecture, Gatekeeper, staple, and DMG checks pass.
+
+See [RELEASE.md](./RELEASE.md) for the dual-architecture release contract, external credential setup, failure policy, and first-release checks.

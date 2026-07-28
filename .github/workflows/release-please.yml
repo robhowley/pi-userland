@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
 permissions:
   contents: write
   pull-requests: write
@@ -52,21 +56,37 @@ jobs:
         if: steps.release.outputs.releases_created == 'true'
         run: pnpm -r --filter './packages/*' --if-present build
 
-      - name: Publish changed packages
+      - name: Publish changed packages except pi-session-deck
         if: steps.release.outputs.releases_created == 'true'
         run: |
           echo "Released packages: ${{ steps.release.outputs.paths_released }}"
-          echo '${{ steps.release.outputs.paths_released }}' | jq -r '.[]' | while read pkg; do
+          echo '${{ steps.release.outputs.paths_released }}' | jq -r '.[]' | while read -r pkg; do
+            if [ "$pkg" = "packages/pi-session-deck" ]; then
+              echo "Deferring $pkg until its signed desktop release is public"
+              continue
+            fi
             echo "Publishing $pkg"
             (cd "$pkg" && npm publish)
           done
 
-  session-deck-desktop-artifacts:
+  session-deck-desktop-build:
     needs: release
-    if: ${{ needs.release.outputs.pi_session_deck_released == 'true' || contains(needs.release.outputs.paths_released, 'packages/pi-session-deck') }}
-    runs-on: macos-latest
+    if: needs.release.outputs.pi_session_deck_released == 'true'
+    name: Session Deck desktop (${{ matrix.arch }})
+    environment: session-deck-release
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            arch: arm64
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            arch: x64
+    runs-on: ${{ matrix.runner }}
     permissions:
-      contents: write
+      contents: read
     steps:
       - name: Checkout pi-session-deck release tag
         uses: actions/checkout@v4
@@ -87,24 +107,201 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Validate release metadata
+      - name: Install native Rust target
+        run: rustup target add "$SESSION_DECK_TARGET"
+        env:
+          SESSION_DECK_TARGET: ${{ matrix.target }}
+
+      - name: Import Developer ID certificate and App Store Connect key
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+          APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          APPLE_API_ISSUER: ${{ vars.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ vars.APPLE_API_KEY }}
         run: |
-          test -n "$SESSION_DECK_RELEASE_TAG"
+          set -euo pipefail
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_API_PRIVATE_KEY \
+            APPLE_SIGNING_IDENTITY APPLE_TEAM_ID APPLE_API_ISSUER APPLE_API_KEY; do
+            test -n "${!name:-}" || { echo "Missing $name" >&2; exit 1; }
+          done
+
+          certificate_path="$RUNNER_TEMP/session-deck-developer-id.p12"
+          api_key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
+          keychain_path="$RUNNER_TEMP/session-deck-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 32)"
+          echo "APPLE_API_KEY_PATH=$api_key_path" >> "$GITHUB_ENV"
+          echo "SESSION_DECK_KEYCHAIN_PATH=$keychain_path" >> "$GITHUB_ENV"
+          echo "SESSION_DECK_CERTIFICATE_PATH=$certificate_path" >> "$GITHUB_ENV"
+
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$certificate_path"
+          printf '%s' "$APPLE_API_PRIVATE_KEY" > "$api_key_path"
+          chmod 600 "$certificate_path" "$api_key_path"
+
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" -k "$keychain_path" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple: -s \
+            -k "$keychain_password" "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+          security find-identity -v -p codesigning "$keychain_path" | grep -F "$APPLE_SIGNING_IDENTITY"
+
+      - name: Build, sign, notarize, and verify desktop artifacts
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          APPLE_API_ISSUER: ${{ vars.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ vars.APPLE_API_KEY }}
+          SESSION_DECK_VERSION: ${{ needs.release.outputs.pi_session_deck_version }}
+          SESSION_DECK_TARGET: ${{ matrix.target }}
+          SESSION_DECK_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
           test -n "$SESSION_DECK_VERSION"
-        env:
-          SESSION_DECK_RELEASE_TAG: ${{ needs.release.outputs.pi_session_deck_tag_name }}
-          SESSION_DECK_VERSION: ${{ needs.release.outputs.pi_session_deck_version }}
+          pnpm --filter ./apps/session-deck-desktop artifact:macos -- \
+            --version "$SESSION_DECK_VERSION" \
+            --target "$SESSION_DECK_TARGET" \
+            --arch "$SESSION_DECK_ARCH" \
+            --artifact-dir "dist/artifacts-$SESSION_DECK_ARCH" \
+            --trusted-release
 
-      - name: Build macOS desktop artifacts
+      - name: Stage architecture artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: session-deck-desktop-${{ matrix.arch }}
+          path: apps/session-deck-desktop/dist/artifacts-${{ matrix.arch }}/*
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Remove signing material
+        if: always()
         run: |
-          # Signing/notarization is not configured yet. The artifact script passes --no-sign
-          # unless SESSION_DECK_DESKTOP_SIGN=true and Developer ID/notarization env is added.
-          pnpm --filter ./apps/session-deck-desktop artifact:macos -- --version "$SESSION_DECK_VERSION"
+          keychain_path="${SESSION_DECK_KEYCHAIN_PATH:-$RUNNER_TEMP/session-deck-signing.keychain-db}"
+          security delete-keychain "$keychain_path" || true
+          rm -f "$RUNNER_TEMP"/AuthKey_*.p8 \
+            "$RUNNER_TEMP/session-deck-developer-id.p12" \
+            "$keychain_path"
+
+  session-deck-release:
+    needs: [release, session-deck-desktop-build]
+    if: needs.release.outputs.pi_session_deck_released == 'true'
+    environment: session-deck-release
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+      id-token: write
+    steps:
+      - name: Checkout pi-session-deck release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release.outputs.pi_session_deck_tag_name }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js and npm trusted publishing
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install npm 11
+        run: npm install -g npm@11
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Merge native architecture artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: session-deck-desktop-*
+          path: apps/session-deck-desktop/dist/release-artifacts
+          merge-multiple: true
+
+      - name: Validate complete desktop release set
         env:
           SESSION_DECK_VERSION: ${{ needs.release.outputs.pi_session_deck_version }}
+        run: |
+          set -euo pipefail
+          pnpm --filter ./apps/session-deck-desktop artifact:validate -- \
+            --version "$SESSION_DECK_VERSION" \
+            --artifact-dir dist/release-artifacts
 
-      - name: Upload desktop artifacts to pi-session-deck release
-        run: gh release upload "$SESSION_DECK_RELEASE_TAG" apps/session-deck-desktop/dist/artifacts/* --clobber
+      - name: Preflight immutable release and npm version
         env:
           GH_TOKEN: ${{ github.token }}
           SESSION_DECK_RELEASE_TAG: ${{ needs.release.outputs.pi_session_deck_tag_name }}
+          SESSION_DECK_VERSION: ${{ needs.release.outputs.pi_session_deck_version }}
+        run: |
+          set -euo pipefail
+          test -n "$SESSION_DECK_RELEASE_TAG"
+          test -n "$SESSION_DECK_VERSION"
+          test "$(node -p "require('./packages/pi-session-deck/package.json').version")" = "$SESSION_DECK_VERSION"
+
+          gh release view "$SESSION_DECK_RELEASE_TAG" --json isDraft,assets > "$RUNNER_TEMP/release-before.json"
+          test "$(jq -r '.isDraft' "$RUNNER_TEMP/release-before.json")" = true || {
+            echo "Session Deck release must still be a draft" >&2
+            exit 1
+          }
+          test "$(jq '.assets | length' "$RUNNER_TEMP/release-before.json")" = 0 || {
+            echo "Refusing to replace preexisting immutable release assets" >&2
+            exit 1
+          }
+
+          set +e
+          npm_view_output="$(npm view "@robhowley/pi-session-deck@$SESSION_DECK_VERSION" version 2>&1)"
+          npm_view_status=$?
+          set -e
+          if [ "$npm_view_status" -eq 0 ]; then
+            echo "npm version $SESSION_DECK_VERSION already exists" >&2
+            exit 1
+          fi
+          printf '%s' "$npm_view_output" | grep -q 'E404' || {
+            echo "Could not prove npm version is unpublished" >&2
+            exit 1
+          }
+
+          pnpm --filter @robhowley/pi-session-deck build
+          (cd packages/pi-session-deck && npm pack --dry-run --json >/dev/null)
+
+      - name: Upload immutable desktop assets to draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SESSION_DECK_RELEASE_TAG: ${{ needs.release.outputs.pi_session_deck_tag_name }}
+        run: |
+          set -euo pipefail
+          gh release upload "$SESSION_DECK_RELEASE_TAG" \
+            apps/session-deck-desktop/dist/release-artifacts/*
+
+      - name: Verify uploaded assets and publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SESSION_DECK_RELEASE_TAG: ${{ needs.release.outputs.pi_session_deck_tag_name }}
+        run: |
+          set -euo pipefail
+          gh release view "$SESSION_DECK_RELEASE_TAG" --json isDraft,assets > "$RUNNER_TEMP/release-after.json"
+          test "$(jq -r '.isDraft' "$RUNNER_TEMP/release-after.json")" = true
+          test "$(jq '.assets | length' "$RUNNER_TEMP/release-after.json")" = 12
+          for path in apps/session-deck-desktop/dist/release-artifacts/*; do
+            name="$(basename "$path")"
+            local_size="$(stat -c '%s' "$path")"
+            matches="$(jq --arg name "$name" '[.assets[] | select(.name == $name)] | length' \
+              "$RUNNER_TEMP/release-after.json")"
+            remote_size="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .size' \
+              "$RUNNER_TEMP/release-after.json")"
+            test "$matches" = 1
+            test "$remote_size" = "$local_size"
+          done
+          gh release edit "$SESSION_DECK_RELEASE_TAG" --draft=false
+          test "$(gh release view "$SESSION_DECK_RELEASE_TAG" --json isDraft --jq .isDraft)" = false
+
+      - name: Publish pi-session-deck after public release
+        run: cd packages/pi-session-deck && npm publish

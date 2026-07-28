@@ -57,6 +57,9 @@ describe('session-deck desktop artifacts', () => {
     expect(getSessionDeckDesktopArtifactName('0.9.0', { platform: 'darwin', arch: 'arm64' })).toBe(
       'session-deck-desktop-v0.9.0-macos-arm64.zip',
     );
+    expect(getSessionDeckDesktopArtifactName('0.9.0', { platform: 'darwin', arch: 'x64' })).toBe(
+      'session-deck-desktop-v0.9.0-macos-x64.zip',
+    );
     expect(() =>
       getSessionDeckDesktopArtifactName('0.9.0', { platform: 'linux', arch: 'x64' }),
     ).toThrow('only available for macOS');
@@ -91,6 +94,35 @@ describe('session-deck desktop artifacts', () => {
       assetUrl: 'https://example.test/app.zip',
       checksumAssetName: 'session-deck-desktop-v0.9.0-macos-arm64.zip.sha256',
       checksumUrl: 'https://example.test/app.zip.sha256',
+    });
+  });
+
+  it('resolves x64 artifact and checksum release assets', async () => {
+    const fetch = vi.fn<SessionDeckDesktopFetch>(async () =>
+      okJson({
+        assets: [
+          {
+            name: 'session-deck-desktop-v0.9.0-macos-x64.zip',
+            browser_download_url: 'https://example.test/app-x64.zip',
+          },
+          {
+            name: 'session-deck-desktop-v0.9.0-macos-x64.zip.sha256',
+            browser_download_url: 'https://example.test/app-x64.zip.sha256',
+          },
+        ],
+      }),
+    );
+
+    await expect(
+      resolveSessionDeckDesktopReleaseArtifact({
+        version: '0.9.0',
+        platform: 'darwin',
+        arch: 'x64',
+        fetch,
+      }),
+    ).resolves.toMatchObject({
+      assetName: 'session-deck-desktop-v0.9.0-macos-x64.zip',
+      checksumAssetName: 'session-deck-desktop-v0.9.0-macos-x64.zip.sha256',
     });
   });
 
