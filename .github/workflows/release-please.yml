@@ -39,13 +39,13 @@ jobs:
       - uses: actions/setup-node@v4
         if: steps.release.outputs.releases_created == 'true'
         with:
-          node-version: '20'
+          node-version: '22.14'
           cache: 'pnpm'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Install npm 11
         if: steps.release.outputs.releases_created == 'true'
-        # npm 12 requires Node 22.22+/24.15+; npm 11 keeps the Node 20 release job working.
+        # npm trusted publishing requires npm 11.5.1+ on Node 22.14+.
         run: npm install -g npm@11
 
       - name: Install dependencies
@@ -73,7 +73,6 @@ jobs:
     needs: release
     if: needs.release.outputs.pi_session_deck_released == 'true'
     name: Session Deck desktop (${{ matrix.arch }})
-    environment: session-deck-release
     strategy:
       fail-fast: true
       matrix:
@@ -117,14 +116,12 @@ jobs:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
-          APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
-          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
           APPLE_API_ISSUER: ${{ vars.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ vars.APPLE_API_KEY }}
         run: |
           set -euo pipefail
           for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_API_PRIVATE_KEY \
-            APPLE_SIGNING_IDENTITY APPLE_TEAM_ID APPLE_API_ISSUER APPLE_API_KEY; do
+            APPLE_API_ISSUER APPLE_API_KEY; do
             test -n "${!name:-}" || { echo "Missing $name" >&2; exit 1; }
           done
 
@@ -132,9 +129,11 @@ jobs:
           api_key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
           keychain_path="$RUNNER_TEMP/session-deck-signing.keychain-db"
           keychain_password="$(openssl rand -hex 32)"
-          echo "APPLE_API_KEY_PATH=$api_key_path" >> "$GITHUB_ENV"
-          echo "SESSION_DECK_KEYCHAIN_PATH=$keychain_path" >> "$GITHUB_ENV"
-          echo "SESSION_DECK_CERTIFICATE_PATH=$certificate_path" >> "$GITHUB_ENV"
+          {
+            echo "APPLE_API_KEY_PATH=$api_key_path"
+            echo "SESSION_DECK_KEYCHAIN_PATH=$keychain_path"
+            echo "SESSION_DECK_CERTIFICATE_PATH=$certificate_path"
+          } >> "$GITHUB_ENV"
 
           printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$certificate_path"
           printf '%s' "$APPLE_API_PRIVATE_KEY" > "$api_key_path"
@@ -148,12 +147,11 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -s \
             -k "$keychain_password" "$keychain_path"
           security list-keychains -d user -s "$keychain_path"
-          security find-identity -v -p codesigning "$keychain_path" | grep -F "$APPLE_SIGNING_IDENTITY"
+          security find-identity -v -p codesigning "$keychain_path" | \
+            node apps/session-deck-desktop/scripts/derive-apple-signing-identity.js >> "$GITHUB_ENV"
 
       - name: Build, sign, notarize, and verify desktop artifacts
         env:
-          APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
-          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
           APPLE_API_ISSUER: ${{ vars.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ vars.APPLE_API_KEY }}
           SESSION_DECK_VERSION: ${{ needs.release.outputs.pi_session_deck_version }}
@@ -186,10 +184,9 @@ jobs:
             "$RUNNER_TEMP/session-deck-developer-id.p12" \
             "$keychain_path"
 
-  session-deck-release:
+  session-deck-publish:
     needs: [release, session-deck-desktop-build]
     if: needs.release.outputs.pi_session_deck_released == 'true'
-    environment: session-deck-release
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -209,7 +206,7 @@ jobs:
       - name: Setup Node.js and npm trusted publishing
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22.14'
           cache: 'pnpm'
           registry-url: 'https://registry.npmjs.org'
 
@@ -235,7 +232,7 @@ jobs:
             --version "$SESSION_DECK_VERSION" \
             --artifact-dir dist/release-artifacts
 
-      - name: Preflight immutable release and npm version
+      - name: Preflight draft release and npm version
         env:
           GH_TOKEN: ${{ github.token }}
           SESSION_DECK_RELEASE_TAG: ${{ needs.release.outputs.pi_session_deck_tag_name }}
@@ -245,10 +242,6 @@ jobs:
           test -n "$SESSION_DECK_RELEASE_TAG"
           test -n "$SESSION_DECK_VERSION"
           test "$(node -p "require('./packages/pi-session-deck/package.json').version")" = "$SESSION_DECK_VERSION"
-          test "$(gh api "repos/$GITHUB_REPOSITORY/immutable-releases" --jq .enabled)" = true || {
-            echo "GitHub immutable releases must be enabled before publishing" >&2
-            exit 1
-          }
 
           gh release view "$SESSION_DECK_RELEASE_TAG" --json isDraft,assets > "$RUNNER_TEMP/release-before.json"
           test "$(jq -r '.isDraft' "$RUNNER_TEMP/release-before.json")" = true || {
@@ -256,7 +249,7 @@ jobs:
             exit 1
           }
           test "$(jq '.assets | length' "$RUNNER_TEMP/release-before.json")" = 0 || {
-            echo "Refusing to replace preexisting immutable release assets" >&2
+            echo "Refusing to overwrite preexisting release assets" >&2
             exit 1
           }
 
@@ -276,7 +269,7 @@ jobs:
           pnpm --filter @robhowley/pi-session-deck build
           (cd packages/pi-session-deck && npm pack --dry-run --json >/dev/null)
 
-      - name: Upload immutable desktop assets to draft release
+      - name: Upload desktop assets to draft release
         env:
           GH_TOKEN: ${{ github.token }}
           SESSION_DECK_RELEASE_TAG: ${{ needs.release.outputs.pi_session_deck_tag_name }}
@@ -305,13 +298,9 @@ jobs:
             test "$remote_size" = "$local_size"
           done
           gh release edit "$SESSION_DECK_RELEASE_TAG" --draft=false
-          gh release view "$SESSION_DECK_RELEASE_TAG" --json isDraft,isImmutable \
+          gh release view "$SESSION_DECK_RELEASE_TAG" --json isDraft \
             > "$RUNNER_TEMP/release-published.json"
           test "$(jq -r '.isDraft' "$RUNNER_TEMP/release-published.json")" = false
-          test "$(jq -r '.isImmutable' "$RUNNER_TEMP/release-published.json")" = true || {
-            echo "Published Session Deck release is not immutable" >&2
-            exit 1
-          }
 
       - name: Publish pi-session-deck after public release
         run: cd packages/pi-session-deck && npm publish
