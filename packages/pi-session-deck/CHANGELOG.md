@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.0](https://github.com/robhowley/pi-userland/compare/pi-session-deck-v0.11.1...pi-session-deck-v0.12.0) (2026-07-28)
+
+
+### Features
+
+* **pi-session-deck:** add always-available session creation ([#147](https://github.com/robhowley/pi-userland/issues/147)) ([93a58f9](https://github.com/robhowley/pi-userland/commit/93a58f9fdc57f137a44fb817aa6226a6e35acc64))
+* **pi-session-deck:** surface sessions awaiting input ([#146](https://github.com/robhowley/pi-userland/issues/146)) ([1f4a52f](https://github.com/robhowley/pi-userland/commit/1f4a52f1f5ef9f53111acae90c4ea30f971d8bba))
+
 ## [0.11.1](https://github.com/robhowley/pi-userland/compare/pi-session-deck-v0.11.0...pi-session-deck-v0.11.1) (2026-07-23)
 
 
