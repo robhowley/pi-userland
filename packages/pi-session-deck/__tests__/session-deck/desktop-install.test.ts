@@ -68,6 +68,9 @@ describe('session-deck desktop install', () => {
     const state = await readSessionDeckDesktopInstallState(getSessionDeckDesktopStatePath(home));
     expect(result.level).toBe('info');
     expect(result.message).toContain('Installed Session Deck desktop app.');
+    expect(result.message).toContain(
+      'Next: double-click Session Deck Desktop in Applications, or run /session-deck desktop open.',
+    );
     expect(state).toMatchObject({
       installedAt: NOW.toISOString(),
       app: {

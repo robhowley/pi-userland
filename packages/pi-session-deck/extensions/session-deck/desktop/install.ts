@@ -186,7 +186,8 @@ export async function installSessionDeckDesktop(
         `App: ${targetAppPath}`,
         `State: ${statePath}`,
         `Source: ${formatSource(prepared.source)}`,
-        'Next: run /session-deck desktop open, or /session-deck desktop doctor for diagnostics.',
+        'Next: double-click Session Deck Desktop in Applications, or run /session-deck desktop open.',
+        'For diagnostics, run /session-deck desktop doctor.',
       ].join('\n'),
     };
   } catch (error) {

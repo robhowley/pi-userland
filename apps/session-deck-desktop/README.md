@@ -16,6 +16,7 @@ Private Tauri desktop companion for Session Deck. This app lives under `apps/` s
 - `pnpm --filter ./apps/session-deck-desktop typecheck`
 - `pnpm --filter ./apps/session-deck-desktop test`
 - `pnpm --filter ./apps/session-deck-desktop build`
+- `pnpm --filter ./apps/session-deck-desktop dev:isolated` — build the local helper and launch from temporary checkout-specific metadata without replacing the installed app
 - `pnpm --filter ./apps/session-deck-desktop tauri dev`
 - `pnpm --filter ./apps/session-deck-desktop artifact:macos -- --version <pi-session-deck-version>`
 

@@ -110,10 +110,11 @@ function parseArgs(argv) {
 
 function usage() {
   return [
-    'Usage: pnpm --filter ./apps/session-deck-desktop launch:branch [dev]',
+    'Usage: pnpm --filter ./apps/session-deck-desktop dev:isolated',
+    '       pnpm --filter ./apps/session-deck-desktop launch:branch [dev]',
     '       pnpm --filter ./apps/session-deck-desktop launch:branch bundle [--no-open]',
     '',
-    'Default dev mode builds @robhowley/pi-session-deck, writes temporary branch runtime',
+    'Isolated dev mode builds @robhowley/pi-session-deck, writes temporary branch runtime',
     'metadata, and runs the local Tauri dev app. Bundle mode builds bundle:macos,',
     'installs the .app with branch package metadata, and opens it unless --no-open is set.',
   ].join('\n');
