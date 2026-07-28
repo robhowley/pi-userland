@@ -21,6 +21,7 @@ Production uses:
 - an App Store Connect team API key for notarization;
 - stapled notarization tickets on the app and DMG;
 - a protected GitHub environment named `session-deck-release`;
+- GitHub immutable releases;
 - npm trusted publishing through GitHub Actions OIDC.
 
 `--trusted-release` is required in CI. It requires an explicit target and every Apple variable below, and it never passes `--no-sign`. Metadata remains `signed: false` and `notarized: false` for local output. Trusted metadata is written only after all macOS verification commands succeed.
@@ -83,6 +84,8 @@ The final job has `id-token: write` and uses npm 11. Do not add a long-lived npm
 
 GitHub Actions must be allowed to create releases and upload Actions artifacts. The workflow uses its scoped `GITHUB_TOKEN`; no personal access token is required. Release Please is configured to create `pi-session-deck` releases as drafts and force tag creation. Other packages keep their existing immediate publication path.
 
+Before releasing, enable **immutable releases** in `robhowley/pi-userland` under repository **Settings → General → Releases**. This external setting is required; the workflow token intentionally does not change it. The final job queries `GET /repos/robhowley/pi-userland/immutable-releases` and fails before uploading or publishing when `enabled` is not `true`.
+
 ## Release inventory
 
 For package version `<V>`, the public GitHub release must contain exactly these desktop files:
@@ -117,11 +120,12 @@ Metadata must identify the package version and architecture, report `signed: tru
    - a read-only mounted DMG contains the expected app, which passes the same app checks.
 4. Each leg uploads a unique internal Actions artifact. Matrix failure prevents the final job.
 5. The final job merges both legs and validates the exact 12-file set without Apple secrets.
-6. It requires the GitHub release to remain a draft and rejects any preexisting expected asset. Upload does not use `--clobber`.
+6. It requires GitHub immutable releases to be enabled, the release to remain a draft, and no preexisting assets. Upload does not use `--clobber`.
 7. It verifies every uploaded GitHub asset exists once with the local byte size, then publishes the draft.
-8. It proves the release is public before running `npm publish` for the exact package version.
+8. It requires the published release to report `isDraft: false` and `isImmutable: true`.
+9. It runs `npm publish` for the exact package version only after those checks pass.
 
-The process fails closed on missing credentials, wrong architecture, build/sign/notarization/verification failure, missing DMG, one failed matrix leg, inventory mismatch, preexisting expected asset, unavailable npm preflight, upload mismatch, or a release that is already public.
+The process fails closed on missing credentials, wrong architecture, build/sign/notarization/verification failure, missing DMG, one failed matrix leg, inventory mismatch, disabled immutable releases, preexisting assets, unavailable npm preflight, upload mismatch, a release that is already public, or a published release that reports mutable.
 
 ## Rollback and incident behavior
 
@@ -157,9 +161,21 @@ pnpm --filter ./apps/session-deck-desktop artifact:macos -- \
 
 Do these before announcing the first release. Run architecture-specific install checks on both Apple silicon and Intel Macs; do not rely only on Rosetta.
 
-1. In Actions, confirm both matrix legs used their documented runner and target and both temporary-key cleanup steps ran.
-2. Confirm the release has the exact 12 desktop files and no duplicate names.
-3. Download each architecture set into a clean directory and run:
+1. Before triggering the release, confirm the repository setting is enabled:
+
+   ```sh
+   test "$(gh api repos/robhowley/pi-userland/immutable-releases --jq .enabled)" = true
+   ```
+
+2. In Actions, confirm both matrix legs used their documented runner and target and both temporary-key cleanup steps ran.
+3. Confirm the published release is immutable, has the exact 12 desktop files, and has no duplicate names:
+
+   ```sh
+   gh release view "<TAG>" --json isDraft,isImmutable --jq '{isDraft,isImmutable}'
+   # Must report {"isDraft":false,"isImmutable":true}.
+   ```
+
+4. Download each architecture set into a clean directory and run:
 
    ```sh
    shasum -a 256 -c session-deck-desktop-v<V>-macos-<arch>.zip.sha256
@@ -171,13 +187,13 @@ Do these before announcing the first release. Run architecture-specific install 
      session-deck-desktop-v<V>-macos-<arch>.dmg
    ```
 
-4. Mount each DMG, inspect the app with `codesign -dv --verbose=4`, and confirm the expected Team ID and Developer ID Application authority.
-5. Install the published npm version on a clean Pi setup. For each native architecture, exercise:
+5. Mount each DMG, inspect the app with `codesign -dv --verbose=4`, and confirm the expected Team ID and Developer ID Application authority.
+6. Install the published npm version on a clean Pi setup. For each native architecture, exercise:
    - `/session-deck desktop install` and confirm it selects `macos-arm64` or `macos-x64`;
    - `/session-deck desktop doctor`;
    - `/session-deck desktop open` from Finder and from Pi;
    - app snapshot loading and terminal/worktree actions;
    - `/session-deck desktop uninstall`.
-6. Confirm `npm view @robhowley/pi-session-deck@<V> version` returns `<V>` only after the GitHub release is public.
+7. Confirm `npm view @robhowley/pi-session-deck@<V> version` returns `<V>` only after the GitHub release is public.
 
 Actual certificate import, Apple notarization, Gatekeeper behavior, GitHub release publication, and npm trusted publishing can only be proven by this credentialed first-release run. Never relax a gate to make that run pass.

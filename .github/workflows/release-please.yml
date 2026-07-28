@@ -245,6 +245,10 @@ jobs:
           test -n "$SESSION_DECK_RELEASE_TAG"
           test -n "$SESSION_DECK_VERSION"
           test "$(node -p "require('./packages/pi-session-deck/package.json').version")" = "$SESSION_DECK_VERSION"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/immutable-releases" --jq .enabled)" = true || {
+            echo "GitHub immutable releases must be enabled before publishing" >&2
+            exit 1
+          }
 
           gh release view "$SESSION_DECK_RELEASE_TAG" --json isDraft,assets > "$RUNNER_TEMP/release-before.json"
           test "$(jq -r '.isDraft' "$RUNNER_TEMP/release-before.json")" = true || {
@@ -301,7 +305,13 @@ jobs:
             test "$remote_size" = "$local_size"
           done
           gh release edit "$SESSION_DECK_RELEASE_TAG" --draft=false
-          test "$(gh release view "$SESSION_DECK_RELEASE_TAG" --json isDraft --jq .isDraft)" = false
+          gh release view "$SESSION_DECK_RELEASE_TAG" --json isDraft,isImmutable \
+            > "$RUNNER_TEMP/release-published.json"
+          test "$(jq -r '.isDraft' "$RUNNER_TEMP/release-published.json")" = false
+          test "$(jq -r '.isImmutable' "$RUNNER_TEMP/release-published.json")" = true || {
+            echo "Published Session Deck release is not immutable" >&2
+            exit 1
+          }
 
       - name: Publish pi-session-deck after public release
         run: cd packages/pi-session-deck && npm publish
