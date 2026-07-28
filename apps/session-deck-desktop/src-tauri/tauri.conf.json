@@ -41,6 +41,7 @@
     "shortDescription": "Desktop companion for Session Deck.",
     "longDescription": "A private Tauri desktop companion distributed as a GitHub Release artifact for @robhowley/pi-session-deck.",
     "macOS": {
+      "bundleName": "Session Deck",
       "minimumSystemVersion": "11.0",
       "signingIdentity": "-"
     }

@@ -5,6 +5,7 @@ import { inflateSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 
 type TauriConfig = {
+  productName: string;
   app: {
     trayIcon: {
       id: string;
@@ -22,6 +23,7 @@ type TauriConfig = {
     icon: string[];
     targets: string[];
     macOS: {
+      bundleName: string;
       signingIdentity?: string;
     };
   };
@@ -36,6 +38,7 @@ type PngMetadata = {
 
 const TAURI_ROOT = new URL('../src-tauri/', import.meta.url);
 const TAURI_CONFIG_PATH = fileURLToPath(new URL('tauri.conf.json', TAURI_ROOT));
+const INFO_PLIST_PATH = fileURLToPath(new URL('Info.plist', TAURI_ROOT));
 const CARGO_MANIFEST_PATH = fileURLToPath(new URL('Cargo.toml', TAURI_ROOT));
 const APP_ICON_PATH = fileURLToPath(new URL('icons/icon.png', TAURI_ROOT));
 const ICNS_ICON_PATH = fileURLToPath(new URL('icons/icon.icns', TAURI_ROOT));
@@ -121,6 +124,24 @@ function decodePngAlpha(png: Buffer): (x: number, y: number) => number {
 }
 
 describe('Tauri configuration', () => {
+  it('keeps the product name distinct from the macOS bundle and display names', () => {
+    const config = JSON.parse(readFileSync(TAURI_CONFIG_PATH, 'utf8')) as TauriConfig;
+    const infoPlist = readFileSync(INFO_PLIST_PATH, 'utf8');
+    const displayName = infoPlist.match(
+      /<key>CFBundleDisplayName<\/key>\s*<string>([^<]+)<\/string>/u,
+    )?.[1];
+
+    expect({
+      productName: config.productName,
+      bundleName: config.bundle.macOS.bundleName,
+      displayName,
+    }).toEqual({
+      productName: 'Session Deck Desktop',
+      bundleName: 'Session Deck',
+      displayName: 'Session Deck',
+    });
+  });
+
   it('keeps the Session Deck title and uses a dark native appearance', () => {
     const config = JSON.parse(readFileSync(TAURI_CONFIG_PATH, 'utf8')) as TauriConfig;
     const [mainWindow] = config.app.windows;
