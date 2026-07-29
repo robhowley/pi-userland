@@ -220,18 +220,7 @@ async function writeBranchState(version) {
   const file = `${hash(REPO_ROOT).slice(0, 16)}.install.json`;
   const path = join(dir, file);
   const tempPath = join(dir, `.${file}.${process.pid}.${randomUUID()}.tmp`);
-  const state = {
-    schemaVersion: 1,
-    product: 'session-deck-desktop',
-    packageName: PACKAGE_NAME,
-    packageVersion: version,
-    installedAt: new Date().toISOString(),
-    runtime: {
-      nodeExecutablePath: process.execPath,
-      packageRoot: PACKAGE_ROOT,
-      helperPackageVersion: version,
-    },
-  };
+  const state = createBranchState(version, new Date().toISOString());
 
   try {
     await mkdir(dir, { recursive: true, mode: 0o700 });
@@ -247,6 +236,25 @@ async function writeBranchState(version) {
   } catch (error) {
     throw new Error(`Could not write branch runtime state at ${path}: ${message(error)}`);
   }
+}
+
+/**
+ * @param {string} version
+ * @param {string} installedAt
+ */
+export function createBranchState(version, installedAt) {
+  return {
+    schemaVersion: 1,
+    product: 'session-deck-desktop-development',
+    packageName: PACKAGE_NAME,
+    packageVersion: version,
+    installedAt,
+    runtime: {
+      nodeExecutablePath: process.execPath,
+      packageRoot: PACKAGE_ROOT,
+      helperPackageVersion: version,
+    },
+  };
 }
 
 async function branchSummary() {

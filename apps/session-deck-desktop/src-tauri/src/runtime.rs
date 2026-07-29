@@ -17,8 +17,8 @@ pub const OPEN_TERMINAL_ACTION_BRIDGE_SOCKET_ENV: &str =
 const DESKTOP_STATE_PATH_ENV: &str = "PI_SESSION_DECK_DESKTOP_STATE_PATH";
 const DESKTOP_INSTALL_COMMAND: &str = "/session-deck desktop install";
 const DESKTOP_STATE_SCHEMA_VERSION: u64 = 1;
-const DESKTOP_STATE_PRODUCT: &str = "session-deck-desktop";
 const SESSION_DECK_PACKAGE_NAME: &str = "@robhowley/pi-session-deck";
+const SESSION_DECK_BUNDLE_IDENTIFIER: &str = "dev.pi-userland.session-deck.desktop";
 const ITERM2_STATE_SCHEMA_VERSION: u64 = 1;
 const ITERM2_STATE_PRODUCT: &str = "pi-session-deck-iterm2";
 const SNAPSHOT_HELPER_RELATIVE_PATH: &str = "dist/extensions/session-deck/iterm2/snapshot-cli.js";
@@ -154,20 +154,57 @@ pub struct RuntimeDiscovery {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawDesktopInstallState {
-    schema_version: u64,
-    product: String,
-    package_name: String,
-    package_version: String,
-    installed_at: String,
-    #[serde(default)]
-    app: Option<Value>,
-    #[serde(default)]
-    source: Option<Value>,
-    runtime: RawDesktopRuntimeState,
-    #[serde(default)]
-    owned_paths: Option<Value>,
+#[serde(tag = "product", deny_unknown_fields)]
+enum RawDesktopInstallState {
+    #[serde(rename = "session-deck-desktop", rename_all = "camelCase")]
+    Production {
+        schema_version: u64,
+        package_name: String,
+        package_version: String,
+        installed_at: String,
+        app: RawDesktopAppState,
+        source: RawDesktopSourceState,
+        runtime: RawDesktopRuntimeState,
+        owned_paths: Vec<String>,
+    },
+    #[serde(rename = "session-deck-desktop-development", rename_all = "camelCase")]
+    Development {
+        schema_version: u64,
+        package_name: String,
+        package_version: String,
+        installed_at: String,
+        runtime: RawDesktopRuntimeState,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawDesktopAppState {
+    path: String,
+    bundle_identifier: String,
+    name: String,
+    version: String,
+    sha256: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+enum RawDesktopSourceState {
+    LocalPath {
+        path: String,
+        sha256: String,
+    },
+    GithubRelease {
+        release_tag: String,
+        asset_name: String,
+        url: String,
+        sha256: String,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -255,55 +292,77 @@ pub fn parse_desktop_install_state(
     let raw: RawDesktopInstallState = serde_json::from_str(contents)
         .map_err(|error| format!("Invalid desktop install state JSON: {error}"))?;
 
-    if raw.schema_version != DESKTOP_STATE_SCHEMA_VERSION {
+    let (schema_version, package_name, package_version, installed_at, runtime) = match raw {
+        RawDesktopInstallState::Production {
+            schema_version,
+            package_name,
+            package_version,
+            installed_at,
+            app,
+            source,
+            runtime,
+            owned_paths,
+        } => {
+            validate_production_desktop_shape(&app, &source, &owned_paths)?;
+            (
+                schema_version,
+                package_name,
+                package_version,
+                installed_at,
+                runtime,
+            )
+        }
+        RawDesktopInstallState::Development {
+            schema_version,
+            package_name,
+            package_version,
+            installed_at,
+            runtime,
+        } => (
+            schema_version,
+            package_name,
+            package_version,
+            installed_at,
+            runtime,
+        ),
+    };
+
+    if schema_version != DESKTOP_STATE_SCHEMA_VERSION {
         return Err(format!(
-            "Expected schemaVersion {DESKTOP_STATE_SCHEMA_VERSION}, got {}.",
-            raw.schema_version
+            "Expected schemaVersion {DESKTOP_STATE_SCHEMA_VERSION}, got {schema_version}."
         ));
     }
 
-    if raw.product != DESKTOP_STATE_PRODUCT {
+    if package_name != SESSION_DECK_PACKAGE_NAME {
         return Err(format!(
-            "Expected product {DESKTOP_STATE_PRODUCT}, got {}.",
-            raw.product
+            "Expected packageName {SESSION_DECK_PACKAGE_NAME}, got {package_name}."
         ));
     }
 
-    if raw.package_name != SESSION_DECK_PACKAGE_NAME {
-        return Err(format!(
-            "Expected packageName {SESSION_DECK_PACKAGE_NAME}, got {}.",
-            raw.package_name
-        ));
-    }
-
-    if raw.package_version.trim().is_empty() {
+    if package_version.trim().is_empty() {
         return Err(String::from("packageVersion must be a non-empty string."));
     }
 
-    if raw.installed_at.trim().is_empty() {
+    if installed_at.trim().is_empty() {
         return Err(String::from("installedAt must be a non-empty string."));
     }
 
-    if raw.runtime.helper_package_version.trim().is_empty() {
+    if runtime.helper_package_version.trim().is_empty() {
         return Err(String::from(
             "runtime.helperPackageVersion must be a non-empty string.",
         ));
     }
 
-    let _ = (raw.app, raw.source, raw.owned_paths);
-
-    let node_executable_path = parse_absolute_path(
-        &raw.runtime.node_executable_path,
-        "runtime.nodeExecutablePath",
-    )?;
-    let package_root = parse_absolute_path(&raw.runtime.package_root, "runtime.packageRoot")?;
+    let node_executable_path =
+        parse_absolute_path(&runtime.node_executable_path, "runtime.nodeExecutablePath")?;
+    let package_root = parse_absolute_path(&runtime.package_root, "runtime.packageRoot")?;
 
     Ok(ResolvedInstallState {
         metadata_source: RuntimeMetadataSource::Desktop,
         state_path: state_path.to_path_buf(),
         package_root: package_root.clone(),
-        package_version: raw.package_version,
-        declared_helper_package_version: Some(raw.runtime.helper_package_version),
+        package_version,
+        declared_helper_package_version: Some(runtime.helper_package_version),
         node_executable_path,
         snapshot_helper_path: package_root.join(SNAPSHOT_HELPER_RELATIVE_PATH),
         open_action_helper_path: package_root.join(OPEN_HELPER_RELATIVE_PATH),
@@ -312,6 +371,72 @@ pub fn parse_desktop_install_state(
         web_root_path: package_root.join(WEB_ROOT_RELATIVE_PATH),
         bridge_socket_path: default_bridge_socket_path(),
     })
+}
+
+fn validate_production_desktop_shape(
+    app: &RawDesktopAppState,
+    source: &RawDesktopSourceState,
+    owned_paths: &[String],
+) -> Result<(), String> {
+    let app_path = parse_absolute_path(&app.path, "app.path")?;
+    if app.bundle_identifier != SESSION_DECK_BUNDLE_IDENTIFIER {
+        return Err(format!(
+            "Expected app.bundleIdentifier {SESSION_DECK_BUNDLE_IDENTIFIER}, got {}.",
+            app.bundle_identifier
+        ));
+    }
+    validate_non_empty(&app.name, "app.name")?;
+    validate_non_empty(&app.version, "app.version")?;
+    validate_sha256(&app.sha256, "app.sha256")?;
+
+    match source {
+        RawDesktopSourceState::LocalPath { path, sha256 } => {
+            parse_absolute_path(path, "source.path")?;
+            validate_sha256(sha256, "source.sha256")?;
+        }
+        RawDesktopSourceState::GithubRelease {
+            release_tag,
+            asset_name,
+            url,
+            sha256,
+        } => {
+            validate_non_empty(release_tag, "source.releaseTag")?;
+            validate_non_empty(asset_name, "source.assetName")?;
+            validate_non_empty(url, "source.url")?;
+            validate_sha256(sha256, "source.sha256")?;
+        }
+    }
+
+    if owned_paths.is_empty() {
+        return Err(String::from("ownedPaths must contain at least one path."));
+    }
+    let parsed_owned_paths = owned_paths
+        .iter()
+        .map(|path| parse_absolute_path(path, "ownedPaths entry"))
+        .collect::<Result<Vec<_>, _>>()?;
+    if !parsed_owned_paths.contains(&app_path) {
+        return Err(String::from("ownedPaths must include app.path."));
+    }
+
+    Ok(())
+}
+
+fn validate_non_empty(value: &str, field_name: &str) -> Result<(), String> {
+    if value.trim().is_empty() {
+        return Err(format!("{field_name} must be a non-empty string."));
+    }
+    Ok(())
+}
+
+fn validate_sha256(value: &str, field_name: &str) -> Result<(), String> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(format!("{field_name} must be a lowercase SHA-256 digest."));
+    }
+    Ok(())
 }
 
 pub fn parse_iterm2_install_state(
@@ -427,12 +552,15 @@ fn discover_runtime_from_state_paths(
         .unwrap_or_else(|| desktop_state_path.to_path_buf());
 
     if let Some(resolved_state) = resolved_state {
-        let helper_package_version =
-            read_helper_package_version(&resolved_state.package_root).unwrap_or(None);
+        let helper_package_version_result =
+            read_helper_package_version(&resolved_state.package_root);
+        let helper_package_version = helper_package_version_result.as_ref().ok().cloned();
 
         validate_resolved_install_state(
             &resolved_state,
-            helper_package_version.as_deref(),
+            helper_package_version_result
+                .as_deref()
+                .map_err(String::as_str),
             &launch_prereqs,
             &mut issues,
         );
@@ -625,7 +753,7 @@ fn select_iterm2_fallback_state(
 
 fn validate_resolved_install_state(
     resolved_state: &ResolvedInstallState,
-    helper_package_version: Option<&str>,
+    helper_package_version: Result<&str, &str>,
     launch_prereqs: &LaunchPrereqReport,
     issues: &mut Vec<DoctorIssue>,
 ) {
@@ -700,27 +828,38 @@ fn validate_resolved_install_state(
                     resolved_state.package_version, declared_helper_package_version
                 ),
                 repair: String::from(repair),
-                blocking: false,
+                blocking: true,
             });
         }
     }
 
-    if let Some(helper_package_version) = helper_package_version {
-        let expected_helper_package_version = resolved_state
-            .declared_helper_package_version
-            .as_deref()
-            .unwrap_or(&resolved_state.package_version);
-        if helper_package_version != expected_helper_package_version {
+    match helper_package_version {
+        Ok(helper_package_version) => {
+            let expected_helper_package_version = resolved_state
+                .declared_helper_package_version
+                .as_deref()
+                .unwrap_or(&resolved_state.package_version);
+            if helper_package_version != expected_helper_package_version {
+                issues.push(DoctorIssue {
+                    code: String::from("helper-package-version-mismatch"),
+                    message: format!(
+                        "Install metadata helper version {} does not match helper package version {}.",
+                        expected_helper_package_version, helper_package_version
+                    ),
+                    repair: String::from(repair),
+                    blocking: resolved_state.metadata_source == RuntimeMetadataSource::Desktop,
+                });
+            }
+        }
+        Err(error) if resolved_state.metadata_source == RuntimeMetadataSource::Desktop => {
             issues.push(DoctorIssue {
-                code: String::from("helper-package-version-mismatch"),
-                message: format!(
-                    "Install metadata helper version {} does not match helper package version {}.",
-                    expected_helper_package_version, helper_package_version
-                ),
+                code: String::from("helper-package-version-invalid"),
+                message: format!("Could not verify the installed helper package version: {error}."),
                 repair: String::from(repair),
-                blocking: false,
+                blocking: true,
             });
         }
+        Err(_) => {}
     }
 }
 
@@ -739,16 +878,28 @@ fn derive_expected_web_root(package_root: &Path) -> PathBuf {
     package_root.join(WEB_ROOT_RELATIVE_PATH)
 }
 
-fn read_helper_package_version(package_root: &Path) -> Result<Option<String>, String> {
+fn read_helper_package_version(package_root: &Path) -> Result<String, String> {
     let package_json_path = package_root.join("package.json");
     let package_json = fs::read_to_string(&package_json_path)
         .map_err(|error| format!("Could not read {}: {error}", package_json_path.display()))?;
     let parsed: Value = serde_json::from_str(&package_json)
         .map_err(|error| format!("Could not parse {}: {error}", package_json_path.display()))?;
-    Ok(parsed
+    let version = parsed
         .get("version")
         .and_then(Value::as_str)
-        .map(ToOwned::to_owned))
+        .ok_or_else(|| {
+            format!(
+                "{} must contain a string version",
+                package_json_path.display()
+            )
+        })?;
+    if version.trim().is_empty() {
+        return Err(format!(
+            "{} must contain a non-empty version",
+            package_json_path.display()
+        ));
+    }
+    Ok(String::from(version))
 }
 
 fn derive_package_root_from_snapshot_helper_path(snapshot_helper_path: &Path) -> Option<PathBuf> {
@@ -1088,11 +1239,53 @@ mod tests {
         RuntimeMetadataSource, KILL_HELPER_RELATIVE_PATH, OPEN_HELPER_RELATIVE_PATH,
         SNAPSHOT_HELPER_RELATIVE_PATH, WEB_ROOT_RELATIVE_PATH, WORKTREE_HELPER_RELATIVE_PATH,
     };
-    use serde_json::json;
+    use serde::Deserialize;
+    use serde_json::{json, Value};
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
     use tempfile::tempdir;
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct RuntimeLayoutFixture {
+        schema_version: u64,
+        snapshot_helper_relative_path: String,
+        open_action_helper_relative_path: String,
+        kill_action_helper_relative_path: String,
+        worktree_action_helper_relative_path: String,
+        web_root_relative_path: String,
+    }
+
+    #[test]
+    fn derives_allowlisted_paths_from_the_shared_runtime_layout_fixture() {
+        let layout: RuntimeLayoutFixture =
+            serde_json::from_str(include_str!("../../fixtures/runtime-layout-v1.json")).unwrap();
+        let package_root = Path::new("/tmp/pi-session-deck");
+        let snapshot_helper_path = package_root.join(&layout.snapshot_helper_relative_path);
+
+        assert_eq!(layout.schema_version, 1);
+        assert_eq!(
+            layout.snapshot_helper_relative_path,
+            SNAPSHOT_HELPER_RELATIVE_PATH
+        );
+        assert_eq!(
+            derive_open_action_helper_path(&snapshot_helper_path),
+            package_root.join(&layout.open_action_helper_relative_path)
+        );
+        assert_eq!(
+            derive_kill_action_helper_path(&snapshot_helper_path),
+            package_root.join(&layout.kill_action_helper_relative_path)
+        );
+        assert_eq!(
+            derive_worktree_action_helper_path(&snapshot_helper_path),
+            package_root.join(&layout.worktree_action_helper_relative_path)
+        );
+        assert_eq!(
+            package_root.join(WEB_ROOT_RELATIVE_PATH),
+            package_root.join(&layout.web_root_relative_path)
+        );
+    }
 
     #[test]
     fn derives_helper_paths_from_snapshot_helper_path() {
@@ -1148,6 +1341,89 @@ mod tests {
             parsed.worktree_action_helper_path,
             package_root.join(WORKTREE_HELPER_RELATIVE_PATH)
         );
+    }
+
+    #[test]
+    fn accepts_isolated_development_metadata_with_its_distinct_discriminator() {
+        let temp = tempdir().unwrap();
+        let node_path = temp.path().join("bin/node");
+        write_executable(&node_path);
+        let package_root = temp.path().join("development-package");
+        write_helper_package(&package_root, "0.10.0");
+        let desktop_state_path = temp.path().join("desktop/install.json");
+        write_state(
+            &desktop_state_path,
+            development_state_json(&package_root, &node_path, "0.10.0", "0.10.0"),
+        );
+
+        let discovery = discover_runtime_from_state_paths(
+            &desktop_state_path,
+            &temp.path().join("iterm2/install.json"),
+            write_effective_path_tools(temp.path()),
+        );
+        let config = discovery
+            .config
+            .expect("development metadata should be usable");
+
+        assert_eq!(config.metadata_source, RuntimeMetadataSource::Desktop);
+        assert_eq!(config.package_version, "0.10.0");
+    }
+
+    #[test]
+    fn requires_the_complete_production_metadata_shape() {
+        let mut state: Value = serde_json::from_str(&desktop_state_json(
+            Path::new("/tmp/pi-session-deck"),
+            Path::new("/usr/local/bin/node"),
+            "0.10.0",
+            "0.10.0",
+        ))
+        .unwrap();
+        state.as_object_mut().unwrap().remove("app");
+
+        let error = parse_desktop_install_state(
+            &serde_json::to_string(&state).unwrap(),
+            Path::new("/tmp/install.json"),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("missing field `app`"));
+    }
+
+    #[test]
+    fn rejects_missing_non_string_or_blank_declared_helper_versions() {
+        let base: Value = serde_json::from_str(&desktop_state_json(
+            Path::new("/tmp/pi-session-deck"),
+            Path::new("/usr/local/bin/node"),
+            "0.10.0",
+            "0.10.0",
+        ))
+        .unwrap();
+
+        for (label, helper_version) in [
+            ("missing", None),
+            ("non-string", Some(json!(12))),
+            ("blank", Some(json!("  "))),
+        ] {
+            let mut state = base.clone();
+            let runtime = state.get_mut("runtime").unwrap().as_object_mut().unwrap();
+            match helper_version {
+                Some(value) => {
+                    runtime.insert(String::from("helperPackageVersion"), value);
+                }
+                None => {
+                    runtime.remove("helperPackageVersion");
+                }
+            }
+
+            assert!(
+                parse_desktop_install_state(
+                    &serde_json::to_string(&state).unwrap(),
+                    Path::new("/tmp/install.json"),
+                )
+                .is_err(),
+                "{label}"
+            );
+        }
     }
 
     #[test]
@@ -1274,6 +1550,82 @@ mod tests {
     }
 
     #[test]
+    fn blocks_desktop_runtime_when_the_actual_helper_version_is_invalid() {
+        let package_json_cases = [
+            ("missing version", Some("{}")),
+            ("non-string version", Some(r#"{"version": 12}"#)),
+            ("blank version", Some(r#"{"version": "  "}"#)),
+            ("malformed package JSON", Some("{")),
+            ("missing package JSON", None),
+        ];
+
+        for (label, package_json) in package_json_cases {
+            let temp = tempdir().unwrap();
+            let node_path = temp.path().join("bin/node");
+            write_executable(&node_path);
+            let package_root = temp.path().join("desktop-package");
+            write_helper_files(&package_root);
+            if let Some(package_json) = package_json {
+                fs::write(package_root.join("package.json"), package_json).unwrap();
+            }
+            let desktop_state_path = temp.path().join("desktop/install.json");
+            write_state(
+                &desktop_state_path,
+                desktop_state_json(&package_root, &node_path, "1.2.0", "1.2.0"),
+            );
+
+            let discovery = discover_runtime_from_state_paths(
+                &desktop_state_path,
+                &temp.path().join("iterm2/install.json"),
+                write_effective_path_tools(temp.path()),
+            );
+
+            assert!(discovery.config.is_none(), "{label}");
+            assert!(
+                discovery.status.issues.iter().any(|issue| {
+                    issue.code == "helper-package-version-invalid" && issue.blocking
+                }),
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
+    fn blocks_desktop_runtime_when_declared_or_actual_helper_versions_mismatch() {
+        for (label, declared_version, actual_version) in [
+            ("declared mismatch", "1.1.0", "1.1.0"),
+            ("actual mismatch", "1.2.0", "1.1.0"),
+        ] {
+            let temp = tempdir().unwrap();
+            let node_path = temp.path().join("bin/node");
+            write_executable(&node_path);
+            let package_root = temp.path().join("desktop-package");
+            write_helper_package(&package_root, actual_version);
+            let desktop_state_path = temp.path().join("desktop/install.json");
+            write_state(
+                &desktop_state_path,
+                desktop_state_json(&package_root, &node_path, "1.2.0", declared_version),
+            );
+
+            let discovery = discover_runtime_from_state_paths(
+                &desktop_state_path,
+                &temp.path().join("iterm2/install.json"),
+                write_effective_path_tools(temp.path()),
+            );
+
+            assert!(discovery.config.is_none(), "{label}");
+            assert!(
+                discovery
+                    .status
+                    .issues
+                    .iter()
+                    .any(|issue| issue.blocking && issue.code.contains("version-mismatch")),
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
     fn falls_back_to_iterm2_metadata_when_desktop_metadata_is_missing() {
         let temp = tempdir().unwrap();
         let node_path = temp.path().join("bin/node");
@@ -1385,6 +1737,7 @@ mod tests {
           "app": {
             "path": "/Users/tester/Applications/Session Deck.app",
             "bundleIdentifier": "dev.pi-userland.session-deck.desktop",
+            "name": "Session Deck",
             "version": package_version,
             "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           },
@@ -1399,6 +1752,27 @@ mod tests {
             "helperPackageVersion": helper_package_version
           },
           "ownedPaths": ["/Users/tester/Applications/Session Deck.app"]
+        }))
+        .unwrap()
+    }
+
+    fn development_state_json(
+        package_root: &Path,
+        node_path: &Path,
+        package_version: &str,
+        helper_package_version: &str,
+    ) -> String {
+        serde_json::to_string_pretty(&json!({
+          "schemaVersion": 1,
+          "product": "session-deck-desktop-development",
+          "packageName": "@robhowley/pi-session-deck",
+          "packageVersion": package_version,
+          "installedAt": "2026-07-17T00:00:00.000Z",
+          "runtime": {
+            "nodeExecutablePath": node_path,
+            "packageRoot": package_root,
+            "helperPackageVersion": helper_package_version
+          }
         }))
         .unwrap()
     }
@@ -1425,7 +1799,7 @@ mod tests {
     }
 
     fn write_helper_package(package_root: &Path, version: &str) {
-        fs::create_dir_all(package_root).unwrap();
+        write_helper_files(package_root);
         fs::write(
             package_root.join("package.json"),
             serde_json::to_string(&json!({
@@ -1435,6 +1809,10 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
+    }
+
+    fn write_helper_files(package_root: &Path) {
+        fs::create_dir_all(package_root).unwrap();
         write_readable_file(&package_root.join(SNAPSHOT_HELPER_RELATIVE_PATH));
         write_readable_file(&package_root.join(OPEN_HELPER_RELATIVE_PATH));
         write_readable_file(&package_root.join(KILL_HELPER_RELATIVE_PATH));
