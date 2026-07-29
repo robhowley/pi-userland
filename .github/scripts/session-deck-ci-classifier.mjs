@@ -465,7 +465,7 @@ function discoverWorkspaceManifests(rootDirectory) {
   const visit = (relativeDirectory) => {
     const absoluteDirectory = path.join(rootDirectory, relativeDirectory);
     for (const entry of readdirSync(absoluteDirectory, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
+      if (!entry.isDirectory() || entry.name === "node_modules") continue;
       const relativePath = path.posix.join(relativeDirectory, entry.name, "package.json");
       const absolutePath = path.join(rootDirectory, relativePath);
       try {

@@ -566,6 +566,9 @@ function writeRuntimeManifests(cwd) {
 test("non-PR execution writes full desktop selection without invoking Git or reading an event", () => {
   const cwd = mkdtempSync(path.join(tmpdir(), "session-deck-non-pr-"));
   writeRuntimeManifests(cwd);
+  const ignoredManifest = path.join(cwd, "packages/fixture/node_modules/.ignored/package.json");
+  mkdirSync(path.dirname(ignoredManifest), { recursive: true });
+  writeFileSync(ignoredManifest, JSON.stringify({ name: "@test/desktop" }));
   const bin = path.join(cwd, "bin");
   mkdirSync(bin);
   writeFileSync(path.join(bin, "git"), "#!/bin/sh\necho invoked > git-was-invoked\nexit 99\n", { mode: 0o755 });
