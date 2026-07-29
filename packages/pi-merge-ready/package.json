@@ -1,6 +1,6 @@
 {
   "name": "@robhowley/pi-merge-ready",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "description": "Pull requests that explain and repair their own blockers. Give your agents the context they need to take your PR all the way to green.",
   "license": "MIT",
   "type": "module",

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.1](https://github.com/robhowley/pi-userland/compare/pi-merge-ready-v0.12.0...pi-merge-ready-v0.12.1) (2026-07-29)
+
+
+### Bug Fixes
+
+* **pi-session-deck:** refresh package descriptions and Session Deck README ([#150](https://github.com/robhowley/pi-userland/issues/150)) ([920ee2b](https://github.com/robhowley/pi-userland/commit/920ee2b01bedb6693729731534085ba857dc16e7))
+
 ## [0.12.0](https://github.com/robhowley/pi-userland/compare/pi-merge-ready-v0.11.0...pi-merge-ready-v0.12.0) (2026-07-17)
 
 

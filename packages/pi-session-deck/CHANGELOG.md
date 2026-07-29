@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.13.1](https://github.com/robhowley/pi-userland/compare/pi-session-deck-v0.13.0...pi-session-deck-v0.13.1) (2026-07-29)
+
+
+### Bug Fixes
+
+* **pi-session-deck:** promote inherited child runtimes ([#152](https://github.com/robhowley/pi-userland/issues/152)) ([55fb65d](https://github.com/robhowley/pi-userland/commit/55fb65d0006d40742a15c55bf079abec2577bd57))
+* **pi-session-deck:** refresh package descriptions and Session Deck README ([#150](https://github.com/robhowley/pi-userland/issues/150)) ([920ee2b](https://github.com/robhowley/pi-userland/commit/920ee2b01bedb6693729731534085ba857dc16e7))
+
 ## [0.13.0](https://github.com/robhowley/pi-userland/compare/pi-session-deck-v0.12.0...pi-session-deck-v0.13.0) (2026-07-29)
 
 
