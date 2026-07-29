@@ -3,8 +3,10 @@ use crate::commands::{
     PreviewWorktreeBaseRefRequest, PreviewWorktreeLaunchContextRequest,
 };
 use crate::runtime::{load_runtime_config, RuntimeConfig, OPEN_TERMINAL_ACTION_BRIDGE_SOCKET_ENV};
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::io::{Read, Write};
+use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -12,33 +14,75 @@ use wait_timeout::ChildExt;
 
 const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10);
 const ACTION_TIMEOUT: Duration = Duration::from_secs(60);
+const MUTATING_HELPER_TIMEOUT_CODE: &str = "mutating-helper-timeout";
+const MUTATING_HELPER_TIMEOUT_MESSAGE: &str =
+    "The desktop helper timed out before Session Deck could confirm whether the action completed.";
+
+#[derive(Debug, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum CommandErrorPayload {
+    Message(String),
+    OutcomeUnknown {
+        code: &'static str,
+        message: &'static str,
+        #[serde(rename = "outcomeUnknown")]
+        outcome_unknown: bool,
+    },
+}
 
 #[derive(Debug)]
 pub struct CommandError {
-    public_message: String,
+    payload: CommandErrorPayload,
     detail: Option<String>,
 }
 
 impl CommandError {
     pub fn new(public_message: impl Into<String>) -> Self {
         Self {
-            public_message: public_message.into(),
+            payload: CommandErrorPayload::Message(public_message.into()),
             detail: None,
         }
     }
 
     pub fn with_detail(public_message: impl Into<String>, detail: impl Into<String>) -> Self {
         Self {
-            public_message: public_message.into(),
+            payload: CommandErrorPayload::Message(public_message.into()),
             detail: Some(detail.into()),
         }
     }
 
+    fn timeout(timeout: Duration, outcome_unknown: bool, public_message: &str) -> Self {
+        let payload = if outcome_unknown {
+            CommandErrorPayload::OutcomeUnknown {
+                code: MUTATING_HELPER_TIMEOUT_CODE,
+                message: MUTATING_HELPER_TIMEOUT_MESSAGE,
+                outcome_unknown: true,
+            }
+        } else {
+            CommandErrorPayload::Message(String::from(public_message))
+        };
+
+        Self {
+            payload,
+            detail: Some(format!(
+                "Helper process timed out after {} seconds.",
+                timeout.as_secs_f64()
+            )),
+        }
+    }
+
     pub fn into_public_message(self) -> String {
+        match self.into_tauri_error() {
+            CommandErrorPayload::Message(message) => message,
+            CommandErrorPayload::OutcomeUnknown { message, .. } => String::from(message),
+        }
+    }
+
+    pub fn into_tauri_error(self) -> CommandErrorPayload {
         if let Some(detail) = self.detail {
             eprintln!("{detail}");
         }
-        self.public_message
+        self.payload
     }
 }
 
@@ -53,6 +97,7 @@ pub fn load_snapshot() -> Result<Value, CommandError> {
             bridge_socket_path: None,
             public_error_message:
                 "Session Deck snapshot is unavailable. Open desktop diagnostics for details.",
+            outcome_unknown_on_timeout: false,
         },
     )?;
 
@@ -86,6 +131,7 @@ pub fn preview_worktree_base_ref(
             "repoIntent": request.repo_intent,
         }),
         "Create-worktree preview is unavailable. Open desktop diagnostics for details.",
+        false,
     )
 }
 
@@ -102,6 +148,7 @@ pub fn preview_worktree_launch_context(
             "launch": request.launch,
         }),
         "Pi config preview is unavailable. Open desktop diagnostics for details.",
+        false,
     )
 }
 
@@ -118,6 +165,7 @@ pub fn create_worktree(request: CreateWorktreeRequest) -> Result<Value, CommandE
             )
         })?,
         "Create-worktree action is unavailable. Open desktop diagnostics for details.",
+        true,
     )
 }
 
@@ -134,6 +182,7 @@ pub fn create_session(request: CreateSessionRequest) -> Result<Value, CommandErr
             )
         })?,
         "Create-session action is unavailable. Open desktop diagnostics for details.",
+        true,
     )
 }
 
@@ -150,6 +199,7 @@ pub fn open_terminal(request: OpenTerminalRequest) -> Result<Value, CommandError
             )
         })?,
         "Open-terminal action is unavailable. Open desktop diagnostics for details.",
+        true,
     )
 }
 
@@ -166,6 +216,7 @@ pub fn kill_session(request: KillSessionRequest) -> Result<Value, CommandError> 
             )
         })?,
         "End-session action is unavailable. Open desktop diagnostics for details.",
+        true,
     )
 }
 
@@ -183,6 +234,7 @@ fn run_action_helper(
     script_path: &std::path::Path,
     payload: Value,
     public_error_message: &str,
+    outcome_unknown_on_timeout: bool,
 ) -> Result<Value, CommandError> {
     let output = run_helper(
         runtime_config,
@@ -201,6 +253,7 @@ fn run_action_helper(
                 None
             },
             public_error_message,
+            outcome_unknown_on_timeout,
         },
     )?;
 
@@ -245,8 +298,10 @@ struct HelperSpec<'a> {
     timeout: Duration,
     bridge_socket_path: Option<&'a std::path::Path>,
     public_error_message: &'a str,
+    outcome_unknown_on_timeout: bool,
 }
 
+#[derive(Debug)]
 struct HelperOutput {
     success: bool,
     stdout: String,
@@ -275,6 +330,16 @@ fn run_helper(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("PATH", &runtime_config.effective_command_path.value);
+
+    // SAFETY: setpgid only changes the child process before exec and does not access parent memory.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
 
     if let Some(bridge_socket_path) = helper_spec.bridge_socket_path {
         command.env(
@@ -314,7 +379,13 @@ fn run_helper(
     match child.wait_timeout(helper_spec.timeout) {
         Ok(Some(status)) => {
             let (stdout, stderr) =
-                collect_helper_output(output_readers, helper_spec.public_error_message)?;
+                match collect_helper_output(output_readers, helper_spec.public_error_message) {
+                    Ok(output) => output,
+                    Err(error) => {
+                        terminate_child(&mut child);
+                        return Err(error);
+                    }
+                };
 
             Ok(HelperOutput {
                 success: status.success(),
@@ -324,12 +395,10 @@ fn run_helper(
         }
         Ok(None) => {
             terminate_child(&mut child);
-            Err(CommandError::with_detail(
+            Err(CommandError::timeout(
+                helper_spec.timeout,
+                helper_spec.outcome_unknown_on_timeout,
                 helper_spec.public_error_message,
-                format!(
-                    "Helper process timed out after {} seconds.",
-                    helper_spec.timeout.as_secs()
-                ),
             ))
         }
         Err(error) => {
@@ -430,6 +499,12 @@ fn collect_pipe_output(
 }
 
 fn terminate_child(child: &mut Child) {
+    let process_group = child.id() as libc::pid_t;
+    // The direct child created this process group in pre_exec. Killing the group limits ordinary
+    // descendants; detached processes and external effects such as tmux are outside this boundary.
+    unsafe {
+        let _ = libc::kill(-process_group, libc::SIGKILL);
+    }
     let _ = child.kill();
     let _ = child.wait();
 }
@@ -451,7 +526,7 @@ fn format_process_detail(stdout: &str, stderr: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{run_helper, HelperSpec};
+    use super::{run_helper, CommandError, CommandErrorPayload, HelperSpec};
     use crate::runtime::{EffectiveCommandPath, RuntimeConfig, RuntimeMetadataSource};
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
@@ -484,6 +559,7 @@ mod tests {
                 timeout: Duration::from_secs(2),
                 bridge_socket_path: None,
                 public_error_message: "helper failed",
+                outcome_unknown_on_timeout: false,
             },
         )
         .unwrap();
@@ -491,6 +567,61 @@ mod tests {
         assert!(output.success);
         assert_eq!(output.stdout.as_bytes().len(), 256 * 1024);
         assert_eq!(output.stderr, "");
+    }
+
+    #[test]
+    fn mutating_timeout_is_structured_and_terminates_same_group_descendants() {
+        let temp_dir = tempdir().unwrap();
+        let marker_path = temp_dir.path().join("delayed-marker");
+        let node_shim_path = temp_dir.path().join("node-shim");
+        fs::write(
+            &node_shim_path,
+            format!(
+                "#!/bin/sh\n(sleep 0.2; printf late > '{}') &\nsleep 5\n",
+                marker_path.display()
+            ),
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&node_shim_path).unwrap().permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&node_shim_path, permissions).unwrap();
+
+        let script_path = temp_dir.path().join("ignored-helper.js");
+        fs::write(&script_path, "").unwrap();
+        let runtime_config = runtime_config_for_test(temp_dir.path(), node_shim_path);
+
+        let error = run_helper(
+            &runtime_config,
+            HelperSpec {
+                script_path: &script_path,
+                stdin_payload: None,
+                timeout: Duration::from_millis(50),
+                bridge_socket_path: None,
+                public_error_message: "helper failed",
+                outcome_unknown_on_timeout: true,
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            serde_json::to_value(error.into_tauri_error()).unwrap(),
+            serde_json::json!({
+                "code": "mutating-helper-timeout",
+                "message": "The desktop helper timed out before Session Deck could confirm whether the action completed.",
+                "outcomeUnknown": true
+            })
+        );
+        std::thread::sleep(Duration::from_millis(350));
+        assert!(!marker_path.exists());
+    }
+
+    #[test]
+    fn read_only_timeout_remains_an_ordinary_error() {
+        assert_eq!(
+            CommandError::timeout(Duration::from_secs(10), false, "snapshot unavailable")
+                .into_tauri_error(),
+            CommandErrorPayload::Message(String::from("snapshot unavailable"))
+        );
     }
 
     fn runtime_config_for_test(root: &Path, node_executable_path: PathBuf) -> RuntimeConfig {

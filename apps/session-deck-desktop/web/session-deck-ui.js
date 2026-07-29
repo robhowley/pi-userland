@@ -335,7 +335,7 @@
 
     function reconcilePendingWorktrees(repoGroups = createRepoGroups(getVisibleRecords())) {
       for (const [repoKey, pending] of [...state.pendingWorktrees.entries()]) {
-        if (pending.kind !== 'success') {
+        if (pending.kind !== 'success' && pending.kind !== 'unknown') {
           continue;
         }
 
@@ -361,7 +361,7 @@
 
     function reconcileKillSessionAction() {
       const action = state.killSessionAction;
-      if (action?.kind !== 'confirming') {
+      if (action?.kind !== 'confirming' && action?.kind !== 'unknown') {
         return;
       }
 
@@ -395,7 +395,8 @@
       }
 
       return [pending.cwd, pending.resultCwd].some(
-        (cwd) => isNonEmptyString(cwd) && record.cwd === cwd,
+        (cwd) =>
+          isNonEmptyString(cwd) && (record.cwd === cwd || shortenHomePath(record.cwd) === cwd),
       );
     }
 
@@ -1421,13 +1422,20 @@
             await refreshSnapshot({ source: 'manual' });
           }
         })
-        .catch((error) => {
+        .catch(async (error) => {
           clearWorktreeFormState(repoGroup.key);
+          if (isOutcomeUnknownError(error)) {
+            setUnknownCreateAction(repoGroup.key, request, error);
+            render();
+            await refreshSnapshot({ source: 'manual' });
+            return;
+          }
+
           setPendingWorktree(repoGroup.key, {
             sessionKind: 'worktree',
             kind: 'failure',
             title: 'New session failed',
-            message: `Create worktree failed: ${error instanceof Error ? error.message : String(error)}`,
+            message: `Create worktree failed: ${getErrorMessage(error)}`,
             tone: 'failed',
           });
           render();
@@ -1483,13 +1491,20 @@
             await refreshSnapshot({ source: 'manual' });
           }
         })
-        .catch((error) => {
+        .catch(async (error) => {
           clearWorktreeFormState(ownerKey);
+          if (isOutcomeUnknownError(error)) {
+            setUnknownCreateAction(ownerKey, request, error);
+            render();
+            await refreshSnapshot({ source: 'manual' });
+            return;
+          }
+
           setPendingWorktree(ownerKey, {
             sessionKind: 'cwd',
             kind: 'failure',
             title: 'New session failed',
-            message: `Create session failed: ${error instanceof Error ? error.message : String(error)}`,
+            message: `Create session failed: ${getErrorMessage(error)}`,
             tone: 'failed',
           });
           render();
@@ -1618,12 +1633,19 @@
             await refreshSnapshot({ source: 'manual' });
           }
         })
-        .catch((error) => {
+        .catch(async (error) => {
+          if (isOutcomeUnknownError(error)) {
+            setUnknownCreateAction(repoKey, request, error);
+            render();
+            await refreshSnapshot({ source: 'manual' });
+            return;
+          }
+
           setPendingWorktree(repoKey, {
             sessionKind: 'worktree',
             kind: 'failure',
             title: 'Retry failed',
-            message: `Create worktree failed: ${error instanceof Error ? error.message : String(error)}`,
+            message: `Create worktree failed: ${getErrorMessage(error)}`,
             tone: 'failed',
           });
           render();
@@ -1656,16 +1678,41 @@
             await refreshSnapshot({ source: 'manual' });
           }
         })
-        .catch((error) => {
+        .catch(async (error) => {
+          if (isOutcomeUnknownError(error)) {
+            setUnknownCreateAction(repoKey, request, error);
+            render();
+            await refreshSnapshot({ source: 'manual' });
+            return;
+          }
+
           setPendingWorktree(repoKey, {
             sessionKind: 'cwd',
             kind: 'failure',
             title: 'Retry failed',
-            message: `Create session failed: ${error instanceof Error ? error.message : String(error)}`,
+            message: `Create session failed: ${getErrorMessage(error)}`,
             tone: 'failed',
           });
           render();
         });
+    }
+
+    function isOutcomeUnknownError(error) {
+      return isObject(error) && error.outcomeUnknown === true;
+    }
+
+    function setUnknownCreateAction(repoKey, request, error) {
+      const isCwdSession = request.action === 'create-session';
+      setPendingWorktree(repoKey, {
+        sessionKind: isCwdSession ? 'cwd' : 'worktree',
+        kind: 'unknown',
+        title: 'Creation outcome unknown',
+        message: `${getErrorMessage(error)} Session Deck requested a session-list refresh; verify the matching session before trying again.`,
+        tone: 'partial',
+        request,
+        cwd: isCwdSession ? request.cwd : undefined,
+      });
+      state.expandedRepoKeys.add(repoKey);
     }
 
     function summarizeWorktreeActionResult(repoKey, request, result) {
@@ -1931,6 +1978,11 @@
       if (state.openTerminalAction?.kind === 'pending') {
         return;
       }
+      if (state.openTerminalAction?.kind === 'unknown') {
+        clearOpenTerminalAction();
+        render();
+        return;
+      }
 
       const pendingAction = setOpenTerminalAction({ kind: 'pending', runtimeId: record.runtimeId });
       render();
@@ -1958,8 +2010,19 @@
           }
           render();
         })
-        .catch((error) => {
+        .catch(async (error) => {
           if (state.openTerminalAction !== pendingAction) {
+            return;
+          }
+
+          if (isOutcomeUnknownError(error)) {
+            setOpenTerminalAction({
+              kind: 'unknown',
+              runtimeId: record.runtimeId,
+              message: `${getErrorMessage(error)} Session Deck requested a session-list refresh; select to dismiss this status.`,
+            });
+            render();
+            await refreshSnapshot({ source: 'manual' });
             return;
           }
 
@@ -2057,8 +2120,19 @@
           }
           render();
         })
-        .catch((error) => {
+        .catch(async (error) => {
           if (state.killSessionAction !== pendingAction) {
+            return;
+          }
+
+          if (isOutcomeUnknownError(error)) {
+            setKillSessionAction({
+              kind: 'unknown',
+              runtimeId: record.runtimeId,
+              message: `${getErrorMessage(error)} Session Deck requested a session-list refresh; verify whether the session is still running before trying again.`,
+            });
+            render();
+            await refreshSnapshot({ source: 'manual' });
             return;
           }
 
@@ -2177,6 +2251,8 @@
           return '✓';
         case 'failure':
           return '!';
+        case 'unknown':
+          return '?';
         default:
           return '↗';
       }
@@ -2190,6 +2266,8 @@
           return `Terminal open requested for ${title}`;
         case 'failure':
           return `Open terminal failed for ${title}: ${action.message}`;
+        case 'unknown':
+          return `Terminal open outcome unknown for ${title}: ${action.message}`;
         default:
           return `Open terminal for ${title}`;
       }
@@ -2340,7 +2418,11 @@
 
       if (action?.kind === 'pending') {
         content.push(createText('p', 'Requesting session end…', 'stop-action-message'));
-      } else if (action?.kind === 'success' || action?.kind === 'failure') {
+      } else if (
+        action?.kind === 'success' ||
+        action?.kind === 'failure' ||
+        action?.kind === 'unknown'
+      ) {
         content.push(
           createText(
             'p',
@@ -2363,6 +2445,8 @@
           return 'End requested';
         case 'failure':
           return 'Retry end';
+        case 'unknown':
+          return 'Outcome unknown';
         default:
           return 'End session';
       }

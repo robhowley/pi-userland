@@ -1,5 +1,5 @@
 use crate::doctor;
-use crate::helper_runner::{self, CommandError};
+use crate::helper_runner::{self, CommandError, CommandErrorPayload};
 use crate::runtime::DoctorStatus;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -234,23 +234,23 @@ pub async fn preview_worktree_launch_context(
 }
 
 #[tauri::command]
-pub async fn create_worktree(request: CreateWorktreeRequest) -> Result<Value, String> {
-    run_blocking(move || helper_runner::create_worktree(request)).await
+pub async fn create_worktree(request: CreateWorktreeRequest) -> Result<Value, CommandErrorPayload> {
+    run_mutating_blocking(move || helper_runner::create_worktree(request)).await
 }
 
 #[tauri::command]
-pub async fn create_session(request: CreateSessionRequest) -> Result<Value, String> {
-    run_blocking(move || helper_runner::create_session(request)).await
+pub async fn create_session(request: CreateSessionRequest) -> Result<Value, CommandErrorPayload> {
+    run_mutating_blocking(move || helper_runner::create_session(request)).await
 }
 
 #[tauri::command]
-pub async fn open_terminal(request: OpenTerminalRequest) -> Result<Value, String> {
-    run_blocking(move || helper_runner::open_terminal(request)).await
+pub async fn open_terminal(request: OpenTerminalRequest) -> Result<Value, CommandErrorPayload> {
+    run_mutating_blocking(move || helper_runner::open_terminal(request)).await
 }
 
 #[tauri::command]
-pub async fn kill_session(request: KillSessionRequest) -> Result<Value, String> {
-    run_blocking(move || helper_runner::kill_session(request)).await
+pub async fn kill_session(request: KillSessionRequest) -> Result<Value, CommandErrorPayload> {
+    run_mutating_blocking(move || helper_runner::kill_session(request)).await
 }
 
 #[tauri::command]
@@ -397,6 +397,19 @@ where
         .await
         .map_err(|error| format!("Desktop command worker failed: {error}"))?
         .map_err(CommandError::into_public_message)
+}
+
+async fn run_mutating_blocking<T, F>(operation: F) -> Result<T, CommandErrorPayload>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, CommandError> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(operation)
+        .await
+        .map_err(|error| {
+            CommandErrorPayload::Message(format!("Desktop command worker failed: {error}"))
+        })?
+        .map_err(CommandError::into_tauri_error)
 }
 
 #[cfg(test)]

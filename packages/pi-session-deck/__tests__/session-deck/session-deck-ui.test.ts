@@ -231,6 +231,7 @@ interface SharedUiHarness {
   createWorktreeMock: ReturnType<typeof vi.fn>;
   copyTextMock: ReturnType<typeof vi.fn>;
   loadSnapshotMock: ReturnType<typeof vi.fn>;
+  killSessionMock: ReturnType<typeof vi.fn>;
   openExternalMock: ReturnType<typeof vi.fn>;
   openTerminalMock: ReturnType<typeof vi.fn>;
   previewMock: ReturnType<typeof vi.fn>;
@@ -392,6 +393,7 @@ async function setupSharedUi(
     copyText?: ReturnType<typeof vi.fn>;
     createWorktree?: ReturnType<typeof vi.fn>;
     loadSnapshot?: ReturnType<typeof vi.fn>;
+    killSession?: ReturnType<typeof vi.fn>;
     openExternal?: ReturnType<typeof vi.fn>;
     openTerminal?: ReturnType<typeof vi.fn>;
     previewWorktreeBaseRef?: ReturnType<typeof vi.fn>;
@@ -439,6 +441,7 @@ async function setupSharedUi(
     vi.fn(async () => ({ ok: true, status: 'resolved', baseRef: 'origin/main' }));
   const createWorktreeMock = options.createWorktree ?? vi.fn();
   const openTerminalMock = options.openTerminal ?? vi.fn();
+  const killSessionMock = options.killSession ?? vi.fn();
   const openExternalMock = options.openExternal ?? vi.fn(async () => ({ ok: true }));
   const copyTextMock = options.copyText ?? vi.fn(async () => ({ ok: true }));
 
@@ -455,7 +458,7 @@ async function setupSharedUi(
       loadSnapshot: loadSnapshotMock,
       openExternal: openExternalMock,
       createSession: vi.fn(),
-      killSession: vi.fn(),
+      killSession: killSessionMock,
       openTerminal: openTerminalMock,
       previewWorktreeBaseRef: previewMock,
       previewWorktreeLaunchContext: vi.fn(async () => ({
@@ -473,6 +476,7 @@ async function setupSharedUi(
     createWorktreeMock,
     copyTextMock,
     loadSnapshotMock,
+    killSessionMock,
     openExternalMock,
     openTerminalMock,
     previewMock,
@@ -565,6 +569,29 @@ function getCards(root: FakeNode): FakeElement[] {
 
 function getPendingWorktreeCards(root: FakeNode): FakeElement[] {
   return findAllByClass(root, 'pending-worktree');
+}
+
+function getPendingWorktreeActions(root: FakeNode): FakeButtonElement[] {
+  return findAllByClass(root, 'pending-worktree-action').filter(
+    (element): element is FakeButtonElement => element instanceof FakeButtonElement,
+  );
+}
+
+function getButtonByText(root: FakeNode, text: string): FakeButtonElement {
+  const button = findAllByTag(root, 'button').find((element) => element.textContent === text);
+  if (!(button instanceof FakeButtonElement)) {
+    throw new Error(`Expected button ${text}.`);
+  }
+  return button;
+}
+
+function helperTimeoutError(): Error & { code: string; outcomeUnknown: true } {
+  return Object.assign(
+    new Error(
+      'The desktop helper timed out before Session Deck could confirm whether the action completed.',
+    ),
+    { code: 'mutating-helper-timeout', outcomeUnknown: true as const },
+  );
 }
 
 function getCardToggle(card: FakeElement): FakeButtonElement {
@@ -793,6 +820,135 @@ describe('SessionDeckUI shared controller', () => {
     });
     expect(harness.elements.list.textContent).toContain('Session launched');
     expect(harness.loadSnapshotMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('refreshes once and reconciles a create timeout only after the requested worktree appears', async () => {
+    const createWorktreeMock = vi.fn(async () => {
+      throw helperTimeoutError();
+    });
+    const harness = await setupSharedUi({
+      createWorktree: createWorktreeMock,
+      snapshots: [buildSnapshot(), buildSnapshot()],
+    });
+
+    getRepoActionButton(getRepoGroupByLabel(harness.elements.list, 'owner/project')).click();
+    await flushMicrotasks();
+    const form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'owner/project'),
+      'worktree-form',
+    )[0]!;
+    const branchInput = findAllByTag(form, 'input').find(
+      (input) => input.getAttribute('aria-label') === 'Branch name',
+    ) as FakeInputElement;
+    branchInput.value = 'rh/timeout';
+    branchInput.dispatchEvent({ type: 'input' });
+    form.dispatchEvent({ type: 'submit' });
+    await flushMicrotasks();
+
+    expect(harness.loadSnapshotMock).toHaveBeenCalledTimes(2);
+    expect(harness.elements.list.textContent).toContain('Creation outcome unknown');
+    expect(harness.elements.list.textContent).toContain('verify the matching session');
+    expect(getPendingWorktreeActions(harness.elements.list)).toHaveLength(0);
+    expect(findAllByClass(harness.elements.list, 'pending-worktree-dismiss')).toHaveLength(1);
+
+    harness.pushSnapshot(
+      buildSnapshot({
+        records: [
+          buildRecord(),
+          buildRecord({
+            runtimeId: 'rt-timeout',
+            sessionId: 'session-timeout',
+            branch: 'rh/timeout',
+            isLinkedWorktree: true,
+            worktreeLabel: 'timeout',
+          }),
+        ],
+      }),
+    );
+    harness.elements.refresh.click();
+    await flushMicrotasks();
+
+    expect(getPendingWorktreeCards(harness.elements.list)).toHaveLength(0);
+  });
+
+  it('turns an unknown retry into match-only status without another Retry action', async () => {
+    const createWorktreeMock = vi
+      .fn<() => Promise<unknown>>()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 'partial-launch-failed',
+        launch: { requested: true, ok: false, status: 'failed', reason: 'spawn-failed' },
+      })
+      .mockRejectedValueOnce(helperTimeoutError());
+    const harness = await setupSharedUi({
+      createWorktree: createWorktreeMock,
+      snapshots: [buildSnapshot(), buildSnapshot(), buildSnapshot()],
+    });
+
+    getRepoActionButton(getRepoGroupByLabel(harness.elements.list, 'owner/project')).click();
+    await flushMicrotasks();
+    const form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'owner/project'),
+      'worktree-form',
+    )[0]!;
+    const branchInput = findAllByTag(form, 'input').find(
+      (input) => input.getAttribute('aria-label') === 'Branch name',
+    ) as FakeInputElement;
+    branchInput.value = 'rh/retry-timeout';
+    branchInput.dispatchEvent({ type: 'input' });
+    form.dispatchEvent({ type: 'submit' });
+    await flushMicrotasks();
+
+    expect(
+      getPendingWorktreeActions(harness.elements.list).map((button) => button.textContent),
+    ).toEqual(['Retry']);
+    getPendingWorktreeActions(harness.elements.list)[0]!.click();
+    await flushMicrotasks();
+
+    expect(createWorktreeMock).toHaveBeenCalledTimes(2);
+    expect(harness.loadSnapshotMock).toHaveBeenCalledTimes(3);
+    expect(harness.elements.list.textContent).toContain('Creation outcome unknown');
+    expect(getPendingWorktreeActions(harness.elements.list)).toHaveLength(0);
+  });
+
+  it('uses truthful unknown copy and refreshes after Open and End timeouts', async () => {
+    const openTerminalMock = vi.fn(async () => {
+      throw helperTimeoutError();
+    });
+    const killSessionMock = vi.fn(async () => {
+      throw helperTimeoutError();
+    });
+    const harness = await setupSharedUi({
+      openTerminal: openTerminalMock,
+      killSession: killSessionMock,
+      snapshots: [buildSnapshot(), buildSnapshot(), buildSnapshot()],
+    });
+
+    expandRepoGroup(harness.elements.list, 'owner/project');
+    getCardOpenButton(getCards(harness.elements.list)[0]!).click();
+    await flushMicrotasks();
+
+    let openButton = getCardOpenButton(getCards(harness.elements.list)[0]!);
+    expect(openButton.textContent).toBe('?');
+    expect(openButton.getAttribute('aria-label')).toContain('Terminal open outcome unknown');
+    expect(openButton.getAttribute('aria-label')).not.toContain('Open terminal failed');
+    expect(harness.loadSnapshotMock).toHaveBeenCalledTimes(2);
+
+    getCardToggle(getCards(harness.elements.list)[0]!).click();
+    getButtonByText(harness.elements.list, 'End session').click();
+    getButtonByText(harness.elements.list, 'End session').click();
+    await flushMicrotasks();
+
+    expect(harness.elements.list.textContent).toContain('Outcome unknown');
+    expect(harness.elements.list.textContent).toContain(
+      'verify whether the session is still running before trying again',
+    );
+    expect(harness.elements.list.textContent).not.toContain('Retry end');
+    expect(harness.loadSnapshotMock).toHaveBeenCalledTimes(3);
+
+    openButton = getCardOpenButton(getCards(harness.elements.list)[0]!);
+    openButton.click();
+    expect(openTerminalMock).toHaveBeenCalledTimes(1);
   });
 
   it('reconciles the expanded selection when show-all hides the active runtime', async () => {

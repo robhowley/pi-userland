@@ -95,6 +95,56 @@ describe('tauri-host', () => {
     ]);
   });
 
+  it('preserves structured Tauri rejection fields on an Error', async () => {
+    const invoke = vi.fn(async () => {
+      throw {
+        code: 'mutating-helper-timeout',
+        message:
+          'The desktop helper timed out before Session Deck could confirm whether the action completed.',
+        outcomeUnknown: true,
+      };
+    });
+    const host = createTauriSessionDeckHost({
+      window: {
+        __TAURI__: { core: { invoke } },
+      } as unknown as Window & typeof globalThis,
+    });
+
+    const error = await host
+      .createSession({ action: 'create-session', cwd: '~/scratch' })
+      .catch((rejection: unknown) => rejection);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({
+      code: 'mutating-helper-timeout',
+      message:
+        'The desktop helper timed out before Session Deck could confirm whether the action completed.',
+      outcomeUnknown: true,
+    });
+  });
+
+  it.each([
+    ['a string rejection', 'desktop unavailable'],
+    ['an Error rejection', new Error('desktop unavailable')],
+  ])('preserves %s handling', async (_label, rejection) => {
+    const invoke = vi.fn(async () => {
+      throw rejection;
+    });
+    const host = createTauriSessionDeckHost({
+      window: {
+        __TAURI__: { core: { invoke } },
+      } as unknown as Window & typeof globalThis,
+    });
+
+    const error = await host.loadSnapshot().catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe('desktop unavailable');
+    if (rejection instanceof Error) {
+      expect(error).toBe(rejection);
+    }
+  });
+
   it('fails clearly when the global Tauri bridge is unavailable', () => {
     expect(() => resolveTauriInvoke(undefined)).toThrow(
       'Tauri invoke bridge is unavailable. Ensure app.withGlobalTauri is enabled.',

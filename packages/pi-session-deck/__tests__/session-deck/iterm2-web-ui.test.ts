@@ -3290,6 +3290,42 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(harness.elements.list.textContent).toContain('feature');
   });
 
+  it('keeps ordinary iTerm2 transport errors as definite create failures', async () => {
+    const fetchMock = vi.fn(async (url: string, init?: { body?: string }) => {
+      if (url === '/snapshot.json') {
+        return buildJsonResponse(buildSnapshot());
+      }
+      if (url === '/actions/create-worktree-preview') {
+        const body = JSON.parse(init?.body ?? '{}') as { action?: string };
+        return buildJsonResponse(
+          body.action === 'preview-base-ref' ? buildBasePreview() : buildLaunchPreview(),
+        );
+      }
+      if (url === '/actions/create-worktree') {
+        throw new Error('connection reset');
+      }
+      throw new Error(`Unexpected fetch ${url}.`);
+    });
+    const harness = await setupAppWithFetch(fetchMock);
+
+    getRepoActionButton(getRepoGroupByLabel(harness.elements.list, 'owner/project')).click();
+    await flushMicrotasks();
+    const form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'owner/project'),
+      'worktree-form',
+    )[0]!;
+    const branchInput = getInputByAriaLabel(form, 'Branch name');
+    branchInput.value = 'rh/transport-failure';
+    branchInput.dispatchEvent({ type: 'input' });
+    form.dispatchEvent({ type: 'submit' });
+    await flushMicrotasks();
+
+    expect(harness.elements.list.textContent).toContain('New session failed');
+    expect(harness.elements.list.textContent).toContain('Create worktree failed: connection reset');
+    expect(harness.elements.list.textContent).not.toContain('outcome unknown');
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/snapshot.json')).toHaveLength(1);
+  });
+
   it('renders partial launch failure with retry only, and retry re-posts the original request', async () => {
     const harness = await setupApp([
       buildSnapshot(),

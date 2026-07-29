@@ -56,44 +56,69 @@ export function resolveTauriInvoke(windowLike = globalThis.window) {
  */
 export function createTauriSessionDeckHost(options = {}) {
   const invoke = resolveTauriInvoke(options.window);
+  /**
+   * @param {string} command
+   * @param {Record<string, unknown> | undefined} [args]
+   */
+  const invokeCommand = (command, args) =>
+    (args === undefined ? invoke(command) : invoke(command, args)).catch((rejection) => {
+      throw normalizeTauriRejection(rejection);
+    });
   const doctorCommand =
     options.doctorCommand ?? 'Open desktop diagnostics or run /session-deck desktop doctor.';
 
   return {
     loadSnapshot() {
-      return invoke('load_snapshot');
+      return invokeCommand('load_snapshot');
     },
     previewWorktreeBaseRef(request) {
-      return invoke('preview_worktree_base_ref', { request });
+      return invokeCommand('preview_worktree_base_ref', { request });
     },
     previewWorktreeLaunchContext(request) {
-      return invoke('preview_worktree_launch_context', { request });
+      return invokeCommand('preview_worktree_launch_context', { request });
     },
     createWorktree(request) {
-      return invoke('create_worktree', { request });
+      return invokeCommand('create_worktree', { request });
     },
     createSession(request) {
-      return invoke('create_session', { request });
+      return invokeCommand('create_session', { request });
     },
     openTerminal(runtimeId) {
-      return invoke('open_terminal', { request: { runtimeId } });
+      return invokeCommand('open_terminal', { request: { runtimeId } });
     },
     killSession(runtimeId) {
-      return invoke('kill_session', { request: { runtimeId } });
+      return invokeCommand('kill_session', { request: { runtimeId } });
     },
     openExternal(url) {
       return /** @type {Promise<{ ok: boolean, message?: string }>} */ (
-        invoke('open_external', { url })
+        invokeCommand('open_external', { url })
       );
     },
     copyText(text) {
       return /** @type {Promise<{ ok: boolean, message?: string }>} */ (
-        invoke('copy_text', { text })
+        invokeCommand('copy_text', { text })
       );
     },
     doctorCommand,
     doctorStatus() {
-      return invoke('doctor_status');
+      return invokeCommand('doctor_status');
     },
   };
+}
+
+/** @param {unknown} rejection */
+function normalizeTauriRejection(rejection) {
+  if (rejection instanceof Error) {
+    return rejection;
+  }
+
+  if (typeof rejection === 'object' && rejection !== null) {
+    const structured = /** @type {Record<string, unknown>} */ (rejection);
+    const error = new Error(
+      typeof structured['message'] === 'string' ? structured['message'] : String(rejection),
+    );
+    return Object.assign(error, structured);
+  }
+
+  return new Error(String(rejection));
 }
