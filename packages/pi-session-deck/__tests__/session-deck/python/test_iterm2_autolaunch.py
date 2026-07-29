@@ -62,6 +62,8 @@ class TempRuntime:
         self.web_root.mkdir()
         (self.web_root / "index.html").write_text("<main>Session Deck</main>", encoding="utf-8")
         (self.web_root / "app.js").write_text("console.log('session deck');", encoding="utf-8")
+        (self.web_root / "session-deck-ui.js").write_text("console.log('shared ui');", encoding="utf-8")
+        (self.web_root / "iterm2-host.js").write_text("console.log('iterm2 host');", encoding="utf-8")
         (self.web_root / "launch-context-view.js").write_text(
             "export const labels = [];", encoding="utf-8"
         )

@@ -631,16 +631,22 @@ function restoreGlobal(name: string, value: unknown): void {
 }
 
 async function importFreshApp(): Promise<void> {
-  const moduleUrl = new URL('../../extensions/session-deck/iterm2/web/app.js', import.meta.url);
-  moduleUrl.searchParams.set('t', `${Date.now()}-${Math.random()}`);
-  await import(moduleUrl.href);
+  const cacheBust = `${Date.now()}-${Math.random()}`;
+  for (const relativePath of [
+    '../../extensions/session-deck/iterm2/web/session-deck-ui.js',
+    '../../extensions/session-deck/iterm2/web/iterm2-host.js',
+    '../../extensions/session-deck/iterm2/web/app.js',
+  ]) {
+    const moduleUrl = new URL(relativePath, import.meta.url);
+    moduleUrl.searchParams.set('t', cacheBust);
+    await import(moduleUrl.href);
+  }
 }
 
 async function flushMicrotasks(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let index = 0; index < 10; index += 1) {
+    await Promise.resolve();
+  }
 }
 
 function findById(node: FakeNode, id: string): FakeElement | null {
@@ -3282,6 +3288,42 @@ describe('Session Deck iTerm2 web UI', () => {
 
     expect(getPendingWorktreeCards(harness.elements.list)).toHaveLength(0);
     expect(harness.elements.list.textContent).toContain('feature');
+  });
+
+  it('keeps ordinary iTerm2 transport errors as definite create failures', async () => {
+    const fetchMock = vi.fn(async (url: string, init?: { body?: string }) => {
+      if (url === '/snapshot.json') {
+        return buildJsonResponse(buildSnapshot());
+      }
+      if (url === '/actions/create-worktree-preview') {
+        const body = JSON.parse(init?.body ?? '{}') as { action?: string };
+        return buildJsonResponse(
+          body.action === 'preview-base-ref' ? buildBasePreview() : buildLaunchPreview(),
+        );
+      }
+      if (url === '/actions/create-worktree') {
+        throw new Error('connection reset');
+      }
+      throw new Error(`Unexpected fetch ${url}.`);
+    });
+    const harness = await setupAppWithFetch(fetchMock);
+
+    getRepoActionButton(getRepoGroupByLabel(harness.elements.list, 'owner/project')).click();
+    await flushMicrotasks();
+    const form = findAllByClass(
+      getRepoGroupByLabel(harness.elements.list, 'owner/project'),
+      'worktree-form',
+    )[0]!;
+    const branchInput = getInputByAriaLabel(form, 'Branch name');
+    branchInput.value = 'rh/transport-failure';
+    branchInput.dispatchEvent({ type: 'input' });
+    form.dispatchEvent({ type: 'submit' });
+    await flushMicrotasks();
+
+    expect(harness.elements.list.textContent).toContain('New session failed');
+    expect(harness.elements.list.textContent).toContain('Create worktree failed: connection reset');
+    expect(harness.elements.list.textContent).not.toContain('outcome unknown');
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/snapshot.json')).toHaveLength(1);
   });
 
   it('renders partial launch failure with retry only, and retry re-posts the original request', async () => {

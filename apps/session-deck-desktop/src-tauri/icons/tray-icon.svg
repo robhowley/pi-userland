@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <defs>
+    <mask id="cutouts" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24">
+      <rect width="24" height="24" fill="white"/>
+      <circle cx="5.5" cy="5.5" r="1.1" fill="black"/>
+      <circle cx="5.5" cy="12" r="1.1" fill="black"/>
+      <circle cx="5.5" cy="18.5" r="1.1" fill="black"/>
+    </mask>
+  </defs>
+  <g fill="black" mask="url(#cutouts)">
+    <rect x="3" y="3" width="18" height="5" rx="1.4"/>
+    <rect x="3" y="9.5" width="18" height="5" rx="1.4"/>
+    <rect x="3" y="16" width="18" height="5" rx="1.4"/>
+  </g>
+</svg>

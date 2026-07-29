@@ -1,5 +1,10 @@
 import type { Theme } from '@earendil-works/pi-coding-agent';
 import {
+  getSessionDeckDesktopCommandCompletions,
+  isSessionDeckDesktopCommand,
+  runSessionDeckDesktopCommand,
+} from '../desktop/command.js';
+import {
   getSessionDeckIterm2CommandCompletions,
   isSessionDeckIterm2Command,
   runSessionDeckIterm2Command,
@@ -89,9 +94,11 @@ export interface PresenceCommandAPI {
 }
 
 export interface RegisterSessionDeckCommandOptions extends ReadSessionDeckSnapshotOptions {
+  isSessionDeckDesktopCommand?: typeof isSessionDeckDesktopCommand;
   isSessionDeckIterm2Command?: typeof isSessionDeckIterm2Command;
   readSessionDeckSnapshot?: typeof readSessionDeckSnapshot;
   reapPresenceRecords?: typeof reapPresenceRecords;
+  runSessionDeckDesktopCommand?: typeof runSessionDeckDesktopCommand;
   runSessionDeckIterm2Command?: typeof runSessionDeckIterm2Command;
   unlink?: ReapPresenceRecordsOptions['unlink'];
   openTerminal?: (runtimeId: string) => Promise<SessionDeckBrowserOpenSelectedResult>;
@@ -148,16 +155,24 @@ export function registerSessionDeckCommand(
   pi: PresenceCommandAPI,
   options: RegisterSessionDeckCommandOptions = {},
 ): void {
+  const isDesktopCommand = options.isSessionDeckDesktopCommand ?? isSessionDeckDesktopCommand;
   const isIterm2Command = options.isSessionDeckIterm2Command ?? isSessionDeckIterm2Command;
   const readSnapshot = options.readSessionDeckSnapshot ?? readSessionDeckSnapshot;
   const reapPresence = options.reapPresenceRecords ?? reapPresenceRecords;
+  const runDesktopCommand = options.runSessionDeckDesktopCommand ?? runSessionDeckDesktopCommand;
   const runIterm2Command = options.runSessionDeckIterm2Command ?? runSessionDeckIterm2Command;
 
   pi.registerCommand(SESSION_DECK_COMMAND_NAME, {
     description:
-      'Show Pi session presence, identity, activity, and chips from ~/.pi/session-deck, or manage the iTerm2 Toolbelt install',
+      'Show Pi session presence, identity, activity, and chips from ~/.pi/session-deck, or manage the desktop app and iTerm2 Toolbelt installs',
     getArgumentCompletions: getSessionDeckCommandCompletions,
     handler: async (args: string, ctx: PresenceCommandContext) => {
+      if (isDesktopCommand(args)) {
+        const result = await runDesktopCommand(args);
+        ctx.ui.notify(result.message, result.level);
+        return;
+      }
+
       if (isIterm2Command(args)) {
         const result = await runIterm2Command(args);
         ctx.ui.notify(result.message, result.level);
@@ -594,7 +609,12 @@ function pluralize(count: number, singular: string): string {
 
 function getSessionDeckCommandCompletions(prefix: string) {
   const trimmedPrefix = prefix.trimStart();
+  const desktopMatches = getSessionDeckDesktopCommandCompletions(trimmedPrefix);
   const iterm2Matches = getSessionDeckIterm2CommandCompletions(trimmedPrefix);
+
+  if (trimmedPrefix.startsWith('desktop')) {
+    return desktopMatches;
+  }
 
   if (trimmedPrefix.startsWith('iterm2')) {
     return iterm2Matches;
@@ -606,12 +626,9 @@ function getSessionDeckCommandCompletions(prefix: string) {
       label: flag,
     }),
   );
-
-  if (iterm2Matches === null) {
-    return flagMatches.length > 0 ? flagMatches : null;
-  }
-
-  return [...flagMatches, ...iterm2Matches];
+  const commandMatches = [desktopMatches, iterm2Matches].flatMap((matches) => matches ?? []);
+  const matches = [...flagMatches, ...commandMatches];
+  return matches.length > 0 ? matches : null;
 }
 
 function getOpenTerminalForRuntimeOptions(
