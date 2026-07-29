@@ -95,7 +95,25 @@ function deriveRowKindFacet(
 }
 
 function hasRowKindPromotionEvidence(childRuntime: ChildRuntimeFacet | undefined): boolean {
-  return childRuntime?.candidate === true && childRuntime.evidence.some(isRowKindPromotionEvidence);
+  if (childRuntime?.candidate !== true) {
+    return false;
+  }
+
+  if (childRuntime.evidence.some(isRowKindPromotionEvidence)) {
+    return true;
+  }
+
+  const parentRuntimeId = childRuntime.parentRuntimeId;
+  return (
+    parentRuntimeId !== undefined &&
+    childRuntime.evidence.some((evidence) => evidence.code === 'headless_in_memory') &&
+    childRuntime.evidence.some(
+      (evidence) =>
+        evidence.code === 'inherited_deck_runtime' &&
+        evidence.confidence === 'high' &&
+        evidence.parentRuntimeId === parentRuntimeId,
+    )
+  );
 }
 
 function isRowKindPromotionEvidence(evidence: ChildRuntimeEvidence): boolean {
