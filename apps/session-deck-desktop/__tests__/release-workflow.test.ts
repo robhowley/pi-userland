@@ -5,6 +5,7 @@ const workflow = readFileSync(
   new URL('../../../.github/workflows/release-please.yml', import.meta.url),
   'utf8',
 );
+const trigger = workflow.slice(workflow.indexOf('on:\n'), workflow.indexOf('\n\nconcurrency:'));
 const builder = readFileSync(
   new URL('../scripts/build-macos-artifacts.js', import.meta.url),
   'utf8',
@@ -24,7 +25,7 @@ const publicationHeader = publicationJob.slice(0, publicationJob.indexOf('    st
 
 describe('Session Deck release workflow contract', () => {
   it('runs only for pushes to main', () => {
-    expect(workflow).toContain('on:\n  push:\n    branches: [main]\n');
+    expect(trigger).toBe(['on:', '  push:', '    branches: [main]'].join('\n'));
     expect(workflow).not.toMatch(
       /^ {2}(?:pull_request|pull_request_target|workflow_dispatch|schedule|merge_group):/mu,
     );
