@@ -17,6 +17,7 @@ import type { SessionDeckDesktopCommandResult } from './command.js';
 
 export interface UninstallSessionDeckDesktopOptions {
   homeDirectory?: string;
+  removePath?: typeof rm;
   statePath?: string;
 }
 
@@ -47,13 +48,41 @@ export async function uninstallSessionDeckDesktop(
     };
   }
 
-  const removalPlan = getOwnedRemovalPlan(state, homeDirectory);
+  const removePath = options.removePath ?? rm;
+  const removalPlan = getOwnedRemovalPlan(state, homeDirectory, statePath);
   const removedPaths: string[] = [];
-  for (const path of removalPlan.safePaths) {
-    await rm(path, { recursive: true, force: true });
-    removedPaths.push(path);
+  for (const [index, path] of removalPlan.safePaths.entries()) {
+    try {
+      await removePath(path, { recursive: true, force: true });
+      removedPaths.push(path);
+    } catch (error) {
+      return {
+        level: 'warning',
+        message: formatOwnedPathRemovalFailure({
+          failedPath: path,
+          failure: getErrorMessage(error),
+          pendingPaths: removalPlan.safePaths.slice(index + 1),
+          removedPaths,
+          skippedPaths: removalPlan.skippedPaths,
+          statePath,
+        }),
+      };
+    }
   }
-  await rm(statePath, { force: true });
+
+  try {
+    await removePath(statePath, { force: true });
+  } catch (error) {
+    return {
+      level: 'warning',
+      message: formatStateRemovalFailure({
+        failure: getErrorMessage(error),
+        removedPaths,
+        skippedPaths: removalPlan.skippedPaths,
+        statePath,
+      }),
+    };
+  }
 
   const lines = ['Uninstalled Session Deck desktop app.'];
   if (removedPaths.length > 0) {
@@ -82,8 +111,10 @@ export async function uninstallSessionDeckDesktop(
 function getOwnedRemovalPlan(
   state: SessionDeckDesktopInstallState,
   homeDirectory: string,
+  statePath: string,
 ): { safePaths: string[]; skippedPaths: string[] } {
   const defaultAppPath = resolve(getDefaultSessionDeckDesktopAppPath(homeDirectory));
+  const resolvedStatePath = resolve(statePath);
   const stateDir = resolve(getSessionDeckDesktopStateDir(homeDirectory));
   const cacheDir = resolve(getSessionDeckDesktopCacheDir(homeDirectory));
   const tmpDir = resolve(getSessionDeckDesktopTmpDir(homeDirectory));
@@ -92,6 +123,10 @@ function getOwnedRemovalPlan(
 
   for (const ownedPath of state.ownedPaths) {
     const resolvedPath = resolve(ownedPath);
+    if (resolvedPath === resolvedStatePath) {
+      continue;
+    }
+
     if (
       resolvedPath === defaultAppPath ||
       isPathInside(cacheDir, resolvedPath) ||
@@ -114,6 +149,60 @@ function getOwnedRemovalPlan(
   }
 
   return { safePaths, skippedPaths };
+}
+
+function formatOwnedPathRemovalFailure(options: {
+  failedPath: string;
+  failure: string;
+  pendingPaths: string[];
+  removedPaths: string[];
+  skippedPaths: string[];
+  statePath: string;
+}): string {
+  const lines = [
+    'Session Deck desktop uninstall stopped after an owned path could not be removed.',
+    'Removed owned paths:',
+    ...formatPaths(options.removedPaths),
+    'Failed owned path:',
+    `- ${options.failedPath}: ${options.failure}`,
+    'Pending owned paths:',
+    ...formatPaths(options.pendingPaths),
+    `Install state retained for retry: ${options.statePath}`,
+  ];
+  appendSkippedPaths(lines, options.skippedPaths);
+  return lines.join('\n');
+}
+
+function formatStateRemovalFailure(options: {
+  failure: string;
+  removedPaths: string[];
+  skippedPaths: string[];
+  statePath: string;
+}): string {
+  const lines = [
+    'Session Deck desktop safe owned-path cleanup completed, but install state removal failed.',
+    'Removed owned paths:',
+    ...formatPaths(options.removedPaths),
+    'Failed state path:',
+    `- ${options.statePath}: ${options.failure}`,
+    'Pending owned paths:',
+    '- (none)',
+    'Retry /session-deck desktop uninstall to finish state cleanup.',
+  ];
+  appendSkippedPaths(lines, options.skippedPaths);
+  return lines.join('\n');
+}
+
+function formatPaths(paths: string[]): string[] {
+  return paths.length === 0 ? ['- (none)'] : paths.map((path) => `- ${path}`);
+}
+
+function appendSkippedPaths(lines: string[], skippedPaths: string[]): void {
+  if (skippedPaths.length === 0) {
+    return;
+  }
+
+  lines.push('Skipped unsafe ownedPaths entries:', ...skippedPaths.map((path) => `- ${path}`));
 }
 
 function getErrorMessage(error: unknown): string {

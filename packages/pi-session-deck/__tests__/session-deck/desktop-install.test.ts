@@ -28,6 +28,8 @@ async function createFakeApp(path: string, version: string, marker: string): Pro
   <string>Session Deck Desktop</string>
   <key>CFBundleShortVersionString</key>
   <string>${version}</string>
+  <key>CFBundleExecutable</key>
+  <string>session-deck-desktop</string>
 </dict>
 </plist>
 `,

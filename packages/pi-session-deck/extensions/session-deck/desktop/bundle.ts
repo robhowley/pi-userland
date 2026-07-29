@@ -1,3 +1,4 @@
+import { constants } from 'node:fs';
 import { access, lstat, readFile, readdir } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
 import { SESSION_DECK_DESKTOP_BUNDLE_IDENTIFIER } from './paths.js';
@@ -34,12 +35,18 @@ export async function validateSessionDeckDesktopAppBundle(
     throw new Error(`App bundle is missing Contents/MacOS directory: ${macosPath}`);
   }
 
-  const executableEntries = await readdir(macosPath);
-  if (executableEntries.length === 0) {
-    throw new Error(`App bundle Contents/MacOS has no executable entries: ${macosPath}`);
-  }
-
   const plist = await readFile(infoPlistPath, 'utf8');
+  const executableName = readPlistString(plist, 'CFBundleExecutable');
+  if (executableName === null) {
+    throw new Error(`App bundle Info.plist is missing CFBundleExecutable: ${infoPlistPath}`);
+  }
+  if (!isSafeExecutableName(executableName)) {
+    throw new Error(
+      `App bundle Info.plist has unsafe CFBundleExecutable ${JSON.stringify(executableName)}: ${infoPlistPath}`,
+    );
+  }
+  await validateExecutable(join(macosPath, executableName));
+
   const bundleIdentifier = readPlistString(plist, 'CFBundleIdentifier');
   if (bundleIdentifier !== expectedBundleIdentifier) {
     throw new Error(
@@ -67,6 +74,41 @@ export async function validateSessionDeckDesktopAppBundle(
     name,
     version,
   };
+}
+
+function isSafeExecutableName(value: string): boolean {
+  return (
+    value.length > 0 &&
+    value !== '.' &&
+    value !== '..' &&
+    !value.includes('\0') &&
+    basename(value) === value
+  );
+}
+
+async function validateExecutable(path: string): Promise<void> {
+  const pathStat = await lstat(path).catch((error: unknown) => {
+    if (isMissingFileError(error)) {
+      throw new Error(`App bundle declared executable is missing: ${path}`);
+    }
+    throw error;
+  });
+
+  if (pathStat.isSymbolicLink()) {
+    throw new Error(`App bundle declared executable must not be a symlink: ${path}`);
+  }
+  if (!pathStat.isFile()) {
+    throw new Error(`App bundle declared executable is not a regular file: ${path}`);
+  }
+  if (pathStat.size === 0) {
+    throw new Error(`App bundle declared executable is empty: ${path}`);
+  }
+
+  try {
+    await access(path, constants.X_OK);
+  } catch {
+    throw new Error(`App bundle declared executable is not executable: ${path}`);
+  }
 }
 
 function readPlistString(plist: string, key: string): string | null {
