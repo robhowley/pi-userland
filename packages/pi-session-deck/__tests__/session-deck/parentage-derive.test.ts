@@ -306,9 +306,43 @@ describe('deriveChildRuntimeFacets', () => {
 });
 
 describe('attachChildRuntimeFacets', () => {
-  it('keeps env-only in-memory candidates as plain ephemeral runtimes', () => {
+  it('promotes headless in-memory runtimes with matching inherited deck evidence', () => {
     const parent = buildRecord();
     const child = buildChild({
+      runtimeSignals: {
+        process: {
+          pid: 200,
+          ppid: 100,
+          processStartedAt: '2026-07-17T12:01:30.000Z',
+          ancestors: [],
+        },
+        inheritedDeckRuntime: { runtimeId: 'rt-parent', sessionId: 'session-parent' },
+      },
+    });
+
+    const attached = attachChildRuntimeFacets([parent, child]);
+    const updatedChild = attached.find((record) => record.runtimeId === 'rt-child');
+
+    expect(updatedChild?.derivedFacets?.childRuntime).toMatchObject({
+      confidence: 'high',
+      parentRuntimeId: 'rt-parent',
+    });
+    expect(updatedChild?.derivedFacets?.rowKind).toBe('ephemeral_child_runtime');
+  });
+
+  it('does not promote inherited deck evidence for interactive in-memory runtimes', () => {
+    const parent = buildRecord();
+    const child = buildChild({
+      sessionStart: { reason: 'startup', mode: 'tui', hasUI: true },
+      derivedFacets: {
+        persistence: 'in_memory',
+        rowKind: 'ephemeral_runtime',
+        interactivity: 'interactive',
+        lifecycle: 'startup',
+        lineage: 'root',
+        identityStrength: 'weak',
+        headerConsistency: 'consistent',
+      },
       runtimeSignals: {
         inheritedDeckRuntime: { runtimeId: 'rt-parent', sessionId: 'session-parent' },
       },
@@ -318,6 +352,62 @@ describe('attachChildRuntimeFacets', () => {
     const updatedChild = attached.find((record) => record.runtimeId === 'rt-child');
 
     expect(updatedChild?.derivedFacets?.childRuntime?.confidence).toBe('high');
+    expect(updatedChild?.derivedFacets?.rowKind).toBe('ephemeral_runtime');
+  });
+
+  it('does not promote unresolved inherited deck evidence', () => {
+    const parent = buildRecord();
+    const child = buildChild({
+      runtimeSignals: {
+        process: {
+          pid: 200,
+          ppid: 100,
+          processStartedAt: '2026-07-17T12:01:30.000Z',
+          ancestors: [],
+        },
+        inheritedDeckRuntime: { runtimeId: 'rt-missing' },
+      },
+    });
+
+    const attached = attachChildRuntimeFacets([parent, child]);
+    const updatedChild = attached.find((record) => record.runtimeId === 'rt-child');
+
+    expect(updatedChild?.derivedFacets?.childRuntime?.confidence).toBe('low');
+    expect(updatedChild?.derivedFacets?.childRuntime).not.toHaveProperty('parentRuntimeId');
+    expect(updatedChild?.derivedFacets?.rowKind).toBe('ephemeral_runtime');
+  });
+
+  it('does not promote conflicting inherited deck evidence', () => {
+    const leftParent = buildRecord({
+      runtimeId: 'rt-left',
+      sessionId: 'session-left',
+      sessionFile: '/tmp/session-left.md',
+    });
+    const rightParent = buildRecord({
+      runtimeId: 'rt-right',
+      sessionId: 'session-right',
+      sessionFile: '/tmp/session-right.md',
+    });
+    const child = buildChild({
+      runtimeSignals: {
+        process: {
+          pid: 200,
+          ppid: 100,
+          processStartedAt: '2026-07-17T12:01:30.000Z',
+          ancestors: [],
+        },
+        inheritedDeckRuntime: {
+          runtimeId: 'rt-left',
+          sessionId: 'session-right',
+        },
+      },
+    });
+
+    const attached = attachChildRuntimeFacets([leftParent, rightParent, child]);
+    const updatedChild = attached.find((record) => record.runtimeId === 'rt-child');
+
+    expect(updatedChild?.derivedFacets?.childRuntime?.confidence).toBe('medium');
+    expect(updatedChild?.derivedFacets?.childRuntime).not.toHaveProperty('parentRuntimeId');
     expect(updatedChild?.derivedFacets?.rowKind).toBe('ephemeral_runtime');
   });
 
