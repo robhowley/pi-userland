@@ -14,7 +14,7 @@ import {
 } from './paths.js';
 
 export const SESSION_DECK_DESKTOP_COMMAND_USAGE =
-  'Usage: /session-deck desktop install [--from-path <Session Deck.app|zip|dmg>] [--version <version>] [--sha256 <sha256>] | /session-deck desktop <open|uninstall|doctor>';
+  'Usage: /session-deck desktop install [--from-path <Session Deck.app|zip|dmg> | --version <version>] [--sha256 <sha256>] | /session-deck desktop <open|uninstall|doctor>';
 
 export interface SessionDeckDesktopCommandResult {
   level: 'info' | 'warning' | 'error';
@@ -193,7 +193,17 @@ export function getSessionDeckDesktopCommandCompletions(prefix: string) {
     ),
   );
   const matches = SESSION_DECK_DESKTOP_INSTALL_FLAGS.filter(
-    (value) => !usedFlags.has(value) && value.startsWith(flagPrefix),
+    (value) =>
+      !usedFlags.has(value) &&
+      !(
+        usedFlags.has(SESSION_DECK_DESKTOP_FROM_PATH_FLAG) &&
+        value === SESSION_DECK_DESKTOP_VERSION_FLAG
+      ) &&
+      !(
+        usedFlags.has(SESSION_DECK_DESKTOP_VERSION_FLAG) &&
+        value === SESSION_DECK_DESKTOP_FROM_PATH_FLAG
+      ) &&
+      value.startsWith(flagPrefix),
   ).map((value) => ({
     value: `${trimmedPrefix.replace(/\s+$/u, '')} ${value}`.trim(),
     label: value,
@@ -256,6 +266,12 @@ function parseInstallFlags(
     }
     sha256 = value;
     index += 1;
+  }
+
+  if (fromPath !== undefined && version !== undefined) {
+    return createUsageError(
+      `${SESSION_DECK_DESKTOP_FROM_PATH_FLAG} cannot be used with ${SESSION_DECK_DESKTOP_VERSION_FLAG}`,
+    );
   }
 
   return {

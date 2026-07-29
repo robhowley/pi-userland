@@ -77,10 +77,10 @@ export async function readSessionDeckDesktopInstallState(
   }
 }
 
-export async function writeSessionDeckDesktopInstallState(
+export async function stageSessionDeckDesktopInstallState(
   statePath: string,
   state: SessionDeckDesktopInstallState,
-): Promise<void> {
+): Promise<string> {
   const stateDir = dirname(statePath);
   await mkdir(stateDir, { recursive: true, mode: 0o700 });
   await chmod(stateDir, 0o700);
@@ -92,10 +92,22 @@ export async function writeSessionDeckDesktopInstallState(
       mode: 0o600,
     });
     await chmod(tempPath, 0o600);
-    await rename(tempPath, statePath);
-    await chmod(statePath, 0o600);
+    return tempPath;
   } catch (error) {
-    await rm(tempPath, { force: true });
+    await rm(tempPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+export async function writeSessionDeckDesktopInstallState(
+  statePath: string,
+  state: SessionDeckDesktopInstallState,
+): Promise<void> {
+  const tempPath = await stageSessionDeckDesktopInstallState(statePath, state);
+  try {
+    await rename(tempPath, statePath);
+  } catch (error) {
+    await rm(tempPath, { force: true }).catch(() => undefined);
     throw error;
   }
 }

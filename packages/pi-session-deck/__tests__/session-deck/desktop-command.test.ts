@@ -25,14 +25,18 @@ describe('session-deck desktop command', () => {
     });
     expect(
       parseSessionDeckDesktopCommandArgs(
-        `desktop install --from-path "/tmp/Session Deck.app" --version 0.9.0 --sha256 ${SHA256}`,
+        `desktop install --from-path "/tmp/Session Deck.app" --sha256 ${SHA256}`,
       ),
     ).toEqual({
       ok: true,
       action: 'install',
       fromPath: '/tmp/Session Deck.app',
-      version: '0.9.0',
       sha256: SHA256,
+    });
+    expect(parseSessionDeckDesktopCommandArgs('desktop install --version 0.9.0')).toEqual({
+      ok: true,
+      action: 'install',
+      version: '0.9.0',
     });
     expect(parseSessionDeckDesktopCommandArgs('desktop open')).toEqual({
       ok: true,
@@ -72,6 +76,12 @@ describe('session-deck desktop command', () => {
       message: `--sha256 must be a lowercase SHA-256 hash. ${SESSION_DECK_DESKTOP_COMMAND_USAGE}`,
     });
     expect(
+      parseSessionDeckDesktopCommandArgs('desktop install --from-path /tmp/app --version 0.9.0'),
+    ).toEqual({
+      ok: false,
+      message: `--from-path cannot be used with --version. ${SESSION_DECK_DESKTOP_COMMAND_USAGE}`,
+    });
+    expect(
       parseSessionDeckDesktopCommandArgs('desktop install --from-path "/tmp/Session Deck.app'),
     ).toEqual({
       ok: false,
@@ -105,6 +115,20 @@ describe('session-deck desktop command', () => {
       { value: 'desktop install --sha256', label: '--sha256' },
     ]);
     expect(getSessionDeckDesktopCommandCompletions('desktop install --from-path')).toBeNull();
+    expect(
+      getSessionDeckDesktopCommandCompletions('desktop install --from-path /tmp/app '),
+    ).toEqual([
+      {
+        value: 'desktop install --from-path /tmp/app --sha256',
+        label: '--sha256',
+      },
+    ]);
+    expect(getSessionDeckDesktopCommandCompletions('desktop install --version 0.9.0 ')).toEqual([
+      {
+        value: 'desktop install --version 0.9.0 --sha256',
+        label: '--sha256',
+      },
+    ]);
     expect(getSessionDeckDesktopCommandCompletions('desktop open ')).toBeNull();
     expect(getSessionDeckDesktopCommandCompletions('zzz')).toBeNull();
   });

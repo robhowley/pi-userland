@@ -1,4 +1,4 @@
-import { mkdtemp } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -8,6 +8,13 @@ import {
   writeSessionDeckDesktopInstallState,
   type SessionDeckDesktopInstallState,
 } from '../../extensions/session-deck/desktop/state.js';
+import {
+  SESSION_DECK_ITERM2_CREATE_WORKTREE_HELPER_RELATIVE_PATH,
+  SESSION_DECK_ITERM2_HELPER_RELATIVE_PATH,
+  SESSION_DECK_ITERM2_KILL_HELPER_RELATIVE_PATH,
+  SESSION_DECK_ITERM2_OPEN_HELPER_RELATIVE_PATH,
+  SESSION_DECK_ITERM2_WEB_ROOT_RELATIVE_PATH,
+} from '../../extensions/session-deck/iterm2/paths.js';
 
 const SHA256 = 'b'.repeat(64);
 
@@ -50,8 +57,11 @@ describe('session-deck desktop state', () => {
     const state = buildState();
 
     await writeSessionDeckDesktopInstallState(statePath, state);
+    await chmod(statePath, 0o644);
+    await writeSessionDeckDesktopInstallState(statePath, state);
 
     await expect(readSessionDeckDesktopInstallState(statePath)).resolves.toEqual(state);
+    expect((await stat(statePath)).mode & 0o777).toBe(0o600);
   });
 
   it('returns null for missing state', async () => {
@@ -82,5 +92,69 @@ describe('session-deck desktop state', () => {
     });
 
     expect(parseSessionDeckDesktopInstallState(state).source).toEqual(state.source);
+  });
+
+  it('matches the shared desktop runtime layout without persisting derived helper paths', async () => {
+    const fixture = JSON.parse(
+      await readFile(
+        new URL(
+          '../../../../apps/session-deck-desktop/fixtures/runtime-layout-v1.json',
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    ) as {
+      schemaVersion: number;
+      snapshotHelperRelativePath: string;
+      openActionHelperRelativePath: string;
+      killActionHelperRelativePath: string;
+      worktreeActionHelperRelativePath: string;
+      webRootRelativePath: string;
+    };
+    const relativeLayout = {
+      schemaVersion: 1,
+      snapshotHelperRelativePath: SESSION_DECK_ITERM2_HELPER_RELATIVE_PATH,
+      openActionHelperRelativePath: SESSION_DECK_ITERM2_OPEN_HELPER_RELATIVE_PATH,
+      killActionHelperRelativePath: SESSION_DECK_ITERM2_KILL_HELPER_RELATIVE_PATH,
+      worktreeActionHelperRelativePath: SESSION_DECK_ITERM2_CREATE_WORKTREE_HELPER_RELATIVE_PATH,
+      webRootRelativePath: SESSION_DECK_ITERM2_WEB_ROOT_RELATIVE_PATH,
+    };
+    expect(relativeLayout).toEqual(fixture);
+
+    const state = parseSessionDeckDesktopInstallState(buildState());
+    expect({
+      snapshotHelperPath: join(
+        state.runtime.packageRoot,
+        relativeLayout.snapshotHelperRelativePath,
+      ),
+      openActionHelperPath: join(
+        state.runtime.packageRoot,
+        relativeLayout.openActionHelperRelativePath,
+      ),
+      killActionHelperPath: join(
+        state.runtime.packageRoot,
+        relativeLayout.killActionHelperRelativePath,
+      ),
+      worktreeActionHelperPath: join(
+        state.runtime.packageRoot,
+        relativeLayout.worktreeActionHelperRelativePath,
+      ),
+      webRootPath: join(state.runtime.packageRoot, relativeLayout.webRootRelativePath),
+    }).toEqual({
+      snapshotHelperPath:
+        '/tmp/pi-session-deck/dist/extensions/session-deck/iterm2/snapshot-cli.js',
+      openActionHelperPath:
+        '/tmp/pi-session-deck/dist/extensions/session-deck/iterm2/open-action-cli.js',
+      killActionHelperPath:
+        '/tmp/pi-session-deck/dist/extensions/session-deck/iterm2/kill-action-cli.js',
+      worktreeActionHelperPath:
+        '/tmp/pi-session-deck/dist/extensions/session-deck/worktree/action-cli.js',
+      webRootPath: '/tmp/pi-session-deck/extensions/session-deck/iterm2/web',
+    });
+    expect(Object.keys(state.runtime).sort()).toEqual([
+      'helperPackageVersion',
+      'nodeExecutablePath',
+      'packageRoot',
+    ]);
   });
 });

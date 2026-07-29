@@ -17,7 +17,7 @@ import {
 import {
   hashSessionDeckDesktopPath,
   readSessionDeckDesktopInstallState,
-  writeSessionDeckDesktopInstallState,
+  stageSessionDeckDesktopInstallState,
   type SessionDeckDesktopInstallState,
   type SessionDeckDesktopSourceState,
 } from './state.js';
@@ -42,7 +42,8 @@ export interface InstallSessionDeckDesktopOptions {
   sha256?: string;
   statePath?: string;
   version?: string;
-  writeInstallState?: typeof writeSessionDeckDesktopInstallState;
+  removePath?: (path: string) => Promise<void>;
+  renamePath?: (oldPath: string, newPath: string) => Promise<void>;
 }
 
 interface PreparedDesktopArtifact {
@@ -58,6 +59,13 @@ export async function installSessionDeckDesktop(
     return {
       level: 'error',
       message: `Session Deck desktop install is only supported on macOS, not ${platform}.`,
+    };
+  }
+
+  if (options.fromPath !== undefined && options.version !== undefined) {
+    return {
+      level: 'error',
+      message: '--from-path and --version cannot be used together.',
     };
   }
 
@@ -116,12 +124,22 @@ export async function installSessionDeckDesktop(
     };
   }
 
+  if (options.version !== undefined && options.version !== runtimePaths.packageVersion) {
+    return {
+      level: 'error',
+      message: `Requested desktop version ${options.version} does not match running package version ${runtimePaths.packageVersion}.`,
+    };
+  }
+
   const installId = randomUUID();
   const workDir = join(getSessionDeckDesktopTmpDir(homeDirectory), installId);
   const stagedAppPath = join(
     dirname(targetAppPath),
     `.${SESSION_DECK_DESKTOP_APP_BUNDLE_NAME}.${process.pid}.${installId}.tmp`,
   );
+  const removePath = options.removePath ?? removeInstallPath;
+  const renamePath = options.renamePath ?? rename;
+  const cleanupWarnings: string[] = [];
 
   try {
     await mkdir(workDir, { recursive: true, mode: 0o700 });
@@ -134,7 +152,6 @@ export async function installSessionDeckDesktop(
             ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
             platform,
             runtimePaths,
-            ...(options.version === undefined ? {} : { version: options.version }),
             workDir,
           })
         : await prepareLocalArtifact({
@@ -146,6 +163,15 @@ export async function installSessionDeckDesktop(
           });
 
     const bundle = await validateSessionDeckDesktopAppBundle(prepared.appPath);
+    if (
+      prepared.source.kind === 'github-release' &&
+      bundle.version !== runtimePaths.packageVersion
+    ) {
+      throw new Error(
+        `Downloaded app bundle version ${bundle.version} does not match requested version ${runtimePaths.packageVersion}.`,
+      );
+    }
+
     await mkdir(dirname(stagedAppPath), { recursive: true });
     await copyAppBundle(prepared.appPath, stagedAppPath);
     const installedSha256 = await hashSessionDeckDesktopPath(stagedAppPath);
@@ -171,33 +197,44 @@ export async function installSessionDeckDesktop(
       ownedPaths: [targetAppPath],
     };
 
-    await commitManagedAppInstall({
-      state,
-      statePath,
-      stagedAppPath,
-      targetAppPath,
-      writeInstallState: options.writeInstallState ?? writeSessionDeckDesktopInstallState,
-    });
+    cleanupWarnings.push(
+      ...(await commitManagedAppInstall({
+        state,
+        statePath,
+        stagedAppPath,
+        targetAppPath,
+        removePath,
+        renamePath,
+      })),
+    );
+    const workDirWarning = await removeInstallPathWithWarning(workDir, removePath);
+    if (workDirWarning !== null) cleanupWarnings.push(workDirWarning);
 
     return {
-      level: 'info',
+      level: cleanupWarnings.length === 0 ? 'info' : 'warning',
       message: [
         'Installed Session Deck desktop app.',
         `App: ${targetAppPath}`,
         `State: ${statePath}`,
         `Source: ${formatSource(prepared.source)}`,
+        ...cleanupWarnings,
         'Next: double-click Session Deck Desktop in Applications, or run /session-deck desktop open.',
         'For diagnostics, run /session-deck desktop doctor.',
       ].join('\n'),
     };
   } catch (error) {
-    await rm(stagedAppPath, { recursive: true, force: true });
+    for (const path of [stagedAppPath, workDir]) {
+      const warning = await removeInstallPathWithWarning(path, removePath);
+      if (warning !== null) cleanupWarnings.push(warning);
+    }
     return {
       level: 'error',
-      message: ['Could not install Session Deck desktop app.', getErrorMessage(error)].join('\n'),
+      message: [
+        'Could not install Session Deck desktop app.',
+        getErrorMessage(error),
+        ...cleanupWarnings,
+      ].join('\n'),
     };
-  } finally {
-    await rm(workDir, { recursive: true, force: true });
   }
 }
 
@@ -208,12 +245,10 @@ async function prepareDownloadedArtifact(options: {
   fetch?: SessionDeckDesktopFetch;
   platform: NodeJS.Platform;
   runtimePaths: SessionDeckDesktopRuntimePaths;
-  version?: string;
   workDir: string;
 }): Promise<PreparedDesktopArtifact> {
-  const version = options.version ?? options.runtimePaths.packageVersion;
   const downloaded = await downloadSessionDeckDesktopArtifact({
-    version,
+    version: options.runtimePaths.packageVersion,
     workDir: options.workDir,
     platform: options.platform,
     ...(options.arch === undefined ? {} : { arch: options.arch }),
@@ -349,56 +384,79 @@ async function commitManagedAppInstall(options: {
   statePath: string;
   stagedAppPath: string;
   targetAppPath: string;
-  writeInstallState: typeof writeSessionDeckDesktopInstallState;
-}): Promise<void> {
+  removePath: (path: string) => Promise<void>;
+  renamePath: (oldPath: string, newPath: string) => Promise<void>;
+}): Promise<string[]> {
   await mkdir(dirname(options.targetAppPath), { recursive: true });
+  const hadPreviousApp = await pathExists(options.targetAppPath);
+  const tempStatePath = await stageSessionDeckDesktopInstallState(options.statePath, options.state);
   const previousAppPath = join(
     dirname(options.targetAppPath),
     `.${basename(options.targetAppPath)}.${process.pid}.${randomUUID()}.previous`,
   );
-  const hadPreviousApp = await pathExists(options.targetAppPath);
+  let movedPreviousApp = false;
   let installedTarget = false;
-  if (hadPreviousApp) {
-    await rename(options.targetAppPath, previousAppPath);
-  }
 
   try {
-    await rename(options.stagedAppPath, options.targetAppPath);
-    installedTarget = true;
-    await options.writeInstallState(options.statePath, options.state);
     if (hadPreviousApp) {
-      await rm(previousAppPath, { recursive: true, force: true });
+      await options.renamePath(options.targetAppPath, previousAppPath);
+      movedPreviousApp = true;
     }
+    await options.renamePath(options.stagedAppPath, options.targetAppPath);
+    installedTarget = true;
+
+    // This atomic rename is the install commit point. The app and state stay installed after it.
+    await options.renamePath(tempStatePath, options.statePath);
   } catch (error) {
     const rollbackMessage = await rollbackManagedAppInstall({
-      hadPreviousApp,
       installedTarget,
+      movedPreviousApp,
       previousAppPath,
+      statePath: options.statePath,
       targetAppPath: options.targetAppPath,
+      removePath: options.removePath,
+      renamePath: options.renamePath,
     });
-    throw new Error(`${getErrorMessage(error)} ${rollbackMessage}`);
+    const stateWarning = await removeInstallPathWithWarning(tempStatePath, options.removePath);
+    throw new Error(
+      [
+        getErrorMessage(error),
+        rollbackMessage,
+        ...(stateWarning === null ? [] : [stateWarning]),
+      ].join('\n'),
+    );
   }
+
+  if (!hadPreviousApp) return [];
+  const backupWarning = await removeInstallPathWithWarning(previousAppPath, options.removePath);
+  return backupWarning === null ? [] : [backupWarning];
 }
 
 async function rollbackManagedAppInstall(options: {
-  hadPreviousApp: boolean;
   installedTarget: boolean;
+  movedPreviousApp: boolean;
   previousAppPath: string;
+  statePath: string;
   targetAppPath: string;
+  removePath: (path: string) => Promise<void>;
+  renamePath: (oldPath: string, newPath: string) => Promise<void>;
 }): Promise<string> {
   try {
     if (options.installedTarget) {
-      await rm(options.targetAppPath, { recursive: true, force: true });
+      await options.removePath(options.targetAppPath);
     }
 
-    if (options.hadPreviousApp) {
-      await rename(options.previousAppPath, options.targetAppPath);
-      return 'Previous app install was restored.';
+    if (options.movedPreviousApp) {
+      await options.renamePath(options.previousAppPath, options.targetAppPath);
+      return 'Previous app install and state were preserved.';
     }
 
-    return 'No previous app install existed; partial app copy was removed.';
+    return 'Previous state was preserved; no previous managed app needed restoration.';
   } catch (error) {
-    return `Rollback failed: ${getErrorMessage(error)}`;
+    return [
+      `Rollback failed: ${getErrorMessage(error)}`,
+      `Recovery paths: app ${options.targetAppPath}; backup ${options.previousAppPath}; state ${options.statePath}.`,
+    ].join('\n');
   }
 }
 
@@ -484,6 +542,22 @@ function formatSource(source: SessionDeckDesktopSourceState): string {
   return source.kind === 'local-path'
     ? `${source.path} (${source.sha256})`
     : `${source.releaseTag}/${source.assetName} (${source.sha256})`;
+}
+
+async function removeInstallPath(path: string): Promise<void> {
+  await rm(path, { recursive: true, force: true });
+}
+
+async function removeInstallPathWithWarning(
+  path: string,
+  removePath: (path: string) => Promise<void>,
+): Promise<string | null> {
+  try {
+    await removePath(path);
+    return null;
+  } catch (error) {
+    return `Warning: cleanup left ${path}: ${getErrorMessage(error)}`;
+  }
 }
 
 async function pathExists(path: string): Promise<boolean> {
