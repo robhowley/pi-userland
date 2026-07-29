@@ -1,4 +1,4 @@
-name: CI - Checks
+name: Packages CI
 
 on:
   push:
@@ -6,8 +6,15 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: packages-ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}-{1}', github.run_id, github.run_attempt) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  check:
+  package-checks:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -24,50 +31,43 @@ jobs:
           node-version: 20
           cache: 'pnpm'
 
-      - name: Install Tauri Linux system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config \
-            libglib2.0-dev \
-            libgtk-3-dev \
-            libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            libxdo-dev \
-            libssl-dev
-
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: Build publishable packages
         run: pnpm -r --filter './packages/*' --if-present build
 
-      - name: Verify Session Deck web assets are synchronized
-        run: |
-          pnpm --filter ./apps/session-deck-desktop sync:web
-          git diff --exit-code -- \
-            apps/session-deck-desktop/web/index.html \
-            apps/session-deck-desktop/web/style.css \
-            apps/session-deck-desktop/web/session-deck-ui.js
-
-      - name: Build Session Deck desktop app
-        run: pnpm --filter ./apps/session-deck-desktop build
-
       - name: Run package lint
         run: pnpm lint
-
-      - name: Run Session Deck desktop lint
-        run: pnpm --filter ./apps/session-deck-desktop lint
 
       - name: Run package format check
         run: pnpm format:check
 
-      - name: Run Session Deck desktop format check
-        run: pnpm --filter ./apps/session-deck-desktop format:check
-
       - name: Run package typecheck
         run: pnpm typecheck
 
-      - name: Run Session Deck desktop typecheck
-        run: pnpm --filter ./apps/session-deck-desktop typecheck
+  package-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build publishable packages
+        run: pnpm -r --filter './packages/*' --if-present build
+
+      - name: Run package tests
+        run: pnpm test
