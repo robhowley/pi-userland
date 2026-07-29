@@ -26,19 +26,19 @@ describe('Session Deck release workflow contract', () => {
   it('runs only for pushes to main', () => {
     expect(workflow).toContain('on:\n  push:\n    branches: [main]\n');
     expect(workflow).not.toMatch(
-      /^  (?:pull_request|pull_request_target|workflow_dispatch|schedule|merge_group):/mu,
+      /^ {2}(?:pull_request|pull_request_target|workflow_dispatch|schedule|merge_group):/mu,
     );
   });
 
   it('keeps the desktop build and publication behind the exact release-created condition', () => {
-    expect(buildHeader.match(/^    needs:.*$/gmu)).toEqual(['    needs: release']);
-    expect(buildHeader.match(/^    if:.*$/gmu)).toEqual([
+    expect(buildHeader.match(/^ {4}needs:.*$/gmu)).toEqual(['    needs: release']);
+    expect(buildHeader.match(/^ {4}if:.*$/gmu)).toEqual([
       "    if: needs.release.outputs.pi_session_deck_released == 'true'",
     ]);
-    expect(publicationHeader.match(/^    needs:.*$/gmu)).toEqual([
+    expect(publicationHeader.match(/^ {4}needs:.*$/gmu)).toEqual([
       '    needs: [release, session-deck-desktop-build]',
     ]);
-    expect(publicationHeader.match(/^    if:.*$/gmu)).toEqual([
+    expect(publicationHeader.match(/^ {4}if:.*$/gmu)).toEqual([
       "    if: needs.release.outputs.pi_session_deck_released == 'true'",
     ]);
   });

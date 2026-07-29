@@ -13,7 +13,7 @@ function jobSlice(name: string): string {
   if (start < 0) throw new Error(`Missing CI job: ${name}`);
 
   const bodyStart = start + marker.length;
-  const nextJob = jobs.slice(bodyStart).search(/^  [a-z][a-z0-9-]*:\n/mu);
+  const nextJob = jobs.slice(bodyStart).search(/^ {2}[a-z][a-z0-9-]*:\n/mu);
   return jobs.slice(start, nextJob < 0 ? undefined : bodyStart + nextJob);
 }
 
@@ -116,7 +116,7 @@ describe('Session Deck CI workflow contract', () => {
   });
 
   it('has exactly the six Option 2 jobs', () => {
-    expect([...jobs.matchAll(/^  ([a-z][a-z0-9-]*):$/gmu)].map((match) => match[1])).toEqual([
+    expect([...jobs.matchAll(/^ {2}([a-z][a-z0-9-]*):$/gmu)].map((match) => match[1])).toEqual([
       'classify-impact',
       'package-checks',
       'package-tests',
@@ -128,7 +128,7 @@ describe('Session Deck CI workflow contract', () => {
 
   it('keeps package checks and tests independent of classification and apt setup', () => {
     for (const packageJob of [packageChecksJob, packageTestsJob]) {
-      expect(packageJob).not.toMatch(/^    needs:/mu);
+      expect(packageJob).not.toMatch(/^ {4}needs:/mu);
       expect(packageJob).not.toContain('needs.classify-impact');
       expect(packageJob).not.toContain('apt-get');
       expect(packageJob).not.toContain('Install Tauri Linux system dependencies');
@@ -156,7 +156,7 @@ describe('Session Deck CI workflow contract', () => {
     for (const desktopJob of [desktopChecksJob, desktopTestsJob]) {
       expect(desktopJob).toContain('    needs: classify-impact');
       expect(desktopJob).toContain(condition);
-      expect(desktopJob.match(/^    if:.*$/gmu)).toEqual([condition]);
+      expect(desktopJob.match(/^ {4}if:.*$/gmu)).toEqual([condition]);
       expect(desktopJob).toContain(aptInstall);
     }
 
