@@ -19,8 +19,62 @@ const buildJob = workflow.slice(
   workflow.indexOf('  session-deck-publish:\n'),
 );
 const publicationJob = workflow.slice(workflow.indexOf('  session-deck-publish:\n'));
+const buildHeader = buildJob.slice(0, buildJob.indexOf('    strategy:\n'));
+const publicationHeader = publicationJob.slice(0, publicationJob.indexOf('    steps:\n'));
 
 describe('Session Deck release workflow contract', () => {
+  it('runs only for pushes to main', () => {
+    expect(workflow).toContain('on:\n  push:\n    branches: [main]\n');
+    expect(workflow).not.toMatch(
+      /^  (?:pull_request|pull_request_target|workflow_dispatch|schedule|merge_group):/mu,
+    );
+  });
+
+  it('keeps the desktop build and publication behind the exact release-created condition', () => {
+    expect(buildHeader.match(/^    needs:.*$/gmu)).toEqual(['    needs: release']);
+    expect(buildHeader.match(/^    if:.*$/gmu)).toEqual([
+      "    if: needs.release.outputs.pi_session_deck_released == 'true'",
+    ]);
+    expect(publicationHeader.match(/^    needs:.*$/gmu)).toEqual([
+      '    needs: [release, session-deck-desktop-build]',
+    ]);
+    expect(publicationHeader.match(/^    if:.*$/gmu)).toEqual([
+      "    if: needs.release.outputs.pi_session_deck_released == 'true'",
+    ]);
+  });
+
+  it('keeps exactly one unconditional arm64/x64 build matrix', () => {
+    const matrix = buildJob.slice(
+      buildJob.indexOf('    strategy:\n'),
+      buildJob.indexOf('    runs-on: '),
+    );
+
+    expect(matrix).toBe(
+      [
+        '    strategy:',
+        '      fail-fast: true',
+        '      matrix:',
+        '        include:',
+        '          - runner: macos-15',
+        '            target: aarch64-apple-darwin',
+        '            arch: arm64',
+        '          - runner: macos-15-intel',
+        '            target: x86_64-apple-darwin',
+        '            arch: x64',
+        '',
+      ].join('\n'),
+    );
+    expect(matrix).not.toMatch(/\b(?:if|exclude|paths?|labels?|changed-files?)\b/iu);
+  });
+
+  it('keeps release jobs isolated from classifier and selective path logic', () => {
+    const selectionReferences =
+      /classifier|selective|run_(?:desktop|web_sync|desktop_js|native)|changed-files|path-filter|paths-ignore/iu;
+
+    expect(buildJob).not.toMatch(selectionReferences);
+    expect(publicationJob).not.toMatch(selectionReferences);
+  });
+
   it('has no credential-backed desktop release inputs or alternate release mode', () => {
     const secretNames = [...workflow.matchAll(/\$\{\{\s*secrets\.([A-Z0-9_]+)\s*\}\}/gu)].map(
       (match) => match[1],
