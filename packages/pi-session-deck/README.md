@@ -4,16 +4,16 @@
 
 Create and organize Pi sessions across repos and worktrees, see what each agent is doing or waiting on, and reopen or end them from a TUI, desktop app, or iTerm2 Toolbelt.
 
-<img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-session-deck/img/session-deck-toolbelt-overview.png" alt="Session Deck iTerm2 Toolbelt showing live Pi agent sessions grouped under pi-userland" width="720">
+<img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-session-deck/img/session-deck-iterm2-integrated.png" alt="Session Deck running as an iTerm2 Toolbelt beside an active Pi terminal session" width="1200">
 
 Session Deck turns agents scattered across terminals, repos, worktrees, and background tmux sessions into one operational view.
 
 ## The session lifecycle
 
 * **Launch isolated agents.** Create a branch, Git worktree, and detached tmux session in one flow. The agent can keep working without occupying a terminal tab.
-* **Know what your agent is doing at a glance.** Distinct activity states show what is working, waiting, or in need of attention.
+* **Know what every agent is doing at a glance.** See which agents are working, waiting, or need attention.
 * **Keep work in context.** Sessions stay grouped by repo with their branch, worktree, pull request, status chips, and current activity close at hand.
-* **Return without hunting.** Focus an existing iTerm2 session or reattach to the agent's tmux session directly from the deck.
+* **Return without hunting.** Focus an existing terminal or reattach to the agent's tmux session directly from the deck.
 * **End sessions cleanly.** Stop an agent when its work is done without deleting its session history.
 
 Session Deck gives each activity state its own icon, so the deck remains scannable without relying on color alone.
@@ -31,10 +31,6 @@ Use Session Deck wherever it fits your workflow:
 * **Native Pi TUI** for a fast, keyboard-driven view inside Pi.
 * **Desktop app** for a dedicated, always-available session window.
 * **iTerm2 Toolbelt** for an operational sidebar beside your terminals.
-
-In iTerm2, Session Deck stays visible beside your terminals, giving you an integrated view of every active agent while you work.
-
-<img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-session-deck/img/session-deck-iterm2-integrated.png" alt="Session Deck running as an iTerm2 Toolbelt beside an active Pi terminal session" width="1200">
 
 Each surface shows the same underlying sessions and gives you the same path through their lifecycle: launch, monitor, reopen, and end.
 
