@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/robhowley/pi-userland/compare/pi-session-deck-v0.12.0...pi-session-deck-v0.13.0) (2026-07-29)
+
+
+### Features
+
+* **pi-session-deck-desktop:** add Tauri desktop companion ([#131](https://github.com/robhowley/pi-userland/issues/131)) ([3dceb8e](https://github.com/robhowley/pi-userland/commit/3dceb8eb83679d9b10a8049e355c6c4e404463b4))
+
 ## [0.12.0](https://github.com/robhowley/pi-userland/compare/pi-session-deck-v0.11.1...pi-session-deck-v0.12.0) (2026-07-28)
 
 
