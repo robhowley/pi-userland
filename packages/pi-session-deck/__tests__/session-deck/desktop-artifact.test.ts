@@ -145,6 +145,41 @@ describe('session-deck desktop artifacts', () => {
     await expect(readFile(downloaded.path, 'utf8')).resolves.toBe('zip bytes');
   });
 
+  it('rejects downloaded ZIP bytes that do not match the sidecar before returning for extraction', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pi-session-deck-desktop-artifact-'));
+    const sidecarSha256 = createHash('sha256').update('expected zip bytes').digest('hex');
+    const fetch = vi.fn<SessionDeckDesktopFetch>(async (url) => {
+      if (url.includes('/releases/tags/')) {
+        return okJson({
+          assets: [
+            {
+              name: 'session-deck-desktop-v0.9.0-macos-arm64.zip',
+              browser_download_url: 'https://example.test/app.zip',
+            },
+            {
+              name: 'session-deck-desktop-v0.9.0-macos-arm64.zip.sha256',
+              browser_download_url: 'https://example.test/app.zip.sha256',
+            },
+          ],
+        });
+      }
+      if (url.endsWith('.sha256')) {
+        return okText(`${sidecarSha256}  session-deck-desktop-v0.9.0-macos-arm64.zip\n`);
+      }
+      return okBuffer(Buffer.from('different downloaded zip bytes'));
+    });
+
+    await expect(
+      downloadSessionDeckDesktopArtifact({
+        version: '0.9.0',
+        platform: 'darwin',
+        arch: 'arm64',
+        fetch,
+        workDir: root,
+      }),
+    ).rejects.toThrow('Checksum mismatch for session-deck-desktop-v0.9.0-macos-arm64.zip');
+  });
+
   it('rejects malformed checksum sidecars', () => {
     expect(() => parseSessionDeckDesktopSha256Sidecar('not-a-sha file.zip', 'file.zip')).toThrow(
       'does not start with a SHA-256 hash',

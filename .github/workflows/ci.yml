@@ -43,6 +43,14 @@ jobs:
       - name: Build publishable packages
         run: pnpm -r --filter './packages/*' --if-present build
 
+      - name: Verify Session Deck web assets are synchronized
+        run: |
+          pnpm --filter ./apps/session-deck-desktop sync:web
+          git diff --exit-code -- \
+            apps/session-deck-desktop/web/index.html \
+            apps/session-deck-desktop/web/style.css \
+            apps/session-deck-desktop/web/session-deck-ui.js
+
       - name: Build Session Deck desktop app
         run: pnpm --filter ./apps/session-deck-desktop build
 

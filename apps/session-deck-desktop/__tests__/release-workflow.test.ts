@@ -35,6 +35,16 @@ describe('Session Deck release workflow contract', () => {
     expect(buildJob).not.toMatch(/^\s+environment:/mu);
   });
 
+  it('skips pi-session-deck before the generic npm publish loop reaches publish', () => {
+    const skipCondition = 'if [ "$pkg" = "packages/pi-session-deck" ]; then';
+    const continuePosition = releaseJob.indexOf('continue', releaseJob.indexOf(skipCondition));
+    const publishPosition = releaseJob.indexOf('(cd "$pkg" && npm publish)');
+
+    expect(releaseJob).toContain(skipCondition);
+    expect(continuePosition).toBeGreaterThan(releaseJob.indexOf(skipCondition));
+    expect(publishPosition).toBeGreaterThan(continuePosition);
+  });
+
   it('builds and stages one native app ZIP and checksum per architecture', () => {
     expect(buildJob).toContain('runner: macos-15\n            target: aarch64-apple-darwin');
     expect(buildJob).toContain('runner: macos-15-intel\n            target: x86_64-apple-darwin');

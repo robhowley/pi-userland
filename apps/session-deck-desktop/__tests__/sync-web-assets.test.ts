@@ -1,5 +1,8 @@
+import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { buildDesktopIndex, buildSharedUiAsset } from '../scripts/sync-web-assets.js';
+import { buildDesktopIndex, syncWebAssets } from '../scripts/sync-web-assets.js';
 
 const CANONICAL_INDEX = `<!doctype html>
 <html lang="en">
@@ -33,8 +36,40 @@ describe('sync-web-assets', () => {
     expect(rewritten).not.toContain('iterm2-host.js');
   });
 
-  it('writes a deterministic shared-ui placeholder when the canonical asset is missing', () => {
-    expect(buildSharedUiAsset(null)).toContain('Shared Session Deck UI');
-    expect(buildSharedUiAsset('window.SessionDeckUI = {};')).toBe('window.SessionDeckUI = {};');
+  it('copies the required canonical shared UI byte-for-byte', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'session-deck-sync-web-'));
+    const sourceWebRoot = join(root, 'source');
+    const destinationWebRoot = join(root, 'destination');
+    const sharedUi = Buffer.from([0, 1, 2, 10, 13, 255]);
+    await mkdir(sourceWebRoot);
+    await Promise.all([
+      writeFile(join(sourceWebRoot, 'index.html'), CANONICAL_INDEX),
+      writeFile(join(sourceWebRoot, 'style.css'), 'body { color: red; }\n'),
+      writeFile(join(sourceWebRoot, 'session-deck-ui.js'), sharedUi),
+    ]);
+
+    await syncWebAssets({ sourceWebRoot, destinationWebRoot });
+
+    await expect(readFile(join(destinationWebRoot, 'session-deck-ui.js'))).resolves.toEqual(
+      sharedUi,
+    );
+  });
+
+  it('rejects sync when the canonical shared UI is missing', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'session-deck-sync-web-'));
+    const sourceWebRoot = join(root, 'source');
+    const destinationWebRoot = join(root, 'destination');
+    await mkdir(sourceWebRoot);
+    await Promise.all([
+      writeFile(join(sourceWebRoot, 'index.html'), CANONICAL_INDEX),
+      writeFile(join(sourceWebRoot, 'style.css'), 'body {}\n'),
+    ]);
+
+    await expect(syncWebAssets({ sourceWebRoot, destinationWebRoot })).rejects.toThrow(
+      'session-deck-ui.js',
+    );
+    await expect(readFile(join(destinationWebRoot, 'session-deck-ui.js'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
   });
 });

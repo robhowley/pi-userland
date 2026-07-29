@@ -11,10 +11,6 @@ const SOURCE_WEB_ROOT = resolve(
   '../../packages/pi-session-deck/extensions/session-deck/iterm2/web',
 );
 const DESTINATION_WEB_ROOT = resolve(PACKAGE_ROOT, 'web');
-const CANONICAL_INDEX_PATH = resolve(SOURCE_WEB_ROOT, 'index.html');
-const CANONICAL_STYLE_PATH = resolve(SOURCE_WEB_ROOT, 'style.css');
-const CANONICAL_SHARED_UI_PATH = resolve(SOURCE_WEB_ROOT, 'session-deck-ui.js');
-const PLACEHOLDER_SHARED_UI = `/* Shared Session Deck UI has not been copied into this worktree yet.\n   Replace this file by syncing the canonical session-deck-ui.js asset. */\n`;
 const ACTION_TOKEN_META_PATTERN = /\n\s*<meta\s+id="session-deck-action-token"[\s\S]*?\/>/u;
 const CANONICAL_SCRIPT_TAGS_PATTERN =
   /\n\s*<script src="\/session-deck-ui\.js"><\/script>\n\s*<script src="\/iterm2-host\.js"><\/script>\n\s*<script src="\/app\.js"><\/script>/u;
@@ -41,54 +37,23 @@ export function buildDesktopIndex(sourceIndex) {
 }
 
 /**
- * @param {string | null} sourceSharedUi
- * @returns {string}
+ * @param {{ sourceWebRoot?: string, destinationWebRoot?: string }} [options]
  */
-export function buildSharedUiAsset(sourceSharedUi) {
-  return sourceSharedUi ?? PLACEHOLDER_SHARED_UI;
-}
-
-export async function syncWebAssets() {
-  await mkdir(DESTINATION_WEB_ROOT, { recursive: true });
-
+export async function syncWebAssets(options = {}) {
+  const sourceWebRoot = options.sourceWebRoot ?? SOURCE_WEB_ROOT;
+  const destinationWebRoot = options.destinationWebRoot ?? DESTINATION_WEB_ROOT;
   const [sourceIndex, sourceStyle, sourceSharedUi] = await Promise.all([
-    readFile(CANONICAL_INDEX_PATH, 'utf8'),
-    readFile(CANONICAL_STYLE_PATH, 'utf8'),
-    readOptionalFile(CANONICAL_SHARED_UI_PATH),
+    readFile(resolve(sourceWebRoot, 'index.html'), 'utf8'),
+    readFile(resolve(sourceWebRoot, 'style.css'), 'utf8'),
+    readFile(resolve(sourceWebRoot, 'session-deck-ui.js')),
   ]);
 
+  await mkdir(destinationWebRoot, { recursive: true });
   await Promise.all([
-    writeFile(resolve(DESTINATION_WEB_ROOT, 'index.html'), buildDesktopIndex(sourceIndex), 'utf8'),
-    writeFile(resolve(DESTINATION_WEB_ROOT, 'style.css'), sourceStyle, 'utf8'),
-    writeFile(
-      resolve(DESTINATION_WEB_ROOT, 'session-deck-ui.js'),
-      buildSharedUiAsset(sourceSharedUi),
-      'utf8',
-    ),
+    writeFile(resolve(destinationWebRoot, 'index.html'), buildDesktopIndex(sourceIndex), 'utf8'),
+    writeFile(resolve(destinationWebRoot, 'style.css'), sourceStyle, 'utf8'),
+    writeFile(resolve(destinationWebRoot, 'session-deck-ui.js'), sourceSharedUi),
   ]);
-}
-
-/**
- * @param {string} path
- * @returns {Promise<string | null>}
- */
-async function readOptionalFile(path) {
-  try {
-    return await readFile(path, 'utf8');
-  } catch (error) {
-    if (isMissingFileError(error)) {
-      return null;
-    }
-    throw error;
-  }
-}
-
-/**
- * @param {unknown} error
- * @returns {error is NodeJS.ErrnoException}
- */
-function isMissingFileError(error) {
-  return error instanceof Error && 'code' in error && error.code === 'ENOENT';
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
