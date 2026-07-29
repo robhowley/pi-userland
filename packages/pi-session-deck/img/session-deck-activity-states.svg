@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="96" viewBox="0 0 720 96" role="img" aria-labelledby="title description">
+  <title id="title">Session Deck activity state icons</title>
+  <desc id="description">The Toolbelt icons for idle, thinking, tool-running, needs input, compacting, error, and unknown activity.</desc>
+  <rect width="720" height="96" rx="12" fill="#12161e"/>
+
+  <g font-family="SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="12" text-anchor="middle">
+    <g transform="translate(52 28)" color="#778196">
+      <circle r="11" fill="#1c212c" stroke="rgba(143, 188, 187, 0.42)"/>
+      <g transform="translate(-8 -8)">
+        <circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.5"/>
+      </g>
+      <text y="37" fill="#d8dee9">idle</text>
+    </g>
+
+    <g transform="translate(154 28)" color="#88c0d0">
+      <circle r="11" fill="#1c212c" stroke="rgba(136, 192, 208, 0.68)"/>
+      <g transform="translate(-8 -8)">
+        <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v.2A2.5 2.5 0 0 1 14 7.1c0 .8-.4 1.5-1 2 .6.5 1 1.2 1 2A2.9 2.9 0 0 1 11.1 14H10a2 2 0 0 1-2-2V4a2 2 0 0 1 1.5-2ZM6.5 2A2.5 2.5 0 0 0 4 4.5v.2A2.5 2.5 0 0 0 2 7.1c0 .8.4 1.5 1 2-.6.5-1 1.2-1 2A2.9 2.9 0 0 0 4.9 14H6a2 2 0 0 0 2-2V4a2 2 0 0 0-1.5-2Z" fill="currentColor"/>
+        <circle cx="8" cy="8" r="6.35" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.2" stroke-dasharray="3 40" opacity=".75"/>
+      </g>
+      <text y="37" fill="#d8dee9">thinking</text>
+    </g>
+
+    <g transform="translate(257 28)" color="#88c0d0">
+      <circle r="11" fill="#1c212c" stroke="rgba(136, 192, 208, 0.68)"/>
+      <g transform="translate(-8 -8)">
+        <path d="M.1 2.2A3 3 0 0 0 3.8 5.9l6.3 6.3a3 3 0 0 0 3.7 3.7l-2.1-2.1a.5.5 0 0 1 .4-.9h1.4a.5.5 0 0 1 .4.1l2.1 2.1a3 3 0 0 0-3.7-3.7L5.9 5.1A3 3 0 0 0 2.2.1l2.1 2.1a.5.5 0 0 1-.4.9H2.5a.5.5 0 0 1-.4-.1L.1 2.2Z" fill="currentColor"/>
+      </g>
+      <text y="37" fill="#d8dee9">tool-running</text>
+    </g>
+
+    <g transform="translate(360 28)" color="#ebcb8b">
+      <circle r="11" fill="#1c212c" stroke="rgba(235, 203, 139, 0.68)"/>
+      <g transform="translate(-8 -8)">
+        <path d="M3 4a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H8.6l-3.1 3.1A.9.9 0 0 1 4 12.5V10a2 2 0 0 1-1-1.7V4Zm3 1.4v1.4h4V5.4H6Zm0 2.4v1.4h2.8V7.8H6Z" fill="currentColor"/>
+      </g>
+      <text y="37" fill="#d8dee9">needs input</text>
+    </g>
+
+    <g transform="translate(463 28)" color="#88c0d0">
+      <circle r="11" fill="#1c212c" stroke="rgba(136, 192, 208, 0.68)"/>
+      <g transform="translate(-8 -8)">
+        <path d="M8 2a6 6 0 0 1 5.2 3H15l-2.8 3L9.4 5h1.7A4 4 0 0 0 4 6.6L2.3 5.5A6 6 0 0 1 8 2Zm5.7 8.5A6 6 0 0 1 2.8 11H1l2.8-3 2.8 3H4.9a4 4 0 0 0 7.1-1.6l1.7 1.1Z" fill="currentColor"/>
+      </g>
+      <text y="37" fill="#d8dee9">compacting</text>
+    </g>
+
+    <g transform="translate(566 28)" color="#bf616a">
+      <circle r="11" fill="#1c212c" stroke="rgba(191, 97, 106, 0.64)"/>
+      <g transform="translate(-8 -8)">
+        <path d="M8.9 1.5l6.4 11c.3.5.1 1.1-.4 1.4-.2.1-.3.1-.5.1H1.6c-.6 0-1-.4-1-1 0-.2 0-.3.1-.5l6.4-11c.3-.5.9-.6 1.4-.4.2.2.4.3.4.4zM8 11c-.6 0-1 .4-1 1s.4 1 1 1 1-.4 1-1-.4-1-1-1zm0-6c-.6 0-1 .4-1 1v3c0 .6.4 1 1 1s1-.4 1-1V6c0-.6-.4-1-1-1z" fill="currentColor"/>
+      </g>
+      <text y="37" fill="#d8dee9">error</text>
+    </g>
+
+    <g transform="translate(668 28)" color="#778196">
+      <circle r="11" fill="#1c212c" stroke="rgba(143, 188, 187, 0.42)"/>
+      <g transform="translate(-8 -8)">
+        <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <text x="8" y="11" fill="currentColor" text-anchor="middle" font-size="10" font-weight="700">?</text>
+      </g>
+      <text y="37" fill="#d8dee9">unknown</text>
+    </g>
+  </g>
+</svg>

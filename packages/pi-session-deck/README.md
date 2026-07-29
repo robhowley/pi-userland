@@ -1,34 +1,48 @@
 # pi-session-deck
 
-One place to launch, monitor, reopen, and end Pi agents across repos, worktrees, and terminals.
+**The full Pi session lifecycle in one place.**
 
-Pi agents are most useful when they can work independently, but that can scatter context across terminal tabs, repos, and worktrees. Session Deck gives them one operational view: see what is running, understand what each agent is doing, and return to the right terminal without hunting for it.
+Create and organize Pi sessions across repos and worktrees, see what each agent is doing or waiting on, and reopen or end them from a TUI, desktop app, or iTerm2 Toolbelt.
 
-Open Session Deck as a native Pi TUI with `/session-deck`, or keep it visible as an always-on iTerm2 Toolbelt sidebar.
+Pi agents are most useful when they can work independently. That independence can also scatter them across terminal tabs, repos, worktrees, and background tmux sessions. Session Deck turns that sprawl into one operational view: what is running, what needs attention, where each agent lives, and how to get back.
 
 <img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-session-deck/img/session-deck-toolbelt-overview.png" alt="Session Deck iTerm2 Toolbelt showing live Pi agent sessions grouped under pi-userland" width="720">
 
-## What you get
+## The session lifecycle
 
-- **Agents organized by repo.** See all of your live sessions in their project context. Collapse repos that do not need attention. Temp child-runtime sessions stay hidden, with active spawned counts shown on their parent detail.
-- **Detailed status at a glance.** Names, liveness, current activity, branch and worktree context, PR state, and status chips stay together.
-- **A reliable way back.** Focus an active iTerm2 session or reattach to an existing tmux session from the deck.
-- **End sessions without losing their history.** Preserve session history when an agent is done.
-- **New isolated agents on demand.** Start Pi on a generated Git worktree in detached tmux and let it keep running headlessly.
+* **Launch isolated agents.** Create a branch, Git worktree, and detached tmux session in one flow. The agent can keep working without occupying a terminal tab.
+* **See what every agent is doing.** Know what your agent is doing at a glance. Track when it's thinking, using a tool, idle, waiting for your input, or stopped.
+* **Keep work in context.** Sessions stay grouped by repo with their branch, worktree, pull request, status chips, and current activity close at hand.
+* **Return without hunting.** Focus an existing iTerm2 session or reattach to the agent's tmux session directly from the deck.
+* **End sessions cleanly.** Stop an agent when its work is done without deleting its session history.
+
+Temporary child runtimes stay folded into their parent session, keeping the deck readable while still showing how many spawned agents are active.
+
+Session Deck gives each activity state its own icon, so the deck remains scannable without relying on color alone.
+
+<img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-session-deck/img/session-deck-activity-states.svg" alt="Session Deck Toolbelt activity icons for idle, thinking, tool-running, needs input, compacting, error, and unknown states" width="720">
 
 <img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-session-deck/img/session-deck-toolbelt-repos.png" alt="Session Deck iTerm2 Toolbelt showing Pi agents organized across betterby-bike and pi-userland repos" width="720">
 
-Repo groups make a busy deck readable: expand the work in motion, collapse everything else, and keep each agent's branch, activity, and status close at hand.
+## One deck, three surfaces
 
-## Launch, return, and end sessions
+Use Session Deck wherever it fits your workflow:
 
-Use `w` in the Pi TUI or **＋ New** in the Toolbelt to start an agent on a new branch. Session Deck gives it an isolated Git worktree and detached tmux session, so it can keep working without occupying a terminal tab.
+* **Native Pi TUI** for a fast, keyboard-driven view inside Pi.
+* **Desktop app** for a dedicated, always-available session window.
+* **iTerm2 Toolbelt** for an operational sidebar beside your terminals.
+
+Each surface shows the same underlying sessions and gives you the same path through their lifecycle: launch, monitor, reopen, and end.
+
+## Launch, reopen, and end
+
+Use `w` in the Pi TUI or **＋ New** in the Toolbelt to launch Pi on a new branch. Session Deck creates an isolated Git worktree and detached tmux session, allowing the agent to continue headlessly.
 
 <img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-session-deck/img/session-deck-toolbelt.png" alt="Session Deck iTerm2 Toolbelt branch composer for launching a new Pi agent on a worktree" width="720">
 
-When you are ready to return, use `o` or **↗ Open** to focus or reattach to that agent's existing terminal. **↗ Open** always returns to the existing session; it never launches a duplicate.
+Use `o` or **↗ Open** to return to an agent. Session Deck focuses its existing iTerm2 session when possible or reattaches to its tmux session. It never launches a duplicate.
 
-When an agent is done, end it with `k` in the Pi TUI or **End session** in the Toolbelt.
+Use `k` or **End session** when the agent is done. Its runtime stops, but its session history remains available to Pi.
 
 ## Installation
 
@@ -44,6 +58,18 @@ Run inside Pi:
 /session-deck
 ```
 
+### Desktop app
+
+Install the Session Deck desktop app and control all of your Pi agents with a native UI.
+
+```text
+/session-deck desktop install
+```
+
+```text
+/session-deck desktop doctor
+```
+
 ### iTerm2 Toolbelt
 
 Install the Toolbelt integration:
@@ -52,7 +78,13 @@ Install the Toolbelt integration:
 /session-deck iterm2 install
 ```
 
-Enable the iTerm2 Python API if prompted, fully quit and reopen iTerm2, then open **Toolbelt → Session Deck**. If the view is missing, stale, or unable to launch/open an agent, run `/session-deck iterm2 doctor`.
+Enable the iTerm2 Python API if prompted, fully quit and reopen iTerm2, then open **Toolbelt → Session Deck**.
+
+Run the doctor command if the view is missing, stale, or unable to launch or reopen an agent:
+
+```text
+/session-deck iterm2 doctor
+```
 
 The native TUI, text output, and JSON output do not require iTerm2 setup.
 
@@ -73,23 +105,23 @@ Flags can be combined.
 
 ## TUI controls
 
-| Key       | Action                                                      |
-| --------- | ----------------------------------------------------------- |
-| `↑` / `↓` | Move between sessions.                                      |
-| `←` / `→` | Switch repo filters.                                        |
-| `enter`   | Toggle session details.                                     |
-| `w`       | Launch a Pi agent on a generated worktree in detached tmux. |
-| `o`       | Open or focus the selected agent's terminal.                |
-| `k`       | End the selected session.                                   |
-| `r`       | Refresh.                                                    |
-| `q`       | Close Session Deck.                                         |
-| `esc`     | Cancel an open prompt, or close Session Deck.               |
+| Key       | Action                                              |
+| --------- | --------------------------------------------------- |
+| `↑` / `↓` | Move between sessions.                              |
+| `←` / `→` | Switch repo filters.                                |
+| `enter`   | Toggle session details.                             |
+| `w`       | Launch Pi on a generated worktree in detached tmux. |
+| `o`       | Open or focus the selected agent's terminal.        |
+| `k`       | End the selected session.                           |
+| `r`       | Refresh the deck.                                   |
+| `q`       | Close Session Deck.                                 |
+| `esc`     | Cancel an open prompt or close Session Deck.        |
 
 ## Privacy
 
-Session Deck observes current operational state, not conversation history.
+Session Deck observes operational state, not conversation history.
 
-- It does not persist prompts, transcript content, tool arguments, or tool output.
-- Status chips contain sanitized visible text only.
-- Tool and assistant errors are reduced to compact, safe summaries.
-- JSON output and the Toolbelt view omit raw terminal metadata and tmux attach details.
+* It does not persist prompts, transcript content, tool arguments, or tool output.
+* Status chips contain sanitized visible text only.
+* Tool and assistant errors are reduced to compact, safe summaries.
+* JSON output and the Toolbelt omit raw terminal metadata and tmux attachment details.
