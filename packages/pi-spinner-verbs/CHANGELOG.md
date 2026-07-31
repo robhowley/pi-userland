@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.5.0](https://github.com/robhowley/pi-userland/compare/pi-spinner-verbs-v3.4.0...pi-spinner-verbs-v3.5.0) (2026-07-31)
+
+
+### Features
+
+* **pi-spinner-verbs:** add weird-git spinner verbs ([#154](https://github.com/robhowley/pi-userland/issues/154)) ([d94e564](https://github.com/robhowley/pi-userland/commit/d94e564e0be9ba3acb9e4b9d9158e9cad8dfebad))
+
 ## [3.4.0](https://github.com/robhowley/pi-userland/compare/pi-spinner-verbs-v3.3.2...pi-spinner-verbs-v3.4.0) (2026-06-18)
 
 
