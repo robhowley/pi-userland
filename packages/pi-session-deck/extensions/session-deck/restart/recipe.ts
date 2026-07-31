@@ -1,5 +1,6 @@
 import { readPidStartedAt } from '../presence/pid.js';
 import type { SessionIdentityRecord } from '../identity/types.js';
+import type { CreateWorktreeLaunchAgentDir } from '../worktree/types.js';
 import { readRestartRecipe, writeRestartRecipe } from './store.js';
 import type { ManagedRestartRecipeV1 } from './types.js';
 
@@ -9,7 +10,7 @@ export interface CreateManagedRestartRecipeInput {
   runtimeId: string;
   piExecutable: string;
   effectivePath: string;
-  agentDir: { mode: 'ambient' | 'default' | 'custom'; customDir?: string };
+  agentDir: CreateWorktreeLaunchAgentDir;
   env: NodeJS.ProcessEnv;
   cwd: string;
   sessionName: string;
@@ -30,7 +31,7 @@ export function createManagedRestartRecipe(
       effectivePath: input.effectivePath,
       agentDir:
         input.agentDir.mode === 'custom'
-          ? { mode: 'custom', path: input.agentDir.customDir! }
+          ? { mode: 'custom', path: input.agentDir.customDir }
           : input.agentDir.mode === 'default'
             ? { mode: 'default' }
             : {

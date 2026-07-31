@@ -1,13 +1,19 @@
-import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { getIdentityRecordPath } from '../../extensions/session-deck/identity/store.js';
 import { readRestartRecoveryRecords } from '../../extensions/session-deck/restart/recovery.js';
+import type {
+  ManagedRestartRecipeV1,
+  RestartJournalV1,
+} from '../../extensions/session-deck/restart/types.js';
 import {
   createRestartGeneration,
+  getRestartJournalPath,
   getRestartRecipePath,
   normalizeRestartSessionRequest,
+  readRestartJournal,
   readRestartRecipe,
   writeRestartJournal,
   writeRestartRecipe,
@@ -78,7 +84,16 @@ describe('restart private store', () => {
         oldPid: 42,
         oldOsProcessStartedAt: '2026-07-31T00:00:00.000Z',
         oldPresenceStartedAt: '2026-07-31T00:00:01.000Z',
+        previousRemainOnExit: { explicit: false },
+        pane: {
+          id: '%1',
+          socketPath: '/tmp/tmux-501/default',
+          sessionName: 'pi-test',
+          windowIndex: 0,
+          paneIndex: 0,
+        },
         updatedAt: '2026-07-31T00:00:02.000Z',
+        messageCode: 'respawn-failed',
       },
       directory,
     );
@@ -139,6 +154,14 @@ describe('restart private store', () => {
           oldPid: 42,
           oldOsProcessStartedAt: '2026-07-31T00:00:00.000Z',
           oldPresenceStartedAt: '2026-07-31T00:00:01.000Z',
+          previousRemainOnExit: { explicit: false },
+          pane: {
+            id: '%1',
+            socketPath: '/tmp/tmux-501/default',
+            sessionName: 'pi-test',
+            windowIndex: 0,
+            paneIndex: 0,
+          },
           updatedAt: '2026-07-31T00:00:02.000Z',
         },
         directory,
@@ -165,6 +188,57 @@ describe('restart private store', () => {
       ]);
     },
   );
+
+  it('distinguishes an absent journal from invalid and unreadable journal state', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'session-deck-journal-read-'));
+    await expect(readRestartJournal(RUNTIME_ID, directory)).resolves.toBeNull();
+
+    const path = getRestartJournalPath(RUNTIME_ID, directory);
+    await mkdir(join(directory, 'journals'), { recursive: true, mode: 0o700 });
+    await writeFile(path, '{not-json', { mode: 0o600 });
+    await expect(readRestartJournal(RUNTIME_ID, directory)).rejects.toThrow(
+      'invalid-restart-journal',
+    );
+
+    await writeFile(path, '{}', { mode: 0o600 });
+    await chmod(path, 0o644);
+    await expect(readRestartJournal(RUNTIME_ID, directory)).rejects.toThrow(
+      'invalid-restart-journal',
+    );
+  });
+
+  it('rejects journal states without their recovery fields and recipe writes the reader cannot accept', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'session-deck-write-contract-'));
+    await expect(
+      writeRestartJournal(
+        {
+          schemaVersion: 1,
+          runtimeId: RUNTIME_ID,
+          generation: 'opaque-generation-token',
+          operationId: 'operation-invalid',
+          state: 'spawn-requested',
+          coordinator: { pid: 99, osProcessStartedAt: '2026-07-31T00:00:00.000Z' },
+          oldPid: 42,
+          oldOsProcessStartedAt: '2026-07-31T00:00:00.000Z',
+          oldPresenceStartedAt: '2026-07-31T00:00:01.000Z',
+          updatedAt: '2026-07-31T00:00:02.000Z',
+        } as unknown as RestartJournalV1,
+        directory,
+      ),
+    ).rejects.toThrow('invalid-restart-journal');
+
+    const invalidRecipe = {
+      ...recipe(),
+      launch: {
+        ...recipe().launch,
+        agentDir: { mode: 'custom' as const },
+      },
+    };
+    await expect(
+      writeRestartRecipe(invalidRecipe as unknown as ManagedRestartRecipeV1, directory),
+    ).rejects.toThrow('invalid-restart-recipe');
+    await expect(readRestartRecipe(RUNTIME_ID, directory)).resolves.toBeNull();
+  });
 
   it('accepts only the three browser-safe restart request fields', () => {
     const valid = {

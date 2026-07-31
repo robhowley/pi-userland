@@ -12,6 +12,41 @@
     const URL = window.URL ?? globalThis.URL;
 
     const LAUNCH_AGENT_DIR_MODE_OPTIONS = Object.freeze(['ambient', 'default', 'custom']);
+    const RESTART_JOURNAL_STATES = new Set([
+      'preparing',
+      'term-sent',
+      'kill-sent',
+      'stopped',
+      'spawn-requested',
+      'observing',
+      'restarted',
+      'stop-failed',
+      'stopped-not-restarted',
+      'outcome-unknown',
+    ]);
+    const RESTART_REASON_CODES = new Set([
+      'replacement-observed',
+      'managed-recipe-unavailable',
+      'recipe-not-bound',
+      'recipe-invalid',
+      'runtime-unavailable',
+      'identity-mismatch',
+      'session-file-unavailable',
+      'cwd-unavailable',
+      'pi-executable-unavailable',
+      'tmux-target-unavailable',
+      'tmux-pane-mismatch',
+      'unsafe-descendants',
+      'hosting-runtime',
+      'coordinator-runtime',
+      'generation-changed',
+      'operation-in-progress',
+      'termination-failed',
+      'pane-did-not-stop',
+      'respawn-failed',
+      'replacement-unobserved',
+      'operation-state-unknown',
+    ]);
 
     function formatLaunchAgentDirOptionLabel(mode) {
       switch (mode) {
@@ -235,12 +270,39 @@
     }
 
     function isOptionalRestartEligibility(candidate) {
+      if (candidate === undefined) {
+        return true;
+      }
+
+      if (!isObject(candidate)) {
+        return false;
+      }
+
+      if (candidate.available === true) {
+        return (
+          isNonBlankString(candidate.generation) &&
+          (candidate.operation === undefined || isRestartOperation(candidate.operation))
+        );
+      }
+
+      return candidate.available === false && isKnownRestartReason(candidate.reason);
+    }
+
+    function isRestartOperation(candidate) {
       return (
-        candidate === undefined ||
-        (isObject(candidate) &&
-          ((candidate.available === true && typeof candidate.generation === 'string') ||
-            (candidate.available === false && typeof candidate.reason === 'string')))
+        isObject(candidate) &&
+        isNonBlankString(candidate.operationId) &&
+        isKnownRestartJournalState(candidate.status) &&
+        typeof candidate.retryable === 'boolean'
       );
+    }
+
+    function isKnownRestartJournalState(value) {
+      return typeof value === 'string' && RESTART_JOURNAL_STATES.has(value);
+    }
+
+    function isKnownRestartReason(value) {
+      return typeof value === 'string' && RESTART_REASON_CODES.has(value);
     }
 
     function isSessionDeckDiagnostic(candidate) {
@@ -476,6 +538,10 @@
 
     function isNonEmptyString(value) {
       return typeof value === 'string' && value.length > 0;
+    }
+
+    function isNonBlankString(value) {
+      return typeof value === 'string' && value.trim().length > 0;
     }
 
     function createRepoGroups(records) {

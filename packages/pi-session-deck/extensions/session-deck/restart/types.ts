@@ -1,10 +1,15 @@
+export type ManagedRestartAgentDir =
+  | { mode: 'ambient'; path?: string }
+  | { mode: 'default'; path?: never }
+  | { mode: 'custom'; path: string };
+
 export interface ManagedRestartRecipeV1 {
   schemaVersion: 1;
   runtimeId: string;
   launch: {
     piExecutable: string;
     effectivePath: string;
-    agentDir: { mode: 'ambient' | 'default' | 'custom'; path?: string };
+    agentDir: ManagedRestartAgentDir;
     sessionDir?: { mode: 'explicit'; path: string };
   };
   cwd: string;
@@ -36,18 +41,16 @@ export type RestartJournalState =
   | 'stopped-not-restarted'
   | 'outcome-unknown';
 
-export interface RestartJournalV1 {
+interface RestartJournalBase {
   schemaVersion: 1;
   runtimeId: string;
   generation: string;
   operationId: string;
-  state: RestartJournalState;
   coordinator: { pid: number; osProcessStartedAt: string };
   oldPid: number;
   oldOsProcessStartedAt: string;
   oldPresenceStartedAt: string;
-  previousRemainOnExit?: { explicit: boolean; value?: string };
-  pane?: {
+  pane: {
     id: string;
     socketPath: string;
     sessionName: string;
@@ -55,8 +58,34 @@ export interface RestartJournalV1 {
     paneIndex: number;
   };
   updatedAt: string;
-  messageCode?: RestartReasonCode;
 }
+
+type PreviousRemainOnExit = { explicit: boolean; value?: string };
+type RestartTerminalState =
+  | 'restarted'
+  | 'stop-failed'
+  | 'stopped-not-restarted'
+  | 'outcome-unknown';
+type RestartRecoveryState = Exclude<RestartJournalState, 'preparing' | RestartTerminalState>;
+
+export type RestartJournalV1 = RestartJournalBase &
+  (
+    | {
+        state: 'preparing';
+        previousRemainOnExit?: PreviousRemainOnExit;
+        messageCode?: never;
+      }
+    | {
+        state: RestartRecoveryState;
+        previousRemainOnExit: PreviousRemainOnExit;
+        messageCode?: never;
+      }
+    | {
+        state: RestartTerminalState;
+        previousRemainOnExit: PreviousRemainOnExit;
+        messageCode: RestartReasonCode;
+      }
+  );
 
 export interface RestartSessionRequest {
   runtimeId: string;

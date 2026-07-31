@@ -48,7 +48,11 @@ interface CommandResult {
   stderr: string;
   exitCode: number;
 }
-type Exec = (file: string, args: readonly string[]) => Promise<CommandResult>;
+export type RestartExec = (
+  file: string,
+  args: readonly string[],
+  options: { signal: AbortSignal },
+) => Promise<CommandResult>;
 type Signal = (pid: number, signal: NodeJS.Signals) => void;
 
 export interface RestartSessionOptions {
@@ -58,7 +62,7 @@ export interface RestartSessionOptions {
   hostingRuntimeId?: string;
   currentPid?: number;
   now?: () => Date;
-  exec?: Exec;
+  exec?: RestartExec;
   signal?: Signal;
   readPidStartedAt?: typeof readPidStartedAt;
   probePidExists?: PidExistenceProbe;
@@ -144,23 +148,14 @@ export async function restartSessionDeckRuntime(
         keepRetainedPane = response.status === 'stopped-not-restarted';
         return response;
       }
-      if (journal.state === 'preparing' && journal.previousRemainOnExit !== undefined) {
-        const recipe = await readRestartRecipe(request.runtimeId, directory);
-        if (recipe !== null)
-          await restoreRemainOnExit(
-            recipe,
-            journal.previousRemainOnExit,
-            options,
-            journal.pane,
-          ).catch(() => undefined);
+      if (journal.state === 'preparing') {
+        await cleanupPreparingRestart(journal, options, directory);
+        journal = null;
       }
     }
 
     const prepared = await preflightRestart(request, options, directory);
-    if (!prepared.ok) {
-      if (journal?.state === 'preparing') await removeRestartJournal(request.runtimeId, directory);
-      return prepared.result;
-    }
+    if (!prepared.ok) return prepared.result;
     if (prepared.value.recipe.binding.pid === (options.currentPid ?? process.pid)) {
       return result('not-eligible', request, 'coordinator-runtime', false);
     }
@@ -193,7 +188,7 @@ export async function restartSessionDeckRuntime(
     journal = { ...journal, previousRemainOnExit, updatedAt: now(options) };
     await writeRestartJournal(journal, directory);
     if (!(await setRemainOnExit(prepared.value.recipe, 'on', options, prepared.value.pane))) {
-      await removeRestartJournal(request.runtimeId, directory);
+      await cleanupPreparingRestart(journal, options, directory, prepared.value.recipe);
       journal = null;
       return result('not-eligible', request, 'tmux-target-unavailable', false);
     }
@@ -211,13 +206,7 @@ export async function restartSessionDeckRuntime(
       rechecked.pid !== journal.oldPid ||
       recheckedGeneration !== 'matches'
     ) {
-      await restoreRemainOnExit(
-        prepared.value.recipe,
-        previousRemainOnExit,
-        options,
-        prepared.value.pane,
-      );
-      await removeRestartJournal(request.runtimeId, directory);
+      await cleanupPreparingRestart(journal, options, directory, prepared.value.recipe);
       journal = null;
       return recheckedGeneration === 'unverified'
         ? result('not-eligible', request, 'runtime-unavailable', true)
@@ -309,12 +298,22 @@ export async function restartSessionDeckRuntime(
       keepRetainedPane = await shouldKeepRetainedPane(spawnResult, journal, options, directory);
     return spawnResult;
   } catch {
+    const persisted = await readRestartJournal(request.runtimeId, directory);
+    if (
+      persisted?.operationId === request.operationId &&
+      persisted.generation === request.generation
+    )
+      journal = persisted;
+
+    if (journal?.state === 'term-sent' || journal?.state === 'kill-sent') {
+      journal = await terminalTransition(journal, 'stop-failed', 'termination-failed', directory);
+      return result('stop-failed', request, 'termination-failed', true);
+    }
     if (
       journal !== null &&
       [
-        'term-sent',
-        'kill-sent',
         'stopped',
+        'stopped-not-restarted',
         'spawn-requested',
         'observing',
         'outcome-unknown',
@@ -329,13 +328,13 @@ export async function restartSessionDeckRuntime(
               'outcome-unknown',
               'operation-state-unknown',
               directory,
-            ).catch(() => activeJournal);
+            );
       const response = result('outcome-unknown', request, 'operation-state-unknown', true);
       keepRetainedPane = await shouldKeepRetainedPane(response, journal, options, directory);
       return response;
     }
     if (journal?.state === 'preparing') {
-      await removeRestartJournal(request.runtimeId, directory).catch(() => undefined);
+      await cleanupPreparingRestart(journal, options, directory);
       journal = null;
     }
     throw new Error('Restart operation failed before process mutation.');
@@ -513,8 +512,8 @@ async function reconcileStoppedProcess(
     return result('stop-failed', request, 'termination-failed', true);
   }
   if (oldGeneration === 'unverified') {
-    await terminalTransition(journal, 'outcome-unknown', 'operation-state-unknown', directory);
-    return result('outcome-unknown', request, 'operation-state-unknown', true);
+    await terminalTransition(journal, 'stop-failed', 'termination-failed', directory);
+    return result('stop-failed', request, 'termination-failed', true);
   }
   const pane = await inspectPane(recipe, options, journal.pane);
   if (pane === null || !pane.dead || !paneMatches(pane, recipe, journal.pane)) {
@@ -560,7 +559,7 @@ async function continueStoppedRestart(
   directory: string,
 ): Promise<RestartSessionResult> {
   const recipe = await readRestartRecipe(request.runtimeId, directory);
-  if (recipe?.binding === undefined || recipe.binding.pid !== journal.oldPid)
+  if (recipe?.binding === undefined)
     return result('stale-generation', request, 'generation-changed', false);
   const oldGeneration = await inspectGeneration(
     journal.oldPid,
@@ -569,6 +568,15 @@ async function continueStoppedRestart(
   );
   if (oldGeneration === 'unverified' || oldGeneration === 'matches')
     return result('outcome-unknown', request, 'operation-state-unknown', true);
+  if (isReplacementGeneration(recipe.binding, journal)) {
+    const replacement = await inspectGeneration(
+      recipe.binding.pid,
+      recipe.binding.osProcessStartedAt,
+      options,
+    );
+    if (!isGenerationGone(replacement))
+      return result('outcome-unknown', request, 'operation-state-unknown', true);
+  }
   const pane = await inspectPane(recipe, options, journal.pane);
   if (pane === null || !pane.dead || !paneMatches(pane, recipe, journal.pane))
     return result('outcome-unknown', request, 'operation-state-unknown', true);
@@ -582,15 +590,46 @@ async function reconcileSpawnedRestart(
   directory: string,
 ): Promise<RestartSessionResult> {
   const recipe = await readRestartRecipe(request.runtimeId, directory);
+  if (recipe?.binding === undefined || recipe.binding.sessionId.length === 0)
+    return result('outcome-unknown', request, 'operation-state-unknown', true);
+
   if (
-    recipe?.binding !== undefined &&
     isReplacementGeneration(recipe.binding, journal) &&
     (await observeReplacement(recipe as PreparedRestart['recipe'], journal, options, directory))
   ) {
     await terminalTransition(journal, 'restarted', 'replacement-observed', directory);
     return result('restarted', request, 'replacement-observed', false);
   }
-  return result('outcome-unknown', request, 'replacement-unobserved', true);
+
+  const oldGeneration = await inspectGeneration(
+    journal.oldPid,
+    journal.oldOsProcessStartedAt,
+    options,
+  );
+  if (!isGenerationGone(oldGeneration))
+    return result('outcome-unknown', request, 'operation-state-unknown', true);
+
+  if (isReplacementGeneration(recipe.binding, journal)) {
+    const replacement = await inspectGeneration(
+      recipe.binding.pid,
+      recipe.binding.osProcessStartedAt,
+      options,
+    );
+    if (!isGenerationGone(replacement))
+      return result('outcome-unknown', request, 'replacement-unobserved', true);
+  }
+
+  const pane = await inspectPane(recipe, options, journal.pane);
+  if (pane === null || !pane.dead || !paneMatches(pane, recipe, journal.pane))
+    return result('outcome-unknown', request, 'replacement-unobserved', true);
+
+  const stopped = await terminalTransition(
+    journal,
+    'stopped-not-restarted',
+    'replacement-unobserved',
+    directory,
+  );
+  return await continueStoppedRestart(request, stopped, options, directory);
 }
 
 export function buildRestartCommand(recipe: PreparedRestart['recipe']): string {
@@ -804,7 +843,7 @@ async function restoreRemainOnExit(
   options: RestartSessionOptions,
   expected?: RestartJournalV1['pane'] | PaneState,
 ): Promise<void> {
-  await runTmux(
+  const restored = await runTmux(
     recipe,
     previous.explicit
       ? [
@@ -818,6 +857,21 @@ async function restoreRemainOnExit(
       : ['set-option', '-p', '-u', '-t', tmuxTarget(recipe, expected), 'remain-on-exit'],
     options,
   );
+  if (restored.exitCode !== 0) throw new Error('remain-on-exit-restore-failed');
+}
+
+async function cleanupPreparingRestart(
+  journal: RestartJournalV1,
+  options: RestartSessionOptions,
+  directory: string,
+  knownRecipe?: ManagedRestartRecipeV1,
+): Promise<void> {
+  if (journal.previousRemainOnExit !== undefined) {
+    const recipe = knownRecipe ?? (await readRestartRecipe(journal.runtimeId, directory));
+    if (recipe === null) throw new Error('remain-on-exit-restore-unavailable');
+    await restoreRemainOnExit(recipe, journal.previousRemainOnExit, options, journal.pane);
+  }
+  await removeRestartJournal(journal.runtimeId, directory);
 }
 async function waitForPaneDead(
   recipe: ManagedRestartRecipeV1,
@@ -992,15 +1046,15 @@ function normalizeRuntimeLockOwner(candidate: unknown): RuntimeLockOwner | null 
 }
 const LEGAL_RESTART_TRANSITIONS: Record<RestartJournalState, readonly RestartJournalState[]> = {
   preparing: ['term-sent'],
-  'term-sent': ['kill-sent', 'stopped', 'stop-failed', 'stopped-not-restarted', 'outcome-unknown'],
-  'kill-sent': ['stopped', 'stop-failed', 'stopped-not-restarted', 'outcome-unknown'],
+  'term-sent': ['kill-sent', 'stopped', 'stop-failed', 'stopped-not-restarted'],
+  'kill-sent': ['stopped', 'stop-failed', 'stopped-not-restarted'],
   stopped: ['spawn-requested', 'stopped-not-restarted', 'outcome-unknown'],
   'spawn-requested': ['observing', 'stopped-not-restarted', 'outcome-unknown'],
-  observing: ['restarted', 'outcome-unknown'],
+  observing: ['restarted', 'stopped-not-restarted', 'outcome-unknown'],
   restarted: [],
   'stop-failed': [],
   'stopped-not-restarted': ['spawn-requested', 'outcome-unknown'],
-  'outcome-unknown': ['restarted'],
+  'outcome-unknown': ['restarted', 'stopped-not-restarted'],
 };
 
 async function transition(
@@ -1009,7 +1063,8 @@ async function transition(
   directory: string,
 ): Promise<RestartJournalV1> {
   assertLegalTransition(journal.state, state);
-  const next = { ...journal, state, updatedAt: new Date().toISOString() };
+  const next = { ...journal, state, updatedAt: new Date().toISOString() } as RestartJournalV1;
+  delete (next as { messageCode?: RestartReasonCode }).messageCode;
   await writeRestartJournal(next, directory);
   return next;
 }
@@ -1020,7 +1075,12 @@ async function terminalTransition(
   directory: string,
 ): Promise<RestartJournalV1> {
   assertLegalTransition(journal.state, state);
-  const next = { ...journal, state, messageCode: code, updatedAt: new Date().toISOString() };
+  const next = {
+    ...journal,
+    state,
+    messageCode: code,
+    updatedAt: new Date().toISOString(),
+  } as RestartJournalV1;
   await writeRestartJournal(next, directory);
   return next;
 }
@@ -1236,7 +1296,35 @@ async function runCommand(
   args: readonly string[],
   options: RestartSessionOptions,
 ): Promise<CommandResult> {
-  return await withOperationDeadline((options.exec ?? defaultExec)(file, args), options);
+  const remaining = (options.operationDeadlineAt ?? Number.POSITIVE_INFINITY) - Date.now();
+  if (remaining <= 0) throw new Error('restart-operation-deadline');
+
+  const controller = new AbortController();
+  const operation = (options.exec ?? defaultExec)(file, args, { signal: controller.signal });
+  if (!Number.isFinite(remaining)) return await operation;
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let deadlineExpired = false;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          deadlineExpired = true;
+          reject(new Error('restart-operation-deadline'));
+        }, remaining);
+        timer.unref?.();
+      }),
+    ]);
+  } catch (error) {
+    if (deadlineExpired) {
+      controller.abort();
+      await operation.catch(() => undefined);
+    }
+    throw error;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 async function withOperationDeadline<T>(
@@ -1260,9 +1348,13 @@ async function withOperationDeadline<T>(
   }
 }
 
-const defaultExec: Exec = async (file, args) => {
+const defaultExec: RestartExec = async (file, args, options) => {
   try {
-    const value = await execFile(file, [...args], { encoding: 'utf8', timeout: 10_000 });
+    const value = await execFile(file, [...args], {
+      encoding: 'utf8',
+      timeout: 10_000,
+      signal: options.signal,
+    });
     return { stdout: value.stdout, stderr: value.stderr, exitCode: 0 };
   } catch (error) {
     const child = error as NodeJS.ErrnoException & {

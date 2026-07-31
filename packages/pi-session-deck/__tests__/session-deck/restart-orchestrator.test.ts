@@ -10,11 +10,16 @@ import {
 } from '../../extensions/session-deck/restart/orchestrator.js';
 import {
   createRestartGeneration,
+  getRestartJournalPath,
   getRestartLockPath,
+  readRestartJournal,
   writeRestartJournal,
   writeRestartRecipe,
 } from '../../extensions/session-deck/restart/store.js';
-import type { ManagedRestartRecipeV1 } from '../../extensions/session-deck/restart/types.js';
+import type {
+  ManagedRestartRecipeV1,
+  RestartJournalV1,
+} from '../../extensions/session-deck/restart/types.js';
 
 const RUNTIME_ID = '123e4567-e89b-42d3-a456-426614174000';
 const OLD_MARKER = '2026-07-31T00:00:00.000Z';
@@ -227,11 +232,20 @@ describe('restart lifecycle', () => {
     ]);
   });
 
-  it('refuses a live descendant before pane retention or signaling', async () => {
+  it.each([
+    {
+      label: 'a live descendant',
+      ps: { stdout: '4100 1\n4200 4100\n', exitCode: 0 },
+    },
+    {
+      label: 'a failed process-table inspection',
+      ps: { stdout: '4100 1\n', exitCode: 1 },
+    },
+  ])('refuses $label before pane retention or signaling', async ({ ps }) => {
     const files = await fixture();
     const signal = vi.fn();
     const exec = vi.fn(async (file: string, args: readonly string[]) => {
-      if (file === 'ps') return { stdout: '4100 1\n4200 4100\n', stderr: '', exitCode: 0 };
+      if (file === 'ps') return { ...ps, stderr: '' };
       if (args.includes('display-message'))
         return { stdout: paneOutput(false, 4100, files.recipe.cwd), stderr: '', exitCode: 0 };
       return { stdout: '', stderr: 'unexpected', exitCode: 1 };
@@ -378,6 +392,103 @@ describe('restart lifecycle', () => {
       .map(([, args]) => args)
       .filter((args) => args.includes('set-option'));
     expect(optionWrites.at(-1)).toContain('on');
+  });
+
+  it('restores remain-on-exit before deleting a preparing journal after a pre-TERM failure', async () => {
+    const files = await fixture();
+    let paneRead = 0;
+    let journalExistedDuringRestore = false;
+    const signal = vi.fn();
+    const exec = vi.fn(async (file: string, args: readonly string[]) => {
+      if (file === 'ps') return { stdout: '4100 1\n', stderr: '', exitCode: 0 };
+      if (args.includes('display-message')) {
+        paneRead += 1;
+        if (paneRead > 1) throw new Error('inspection failed');
+        return { stdout: paneOutput(false, 4100, files.recipe.cwd), stderr: '', exitCode: 0 };
+      }
+      if (args.includes('show-options')) return { stdout: 'off\n', stderr: '', exitCode: 0 };
+      if (args.includes('set-option')) {
+        if (args.at(-1) === 'off') {
+          journalExistedDuringRestore = await readFile(
+            getRestartJournalPath(RUNTIME_ID, files.restartDirectory),
+            'utf8',
+          ).then(
+            () => true,
+            () => false,
+          );
+        }
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
+      return { stdout: '', stderr: 'unexpected', exitCode: 1 };
+    });
+
+    await expect(
+      restartSessionDeckRuntime(
+        {
+          runtimeId: RUNTIME_ID,
+          generation: createRestartGeneration(RUNTIME_ID, 4100, OLD_MARKER),
+          operationId: 'operation-pre-term-cleanup',
+        },
+        {
+          restartDirectory: files.restartDirectory,
+          presenceDirectory: files.presenceDirectory,
+          identityDirectory: files.identityDirectory,
+          currentPid: 999,
+          exec,
+          signal,
+          readPidStartedAt: async (pid) => (pid === 999 ? '2026-07-31T00:00:30.000Z' : OLD_MARKER),
+        },
+      ),
+    ).rejects.toThrow('Restart operation failed before process mutation.');
+    expect(signal).not.toHaveBeenCalled();
+    expect(journalExistedDuringRestore).toBe(true);
+    await expect(
+      readFile(getRestartJournalPath(RUNTIME_ID, files.restartDirectory), 'utf8'),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('retains a preparing journal when pre-TERM option restoration fails', async () => {
+    const files = await fixture();
+    let paneRead = 0;
+    const signal = vi.fn();
+    const exec = vi.fn(async (file: string, args: readonly string[]) => {
+      if (file === 'ps') return { stdout: '4100 1\n', stderr: '', exitCode: 0 };
+      if (args.includes('display-message')) {
+        paneRead += 1;
+        if (paneRead > 1) throw new Error('inspection failed');
+        return { stdout: paneOutput(false, 4100, files.recipe.cwd), stderr: '', exitCode: 0 };
+      }
+      if (args.includes('show-options')) return { stdout: 'off\n', stderr: '', exitCode: 0 };
+      if (args.includes('set-option'))
+        return args.at(-1) === 'off'
+          ? { stdout: '', stderr: 'restore failed', exitCode: 1 }
+          : { stdout: '', stderr: '', exitCode: 0 };
+      return { stdout: '', stderr: 'unexpected', exitCode: 1 };
+    });
+
+    await expect(
+      restartSessionDeckRuntime(
+        {
+          runtimeId: RUNTIME_ID,
+          generation: createRestartGeneration(RUNTIME_ID, 4100, OLD_MARKER),
+          operationId: 'operation-restore-failed',
+        },
+        {
+          restartDirectory: files.restartDirectory,
+          presenceDirectory: files.presenceDirectory,
+          identityDirectory: files.identityDirectory,
+          currentPid: 999,
+          exec,
+          signal,
+          readPidStartedAt: async (pid) => (pid === 999 ? '2026-07-31T00:00:30.000Z' : OLD_MARKER),
+        },
+      ),
+    ).rejects.toThrow('remain-on-exit-restore-failed');
+    expect(signal).not.toHaveBeenCalled();
+    await expect(readRestartJournal(RUNTIME_ID, files.restartDirectory)).resolves.toMatchObject({
+      state: 'preparing',
+      previousRemainOnExit: { explicit: true, value: 'off' },
+    });
   });
 
   it('does not declare exit, send KILL, or respawn when the post-TERM PID probe is unverified', async () => {
@@ -565,25 +676,48 @@ describe('restart lifecycle', () => {
     expect(signal).not.toHaveBeenCalled();
   });
 
-  it('returns outcome-unknown when the operation deadline expires after respawn is requested', async () => {
+  it('cancels and settles a timed-out respawn before returning outcome-unknown', async () => {
     const files = await fixture();
     let oldAlive = true;
     let paneDead = false;
-    const exec = vi.fn(async (file: string, args: readonly string[]) => {
-      if (file === 'ps') return { stdout: '4100 1\n', stderr: '', exitCode: 0 };
-      if (args.includes('display-message'))
-        return { stdout: paneOutput(paneDead, 4100, files.recipe.cwd), stderr: '', exitCode: 0 };
-      if (args.includes('show-options'))
-        return args.includes('-A')
-          ? { stdout: 'off\n', stderr: '', exitCode: 0 }
-          : { stdout: '', stderr: '', exitCode: 0 };
-      if (args.includes('set-option')) return { stdout: '', stderr: '', exitCode: 0 };
-      if (args.includes('respawn-pane')) return await new Promise<never>(() => undefined);
-      return { stdout: '', stderr: 'unexpected', exitCode: 1 };
+    let respawnAborted = false;
+    let respawnSettled = false;
+    let resolveRespawnStarted: () => void = () => undefined;
+    const respawnStarted = new Promise<void>((resolve) => {
+      resolveRespawnStarted = resolve;
     });
+    const internalOperationMs = 25;
+    const exec = vi.fn(
+      async (file: string, args: readonly string[], options: { signal: AbortSignal }) => {
+        if (file === 'ps') return { stdout: '4100 1\n', stderr: '', exitCode: 0 };
+        if (args.includes('display-message'))
+          return { stdout: paneOutput(paneDead, 4100, files.recipe.cwd), stderr: '', exitCode: 0 };
+        if (args.includes('show-options'))
+          return args.includes('-A')
+            ? { stdout: 'off\n', stderr: '', exitCode: 0 }
+            : { stdout: '', stderr: '', exitCode: 0 };
+        if (args.includes('set-option')) return { stdout: '', stderr: '', exitCode: 0 };
+        if (args.includes('respawn-pane')) {
+          resolveRespawnStarted();
+          return await new Promise<{ stdout: string; stderr: string; exitCode: number }>(
+            (resolve) => {
+              options.signal.addEventListener('abort', () => {
+                respawnAborted = true;
+                queueMicrotask(() => {
+                  respawnSettled = true;
+                  resolve({ stdout: '', stderr: 'aborted', exitCode: 1 });
+                });
+              });
+            },
+          );
+        }
+        return { stdout: '', stderr: 'unexpected', exitCode: 1 };
+      },
+    );
 
-    await expect(
-      restartSessionDeckRuntime(
+    vi.useFakeTimers();
+    try {
+      const operation = restartSessionDeckRuntime(
         {
           runtimeId: RUNTIME_ID,
           generation: createRestartGeneration(RUNTIME_ID, 4100, OLD_MARKER),
@@ -604,14 +738,250 @@ describe('restart lifecycle', () => {
           sleep: async () => undefined,
           termGraceMs: 1,
           paneDeadWaitMs: 1,
-          internalOperationMs: 25,
+          internalOperationMs,
+        },
+      );
+      await respawnStarted;
+      await vi.advanceTimersByTimeAsync(internalOperationMs);
+      await expect(operation).resolves.toMatchObject({
+        status: 'outcome-unknown',
+        reason: 'operation-state-unknown',
+        retryable: true,
+      });
+      expect(respawnAborted).toBe(true);
+      expect(respawnSettled).toBe(true);
+      await expect(
+        readFile(getRestartLockPath(RUNTIME_ID, files.restartDirectory), 'utf8'),
+      ).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['spawn-requested', 'observing', 'outcome-unknown'] as const)(
+    'continues the same %s operation from a dead retained pane without another signal',
+    async (state) => {
+      const files = await fixture();
+      await writeRestartJournal(
+        {
+          schemaVersion: 1,
+          runtimeId: RUNTIME_ID,
+          generation: createRestartGeneration(RUNTIME_ID, 4100, OLD_MARKER),
+          operationId: `operation-reconcile-${state}`,
+          state,
+          coordinator: { pid: 888, osProcessStartedAt: OLD_MARKER },
+          oldPid: 4100,
+          oldOsProcessStartedAt: OLD_MARKER,
+          oldPresenceStartedAt: '2026-07-31T00:00:01.000Z',
+          previousRemainOnExit: { explicit: false },
+          pane: {
+            id: '%1',
+            socketPath: '/tmp/tmux-501/default',
+            sessionName: 'pi-managed-test',
+            windowIndex: 0,
+            paneIndex: 0,
+          },
+          updatedAt: NEW_MARKER,
+          ...(state === 'outcome-unknown'
+            ? { messageCode: 'replacement-unobserved' as const }
+            : {}),
+        } as RestartJournalV1,
+        files.restartDirectory,
+      );
+      const signal = vi.fn();
+      const exec = vi.fn(async (_file: string, args: readonly string[]) => {
+        if (args.includes('display-message'))
+          return { stdout: paneOutput(true, 4100, files.recipe.cwd), stderr: '', exitCode: 0 };
+        if (args.includes('respawn-pane'))
+          return { stdout: '', stderr: 'forced failure', exitCode: 1 };
+        return { stdout: '', stderr: 'unexpected', exitCode: 1 };
+      });
+
+      const response = await restartSessionDeckRuntime(
+        {
+          runtimeId: RUNTIME_ID,
+          generation: createRestartGeneration(RUNTIME_ID, 4100, OLD_MARKER),
+          operationId: `operation-reconcile-${state}`,
+        },
+        {
+          restartDirectory: files.restartDirectory,
+          currentPid: 999,
+          exec,
+          signal,
+          readPidStartedAt: async (pid) => (pid === 999 ? '2026-07-31T00:00:30.000Z' : null),
+          probePidExists: () => ({ exists: false }),
+          sleep: async () => undefined,
+          observeMs: 1,
+        },
+      );
+
+      expect(response).toMatchObject({
+        status: 'stopped-not-restarted',
+        reason: 'respawn-failed',
+      });
+      expect(signal).not.toHaveBeenCalled();
+      expect(exec.mock.calls.filter(([, args]) => args.includes('respawn-pane'))).toHaveLength(1);
+    },
+  );
+
+  it('continues after an immediately exited replacement leaves the retained pane dead', async () => {
+    const files = await fixture();
+    await writeRestartRecipe(
+      {
+        ...files.recipe,
+        binding: {
+          ...files.recipe.binding!,
+          pid: 4200,
+          osProcessStartedAt: NEW_MARKER,
+          boundAt: NEW_MARKER,
+        },
+      },
+      files.restartDirectory,
+    );
+    await writeRestartJournal(
+      {
+        schemaVersion: 1,
+        runtimeId: RUNTIME_ID,
+        generation: createRestartGeneration(RUNTIME_ID, 4100, OLD_MARKER),
+        operationId: 'operation-exited-replacement',
+        state: 'observing',
+        coordinator: { pid: 888, osProcessStartedAt: OLD_MARKER },
+        oldPid: 4100,
+        oldOsProcessStartedAt: OLD_MARKER,
+        oldPresenceStartedAt: '2026-07-31T00:00:01.000Z',
+        previousRemainOnExit: { explicit: false },
+        pane: {
+          id: '%1',
+          socketPath: '/tmp/tmux-501/default',
+          sessionName: 'pi-managed-test',
+          windowIndex: 0,
+          paneIndex: 0,
+        },
+        updatedAt: NEW_MARKER,
+      },
+      files.restartDirectory,
+    );
+    const signal = vi.fn();
+    const exec = vi.fn(async (_file: string, args: readonly string[]) => {
+      if (args.includes('display-message'))
+        return { stdout: paneOutput(true, 4200, files.recipe.cwd), stderr: '', exitCode: 0 };
+      if (args.includes('respawn-pane'))
+        return { stdout: '', stderr: 'forced failure', exitCode: 1 };
+      return { stdout: '', stderr: 'unexpected', exitCode: 1 };
+    });
+
+    await expect(
+      restartSessionDeckRuntime(
+        {
+          runtimeId: RUNTIME_ID,
+          generation: createRestartGeneration(RUNTIME_ID, 4100, OLD_MARKER),
+          operationId: 'operation-exited-replacement',
+        },
+        {
+          restartDirectory: files.restartDirectory,
+          currentPid: 999,
+          exec,
+          signal,
+          readPidStartedAt: async (pid) => (pid === 999 ? '2026-07-31T00:00:30.000Z' : null),
+          probePidExists: () => ({ exists: false }),
+          sleep: async () => undefined,
+          observeMs: 1,
+        },
+      ),
+    ).resolves.toMatchObject({ status: 'stopped-not-restarted', reason: 'respawn-failed' });
+    expect(signal).not.toHaveBeenCalled();
+  });
+
+  it('uses persisted spawn-requested state when a stopped retry throws after the spawn transition', async () => {
+    const files = await fixture();
+    await writeRestartJournal(
+      {
+        schemaVersion: 1,
+        runtimeId: RUNTIME_ID,
+        generation: createRestartGeneration(RUNTIME_ID, 4100, OLD_MARKER),
+        operationId: 'operation-retry-throws',
+        state: 'stopped-not-restarted',
+        coordinator: { pid: 888, osProcessStartedAt: OLD_MARKER },
+        oldPid: 4100,
+        oldOsProcessStartedAt: OLD_MARKER,
+        oldPresenceStartedAt: '2026-07-31T00:00:01.000Z',
+        previousRemainOnExit: { explicit: false },
+        pane: {
+          id: '%1',
+          socketPath: '/tmp/tmux-501/default',
+          sessionName: 'pi-managed-test',
+          windowIndex: 0,
+          paneIndex: 0,
+        },
+        updatedAt: NEW_MARKER,
+        messageCode: 'respawn-failed',
+      },
+      files.restartDirectory,
+    );
+    const signal = vi.fn();
+    const exec = vi.fn(async (_file: string, args: readonly string[]) => {
+      if (args.includes('display-message'))
+        return { stdout: paneOutput(true, 4100, files.recipe.cwd), stderr: '', exitCode: 0 };
+      if (args.includes('respawn-pane')) throw new Error('executor failed');
+      if (args.includes('set-option')) return { stdout: '', stderr: '', exitCode: 0 };
+      return { stdout: '', stderr: 'unexpected', exitCode: 1 };
+    });
+
+    await expect(
+      restartSessionDeckRuntime(
+        {
+          runtimeId: RUNTIME_ID,
+          generation: createRestartGeneration(RUNTIME_ID, 4100, OLD_MARKER),
+          operationId: 'operation-retry-throws',
+        },
+        {
+          restartDirectory: files.restartDirectory,
+          currentPid: 999,
+          exec,
+          signal,
+          readPidStartedAt: async (pid) => (pid === 999 ? '2026-07-31T00:00:30.000Z' : null),
+          probePidExists: () => ({ exists: false }),
         },
       ),
     ).resolves.toMatchObject({
       status: 'outcome-unknown',
       reason: 'operation-state-unknown',
-      retryable: true,
     });
+    expect(signal).not.toHaveBeenCalled();
+    await expect(readRestartJournal(RUNTIME_ID, files.restartDirectory)).resolves.toMatchObject({
+      state: 'outcome-unknown',
+      messageCode: 'operation-state-unknown',
+    });
+  });
+
+  it('fails closed on an invalid journal before tmux inspection or signaling', async () => {
+    const files = await fixture();
+    const journalPath = getRestartJournalPath(RUNTIME_ID, files.restartDirectory);
+    await mkdir(join(files.restartDirectory, 'journals'), { recursive: true, mode: 0o700 });
+    await writeFile(journalPath, '{not-json', { mode: 0o600 });
+    const signal = vi.fn();
+    const exec = vi.fn();
+
+    await expect(
+      restartSessionDeckRuntime(
+        {
+          runtimeId: RUNTIME_ID,
+          generation: createRestartGeneration(RUNTIME_ID, 4100, OLD_MARKER),
+          operationId: 'operation-invalid-journal',
+        },
+        {
+          restartDirectory: files.restartDirectory,
+          currentPid: 999,
+          exec,
+          signal,
+          readPidStartedAt: async (pid) => (pid === 999 ? '2026-07-31T00:00:30.000Z' : OLD_MARKER),
+        },
+      ),
+    ).rejects.toThrow('invalid-restart-journal');
+    expect(signal).not.toHaveBeenCalled();
+    expect(exec).not.toHaveBeenCalled();
   });
 
   it('reconciles a same-PID replacement after an unknown outcome when its start marker changes', async () => {
@@ -656,6 +1026,7 @@ describe('restart lifecycle', () => {
           paneIndex: 0,
         },
         updatedAt: NEW_MARKER,
+        messageCode: 'replacement-unobserved',
       },
       files.restartDirectory,
     );

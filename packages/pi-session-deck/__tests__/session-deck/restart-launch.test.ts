@@ -1,8 +1,13 @@
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { launchDetachedTmuxPiForCwd } from '../../extensions/session-deck/worktree/launch.js';
+import { writeRestartRecipe } from '../../extensions/session-deck/restart/store.js';
 import type { ManagedRestartRecipeV1 } from '../../extensions/session-deck/restart/types.js';
+import { launchDetachedTmuxPiForCwd } from '../../extensions/session-deck/worktree/launch.js';
 
 const RUNTIME_ID = '123e4567-e89b-42d3-a456-426614174000';
+const MANAGED_LAUNCH_SECRET = 'managed-launch-secret-sentinel';
 
 describe('managed restart launch recipe', () => {
   it('writes the fixed private recipe before tmux spawn and passes the assigned runtime id', async () => {
@@ -35,6 +40,7 @@ describe('managed restart launch recipe', () => {
           PATH: '/opt/pi/bin:/usr/bin',
           PI_CODING_AGENT_DIR: '/Users/test/.pi/agent-custom',
           PI_CODING_AGENT_SESSION_DIR: '/Users/test/.pi/sessions-custom',
+          OPENAI_API_KEY: MANAGED_LAUNCH_SECRET,
         },
         postLaunchVerifyDelayMs: 0,
         randomUUID: () => RUNTIME_ID,
@@ -58,5 +64,33 @@ describe('managed restart launch recipe', () => {
       cwd: '/tmp/project',
       tmux: { socketSelector: 'name:default', windowIndex: 0, paneIndex: 0 },
     });
+    expect(JSON.stringify(recipe)).not.toContain(MANAGED_LAUNCH_SECRET);
+  });
+
+  it('rejects an invalid managed recipe before tmux spawn', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'session-deck-invalid-managed-launch-'));
+    const execFile = vi.fn(async (file: string, args: readonly string[]) => {
+      if (file === 'tmux' && args[0] === '-V')
+        return { stdout: 'tmux 3.7b\n', stderr: '', exitCode: 0 };
+      if (file === 'which') return { stdout: '/opt/pi/bin/pi\n', stderr: '', exitCode: 0 };
+      if (file === 'tmux' && args[0] === 'has-session')
+        return { stdout: '', stderr: '', exitCode: 1 };
+      return { stdout: '', stderr: 'unexpected', exitCode: 1 };
+    });
+
+    await expect(
+      launchDetachedTmuxPiForCwd({ cwd: '/tmp/project', repoName: 'project' }, 'project', {
+        execFile,
+        env: {
+          PATH: '/opt/pi/bin:/usr/bin',
+          PI_CODING_AGENT_DIR: 'relative-agent-dir',
+        },
+        randomUUID: () => RUNTIME_ID,
+        writeRestartRecipe: async (recipe) => writeRestartRecipe(recipe, directory),
+      }),
+    ).resolves.toMatchObject({ ok: false, reason: 'spawn-failed' });
+    expect(
+      execFile.mock.calls.some(([file, args]) => file === 'tmux' && args[0] === 'new-session'),
+    ).toBe(false);
   });
 });

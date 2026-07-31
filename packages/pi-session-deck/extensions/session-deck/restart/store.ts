@@ -72,7 +72,9 @@ export async function writeRestartRecipe(
   recipe: ManagedRestartRecipeV1,
   directory = getDefaultRestartDirectory(),
 ): Promise<void> {
-  await writePrivateJson(getRestartRecipePath(recipe.runtimeId, directory), recipe);
+  const normalized = normalizeManagedRestartRecipe(jsonRoundTrip(recipe), recipe.runtimeId);
+  if (normalized === null) throw new Error('invalid-restart-recipe');
+  await writePrivateJson(getRestartRecipePath(recipe.runtimeId, directory), normalized);
 }
 
 export async function readRestartRecipe(
@@ -103,17 +105,21 @@ export async function writeRestartJournal(
   journal: RestartJournalV1,
   directory = getDefaultRestartDirectory(),
 ): Promise<void> {
-  await writePrivateJson(getRestartJournalPath(journal.runtimeId, directory), journal);
+  const normalized = normalizeRestartJournal(jsonRoundTrip(journal), journal.runtimeId);
+  if (normalized === null) throw new Error('invalid-restart-journal');
+  await writePrivateJson(getRestartJournalPath(journal.runtimeId, directory), normalized);
 }
 
 export async function readRestartJournal(
   runtimeId: string,
   directory = getDefaultRestartDirectory(),
 ): Promise<RestartJournalV1 | null> {
-  return normalizeRestartJournal(
-    await readOwnedJson(getRestartJournalPath(runtimeId, directory)),
-    runtimeId,
-  );
+  const read = await readOwnedJsonResult(getRestartJournalPath(runtimeId, directory));
+  if (read.status === 'absent') return null;
+  if (read.status === 'invalid') throw new Error('invalid-restart-journal');
+  const journal = normalizeRestartJournal(read.value, runtimeId);
+  if (journal === null) throw new Error('invalid-restart-journal');
+  return journal;
 }
 
 export async function writePrivateJson(path: string, value: unknown): Promise<void> {
@@ -136,11 +142,37 @@ export async function writePrivateJson(path: string, value: unknown): Promise<vo
   }
 }
 
+type OwnedJsonRead =
+  | { status: 'absent' }
+  | { status: 'invalid' }
+  | { status: 'value'; value: unknown };
+
 async function readOwnedJson(path: string): Promise<unknown> {
+  const read = await readOwnedJsonResult(path);
+  return read.status === 'value' ? read.value : null;
+}
+
+async function readOwnedJsonResult(path: string): Promise<OwnedJsonRead> {
+  let info;
   try {
-    const info = await stat(path);
-    if (!info.isFile() || !isCurrentUserOwned(info.uid) || (info.mode & 0o077) !== 0) return null;
-    return JSON.parse(await readFile(path, 'utf8')) as unknown;
+    info = await stat(path);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT'
+      ? { status: 'absent' }
+      : { status: 'invalid' };
+  }
+  if (!info.isFile() || !isCurrentUserOwned(info.uid) || (info.mode & 0o077) !== 0)
+    return { status: 'invalid' };
+  try {
+    return { status: 'value', value: JSON.parse(await readFile(path, 'utf8')) as unknown };
+  } catch {
+    return { status: 'invalid' };
+  }
+}
+
+function jsonRoundTrip(value: unknown): unknown {
+  try {
+    return JSON.parse(JSON.stringify(value)) as unknown;
   } catch {
     return null;
   }
@@ -245,6 +277,7 @@ function normalizeRestartJournal(candidate: unknown, runtimeId: string): Restart
     return null;
   const generation = candidate['generation'];
   const operationId = candidate['operationId'];
+  const state = candidate['state'];
   const coordinator = candidate['coordinator'];
   if (
     typeof generation !== 'string' ||
@@ -252,7 +285,7 @@ function normalizeRestartJournal(candidate: unknown, runtimeId: string): Restart
     generation.length > 128 ||
     typeof operationId !== 'string' ||
     !OPERATION_ID_PATTERN.test(operationId) ||
-    !isRestartState(candidate['state']) ||
+    !isRestartState(state) ||
     !isRecord(coordinator) ||
     !hasOnlyKeys(coordinator, ['pid', 'osProcessStartedAt']) ||
     !isPositiveInteger(coordinator['pid']) ||
@@ -263,7 +296,12 @@ function normalizeRestartJournal(candidate: unknown, runtimeId: string): Restart
     !isIsoDate(candidate['updatedAt']) ||
     !isPreviousRemainOnExit(candidate['previousRemainOnExit']) ||
     !isJournalPane(candidate['pane']) ||
-    (candidate['messageCode'] !== undefined && !isRestartReasonCode(candidate['messageCode']))
+    candidate['pane'] === undefined ||
+    (state !== 'preparing' && candidate['previousRemainOnExit'] === undefined) ||
+    (candidate['messageCode'] !== undefined && !isRestartReasonCode(candidate['messageCode'])) ||
+    (isTerminalJournalState(state)
+      ? candidate['messageCode'] === undefined
+      : candidate['messageCode'] !== undefined)
   )
     return null;
   return candidate as unknown as RestartJournalV1;
@@ -356,6 +394,9 @@ function isJournalPane(value: unknown): boolean {
       isNonNegativeInteger(value['paneIndex']))
   );
 }
+function isTerminalJournalState(state: RestartJournalV1['state']): boolean {
+  return ['restarted', 'stop-failed', 'stopped-not-restarted', 'outcome-unknown'].includes(state);
+}
 function isRestartReasonCode(value: unknown): boolean {
   return (
     typeof value === 'string' &&
@@ -387,7 +428,7 @@ function isRestartReasonCode(value: unknown): boolean {
 function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
   return Object.keys(value).every((key) => allowed.includes(key));
 }
-function isRestartState(value: unknown): boolean {
+function isRestartState(value: unknown): value is RestartJournalV1['state'] {
   return (
     typeof value === 'string' &&
     [

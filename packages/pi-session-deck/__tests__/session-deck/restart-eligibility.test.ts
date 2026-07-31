@@ -2,6 +2,8 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import type { SessionTmuxTerminalMetadata } from '../../extensions/session-deck/identity/types.js';
+import type { RestartEligibilityObservation } from '../../extensions/session-deck/restart/eligibility.js';
 import { readRestartEligibility } from '../../extensions/session-deck/restart/eligibility.js';
 import {
   createRestartGeneration,
@@ -12,7 +14,7 @@ import {
 const RUNTIME_ID = '123e4567-e89b-42d3-a456-426614174000';
 const MARKER = '2026-07-31T00:00:00.000Z';
 
-async function fixture() {
+async function fixture(socketSelector = 'name:default') {
   const directory = await mkdtemp(join(tmpdir(), 'session-deck-restart-eligibility-'));
   await writeRestartRecipe(
     {
@@ -25,7 +27,7 @@ async function fixture() {
       },
       cwd: '/tmp/project',
       tmux: {
-        socketSelector: 'name:default',
+        socketSelector,
         sessionName: 'pi-project',
         windowIndex: 0,
         paneIndex: 0,
@@ -44,14 +46,14 @@ async function fixture() {
   return directory;
 }
 
-const observed = {
+const observed: RestartEligibilityObservation = {
   pid: 42,
   sessionId: 'session-1',
   sessionFile: '/tmp/session-1.jsonl',
   cwd: '/tmp/project',
   processPid: 42,
   terminal: {
-    kind: 'tmux' as const,
+    kind: 'tmux',
     socketPath: '/tmp/tmux-501/default',
     sessionName: 'pi-project',
     windowIndex: 0,
@@ -60,23 +62,117 @@ const observed = {
   },
 };
 
+function withTmuxTerminal(
+  value: RestartEligibilityObservation,
+  overrides: Partial<SessionTmuxTerminalMetadata>,
+): RestartEligibilityObservation {
+  if (value.terminal?.kind !== 'tmux') throw new Error('Expected a tmux observation.');
+  return { ...value, terminal: { ...value.terminal, ...overrides } };
+}
+
+const selectorCases = [
+  { label: 'name', selector: 'name:default', socketPath: '/tmp/tmux-501/default' },
+  {
+    label: 'path',
+    selector: 'path:/tmp/tmux-501/private',
+    socketPath: '/tmp/tmux-501/private',
+  },
+] as const;
+
+const mismatchCases = [
+  { label: 'pid', mutate: (value: RestartEligibilityObservation) => ({ ...value, pid: 43 }) },
+  {
+    label: 'session id',
+    mutate: (value: RestartEligibilityObservation) => ({ ...value, sessionId: 'session-2' }),
+  },
+  {
+    label: 'session file',
+    mutate: (value: RestartEligibilityObservation) => ({
+      ...value,
+      sessionFile: '/tmp/session-2.jsonl',
+    }),
+  },
+  {
+    label: 'cwd',
+    mutate: (value: RestartEligibilityObservation) => ({ ...value, cwd: '/tmp/other' }),
+  },
+  {
+    label: 'process pid',
+    mutate: (value: RestartEligibilityObservation) => ({ ...value, processPid: 43 }),
+  },
+  {
+    label: 'terminal kind',
+    mutate: (value: RestartEligibilityObservation) => ({
+      ...value,
+      terminal: {
+        kind: 'iterm2' as const,
+        sessionId: 'iterm-session',
+        revealUrl: 'iterm2:///reveal',
+      },
+    }),
+  },
+  {
+    label: 'tmux session name',
+    mutate: (value: RestartEligibilityObservation) =>
+      withTmuxTerminal(value, { sessionName: 'other-session' }),
+  },
+  {
+    label: 'tmux window index',
+    mutate: (value: RestartEligibilityObservation) => withTmuxTerminal(value, { windowIndex: 1 }),
+  },
+  {
+    label: 'tmux pane index',
+    mutate: (value: RestartEligibilityObservation) => withTmuxTerminal(value, { paneIndex: 1 }),
+  },
+  {
+    label: 'tmux pane pid',
+    mutate: (value: RestartEligibilityObservation) => withTmuxTerminal(value, { panePid: 43 }),
+  },
+  {
+    label: 'tmux socket path',
+    mutate: (value: RestartEligibilityObservation) =>
+      withTmuxTerminal(value, { socketPath: '/tmp/tmux-501/other' }),
+  },
+] as const;
+
 describe('restart eligibility', () => {
-  it('requires the currently observed identity, pane, and OS generation to match the binding', async () => {
+  it.each(selectorCases)(
+    'accepts matching $label tmux socket selectors',
+    async ({ selector, socketPath }) => {
+      const directory = await fixture(selector);
+      const current = withTmuxTerminal(observed, { socketPath });
+      await expect(
+        readRestartEligibility(RUNTIME_ID, {
+          directory,
+          observed: current,
+          readPidStartedAt: async () => MARKER,
+          readDescendantPids: async () => [],
+        }),
+      ).resolves.toMatchObject({ available: true });
+    },
+  );
+
+  it.each(
+    selectorCases.flatMap((selectorCase) =>
+      mismatchCases.map((mismatchCase) => ({ ...selectorCase, ...mismatchCase })),
+    ),
+  )(
+    'rejects a $label mismatch for the $selector selector',
+    async ({ selector, socketPath, mutate }) => {
+      const directory = await fixture(selector);
+      const current = withTmuxTerminal(observed, { socketPath });
+      await expect(
+        readRestartEligibility(RUNTIME_ID, {
+          directory,
+          observed: mutate(current),
+          readPidStartedAt: async () => MARKER,
+        }),
+      ).resolves.toEqual({ available: false, reason: 'identity-mismatch' });
+    },
+  );
+
+  it('rejects a changed OS process generation', async () => {
     const directory = await fixture();
-    await expect(
-      readRestartEligibility(RUNTIME_ID, {
-        directory,
-        observed,
-        readPidStartedAt: async () => MARKER,
-      }),
-    ).resolves.toMatchObject({ available: true });
-    await expect(
-      readRestartEligibility(RUNTIME_ID, {
-        directory,
-        observed: { ...observed, pid: 43 },
-        readPidStartedAt: async () => MARKER,
-      }),
-    ).resolves.toEqual({ available: false, reason: 'identity-mismatch' });
     await expect(
       readRestartEligibility(RUNTIME_ID, {
         directory,
@@ -121,7 +217,16 @@ describe('restart eligibility', () => {
         oldPid: 42,
         oldOsProcessStartedAt: MARKER,
         oldPresenceStartedAt: MARKER,
+        previousRemainOnExit: { explicit: false },
+        pane: {
+          id: '%1',
+          socketPath: '/tmp/tmux-501/default',
+          sessionName: 'pi-test',
+          windowIndex: 0,
+          paneIndex: 0,
+        },
         updatedAt: MARKER,
+        messageCode: 'replacement-unobserved',
       },
       directory,
     );
