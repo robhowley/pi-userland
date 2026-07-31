@@ -1168,6 +1168,9 @@ async function removeReclaimableRuntimeLock(path: string, expected: RuntimeLock)
       current === null ||
       current.device !== expected.device ||
       current.inode !== expected.inode ||
+      current.owner === null ||
+      expected.owner === null ||
+      !lockOwnersEqual(current.owner, expected.owner) ||
       witness.dev !== expected.device ||
       witness.ino !== expected.inode ||
       witness.nlink !== 2
