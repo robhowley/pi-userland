@@ -102,6 +102,14 @@ pub struct KillSessionRequest {
     pub runtime_id: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RestartSessionRequest {
+    pub runtime_id: String,
+    pub generation: String,
+    pub operation_id: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OperationStatus {
@@ -214,6 +222,17 @@ impl KillSessionRequest {
     }
 }
 
+impl RestartSessionRequest {
+    pub fn validate(&self) -> Result<(), CommandError> {
+        validate_runtime_id(&self.runtime_id)?;
+        if !is_uuid_v4(&self.runtime_id) {
+            return Err(CommandError::new("runtimeId must be a UUID v4."));
+        }
+        validate_opaque_token("generation", &self.generation, 16, 128)?;
+        validate_opaque_token("operationId", &self.operation_id, 1, 128)
+    }
+}
+
 #[tauri::command]
 pub async fn load_snapshot() -> Result<Value, String> {
     run_blocking(helper_runner::load_snapshot).await
@@ -251,6 +270,11 @@ pub async fn open_terminal(request: OpenTerminalRequest) -> Result<Value, Comman
 #[tauri::command]
 pub async fn kill_session(request: KillSessionRequest) -> Result<Value, CommandErrorPayload> {
     run_mutating_blocking(move || helper_runner::kill_session(request)).await
+}
+
+#[tauri::command]
+pub async fn restart_session(request: RestartSessionRequest) -> Result<Value, CommandErrorPayload> {
+    run_mutating_blocking(move || helper_runner::restart_session(request)).await
 }
 
 #[tauri::command]
@@ -325,6 +349,35 @@ fn validate_cwd(cwd: &str) -> Result<(), CommandError> {
         ));
     }
 
+    Ok(())
+}
+
+fn is_uuid_v4(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 36
+        && [8, 13, 18, 23].iter().all(|index| bytes[*index] == b'-')
+        && bytes[14] == b'4'
+        && matches!(bytes[19].to_ascii_lowercase(), b'8' | b'9' | b'a' | b'b')
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| [8, 13, 18, 23].contains(&index) || byte.is_ascii_hexdigit())
+}
+
+fn validate_opaque_token(
+    field: &str,
+    value: &str,
+    min_length: usize,
+    max_length: usize,
+) -> Result<(), CommandError> {
+    if value.len() < min_length
+        || value.len() > max_length
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(CommandError::new(format!("{field} is invalid.")));
+    }
     Ok(())
 }
 
@@ -417,6 +470,7 @@ mod tests {
     use super::{
         CreateSessionAction, CreateSessionRequest, CreateWorktreeRequest, KillSessionRequest,
         LaunchAgentDirMode, LaunchMode, OpenTerminalRequest, PreviewWorktreeLaunchContextRequest,
+        RestartSessionRequest,
     };
     use serde_json::json;
 
@@ -524,6 +578,32 @@ mod tests {
             error.into_public_message(),
             "runtimeId must be a safe identity segment."
         );
+    }
+
+    #[test]
+    fn restart_session_accepts_only_browser_safe_identity_tokens() {
+        let request: RestartSessionRequest = serde_json::from_value(json!({
+            "runtimeId": "123e4567-e89b-42d3-a456-426614174000",
+            "generation": "opaque-generation-token",
+            "operationId": "operation-1"
+        }))
+        .unwrap();
+        request.validate().unwrap();
+        assert!(RestartSessionRequest {
+            runtime_id: "legacy-runtime".into(),
+            generation: "opaque-generation-token".into(),
+            operation_id: "operation-1".into(),
+        }
+        .validate()
+        .is_err());
+
+        assert!(serde_json::from_value::<RestartSessionRequest>(json!({
+            "runtimeId": "123e4567-e89b-42d3-a456-426614174000",
+            "generation": "opaque-generation-token",
+            "operationId": "operation-1",
+            "sessionFile": "/private/session.jsonl"
+        }))
+        .is_err());
     }
 
     #[test]

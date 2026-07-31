@@ -1,6 +1,6 @@
 use crate::commands::{
     CreateSessionRequest, CreateWorktreeRequest, KillSessionRequest, OpenTerminalRequest,
-    PreviewWorktreeBaseRefRequest, PreviewWorktreeLaunchContextRequest,
+    PreviewWorktreeBaseRefRequest, PreviewWorktreeLaunchContextRequest, RestartSessionRequest,
 };
 use crate::runtime::{load_runtime_config, RuntimeConfig, OPEN_TERMINAL_ACTION_BRIDGE_SOCKET_ENV};
 use serde::Serialize;
@@ -200,6 +200,115 @@ pub fn open_terminal(request: OpenTerminalRequest) -> Result<Value, CommandError
         })?,
         "Open-terminal action is unavailable. Open desktop diagnostics for details.",
         true,
+    )
+}
+
+pub fn restart_session(request: RestartSessionRequest) -> Result<Value, CommandError> {
+    request.validate()?;
+    let operation_id = request.operation_id.clone();
+    let runtime_config = load_config_for_command()?;
+    match run_action_helper(
+        &runtime_config,
+        &runtime_config.worktree_action_helper_path,
+        json!({
+            "action": "restart-session",
+            "runtimeId": request.runtime_id,
+            "generation": request.generation,
+            "operationId": request.operation_id,
+        }),
+        "Restart-session action is unavailable. Open desktop diagnostics for details.",
+        true,
+    ) {
+        Ok(value) => validate_restart_session_result(value, &operation_id),
+        Err(error) => match &error.payload {
+            CommandErrorPayload::OutcomeUnknown { .. } => Ok(json!({
+                "ok": false,
+                "status": "outcome-unknown",
+                "operationId": operation_id,
+                "reason": "operation-state-unknown",
+                "retryable": true,
+                "message": "Session Deck could not confirm the restart outcome. Reconcile before retrying.",
+            })),
+            _ => Err(error),
+        },
+    }
+}
+
+fn validate_restart_session_result(
+    value: Value,
+    expected_operation_id: &str,
+) -> Result<Value, CommandError> {
+    let Some(result) = value.as_object() else {
+        return Err(invalid_restart_result());
+    };
+    let expected_keys = [
+        "ok",
+        "status",
+        "operationId",
+        "reason",
+        "retryable",
+        "message",
+    ];
+    if result.len() != expected_keys.len()
+        || expected_keys.iter().any(|key| !result.contains_key(*key))
+    {
+        return Err(invalid_restart_result());
+    }
+    let status = result.get("status").and_then(Value::as_str);
+    let valid_status = matches!(
+        status,
+        Some(
+            "restarted"
+                | "not-eligible"
+                | "stale-generation"
+                | "already-in-progress"
+                | "stop-failed"
+                | "stopped-not-restarted"
+                | "outcome-unknown"
+        )
+    );
+    let valid_reason = matches!(
+        result.get("reason").and_then(Value::as_str),
+        Some(
+            "replacement-observed"
+                | "managed-recipe-unavailable"
+                | "recipe-not-bound"
+                | "recipe-invalid"
+                | "runtime-unavailable"
+                | "identity-mismatch"
+                | "session-file-unavailable"
+                | "cwd-unavailable"
+                | "pi-executable-unavailable"
+                | "tmux-target-unavailable"
+                | "tmux-pane-mismatch"
+                | "unsafe-descendants"
+                | "hosting-runtime"
+                | "coordinator-runtime"
+                | "generation-changed"
+                | "operation-in-progress"
+                | "termination-failed"
+                | "pane-did-not-stop"
+                | "respawn-failed"
+                | "replacement-unobserved"
+                | "operation-state-unknown"
+        )
+    );
+    if !valid_status
+        || !valid_reason
+        || result.get("operationId").and_then(Value::as_str) != Some(expected_operation_id)
+        || result.get("retryable").and_then(Value::as_bool).is_none()
+        || result.get("message").and_then(Value::as_str).is_none()
+        || result.get("ok").and_then(Value::as_bool) != Some(status == Some("restarted"))
+    {
+        return Err(invalid_restart_result());
+    }
+    Ok(value)
+}
+
+fn invalid_restart_result() -> CommandError {
+    CommandError::with_detail(
+        "Restart-session action returned an invalid response.",
+        "The helper response did not match the restart-session domain contract.",
     )
 }
 
@@ -526,7 +635,9 @@ fn format_process_detail(stdout: &str, stderr: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{run_helper, CommandError, CommandErrorPayload, HelperSpec};
+    use super::{
+        run_helper, validate_restart_session_result, CommandError, CommandErrorPayload, HelperSpec,
+    };
     use crate::runtime::{EffectiveCommandPath, RuntimeConfig, RuntimeMetadataSource};
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
@@ -613,6 +724,23 @@ mod tests {
         );
         std::thread::sleep(Duration::from_millis(350));
         assert!(!marker_path.exists());
+    }
+
+    #[test]
+    fn restart_result_requires_the_exact_operation_and_domain_shape() {
+        let valid = serde_json::json!({
+            "ok": true,
+            "status": "restarted",
+            "operationId": "operation-1",
+            "reason": "replacement-observed",
+            "retryable": false,
+            "message": "Session restarted."
+        });
+        assert!(validate_restart_session_result(valid.clone(), "operation-1").is_ok());
+        assert!(validate_restart_session_result(valid.clone(), "operation-2").is_err());
+        let mut private = valid;
+        private["sessionFile"] = serde_json::json!("/private/session.jsonl");
+        assert!(validate_restart_session_result(private, "operation-1").is_err());
     }
 
     #[test]

@@ -5,12 +5,20 @@ import { readSessionDeckChips } from './chips/reader.js';
 import { readJoinedSessionView } from './identity/reader.js';
 import type { IdentityFreshnessThresholds } from './identity/types.js';
 import { readPresenceView, type ReadPresenceViewOptions } from './presence/reader.js';
+import type { readPidStartedAt } from './presence/pid.js';
+import { readRestartEligibility } from './restart/eligibility.js';
+import type { readDescendantPids } from './restart/process.js';
+import { readRestartRecoveryRecords } from './restart/recovery.js';
 import type { SessionDeckDiagnostic, SessionDeckRecord, SessionDeckSnapshot } from './types.js';
 
 export interface ReadSessionDeckSnapshotOptions extends ReadPresenceViewOptions {
   identityDirectory?: string;
   activityDirectory?: string;
   chipsDirectory?: string;
+  restartDirectory?: string;
+  hostingRuntimeId?: string;
+  readRestartPidStartedAt?: typeof readPidStartedAt;
+  readRestartDescendantPids?: typeof readDescendantPids;
   identityFreshnessThresholds?: Partial<IdentityFreshnessThresholds>;
   activityThresholds?: Partial<ActivityThresholds>;
 }
@@ -67,39 +75,91 @@ export async function readSessionDeckSnapshot(
   const chipsByRuntimeId = new Map(chipsView.records.map((record) => [record.runtimeId, record]));
 
   const orderedRecords = [...activityView.records].sort(compareSessionDeckRecordsBySnapshotOrder);
+  const restartByRuntimeId = new Map(
+    await Promise.all(
+      orderedRecords.map(
+        async (record) =>
+          [
+            record.runtimeId,
+            await readRestartEligibility(record.runtimeId, {
+              ...(options.restartDirectory === undefined
+                ? {}
+                : { directory: options.restartDirectory }),
+              ...(options.hostingRuntimeId === undefined
+                ? {}
+                : { hostingRuntimeId: options.hostingRuntimeId }),
+              ...(options.readRestartPidStartedAt === undefined
+                ? {}
+                : { readPidStartedAt: options.readRestartPidStartedAt }),
+              ...(options.readRestartDescendantPids === undefined
+                ? {}
+                : { readDescendantPids: options.readRestartDescendantPids }),
+              observed: {
+                pid: record.pid,
+                sessionId: record.sessionId,
+                sessionFile: record.sessionFile,
+                cwd: record.cwd,
+                ...(record.terminal === undefined ? {} : { terminal: record.terminal }),
+                ...(record.runtimeSignals?.process?.pid === undefined
+                  ? {}
+                  : { processPid: record.runtimeSignals.process.pid }),
+              },
+            }),
+          ] as const,
+      ),
+    ),
+  );
+
+  const records: SessionDeckRecord[] = orderedRecords.map((record) => {
+    const chipRecord = chipsByRuntimeId.get(record.runtimeId);
+    return {
+      runtimeId: record.runtimeId,
+      pid: record.pid,
+      presenceState: record.presenceState as SessionDeckRecord['presenceState'],
+      ...(record.presenceReason === undefined ? {} : { presenceReason: record.presenceReason }),
+      heartbeatAgeMs: record.heartbeatAgeMs,
+      sessionId: record.sessionId,
+      sessionName: record.sessionName,
+      repoName: record.repoName ?? getRepoName(record.worktree),
+      qualifiedRepoName: record.qualifiedRepoName,
+      cwd: record.cwd,
+      branch: record.branch,
+      prUrl: record.prUrl,
+      isLinkedWorktree: record.isLinkedWorktree,
+      worktreeLabel: record.worktreeLabel,
+      restart: restartByRuntimeId.get(record.runtimeId) ?? {
+        available: false,
+        reason: 'managed-recipe-unavailable',
+      },
+      ...(record.derivedFacets === undefined ? {} : { derivedFacets: record.derivedFacets }),
+      activityState: record.activityState,
+      activityAgeMs: record.activityAgeMs,
+      currentToolName: record.currentToolName,
+      lastError: record.lastError,
+      compaction: record.compaction,
+      chips: chipRecord?.chips ?? [],
+      diagnostics: [
+        ...record.diagnostics.map(toSessionDeckDiagnostic),
+        ...(chipRecord?.diagnostics.map(toSessionDeckDiagnostic) ?? []),
+      ],
+    };
+  });
+  const recoveryRecords = await readRestartRecoveryRecords(
+    new Set(records.map((record) => record.runtimeId)),
+    {
+      ...(options.restartDirectory === undefined
+        ? {}
+        : { restartDirectory: options.restartDirectory }),
+      ...(options.identityDirectory === undefined
+        ? {}
+        : { identityDirectory: options.identityDirectory }),
+      now,
+    },
+  );
 
   return {
     generatedAt: now.toISOString(),
-    records: orderedRecords.map((record) => {
-      const chipRecord = chipsByRuntimeId.get(record.runtimeId);
-      return {
-        runtimeId: record.runtimeId,
-        pid: record.pid,
-        presenceState: record.presenceState as SessionDeckRecord['presenceState'],
-        ...(record.presenceReason === undefined ? {} : { presenceReason: record.presenceReason }),
-        heartbeatAgeMs: record.heartbeatAgeMs,
-        sessionId: record.sessionId,
-        sessionName: record.sessionName,
-        repoName: record.repoName ?? getRepoName(record.worktree),
-        qualifiedRepoName: record.qualifiedRepoName,
-        cwd: record.cwd,
-        branch: record.branch,
-        prUrl: record.prUrl,
-        isLinkedWorktree: record.isLinkedWorktree,
-        worktreeLabel: record.worktreeLabel,
-        ...(record.derivedFacets === undefined ? {} : { derivedFacets: record.derivedFacets }),
-        activityState: record.activityState,
-        activityAgeMs: record.activityAgeMs,
-        currentToolName: record.currentToolName,
-        lastError: record.lastError,
-        compaction: record.compaction,
-        chips: chipRecord?.chips ?? [],
-        diagnostics: [
-          ...record.diagnostics.map(toSessionDeckDiagnostic),
-          ...(chipRecord?.diagnostics.map(toSessionDeckDiagnostic) ?? []),
-        ],
-      };
-    }),
+    records: [...records, ...recoveryRecords],
     diagnostics: [
       ...activityView.diagnostics.map(toSessionDeckDiagnostic),
       ...chipsView.diagnostics.map(toSessionDeckDiagnostic),

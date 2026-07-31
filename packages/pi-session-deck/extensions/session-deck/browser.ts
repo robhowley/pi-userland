@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { Theme } from '@earendil-works/pi-coding-agent';
 import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from '@mariozechner/pi-tui';
 import {
@@ -21,6 +22,8 @@ import {
   normalizeLaunchAgentDirSelection,
   shortenHomeDir,
 } from './worktree/agent-dir.js';
+import { restartUnavailableMessage } from './restart/eligibility.js';
+import type { RestartSessionRequest, RestartSessionResult } from './restart/types.js';
 import type {
   CreateWorktreeActionRequest,
   CreateWorktreeActionResult,
@@ -125,6 +128,10 @@ export type SessionDeckBrowserKillSelected = (
   record: SessionDeckBrowserRecord,
 ) => Promise<SessionDeckBrowserKillSelectedResult>;
 
+export type SessionDeckBrowserRestartSelected = (
+  request: RestartSessionRequest,
+) => Promise<RestartSessionResult>;
+
 export type SessionDeckBrowserCreateWorktree = (
   request: CreateWorktreeActionRequest,
   onStatus: (update: CreateWorktreeStatusUpdate) => void,
@@ -155,6 +162,13 @@ interface SessionDeckKillConfirm {
   pid: number | null;
 }
 
+interface SessionDeckRestartConfirm {
+  runtimeId: string;
+  generation: string;
+  operationId: string;
+  title: string;
+}
+
 export interface SessionDeckBrowserOptions {
   all: boolean;
   showIdentity: boolean;
@@ -162,6 +176,7 @@ export interface SessionDeckBrowserOptions {
   onClose: () => void;
   openSelected?: SessionDeckBrowserOpenSelected;
   killSelected?: SessionDeckBrowserKillSelected;
+  restartSelected?: SessionDeckBrowserRestartSelected;
   createWorktree?: SessionDeckBrowserCreateWorktree;
   previewLaunchContext?: SessionDeckBrowserPreviewLaunchContext;
   reload: () => Promise<SessionDeckBrowserSnapshot>;
@@ -176,6 +191,7 @@ export class SessionDeckBrowser {
   private readonly onClose: () => void;
   private readonly openSelected: SessionDeckBrowserOpenSelected | null;
   private readonly killSelected: SessionDeckBrowserKillSelected | null;
+  private readonly restartSelected: SessionDeckBrowserRestartSelected | null;
   private readonly createWorktree: SessionDeckBrowserCreateWorktree | null;
   private readonly previewLaunchContext: SessionDeckBrowserPreviewLaunchContext;
   private readonly reload: () => Promise<SessionDeckBrowserSnapshot>;
@@ -190,12 +206,15 @@ export class SessionDeckBrowser {
   private refreshStatus: { message: string; tone: 'muted' | 'warning' } | null = null;
   private openStatus: { message: string; tone: 'muted' | 'warning' } | null = null;
   private killStatus: { message: string; tone: 'muted' | 'warning' } | null = null;
+  private restartStatus: { message: string; tone: 'muted' | 'warning' } | null = null;
   private worktreeStatus: { message: string; tone: 'muted' | 'warning' } | null = null;
   private worktreePrompt: SessionDeckWorktreePrompt | null = null;
   private killConfirm: SessionDeckKillConfirm | null = null;
+  private restartConfirm: SessionDeckRestartConfirm | null = null;
   private refreshPending: Promise<void> | null = null;
   private openPending: Promise<void> | null = null;
   private killPending: Promise<void> | null = null;
+  private restartPending: Promise<void> | null = null;
   private worktreePending: Promise<void> | null = null;
   private isRefreshing = false;
   private autoRefreshInterval: ReturnType<typeof setInterval> | null = null;
@@ -209,6 +228,7 @@ export class SessionDeckBrowser {
     this.onClose = options.onClose;
     this.openSelected = options.openSelected ?? null;
     this.killSelected = options.killSelected ?? null;
+    this.restartSelected = options.restartSelected ?? null;
     this.createWorktree = options.createWorktree ?? null;
     this.previewLaunchContext = options.previewLaunchContext ?? previewLaunchContextFromProcess;
     this.reload = options.reload;
@@ -235,6 +255,11 @@ export class SessionDeckBrowser {
       return;
     }
 
+    if (this.restartConfirm !== null) {
+      this.handleRestartConfirmInput(data);
+      return;
+    }
+
     if (matchesKey(data, 'escape') || matchesKey(data, 'ctrl+c') || data === 'q') {
       this.dispose();
       this.onClose();
@@ -245,6 +270,13 @@ export class SessionDeckBrowser {
       this.detailVisible = !this.detailVisible;
       this.clearStatus();
       this.bump();
+      return;
+    }
+
+    if (data === 'R') {
+      const selection = this.getSelection();
+      const record = selection.records[this.selectedIndex];
+      if (record !== undefined) this.openRestartConfirmation(record);
       return;
     }
 
@@ -317,7 +349,7 @@ export class SessionDeckBrowser {
     );
     const help = this.theme.fg(
       'muted',
-      '↑↓ move · ←→ switch repo · enter details · w new Pi session · o open terminal · k end session · r refresh · q close',
+      '↑↓ move · ←→ switch repo · enter details · w new Pi session · o open · R restart · k end · r refresh · q close',
     );
 
     pushWrappedLine(lines, title, width);
@@ -341,6 +373,14 @@ export class SessionDeckBrowser {
       pushWrappedLine(lines, this.theme.fg(this.killStatus.tone, this.killStatus.message), width);
     }
 
+    if (this.restartStatus !== null) {
+      pushWrappedLine(
+        lines,
+        this.theme.fg(this.restartStatus.tone, this.restartStatus.message),
+        width,
+      );
+    }
+
     if (this.worktreeStatus !== null) {
       pushWrappedLine(
         lines,
@@ -357,6 +397,16 @@ export class SessionDeckBrowser {
 
     if (this.killConfirm !== null) {
       pushWrappedLine(lines, this.theme.fg('warning', this.formatKillConfirmation()), width);
+    }
+    if (this.restartConfirm !== null) {
+      pushWrappedLine(
+        lines,
+        this.theme.fg(
+          'warning',
+          `Restart ${this.restartConfirm.title}? Pi receives TERM, may be force-killed after 2 seconds, and in-flight work can be lost. Enter confirm · esc/q cancel`,
+        ),
+        width,
+      );
     }
 
     if (this.reapLines.length > 0) {
@@ -777,6 +827,79 @@ export class SessionDeckBrowser {
       });
   }
 
+  private openRestartConfirmation(record: SessionDeckBrowserRecord): void {
+    if (this.restartPending !== null) {
+      this.restartStatus = { message: 'A restart is already pending…', tone: 'muted' };
+      this.bump();
+      return;
+    }
+    if (this.restartSelected === null || record.restart?.available !== true) {
+      this.restartStatus = {
+        message:
+          record.restart?.available === false
+            ? restartUnavailableMessage(record.restart.reason)
+            : 'Restart action is unavailable in this context.',
+        tone: 'warning',
+      };
+      this.bump();
+      return;
+    }
+    this.clearStatus();
+    this.restartConfirm = {
+      runtimeId: record.runtimeId,
+      generation: record.restart.generation,
+      operationId: record.restart.operation?.operationId ?? randomUUID(),
+      title: formatSessionDeckBrowserRow(record).title,
+    };
+    this.bump();
+  }
+
+  private handleRestartConfirmInput(data: string): void {
+    if (matchesKey(data, 'escape') || matchesKey(data, 'ctrl+c') || data === 'q') {
+      this.restartConfirm = null;
+      this.restartStatus = { message: 'Restart cancelled.', tone: 'muted' };
+      this.bump();
+      return;
+    }
+    if (matchesKey(data, 'enter') || matchesKey(data, 'return'))
+      void this.submitRestartConfirmation();
+  }
+
+  private async submitRestartConfirmation(): Promise<void> {
+    const confirmation = this.restartConfirm;
+    if (confirmation === null || this.restartSelected === null || this.restartPending !== null)
+      return;
+    this.restartConfirm = null;
+    this.restartStatus = { message: 'Restarting session…', tone: 'muted' };
+    this.bump();
+    this.restartPending = (async () => {
+      try {
+        const response = await this.restartSelected!({
+          runtimeId: confirmation.runtimeId,
+          generation: confirmation.generation,
+          operationId: confirmation.operationId,
+        });
+        if (!this.disposed) {
+          this.restartStatus = {
+            message: response.message,
+            tone: response.ok ? 'muted' : 'warning',
+          };
+          await this.refresh('auto');
+        }
+      } catch (error) {
+        if (!this.disposed)
+          this.restartStatus = {
+            message: `Restart failed: ${getErrorMessage(error)}`,
+            tone: 'warning',
+          };
+      } finally {
+        this.restartPending = null;
+        this.bump();
+      }
+    })();
+    return this.restartPending;
+  }
+
   private openKillConfirmation(record: SessionDeckBrowserRecord): void {
     if (this.killPending !== null) {
       this.killStatus = { message: 'Already requesting session end…', tone: 'muted' };
@@ -1014,6 +1137,17 @@ export class SessionDeckBrowser {
     );
 
     if (
+      this.restartConfirm !== null &&
+      !nextVisibleRecords.some((record) => record.runtimeId === this.restartConfirm?.runtimeId)
+    ) {
+      this.restartConfirm = null;
+      this.restartStatus = {
+        message: 'Restart cancelled; selected session is no longer visible.',
+        tone: 'muted',
+      };
+    }
+
+    if (
       this.killConfirm !== null &&
       !nextVisibleRecords.some((record) => record.runtimeId === this.killConfirm?.runtimeId)
     ) {
@@ -1067,6 +1201,7 @@ export class SessionDeckBrowser {
     this.refreshStatus = null;
     this.openStatus = null;
     this.killStatus = null;
+    this.restartStatus = null;
     this.worktreeStatus = null;
   }
 

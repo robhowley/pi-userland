@@ -5,6 +5,7 @@ import {
   getRequestedAction,
   normalizeActionRequest,
   normalizeLaunchContextPreviewRequest,
+  normalizeRestartActionRequest,
   runCreateSessionAction,
   toBrowserSafeCreateSessionActionResult,
   toBrowserSafeCreateWorktreeActionResult,
@@ -12,7 +13,7 @@ import {
 import type { CreateWorktreeActionResult } from '../../extensions/session-deck/worktree/types.js';
 
 describe('session-deck worktree action cli', () => {
-  it('detects create-session while keeping absent action as create-worktree', () => {
+  it('detects create-session and restart-session while keeping absent action as create-worktree', () => {
     expect(getRequestedAction({ cwd: '/tmp/scratch' })).toEqual({
       ok: true,
       action: 'create-worktree',
@@ -21,6 +22,27 @@ describe('session-deck worktree action cli', () => {
       ok: true,
       action: 'create-session',
     });
+    expect(getRequestedAction({ action: 'restart-session' })).toEqual({
+      ok: true,
+      action: 'restart-session',
+    });
+  });
+
+  it('accepts only the action and browser-safe restart identity tokens', () => {
+    const request = {
+      action: 'restart-session',
+      runtimeId: '123e4567-e89b-42d3-a456-426614174000',
+      generation: 'opaque-generation-token',
+      operationId: 'operation-1',
+    };
+    expect(normalizeRestartActionRequest(request)).toEqual({
+      runtimeId: request.runtimeId,
+      generation: request.generation,
+      operationId: request.operationId,
+    });
+    expect(
+      normalizeRestartActionRequest({ ...request, sessionFile: '/private/session.jsonl' }),
+    ).toBeNull();
   });
 
   it('normalizes create-session cwd and launch agent dir without repo intent', () => {

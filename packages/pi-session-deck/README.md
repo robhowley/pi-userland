@@ -10,11 +10,11 @@ Session Deck turns agents scattered across terminals, repos, worktrees, and back
 
 ## The session lifecycle
 
-* **Launch isolated agents.** Create a branch, Git worktree, and detached tmux session in one flow. The agent can keep working without occupying a terminal tab.
-* **Know what every agent is doing at a glance.** See which agents are working, waiting, or need attention.
-* **Keep work in context.** Sessions stay grouped by repo with their branch, worktree, pull request, status chips, and current activity close at hand.
-* **Return without hunting.** Focus an existing terminal or reattach to the agent's tmux session directly from the deck.
-* **End sessions cleanly.** Stop an agent when its work is done without deleting its session history.
+- **Launch isolated agents.** Create a branch, Git worktree, and detached tmux session in one flow. The agent can keep working without occupying a terminal tab.
+- **Know what every agent is doing at a glance.** See which agents are working, waiting, or need attention.
+- **Keep work in context.** Sessions stay grouped by repo with their branch, worktree, pull request, status chips, and current activity close at hand.
+- **Return without hunting.** Focus an existing terminal or reattach to the agent's tmux session directly from the deck.
+- **End sessions cleanly.** Stop an agent when its work is done without deleting its session history.
 
 Session Deck gives each activity state its own icon, so the deck remains scannable without relying on color alone.
 
@@ -28,13 +28,13 @@ Temporary child runtimes stay folded into their parent session, keeping the deck
 
 Use Session Deck wherever it fits your workflow:
 
-* **Native Pi TUI** for a fast, keyboard-driven view inside Pi.
-* **Desktop app** for a dedicated, always-available session window.
-* **iTerm2 Toolbelt** for an operational sidebar beside your terminals.
+- **Native Pi TUI** for a fast, keyboard-driven view inside Pi.
+- **Desktop app** for a dedicated, always-available session window.
+- **iTerm2 Toolbelt** for an operational sidebar beside your terminals.
 
-Each surface shows the same underlying sessions and gives you the same path through their lifecycle: launch, monitor, reopen, and end.
+Each surface shows the same underlying sessions and gives you the same path through their lifecycle: launch, monitor, reopen, restart, and end.
 
-## Launch, reopen, and end
+## Launch, reopen, restart, and end
 
 Use `w` in the Pi TUI or **＋ New** in the Toolbelt to launch Pi on a new branch. Session Deck creates an isolated Git worktree and detached tmux session, allowing the agent to continue headlessly.
 
@@ -42,7 +42,9 @@ Use `w` in the Pi TUI or **＋ New** in the Toolbelt to launch Pi on a new branc
 
 Use `o` or **↗ Open** to return to an agent. Session Deck focuses its existing iTerm2 session when possible or reattaches to its tmux session. It never launches a duplicate.
 
-Use `k` or **End session** when the agent is done. Its runtime stops, but its session history remains available to Pi.
+Use uppercase `R` or **Restart Session** when a Session Deck-managed tmux Pi is unresponsive. Restart resumes the exact session file in the same pane and keeps its Session Deck runtime ID. It may force-kill Pi after two seconds and can lose in-flight work. Legacy, manual, direct-terminal, self-hosting TUI, and sessions with live child processes are not restartable.
+
+Use `k` or **End session** when the agent is done. Its runtime stops, but its session history remains available to Pi. End Session keeps its existing SIGTERM-only behavior.
 
 ## Installation
 
@@ -103,6 +105,7 @@ Flags can be combined.
 | `enter`   | Toggle session details.                             |
 | `w`       | Launch Pi on a generated worktree in detached tmux. |
 | `o`       | Open or focus the selected agent's terminal.        |
+| `R`       | Restart an eligible managed tmux session.           |
 | `k`       | End the selected session.                           |
 | `r`       | Refresh the deck.                                   |
 | `q`       | Close Session Deck.                                 |
@@ -112,7 +115,8 @@ Flags can be combined.
 
 Session Deck observes operational state, not conversation history.
 
-* It does not persist prompts, transcript content, tool arguments, or tool output.
-* Status chips contain sanitized visible text only.
-* Tool and assistant errors are reduced to compact, safe summaries.
-* JSON output, the desktop app, and the Toolbelt omit raw terminal metadata and tmux attachment details.
+- It does not persist prompts, transcript content, tool arguments, or tool output.
+- Status chips contain sanitized visible text only.
+- Tool and assistant errors are reduced to compact, safe summaries.
+- Managed restart recipes are private user-only files. They contain only the fixed executable/PATH, agent/session directory intent, cwd, exact tmux target, session binding, and process generation needed to restart safely.
+- JSON output, restart results, the desktop app, and the Toolbelt omit recipes, session-file paths, commands, PATH, raw terminal metadata, and tmux attachment details.

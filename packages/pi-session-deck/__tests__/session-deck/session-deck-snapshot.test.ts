@@ -196,6 +196,7 @@ describe('readSessionDeckSnapshot', () => {
         prUrl: 'https://github.com/owner/repo/pull/42',
         isLinkedWorktree: false,
         worktreeLabel: null,
+        restart: { available: false, reason: 'managed-recipe-unavailable' },
         derivedFacets: {
           persistence: 'file_backed',
           rowKind: 'durable_session',

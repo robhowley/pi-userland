@@ -22,6 +22,7 @@ import {
   collectRuntimeSignalsMetadata,
   publishDeckRuntimeEnv,
 } from './identity/runtime-signals.js';
+import { bindManagedRestartRecipe } from './restart/recipe.js';
 import type {
   SessionManagerLike,
   SessionRuntimeSignalsMetadata,
@@ -112,6 +113,10 @@ export default async function (pi: ExtensionAPI): Promise<void> {
       const activityRuntime = await ensureActivityRuntimeStarted(presenceRuntime.runtime.runtimeId);
 
       await identityRuntime.refreshIdentity(event.reason, sessionManager);
+      const identity = identityRuntime.getIdentity();
+      if (identity !== null) {
+        await bindManagedRestartRecipe(identity).catch(() => false);
+      }
       publishDeckRuntimeEnv({
         runtimeId: presenceRuntime.runtime.runtimeId,
         sessionId: sessionManager.getSessionId(),

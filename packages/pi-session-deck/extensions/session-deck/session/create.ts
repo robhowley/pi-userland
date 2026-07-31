@@ -2,6 +2,7 @@ import { stat as defaultStat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, isAbsolute, resolve } from 'node:path';
 import { normalizeLaunchAgentDirSelection } from '../worktree/agent-dir.js';
+import { removeRestartRecipe, writeRestartRecipe } from '../restart/store.js';
 import { resolveGitTopLevel } from '../worktree/git.js';
 import {
   launchDetachedTmuxPiForCwd,
@@ -249,6 +250,9 @@ function buildLaunchOptions(
       ? {}
       : { postLaunchVerifyDelayMs: options.postLaunchVerifyDelayMs }),
     ...(options.randomUUID === undefined ? {} : { randomUUID: options.randomUUID }),
+    writeRestartRecipe: options.writeRestartRecipe ?? ((recipe) => writeRestartRecipe(recipe)),
+    removeRestartRecipe:
+      options.removeRestartRecipe ?? ((runtimeId) => removeRestartRecipe(runtimeId)),
     agentDir,
   };
 }

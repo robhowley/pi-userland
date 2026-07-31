@@ -1,3 +1,4 @@
+import { removeRestartRecipe, writeRestartRecipe } from '../restart/store.js';
 import { normalizeLaunchAgentDirSelection } from './agent-dir.js';
 import { applyGitWorktreePlan, planGitWorktree, type CreateGitWorktreeOptions } from './create.js';
 import {
@@ -108,6 +109,9 @@ export async function orchestrateCreateWorktree(
   options.onStatus?.({ stage: 'starting-pi', message: 'Starting Pi session in tmux…' });
   const launch = await launchDetachedTmuxPi(worktree, normalizedRequest.label, {
     ...options,
+    writeRestartRecipe: options.writeRestartRecipe ?? ((recipe) => writeRestartRecipe(recipe)),
+    removeRestartRecipe:
+      options.removeRestartRecipe ?? ((runtimeId) => removeRestartRecipe(runtimeId)),
     agentDir: normalizedRequest.launch.agentDir,
   });
   if (!launch.ok) {

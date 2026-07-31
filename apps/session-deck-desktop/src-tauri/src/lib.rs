@@ -38,6 +38,7 @@ pub fn run() {
             commands::create_session,
             commands::open_terminal,
             commands::kill_session,
+            commands::restart_session,
             commands::open_external,
             commands::copy_text,
             commands::doctor_status,

@@ -1,5 +1,6 @@
 import { basename } from 'node:path';
 import type { SessionDeckBrowserRecord } from './browser-view.js';
+import { restartUnavailableMessage } from './restart/eligibility.js';
 import type { SessionDeckDiagnostic, SessionDeckRecord, SessionDeckSnapshot } from './types.js';
 
 export interface SessionDeckRecordRenderOptions {
@@ -160,6 +161,8 @@ export function formatSessionDeckBrowserCardLines(
   }
 
   lines.push(formatCardStatusLine(record));
+  if (record.restart?.available === false)
+    lines.push(`restart: ${restartUnavailableMessage(record.restart.reason)}`);
 
   const childRuntimeLine = formatChildRuntimeLine(record);
   if (childRuntimeLine !== null) {

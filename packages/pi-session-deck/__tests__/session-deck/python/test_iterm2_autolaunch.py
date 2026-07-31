@@ -609,6 +609,7 @@ class ImportAndConfigTests(unittest.TestCase):
         )
         self.assertIn("create-session", health["actionCapabilities"])
         self.assertIn("kill-session", health["actionCapabilities"])
+        self.assertIn("restart-session", health["actionCapabilities"])
         self.assertNotIn(effective_command_path.value, json.dumps(health))
 
         with urlopen(f"{base_url}/", timeout=1.0) as response:
@@ -1080,6 +1081,81 @@ class ImportAndConfigTests(unittest.TestCase):
         with self.assertRaises(HTTPError) as raised:
             urlopen(missing_token, timeout=1.0)
         self.assertEqual(raised.exception.code, 403)
+
+    def test_run_restart_session_action_uses_worktree_helper_and_preserves_domain_result(self):
+        fixture = TempRuntime(self)
+        fixture.write_helper("# sentinel\n")
+        config = fixture.config()
+        effective_path = make_effective_command_path("/shell/bin:/usr/bin")
+        captured: dict[str, object] = {}
+        request = {
+            "runtimeId": "123e4567-e89b-42d3-a456-426614174000",
+            "generation": "opaque-generation-token",
+            "operationId": "operation-1",
+        }
+        result = {
+            "ok": True,
+            "status": "restarted",
+            "operationId": "operation-1",
+            "reason": "replacement-observed",
+            "retryable": False,
+            "message": "Session restarted.",
+        }
+
+        def fake_run(args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            return subprocess.CompletedProcess(args, 0, stdout=json.dumps(result), stderr="")
+
+        with mock.patch.object(AUTO.subprocess, "run", side_effect=fake_run):
+            status_code, payload = AUTO.run_restart_session_action(
+                config, json.dumps(request), effective_path
+            )
+
+        self.assertEqual((status_code, payload), (200, result))
+        self.assertEqual(
+            captured["args"],
+            [str(config.runtime.node_executable_path), str(config.runtime.create_worktree_helper_path)],
+        )
+        helper_request = json.loads(captured["kwargs"]["input"])
+        self.assertEqual(helper_request, {**request, "action": "restart-session"})
+        self.assertEqual(
+            captured["kwargs"]["timeout"], AUTO.RESTART_ACTION_HELPER_TIMEOUT_SECONDS
+        )
+        self.assertEqual(captured["kwargs"]["env"]["PATH"], effective_path.value)
+
+    def test_run_restart_session_action_rejects_a_mismatched_operation_id(self):
+        fixture = TempRuntime(self)
+        fixture.write_helper("# sentinel\n")
+        request = {
+            "runtimeId": "123e4567-e89b-42d3-a456-426614174000",
+            "generation": "opaque-generation-token",
+            "operationId": "operation-1",
+        }
+        result = {
+            "ok": True,
+            "status": "restarted",
+            "operationId": "operation-2",
+            "reason": "replacement-observed",
+            "retryable": False,
+            "message": "Session restarted.",
+        }
+
+        with mock.patch.object(
+            AUTO.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess(
+                ["helper"], 0, stdout=json.dumps(result), stderr=""
+            ),
+        ):
+            status_code, payload = AUTO.run_restart_session_action(
+                fixture.config(),
+                json.dumps(request),
+                make_effective_command_path("/usr/bin"),
+            )
+
+        self.assertEqual(status_code, 500)
+        self.assertEqual(payload["ok"], False)
 
     def test_run_kill_session_action_invokes_fixed_helper_argv_with_short_timeout(self):
         fixture = TempRuntime(self)

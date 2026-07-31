@@ -2,6 +2,9 @@
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { orchestrateCreateSession } from '../session/create.js';
+import { restartSessionDeckRuntime } from '../restart/orchestrator.js';
+import { normalizeRestartSessionRequest } from '../restart/store.js';
+import type { RestartSessionRequest, RestartSessionResult } from '../restart/types.js';
 import type {
   BrowserSafeCreateSessionActionResult,
   BrowserSafeCreateSessionLaunchFailure,
@@ -102,6 +105,17 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (action.action === 'restart-session') {
+    const request = normalizeRestartActionRequest(parsed);
+    if (request === null) {
+      writeJson({ ok: false, status: 'failed', message: 'Restart-session request is invalid.' });
+      process.exitCode = 1;
+      return;
+    }
+    writeJson(await runRestartSessionAction(request));
+    return;
+  }
+
   const request = normalizeActionRequest(parsed);
   if (!request.ok) {
     writeJson({ ok: false, status: 'failed', message: request.message });
@@ -199,7 +213,12 @@ export function normalizeLaunchContextPreviewRequest(
 export function getRequestedAction(parsed: unknown):
   | {
       ok: true;
-      action: 'create-worktree' | 'create-session' | 'preview-base-ref' | 'preview-launch-context';
+      action:
+        | 'create-worktree'
+        | 'create-session'
+        | 'restart-session'
+        | 'preview-base-ref'
+        | 'preview-launch-context';
     }
   | { ok: false; message: string } {
   if (!isRecord(parsed)) {
@@ -213,6 +232,7 @@ export function getRequestedAction(parsed: unknown):
   if (
     action === 'create-worktree' ||
     action === 'create-session' ||
+    action === 'restart-session' ||
     action === 'preview-base-ref' ||
     action === 'preview-launch-context'
   ) {
@@ -314,6 +334,25 @@ export function toBrowserSafeCreateWorktreeActionResult(
   }
 
   throw new Error('Unhandled worktree action result status.');
+}
+
+export function normalizeRestartActionRequest(parsed: unknown): RestartSessionRequest | null {
+  if (
+    !isRecord(parsed) ||
+    Object.keys(parsed).some(
+      (key) => !['action', 'runtimeId', 'generation', 'operationId'].includes(key),
+    )
+  )
+    return null;
+  return normalizeRestartSessionRequest({
+    runtimeId: parsed['runtimeId'],
+    generation: parsed['generation'],
+    operationId: parsed['operationId'],
+  });
+}
+
+export async function runRestartSessionAction(parsed: unknown): Promise<RestartSessionResult> {
+  return await restartSessionDeckRuntime(parsed);
 }
 
 export async function runCreateSessionAction(
