@@ -516,6 +516,7 @@ button.card-toggle[aria-expanded='true']::after {
 }
 
 .stop-action-button,
+.restart-action-button,
 .stop-confirm {
   padding: 0.26rem 0.58rem;
   font-family: var(--font-mono);
@@ -523,7 +524,8 @@ button.card-toggle[aria-expanded='true']::after {
   line-height: 1.05;
 }
 
-.stop-action-button {
+.stop-action-button,
+.restart-action-button {
   border-color: rgba(76, 86, 106, 0.82);
   background: rgba(191, 97, 106, 0.04);
   color: rgba(229, 199, 203, 0.82);
@@ -535,7 +537,9 @@ button.card-toggle[aria-expanded='true']::after {
 }
 
 .stop-action-button:hover,
-.stop-action-button:focus-visible {
+.stop-action-button:focus-visible,
+.restart-action-button:hover,
+.restart-action-button:focus-visible {
   border-color: rgba(191, 97, 106, 0.5);
   background: rgba(191, 97, 106, 0.1);
   color: var(--color-banner-text);
@@ -547,7 +551,8 @@ button.card-toggle[aria-expanded='true']::after {
   background: rgba(191, 97, 106, 0.14);
 }
 
-.stop-action-button:disabled {
+.stop-action-button:disabled,
+.restart-action-button:disabled {
   cursor: not-allowed;
   opacity: 0.5;
 }

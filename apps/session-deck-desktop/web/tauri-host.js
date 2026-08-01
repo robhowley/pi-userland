@@ -27,6 +27,7 @@
  *   }) => Promise<unknown>,
  *   openTerminal: (runtimeId: string) => Promise<unknown>,
  *   killSession: (runtimeId: string) => Promise<unknown>,
+ *   restartSession: (request: { runtimeId: string, generation: string, operationId: string }) => Promise<unknown>,
  *   openExternal: (url: string) => Promise<{ ok: boolean, message?: string }>,
  *   copyText: (text: string) => Promise<{ ok: boolean, message?: string }>,
  *   doctorCommand: string,
@@ -88,6 +89,9 @@ export function createTauriSessionDeckHost(options = {}) {
     },
     killSession(runtimeId) {
       return invokeCommand('kill_session', { request: { runtimeId } });
+    },
+    restartSession(request) {
+      return invokeCommand('restart_session', { request });
     },
     openExternal(url) {
       return /** @type {Promise<{ ok: boolean, message?: string }>} */ (

@@ -16,8 +16,11 @@ import {
   type SessionDeckBrowserKillSelected,
   type SessionDeckBrowserKillSelectedResult,
   type SessionDeckBrowserOpenSelectedResult,
+  type SessionDeckBrowserRestartSelected,
 } from '../browser.js';
 import { orchestrateCreateWorktree } from '../worktree/orchestrate.js';
+import { restartSessionDeckRuntime, type RestartSessionOptions } from '../restart/orchestrator.js';
+import type { RestartSessionResult } from '../restart/types.js';
 import { resolveWorktreeLaunchContextPreview } from '../worktree/preview.js';
 import { openTerminalForRuntime, type OpenTerminalForRuntimeOptions } from './open.js';
 export {
@@ -105,6 +108,10 @@ export interface RegisterSessionDeckCommandOptions extends ReadSessionDeckSnapsh
   openIterm2Terminal?: (runtimeId: string) => Promise<SessionDeckBrowserOpenSelectedResult>;
   getCurrentRuntimeIdentity?: typeof getPresenceRuntimeIdentity;
   killRuntime?: (runtimeId: string) => Promise<TerminateSessionDeckRuntimeResult>;
+  restartRuntime?: (
+    request: Parameters<SessionDeckBrowserRestartSelected>[0],
+  ) => Promise<RestartSessionResult>;
+  restartDirectory?: string;
   createWorktree?: SessionDeckBrowserCreateWorktree;
 }
 
@@ -216,6 +223,11 @@ export function registerSessionDeckCommand(
           async () => readVisibleSessionDeckBrowserView(parsedArgs.all, readSnapshot, options),
           openTerminal,
           createKillSelectedRuntime(ctx, options, killRuntime),
+          createRestartSelectedRuntime(
+            options,
+            options.restartRuntime ??
+              ((request) => restartSessionDeckRuntime(request, getRestartOptions(options))),
+          ),
           options.createWorktree ??
             ((request, onStatus) =>
               orchestrateCreateWorktree(request, {
@@ -481,8 +493,10 @@ function filterVisibleSessionDeckView(
 
   return {
     generatedAt: sessionDeckSnapshot.generatedAt,
-    records: sessionDeckSnapshot.records.filter((record) =>
-      DEFAULT_VISIBLE_STATES.includes(record.presenceState),
+    records: sessionDeckSnapshot.records.filter(
+      (record) =>
+        DEFAULT_VISIBLE_STATES.includes(record.presenceState) ||
+        (record.restart?.available === true && record.restart.operation !== undefined),
     ),
     diagnostics: [],
   };
@@ -495,6 +509,7 @@ async function openSessionDeckBrowser(
   reload: () => Promise<SessionDeckBrowserSnapshot>,
   openTerminal: (runtimeId: string) => Promise<SessionDeckBrowserOpenSelectedResult>,
   killSelected: SessionDeckBrowserKillSelected,
+  restartSelected: SessionDeckBrowserRestartSelected,
   createWorktree: SessionDeckBrowserCreateWorktree,
 ): Promise<void> {
   if (ctx.ui.custom === undefined) {
@@ -510,6 +525,7 @@ async function openSessionDeckBrowser(
         onClose: () => done(undefined),
         openSelected: (record) => openTerminal(record.runtimeId),
         killSelected,
+        restartSelected,
         createWorktree,
         previewLaunchContext: (agentDir) => resolveWorktreeLaunchContextPreview({ agentDir }),
         reload,
@@ -520,6 +536,26 @@ async function openSessionDeckBrowser(
         theme,
       }),
   );
+}
+
+function createRestartSelectedRuntime(
+  options: RegisterSessionDeckCommandOptions,
+  restartRuntime: SessionDeckBrowserRestartSelected,
+): SessionDeckBrowserRestartSelected {
+  return async (request) => {
+    const currentRuntime = (options.getCurrentRuntimeIdentity ?? getPresenceRuntimeIdentity)();
+    if (request.runtimeId === currentRuntime.runtimeId) {
+      return {
+        ok: false,
+        status: 'not-eligible',
+        operationId: request.operationId,
+        reason: 'hosting-runtime',
+        retryable: false,
+        message: 'Restarting the Session Deck TUI hosting runtime is unavailable.',
+      };
+    }
+    return await restartRuntime(request);
+  };
 }
 
 function createKillSelectedRuntime(
@@ -579,6 +615,19 @@ function getKillRuntimeFailureMessage(
     case 'signal-failed':
       return 'Could not request session end.';
   }
+}
+
+function getRestartOptions(options: RegisterSessionDeckCommandOptions): RestartSessionOptions {
+  return {
+    ...(options.restartDirectory === undefined
+      ? {}
+      : { restartDirectory: options.restartDirectory }),
+    ...(options.directory === undefined ? {} : { presenceDirectory: options.directory }),
+    ...(options.identityDirectory === undefined
+      ? {}
+      : { identityDirectory: options.identityDirectory }),
+    hostingRuntimeId: (options.getCurrentRuntimeIdentity ?? getPresenceRuntimeIdentity)().runtimeId,
+  };
 }
 
 function getTerminateOptions(
@@ -666,6 +715,16 @@ function getReadSessionDeckSnapshotOptions(
       ? {}
       : { activityDirectory: options.activityDirectory }),
     ...(options.chipsDirectory === undefined ? {} : { chipsDirectory: options.chipsDirectory }),
+    ...(options.restartDirectory === undefined
+      ? {}
+      : { restartDirectory: options.restartDirectory }),
+    hostingRuntimeId: (options.getCurrentRuntimeIdentity ?? getPresenceRuntimeIdentity)().runtimeId,
+    ...(options.readRestartPidStartedAt === undefined
+      ? {}
+      : { readRestartPidStartedAt: options.readRestartPidStartedAt }),
+    ...(options.readRestartDescendantPids === undefined
+      ? {}
+      : { readRestartDescendantPids: options.readRestartDescendantPids }),
     ...(options.now === undefined ? {} : { now: options.now }),
     ...(options.thresholds === undefined ? {} : { thresholds: options.thresholds }),
     ...(options.identityFreshnessThresholds === undefined

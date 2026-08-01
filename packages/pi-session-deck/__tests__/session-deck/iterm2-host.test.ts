@@ -43,6 +43,7 @@ async function loadFreshHostFactory(): Promise<{
     createWorktree: (request: unknown) => Promise<unknown>;
     loadSnapshot: () => Promise<unknown>;
     killSession: (runtimeId: string) => Promise<unknown>;
+    restartSession: (request: unknown) => Promise<unknown>;
     openExternal: (url: string) => Promise<unknown>;
     openTerminal: (runtimeId: string) => Promise<unknown>;
     previewWorktreeBaseRef: (request: unknown) => Promise<unknown>;
@@ -63,6 +64,7 @@ async function loadFreshHostFactory(): Promise<{
       createWorktree: (request: unknown) => Promise<unknown>;
       loadSnapshot: () => Promise<unknown>;
       killSession: (runtimeId: string) => Promise<unknown>;
+      restartSession: (request: unknown) => Promise<unknown>;
       openExternal: (url: string) => Promise<unknown>;
       openTerminal: (runtimeId: string) => Promise<unknown>;
       previewWorktreeBaseRef: (request: unknown) => Promise<unknown>;
@@ -204,6 +206,11 @@ describe('SessionDeckIterm2Host', () => {
         ok: true,
         status: 200,
         json: async () => ({ ok: true, status: 'terminated' }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true, status: 'restarted' }),
       });
     cleanupGlobals = installGlobals({
       document: buildDocument('action-token'),
@@ -233,6 +240,11 @@ describe('SessionDeckIterm2Host', () => {
 
     await expect(host.openTerminal('rt-1')).rejects.toThrow('HTTP 504');
     await host.killSession('rt-1');
+    await host.restartSession({
+      runtimeId: 'rt-1',
+      generation: 'generation-1',
+      operationId: 'operation-1',
+    });
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, '/actions/create-worktree', {
       method: 'POST',
@@ -286,6 +298,20 @@ describe('SessionDeckIterm2Host', () => {
         'X-Session-Deck-Action-Token': 'action-token',
       },
       body: JSON.stringify({ runtimeId: 'rt-1' }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(5, '/actions/restart-session', {
+      method: 'POST',
+      cache: 'no-store',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-Session-Deck-Action-Token': 'action-token',
+      },
+      body: JSON.stringify({
+        runtimeId: 'rt-1',
+        generation: 'generation-1',
+        operationId: 'operation-1',
+      }),
     });
   });
 

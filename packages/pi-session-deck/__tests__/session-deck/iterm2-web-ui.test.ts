@@ -4135,6 +4135,182 @@ describe('Session Deck iTerm2 web UI', () => {
     );
   });
 
+  it('rejects incomplete or unknown restart eligibility records at the browser boundary', async () => {
+    const harness = await setupApp([buildSnapshot()]);
+    const invalidRestartValues: unknown[] = [
+      { available: true, generation: '' },
+      {
+        available: true,
+        generation: 'generation-one',
+        operation: {
+          operationId: '',
+          status: 'outcome-unknown',
+          retryable: true,
+        },
+      },
+      {
+        available: true,
+        generation: 'generation-one',
+        operation: {
+          operationId: 'operation-one',
+          status: 'unknown-status',
+          retryable: true,
+        },
+      },
+      {
+        available: true,
+        generation: 'generation-one',
+        operation: {
+          operationId: 'operation-one',
+          status: 'outcome-unknown',
+          retryable: 'yes',
+        },
+      },
+      { available: false, reason: 'unknown-reason' },
+    ];
+
+    for (const restart of invalidRestartValues) {
+      harness.pushSnapshot(
+        buildSnapshot({
+          records: [buildRecord({ restart: restart as NonNullable<SessionDeckRecord['restart']> })],
+        }),
+      );
+      harness.elements.refresh.click();
+      await flushMicrotasks();
+      expect(getCards(harness.elements.list)).toHaveLength(0);
+    }
+
+    harness.pushSnapshot(
+      buildSnapshot({
+        records: [
+          buildRecord({
+            restart: {
+              available: true,
+              generation: 'generation-one',
+              operation: {
+                operationId: 'operation-one',
+                status: 'outcome-unknown',
+                retryable: true,
+              },
+            },
+          }),
+        ],
+      }),
+    );
+    harness.elements.refresh.click();
+    await flushMicrotasks();
+    expandAllRepoGroups(harness.elements.list);
+
+    expect(getCards(harness.elements.list)).toHaveLength(1);
+    getCardToggle(getCards(harness.elements.list)[0]!).click();
+    expect(findAllByClass(harness.elements.list, 'restart-action-button')[0]?.textContent).toBe(
+      'Reconcile restart',
+    );
+  });
+
+  it('reuses restart identity through a timeout refresh and retry', async () => {
+    const generation = 'generation-one';
+    const restartRequests: Array<{
+      runtimeId: string;
+      generation: string;
+      operationId: string;
+    }> = [];
+    let snapshotCount = 0;
+    const timeout = Object.assign(
+      new Error(
+        'The desktop helper timed out before Session Deck could confirm whether the action completed.',
+      ),
+      { outcomeUnknown: true },
+    );
+    const fetchMock = vi.fn((url: string, init?: { body?: string }) => {
+      if (url === '/snapshot.json') {
+        snapshotCount += 1;
+        if (snapshotCount === 1 || snapshotCount === 3) {
+          return Promise.resolve(
+            buildJsonResponse(
+              buildSnapshot({
+                records: [buildRecord({ restart: { available: true, generation } })],
+              }),
+            ),
+          );
+        }
+
+        const operationId = restartRequests[0]?.operationId;
+        if (!operationId) {
+          throw new Error('Expected the timed-out restart request before reconciliation.');
+        }
+        return Promise.resolve(
+          buildJsonResponse(
+            buildSnapshot({
+              records: [
+                buildRecord({
+                  restart: {
+                    available: true,
+                    generation,
+                    operation: {
+                      operationId,
+                      status: 'outcome-unknown',
+                      retryable: true,
+                    },
+                  },
+                }),
+              ],
+            }),
+          ),
+        );
+      }
+
+      if (url === '/actions/restart-session') {
+        const request = JSON.parse(init?.body ?? '{}') as {
+          runtimeId: string;
+          generation: string;
+          operationId: string;
+        };
+        restartRequests.push(request);
+        return restartRequests.length === 1
+          ? Promise.reject(timeout)
+          : Promise.resolve(
+              buildJsonResponse({
+                ok: true,
+                status: 'restarted',
+                operationId: request.operationId,
+                reason: 'replacement-observed',
+                retryable: false,
+                message: 'Session restarted.',
+              }),
+            );
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    const harness = await setupAppWithFetch(fetchMock);
+    expandAllRepoGroups(harness.elements.list);
+    getCardToggle(getCards(harness.elements.list)[0]!).click();
+
+    (
+      findAllByClass(harness.elements.list, 'restart-action-button')[0] as FakeButtonElement
+    ).click();
+    (findAllByClass(harness.elements.list, 'stop-confirm-primary')[0] as FakeButtonElement).click();
+    await vi.waitFor(() => expect(snapshotCount).toBe(2));
+
+    expect(restartRequests).toHaveLength(1);
+    expect(findAllByClass(harness.elements.list, 'restart-action-button')[0]?.textContent).toBe(
+      'Reconcile restart',
+    );
+
+    (
+      findAllByClass(harness.elements.list, 'restart-action-button')[0] as FakeButtonElement
+    ).click();
+    (findAllByClass(harness.elements.list, 'stop-confirm-primary')[0] as FakeButtonElement).click();
+    await vi.waitFor(() => expect(restartRequests).toHaveLength(2));
+
+    expect(restartRequests[1]).toEqual(restartRequests[0]);
+    expect(restartRequests[0]).toMatchObject({
+      runtimeId: 'rt-1',
+      generation,
+    });
+  });
+
   it('renders End session only in expanded details and posts exact authenticated Kill requests after confirmation', async () => {
     const fetchMock = vi.fn((url: string, _init?: unknown) => {
       if (url === '/snapshot.json') {

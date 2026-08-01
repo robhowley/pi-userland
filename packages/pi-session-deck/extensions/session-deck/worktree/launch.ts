@@ -10,6 +10,8 @@ import {
 import { formatPosixCommand, quotePosixArg } from '../identity/terminal-focus.js';
 import { PI_SESSION_DECK_ASSIGNED_RUNTIME_ID_ENV } from '../presence/constants.js';
 import { isValidAssignedPresenceRuntimeId } from '../presence/store.js';
+import { createManagedRestartRecipe } from '../restart/recipe.js';
+import type { ManagedRestartRecipeV1 } from '../restart/types.js';
 import { buildLaunchAgentDirEnvPlan, normalizeLaunchAgentDirSelection } from './agent-dir.js';
 import { defaultWorktreeExecFile, type ExecFileResult, type WorktreeExecFile } from './git.js';
 import { slugifyWorktreeLabel } from './create.js';
@@ -29,6 +31,8 @@ export interface LaunchDetachedTmuxPiOptions {
   postLaunchVerifyDelayMs?: number;
   agentDir?: CreateWorktreeLaunchAgentDir;
   randomUUID?: () => string;
+  writeRestartRecipe?: (recipe: ManagedRestartRecipeV1) => Promise<void>;
+  removeRestartRecipe?: (runtimeId: string) => Promise<void>;
 }
 
 export interface DetachedTmuxPiLaunchTarget {
@@ -37,7 +41,9 @@ export interface DetachedTmuxPiLaunchTarget {
 }
 
 type DetachedTmuxPiLaunchCopyMode = 'worktree' | 'session';
-type DetachedTmuxPiLaunchPolicy = { kind: 'managed' } | { kind: 'fresh'; runtimeId: string };
+type DetachedTmuxPiLaunchPolicy =
+  | { kind: 'managed'; runtimeId: string }
+  | { kind: 'fresh'; runtimeId: string };
 
 interface ResolvedLaunchDetachedTmuxPiOptions extends LaunchDetachedTmuxPiOptions {
   env: NodeJS.ProcessEnv;
@@ -88,7 +94,7 @@ export async function launchDetachedTmuxPi(
     displayName,
     options,
     'worktree',
-    { kind: 'managed' },
+    { kind: 'managed', runtimeId: allocateRuntimeId(options) },
   );
 }
 
@@ -99,6 +105,7 @@ export async function launchDetachedTmuxPiForCwd(
 ): Promise<CreateWorktreeLaunchSuccess | CreateWorktreeLaunchFailure> {
   return await launchDetachedTmuxPiForTarget(target, displayName, options, 'session', {
     kind: 'managed',
+    runtimeId: allocateRuntimeId(options),
   });
 }
 
@@ -107,14 +114,9 @@ export async function launchFreshDetachedTmuxPiForCwd(
   displayName: string,
   options: LaunchDetachedTmuxPiOptions = {},
 ): Promise<FreshDetachedTmuxPiLaunchResult> {
-  const runtimeId = (options.randomUUID ?? nodeRandomUUID)();
-  if (!isValidAssignedPresenceRuntimeId(runtimeId)) {
-    throw new Error('Fresh runtime identity generator must return a safe UUID v4.');
-  }
-
   return await launchDetachedTmuxPiForTarget(target, displayName, options, 'session', {
     kind: 'fresh',
-    runtimeId,
+    runtimeId: allocateRuntimeId(options, 'Fresh'),
   });
 }
 
@@ -130,7 +132,7 @@ async function launchDetachedTmuxPiForTarget(
   displayName: string,
   options: LaunchDetachedTmuxPiOptions,
   copyMode: DetachedTmuxPiLaunchCopyMode,
-  policy: { kind: 'managed' },
+  policy: { kind: 'managed'; runtimeId: string },
 ): Promise<CreateWorktreeLaunchSuccess | CreateWorktreeLaunchFailure>;
 async function launchDetachedTmuxPiForTarget(
   target: DetachedTmuxPiLaunchTarget,
@@ -142,12 +144,6 @@ async function launchDetachedTmuxPiForTarget(
   CreateWorktreeLaunchSuccess | CreateWorktreeLaunchFailure | FreshDetachedTmuxPiCleanupFailure
 > {
   const resolvedOptions = resolveLaunchOptions(options);
-  const launchCommand = buildPiLauncherCommand(
-    displayName,
-    resolvedOptions.env['PATH'] ?? '',
-    resolvedOptions.agentDir,
-    policy.kind === 'fresh' ? policy.runtimeId : undefined,
-  );
   const deckHandoffEnvArgs = buildTmuxEnvironmentArgs(resolvedOptions.env);
   const sessionName =
     policy.kind === 'fresh'
@@ -163,12 +159,44 @@ async function launchDetachedTmuxPiForTarget(
         });
   const tmuxTarget = `=${sessionName}`;
   const manualAttachCommand = formatPosixCommand(['tmux', 'attach-session', '-t', tmuxTarget]);
-  const manualCommand = `cd ${quotePosixArg(target.cwd)} && ${launchCommand}`;
 
-  const preflight = await preflightDetachedTmuxPi(resolvedOptions);
-  if (!preflight.ok) {
-    return prereqLaunchFailure(preflight.reason, manualCommand, copyMode);
+  const tmuxPreflight = await run(resolvedOptions, 'tmux', ['-V']);
+  if (tmuxPreflight.exitCode !== 0) {
+    const fallbackCommand = buildPiLauncherCommand(
+      displayName,
+      resolvedOptions.env['PATH'] ?? '',
+      resolvedOptions.agentDir,
+      policy.runtimeId,
+    );
+    return prereqLaunchFailure(
+      'tmux-unavailable',
+      `cd ${quotePosixArg(target.cwd)} && ${fallbackCommand}`,
+      copyMode,
+    );
   }
+  const piExecutable = await resolvePiExecutable(resolvedOptions);
+  if (piExecutable === null) {
+    const fallbackCommand = buildPiLauncherCommand(
+      displayName,
+      resolvedOptions.env['PATH'] ?? '',
+      resolvedOptions.agentDir,
+      policy.runtimeId,
+    );
+    return prereqLaunchFailure(
+      'pi-command-unavailable',
+      `cd ${quotePosixArg(target.cwd)} && ${fallbackCommand}`,
+      copyMode,
+    );
+  }
+  const launchCommand = buildPiLauncherCommand(
+    displayName,
+    resolvedOptions.env['PATH'] ?? '',
+    resolvedOptions.agentDir,
+    policy.runtimeId,
+    piExecutable,
+    resolvedOptions.env['PI_CODING_AGENT_SESSION_DIR'] ?? null,
+  );
+  const manualCommand = `cd ${quotePosixArg(target.cwd)} && ${launchCommand}`;
 
   const existing = await tmuxHasSession(sessionName, resolvedOptions);
   if (existing) {
@@ -224,6 +252,30 @@ async function launchDetachedTmuxPiForTarget(
     };
   }
 
+  const recipe = createManagedRestartRecipe({
+    runtimeId: policy.runtimeId,
+    piExecutable,
+    effectivePath: resolvedOptions.env['PATH'] ?? '',
+    agentDir: resolvedOptions.agentDir,
+    env: resolvedOptions.env,
+    cwd: target.cwd,
+    sessionName,
+  });
+  try {
+    await resolvedOptions.writeRestartRecipe?.(recipe);
+  } catch {
+    return {
+      requested: true,
+      ok: false,
+      mode: 'tmux-detached',
+      status: 'failed',
+      reason: 'spawn-failed',
+      recoverable: true,
+      message: 'Session Deck could not save the managed launch recipe.',
+      manualCommand,
+    };
+  }
+
   const launchResult = await run(resolvedOptions, 'tmux', [
     'new-session',
     ...(policy.kind === 'fresh' ? ['-P', '-F', '#{session_id}'] : []),
@@ -238,6 +290,7 @@ async function launchDetachedTmuxPiForTarget(
     launchCommand,
   ]);
   if (launchResult.exitCode !== 0) {
+    await resolvedOptions.removeRestartRecipe?.(policy.runtimeId).catch(() => undefined);
     return {
       requested: true,
       ok: false,
@@ -260,6 +313,7 @@ async function launchDetachedTmuxPiForTarget(
       if (!cleanupConfirmed) {
         return postLaunchCleanupFailure(policy.runtimeId, manualCommand, copyMode);
       }
+      await resolvedOptions.removeRestartRecipe?.(policy.runtimeId).catch(() => undefined);
     }
     return postLaunchVerificationFailure(verification.observedCwd, manualCommand, copyMode);
   }
@@ -271,7 +325,7 @@ async function launchDetachedTmuxPiForTarget(
     status: 'launched',
     tmuxSessionName: sessionName,
     tmuxTarget,
-    ...(policy.kind === 'fresh' ? { runtimeId: policy.runtimeId } : {}),
+    runtimeId: policy.runtimeId,
     message: 'Started a detached tmux Pi session.',
     manualAttachCommand,
   };
@@ -313,6 +367,8 @@ export function buildPiLauncherCommand(
   pathValue: string,
   agentDir: CreateWorktreeLaunchAgentDir = { mode: 'ambient' },
   assignedRuntimeId?: string,
+  piExecutable = 'pi',
+  sessionDir?: string | null,
 ): string {
   const normalized = normalizeLaunchAgentDirSelection(agentDir);
   if (!normalized.ok) {
@@ -323,15 +379,23 @@ export function buildPiLauncherCommand(
     assignedRuntimeId === undefined
       ? []
       : [`${PI_SESSION_DECK_ASSIGNED_RUNTIME_ID_ENV}=${assignedRuntimeId}`];
+  const sessionDirEnv = trimNonEmpty(sessionDir);
+  const sessionDirArgs =
+    sessionDir === undefined
+      ? []
+      : sessionDirEnv === undefined
+        ? ['-u', 'PI_CODING_AGENT_SESSION_DIR']
+        : [`PI_CODING_AGENT_SESSION_DIR=${sessionDirEnv}`];
   const envArgs =
     envPlan.envAction === 'unset'
-      ? ['-u', 'PI_CODING_AGENT_DIR', `PATH=${pathValue}`, ...assignedRuntimeEnv]
+      ? ['-u', 'PI_CODING_AGENT_DIR', ...sessionDirArgs, `PATH=${pathValue}`, ...assignedRuntimeEnv]
       : [
+          ...sessionDirArgs,
           `PATH=${pathValue}`,
           ...(envPlan.envAssignment === undefined ? [] : [envPlan.envAssignment]),
           ...assignedRuntimeEnv,
         ];
-  return `exec ${formatPosixCommand(['/usr/bin/env', ...envArgs, 'pi', '--name', displayName])}`;
+  return `exec ${formatPosixCommand(['/usr/bin/env', ...envArgs, piExecutable, '--name', displayName])}`;
 }
 
 export function buildTmuxEnvironmentArgs(env: NodeJS.ProcessEnv): string[] {
@@ -407,6 +471,24 @@ async function run(
     env: options.env,
     timeoutMs: 10_000,
   });
+}
+
+async function resolvePiExecutable(
+  options: ResolvedLaunchDetachedTmuxPiOptions,
+): Promise<string | null> {
+  const result = await run(options, 'which', ['pi']);
+  const executable = result.stdout.trim();
+  return result.exitCode === 0 && executable.startsWith('/') && !/[\r\n\0]/u.test(executable)
+    ? executable
+    : null;
+}
+
+function allocateRuntimeId(options: LaunchDetachedTmuxPiOptions, kind = 'Managed'): string {
+  const runtimeId = (options.randomUUID ?? nodeRandomUUID)();
+  if (!isValidAssignedPresenceRuntimeId(runtimeId)) {
+    throw new Error(`${kind} runtime identity generator must return a safe UUID v4.`);
+  }
+  return runtimeId;
 }
 
 function resolveLaunchOptions(

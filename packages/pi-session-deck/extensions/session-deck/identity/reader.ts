@@ -437,7 +437,7 @@ export function computeIdentityFreshness(
   return 'very_stale';
 }
 
-function normalizeIdentityRecord(candidate: unknown): SessionIdentityRecord | null {
+export function normalizeIdentityRecord(candidate: unknown): SessionIdentityRecord | null {
   if (!isObject(candidate)) {
     return null;
   }

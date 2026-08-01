@@ -6,6 +6,7 @@ Private Tauri desktop companion for Session Deck. This app lives under `apps/` s
 
 - Loads Session Deck snapshots through the installed Node helper.
 - Reuses the existing open-terminal and worktree helper CLIs.
+- Exposes the shared, generation-safe Restart Session action for eligible Session Deck-managed tmux sessions without sending private launch recipes to the webview.
 - Prefers `~/.pi/session-deck/desktop/install.json` for desktop runtime metadata.
 - Falls back to `~/.pi/session-deck/iterm2/install.json` only for development/back-compat.
 - Rebuilds a safe helper `PATH` for Finder-launched app processes.

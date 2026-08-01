@@ -89,6 +89,9 @@
         }
         return payload;
       },
+      restartSession(request) {
+        return postJson(fetchImpl, '/actions/restart-session', actionToken, request);
+      },
       async killSession(runtimeId) {
         const response = await fetchImpl('/actions/kill-session', {
           method: 'POST',

@@ -232,6 +232,7 @@ interface SharedUiHarness {
   copyTextMock: ReturnType<typeof vi.fn>;
   loadSnapshotMock: ReturnType<typeof vi.fn>;
   killSessionMock: ReturnType<typeof vi.fn>;
+  restartSessionMock: ReturnType<typeof vi.fn>;
   openExternalMock: ReturnType<typeof vi.fn>;
   openTerminalMock: ReturnType<typeof vi.fn>;
   previewMock: ReturnType<typeof vi.fn>;
@@ -394,6 +395,7 @@ async function setupSharedUi(
     createWorktree?: ReturnType<typeof vi.fn>;
     loadSnapshot?: ReturnType<typeof vi.fn>;
     killSession?: ReturnType<typeof vi.fn>;
+    restartSession?: ReturnType<typeof vi.fn>;
     openExternal?: ReturnType<typeof vi.fn>;
     openTerminal?: ReturnType<typeof vi.fn>;
     previewWorktreeBaseRef?: ReturnType<typeof vi.fn>;
@@ -442,6 +444,7 @@ async function setupSharedUi(
   const createWorktreeMock = options.createWorktree ?? vi.fn();
   const openTerminalMock = options.openTerminal ?? vi.fn();
   const killSessionMock = options.killSession ?? vi.fn();
+  const restartSessionMock = options.restartSession ?? vi.fn();
   const openExternalMock = options.openExternal ?? vi.fn(async () => ({ ok: true }));
   const copyTextMock = options.copyText ?? vi.fn(async () => ({ ok: true }));
 
@@ -459,6 +462,7 @@ async function setupSharedUi(
       openExternal: openExternalMock,
       createSession: vi.fn(),
       killSession: killSessionMock,
+      restartSession: restartSessionMock,
       openTerminal: openTerminalMock,
       previewWorktreeBaseRef: previewMock,
       previewWorktreeLaunchContext: vi.fn(async () => ({
@@ -477,6 +481,7 @@ async function setupSharedUi(
     copyTextMock,
     loadSnapshotMock,
     killSessionMock,
+    restartSessionMock,
     openExternalMock,
     openTerminalMock,
     previewMock,
@@ -949,6 +954,51 @@ describe('SessionDeckUI shared controller', () => {
     openButton = getCardOpenButton(getCards(harness.elements.list)[0]!);
     openButton.click();
     expect(openTerminalMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('confirms Restart Session with one frozen browser-safe request and preserves selection', async () => {
+    const restartSessionMock = vi.fn(async (request) => ({
+      ok: true,
+      status: 'restarted',
+      operationId: request.operationId,
+      reason: 'replacement-observed',
+      retryable: false,
+      message: 'Session restarted.',
+    }));
+    const before = buildSnapshot({
+      records: [buildRecord({ restart: { available: true, generation: 'generation-one' } })],
+    });
+    const after = buildSnapshot({
+      records: [
+        buildRecord({
+          pid: 202,
+          restart: { available: true, generation: 'generation-two' },
+        }),
+      ],
+    });
+    const harness = await setupSharedUi({
+      restartSession: restartSessionMock,
+      snapshots: [before, after],
+    });
+
+    expandRepoGroup(harness.elements.list, 'owner/project');
+    getCardToggle(getCards(harness.elements.list)[0]!).click();
+    const restartButton = getButtonByText(harness.elements.list, 'Restart Session');
+    expect(restartButton.parentNode).toBe(
+      getButtonByText(harness.elements.list, 'End session').parentNode,
+    );
+    restartButton.click();
+    expect(harness.elements.list.textContent).toContain('may force-kill Pi after 2 seconds');
+    getButtonByText(harness.elements.list, 'Restart Session').click();
+    await flushMicrotasks();
+
+    expect(restartSessionMock).toHaveBeenCalledWith({
+      runtimeId: 'rt-1',
+      generation: 'generation-one',
+      operationId: expect.any(String),
+    });
+    expect(harness.elements.list.textContent).toContain('Session restarted.');
+    expect(getCards(harness.elements.list)[0]!.classList.contains('expanded')).toBe(true);
   });
 
   it('reconciles the expanded selection when show-all hides the active runtime', async () => {

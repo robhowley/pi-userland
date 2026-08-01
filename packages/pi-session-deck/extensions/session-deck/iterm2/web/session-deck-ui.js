@@ -12,6 +12,41 @@
     const URL = window.URL ?? globalThis.URL;
 
     const LAUNCH_AGENT_DIR_MODE_OPTIONS = Object.freeze(['ambient', 'default', 'custom']);
+    const RESTART_JOURNAL_STATES = new Set([
+      'preparing',
+      'term-sent',
+      'kill-sent',
+      'stopped',
+      'spawn-requested',
+      'observing',
+      'restarted',
+      'stop-failed',
+      'stopped-not-restarted',
+      'outcome-unknown',
+    ]);
+    const RESTART_REASON_CODES = new Set([
+      'replacement-observed',
+      'managed-recipe-unavailable',
+      'recipe-not-bound',
+      'recipe-invalid',
+      'runtime-unavailable',
+      'identity-mismatch',
+      'session-file-unavailable',
+      'cwd-unavailable',
+      'pi-executable-unavailable',
+      'tmux-target-unavailable',
+      'tmux-pane-mismatch',
+      'unsafe-descendants',
+      'hosting-runtime',
+      'coordinator-runtime',
+      'generation-changed',
+      'operation-in-progress',
+      'termination-failed',
+      'pane-did-not-stop',
+      'respawn-failed',
+      'replacement-unobserved',
+      'operation-state-unknown',
+    ]);
 
     function formatLaunchAgentDirOptionLabel(mode) {
       switch (mode) {
@@ -52,6 +87,7 @@
     const KILL_SESSION_SUCCESS_TTL_MS = 6_000;
     const DEFAULT_OPEN_TERMINAL_FAILURE_MESSAGE = 'Could not request terminal open.';
     const DEFAULT_KILL_SESSION_FAILURE_MESSAGE = 'Could not request session end.';
+    const DEFAULT_RESTART_SESSION_FAILURE_MESSAGE = 'Could not restart this session.';
     const SPAWNED_CHILD_RUNTIME_TOOLTIP = 'Ephemeral child sessions excluded from the deck.';
     const KILL_SESSION_FAILURE_MESSAGES = {
       'invalid-runtime-id': 'Session runtime metadata is invalid.',
@@ -91,6 +127,7 @@
       pendingWorktrees: new Map(),
       openTerminalAction: null,
       killSessionAction: null,
+      restartSessionAction: null,
       highlightedRuntimeId: null,
     };
 
@@ -122,12 +159,16 @@
         reconcileExpandedRepoKeys();
         reconcileOpenTerminalAction();
         reconcileKillSessionAction();
+        reconcileRestartSessionAction();
         render();
       });
 
       if (typeof window.addEventListener === 'function') {
         window.addEventListener('keydown', (event) => {
-          if (event.key === 'Escape' && clearKillSessionConfirmation()) {
+          if (
+            event.key === 'Escape' &&
+            (clearKillSessionConfirmation() || clearRestartSessionConfirmation())
+          ) {
             render();
           }
         });
@@ -159,6 +200,7 @@
         reconcilePendingWorktrees();
         reconcileOpenTerminalAction();
         reconcileKillSessionAction();
+        reconcileRestartSessionAction();
       } catch (error) {
         state.fetchError = error instanceof Error ? error.message : String(error);
         if (source === 'startup') {
@@ -167,6 +209,7 @@
           reconcileExpandedRepoKeys();
           reconcileOpenTerminalAction();
           reconcileKillSessionAction();
+          reconcileRestartSessionAction();
         }
       } finally {
         state.loading = false;
@@ -213,6 +256,7 @@
         isNullableString(candidate.prUrl) &&
         isNullableBoolean(candidate.isLinkedWorktree) &&
         isNullableString(candidate.worktreeLabel) &&
+        isOptionalRestartEligibility(candidate.restart) &&
         isActivityState(candidate.activityState) &&
         isNullableNumber(candidate.activityAgeMs) &&
         isNullableString(candidate.currentToolName) &&
@@ -223,6 +267,42 @@
         Array.isArray(candidate.diagnostics) &&
         candidate.diagnostics.every(isSessionDeckDiagnostic)
       );
+    }
+
+    function isOptionalRestartEligibility(candidate) {
+      if (candidate === undefined) {
+        return true;
+      }
+
+      if (!isObject(candidate)) {
+        return false;
+      }
+
+      if (candidate.available === true) {
+        return (
+          isNonBlankString(candidate.generation) &&
+          (candidate.operation === undefined || isRestartOperation(candidate.operation))
+        );
+      }
+
+      return candidate.available === false && isKnownRestartReason(candidate.reason);
+    }
+
+    function isRestartOperation(candidate) {
+      return (
+        isObject(candidate) &&
+        isNonBlankString(candidate.operationId) &&
+        isKnownRestartJournalState(candidate.status) &&
+        typeof candidate.retryable === 'boolean'
+      );
+    }
+
+    function isKnownRestartJournalState(value) {
+      return typeof value === 'string' && RESTART_JOURNAL_STATES.has(value);
+    }
+
+    function isKnownRestartReason(value) {
+      return typeof value === 'string' && RESTART_REASON_CODES.has(value);
     }
 
     function isSessionDeckDiagnostic(candidate) {
@@ -320,7 +400,9 @@
       return records.filter(
         (record) =>
           !isTempSession(record) &&
-          (state.showAll || DEFAULT_VISIBLE_STATES.has(record.presenceState)),
+          (state.showAll ||
+            DEFAULT_VISIBLE_STATES.has(record.presenceState) ||
+            record.restart?.operation !== undefined),
       );
     }
 
@@ -370,6 +452,28 @@
       );
       if (!isStillVisible) {
         clearKillSessionAction();
+      }
+    }
+
+    function reconcileRestartSessionAction() {
+      const action = state.restartSessionAction;
+      if (action?.kind !== 'confirming' && action?.kind !== 'unknown') return;
+      const record = getVisibleRecords().find(
+        (candidate) => candidate.runtimeId === action.runtimeId,
+      );
+      if (record === undefined) {
+        state.restartSessionAction = null;
+        return;
+      }
+      if (
+        action.kind === 'unknown' &&
+        record.restart?.available === true &&
+        record.restart.operation?.operationId === action.operationId
+      ) {
+        state.restartSessionAction = {
+          ...action,
+          message: 'Restart outcome still needs reconciliation.',
+        };
       }
     }
 
@@ -434,6 +538,10 @@
 
     function isNonEmptyString(value) {
       return typeof value === 'string' && value.length > 0;
+    }
+
+    function isNonBlankString(value) {
+      return typeof value === 'string' && value.trim().length > 0;
     }
 
     function createRepoGroups(records) {
@@ -2158,6 +2266,99 @@
       return KILL_SESSION_FAILURE_MESSAGES[result?.reason] ?? DEFAULT_KILL_SESSION_FAILURE_MESSAGE;
     }
 
+    function clearRestartSessionConfirmation() {
+      if (state.restartSessionAction?.kind !== 'confirming') return false;
+      state.restartSessionAction = null;
+      return true;
+    }
+
+    function openRestartSessionConfirmation(record) {
+      if (state.restartSessionAction?.kind === 'pending') return;
+      if (record.restart?.available !== true) return;
+      clearKillSessionConfirmation();
+      const previous =
+        state.restartSessionAction?.runtimeId === record.runtimeId
+          ? state.restartSessionAction
+          : null;
+      const recordedOperationId = record.restart.operation?.operationId;
+      const continuePrevious =
+        previous !== null &&
+        (previous.kind === 'unknown' ||
+          previous.status === 'stopped-not-restarted' ||
+          previous.operationId === recordedOperationId);
+      state.restartSessionAction = {
+        kind: 'confirming',
+        runtimeId: record.runtimeId,
+        generation: continuePrevious ? previous.generation : record.restart.generation,
+        operationId:
+          recordedOperationId ?? (continuePrevious ? previous.operationId : createOperationId()),
+      };
+      render();
+    }
+
+    function confirmRestartSession(record) {
+      const action = state.restartSessionAction;
+      if (action?.kind !== 'confirming' || action.runtimeId !== record.runtimeId) return;
+      const pending = { ...action, kind: 'pending' };
+      state.restartSessionAction = pending;
+      render();
+      void host
+        .restartSession({
+          runtimeId: pending.runtimeId,
+          generation: pending.generation,
+          operationId: pending.operationId,
+        })
+        .then((response) => {
+          if (state.restartSessionAction !== pending) return;
+          state.restartSessionAction = {
+            ...pending,
+            kind:
+              response?.status === 'restarted'
+                ? 'success'
+                : response?.status === 'outcome-unknown'
+                  ? 'unknown'
+                  : 'failure',
+            status: response?.status,
+            message: isNonEmptyString(response?.message)
+              ? response.message
+              : DEFAULT_RESTART_SESSION_FAILURE_MESSAGE,
+          };
+          render();
+          void refreshSnapshot({ source: 'manual' });
+        })
+        .catch(async (error) => {
+          if (state.restartSessionAction !== pending) return;
+          state.restartSessionAction = {
+            ...pending,
+            kind: isOutcomeUnknownError(error) ? 'unknown' : 'failure',
+            message: getErrorMessage(error),
+          };
+          render();
+          await refreshSnapshot({ source: 'manual' });
+        });
+    }
+
+    function createOperationId() {
+      if (typeof window.crypto?.randomUUID === 'function') return window.crypto.randomUUID();
+      return `restart-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    }
+
+    function getRestartUnavailableMessage(restart) {
+      if (restart?.available !== false) return 'Restart this session';
+      switch (restart.reason) {
+        case 'recipe-not-bound':
+          return 'Restart will become available after Session Deck verifies this managed session.';
+        case 'hosting-runtime':
+          return 'Restarting the Session Deck TUI hosting runtime is unavailable.';
+        case 'unsafe-descendants':
+          return 'Restart is unavailable while Pi owns child processes.';
+        case 'generation-changed':
+          return 'The session generation changed; refresh before restarting.';
+        default:
+          return 'Restart is available only for new Session Deck-managed tmux sessions.';
+      }
+    }
+
     function createRecordCard(record) {
       const isExpanded = state.detailVisible && record.runtimeId === state.selectedRuntimeId;
       const title = getDisplayTitle(record);
@@ -2173,6 +2374,7 @@
       toggle.setAttribute('aria-expanded', String(isExpanded));
       toggle.addEventListener('click', () => {
         clearKillSessionConfirmation();
+        clearRestartSessionConfirmation();
         if (isExpanded) {
           state.detailVisible = false;
         } else {
@@ -2354,7 +2556,92 @@
 
     function createKillSessionSection(record) {
       const action = getKillSessionActionForRecord(record);
+      const restartAction =
+        state.restartSessionAction?.runtimeId === record.runtimeId
+          ? state.restartSessionAction
+          : null;
       const content = [];
+      let sharedActionsRow = null;
+
+      if (restartAction?.kind === 'confirming') {
+        const panel = document.createElement('div');
+        panel.className = 'stop-confirmation';
+        panel.append(
+          createText(
+            'p',
+            'Restart sends TERM, may force-kill Pi after 2 seconds, and can lose in-flight work. Restart is refused while Pi owns child processes.',
+            'stop-confirmation-copy',
+          ),
+        );
+        const actions = document.createElement('div');
+        actions.className = 'stop-confirmation-actions';
+        const confirm = document.createElement('button');
+        confirm.type = 'button';
+        confirm.className = 'stop-confirm stop-confirm-primary';
+        confirm.textContent = 'Restart Session';
+        confirm.addEventListener('click', (event) => {
+          event.preventDefault?.();
+          event.stopPropagation?.();
+          confirmRestartSession(record);
+        });
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.className = 'stop-confirm';
+        cancel.textContent = 'Cancel';
+        cancel.addEventListener('click', () => {
+          state.restartSessionAction = null;
+          render();
+        });
+        actions.append(confirm, cancel);
+        panel.append(actions);
+        content.push(panel);
+        window.setTimeout?.(() => confirm.focus?.(), 0);
+      } else {
+        const actionsRow = document.createElement('div');
+        actionsRow.className = 'stop-action-row';
+        const restart = document.createElement('button');
+        restart.type = 'button';
+        restart.className = 'restart-action-button';
+        restart.textContent =
+          restartAction?.kind === 'pending'
+            ? 'Restarting…'
+            : record.restart?.operation?.status === 'outcome-unknown'
+              ? 'Reconcile restart'
+              : record.restart?.operation?.status === 'stopped-not-restarted' ||
+                  record.restart?.operation?.status === 'stopped'
+                ? 'Retry restart'
+                : restartAction?.kind === 'unknown'
+                  ? 'Reconcile restart'
+                  : restartAction?.kind === 'failure'
+                    ? 'Retry restart'
+                    : 'Restart Session';
+        restart.disabled = record.restart?.available !== true || restartAction?.kind === 'pending';
+        const unavailableReason = getRestartUnavailableMessage(record.restart);
+        restart.setAttribute('aria-label', unavailableReason);
+        restart.setAttribute('title', unavailableReason);
+        restart.addEventListener('click', (event) => {
+          event.preventDefault?.();
+          event.stopPropagation?.();
+          openRestartSessionConfirmation(record);
+        });
+        actionsRow.append(restart);
+        content.push(actionsRow);
+        sharedActionsRow = actionsRow;
+      }
+
+      if (restartAction?.kind && restartAction.kind !== 'confirming') {
+        content.push(
+          createText(
+            'p',
+            restartAction.kind === 'pending'
+              ? 'Restarting session…'
+              : (restartAction.message ?? ''),
+            restartAction.kind === 'failure'
+              ? 'stop-action-message stop-action-failure'
+              : 'stop-action-message',
+          ),
+        );
+      }
 
       if (action?.kind === 'confirming') {
         const panel = document.createElement('div');
@@ -2399,7 +2686,7 @@
           }, 0);
         }
       } else {
-        const row = document.createElement('div');
+        const row = sharedActionsRow ?? document.createElement('div');
         row.className = 'stop-action-row';
 
         const button = document.createElement('button');
@@ -2413,7 +2700,7 @@
           openKillSessionConfirmation(record);
         });
         row.append(button);
-        content.push(row);
+        if (sharedActionsRow === null) content.push(row);
       }
 
       if (action?.kind === 'pending') {
@@ -2434,7 +2721,10 @@
         );
       }
 
-      return createDetailSection(null, content, { ariaLabel: 'Session actions' });
+      return createDetailSection(null, content, {
+        ariaLabel: 'Session actions',
+        ariaLive: 'polite',
+      });
     }
 
     function getKillSessionButtonText(action) {
@@ -2512,6 +2802,7 @@
 
       const body = document.createElement('div');
       body.className = 'detail-section-body';
+      if (options.ariaLive) body.setAttribute('aria-live', options.ariaLive);
       for (const child of children) {
         if (child) {
           body.append(child);

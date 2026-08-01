@@ -42,6 +42,7 @@ REQUEST_TIMEOUT_SECONDS = 2.0
 SNAPSHOT_TIMEOUT_SECONDS = 10.0
 ACTION_HELPER_TIMEOUT_SECONDS = 60.0
 KILL_ACTION_HELPER_TIMEOUT_SECONDS = 5.0
+RESTART_ACTION_HELPER_TIMEOUT_SECONDS = 25.0
 MAX_REQUEST_BYTES = 8192
 ACTION_BODY_LIMIT_BYTES = 16 * 1024
 ACTION_TOKEN_PLACEHOLDER = b"__SESSION_DECK_ACTION_TOKEN__"
@@ -104,6 +105,12 @@ KILL_SESSION_HELPER_TIMEOUT_MESSAGE = (
 )
 KILL_SESSION_HELPER_FAILED_MESSAGE = (
     "End session action failed. Run /session-deck iterm2 doctor if this keeps happening."
+)
+RESTART_SESSION_HELPER_UNAVAILABLE_MESSAGE = (
+    "Restart session action is unavailable. Run /session-deck iterm2 doctor."
+)
+RESTART_SESSION_HELPER_INVALID_RESPONSE_MESSAGE = (
+    "Restart session action returned an invalid response. Refresh Session Deck before retrying."
 )
 BROWSER_FORBIDDEN_FIELDS = {
     "label",
@@ -907,6 +914,145 @@ def is_valid_kill_session_helper_response(payload: dict[str, Any]) -> bool:
     return False
 
 
+RESTART_SESSION_STATUSES = {
+    "restarted",
+    "not-eligible",
+    "stale-generation",
+    "already-in-progress",
+    "stop-failed",
+    "stopped-not-restarted",
+    "outcome-unknown",
+}
+RESTART_SESSION_REASON_CODES = {
+    "replacement-observed",
+    "managed-recipe-unavailable",
+    "recipe-not-bound",
+    "recipe-invalid",
+    "runtime-unavailable",
+    "identity-mismatch",
+    "session-file-unavailable",
+    "cwd-unavailable",
+    "pi-executable-unavailable",
+    "tmux-target-unavailable",
+    "tmux-pane-mismatch",
+    "unsafe-descendants",
+    "hosting-runtime",
+    "coordinator-runtime",
+    "generation-changed",
+    "operation-in-progress",
+    "termination-failed",
+    "pane-did-not-stop",
+    "respawn-failed",
+    "replacement-unobserved",
+    "operation-state-unknown",
+}
+
+# Keep this table aligned with the restart domain outcomes; retain recipe-invalid for compatibility.
+RESTART_SESSION_RESULT_TUPLES = {
+    ("restarted", "replacement-observed", False, True),
+    ("not-eligible", "managed-recipe-unavailable", False, False),
+    ("not-eligible", "recipe-not-bound", False, False),
+    ("not-eligible", "recipe-invalid", False, False),
+    ("not-eligible", "runtime-unavailable", True, False),
+    ("not-eligible", "identity-mismatch", False, False),
+    ("not-eligible", "session-file-unavailable", False, False),
+    ("not-eligible", "cwd-unavailable", False, False),
+    ("not-eligible", "pi-executable-unavailable", False, False),
+    ("not-eligible", "tmux-target-unavailable", False, False),
+    ("not-eligible", "tmux-pane-mismatch", False, False),
+    ("not-eligible", "unsafe-descendants", True, False),
+    ("not-eligible", "hosting-runtime", False, False),
+    ("not-eligible", "coordinator-runtime", False, False),
+    ("stale-generation", "generation-changed", False, False),
+    ("already-in-progress", "operation-in-progress", True, False),
+    ("stop-failed", "termination-failed", True, False),
+    ("stop-failed", "unsafe-descendants", True, False),
+    ("stopped-not-restarted", "pane-did-not-stop", True, False),
+    ("stopped-not-restarted", "tmux-target-unavailable", True, False),
+    ("stopped-not-restarted", "respawn-failed", True, False),
+    ("outcome-unknown", "replacement-unobserved", True, False),
+    ("outcome-unknown", "operation-state-unknown", True, False),
+}
+
+
+def run_restart_session_action(
+    config: InstallConfig,
+    payload: str,
+    effective_command_path: EffectiveCommandPath,
+) -> tuple[int, dict[str, Any]]:
+    helper_path = config.runtime.create_worktree_helper_path
+    if not helper_path.exists():
+        return 503, helper_failure_payload(RESTART_SESSION_HELPER_UNAVAILABLE_MESSAGE)
+    try:
+        request = json.loads(payload)
+        operation_id = request.get("operationId") if isinstance(request, dict) else None
+    except Exception:
+        operation_id = None
+    try:
+        completed = subprocess.run(
+            [str(config.runtime.node_executable_path), str(helper_path)],
+            input=json.dumps({**(request if isinstance(request, dict) else {}), "action": "restart-session"}),
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=RESTART_ACTION_HELPER_TIMEOUT_SECONDS,
+            env=build_child_process_env(effective_command_path),
+        )
+    except subprocess.TimeoutExpired:
+        if isinstance(operation_id, str):
+            return 200, {
+                "ok": False,
+                "status": "outcome-unknown",
+                "operationId": operation_id,
+                "reason": "operation-state-unknown",
+                "retryable": True,
+                "message": "Session Deck could not confirm the restart outcome. Reconcile before retrying.",
+            }
+        return 504, helper_failure_payload(RESTART_SESSION_HELPER_INVALID_RESPONSE_MESSAGE)
+    except Exception:
+        return 503, helper_failure_payload(RESTART_SESSION_HELPER_UNAVAILABLE_MESSAGE)
+    try:
+        response_payload = json.loads(completed.stdout)
+    except Exception:
+        return 500, helper_failure_payload(RESTART_SESSION_HELPER_INVALID_RESPONSE_MESSAGE)
+    if completed.returncode != 0:
+        return 400, sanitize_helper_failure_payload(
+            response_payload, RESTART_SESSION_HELPER_INVALID_RESPONSE_MESSAGE
+        )
+    if not is_valid_restart_session_helper_response(response_payload, operation_id):
+        return 500, helper_failure_payload(RESTART_SESSION_HELPER_INVALID_RESPONSE_MESSAGE)
+    return 200, response_payload
+
+
+def is_valid_restart_session_helper_response(
+    payload: Any, expected_operation_id: Optional[str] = None
+) -> bool:
+    if not isinstance(payload, dict) or find_forbidden_field(payload) is not None:
+        return False
+    if set(payload.keys()) != {
+        "ok", "status", "operationId", "reason", "retryable", "message"
+    }:
+        return False
+    status = payload.get("status")
+    operation_id = payload.get("operationId")
+    reason = payload.get("reason")
+    retryable = payload.get("retryable")
+    ok = payload.get("ok")
+    return (
+        isinstance(status, str)
+        and status in RESTART_SESSION_STATUSES
+        and isinstance(operation_id, str)
+        and len(operation_id.strip()) > 0
+        and (expected_operation_id is None or operation_id == expected_operation_id)
+        and isinstance(reason, str)
+        and reason in RESTART_SESSION_REASON_CODES
+        and isinstance(retryable, bool)
+        and isinstance(ok, bool)
+        and isinstance(payload.get("message"), str)
+        and (status, reason, retryable, ok) in RESTART_SESSION_RESULT_TUPLES
+    )
+
+
 def resolve_static_path(config: InstallConfig, pathname: str) -> Optional[Path]:
     normalized = "/index.html" if pathname in ("", "/") else pathname
     normalized = posixpath.normpath(normalized)
@@ -951,6 +1097,7 @@ class SessionDeckToolbeltHandler(BaseHTTPRequestHandler):
                         "create-session",
                         "open-terminal",
                         "kill-session",
+                        "restart-session",
                     ],
                     "webRoot": str(config.runtime.web_root_path),
                 },
@@ -986,6 +1133,7 @@ class SessionDeckToolbeltHandler(BaseHTTPRequestHandler):
             "/actions/create-session",
             "/actions/open-terminal",
             "/actions/kill-session",
+            "/actions/restart-session",
         ):
             self.send_json(404, {"ok": False, "status": "failed", "message": "Not found"})
             return
@@ -1024,6 +1172,12 @@ class SessionDeckToolbeltHandler(BaseHTTPRequestHandler):
             )
         elif parsed.path == "/actions/kill-session":
             status_code, response_payload = run_kill_session_action(
+                config,
+                body,
+                effective_command_path,
+            )
+        elif parsed.path == "/actions/restart-session":
+            status_code, response_payload = run_restart_session_action(
                 config,
                 body,
                 effective_command_path,

@@ -92,6 +92,7 @@ function buildSnapshotRecord(overrides: Partial<SessionDeckRecord> = {}): Sessio
     prUrl: 'https://github.com/owner/repo/pull/42',
     isLinkedWorktree: false,
     worktreeLabel: null,
+    restart: { available: false, reason: 'managed-recipe-unavailable' },
     activityState: 'idle',
     activityAgeMs: null,
     currentToolName: null,
@@ -448,6 +449,7 @@ describe('session-deck joined command', () => {
       prUrl: publicRecord.prUrl,
       isLinkedWorktree: publicRecord.isLinkedWorktree,
       worktreeLabel: publicRecord.worktreeLabel,
+      restart: publicRecord.restart!,
       ...(publicRecord.derivedFacets === undefined
         ? {}
         : { derivedFacets: publicRecord.derivedFacets }),
@@ -888,7 +890,8 @@ describe('session-deck joined command', () => {
 
         expect(renderText()).toContain('Reap complete: removed 1 expired presence record.');
         expect(renderText()).toContain('←→ switch repo');
-        expect(renderText()).toContain('o open terminal');
+        expect(renderText()).toContain('o open');
+        expect(renderText()).toContain('R restart');
         expect(renderText()).toContain('alpha');
         expect(renderText()).toContain('session: session-abc · pid: 101');
         expect(renderText()).toContain('runtime: 922f7ac8deadbeef');

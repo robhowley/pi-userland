@@ -51,6 +51,11 @@ describe('tauri-host', () => {
     });
     await host.openTerminal('runtime-1');
     await host.killSession('runtime-1');
+    await host.restartSession({
+      runtimeId: 'runtime-1',
+      generation: 'generation-1',
+      operationId: 'operation-1',
+    });
     await host.openExternal('https://example.com');
     await host.copyText('copied');
     await host.doctorStatus();
@@ -89,6 +94,16 @@ describe('tauri-host', () => {
       ],
       ['open_terminal', { request: { runtimeId: 'runtime-1' } }],
       ['kill_session', { request: { runtimeId: 'runtime-1' } }],
+      [
+        'restart_session',
+        {
+          request: {
+            runtimeId: 'runtime-1',
+            generation: 'generation-1',
+            operationId: 'operation-1',
+          },
+        },
+      ],
       ['open_external', { url: 'https://example.com' }],
       ['copy_text', { text: 'copied' }],
       ['doctor_status'],

@@ -356,7 +356,7 @@ describe('session-deck detached tmux launch', () => {
     ]);
   });
 
-  it('returns launched with one explicit environment and a symbolic pi command', async () => {
+  it('returns launched with one assigned runtime and the exact resolved Pi executable', async () => {
     const env: NodeJS.ProcessEnv = {
       HOME: '/Users/test',
       PATH: "/runtime/tools/bin:/tmp/with space:$HOME;`echo hi`:/tmp/O'Hare",
@@ -390,6 +390,7 @@ describe('session-deck detached tmux launch', () => {
       execFile,
       env,
       postLaunchVerifyDelayMs: 0,
+      randomUUID: () => FRESH_RUNTIME_IDS[0],
     });
 
     expect(result).toMatchObject({
@@ -403,7 +404,14 @@ describe('session-deck detached tmux launch', () => {
       throw new Error('Expected successful launch result.');
     }
 
-    const expectedLaunchCommand = buildPiLauncherCommand("Feature O'Hare", env['PATH'] ?? '');
+    const expectedLaunchCommand = buildPiLauncherCommand(
+      "Feature O'Hare",
+      env['PATH'] ?? '',
+      { mode: 'ambient' },
+      FRESH_RUNTIME_IDS[0],
+      whichPiPath,
+      null,
+    );
     expect(calls.map(({ file, args }) => ({ file, args }))).toEqual([
       { file: 'tmux', args: ['-V'] },
       { file: 'which', args: ['pi'] },
@@ -444,8 +452,8 @@ describe('session-deck detached tmux launch', () => {
       expect(call.options.timeoutMs).toBe(10_000);
     }
     expect(expectedLaunchCommand).toContain('/usr/bin/env');
-    expect(expectedLaunchCommand).toContain(' pi --name ');
-    expect(expectedLaunchCommand).not.toContain(whichPiPath);
+    expect(expectedLaunchCommand).toContain(` ${whichPiPath} --name `);
+    expect(expectedLaunchCommand).not.toContain(' pi --name ');
   });
 
   it('reuses only the generated session name when cwd matches exactly', async () => {
@@ -570,14 +578,18 @@ describe('session-deck detached tmux launch', () => {
         execFile,
         env: { PATH: '' },
         agentDir: { mode: 'default' },
+        randomUUID: () => FRESH_RUNTIME_IDS[0],
       }),
     ).resolves.toMatchObject({
       requested: true,
       ok: false,
       reason: 'tmux-unavailable',
-      manualCommand: `cd /tmp/repo-wt-feature && ${buildPiLauncherCommand('Feature', '', {
-        mode: 'default',
-      })}`,
+      manualCommand: `cd /tmp/repo-wt-feature && ${buildPiLauncherCommand(
+        'Feature',
+        '',
+        { mode: 'default' },
+        FRESH_RUNTIME_IDS[0],
+      )}`,
     });
   });
 
@@ -676,6 +688,7 @@ describe('session-deck detached tmux launch', () => {
         env,
         postLaunchVerifyDelayMs: 0,
         agentDir: { mode: 'custom', customDir: '/Users/test/.pi/agent-custom' },
+        randomUUID: () => FRESH_RUNTIME_IDS[0],
       },
     );
 
@@ -703,10 +716,14 @@ describe('session-deck detached tmux launch', () => {
           '/tmp/scratch',
           '-n',
           'scratch',
-          buildPiLauncherCommand('scratch', '/runtime/bin', {
-            mode: 'custom',
-            customDir: '/Users/test/.pi/agent-custom',
-          }),
+          buildPiLauncherCommand(
+            'scratch',
+            '/runtime/bin',
+            { mode: 'custom', customDir: '/Users/test/.pi/agent-custom' },
+            FRESH_RUNTIME_IDS[0],
+            '/runtime/pi/bin/pi',
+            null,
+          ),
         ],
       },
       {

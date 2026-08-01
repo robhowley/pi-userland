@@ -16,6 +16,10 @@ export function toPublicSessionDeckRecord(record: SessionDeckRecord): SessionDec
     prUrl: record.prUrl,
     isLinkedWorktree: record.isLinkedWorktree,
     worktreeLabel: record.worktreeLabel,
+    restart:
+      record.restart === undefined
+        ? { available: false, reason: 'managed-recipe-unavailable' }
+        : { ...record.restart },
     ...(record.derivedFacets === undefined
       ? {}
       : {

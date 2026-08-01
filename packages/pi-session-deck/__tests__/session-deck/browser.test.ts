@@ -194,6 +194,7 @@ function createBrowser(
     theme: Theme;
     openSelected: (record: SessionDeckRecord) => Promise<{ ok: boolean; message: string }>;
     killSelected: (record: SessionDeckRecord) => Promise<{ ok: boolean; message: string }>;
+    restartSelected: ConstructorParameters<typeof SessionDeckBrowser>[0]['restartSelected'];
     createWorktree: ConstructorParameters<typeof SessionDeckBrowser>[0]['createWorktree'];
     previewLaunchContext: ConstructorParameters<
       typeof SessionDeckBrowser
@@ -210,6 +211,9 @@ function createBrowser(
     ...(overrides.reapLines === undefined ? {} : { reapLines: overrides.reapLines }),
     ...(overrides.openSelected === undefined ? {} : { openSelected: overrides.openSelected }),
     ...(overrides.killSelected === undefined ? {} : { killSelected: overrides.killSelected }),
+    ...(overrides.restartSelected === undefined
+      ? {}
+      : { restartSelected: overrides.restartSelected }),
     ...(overrides.createWorktree === undefined ? {} : { createWorktree: overrides.createWorktree }),
     ...(overrides.previewLaunchContext === undefined
       ? {}
@@ -362,7 +366,7 @@ describe('SessionDeckBrowser', () => {
       lines,
       (line) =>
         line.includes(
-          '↑↓ move · ←→ switch repo · enter details · w new Pi session · o open terminal · k end session · r refresh · q close',
+          '↑↓ move · ←→ switch repo · enter details · w new Pi session · o open · R restart · k end · r refresh · q close',
         ),
       'help line',
     );
@@ -2407,6 +2411,160 @@ describe('SessionDeckBrowser', () => {
     expect(boxedContentLines.length).toBeGreaterThan(9);
     expect(boxedContentLines.some((line) => line.includes('chips:'))).toBe(true);
     expect(boxedContentLines.some((line) => line.includes('diagnostics:'))).toBe(true);
+  });
+
+  it('shows restart safety ineligibility without opening confirmation', () => {
+    const browser = createBrowser({
+      initialView: buildSnapshot({
+        records: [
+          buildSnapshotRecord({
+            restart: { available: false, reason: 'unsafe-descendants' },
+          }),
+        ],
+      }),
+      restartSelected: vi.fn(),
+    });
+
+    expect(renderText(browser)).toContain('Restart is unavailable while Pi owns child processes.');
+    browser.handleInput('R');
+    const output = renderText(browser);
+    expect(output).toContain('Restart is unavailable while Pi owns child processes.');
+    expect(output).not.toContain('may be force-killed after 2 seconds');
+  });
+
+  it('uses uppercase R for a frozen restart request while lowercase r remains refresh', async () => {
+    const reload = vi.fn(async () =>
+      buildSnapshot({
+        records: [
+          buildSnapshotRecord({
+            restart: { available: true, generation: 'generation-one' },
+          }),
+        ],
+      }),
+    );
+    const restartSelected = vi.fn(async (request) => ({
+      ok: true,
+      status: 'restarted' as const,
+      operationId: request.operationId,
+      reason: 'replacement-observed' as const,
+      retryable: false,
+      message: 'Session restarted.',
+    }));
+    const browser = createBrowser({
+      initialView: buildSnapshot({
+        records: [
+          buildSnapshotRecord({
+            restart: { available: true, generation: 'generation-one' },
+          }),
+        ],
+      }),
+      reload,
+      restartSelected,
+    });
+
+    browser.handleInput('r');
+    await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+    expect(restartSelected).not.toHaveBeenCalled();
+
+    browser.handleInput('R');
+    expect(renderText(browser)).toContain('may be force-killed after 2 seconds');
+    browser.handleInput('enter');
+    await vi.waitFor(() => expect(restartSelected).toHaveBeenCalledTimes(1));
+    expect(restartSelected).toHaveBeenCalledWith({
+      runtimeId: '922f7ac8deadbeef',
+      generation: 'generation-one',
+      operationId: expect.any(String),
+    });
+  });
+
+  it('reuses runtime identity and restart tokens after unknown reconciliation', async () => {
+    const generation = 'generation-one';
+    const requests: Array<{
+      runtimeId: string;
+      generation: string;
+      operationId: string;
+    }> = [];
+    const operationId = 'operation-unknown';
+    const reload = vi.fn(async () =>
+      buildSnapshot({
+        records: [
+          buildSnapshotRecord({
+            restart: {
+              available: true,
+              generation,
+              operation: {
+                operationId,
+                status: 'outcome-unknown',
+                retryable: true,
+              },
+            },
+          }),
+        ],
+      }),
+    );
+    const restartSelected = vi.fn(async (request) => {
+      requests.push(request);
+      return requests.length === 1
+        ? {
+            ok: false,
+            status: 'outcome-unknown' as const,
+            operationId: request.operationId,
+            reason: 'operation-state-unknown' as const,
+            retryable: true,
+            message:
+              'Session Deck could not confirm the restart outcome. Reconcile before retrying.',
+          }
+        : {
+            ok: true,
+            status: 'restarted' as const,
+            operationId: request.operationId,
+            reason: 'replacement-observed' as const,
+            retryable: false,
+            message: 'Session restarted.',
+          };
+    });
+    const browser = createBrowser({
+      initialView: buildSnapshot({
+        records: [
+          buildSnapshotRecord({
+            restart: {
+              available: true,
+              generation,
+              operation: {
+                operationId,
+                status: 'stopped-not-restarted',
+                retryable: true,
+              },
+            },
+          }),
+        ],
+      }),
+      reload,
+      restartSelected,
+    });
+
+    browser.handleInput('R');
+    browser.handleInput('enter');
+    await vi.waitFor(() => expect(restartSelected).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    browser.handleInput('R');
+    browser.handleInput('enter');
+    await vi.waitFor(() => expect(restartSelected).toHaveBeenCalledTimes(2));
+
+    expect(requests).toEqual([
+      {
+        runtimeId: '922f7ac8deadbeef',
+        generation,
+        operationId,
+      },
+      {
+        runtimeId: '922f7ac8deadbeef',
+        generation,
+        operationId,
+      },
+    ]);
   });
 
   it('keeps every rendered line within the requested width', () => {

@@ -6,6 +6,7 @@ import type {
 import type { ChipDiagnosticCode } from './chips/types.js';
 import type { IdentityDiagnosticCode, SessionDerivedFacets } from './identity/types.js';
 import type { PresenceDiagnosticCode, PresenceState } from './presence/types.js';
+import type { RestartEligibility } from './restart/types.js';
 
 export type SessionDeckDiagnosticCode =
   | PresenceDiagnosticCode
@@ -35,6 +36,7 @@ export interface SessionDeckRecord {
   prUrl: string | null;
   isLinkedWorktree: boolean | null;
   worktreeLabel: string | null;
+  restart?: RestartEligibility;
   derivedFacets?: SessionDerivedFacets;
   activityState: ActivityState;
   activityAgeMs: number | null;
