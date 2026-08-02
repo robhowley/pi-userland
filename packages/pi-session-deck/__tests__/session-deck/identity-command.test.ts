@@ -893,7 +893,7 @@ describe('session-deck joined command', () => {
         const renderText = () => component.render(120).join('\n');
 
         expect(renderText()).toContain('Reap complete: removed 1 expired presence record.');
-        expect(renderText()).toContain('←→ switch repo');
+        expect(renderText()).toContain('←→ switch group');
         expect(renderText()).toContain('o open');
         expect(renderText()).toContain('R restart');
         expect(renderText()).toContain('alpha');
