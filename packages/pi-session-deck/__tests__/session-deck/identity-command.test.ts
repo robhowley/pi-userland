@@ -84,6 +84,7 @@ function buildSnapshotRecord(overrides: Partial<SessionDeckRecord> = {}): Sessio
     presenceReason: 'fresh_heartbeat',
     heartbeatAgeMs: 5_000,
     sessionId: 'session-abc',
+    projectId: null,
     sessionName: null,
     repoName: 'project',
     qualifiedRepoName: 'owner/project',
@@ -114,6 +115,7 @@ function buildSnapshot(
     generatedAt: '2026-06-17T12:10:00.000Z',
     records: options.records ?? [buildSnapshotRecord()],
     diagnostics: options.diagnostics ?? [],
+    projectState: { status: 'available', projects: [] },
   };
 }
 
@@ -422,6 +424,7 @@ describe('session-deck joined command', () => {
     const { api, getHandler } = createMockAPI();
     const publicRecord = buildSnapshotRecord({
       sessionName: 'alpha',
+      projectId: '550e8400-e29b-41d4-a716-446655440000',
       derivedFacets: {
         persistence: 'file_backed',
         rowKind: 'durable_session',
@@ -441,6 +444,7 @@ describe('session-deck joined command', () => {
         : { presenceReason: publicRecord.presenceReason }),
       heartbeatAgeMs: publicRecord.heartbeatAgeMs,
       sessionId: publicRecord.sessionId,
+      projectId: publicRecord.projectId,
       sessionName: publicRecord.sessionName,
       repoName: publicRecord.repoName,
       qualifiedRepoName: publicRecord.qualifiedRepoName,
@@ -889,7 +893,7 @@ describe('session-deck joined command', () => {
         const renderText = () => component.render(120).join('\n');
 
         expect(renderText()).toContain('Reap complete: removed 1 expired presence record.');
-        expect(renderText()).toContain('←→ switch repo');
+        expect(renderText()).toContain('←→ switch group');
         expect(renderText()).toContain('o open');
         expect(renderText()).toContain('R restart');
         expect(renderText()).toContain('alpha');

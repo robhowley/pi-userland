@@ -112,6 +112,18 @@ RESTART_SESSION_HELPER_UNAVAILABLE_MESSAGE = (
 RESTART_SESSION_HELPER_INVALID_RESPONSE_MESSAGE = (
     "Restart session action returned an invalid response. Refresh Session Deck before retrying."
 )
+PROJECT_ACTION_HELPER_UNAVAILABLE_MESSAGE = (
+    "Project editing is unavailable. Refresh Session Deck or run /session-deck iterm2 doctor."
+)
+PROJECT_ACTION_HELPER_INVALID_RESPONSE_MESSAGE = (
+    "Project editing returned an invalid response. Refresh Session Deck before retrying."
+)
+PROJECT_ACTION_HELPER_TIMEOUT_MESSAGE = (
+    "Project editing did not finish before the helper timeout. Refresh Session Deck before retrying."
+)
+PROJECT_ACTION_HELPER_FAILED_MESSAGE = (
+    "Project editing is unavailable. Refresh Session Deck or run /session-deck iterm2 doctor."
+)
 BROWSER_FORBIDDEN_FIELDS = {
     "label",
     "pid",
@@ -148,6 +160,7 @@ BROWSER_FORBIDDEN_FIELDS = {
     "sessionFile",
 }
 PRIVATE_PATH_RE = re.compile(r"(?<![A-Za-z0-9._-])(/(?:[^/\s]+/)+[^/\s]+)")
+PROJECT_ID_RE = re.compile(r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$")
 
 INVALID_ATTACH_ARGV_MESSAGE = "Bridge only accepts exact tmux attach argv in 'tmuxAttachArgv'."
 INVALID_ITERM_SESSION_ID_MESSAGE = "Bridge only accepts non-empty iTerm2 session ids in 'itermSessionId'."
@@ -619,6 +632,12 @@ CREATE_SESSION_HELPER_MESSAGES = ActionHelperMessages(
     timeout=CREATE_SESSION_HELPER_TIMEOUT_MESSAGE,
     failed=CREATE_SESSION_HELPER_FAILED_MESSAGE,
 )
+PROJECT_ACTION_HELPER_MESSAGES = ActionHelperMessages(
+    unavailable=PROJECT_ACTION_HELPER_UNAVAILABLE_MESSAGE,
+    invalid_response=PROJECT_ACTION_HELPER_INVALID_RESPONSE_MESSAGE,
+    timeout=PROJECT_ACTION_HELPER_TIMEOUT_MESSAGE,
+    failed=PROJECT_ACTION_HELPER_FAILED_MESSAGE,
+)
 
 
 def sanitize_helper_failure_payload(
@@ -734,6 +753,112 @@ def run_create_session_action(
         effective_command_path,
         CREATE_SESSION_HELPER_MESSAGES,
     )
+
+
+PROJECT_ACTION_FAILURE_MESSAGES = {
+    "invalid-session-id": "A non-empty session ID is required.",
+    "invalid-project-id": "A valid project ID is required.",
+    "invalid-project-name": "Project name must be 1–80 characters and contain no control characters.",
+    "project-not-found": "Project does not exist.",
+    "projects-unavailable": "Project editing is unavailable.",
+    "write-failed": "Project update failed.",
+}
+PROJECT_ACTION_SUCCESS_KEYS = {
+    "created-and-assigned": {"ok", "status", "project", "sessionId"},
+    "assigned": {"ok", "status", "projectId", "sessionId"},
+    "unassigned": {"ok", "status", "sessionId"},
+    "deleted": {"ok", "status", "projectId"},
+}
+
+
+def run_project_action(
+    config: InstallConfig,
+    payload: str,
+    effective_command_path: EffectiveCommandPath,
+) -> tuple[int, dict[str, Any]]:
+    status_code, response_payload = run_create_action_helper(
+        config,
+        config.runtime.create_worktree_helper_path,
+        payload,
+        effective_command_path,
+        PROJECT_ACTION_HELPER_MESSAGES,
+    )
+    if status_code != 200:
+        if status_code == 400:
+            return status_code, helper_failure_payload(PROJECT_ACTION_HELPER_FAILED_MESSAGE)
+        return status_code, response_payload
+    if not is_valid_project_action_helper_response(response_payload):
+        return 500, helper_failure_payload(PROJECT_ACTION_HELPER_INVALID_RESPONSE_MESSAGE)
+    return 200, response_payload
+
+
+def is_valid_project_action_helper_response(payload: dict[str, Any]) -> bool:
+    if find_forbidden_field(payload) is not None:
+        return False
+
+    status = payload.get("status")
+    if not isinstance(status, str):
+        return False
+    if payload.get("ok") is True:
+        expected_keys = PROJECT_ACTION_SUCCESS_KEYS.get(status)
+        if expected_keys is None or set(payload.keys()) != expected_keys:
+            return False
+        if status == "created-and-assigned" and not is_valid_project(payload.get("project")):
+            return False
+        if status in ("created-and-assigned", "assigned", "unassigned") and not is_non_empty_string(
+            payload.get("sessionId")
+        ):
+            return False
+        if status in ("assigned", "deleted") and not is_valid_project_id(
+            payload.get("projectId")
+        ):
+            return False
+        return True
+
+    if payload.get("ok") is not False:
+        return False
+    if status == "partial":
+        if set(payload.keys()) != {
+            "ok", "status", "reason", "retryable", "message", "project", "sessionId"
+        }:
+            return False
+        return (
+            payload.get("reason") == "write-failed"
+            and payload.get("retryable") is True
+            and payload.get("message")
+            == "Project was created, but assignment could not be confirmed."
+            and is_valid_project(payload.get("project"))
+            and is_non_empty_string(payload.get("sessionId"))
+        )
+
+    if status != "failed" or set(payload.keys()) != {
+        "ok", "status", "reason", "retryable", "message"
+    }:
+        return False
+    reason = payload.get("reason")
+    return (
+        isinstance(reason, str)
+        and reason in PROJECT_ACTION_FAILURE_MESSAGES
+        and isinstance(payload.get("retryable"), bool)
+        and payload.get("message") == PROJECT_ACTION_FAILURE_MESSAGES.get(reason)
+    )
+
+
+def is_valid_project(candidate: Any) -> bool:
+    return (
+        isinstance(candidate, dict)
+        and set(candidate.keys()) == {"projectId", "name"}
+        and is_valid_project_id(candidate.get("projectId"))
+        and is_non_empty_string(candidate.get("name"))
+    )
+
+
+def is_valid_project_id(candidate: Any) -> bool:
+    return isinstance(candidate, str) and PROJECT_ID_RE.fullmatch(candidate) is not None
+
+
+def is_non_empty_string(candidate: Any) -> bool:
+    return isinstance(candidate, str) and len(candidate) > 0
 
 
 OPEN_TERMINAL_SAFE_SUCCESS_MESSAGE = "Terminal open requested."
@@ -1098,6 +1223,7 @@ class SessionDeckToolbeltHandler(BaseHTTPRequestHandler):
                         "open-terminal",
                         "kill-session",
                         "restart-session",
+                        "project-editing",
                     ],
                     "webRoot": str(config.runtime.web_root_path),
                 },
@@ -1134,6 +1260,7 @@ class SessionDeckToolbeltHandler(BaseHTTPRequestHandler):
             "/actions/open-terminal",
             "/actions/kill-session",
             "/actions/restart-session",
+            "/actions/project",
         ):
             self.send_json(404, {"ok": False, "status": "failed", "message": "Not found"})
             return
@@ -1184,6 +1311,12 @@ class SessionDeckToolbeltHandler(BaseHTTPRequestHandler):
             )
         elif parsed.path == "/actions/create-session":
             status_code, response_payload = run_create_session_action(
+                config,
+                body,
+                effective_command_path,
+            )
+        elif parsed.path == "/actions/project":
+            status_code, response_payload = run_project_action(
                 config,
                 body,
                 effective_command_path,

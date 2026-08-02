@@ -610,6 +610,7 @@ class ImportAndConfigTests(unittest.TestCase):
         self.assertIn("create-session", health["actionCapabilities"])
         self.assertIn("kill-session", health["actionCapabilities"])
         self.assertIn("restart-session", health["actionCapabilities"])
+        self.assertIn("project-editing", health["actionCapabilities"])
         self.assertNotIn(effective_command_path.value, json.dumps(health))
 
         with urlopen(f"{base_url}/", timeout=1.0) as response:
@@ -749,6 +750,107 @@ class ImportAndConfigTests(unittest.TestCase):
             AUTO.helper_failure_payload(AUTO.CREATE_SESSION_HELPER_UNAVAILABLE_MESSAGE),
         )
         self.assertNotIn("Create-worktree", payload["message"])
+
+    def test_toolbelt_project_action_requires_token_and_runs_existing_helper(self):
+        fixture = TempRuntime(self)
+        project_id = "123e4567-e89b-42d3-a456-426614174000"
+        fixture.write_helper(
+            "import json, sys\n"
+            "payload = json.loads(sys.stdin.read())\n"
+            "expected = {'action': 'assign-project', 'sessionId': 'session-1', 'projectId': '123e4567-e89b-42d3-a456-426614174000'}\n"
+            "if payload != expected:\n"
+            "    print(json.dumps({'ok': False, 'status': 'failed', 'message': 'unexpected request'}))\n"
+            "    raise SystemExit(1)\n"
+            "print(json.dumps({'ok': True, 'status': 'assigned', 'sessionId': payload['sessionId'], 'projectId': payload['projectId']}))\n"
+        )
+        fixture.payload["runtime"]["nodeExecutablePath"] = sys.executable
+        fixture.write_state()
+        http = AUTO.start_http_server(fixture.config(), make_effective_command_path())
+        self.addCleanup(http.close)
+        base_url = f"http://127.0.0.1:{http.port}"
+        payload = json.dumps(
+            {"action": "assign-project", "sessionId": "session-1", "projectId": project_id}
+        ).encode("utf-8")
+        request = Request(
+            f"{base_url}/actions/project",
+            data=payload,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "X-Session-Deck-Action-Token": http.server.session_deck_action_token,
+            },
+        )
+
+        with urlopen(request, timeout=1.0) as response:
+            self.assertEqual(
+                json.loads(response.read().decode("utf-8")),
+                {
+                    "ok": True,
+                    "status": "assigned",
+                    "sessionId": "session-1",
+                    "projectId": project_id,
+                },
+            )
+
+        missing_token = Request(
+            f"{base_url}/actions/project",
+            data=payload,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with self.assertRaises(HTTPError) as raised:
+            urlopen(missing_token, timeout=1.0)
+        self.assertEqual(raised.exception.code, 403)
+
+    def test_toolbelt_project_action_rejects_old_or_unsafe_helper_results_without_breaking_snapshot(self):
+        fixture = TempRuntime(self)
+        fixture.write_helper(
+            "import json\n"
+            "print(json.dumps({'ok': False, 'status': 'failed', 'message': 'Unsupported worktree helper action.'}))\n"
+            "raise SystemExit(1)\n"
+        )
+        fixture.payload["runtime"]["nodeExecutablePath"] = sys.executable
+        fixture.write_state()
+        config = fixture.config()
+        http = AUTO.start_http_server(config, make_effective_command_path())
+        self.addCleanup(http.close)
+        base_url = f"http://127.0.0.1:{http.port}"
+        request = Request(
+            f"{base_url}/actions/project",
+            data=b'{"action":"unassign-project","sessionId":"session-1"}',
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "X-Session-Deck-Action-Token": http.server.session_deck_action_token,
+            },
+        )
+
+        with self.assertRaises(HTTPError) as raised:
+            urlopen(request, timeout=1.0)
+        self.assertEqual(raised.exception.code, 400)
+        self.assertEqual(
+            json.loads(raised.exception.read().decode("utf-8")),
+            AUTO.helper_failure_payload(AUTO.PROJECT_ACTION_HELPER_FAILED_MESSAGE),
+        )
+
+        with urlopen(f"{base_url}/snapshot.json", timeout=1.0) as response:
+            snapshot = json.loads(response.read().decode("utf-8"))
+        self.assertEqual(snapshot["records"], [])
+        self.assertEqual(snapshot["diagnostics"][0]["code"], "toolbelt_snapshot_unavailable")
+
+        fixture.write_helper(
+            "import json\n"
+            "print(json.dumps({'ok': True, 'status': 'assigned', 'sessionId': 'session-1', 'projectId': '123e4567-e89b-42d3-a456-426614174000', 'cwd': '/private/repo'}))\n"
+        )
+        status_code, payload = AUTO.run_project_action(
+            config, "{}", make_effective_command_path()
+        )
+        self.assertEqual(status_code, 500)
+        self.assertEqual(
+            payload,
+            AUTO.helper_failure_payload(AUTO.PROJECT_ACTION_HELPER_INVALID_RESPONSE_MESSAGE),
+        )
+        assert_browser_safe_payload(self, payload, str(fixture.root), "/private/repo")
 
     def test_toolbelt_create_worktree_preview_route_runs_helper(self):
         fixture = TempRuntime(self)

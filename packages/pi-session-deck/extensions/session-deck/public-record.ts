@@ -8,6 +8,7 @@ export function toPublicSessionDeckRecord(record: SessionDeckRecord): SessionDec
     ...(record.presenceReason === undefined ? {} : { presenceReason: record.presenceReason }),
     heartbeatAgeMs: record.heartbeatAgeMs,
     sessionId: record.sessionId,
+    projectId: record.projectId ?? null,
     sessionName: record.sessionName,
     repoName: record.repoName,
     qualifiedRepoName: record.qualifiedRepoName,

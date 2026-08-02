@@ -28,6 +28,12 @@
  *   openTerminal: (runtimeId: string) => Promise<unknown>,
  *   killSession: (runtimeId: string) => Promise<unknown>,
  *   restartSession: (request: { runtimeId: string, generation: string, operationId: string }) => Promise<unknown>,
+ *   updateProject: (request:
+ *     | { action: 'create-and-assign', sessionId: string, name: string }
+ *     | { action: 'assign-project', sessionId: string, projectId: string }
+ *     | { action: 'unassign-project', sessionId: string }
+ *     | { action: 'delete-project', projectId: string }
+ *   ) => Promise<unknown>,
  *   openExternal: (url: string) => Promise<{ ok: boolean, message?: string }>,
  *   copyText: (text: string) => Promise<{ ok: boolean, message?: string }>,
  *   doctorCommand: string,
@@ -92,6 +98,9 @@ export function createTauriSessionDeckHost(options = {}) {
     },
     restartSession(request) {
       return invokeCommand('restart_session', { request });
+    },
+    updateProject(request) {
+      return invokeCommand('update_project', { request });
     },
     openExternal(url) {
       return /** @type {Promise<{ ok: boolean, message?: string }>} */ (

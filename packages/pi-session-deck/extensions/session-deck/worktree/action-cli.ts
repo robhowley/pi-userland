@@ -1,6 +1,14 @@
 #!/usr/bin/env node
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import {
+  assignProject,
+  createAndAssignProject,
+  deleteProject,
+  unassignProject,
+} from '../projects/actions.js';
+import type { ProjectActionOptions } from '../projects/actions.js';
+import type { ProjectActionResult } from '../projects/types.js';
 import { orchestrateCreateSession } from '../session/create.js';
 import { restartSessionDeckRuntime } from '../restart/orchestrator.js';
 import { normalizeRestartSessionRequest } from '../restart/store.js';
@@ -116,6 +124,17 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (isProjectAction(action.action)) {
+    const request = normalizeProjectActionRequest(parsed);
+    if (request === null) {
+      writeJson({ ok: false, status: 'failed', message: 'Project request is invalid.' });
+      process.exitCode = 1;
+      return;
+    }
+    writeJson(await runProjectAction(request));
+    return;
+  }
+
   const request = normalizeActionRequest(parsed);
   if (!request.ok) {
     writeJson({ ok: false, status: 'failed', message: request.message });
@@ -218,7 +237,11 @@ export function getRequestedAction(parsed: unknown):
         | 'create-session'
         | 'restart-session'
         | 'preview-base-ref'
-        | 'preview-launch-context';
+        | 'preview-launch-context'
+        | 'create-and-assign'
+        | 'assign-project'
+        | 'unassign-project'
+        | 'delete-project';
     }
   | { ok: false; message: string } {
   if (!isRecord(parsed)) {
@@ -234,7 +257,11 @@ export function getRequestedAction(parsed: unknown):
     action === 'create-session' ||
     action === 'restart-session' ||
     action === 'preview-base-ref' ||
-    action === 'preview-launch-context'
+    action === 'preview-launch-context' ||
+    action === 'create-and-assign' ||
+    action === 'assign-project' ||
+    action === 'unassign-project' ||
+    action === 'delete-project'
   ) {
     return { ok: true, action };
   }
@@ -334,6 +361,106 @@ export function toBrowserSafeCreateWorktreeActionResult(
   }
 
   throw new Error('Unhandled worktree action result status.');
+}
+
+export type ProjectActionRequest =
+  | { action: 'create-and-assign'; sessionId: string; name: string }
+  | { action: 'assign-project'; sessionId: string; projectId: string }
+  | { action: 'unassign-project'; sessionId: string }
+  | { action: 'delete-project'; projectId: string };
+
+export function normalizeProjectActionRequest(parsed: unknown): ProjectActionRequest | null {
+  if (!isRecord(parsed) || !isProjectAction(parsed['action'])) return null;
+
+  switch (parsed['action']) {
+    case 'create-and-assign':
+      return hasExactKeys(parsed, ['action', 'sessionId', 'name']) &&
+        typeof parsed['sessionId'] === 'string' &&
+        typeof parsed['name'] === 'string'
+        ? { action: parsed['action'], sessionId: parsed['sessionId'], name: parsed['name'] }
+        : null;
+    case 'assign-project':
+      return hasExactKeys(parsed, ['action', 'sessionId', 'projectId']) &&
+        typeof parsed['sessionId'] === 'string' &&
+        typeof parsed['projectId'] === 'string'
+        ? {
+            action: parsed['action'],
+            sessionId: parsed['sessionId'],
+            projectId: parsed['projectId'],
+          }
+        : null;
+    case 'unassign-project':
+      return hasExactKeys(parsed, ['action', 'sessionId']) &&
+        typeof parsed['sessionId'] === 'string'
+        ? { action: parsed['action'], sessionId: parsed['sessionId'] }
+        : null;
+    case 'delete-project':
+      return hasExactKeys(parsed, ['action', 'projectId']) &&
+        typeof parsed['projectId'] === 'string'
+        ? { action: parsed['action'], projectId: parsed['projectId'] }
+        : null;
+  }
+}
+
+export async function runProjectAction(
+  request: ProjectActionRequest,
+  options: ProjectActionOptions = {},
+): Promise<ProjectActionResult> {
+  let result: ProjectActionResult;
+  switch (request.action) {
+    case 'create-and-assign':
+      result = await createAndAssignProject(request.sessionId, request.name, options);
+      break;
+    case 'assign-project':
+      result = await assignProject(request.sessionId, request.projectId, options);
+      break;
+    case 'unassign-project':
+      result = await unassignProject(request.sessionId, options);
+      break;
+    case 'delete-project':
+      result = await deleteProject(request.projectId, options);
+      break;
+  }
+  return toBrowserSafeProjectActionResult(result);
+}
+
+export function toBrowserSafeProjectActionResult(result: ProjectActionResult): ProjectActionResult {
+  if (result.ok) return result;
+  if (result.status === 'partial') {
+    return {
+      ...result,
+      message: 'Project was created, but assignment could not be confirmed.',
+    };
+  }
+  return { ...result, message: toBrowserSafeProjectFailureMessage(result.reason) };
+}
+
+function toBrowserSafeProjectFailureMessage(
+  reason: Extract<ProjectActionResult, { status: 'failed' }>['reason'],
+): string {
+  switch (reason) {
+    case 'invalid-session-id':
+      return 'A non-empty session ID is required.';
+    case 'invalid-project-id':
+      return 'A valid project ID is required.';
+    case 'invalid-project-name':
+      return 'Project name must be 1–80 characters and contain no control characters.';
+    case 'project-not-found':
+      return 'Project does not exist.';
+    case 'projects-unavailable':
+      return 'Project editing is unavailable.';
+    case 'write-failed':
+      return 'Project update failed.';
+  }
+}
+
+function isProjectAction(action: unknown): action is ProjectActionRequest['action'] {
+  return (
+    action === 'create-and-assign' ||
+    action === 'assign-project' ||
+    action === 'unassign-project' ||
+    action === 'delete-project'
+  );
 }
 
 export function normalizeRestartActionRequest(parsed: unknown): RestartSessionRequest | null {
@@ -611,6 +738,15 @@ function findForbiddenField(value: unknown, prefix = ''): string | null {
   }
 
   return null;
+}
+
+function hasExactKeys(record: Record<string, unknown>, expected: readonly string[]): boolean {
+  const actual = Object.keys(record).sort();
+  const sortedExpected = [...expected].sort();
+  return (
+    actual.length === sortedExpected.length &&
+    actual.every((key, index) => key === sortedExpected[index])
+  );
 }
 
 function optionalStringField<T extends string>(

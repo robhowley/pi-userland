@@ -81,6 +81,9 @@
     const HOME_PREFIXES = ['/Users/', '/home/'];
     const NO_REPO_GROUP_KEY = 'no-repo';
     const NO_REPO_LABEL = 'No repo';
+    const REPOSITORY_VIEW = 'repository';
+    const PROJECTS_VIEW = 'projects';
+    const REPOSITORY_DEFAULT_VALUE = '__repository__';
     const NEW_SESSION_OWNER_KEY = 'new-session-footer';
     const SUCCESS_PENDING_WORKTREE_TTL_MS = 12_000;
     const OPEN_TERMINAL_SUCCESS_TTL_MS = 4_000;
@@ -114,9 +117,15 @@
       selectedRuntimeId: null,
       detailVisible: false,
       showAll: false,
+      groupingMode: REPOSITORY_VIEW,
       loading: false,
       fetchError: null,
       expandedRepoKeys: new Set(),
+      expandedProjectKeys: new Set(),
+      projectAction: null,
+      projectDrafts: new Map(),
+      projectDeleteAction: null,
+      projectEditingUnsupported: false,
       activeWorktreeFormRepoKey: null,
       worktreeForms: new Map(),
       noRepoSessionForms: new Map(),
@@ -133,6 +142,8 @@
 
     const elements = {
       summary: document.getElementById('summary'),
+      repositoryView: document.getElementById('view-repository'),
+      projectsView: document.getElementById('view-projects'),
       showAll: document.getElementById('show-all'),
       refresh: document.getElementById('refresh'),
       banner: document.getElementById('banner'),
@@ -146,6 +157,8 @@
 
     if (
       Object.values(elements).some((element) => element === null) ||
+      !(elements.repositoryView instanceof HTMLButtonElement) ||
+      !(elements.projectsView instanceof HTMLButtonElement) ||
       !(elements.showAll instanceof HTMLInputElement) ||
       !(elements.refresh instanceof HTMLButtonElement)
     ) {
@@ -153,10 +166,18 @@
     }
 
     function init() {
+      elements.repositoryView.addEventListener('click', () => {
+        setGroupingMode(REPOSITORY_VIEW);
+      });
+
+      elements.projectsView.addEventListener('click', () => {
+        setGroupingMode(PROJECTS_VIEW);
+      });
+
       elements.showAll.addEventListener('change', () => {
         state.showAll = elements.showAll.checked;
         reconcileSelection();
-        reconcileExpandedRepoKeys();
+        reconcileExpandedGroupKeys();
         reconcileOpenTerminalAction();
         reconcileKillSessionAction();
         reconcileRestartSessionAction();
@@ -167,7 +188,9 @@
         window.addEventListener('keydown', (event) => {
           if (
             event.key === 'Escape' &&
-            (clearKillSessionConfirmation() || clearRestartSessionConfirmation())
+            (clearKillSessionConfirmation() ||
+              clearRestartSessionConfirmation() ||
+              clearProjectDeleteConfirmation())
           ) {
             render();
           }
@@ -185,6 +208,32 @@
       void refreshSnapshot({ source: 'startup' });
     }
 
+    function setGroupingMode(mode) {
+      if (mode === PROJECTS_VIEW && !isProjectsViewAvailable()) {
+        return;
+      }
+      if (state.groupingMode === mode) {
+        return;
+      }
+
+      state.groupingMode = mode;
+      state.activeWorktreeFormRepoKey = null;
+      reconcileExpandedGroupKeys();
+      render();
+    }
+
+    function isProjectsViewAvailable() {
+      return state.snapshot?.projectState?.status === 'available';
+    }
+
+    function isProjectEditingAvailable() {
+      return (
+        isProjectsViewAvailable() &&
+        typeof host.updateProject === 'function' &&
+        !state.projectEditingUnsupported
+      );
+    }
+
     async function refreshSnapshot({ source }) {
       state.loading = source !== 'auto';
       if (source !== 'auto') {
@@ -195,8 +244,11 @@
       try {
         state.snapshot = normalizeSnapshot(await host.loadSnapshot());
         state.fetchError = null;
+        if (state.groupingMode === PROJECTS_VIEW && !isProjectsViewAvailable()) {
+          state.groupingMode = REPOSITORY_VIEW;
+        }
         reconcileSelection();
-        reconcileExpandedRepoKeys();
+        reconcileExpandedGroupKeys();
         reconcilePendingWorktrees();
         reconcileOpenTerminalAction();
         reconcileKillSessionAction();
@@ -206,7 +258,7 @@
         if (source === 'startup') {
           state.snapshot = emptySnapshot(`Snapshot request failed: ${state.fetchError}`);
           reconcileSelection();
-          reconcileExpandedRepoKeys();
+          reconcileExpandedGroupKeys();
           reconcileOpenTerminalAction();
           reconcileKillSessionAction();
           reconcileRestartSessionAction();
@@ -226,7 +278,22 @@
         return emptySnapshot('Snapshot payload does not match SessionDeckSnapshot.');
       }
 
-      return payload;
+      const hasProjectFields =
+        Object.prototype.hasOwnProperty.call(payload, 'projectState') &&
+        payload.records.every((record) =>
+          Object.prototype.hasOwnProperty.call(record, 'projectId'),
+        );
+
+      return {
+        ...payload,
+        records: payload.records.map((record) => ({
+          ...record,
+          projectId: isNullableString(record.projectId) ? record.projectId : null,
+        })),
+        projectState: hasProjectFields
+          ? normalizeProjectState(payload.projectState)
+          : { status: 'unavailable', projects: [] },
+      };
     }
 
     function isSessionDeckSnapshot(candidate) {
@@ -248,6 +315,7 @@
         isOptionalString(candidate.presenceReason) &&
         typeof candidate.heartbeatAgeMs === 'number' &&
         isNullableString(candidate.sessionId) &&
+        isOptionalNullableString(candidate.projectId) &&
         isNullableString(candidate.sessionName) &&
         isNullableString(candidate.repoName) &&
         isNullableString(candidate.qualifiedRepoName) &&
@@ -267,6 +335,37 @@
         Array.isArray(candidate.diagnostics) &&
         candidate.diagnostics.every(isSessionDeckDiagnostic)
       );
+    }
+
+    function normalizeProjectState(projectState) {
+      if (!isObject(projectState) || !['available', 'unavailable'].includes(projectState.status)) {
+        return { status: 'unavailable', projects: [] };
+      }
+      if (projectState.status === 'unavailable') {
+        return { status: 'unavailable', projects: [] };
+      }
+      if (!Array.isArray(projectState.projects)) {
+        return { status: 'unavailable', projects: [] };
+      }
+      const projectIds = new Set();
+      for (const project of projectState.projects) {
+        if (
+          !isObject(project) ||
+          !isNonBlankString(project.projectId) ||
+          !isNonBlankString(project.name) ||
+          projectIds.has(project.projectId)
+        ) {
+          return { status: 'unavailable', projects: [] };
+        }
+        projectIds.add(project.projectId);
+      }
+      return {
+        status: 'available',
+        projects: projectState.projects.map((project) => ({
+          projectId: project.projectId,
+          name: project.name,
+        })),
+      };
     }
 
     function isOptionalRestartEligibility(candidate) {
@@ -350,6 +449,10 @@
       return typeof value === 'string' || value === null;
     }
 
+    function isOptionalNullableString(value) {
+      return value === undefined || isNullableString(value);
+    }
+
     function isOptionalString(value) {
       return value === undefined || typeof value === 'string';
     }
@@ -369,6 +472,7 @@
         diagnostics: [
           { code: 'toolbelt_snapshot_unavailable', message, runtimeId: null, filePath: null },
         ],
+        projectState: { status: 'unavailable', projects: [] },
       };
     }
 
@@ -406,11 +510,17 @@
       );
     }
 
-    function reconcileExpandedRepoKeys(repoGroups = createRepoGroups(getVisibleRecords())) {
-      const visibleRepoKeys = new Set(repoGroups.map((repoGroup) => repoGroup.key));
-      for (const expandedRepoKey of state.expandedRepoKeys) {
-        if (!visibleRepoKeys.has(expandedRepoKey)) {
-          state.expandedRepoKeys.delete(expandedRepoKey);
+    function getExpandedGroupKeys() {
+      return state.groupingMode === PROJECTS_VIEW
+        ? state.expandedProjectKeys
+        : state.expandedRepoKeys;
+    }
+
+    function reconcileExpandedGroupKeys(groups = createGroupsForCurrentView()) {
+      const visibleGroupKeys = new Set(groups.map((group) => group.key));
+      for (const expandedGroupKey of getExpandedGroupKeys()) {
+        if (!visibleGroupKeys.has(expandedGroupKey)) {
+          getExpandedGroupKeys().delete(expandedGroupKey);
         }
       }
     }
@@ -672,10 +782,6 @@
       return `repo-group-records-${encodedKey.join('-')}`;
     }
 
-    function formatRepoHeader(repoGroup) {
-      return `${repoGroup.label} · ${repoGroup.records.length}`;
-    }
-
     function getRepoLabelParts(label) {
       const separatorIndex = label.lastIndexOf('/');
       if (separatorIndex <= 0 || separatorIndex === label.length - 1) {
@@ -713,8 +819,87 @@
       return label;
     }
 
+    function createGroupsForCurrentView(records = getVisibleRecords()) {
+      return state.groupingMode === PROJECTS_VIEW
+        ? createProjectGroups(records)
+        : createRepoGroups(records);
+    }
+
+    function createProjectGroups(records) {
+      const projects = state.snapshot?.projectState?.projects ?? [];
+      const projectById = new Map(projects.map((project) => [project.projectId, project]));
+      const displayNames = getProjectDisplayNames(projects);
+      const assignedRecords = new Map();
+      for (const project of projects) {
+        assignedRecords.set(project.projectId, []);
+      }
+      const unassignedRecords = [];
+
+      for (const record of records) {
+        const project = record.projectId === null ? undefined : projectById.get(record.projectId);
+        if (project === undefined) {
+          unassignedRecords.push(record);
+          continue;
+        }
+        assignedRecords.get(project.projectId).push(record);
+      }
+
+      const projectGroups = projects.map((project) => ({
+        key: getProjectGroupKey(project.projectId),
+        kind: 'project',
+        label: displayNames.get(project.projectId) ?? project.name,
+        projectName: project.name,
+        projectId: project.projectId,
+        project,
+        records: assignedRecords.get(project.projectId) ?? [],
+      }));
+      projectGroups.sort(compareProjectGroups);
+
+      return [...projectGroups, ...createRepoGroups(unassignedRecords)];
+    }
+
+    function getProjectDisplayNames(projects) {
+      const nameCounts = new Map();
+      for (const project of projects) {
+        nameCounts.set(project.name, (nameCounts.get(project.name) ?? 0) + 1);
+      }
+
+      const names = new Map();
+      for (const project of projects) {
+        const displayName =
+          nameCounts.get(project.name) === 1
+            ? project.name
+            : `${project.name} · ${getProjectIdSuffix(project.projectId, projects)}`;
+        names.set(project.projectId, displayName);
+      }
+      return names;
+    }
+
+    function getProjectIdSuffix(projectId, projects) {
+      const normalizedIds = projects.map((project) => project.projectId);
+      for (const length of [6, 8, 10, 12]) {
+        const suffix = projectId.slice(0, length);
+        if (
+          normalizedIds.filter((candidate) => candidate.slice(0, length) === suffix).length === 1
+        ) {
+          return suffix;
+        }
+      }
+      return projectId;
+    }
+
+    function getProjectGroupKey(projectId) {
+      return `project:${projectId}`;
+    }
+
+    function compareProjectGroups(left, right) {
+      const nameOrder = left.label.toLowerCase().localeCompare(right.label.toLowerCase());
+      return nameOrder === 0 ? left.projectId.localeCompare(right.projectId) : nameOrder;
+    }
+
     function render() {
       const focusSnapshot = captureRenderFocus();
+      renderGroupingMode();
       renderSummary();
       renderBanner();
       renderList();
@@ -733,13 +918,18 @@
       if (
         ariaLabel !== 'Branch name' &&
         ariaLabel !== 'Working directory' &&
-        ariaLabel !== 'Custom Pi config directory'
+        ariaLabel !== 'Custom Pi config directory' &&
+        ariaLabel !== 'Project name'
       ) {
         return null;
       }
 
       return {
         ariaLabel,
+        projectSessionId:
+          ariaLabel === 'Project name'
+            ? activeElement.getAttribute('data-project-session-id')
+            : null,
         selectionStart:
           typeof activeElement.selectionStart === 'number' ? activeElement.selectionStart : null,
         selectionEnd:
@@ -752,7 +942,11 @@
         return;
       }
 
-      const input = findInputByAriaLabel(elements.listShell, snapshot.ariaLabel);
+      const input = findInputByAriaLabel(
+        elements.listShell,
+        snapshot.ariaLabel,
+        snapshot.projectSessionId,
+      );
       if (input === null) {
         return;
       }
@@ -771,19 +965,42 @@
       }
     }
 
-    function findInputByAriaLabel(node, ariaLabel) {
-      if (node instanceof HTMLInputElement && node.getAttribute('aria-label') === ariaLabel) {
+    function findInputByAriaLabel(node, ariaLabel, projectSessionId = null) {
+      if (
+        node instanceof HTMLInputElement &&
+        node.getAttribute('aria-label') === ariaLabel &&
+        (projectSessionId === null ||
+          node.getAttribute('data-project-session-id') === projectSessionId)
+      ) {
         return node;
       }
 
       for (const child of node.childNodes ?? []) {
-        const match = findInputByAriaLabel(child, ariaLabel);
+        const match = findInputByAriaLabel(child, ariaLabel, projectSessionId);
         if (match !== null) {
           return match;
         }
       }
 
       return null;
+    }
+
+    function renderGroupingMode() {
+      const projectsAvailable = isProjectsViewAvailable();
+      for (const [button, mode] of [
+        [elements.repositoryView, REPOSITORY_VIEW],
+        [elements.projectsView, PROJECTS_VIEW],
+      ]) {
+        const isActive = state.groupingMode === mode;
+        button.setAttribute('aria-pressed', String(isActive));
+        button.classList.toggle('active', isActive);
+        button.disabled = mode === PROJECTS_VIEW && !projectsAvailable;
+        if (mode === PROJECTS_VIEW && !projectsAvailable) {
+          button.setAttribute('title', 'Projects unavailable for this snapshot.');
+        } else {
+          button.removeAttribute('title');
+        }
+      }
     }
 
     function renderSummary() {
@@ -829,16 +1046,19 @@
 
     function renderList() {
       const visibleRecords = getVisibleRecords();
-      const repoGroups = createRepoGroups(visibleRecords);
-      reconcileExpandedRepoKeys(repoGroups);
+      const groups = createGroupsForCurrentView(visibleRecords);
+      reconcileExpandedGroupKeys(groups);
       elements.list.replaceChildren();
-      elements.empty.textContent = state.showAll
-        ? 'No session records found.'
-        : 'No live or stale Pi sessions found.';
-      elements.empty.classList.toggle('hidden', visibleRecords.length > 0);
+      elements.empty.textContent =
+        state.groupingMode === PROJECTS_VIEW
+          ? 'No projects or session records found.'
+          : state.showAll
+            ? 'No session records found.'
+            : 'No live or stale Pi sessions found.';
+      elements.empty.classList.toggle('hidden', groups.length > 0);
 
-      for (const repoGroup of repoGroups) {
-        elements.list.append(createRepoGroup(repoGroup));
+      for (const group of groups) {
+        elements.list.append(createGroup(group));
       }
     }
 
@@ -881,64 +1101,244 @@
       elements.newSession.replaceChildren(...children);
     }
 
-    function createRepoGroup(repoGroup) {
-      const isExpanded = state.expandedRepoKeys.has(repoGroup.key);
+    function createGroup(group) {
+      const expandedGroupKeys = getExpandedGroupKeys();
+      const isExpanded = expandedGroupKeys.has(group.key);
+      const isProjectGroup = group.kind === 'project';
       const section = document.createElement('section');
-      section.className = 'repo-group';
+      section.className = isProjectGroup ? 'repo-group project-group' : 'repo-group';
       section.setAttribute('role', 'listitem');
 
       const header = document.createElement('button');
       header.type = 'button';
-      header.className = 'repo-header';
+      header.className = isProjectGroup ? 'repo-header project-header' : 'repo-header';
       header.setAttribute('aria-expanded', String(isExpanded));
-      header.setAttribute('aria-label', formatRepoHeader(repoGroup));
-      header.append(createRepoHeaderLabel(repoGroup));
+      header.setAttribute('aria-label', formatGroupHeader(group));
+      header.append(createGroupHeaderLabel(group));
       header.addEventListener('click', () => {
         if (isExpanded) {
-          state.expandedRepoKeys.delete(repoGroup.key);
+          expandedGroupKeys.delete(group.key);
         } else {
-          state.expandedRepoKeys.add(repoGroup.key);
+          expandedGroupKeys.add(group.key);
         }
         render();
       });
 
       const headerRow = document.createElement('div');
-      headerRow.className = 'repo-header-row';
+      headerRow.className = isProjectGroup
+        ? 'repo-header-row project-header-row'
+        : 'repo-header-row';
       headerRow.append(header);
 
-      headerRow.append(createRepoActionButton(repoGroup));
+      if (isProjectGroup) {
+        headerRow.append(createProjectDeleteButton(group));
+      } else {
+        headerRow.append(createRepoActionButton(group));
+      }
 
       section.append(headerRow);
 
-      if (state.activeWorktreeFormRepoKey === repoGroup.key) {
+      if (isProjectGroup && state.projectDeleteAction?.projectId === group.projectId) {
+        section.append(createProjectDeleteConfirmation(group));
+      }
+
+      if (!isProjectGroup && state.activeWorktreeFormRepoKey === group.key) {
         section.append(
-          repoGroup.kind === 'no-repo'
-            ? createNoRepoSessionForm(repoGroup.key)
-            : createWorktreeForm(repoGroup),
+          group.kind === 'no-repo' ? createNoRepoSessionForm(group.key) : createWorktreeForm(group),
         );
       }
 
       if (isExpanded) {
         const records = document.createElement('div');
-        const recordsId = getRepoGroupRecordsId(repoGroup.key);
+        const recordsId = getRepoGroupRecordsId(group.key);
         records.className = 'repo-group-records';
         records.setAttribute('id', recordsId);
         records.setAttribute('role', 'list');
-        records.setAttribute('aria-label', `${repoGroup.label} sessions`);
+        records.setAttribute('aria-label', `${group.label} sessions`);
         header.setAttribute('aria-controls', recordsId);
 
-        const pending = state.pendingWorktrees.get(repoGroup.key);
+        const pending = !isProjectGroup ? state.pendingWorktrees.get(group.key) : null;
         if (pending) {
-          records.append(createPendingWorktreeCard(repoGroup.key, pending));
+          records.append(createPendingWorktreeCard(group.key, pending));
         }
 
-        for (const record of repoGroup.records) {
+        for (const record of group.records) {
           records.append(createRecordCard(record));
         }
         section.append(records);
       }
 
       return section;
+    }
+
+    function formatGroupHeader(group) {
+      return `${group.label} · ${group.records.length}`;
+    }
+
+    function createGroupHeaderLabel(group) {
+      if (group.kind === 'project') {
+        const label = document.createElement('span');
+        label.className = 'repo-header-label';
+        if (group.projectName !== group.label) {
+          label.append(
+            createText('span', group.projectName, 'project-name'),
+            createText('span', group.label.slice(group.projectName.length), 'project-id-suffix'),
+          );
+        } else {
+          label.append(createText('span', group.label, 'project-name'));
+        }
+        label.append(
+          createText('span', ' · ', 'repo-divider'),
+          createText('span', String(group.records.length), 'repo-count'),
+        );
+        return label;
+      }
+      return createRepoHeaderLabel(group);
+    }
+
+    function createProjectDeleteButton(projectGroup) {
+      const action =
+        state.projectDeleteAction?.projectId === projectGroup.projectId
+          ? state.projectDeleteAction
+          : null;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'project-delete-button';
+      button.textContent = action?.kind === 'pending' ? 'Deleting…' : 'Delete';
+      button.disabled = !isProjectEditingAvailable() || action?.kind === 'pending';
+      button.setAttribute('aria-label', `Delete project ${projectGroup.projectName}`);
+      button.setAttribute(
+        'title',
+        isProjectEditingAvailable()
+          ? 'Delete project'
+          : 'Project editing unavailable in this host.',
+      );
+      button.addEventListener('click', (event) => {
+        event.preventDefault?.();
+        event.stopPropagation?.();
+        if (button.disabled) return;
+        openProjectDeleteConfirmation(projectGroup);
+      });
+      return button;
+    }
+
+    function createProjectDeleteConfirmation(projectGroup) {
+      const action = state.projectDeleteAction;
+      const panel = document.createElement('div');
+      panel.className = `project-delete-confirmation ${action?.kind ?? ''}`;
+      const message =
+        action?.kind === 'pending'
+          ? 'Deleting project…'
+          : action?.kind === 'failure' || action?.kind === 'partial'
+            ? action.message
+            : `Delete “${projectGroup.projectName}”? Only the project and its assignments are removed. Sessions, worktrees, branches, and history stay unchanged.`;
+      panel.append(createText('div', message, 'project-editor-message'));
+
+      if (action?.kind !== 'pending' && action?.kind !== 'failure' && action?.kind !== 'partial') {
+        const actions = document.createElement('div');
+        actions.className = 'project-delete-actions';
+        const confirm = document.createElement('button');
+        confirm.type = 'button';
+        confirm.className = 'project-delete-confirm';
+        confirm.textContent = 'Delete project';
+        confirm.disabled = !isProjectEditingAvailable();
+        confirm.addEventListener('click', (event) => {
+          event.preventDefault?.();
+          event.stopPropagation?.();
+          confirmProjectDelete(projectGroup);
+        });
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.className = 'project-delete-cancel';
+        cancel.textContent = 'Cancel';
+        cancel.addEventListener('click', () => {
+          clearProjectDeleteConfirmation();
+          render();
+        });
+        actions.append(confirm, cancel);
+        panel.append(actions);
+      }
+      return panel;
+    }
+
+    function openProjectDeleteConfirmation(projectGroup) {
+      if (!isProjectEditingAvailable()) return;
+      if (state.projectDeleteAction?.kind === 'pending') return;
+      state.projectDeleteAction = {
+        kind: 'confirming',
+        projectId: projectGroup.projectId,
+      };
+      render();
+    }
+
+    function clearProjectDeleteConfirmation() {
+      if (state.projectDeleteAction?.kind !== 'confirming') return false;
+      state.projectDeleteAction = null;
+      return true;
+    }
+
+    function confirmProjectDelete(projectGroup) {
+      if (
+        !isProjectEditingAvailable() ||
+        state.projectDeleteAction?.kind !== 'confirming' ||
+        state.projectDeleteAction.projectId !== projectGroup.projectId
+      ) {
+        return;
+      }
+      const pending = {
+        kind: 'pending',
+        projectId: projectGroup.projectId,
+      };
+      state.projectDeleteAction = pending;
+      render();
+
+      void postProjectAction({
+        action: 'delete-project',
+        projectId: projectGroup.projectId,
+      })
+        .then(async (result) => {
+          if (state.projectDeleteAction !== pending) return;
+          if (result?.ok === true) {
+            state.projectDeleteAction = {
+              ...pending,
+              kind: 'success',
+              message: getProjectMutationMessage(result, 'Project deleted.'),
+            };
+          } else if (result?.status === 'partial') {
+            state.projectDeleteAction = {
+              ...pending,
+              kind: 'partial',
+              message: getProjectMutationMessage(
+                result,
+                'Project deletion was only partially applied.',
+              ),
+            };
+          } else {
+            if (isUnsupportedProjectMutationResult(result)) {
+              state.projectEditingUnsupported = true;
+            }
+            state.projectDeleteAction = {
+              ...pending,
+              kind: 'failure',
+              message: getProjectMutationMessage(result, 'Project deletion failed.'),
+            };
+          }
+          render();
+          await refreshSnapshot({ source: 'manual' });
+        })
+        .catch(async (error) => {
+          if (state.projectDeleteAction !== pending) return;
+          if (isUnsupportedProjectMutationError(error)) {
+            state.projectEditingUnsupported = true;
+          }
+          state.projectDeleteAction = {
+            ...pending,
+            kind: 'failure',
+            message: getErrorMessage(error),
+          };
+          render();
+          await refreshSnapshot({ source: 'manual' });
+        });
     }
 
     function createRepoActionButton(repoGroup) {
@@ -2475,6 +2875,276 @@
       }
     }
 
+    function shouldRenderProjectEditor() {
+      return (
+        state.snapshot?.projectState?.status === 'available' ||
+        typeof host.updateProject === 'function'
+      );
+    }
+
+    function getProjectForRecord(record) {
+      if (record.projectId === null || state.snapshot?.projectState?.status !== 'available') {
+        return null;
+      }
+      return (
+        state.snapshot.projectState.projects.find(
+          (project) => project.projectId === record.projectId,
+        ) ?? null
+      );
+    }
+
+    function getProjectActionForRecord(record) {
+      return record.sessionId !== null && state.projectAction?.sessionId === record.sessionId
+        ? state.projectAction
+        : null;
+    }
+
+    function createProjectSection(record) {
+      const currentProject = getProjectForRecord(record);
+      const action = getProjectActionForRecord(record);
+      const content = [
+        createDetailRow('Current', currentProject?.name ?? 'Repository default', {
+          copyValue: null,
+        }),
+      ];
+
+      if (record.sessionId === null || record.sessionId.length === 0) {
+        content.push(
+          createText(
+            'p',
+            'Project editing is unavailable because this record has no exact session ID.',
+            'project-editor-message',
+          ),
+        );
+        return createDetailSection('PROJECT', content);
+      }
+
+      if (!isProjectsViewAvailable()) {
+        content.push(
+          createText(
+            'p',
+            'Projects are unavailable for this snapshot. Repository grouping remains usable.',
+            'project-editor-message',
+          ),
+        );
+        return createDetailSection('PROJECT', content);
+      }
+
+      const editingAvailable = isProjectEditingAvailable();
+      const actionPending = action?.kind === 'pending';
+      const row = document.createElement('div');
+      row.className = 'project-editor-row';
+
+      const select = document.createElement('select');
+      select.className = 'project-select';
+      select.setAttribute('aria-label', 'Project assignment');
+      select.disabled = !editingAvailable || actionPending;
+      const repositoryOption = document.createElement('option');
+      repositoryOption.value = REPOSITORY_DEFAULT_VALUE;
+      repositoryOption.textContent = 'Repository default';
+      select.append(repositoryOption);
+
+      const projects = state.snapshot.projectState.projects;
+      const displayNames = getProjectDisplayNames(projects);
+      for (const project of projects) {
+        const option = document.createElement('option');
+        option.value = project.projectId;
+        option.textContent = displayNames.get(project.projectId) ?? project.name;
+        select.append(option);
+      }
+      select.value = currentProject?.projectId ?? REPOSITORY_DEFAULT_VALUE;
+      select.addEventListener('change', () => {
+        if (!editingAvailable || actionPending) return;
+        const projectId = select.value;
+        if (
+          (projectId === REPOSITORY_DEFAULT_VALUE && currentProject === null) ||
+          (projectId !== REPOSITORY_DEFAULT_VALUE && projectId === currentProject?.projectId)
+        ) {
+          return;
+        }
+        requestProjectMutation(
+          record,
+          projectId === REPOSITORY_DEFAULT_VALUE
+            ? { action: 'unassign-project', sessionId: record.sessionId }
+            : { action: 'assign-project', sessionId: record.sessionId, projectId },
+          '',
+        );
+      });
+      row.append(select);
+      content.push(row);
+
+      const createRow = document.createElement('div');
+      createRow.className = 'project-create-row';
+      const nameInput = document.createElement('input');
+      nameInput.type = 'text';
+      nameInput.className = 'project-create-input';
+      nameInput.setAttribute('aria-label', 'Project name');
+      nameInput.setAttribute('data-project-session-id', record.sessionId);
+      nameInput.setAttribute('placeholder', 'New project name');
+      nameInput.value = state.projectDrafts.get(record.sessionId) ?? action?.draft ?? '';
+      nameInput.disabled = !editingAvailable || actionPending;
+      const createButton = document.createElement('button');
+      createButton.type = 'button';
+      createButton.className = 'project-create-button';
+      createButton.disabled = !editingAvailable || actionPending;
+      const getMatchingProject = () => {
+        const name = normalizeProjectName(nameInput.value);
+        return projects.find((project) => normalizeProjectName(project.name) === name) ?? null;
+      };
+      const updateCreateButtonText = () => {
+        const matchingProject = getMatchingProject();
+        createButton.textContent =
+          matchingProject === null
+            ? 'Create and assign'
+            : `Assign to ${displayNames.get(matchingProject.projectId) ?? matchingProject.name}`;
+      };
+      nameInput.addEventListener('input', () => {
+        state.projectDrafts.set(record.sessionId, nameInput.value);
+        updateCreateButtonText();
+      });
+      updateCreateButtonText();
+      createButton.addEventListener('click', (event) => {
+        event.preventDefault?.();
+        event.stopPropagation?.();
+        if (!editingAvailable || actionPending) return;
+        const name = normalizeProjectName(nameInput.value);
+        if (name.length === 0) {
+          state.projectAction = {
+            kind: 'failure',
+            sessionId: record.sessionId,
+            draft: nameInput.value,
+            message: 'Project name is required.',
+          };
+          render();
+          return;
+        }
+        const matchingProject = getMatchingProject();
+        requestProjectMutation(
+          record,
+          matchingProject === null
+            ? { action: 'create-and-assign', sessionId: record.sessionId, name }
+            : {
+                action: 'assign-project',
+                sessionId: record.sessionId,
+                projectId: matchingProject.projectId,
+              },
+          name,
+        );
+      });
+      createRow.append(nameInput, createButton);
+      content.push(createRow);
+
+      if (!editingAvailable) {
+        content.push(
+          createText('p', 'Project editing is unavailable in this host.', 'project-editor-message'),
+        );
+      } else if (action?.kind === 'pending') {
+        content.push(
+          createText('p', action.message ?? 'Updating project…', 'project-editor-message pending'),
+        );
+      } else if (action?.kind === 'partial') {
+        content.push(createText('p', action.message, 'project-editor-message partial'));
+      } else if (action?.kind === 'failure') {
+        content.push(createText('p', action.message, 'project-editor-message error'));
+      } else if (action?.kind === 'success') {
+        content.push(createText('p', action.message, 'project-editor-message'));
+      }
+
+      return createDetailSection('PROJECT', content);
+    }
+
+    function normalizeProjectName(value) {
+      return value.normalize('NFC').trim();
+    }
+
+    function requestProjectMutation(record, request, draft) {
+      if (
+        !isProjectEditingAvailable() ||
+        record.sessionId === null ||
+        record.sessionId.length === 0
+      ) {
+        return;
+      }
+      const pending = {
+        kind: 'pending',
+        sessionId: record.sessionId,
+        draft,
+        message: 'Updating project…',
+      };
+      state.projectAction = pending;
+      render();
+
+      void postProjectAction(request)
+        .then(async (result) => {
+          if (state.projectAction !== pending) return;
+          if (result?.ok === true) {
+            state.projectAction = {
+              ...pending,
+              kind: 'success',
+              message: getProjectMutationMessage(result, 'Project updated.'),
+            };
+          } else if (result?.status === 'partial') {
+            state.projectAction = {
+              ...pending,
+              kind: 'partial',
+              message: getProjectMutationMessage(
+                result,
+                'Project update was only partially applied.',
+              ),
+            };
+          } else {
+            if (isUnsupportedProjectMutationResult(result)) {
+              state.projectEditingUnsupported = true;
+            }
+            state.projectAction = {
+              ...pending,
+              kind: 'failure',
+              message: getProjectMutationMessage(result, 'Project update failed.'),
+            };
+          }
+          render();
+          await refreshSnapshot({ source: 'manual' });
+        })
+        .catch(async (error) => {
+          if (state.projectAction !== pending) return;
+          if (isUnsupportedProjectMutationError(error)) {
+            state.projectEditingUnsupported = true;
+          }
+          state.projectAction = {
+            ...pending,
+            kind: 'failure',
+            message: getErrorMessage(error),
+          };
+          render();
+          await refreshSnapshot({ source: 'manual' });
+        });
+    }
+
+    async function postProjectAction(request) {
+      return host.updateProject(request);
+    }
+
+    function isUnsupportedProjectMutationResult(result) {
+      return (
+        result?.status === 'unsupported' ||
+        result?.reason === 'unsupported' ||
+        result?.code === 'unsupported'
+      );
+    }
+
+    function isUnsupportedProjectMutationError(error) {
+      return (
+        isObject(error) &&
+        (error.code === 'unsupported' ||
+          error.code === 'unsupported-action' ||
+          /unsupported|unavailable/iu.test(getErrorMessage(error)))
+      );
+    }
+
+    function getProjectMutationMessage(result, fallback) {
+      return isNonEmptyString(result?.message) ? result.message : fallback;
+    }
+
     function createRecordDetail(record) {
       const detail = document.createElement('div');
       detail.className = 'detail card-detail';
@@ -2538,6 +3208,7 @@
             linkHref: workspacePrHref,
           }),
         ]),
+        ...(shouldRenderProjectEditor() ? [createProjectSection(record)] : []),
         createStatusSection(record),
         createKillSessionSection(record),
       );

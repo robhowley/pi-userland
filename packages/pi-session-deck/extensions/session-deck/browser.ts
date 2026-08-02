@@ -11,6 +11,7 @@ import {
 } from './browser-render.js';
 import type { SessionDeckBrowserRow } from './browser-render.js';
 import type { SessionDeckBrowserRecord, SessionDeckBrowserSnapshot } from './browser-view.js';
+import type { SessionDeckProjectState } from './projects/types.js';
 import {
   LAUNCH_AGENT_DIR_MODE_OPTIONS,
   formatLaunchAgentDirOptionLabel,
@@ -38,6 +39,9 @@ const DEFAULT_MAX_VISIBLE_REPOS = 4;
 const AUTO_REFRESH_INTERVAL_MS = 15_000;
 const ALL_REPO_FILTER_KEY = Symbol('all-repo-filter');
 const NO_REPO_FILTER_KEY = Symbol('no-repo-filter');
+const ALL_PROJECT_FILTER_KEY = Symbol('all-project-filter');
+const PROJECT_FILTER_KEY_PREFIX = 'project:';
+const REPO_FALLBACK_FILTER_KEY_PREFIX = 'repo-fallback:';
 
 function isTempSession(record: SessionDeckBrowserRecord): boolean {
   return record.derivedFacets?.rowKind === 'ephemeral_child_runtime';
@@ -70,7 +74,9 @@ function isActiveSession(record: SessionDeckBrowserRecord): boolean {
 }
 
 type SessionDeckRefreshMode = 'manual' | 'auto';
+type SessionDeckGroupingView = 'repository' | 'projects';
 type SessionDeckRepoKey = string | typeof ALL_REPO_FILTER_KEY | typeof NO_REPO_FILTER_KEY;
+type SessionDeckProjectKey = string | typeof ALL_PROJECT_FILTER_KEY;
 type SessionDeckNamedRepoFilter = {
   kind: 'named';
   key: string;
@@ -90,6 +96,22 @@ interface SessionDeckRepoState {
   recordsByKey: Map<SessionDeckRepoKey, SessionDeckBrowserRecord[]>;
 }
 
+type SessionDeckProjectFilter =
+  | { kind: 'all' }
+  | { kind: 'project'; projectId: string }
+  | { kind: 'repo-fallback'; repoFilter: SessionDeckRepoFilter };
+
+interface SessionDeckProjectOption {
+  key: SessionDeckProjectKey;
+  label: string;
+  filter: SessionDeckProjectFilter;
+}
+
+interface SessionDeckProjectFilterState {
+  options: SessionDeckProjectOption[];
+  recordsByKey: Map<SessionDeckProjectKey, SessionDeckBrowserRecord[]>;
+}
+
 interface SessionDeckNamedRepoBucket {
   key: string;
   shortLabel: string;
@@ -103,12 +125,23 @@ interface SessionDeckPendingRepoGroup {
   records: SessionDeckBrowserRecord[];
 }
 
-interface SessionDeckBrowserSelection {
+interface SessionDeckRepositorySelection {
+  groupingView: 'repository';
   repoState: SessionDeckRepoState;
   repoIndex: number;
   repoOption: SessionDeckRepoOption;
   records: SessionDeckBrowserRecord[];
 }
+
+interface SessionDeckProjectsSelection {
+  groupingView: 'projects';
+  projectState: SessionDeckProjectFilterState;
+  projectIndex: number;
+  projectOption: SessionDeckProjectOption;
+  records: SessionDeckBrowserRecord[];
+}
+
+type SessionDeckBrowserSelection = SessionDeckRepositorySelection | SessionDeckProjectsSelection;
 
 export interface SessionDeckBrowserOpenSelectedResult {
   ok: boolean;
@@ -200,7 +233,13 @@ export class SessionDeckBrowser {
   private readonly theme: Theme;
 
   private view: SessionDeckBrowserSnapshot;
+  private groupingView: SessionDeckGroupingView = 'repository';
   private selectedRepoKey: SessionDeckRepoKey = ALL_REPO_FILTER_KEY;
+  private selectedProjectKey: SessionDeckProjectKey = ALL_PROJECT_FILTER_KEY;
+  private selectedRuntimeByView: Record<SessionDeckGroupingView, string | null> = {
+    repository: null,
+    projects: null,
+  };
   private selectedIndex = 0;
   private detailVisible = true;
   private refreshStatus: { message: string; tone: 'muted' | 'warning' } | null = null;
@@ -208,6 +247,7 @@ export class SessionDeckBrowser {
   private killStatus: { message: string; tone: 'muted' | 'warning' } | null = null;
   private restartStatus: { message: string; tone: 'muted' | 'warning' } | null = null;
   private worktreeStatus: { message: string; tone: 'muted' | 'warning' } | null = null;
+  private groupingStatus: { message: string; tone: 'muted' | 'warning' } | null = null;
   private worktreePrompt: SessionDeckWorktreePrompt | null = null;
   private killConfirm: SessionDeckKillConfirm | null = null;
   private restartConfirm: SessionDeckRestartConfirm | null = null;
@@ -237,6 +277,7 @@ export class SessionDeckBrowser {
     this.theme = options.theme;
     this.view = options.initialView;
     this.selectedIndex = clampIndex(0, getVisibleSessionRecords(this.view.records).length);
+    this.rememberSelectedRuntime(this.getSelection());
     this.startAutoRefresh();
   }
 
@@ -273,6 +314,11 @@ export class SessionDeckBrowser {
       return;
     }
 
+    if (data === 'g') {
+      this.toggleGroupingView();
+      return;
+    }
+
     if (data === 'R') {
       const selection = this.getSelection();
       const record = selection.records[this.selectedIndex];
@@ -288,7 +334,25 @@ export class SessionDeckBrowser {
     const selection = this.getSelection();
 
     if (matchesKey(data, 'w')) {
-      this.openWorktreePrompt(selection);
+      if (selection.groupingView === 'projects') {
+        this.worktreeStatus = {
+          message: 'Switch to Repository view before starting a new Pi session.',
+          tone: 'warning',
+        };
+        this.bump();
+      } else {
+        this.openWorktreePrompt(selection);
+      }
+      return;
+    }
+
+    if (matchesKey(data, 'left')) {
+      this.switchGroup(-1, selection);
+      return;
+    }
+
+    if (matchesKey(data, 'right')) {
+      this.switchGroup(1, selection);
       return;
     }
 
@@ -312,18 +376,9 @@ export class SessionDeckBrowser {
       return;
     }
 
-    if (matchesKey(data, 'left')) {
-      this.switchRepo(-1, selection);
-      return;
-    }
-
-    if (matchesKey(data, 'right')) {
-      this.switchRepo(1, selection);
-      return;
-    }
-
     if (matchesKey(data, 'up')) {
       this.selectedIndex = Math.max(0, this.selectedIndex - 1);
+      this.rememberSelectedRuntime(selection);
       this.clearStatus();
       this.bump();
       return;
@@ -331,6 +386,7 @@ export class SessionDeckBrowser {
 
     if (matchesKey(data, 'down')) {
       this.selectedIndex = Math.min(selection.records.length - 1, this.selectedIndex + 1);
+      this.rememberSelectedRuntime(selection);
       this.clearStatus();
       this.bump();
     }
@@ -349,7 +405,7 @@ export class SessionDeckBrowser {
     );
     const help = this.theme.fg(
       'muted',
-      '↑↓ move · ←→ switch repo · enter details · w new Pi session · o open · R restart · k end · r refresh · q close',
+      '↑↓ move · ←→ switch group · enter details · w new Pi session · o open · R restart · k end · r refresh · g Repository/Projects · q close',
     );
 
     pushWrappedLine(lines, title, width);
@@ -389,6 +445,14 @@ export class SessionDeckBrowser {
       );
     }
 
+    if (this.groupingStatus !== null) {
+      pushWrappedLine(
+        lines,
+        this.theme.fg(this.groupingStatus.tone, this.groupingStatus.message),
+        width,
+      );
+    }
+
     if (this.worktreePrompt !== null) {
       for (const line of this.formatWorktreePromptLines()) {
         pushWrappedLine(lines, this.theme.fg('accent', line), width);
@@ -418,11 +482,13 @@ export class SessionDeckBrowser {
 
     if (selection.records.length === 0) {
       lines.push('');
+      if (selection.groupingView === 'projects') {
+        lines.push(renderSelectionGroupRow(this.theme, selection, width));
+        lines.push('');
+      }
       pushWrappedLine(lines, getSessionDeckEmptyMessage(this.all), width);
     } else {
-      lines.push(
-        renderRepoRow(this.theme, selection.repoState.options, selection.repoIndex, width),
-      );
+      lines.push(renderSelectionGroupRow(this.theme, selection, width));
       lines.push('');
 
       const windowed = getVisibleWindow(
@@ -470,6 +536,7 @@ export class SessionDeckBrowser {
           all: this.all,
           showIdentity: this.showIdentity,
           spawnedCount,
+          projectState: this.view.projectState,
         });
         if (cardLines.length > 0) {
           cardLines[0] = this.theme.fg('accent', this.theme.bold(cardLines[0]!));
@@ -504,7 +571,7 @@ export class SessionDeckBrowser {
     }
   }
 
-  private openWorktreePrompt(selection: SessionDeckBrowserSelection): void {
+  private openWorktreePrompt(selection: SessionDeckRepositorySelection): void {
     if (this.worktreePending !== null) {
       this.worktreeStatus = { message: 'Already starting a new Pi session…', tone: 'muted' };
       this.bump();
@@ -689,7 +756,11 @@ export class SessionDeckBrowser {
     }
 
     const selection = this.getSelection();
-    if (selection.repoOption.filter.kind !== 'named' || this.createWorktree === null) {
+    if (
+      selection.groupingView !== 'repository' ||
+      selection.repoOption.filter.kind !== 'named' ||
+      this.createWorktree === null
+    ) {
       this.worktreePrompt = null;
       this.worktreeStatus = {
         message: 'New Pi session action is unavailable here.',
@@ -765,7 +836,8 @@ export class SessionDeckBrowser {
     }
 
     const selection = this.getSelection();
-    const repoLabel = selection.repoOption.label;
+    const repoLabel =
+      selection.groupingView === 'repository' ? selection.repoOption.label : 'Repository';
     const branchName = prompt.branchName.length === 0 ? '<branch-name>' : prompt.branchName;
     const branchMarker = prompt.focus === 'branch' ? '› ' : '  ';
     const piConfigMarker = prompt.focus === 'pi-config' ? '› ' : '  ';
@@ -1120,21 +1192,90 @@ export class SessionDeckBrowser {
     return this.refreshPending;
   }
 
+  private toggleGroupingView(): void {
+    const selection = this.getSelection();
+    const selectedRuntimeId = selection.records[this.selectedIndex]?.runtimeId ?? null;
+    this.rememberSelectedRuntime(selection);
+
+    if (this.groupingView === 'repository') {
+      if (this.view.projectState.status !== 'available') {
+        this.clearStatus();
+        this.groupingStatus = {
+          message: 'Projects view is unavailable; Repository view remains active.',
+          tone: 'warning',
+        };
+        this.bump();
+        return;
+      }
+      this.groupingView = 'projects';
+    } else {
+      this.groupingView = 'repository';
+    }
+
+    this.clearStatus();
+    const nextSelection = this.getSelection();
+    this.selectedIndex = findPreferredSelectedIndex(
+      nextSelection.records,
+      selectedRuntimeId,
+      this.selectedRuntimeByView[this.groupingView],
+    );
+    this.rememberSelectedRuntime(nextSelection);
+    this.bump();
+  }
+
   private applyNextView(
     nextView: SessionDeckBrowserSnapshot,
     selectedRuntimeId: string | null,
   ): void {
-    const selection = this.getSelection();
+    const previousVisibleRecords = getVisibleSessionRecords(this.view.records);
+    const previousRepoSelection = getRepoSelection(
+      buildRepoState(previousVisibleRecords),
+      this.selectedRepoKey,
+    );
+    const previousProjectSelection =
+      this.view.projectState.status === 'available'
+        ? getProjectSelection(
+            buildProjectFilterState(previousVisibleRecords, this.view.projectState),
+            this.selectedProjectKey,
+          )
+        : null;
     const nextVisibleRecords = getVisibleSessionRecords(nextView.records);
     const nextRepoState = buildRepoState(nextVisibleRecords);
-    const nextRepoOption = getPreservedRepoOption(nextRepoState, selection.repoOption.filter);
+    const nextProjectState = buildProjectFilterState(nextVisibleRecords, nextView.projectState);
+    const nextRepoOption = getPreservedRepoOption(
+      nextRepoState,
+      previousRepoSelection.repoOption.filter,
+    );
+    const nextProjectOption =
+      nextView.projectState.status === 'available'
+        ? getPreservedProjectOption(
+            nextProjectState,
+            this.selectedProjectKey,
+            previousProjectSelection?.projectOption.filter ?? { kind: 'all' },
+          )
+        : null;
 
     this.view = nextView;
     this.selectedRepoKey = nextRepoOption.key;
-    this.selectedIndex = findSelectedIndex(
-      getRepoRecords(nextRepoState.recordsByKey, nextRepoOption.key),
+    if (nextProjectOption !== null) {
+      this.selectedProjectKey = nextProjectOption.key;
+    }
+
+    if (this.groupingView === 'projects' && nextView.projectState.status !== 'available') {
+      this.groupingView = 'repository';
+      this.groupingStatus = {
+        message: 'Projects view is unavailable; Repository view remains active.',
+        tone: 'warning',
+      };
+    }
+
+    const nextSelection = this.getSelection();
+    this.selectedIndex = findPreferredSelectedIndex(
+      nextSelection.records,
       selectedRuntimeId,
+      this.selectedRuntimeByView[this.groupingView],
     );
+    this.rememberSelectedRuntime(nextSelection);
 
     if (
       this.restartConfirm !== null &&
@@ -1166,7 +1307,15 @@ export class SessionDeckBrowser {
     this.autoRefreshInterval.unref?.();
   }
 
-  private switchRepo(direction: -1 | 1, selection: SessionDeckBrowserSelection): void {
+  private switchGroup(direction: -1 | 1, selection: SessionDeckBrowserSelection): void {
+    if (selection.groupingView === 'repository') {
+      this.switchRepo(direction, selection);
+    } else {
+      this.switchProject(direction, selection);
+    }
+  }
+
+  private switchRepo(direction: -1 | 1, selection: SessionDeckRepositorySelection): void {
     const nextRepoIndex = clampIndex(
       selection.repoIndex + direction,
       selection.repoState.options.length,
@@ -1186,15 +1335,51 @@ export class SessionDeckBrowser {
       getRepoRecords(selection.repoState.recordsByKey, nextRepoKey),
       selectedRuntimeId,
     );
+    this.rememberSelectedRuntime(this.getSelection());
+    this.clearStatus();
+    this.bump();
+  }
+
+  private switchProject(direction: -1 | 1, selection: SessionDeckProjectsSelection): void {
+    const nextProjectIndex = clampIndex(
+      selection.projectIndex + direction,
+      selection.projectState.options.length,
+    );
+    if (nextProjectIndex === selection.projectIndex) {
+      return;
+    }
+
+    const selectedRuntimeId = selection.records[this.selectedIndex]?.runtimeId ?? null;
+    const nextProjectKey = selection.projectState.options[nextProjectIndex]?.key;
+    if (nextProjectKey === undefined) {
+      return;
+    }
+
+    this.selectedProjectKey = nextProjectKey;
+    this.selectedIndex = findSelectedIndex(
+      getProjectRecords(selection.projectState.recordsByKey, nextProjectKey),
+      selectedRuntimeId,
+    );
+    this.rememberSelectedRuntime(this.getSelection());
     this.clearStatus();
     this.bump();
   }
 
   private getSelection(): SessionDeckBrowserSelection {
-    return getRepoSelection(
-      buildRepoState(getVisibleSessionRecords(this.view.records)),
-      this.selectedRepoKey,
-    );
+    const visibleRecords = getVisibleSessionRecords(this.view.records);
+    if (this.groupingView === 'projects' && this.view.projectState.status === 'available') {
+      return getProjectSelection(
+        buildProjectFilterState(visibleRecords, this.view.projectState),
+        this.selectedProjectKey,
+      );
+    }
+
+    return getRepoSelection(buildRepoState(visibleRecords), this.selectedRepoKey);
+  }
+
+  private rememberSelectedRuntime(selection: SessionDeckBrowserSelection): void {
+    this.selectedRuntimeByView[selection.groupingView] =
+      selection.records[this.selectedIndex]?.runtimeId ?? null;
   }
 
   private clearStatus(): void {
@@ -1203,6 +1388,7 @@ export class SessionDeckBrowser {
     this.killStatus = null;
     this.restartStatus = null;
     this.worktreeStatus = null;
+    this.groupingStatus = null;
   }
 
   private bump(): void {
@@ -1290,7 +1476,7 @@ async function previewLaunchContextFromProcess(
 }
 
 function buildWorktreeRequest(
-  selection: SessionDeckBrowserSelection,
+  selection: SessionDeckRepositorySelection,
   selectedIndex: number,
   branchName: string,
   agentDir: CreateWorktreeLaunchAgentDir,
@@ -1393,9 +1579,19 @@ function isPrintableInput(data: string): boolean {
   return data.length === 1 && data >= ' ' && data !== '\u007f';
 }
 
-function renderRepoRow(
+function renderSelectionGroupRow(
   theme: Theme,
-  options: SessionDeckRepoOption[],
+  selection: SessionDeckBrowserSelection,
+  width: number,
+): string {
+  return selection.groupingView === 'repository'
+    ? renderGroupRow(theme, selection.repoState.options, selection.repoIndex, width)
+    : renderGroupRow(theme, selection.projectState.options, selection.projectIndex, width);
+}
+
+function renderGroupRow(
+  theme: Theme,
+  options: ReadonlyArray<{ label: string }>,
   selectedIndex: number,
   width: number,
 ): string {
@@ -1696,6 +1892,177 @@ function buildRepoState(records: SessionDeckBrowserRecord[]): SessionDeckRepoSta
   return { options, recordsByKey };
 }
 
+function buildProjectFilterState(
+  records: SessionDeckBrowserRecord[],
+  projectState: SessionDeckProjectState,
+): SessionDeckProjectFilterState {
+  if (projectState.status !== 'available') {
+    return { options: [], recordsByKey: new Map() };
+  }
+
+  const recordsByKey = new Map<SessionDeckProjectKey, SessionDeckBrowserRecord[]>([
+    [ALL_PROJECT_FILTER_KEY, records],
+  ]);
+  const projects = [...projectState.projects].sort(
+    (left, right) =>
+      left.name.localeCompare(right.name, undefined, { sensitivity: 'base' }) ||
+      left.projectId.localeCompare(right.projectId),
+  );
+  const projectNameCounts = projects.reduce<Map<string, number>>((counts, project) => {
+    counts.set(project.name, (counts.get(project.name) ?? 0) + 1);
+    return counts;
+  }, new Map());
+  const catalogProjectIds = new Set(projects.map((project) => project.projectId));
+  const recordsByProjectId = new Map<string, SessionDeckBrowserRecord[]>();
+  for (const record of records) {
+    if (record.projectId === null || !catalogProjectIds.has(record.projectId)) {
+      continue;
+    }
+
+    const projectRecords = recordsByProjectId.get(record.projectId) ?? [];
+    projectRecords.push(record);
+    recordsByProjectId.set(record.projectId, projectRecords);
+  }
+
+  const options: SessionDeckProjectOption[] = [
+    { key: ALL_PROJECT_FILTER_KEY, label: 'all', filter: { kind: 'all' } },
+  ];
+
+  for (const project of projects) {
+    const key = getProjectFilterKey(project.projectId);
+    const recordsForProject = recordsByProjectId.get(project.projectId) ?? [];
+    recordsByKey.set(key, recordsForProject);
+    options.push({
+      key,
+      label: formatProjectFilterLabel(project.name, project.projectId, projectNameCounts),
+      filter: { kind: 'project', projectId: project.projectId },
+    });
+  }
+
+  const unassignedRepoState = buildRepoState(
+    records.filter(
+      (record) => record.projectId === null || !catalogProjectIds.has(record.projectId),
+    ),
+  );
+  for (const repoOption of unassignedRepoState.options.slice(1)) {
+    const key = getRepoFallbackFilterKey(repoOption.filter);
+    recordsByKey.set(key, unassignedRepoState.recordsByKey.get(repoOption.key) ?? []);
+    options.push({
+      key,
+      label: `R: ${repoOption.label}`,
+      filter: { kind: 'repo-fallback', repoFilter: repoOption.filter },
+    });
+  }
+
+  return { options, recordsByKey };
+}
+
+function formatProjectFilterLabel(
+  name: string,
+  projectId: string,
+  nameCounts: Map<string, number>,
+): string {
+  const suffix = (nameCounts.get(name) ?? 0) > 1 ? ` (${formatShortProjectId(projectId)})` : '';
+  return `P: ${name}${suffix}`;
+}
+
+function formatShortProjectId(projectId: string): string {
+  return projectId.length <= 8 ? projectId : projectId.slice(0, 8);
+}
+
+function getProjectFilterKey(projectId: string): string {
+  return `${PROJECT_FILTER_KEY_PREFIX}${projectId}`;
+}
+
+function getRepoFallbackFilterKey(filter: SessionDeckRepoFilter): string {
+  if (filter.kind === 'no-repo') {
+    return `${REPO_FALLBACK_FILTER_KEY_PREFIX}none`;
+  }
+
+  if (filter.kind === 'named') {
+    return `${REPO_FALLBACK_FILTER_KEY_PREFIX}named:${filter.key}`;
+  }
+
+  return `${REPO_FALLBACK_FILTER_KEY_PREFIX}all`;
+}
+
+function getProjectSelection(
+  projectState: SessionDeckProjectFilterState,
+  selectedProjectKey: SessionDeckProjectKey,
+): SessionDeckProjectsSelection {
+  const projectIndex = projectState.options.findIndex(
+    (option) => option.key === selectedProjectKey,
+  );
+  const resolvedProjectIndex = projectIndex === -1 ? 0 : projectIndex;
+  const projectOption = projectState.options[resolvedProjectIndex] ?? {
+    key: ALL_PROJECT_FILTER_KEY,
+    label: 'all',
+    filter: { kind: 'all' } as const,
+  };
+
+  return {
+    groupingView: 'projects',
+    projectState,
+    projectIndex: resolvedProjectIndex,
+    projectOption,
+    records: getProjectRecords(projectState.recordsByKey, projectOption.key),
+  };
+}
+
+function getProjectRecords(
+  recordsByKey: Map<SessionDeckProjectKey, SessionDeckBrowserRecord[]>,
+  projectKey: SessionDeckProjectKey,
+): SessionDeckBrowserRecord[] {
+  return recordsByKey.get(projectKey) ?? recordsByKey.get(ALL_PROJECT_FILTER_KEY) ?? [];
+}
+
+function getPreservedProjectOption(
+  projectState: SessionDeckProjectFilterState,
+  selectedProjectKey: SessionDeckProjectKey,
+  filter: SessionDeckProjectFilter,
+): SessionDeckProjectOption {
+  const exactMatch = projectState.options.find((option) => option.key === selectedProjectKey);
+  if (exactMatch !== undefined) {
+    return exactMatch;
+  }
+
+  if (filter.kind === 'all') {
+    return projectState.options[0]!;
+  }
+
+  const matchingOption = projectState.options.find((option) => {
+    if (filter.kind === 'project') {
+      return option.filter.kind === 'project' && option.filter.projectId === filter.projectId;
+    }
+
+    return (
+      option.filter.kind === 'repo-fallback' &&
+      repoFiltersMatch(option.filter.repoFilter, filter.repoFilter)
+    );
+  });
+  return matchingOption ?? projectState.options[0]!;
+}
+
+function repoFiltersMatch(left: SessionDeckRepoFilter, right: SessionDeckRepoFilter): boolean {
+  if (left.kind !== right.kind) {
+    return false;
+  }
+
+  if (left.kind === 'all' || left.kind === 'no-repo') {
+    return true;
+  }
+
+  if (right.kind !== 'named') {
+    return false;
+  }
+
+  if (left.qualifiedLabel !== null && right.qualifiedLabel !== null) {
+    return left.qualifiedLabel === right.qualifiedLabel;
+  }
+
+  return left.shortLabel === right.shortLabel;
+}
+
 function buildNamedRepoBuckets(group: SessionDeckPendingRepoGroup): SessionDeckNamedRepoBucket[] {
   if (group.qualifiedLabels.size <= 1) {
     const qualifiedLabel = group.qualifiedLabels.values().next().value ?? null;
@@ -1750,7 +2117,7 @@ function buildNamedRepoBuckets(group: SessionDeckPendingRepoGroup): SessionDeckN
 function getRepoSelection(
   repoState: SessionDeckRepoState,
   selectedRepoKey: SessionDeckRepoKey,
-): SessionDeckBrowserSelection {
+): SessionDeckRepositorySelection {
   const repoIndex = repoState.options.findIndex((option) => option.key === selectedRepoKey);
   const resolvedRepoIndex = repoIndex === -1 ? 0 : repoIndex;
   const repoOption = repoState.options[resolvedRepoIndex] ?? {
@@ -1760,6 +2127,7 @@ function getRepoSelection(
   };
 
   return {
+    groupingView: 'repository',
     repoState,
     repoIndex: resolvedRepoIndex,
     repoOption,
@@ -1850,6 +2218,19 @@ function getPreservedRepoOption(
         option.filter.kind === 'named' && option.filter.key === filter.key,
     ) ?? repoState.options[0]!
   );
+}
+
+function findPreferredSelectedIndex(
+  records: SessionDeckBrowserRecord[],
+  currentRuntimeId: string | null,
+  savedRuntimeId: string | null,
+): number {
+  const currentIndex = records.findIndex((record) => record.runtimeId === currentRuntimeId);
+  if (currentIndex !== -1) {
+    return currentIndex;
+  }
+
+  return findSelectedIndex(records, savedRuntimeId);
 }
 
 function findSelectedIndex(records: SessionDeckBrowserRecord[], runtimeId: string | null): number {

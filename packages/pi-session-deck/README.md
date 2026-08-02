@@ -34,6 +34,16 @@ Use Session Deck wherever it fits your workflow:
 
 Each surface shows the same underlying sessions and gives you the same path through their lifecycle: launch, monitor, reopen, restart, and end.
 
+## Projects
+
+Repository grouping is always the default. Projects are optional, user-named groups edited in the desktop app or iTerm2 Toolbelt; the Pi TUI can browse them with `g` but is read-only. Grouping does not change the separate live/default and `--all` record scope.
+
+Membership is manual and exact: one non-null Pi `sessionId` maps to one opaque project ID. Session Deck never infers membership from a repository, cwd, path, branch, worktree, runtime ID, or lineage. Unassigned and null-ID sessions stay under their normal repository fallback. A new session is unassigned unless its exact session ID is assigned through the web UI.
+
+Project data is stored in private files under `~/.pi/session-deck/projects/`: project records in `catalog/` and exact session-ID mappings in `memberships/`. Deleting a project does not delete sessions, history, branches, or worktrees. Its membership files become inert orphans, and affected sessions return to repository fallback; project IDs are not reused.
+
+Projects do not add automatic placement, launch-time project choice, TUI editing, rename, bulk assignment, nesting, custom ordering, sync, import/export, or automatic orphan cleanup.
+
 ## Launch, reopen, restart, and end
 
 Use `w` in the Pi TUI or **＋ New** in the Toolbelt to launch Pi on a new branch. Session Deck creates an isolated Git worktree and detached tmux session, allowing the agent to continue headlessly.
@@ -98,18 +108,19 @@ Flags can be combined.
 
 ## TUI controls
 
-| Key       | Action                                              |
-| --------- | --------------------------------------------------- |
-| `↑` / `↓` | Move between sessions.                              |
-| `←` / `→` | Switch repo filters.                                |
-| `enter`   | Toggle session details.                             |
-| `w`       | Launch Pi on a generated worktree in detached tmux. |
-| `o`       | Open or focus the selected agent's terminal.        |
-| `R`       | Restart an eligible managed tmux session.           |
-| `k`       | End the selected session.                           |
-| `r`       | Refresh the deck.                                   |
-| `q`       | Close Session Deck.                                 |
-| `esc`     | Cancel an open prompt or close Session Deck.        |
+| Key       | Action                                         |
+| --------- | ---------------------------------------------- |
+| `↑` / `↓` | Move between sessions.                         |
+| `←` / `→` | Switch repository or project filters.          |
+| `g`       | Switch between Repository and Projects views.  |
+| `enter`   | Toggle session details.                        |
+| `w`       | Launch from a named filter in Repository view. |
+| `o`       | Open or focus the selected agent's terminal.   |
+| `R`       | Restart an eligible managed tmux session.      |
+| `k`       | End the selected session.                      |
+| `r`       | Refresh the deck.                              |
+| `q`       | Close Session Deck.                            |
+| `esc`     | Cancel an open prompt or close Session Deck.   |
 
 ## Privacy
 
@@ -119,4 +130,5 @@ Session Deck observes operational state, not conversation history.
 - Status chips contain sanitized visible text only.
 - Tool and assistant errors are reduced to compact, safe summaries.
 - Managed restart recipes are private user-only files. They contain only the fixed executable/PATH, agent/session directory intent, cwd, exact tmux target, session binding, and process generation needed to restart safely.
+- Project directories are user-only (`0700`) and project/membership files are user-only (`0600`). They contain project names, opaque project IDs, and exact session IDs, never conversation content.
 - JSON output, restart results, the desktop app, and the Toolbelt omit recipes, session-file paths, commands, PATH, raw terminal metadata, and tmux attachment details.

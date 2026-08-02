@@ -1,12 +1,14 @@
 import { basename } from 'node:path';
 import type { SessionDeckBrowserRecord } from './browser-view.js';
 import { restartUnavailableMessage } from './restart/eligibility.js';
+import type { SessionDeckProjectState } from './projects/types.js';
 import type { SessionDeckDiagnostic, SessionDeckRecord, SessionDeckSnapshot } from './types.js';
 
 export interface SessionDeckRecordRenderOptions {
   all: boolean;
   showIdentity: boolean;
   spawnedCount?: number;
+  projectState?: SessionDeckProjectState;
 }
 
 export interface SessionDeckBrowserRow {
@@ -144,6 +146,11 @@ export function formatSessionDeckBrowserCardLines(
   const repoLine = formatCardRepoLine(record, title.text);
   if (repoLine !== null) {
     lines.push(repoLine);
+  }
+
+  const projectLine = formatCardProjectLine(record, options.projectState);
+  if (projectLine !== null) {
+    lines.push(projectLine);
   }
 
   if (record.cwd !== null) {
@@ -408,6 +415,30 @@ function formatCardRepoLine(record: SessionDeckRecord, title: string): string | 
   }
 
   return `repo: ${repo}`;
+}
+
+function formatCardProjectLine(
+  record: SessionDeckRecord,
+  projectState: SessionDeckProjectState | undefined,
+): string | null {
+  if (projectState === undefined) {
+    return null;
+  }
+
+  if (projectState.status !== 'available') {
+    return 'project: Projects unavailable';
+  }
+
+  if (record.projectId === null) {
+    return 'project: Repository default';
+  }
+
+  const project = projectState.projects.find(
+    (candidate) => candidate.projectId === record.projectId,
+  );
+  return project === undefined
+    ? 'project: Repository default (project unavailable)'
+    : `project: ${project.name}`;
 }
 
 function formatCardCheckoutLine(record: SessionDeckRecord): string | null {

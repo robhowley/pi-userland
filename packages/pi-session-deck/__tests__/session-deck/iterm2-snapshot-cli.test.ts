@@ -7,6 +7,7 @@ function buildSnapshot(overrides: Partial<SessionDeckSnapshot> = {}): SessionDec
     generatedAt: '2026-07-10T12:00:00.000Z',
     records: [],
     diagnostics: [],
+    projectState: { status: 'available', projects: [] },
     ...overrides,
   };
 }
@@ -22,6 +23,7 @@ describe('runSessionDeckSnapshotCli', () => {
           presenceReason: 'fresh_heartbeat',
           heartbeatAgeMs: 5_000,
           sessionId: 'session-1',
+          projectId: null,
           sessionName: 'alpha',
           repoName: 'repo',
           qualifiedRepoName: 'owner/repo',

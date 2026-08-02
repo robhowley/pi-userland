@@ -5,10 +5,13 @@ import {
   getRequestedAction,
   normalizeActionRequest,
   normalizeLaunchContextPreviewRequest,
+  normalizeProjectActionRequest,
   normalizeRestartActionRequest,
   runCreateSessionAction,
+  runProjectAction,
   toBrowserSafeCreateSessionActionResult,
   toBrowserSafeCreateWorktreeActionResult,
+  toBrowserSafeProjectActionResult,
 } from '../../extensions/session-deck/worktree/action-cli.js';
 import type { CreateWorktreeActionResult } from '../../extensions/session-deck/worktree/types.js';
 
@@ -26,6 +29,106 @@ describe('session-deck worktree action cli', () => {
       ok: true,
       action: 'restart-session',
     });
+  });
+
+  it('detects all project actions', () => {
+    for (const action of [
+      'create-and-assign',
+      'assign-project',
+      'unassign-project',
+      'delete-project',
+    ] as const) {
+      expect(getRequestedAction({ action })).toEqual({ ok: true, action });
+    }
+  });
+
+  it('accepts only exact project action fields', () => {
+    const projectId = '123e4567-e89b-42d3-a456-426614174000';
+    expect(
+      normalizeProjectActionRequest({
+        action: 'create-and-assign',
+        sessionId: 'session-1',
+        name: '  Project One  ',
+      }),
+    ).toEqual({
+      action: 'create-and-assign',
+      sessionId: 'session-1',
+      name: '  Project One  ',
+    });
+    expect(
+      normalizeProjectActionRequest({
+        action: 'assign-project',
+        sessionId: 'session-1',
+        projectId,
+      }),
+    ).toEqual({ action: 'assign-project', sessionId: 'session-1', projectId });
+    expect(
+      normalizeProjectActionRequest({ action: 'unassign-project', sessionId: 'session-1' }),
+    ).toEqual({ action: 'unassign-project', sessionId: 'session-1' });
+    expect(normalizeProjectActionRequest({ action: 'delete-project', projectId })).toEqual({
+      action: 'delete-project',
+      projectId,
+    });
+
+    for (const privateField of ['cwd', 'repo', 'branch', 'worktree', 'runtimeId']) {
+      expect(
+        normalizeProjectActionRequest({
+          action: 'assign-project',
+          sessionId: 'session-1',
+          projectId,
+          [privateField]: 'private',
+        }),
+      ).toBeNull();
+    }
+  });
+
+  it('runs project actions through injected project storage and keeps partial results explicit', async () => {
+    const projectId = '123e4567-e89b-42d3-a456-426614174000';
+    const availableStore = {
+      status: 'available' as const,
+      projects: [{ projectId, name: 'Project One' }],
+      memberships: new Map<string, string>(),
+    };
+    await expect(
+      runProjectAction(
+        { action: 'assign-project', sessionId: 'session-1', projectId },
+        { readStore: async () => availableStore, writeMembership: async () => undefined },
+      ),
+    ).resolves.toEqual({
+      ok: true,
+      status: 'assigned',
+      sessionId: 'session-1',
+      projectId,
+    });
+
+    expect(
+      toBrowserSafeProjectActionResult({
+        ok: false,
+        status: 'partial',
+        reason: 'write-failed',
+        retryable: true,
+        message: 'Project was created, but assignment failed at /Users/private.',
+        project: { projectId, name: 'Project One' },
+        sessionId: 'session-1',
+      }),
+    ).toEqual({
+      ok: false,
+      status: 'partial',
+      reason: 'write-failed',
+      retryable: true,
+      message: 'Project was created, but assignment could not be confirmed.',
+      project: { projectId, name: 'Project One' },
+      sessionId: 'session-1',
+    });
+    expect(
+      toBrowserSafeProjectActionResult({
+        ok: false,
+        status: 'failed',
+        reason: 'projects-unavailable',
+        retryable: true,
+        message: 'Unsafe store at /Users/private.',
+      }),
+    ).toMatchObject({ message: 'Project editing is unavailable.' });
   });
 
   it('accepts only the action and browser-safe restart identity tokens', () => {

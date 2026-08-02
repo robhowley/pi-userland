@@ -67,6 +67,9 @@
       createSession(request) {
         return postJson(fetchImpl, '/actions/create-session', actionToken, request);
       },
+      updateProject(request) {
+        return postJson(fetchImpl, '/actions/project', actionToken, request);
+      },
       async openTerminal(runtimeId) {
         const response = await fetchImpl('/actions/open-terminal', {
           method: 'POST',

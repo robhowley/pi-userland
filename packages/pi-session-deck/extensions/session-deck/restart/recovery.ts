@@ -46,6 +46,7 @@ export async function readRestartRecoveryRecords(
       presenceReason: 'restart_recovery',
       heartbeatAgeMs: Number.isFinite(age) ? age : 0,
       sessionId: stringOrNull(identity?.['sessionId']),
+      projectId: null,
       sessionName: stringOrNull(identity?.['sessionName']),
       repoName: stringOrNull(identity?.['repoName']),
       qualifiedRepoName: stringOrNull(identity?.['qualifiedRepoName']),

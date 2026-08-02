@@ -40,6 +40,8 @@ import type {
 } from '../../extensions/session-deck/worktree/types.js';
 
 const HOME = process.env['HOME'] ?? '/home/user';
+const PROJECT_ALPHA_ID = '11111111-1111-4111-8111-111111111111';
+const PROJECT_BETA_ID = '22222222-2222-4222-8222-222222222222';
 const openBrowsers: SessionDeckBrowser[] = [];
 
 afterEach(() => {
@@ -66,6 +68,7 @@ function buildSnapshotRecord(overrides: Partial<SessionDeckRecord> = {}): Sessio
     presenceReason: 'fresh_heartbeat',
     heartbeatAgeMs: 5_000,
     sessionId: 'session-abc',
+    projectId: null,
     sessionName: 'alpha',
     repoName: 'project',
     qualifiedRepoName: 'owner/project',
@@ -88,12 +91,14 @@ function buildSnapshotRecord(overrides: Partial<SessionDeckRecord> = {}): Sessio
 function buildSnapshot(
   options: {
     records?: SessionDeckRecord[];
+    projectState?: SessionDeckSnapshot['projectState'];
   } = {},
 ): SessionDeckSnapshot {
   return {
     generatedAt: '2026-06-23T12:10:00.000Z',
     records: options.records ?? [buildSnapshotRecord()],
     diagnostics: [],
+    projectState: options.projectState ?? { status: 'available', projects: [] },
   };
 }
 
@@ -364,10 +369,7 @@ describe('SessionDeckBrowser', () => {
     const lines = renderLines(browser);
     const helpIndex = findLineIndex(
       lines,
-      (line) =>
-        line.includes(
-          '↑↓ move · ←→ switch repo · enter details · w new Pi session · o open · R restart · k end · r refresh · q close',
-        ),
+      (line) => line.includes('↑↓ move · ←→ switch group · enter details'),
       'help line',
     );
     const reapIndex = findLineIndex(lines, (line) => line.includes('Reap complete:'), 'reap line');
@@ -382,6 +384,163 @@ describe('SessionDeckBrowser', () => {
     expect(reapIndex).toBeLessThan(repoRowIndex);
     expect(lines[repoRowIndex + 1]).toBe('');
     expect(listIndex).toBe(repoRowIndex + 2);
+  });
+
+  it('starts in Repository view and groups Projects only by joined IDs with repo fallback', () => {
+    const browser = createBrowser({
+      initialView: buildSnapshot({
+        records: [
+          buildRepoRecord('rt-assigned', 'assigned', 'shared', 'org/shared', {
+            projectId: PROJECT_ALPHA_ID,
+          }),
+          buildRepoRecord('rt-same-repo', 'same-repo-unassigned', 'shared', 'org/shared'),
+          buildRepoRecord('rt-beta', 'beta-unassigned', 'beta', 'org/beta'),
+        ],
+        projectState: {
+          status: 'available',
+          projects: [
+            { projectId: PROJECT_ALPHA_ID, name: 'Alpha Project' },
+            { projectId: PROJECT_BETA_ID, name: 'Empty Project' },
+          ],
+        },
+      }),
+    });
+
+    let output = renderText(browser);
+    expect(output).toContain('all  beta  shared');
+    expect(output).not.toContain('P: Alpha Project');
+    expect(output).toContain('│ project: Alpha Project');
+
+    browser.handleInput('g');
+    output = renderText(browser);
+    expect(output).toContain('P: Alpha Project');
+    expect(output).toContain('P: Empty Project');
+    expect(output).toContain('R: beta');
+
+    browser.handleInput('right');
+    output = renderText(browser);
+    expect(output).toContain('assigned  shared');
+    expect(output).not.toContain('same-repo-unassigned  shared');
+
+    browser.handleInput('right');
+    expect(renderText(browser)).toContain('No live or stale Pi sessions found.');
+
+    browser.handleInput('right');
+    output = renderText(browser);
+    expect(output).toContain('beta-unassigned  beta');
+    expect(output).not.toContain('same-repo-unassigned  shared');
+
+    browser.handleInput('right');
+    output = renderText(browser);
+    expect(output).toContain('R: shared');
+    expect(output).toContain('same-repo-unassigned  shared');
+    expect(output).not.toContain('○ idle  assigned  shared');
+  });
+
+  it('preserves independent Repository and Projects filters and selected runtimes across toggle and refresh', async () => {
+    const nextSnapshot = buildSnapshot({
+      records: [
+        buildRepoRecord('rt-alpha-2', 'alpha-two refreshed', 'alpha', 'org/alpha', {
+          projectId: PROJECT_ALPHA_ID,
+        }),
+        buildRepoRecord('rt-alpha-1', 'alpha-one refreshed', 'alpha', 'org/alpha', {
+          projectId: PROJECT_ALPHA_ID,
+        }),
+        buildRepoRecord('rt-beta', 'beta refreshed', 'beta', 'org/beta'),
+      ],
+      projectState: {
+        status: 'available',
+        projects: [{ projectId: PROJECT_ALPHA_ID, name: 'Alpha Project' }],
+      },
+    });
+    const reload = vi.fn(async () => nextSnapshot);
+    const browser = createBrowser({
+      reload,
+      initialView: buildSnapshot({
+        records: [
+          buildRepoRecord('rt-alpha-1', 'alpha-one', 'alpha', 'org/alpha', {
+            projectId: PROJECT_ALPHA_ID,
+          }),
+          buildRepoRecord('rt-alpha-2', 'alpha-two', 'alpha', 'org/alpha', {
+            projectId: PROJECT_ALPHA_ID,
+          }),
+          buildRepoRecord('rt-beta', 'beta', 'beta', 'org/beta'),
+        ],
+        projectState: {
+          status: 'available',
+          projects: [{ projectId: PROJECT_ALPHA_ID, name: 'Alpha Project' }],
+        },
+      }),
+    });
+
+    browser.handleInput('right');
+    browser.handleInput('right');
+    expect(renderText(browser)).toContain('› ○ idle  beta  beta');
+
+    browser.handleInput('g');
+    browser.handleInput('right');
+    browser.handleInput('down');
+    expect(renderText(browser)).toContain('› ○ idle  alpha-two  alpha');
+
+    browser.handleInput('g');
+    expect(renderText(browser)).toContain('› ○ idle  beta  beta');
+
+    browser.handleInput('g');
+    expect(renderText(browser)).toContain('› ○ idle  alpha-two  alpha');
+
+    browser.handleInput('r');
+    await vi.waitFor(() => {
+      expect(reload).toHaveBeenCalledTimes(1);
+      expect(renderText(browser)).toContain('› ○ idle  alpha-two refreshed  alpha');
+    });
+  });
+
+  it('distinguishes project names, Repository default, and unavailable Projects in details', () => {
+    const assignedBrowser = createBrowser({
+      initialView: buildSnapshot({
+        records: [buildSnapshotRecord({ projectId: PROJECT_ALPHA_ID })],
+        projectState: {
+          status: 'available',
+          projects: [{ projectId: PROJECT_ALPHA_ID, name: 'Alpha Project' }],
+        },
+      }),
+    });
+    const unassignedBrowser = createBrowser({ initialView: buildSnapshot() });
+    const unavailableBrowser = createBrowser({
+      initialView: buildSnapshot({
+        projectState: { status: 'unavailable', projects: [] },
+      }),
+    });
+
+    expect(renderText(assignedBrowser)).toContain('│ project: Alpha Project');
+    expect(renderText(unassignedBrowser)).toContain('│ project: Repository default');
+    expect(renderText(unavailableBrowser)).toContain('│ project: Projects unavailable');
+
+    unavailableBrowser.handleInput('g');
+    const output = renderText(unavailableBrowser);
+    expect(output).toContain('Projects view is unavailable; Repository view remains active.');
+    expect(output).not.toContain('P: Alpha Project');
+  });
+
+  it('keeps worktree launch unavailable in read-only Projects view', () => {
+    const createWorktree = vi.fn();
+    const browser = createBrowser({
+      createWorktree,
+      initialView: buildSnapshot({
+        projectState: {
+          status: 'available',
+          projects: [{ projectId: PROJECT_ALPHA_ID, name: 'Alpha Project' }],
+        },
+      }),
+    });
+
+    browser.handleInput('g');
+    browser.handleInput('w');
+
+    expect(createWorktree).not.toHaveBeenCalled();
+    expect(renderText(browser)).toContain(
+      'Switch to Repository view before starting a new Pi session.',
+    );
   });
 
   it('sorts named repo filters alphabetically by short name', () => {
@@ -1412,6 +1571,7 @@ describe('SessionDeckBrowser', () => {
           buildSnapshotRecord({
             runtimeId,
             sessionId: 'public-session',
+            projectId: '550e8400-e29b-41d4-a716-446655440000',
             sessionName: 'pi session',
             chips: [],
           }),
@@ -1437,6 +1597,8 @@ describe('SessionDeckBrowser', () => {
       openLabel: 'new iTerm2 tab attaches to tmux',
     });
     expect(publicRecord?.sessionId).toBe('public-session');
+    expect(publicRecord?.projectId).toBe('550e8400-e29b-41d4-a716-446655440000');
+    expect(view.projectState).toEqual({ status: 'available', projects: [] });
     expect(publicRecord).not.toHaveProperty('terminal');
     expect(publicRecord).not.toHaveProperty('socketPath');
     expect(publicRecord).not.toHaveProperty('paneId');
@@ -1446,6 +1608,40 @@ describe('SessionDeckBrowser', () => {
     const serialized = JSON.stringify(publicRecord ?? {});
     expect(serialized).not.toContain(socketPath);
     expect(serialized).not.toContain(attachCommand);
+  });
+
+  it('preserves joined project state through browser snapshots', async () => {
+    const snapshot = buildSnapshot({
+      records: [
+        buildSnapshotRecord({
+          projectId: '550e8400-e29b-41d4-a716-446655440000',
+        }),
+      ],
+    });
+    snapshot.projectState = {
+      status: 'available',
+      projects: [{ projectId: '550e8400-e29b-41d4-a716-446655440000', name: 'Explicit' }],
+    };
+
+    const view = await withTerminalDisplayHints(snapshot, {
+      readdir: vi.fn().mockResolvedValue([]),
+    });
+
+    expect(view.projectState).toEqual(snapshot.projectState);
+    expect(view.records[0]?.projectId).toBe('550e8400-e29b-41d4-a716-446655440000');
+  });
+
+  it('normalizes missing project state and project IDs for older snapshots', async () => {
+    const snapshot = buildSnapshot();
+    delete (snapshot as Partial<SessionDeckSnapshot>).projectState;
+    delete (snapshot.records[0] as Partial<SessionDeckRecord>).projectId;
+
+    const view = await withTerminalDisplayHints(snapshot, {
+      readdir: vi.fn().mockResolvedValue([]),
+    });
+
+    expect(view.projectState).toEqual({ status: 'unavailable', projects: [] });
+    expect(view.records[0]?.projectId).toBeNull();
   });
 
   it('keeps browser hint snapshots free of accidental raw terminal fields', async () => {

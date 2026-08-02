@@ -1,6 +1,7 @@
 use crate::commands::{
-    CreateSessionRequest, CreateWorktreeRequest, KillSessionRequest, OpenTerminalRequest,
-    PreviewWorktreeBaseRefRequest, PreviewWorktreeLaunchContextRequest, RestartSessionRequest,
+    validate_project_id, CreateSessionRequest, CreateWorktreeRequest, KillSessionRequest,
+    OpenTerminalRequest, PreviewWorktreeBaseRefRequest, PreviewWorktreeLaunchContextRequest,
+    ProjectActionRequest, RestartSessionRequest,
 };
 use crate::runtime::{load_runtime_config, RuntimeConfig, OPEN_TERMINAL_ACTION_BRIDGE_SOCKET_ENV};
 use serde::Serialize;
@@ -183,6 +184,132 @@ pub fn create_session(request: CreateSessionRequest) -> Result<Value, CommandErr
         })?,
         "Create-session action is unavailable. Open desktop diagnostics for details.",
         true,
+    )
+}
+
+pub fn update_project(request: ProjectActionRequest) -> Result<Value, CommandError> {
+    request.validate()?;
+    let runtime_config = load_config_for_command()?;
+    let result = run_action_helper(
+        &runtime_config,
+        &runtime_config.worktree_action_helper_path,
+        serde_json::to_value(&request).map_err(|error| {
+            CommandError::with_detail(
+                "Project editing is unavailable. Open desktop diagnostics for details.",
+                format!("Could not serialize the project request: {error}"),
+            )
+        })?,
+        "Project editing is unavailable. Open desktop diagnostics for details.",
+        true,
+    )?;
+    validate_project_action_result(result)
+}
+
+fn validate_project_action_result(value: Value) -> Result<Value, CommandError> {
+    let Some(result) = value.as_object() else {
+        return Err(invalid_project_result());
+    };
+    let status = result.get("status").and_then(Value::as_str);
+    let valid = match (result.get("ok").and_then(Value::as_bool), status) {
+        (Some(true), Some("created-and-assigned")) => {
+            has_exact_keys(result, &["ok", "status", "project", "sessionId"])
+                && is_project(result.get("project"))
+                && is_non_empty_string(result.get("sessionId"))
+        }
+        (Some(true), Some("assigned")) => {
+            has_exact_keys(result, &["ok", "status", "projectId", "sessionId"])
+                && is_project_id(result.get("projectId"))
+                && is_non_empty_string(result.get("sessionId"))
+        }
+        (Some(true), Some("unassigned")) => {
+            has_exact_keys(result, &["ok", "status", "sessionId"])
+                && is_non_empty_string(result.get("sessionId"))
+        }
+        (Some(true), Some("deleted")) => {
+            has_exact_keys(result, &["ok", "status", "projectId"])
+                && is_project_id(result.get("projectId"))
+        }
+        (Some(false), Some("partial")) => {
+            has_exact_keys(
+                result,
+                &[
+                    "ok",
+                    "status",
+                    "reason",
+                    "retryable",
+                    "message",
+                    "project",
+                    "sessionId",
+                ],
+            ) && result.get("reason").and_then(Value::as_str) == Some("write-failed")
+                && result.get("retryable").and_then(Value::as_bool) == Some(true)
+                && result.get("message").and_then(Value::as_str)
+                    == Some("Project was created, but assignment could not be confirmed.")
+                && is_project(result.get("project"))
+                && is_non_empty_string(result.get("sessionId"))
+        }
+        (Some(false), Some("failed")) => validate_project_failure(result),
+        _ => false,
+    };
+
+    if valid {
+        Ok(value)
+    } else {
+        Err(invalid_project_result())
+    }
+}
+
+fn validate_project_failure(result: &serde_json::Map<String, Value>) -> bool {
+    if !has_exact_keys(result, &["ok", "status", "reason", "retryable", "message"])
+        || result.get("retryable").and_then(Value::as_bool).is_none()
+    {
+        return false;
+    }
+    let expected_message = match result.get("reason").and_then(Value::as_str) {
+        Some("invalid-session-id") => "A non-empty session ID is required.",
+        Some("invalid-project-id") => "A valid project ID is required.",
+        Some("invalid-project-name") => {
+            "Project name must be 1–80 characters and contain no control characters."
+        }
+        Some("project-not-found") => "Project does not exist.",
+        Some("projects-unavailable") => "Project editing is unavailable.",
+        Some("write-failed") => "Project update failed.",
+        _ => return false,
+    };
+    result.get("message").and_then(Value::as_str) == Some(expected_message)
+}
+
+fn is_project(candidate: Option<&Value>) -> bool {
+    let Some(project) = candidate.and_then(Value::as_object) else {
+        return false;
+    };
+    has_exact_keys(project, &["projectId", "name"])
+        && is_project_id(project.get("projectId"))
+        && is_non_empty_string(project.get("name"))
+}
+
+fn is_project_id(candidate: Option<&Value>) -> bool {
+    candidate
+        .and_then(Value::as_str)
+        .map(|project_id| validate_project_id(project_id).is_ok())
+        .unwrap_or(false)
+}
+
+fn is_non_empty_string(candidate: Option<&Value>) -> bool {
+    candidate
+        .and_then(Value::as_str)
+        .map(|value| !value.is_empty())
+        .unwrap_or(false)
+}
+
+fn has_exact_keys(result: &serde_json::Map<String, Value>, expected: &[&str]) -> bool {
+    result.len() == expected.len() && expected.iter().all(|key| result.contains_key(*key))
+}
+
+fn invalid_project_result() -> CommandError {
+    CommandError::with_detail(
+        "Project editing is unavailable. Open desktop diagnostics for details.",
+        "The helper response did not match the project action contract.",
     )
 }
 
@@ -741,7 +868,8 @@ fn format_process_detail(stdout: &str, stderr: &str) -> String {
 mod tests {
     use super::{
         is_coherent_restart_result, map_restart_helper_error, run_helper,
-        validate_restart_session_result, CommandError, CommandErrorPayload, HelperSpec,
+        validate_project_action_result, validate_restart_session_result, CommandError,
+        CommandErrorPayload, HelperSpec,
     };
     use crate::runtime::{EffectiveCommandPath, RuntimeConfig, RuntimeMetadataSource};
     use std::fs;
@@ -829,6 +957,64 @@ mod tests {
         );
         std::thread::sleep(Duration::from_millis(350));
         assert!(!marker_path.exists());
+    }
+
+    #[test]
+    fn project_result_preserves_partial_create_and_rejects_old_or_private_shapes() {
+        let partial = serde_json::json!({
+            "ok": false,
+            "status": "partial",
+            "reason": "write-failed",
+            "retryable": true,
+            "message": "Project was created, but assignment could not be confirmed.",
+            "project": {
+                "projectId": "123e4567-e89b-42d3-a456-426614174000",
+                "name": "Project One"
+            },
+            "sessionId": "session-1"
+        });
+        assert!(validate_project_action_result(partial).is_ok());
+
+        assert!(validate_project_action_result(serde_json::json!({
+            "ok": false,
+            "status": "failed",
+            "message": "Unsupported worktree helper action."
+        }))
+        .is_err());
+        assert!(validate_project_action_result(serde_json::json!({
+            "ok": true,
+            "status": "assigned",
+            "projectId": "123e4567-e89b-42d3-a456-426614174000",
+            "sessionId": "session-1",
+            "cwd": "/private/repo"
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn project_result_accepts_each_explicit_success_shape() {
+        for result in [
+            serde_json::json!({
+                "ok": true,
+                "status": "created-and-assigned",
+                "project": {"projectId": "123e4567-e89b-42d3-a456-426614174000", "name": "One"},
+                "sessionId": "session-1"
+            }),
+            serde_json::json!({
+                "ok": true,
+                "status": "assigned",
+                "projectId": "123e4567-e89b-42d3-a456-426614174000",
+                "sessionId": "session-1"
+            }),
+            serde_json::json!({"ok": true, "status": "unassigned", "sessionId": "session-1"}),
+            serde_json::json!({
+                "ok": true,
+                "status": "deleted",
+                "projectId": "123e4567-e89b-42d3-a456-426614174000"
+            }),
+        ] {
+            validate_project_action_result(result).unwrap();
+        }
     }
 
     #[test]

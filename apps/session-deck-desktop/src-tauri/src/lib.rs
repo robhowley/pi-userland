@@ -39,6 +39,7 @@ pub fn run() {
             commands::open_terminal,
             commands::kill_session,
             commands::restart_session,
+            commands::update_project,
             commands::open_external,
             commands::copy_text,
             commands::doctor_status,
