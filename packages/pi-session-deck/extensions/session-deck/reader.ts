@@ -5,6 +5,7 @@ import { readSessionDeckChips } from './chips/reader.js';
 import { readJoinedSessionView } from './identity/reader.js';
 import type { IdentityFreshnessThresholds } from './identity/types.js';
 import { readPresenceView, type ReadPresenceViewOptions } from './presence/reader.js';
+import { readProjectStore } from './projects/store.js';
 import type { readPidStartedAt } from './presence/pid.js';
 import { readRestartEligibility } from './restart/eligibility.js';
 import type { readDescendantPids } from './restart/process.js';
@@ -16,6 +17,7 @@ export interface ReadSessionDeckSnapshotOptions extends ReadPresenceViewOptions 
   activityDirectory?: string;
   chipsDirectory?: string;
   restartDirectory?: string;
+  projectsDirectory?: string;
   hostingRuntimeId?: string;
   readRestartPidStartedAt?: typeof readPidStartedAt;
   readRestartDescendantPids?: typeof readDescendantPids;
@@ -119,6 +121,7 @@ export async function readSessionDeckSnapshot(
       ...(record.presenceReason === undefined ? {} : { presenceReason: record.presenceReason }),
       heartbeatAgeMs: record.heartbeatAgeMs,
       sessionId: record.sessionId,
+      projectId: null,
       sessionName: record.sessionName,
       repoName: record.repoName ?? getRepoName(record.worktree),
       qualifiedRepoName: record.qualifiedRepoName,
@@ -157,13 +160,29 @@ export async function readSessionDeckSnapshot(
     },
   );
 
+  const assembledRecords = [...records, ...recoveryRecords];
+  const projectStore = await readProjectStore(options.projectsDirectory);
+  const joinedRecords = assembledRecords.map((record) => ({
+    ...record,
+    projectId:
+      projectStore.status === 'available' &&
+      record.sessionId !== null &&
+      record.sessionId.length > 0
+        ? (projectStore.memberships.get(record.sessionId) ?? null)
+        : null,
+  }));
+
   return {
     generatedAt: now.toISOString(),
-    records: [...records, ...recoveryRecords],
+    records: joinedRecords,
     diagnostics: [
       ...activityView.diagnostics.map(toSessionDeckDiagnostic),
       ...chipsView.diagnostics.map(toSessionDeckDiagnostic),
     ],
+    projectState:
+      projectStore.status === 'available'
+        ? { status: 'available', projects: projectStore.projects }
+        : { status: 'unavailable', projects: [] },
   };
 }
 

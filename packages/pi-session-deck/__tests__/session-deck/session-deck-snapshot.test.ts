@@ -6,13 +6,21 @@ import { writeActivityRecord } from '../../extensions/session-deck/activity/writ
 import { writeChipRecord } from '../../extensions/session-deck/chips/writer.js';
 import { writeIdentityRecord } from '../../extensions/session-deck/identity/writer.js';
 import { writePresenceRecord } from '../../extensions/session-deck/presence/writer.js';
-import { readSessionDeckSnapshot } from '../../extensions/session-deck/reader.js';
+import { readSessionDeckSnapshot as readSnapshot } from '../../extensions/session-deck/reader.js';
 import type { SessionActivityRecord } from '../../extensions/session-deck/activity/types.js';
 import type { SessionDeckChipRecord } from '../../extensions/session-deck/chips/types.js';
 import type { SessionIdentityRecord } from '../../extensions/session-deck/identity/types.js';
 import type { PresenceRecord } from '../../extensions/session-deck/presence/types.js';
 
 const createdDirectories: string[] = [];
+
+function readSessionDeckSnapshot(options: NonNullable<Parameters<typeof readSnapshot>[0]>) {
+  return readSnapshot({
+    ...options,
+    projectsDirectory:
+      options.projectsDirectory ?? join(options.directory ?? tmpdir(), '..', 'projects'),
+  });
+}
 
 function buildPresenceRecord(overrides: Partial<PresenceRecord> = {}): PresenceRecord {
   return {
@@ -180,6 +188,7 @@ describe('readSessionDeckSnapshot', () => {
 
     expect(snapshot.generatedAt).toBe('2026-06-23T12:10:00.000Z');
     expect(snapshot.diagnostics).toEqual([]);
+    expect(snapshot.projectState).toEqual({ status: 'available', projects: [] });
     expect(snapshot.records).toEqual([
       {
         runtimeId: 'rt-1',
@@ -188,6 +197,7 @@ describe('readSessionDeckSnapshot', () => {
         presenceReason: 'fresh_heartbeat',
         heartbeatAgeMs: 5_000,
         sessionId: 'session-1',
+        projectId: null,
         sessionName: 'alpha',
         repoName: 'repo',
         qualifiedRepoName: 'owner/repo',

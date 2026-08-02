@@ -271,6 +271,7 @@ function buildRecord(overrides: Partial<SessionDeckRecord> = {}): SessionDeckRec
     presenceReason: 'fresh_heartbeat',
     heartbeatAgeMs: 5_000,
     sessionId: 'session-1',
+    projectId: null,
     sessionName: 'alpha',
     repoName: 'project',
     qualifiedRepoName: 'owner/project',
@@ -317,6 +318,7 @@ function buildSnapshot(
     generatedAt: '2026-07-10T20:15:00.000Z',
     records: options.records ?? [buildRecord()],
     diagnostics: options.diagnostics ?? [],
+    projectState: { status: 'available', projects: [] },
   };
 }
 

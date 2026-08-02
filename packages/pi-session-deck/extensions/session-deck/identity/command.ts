@@ -38,6 +38,7 @@ import {
   getSessionDeckListHeading,
 } from '../browser-render.js';
 import {
+  normalizeProjectState,
   withTerminalDisplayHints,
   type ReadSessionDeckBrowserSnapshotOptions,
   type SessionDeckBrowserSnapshot,
@@ -488,7 +489,10 @@ function filterVisibleSessionDeckView(
   all: boolean,
 ): SessionDeckSnapshot {
   if (all) {
-    return sessionDeckSnapshot;
+    return {
+      ...sessionDeckSnapshot,
+      projectState: normalizeProjectState(sessionDeckSnapshot.projectState),
+    };
   }
 
   return {
@@ -499,6 +503,7 @@ function filterVisibleSessionDeckView(
         (record.restart?.available === true && record.restart.operation !== undefined),
     ),
     diagnostics: [],
+    projectState: normalizeProjectState(sessionDeckSnapshot.projectState),
   };
 }
 
@@ -718,6 +723,9 @@ function getReadSessionDeckSnapshotOptions(
     ...(options.restartDirectory === undefined
       ? {}
       : { restartDirectory: options.restartDirectory }),
+    ...(options.projectsDirectory === undefined
+      ? {}
+      : { projectsDirectory: options.projectsDirectory }),
     hostingRuntimeId: (options.getCurrentRuntimeIdentity ?? getPresenceRuntimeIdentity)().runtimeId,
     ...(options.readRestartPidStartedAt === undefined
       ? {}

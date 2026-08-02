@@ -66,6 +66,7 @@ function buildSnapshotRecord(overrides: Partial<SessionDeckRecord> = {}): Sessio
     presenceReason: 'fresh_heartbeat',
     heartbeatAgeMs: 5_000,
     sessionId: 'session-abc',
+    projectId: null,
     sessionName: 'alpha',
     repoName: 'project',
     qualifiedRepoName: 'owner/project',
@@ -94,6 +95,7 @@ function buildSnapshot(
     generatedAt: '2026-06-23T12:10:00.000Z',
     records: options.records ?? [buildSnapshotRecord()],
     diagnostics: [],
+    projectState: { status: 'available', projects: [] },
   };
 }
 
@@ -1412,6 +1414,7 @@ describe('SessionDeckBrowser', () => {
           buildSnapshotRecord({
             runtimeId,
             sessionId: 'public-session',
+            projectId: '550e8400-e29b-41d4-a716-446655440000',
             sessionName: 'pi session',
             chips: [],
           }),
@@ -1437,6 +1440,8 @@ describe('SessionDeckBrowser', () => {
       openLabel: 'new iTerm2 tab attaches to tmux',
     });
     expect(publicRecord?.sessionId).toBe('public-session');
+    expect(publicRecord?.projectId).toBe('550e8400-e29b-41d4-a716-446655440000');
+    expect(view.projectState).toEqual({ status: 'available', projects: [] });
     expect(publicRecord).not.toHaveProperty('terminal');
     expect(publicRecord).not.toHaveProperty('socketPath');
     expect(publicRecord).not.toHaveProperty('paneId');
@@ -1446,6 +1451,40 @@ describe('SessionDeckBrowser', () => {
     const serialized = JSON.stringify(publicRecord ?? {});
     expect(serialized).not.toContain(socketPath);
     expect(serialized).not.toContain(attachCommand);
+  });
+
+  it('preserves joined project state through browser snapshots', async () => {
+    const snapshot = buildSnapshot({
+      records: [
+        buildSnapshotRecord({
+          projectId: '550e8400-e29b-41d4-a716-446655440000',
+        }),
+      ],
+    });
+    snapshot.projectState = {
+      status: 'available',
+      projects: [{ projectId: '550e8400-e29b-41d4-a716-446655440000', name: 'Explicit' }],
+    };
+
+    const view = await withTerminalDisplayHints(snapshot, {
+      readdir: vi.fn().mockResolvedValue([]),
+    });
+
+    expect(view.projectState).toEqual(snapshot.projectState);
+    expect(view.records[0]?.projectId).toBe('550e8400-e29b-41d4-a716-446655440000');
+  });
+
+  it('normalizes missing project state and project IDs for older snapshots', async () => {
+    const snapshot = buildSnapshot();
+    delete (snapshot as Partial<SessionDeckSnapshot>).projectState;
+    delete (snapshot.records[0] as Partial<SessionDeckRecord>).projectId;
+
+    const view = await withTerminalDisplayHints(snapshot, {
+      readdir: vi.fn().mockResolvedValue([]),
+    });
+
+    expect(view.projectState).toEqual({ status: 'unavailable', projects: [] });
+    expect(view.records[0]?.projectId).toBeNull();
   });
 
   it('keeps browser hint snapshots free of accidental raw terminal fields', async () => {

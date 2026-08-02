@@ -7,6 +7,7 @@ import type { IdentityDirectoryReader, IdentityFileReader } from './identity/rea
 import type { SessionTerminalMetadata } from './identity/types.js';
 import { toPublicSessionDeckDiagnostic, toPublicSessionDeckRecord } from './public-record.js';
 import { readSessionDeckSnapshot, type ReadSessionDeckSnapshotOptions } from './reader.js';
+import type { SessionDeckProjectState } from './projects/types.js';
 import type { SessionDeckRecord, SessionDeckSnapshot } from './types.js';
 
 export interface SessionDeckTerminalDisplayHint {
@@ -52,7 +53,19 @@ export async function withTerminalDisplayHints(
       return hint === undefined ? publicRecord : { ...publicRecord, terminalDisplay: hint };
     }),
     diagnostics: snapshot.diagnostics.map(toPublicSessionDeckDiagnostic),
+    projectState: normalizeProjectState(snapshot.projectState),
   };
+}
+
+export function normalizeProjectState(
+  state: SessionDeckProjectState | undefined,
+): SessionDeckProjectState {
+  return state === undefined
+    ? { status: 'unavailable', projects: [] }
+    : {
+        status: state.status,
+        projects: state.projects.map((project) => ({ ...project })),
+      };
 }
 
 export function createTerminalDisplayHint(

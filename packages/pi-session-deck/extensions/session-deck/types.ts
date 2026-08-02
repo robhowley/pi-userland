@@ -7,6 +7,7 @@ import type { ChipDiagnosticCode } from './chips/types.js';
 import type { IdentityDiagnosticCode, SessionDerivedFacets } from './identity/types.js';
 import type { PresenceDiagnosticCode, PresenceState } from './presence/types.js';
 import type { RestartEligibility } from './restart/types.js';
+import type { SessionDeckProjectState } from './projects/types.js';
 
 export type SessionDeckDiagnosticCode =
   | PresenceDiagnosticCode
@@ -28,6 +29,7 @@ export interface SessionDeckRecord {
   presenceReason?: string;
   heartbeatAgeMs: number;
   sessionId: string | null;
+  projectId: string | null;
   sessionName: string | null;
   repoName: string | null;
   qualifiedRepoName: string | null;
@@ -51,4 +53,5 @@ export interface SessionDeckSnapshot {
   generatedAt: string;
   records: SessionDeckRecord[];
   diagnostics: SessionDeckDiagnostic[];
+  projectState: SessionDeckProjectState;
 }
