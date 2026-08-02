@@ -123,6 +123,7 @@
       expandedRepoKeys: new Set(),
       expandedProjectKeys: new Set(),
       projectAction: null,
+      projectDrafts: new Map(),
       projectDeleteAction: null,
       projectEditingUnsupported: false,
       activeWorktreeFormRepoKey: null,
@@ -917,13 +918,18 @@
       if (
         ariaLabel !== 'Branch name' &&
         ariaLabel !== 'Working directory' &&
-        ariaLabel !== 'Custom Pi config directory'
+        ariaLabel !== 'Custom Pi config directory' &&
+        ariaLabel !== 'Project name'
       ) {
         return null;
       }
 
       return {
         ariaLabel,
+        projectSessionId:
+          ariaLabel === 'Project name'
+            ? activeElement.getAttribute('data-project-session-id')
+            : null,
         selectionStart:
           typeof activeElement.selectionStart === 'number' ? activeElement.selectionStart : null,
         selectionEnd:
@@ -936,7 +942,11 @@
         return;
       }
 
-      const input = findInputByAriaLabel(elements.listShell, snapshot.ariaLabel);
+      const input = findInputByAriaLabel(
+        elements.listShell,
+        snapshot.ariaLabel,
+        snapshot.projectSessionId,
+      );
       if (input === null) {
         return;
       }
@@ -955,13 +965,18 @@
       }
     }
 
-    function findInputByAriaLabel(node, ariaLabel) {
-      if (node instanceof HTMLInputElement && node.getAttribute('aria-label') === ariaLabel) {
+    function findInputByAriaLabel(node, ariaLabel, projectSessionId = null) {
+      if (
+        node instanceof HTMLInputElement &&
+        node.getAttribute('aria-label') === ariaLabel &&
+        (projectSessionId === null ||
+          node.getAttribute('data-project-session-id') === projectSessionId)
+      ) {
         return node;
       }
 
       for (const child of node.childNodes ?? []) {
-        const match = findInputByAriaLabel(child, ariaLabel);
+        const match = findInputByAriaLabel(child, ariaLabel, projectSessionId);
         if (match !== null) {
           return match;
         }
@@ -2964,19 +2979,35 @@
       nameInput.type = 'text';
       nameInput.className = 'project-create-input';
       nameInput.setAttribute('aria-label', 'Project name');
+      nameInput.setAttribute('data-project-session-id', record.sessionId);
       nameInput.setAttribute('placeholder', 'New project name');
-      nameInput.value = action?.draft ?? '';
+      nameInput.value = state.projectDrafts.get(record.sessionId) ?? action?.draft ?? '';
       nameInput.disabled = !editingAvailable || actionPending;
       const createButton = document.createElement('button');
       createButton.type = 'button';
       createButton.className = 'project-create-button';
-      createButton.textContent = 'Create and assign';
       createButton.disabled = !editingAvailable || actionPending;
+      const getMatchingProject = () => {
+        const name = normalizeProjectName(nameInput.value);
+        return projects.find((project) => normalizeProjectName(project.name) === name) ?? null;
+      };
+      const updateCreateButtonText = () => {
+        const matchingProject = getMatchingProject();
+        createButton.textContent =
+          matchingProject === null
+            ? 'Create and assign'
+            : `Assign to ${displayNames.get(matchingProject.projectId) ?? matchingProject.name}`;
+      };
+      nameInput.addEventListener('input', () => {
+        state.projectDrafts.set(record.sessionId, nameInput.value);
+        updateCreateButtonText();
+      });
+      updateCreateButtonText();
       createButton.addEventListener('click', (event) => {
         event.preventDefault?.();
         event.stopPropagation?.();
         if (!editingAvailable || actionPending) return;
-        const name = nameInput.value.trim();
+        const name = normalizeProjectName(nameInput.value);
         if (name.length === 0) {
           state.projectAction = {
             kind: 'failure',
@@ -2987,9 +3018,16 @@
           render();
           return;
         }
+        const matchingProject = getMatchingProject();
         requestProjectMutation(
           record,
-          { action: 'create-and-assign', sessionId: record.sessionId, name },
+          matchingProject === null
+            ? { action: 'create-and-assign', sessionId: record.sessionId, name }
+            : {
+                action: 'assign-project',
+                sessionId: record.sessionId,
+                projectId: matchingProject.projectId,
+              },
           name,
         );
       });
@@ -3013,6 +3051,10 @@
       }
 
       return createDetailSection('PROJECT', content);
+    }
+
+    function normalizeProjectName(value) {
+      return value.normalize('NFC').trim();
     }
 
     function requestProjectMutation(record, request, draft) {

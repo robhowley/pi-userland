@@ -100,6 +100,7 @@ class FakeElement extends FakeNode {
   readonly tagName: string;
   readonly attributes = new Map<string, string>();
   readonly listeners = new Map<string, EventListener[]>();
+  ownerDocument: FakeDocument | null = null;
   id = '';
   type = '';
 
@@ -173,6 +174,10 @@ class FakeElement extends FakeNode {
     return true;
   }
 
+  focus(): void {
+    this.ownerDocument?.setActiveElement(this);
+  }
+
   click(): void {
     this.dispatchEvent({ type: 'click', preventDefault() {}, stopPropagation() {} });
   }
@@ -190,9 +195,16 @@ class FakeInputElement extends FakeElement {
   checked = false;
   disabled = false;
   value = '';
+  selectionStart: number | null = 0;
+  selectionEnd: number | null = 0;
 
   constructor() {
     super('input');
+  }
+
+  setSelectionRange(start: number, end: number): void {
+    this.selectionStart = start;
+    this.selectionEnd = end;
   }
 }
 
@@ -206,21 +218,31 @@ class FakeSelectElement extends FakeElement {
 }
 
 class FakeDocument extends FakeNode {
+  activeElement: FakeElement | null = null;
+
   createElement(tagName: 'button'): FakeButtonElement;
   createElement(tagName: 'input'): FakeInputElement;
   createElement(tagName: 'select'): FakeSelectElement;
   createElement(tagName: string): FakeElement;
   createElement(tagName: string): FakeElement {
-    switch (tagName.toLowerCase()) {
-      case 'button':
-        return new FakeButtonElement();
-      case 'input':
-        return new FakeInputElement();
-      case 'select':
-        return new FakeSelectElement();
-      default:
-        return new FakeElement(tagName);
-    }
+    const element = (() => {
+      switch (tagName.toLowerCase()) {
+        case 'button':
+          return new FakeButtonElement();
+        case 'input':
+          return new FakeInputElement();
+        case 'select':
+          return new FakeSelectElement();
+        default:
+          return new FakeElement(tagName);
+      }
+    })();
+    element.ownerDocument = this;
+    return element;
+  }
+
+  setActiveElement(element: FakeElement): void {
+    this.activeElement = element;
   }
 
   createElementNS(_namespace: string, tagName: string): FakeElement {
@@ -254,6 +276,7 @@ interface ScheduledTimeout {
 }
 
 interface SharedUiHarness {
+  document: FakeDocument;
   elements: HarnessElements;
   createWorktreeMock: ReturnType<typeof vi.fn>;
   updateProjectMock: ReturnType<typeof vi.fn>;
@@ -265,6 +288,7 @@ interface SharedUiHarness {
   openTerminalMock: ReturnType<typeof vi.fn>;
   previewMock: ReturnType<typeof vi.fn>;
   pushSnapshot: (snapshot: unknown) => void;
+  runAutoRefresh: () => Promise<void>;
   runTimeout: (ms: number) => Promise<void>;
 }
 
@@ -452,9 +476,13 @@ async function setupSharedUi(
   const elements = buildElements(document);
   const snapshotQueue = [...(options.snapshots ?? [buildSnapshot()])];
   const scheduledTimeouts = new Map<number, ScheduledTimeout>();
+  let autoRefreshCallback: (() => void) | null = null;
   let nextTimerId = 1;
 
-  const setIntervalMock = vi.fn(() => nextTimerId++);
+  const setIntervalMock = vi.fn((callback: () => void) => {
+    autoRefreshCallback = callback;
+    return nextTimerId++;
+  });
   const setTimeoutMock = vi.fn((callback: () => void, ms: number) => {
     const id = nextTimerId++;
     scheduledTimeouts.set(id, { id, ms, callback });
@@ -525,6 +553,7 @@ async function setupSharedUi(
   await flushMicrotasks();
 
   return {
+    document,
     elements,
     createWorktreeMock,
     updateProjectMock,
@@ -537,6 +566,13 @@ async function setupSharedUi(
     previewMock,
     pushSnapshot: (snapshot) => {
       snapshotQueue.push(snapshot);
+    },
+    runAutoRefresh: async () => {
+      if (autoRefreshCallback === null) {
+        throw new Error('Expected auto-refresh interval.');
+      }
+      autoRefreshCallback();
+      await flushMicrotasks();
     },
     runTimeout: async (ms) => {
       const timeout = [...scheduledTimeouts.values()].find((candidate) => candidate.ms === ms);
@@ -637,8 +673,8 @@ function getProjectCreateInput(card: FakeElement): FakeInputElement {
 }
 
 function getProjectCreateButton(card: FakeElement): FakeButtonElement {
-  const button = findAllByTag(card, 'button').find(
-    (candidate) => candidate.textContent === 'Create and assign',
+  const button = findAllByTag(card, 'button').find((candidate) =>
+    candidate.classList.contains('project-create-button'),
   );
   if (!(button instanceof FakeButtonElement)) {
     throw new Error('Expected project create button.');
@@ -1330,6 +1366,86 @@ describe('SessionDeckUI shared controller', () => {
       getButtonByText(getProjectGroupByLabel(harness.elements.list, 'Alpha'), 'Delete').disabled,
     ).toBe(true);
     expect(harness.updateProjectMock).not.toHaveBeenCalled();
+  });
+
+  it('assigns an existing normalized project name instead of creating a duplicate', async () => {
+    const snapshot = buildSnapshot({
+      projectState: {
+        status: 'available',
+        projects: [{ projectId: 'project-cafe', name: 'Café' }],
+      },
+    });
+    const updateProjectMock = vi.fn(async () => ({ ok: true, status: 'assigned' }));
+    const harness = await setupSharedUi({
+      updateProject: updateProjectMock,
+      snapshots: [snapshot, snapshot],
+    });
+
+    expandRepoGroup(harness.elements.list, 'owner/project');
+    getCardToggle(getCards(harness.elements.list)[0]!).click();
+    const card = getCards(harness.elements.list)[0]!;
+    const nameInput = getProjectCreateInput(card);
+    nameInput.value = '  Cafe\u0301  ';
+    nameInput.dispatchEvent({ type: 'input' });
+
+    expect(getProjectCreateButton(card).textContent).toBe('Assign to Café');
+    getProjectCreateButton(card).click();
+    await flushMicrotasks();
+
+    expect(updateProjectMock).toHaveBeenCalledWith({
+      action: 'assign-project',
+      sessionId: 'session-1',
+      projectId: 'project-cafe',
+    });
+    expect(updateProjectMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'create-and-assign' }),
+    );
+  });
+
+  it('preserves session-specific project drafts, focus, and caret across auto-refresh', async () => {
+    const snapshot = buildSnapshot({
+      records: [
+        buildRecord(),
+        buildRecord({ runtimeId: 'rt-2', sessionId: 'session-2', sessionName: 'bravo' }),
+      ],
+    });
+    const harness = await setupSharedUi({ snapshots: [snapshot, snapshot] });
+    const getCard = (sessionName: string) => {
+      const card = getCards(harness.elements.list).find((candidate) =>
+        candidate.textContent.includes(sessionName),
+      );
+      if (!card) throw new Error(`Expected card for ${sessionName}.`);
+      return card;
+    };
+
+    expandRepoGroup(harness.elements.list, 'owner/project');
+    getCardToggle(getCard('alpha')).click();
+    let input = getProjectCreateInput(getCard('alpha'));
+    input.value = 'Alpha draft';
+    input.dispatchEvent({ type: 'input' });
+
+    getCardToggle(getCard('bravo')).click();
+    input = getProjectCreateInput(getCard('bravo'));
+    expect(input.value).toBe('');
+    input.value = 'Bravo draft';
+    input.dispatchEvent({ type: 'input' });
+
+    getCardToggle(getCard('alpha')).click();
+    input = getProjectCreateInput(getCard('alpha'));
+    expect(input.value).toBe('Alpha draft');
+    expect(input.getAttribute('data-project-session-id')).toBe('session-1');
+    input.focus();
+    input.setSelectionRange(2, 7);
+
+    await harness.runAutoRefresh();
+
+    const refreshedInput = getProjectCreateInput(getCard('alpha'));
+    expect(refreshedInput.value).toBe('Alpha draft');
+    expect(harness.document.activeElement).toBe(refreshedInput);
+    expect([refreshedInput.selectionStart, refreshedInput.selectionEnd]).toEqual([2, 7]);
+
+    getCardToggle(getCard('bravo')).click();
+    expect(getProjectCreateInput(getCard('bravo')).value).toBe('Bravo draft');
   });
 
   it('supports create-and-assign, repository default, and disabled null-session editing', async () => {
