@@ -110,6 +110,34 @@ pub struct RestartSessionRequest {
     pub operation_id: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "action", deny_unknown_fields)]
+pub enum ProjectActionRequest {
+    #[serde(rename = "create-and-assign")]
+    CreateAndAssign {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        name: String,
+    },
+    #[serde(rename = "assign-project")]
+    AssignProject {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "projectId")]
+        project_id: String,
+    },
+    #[serde(rename = "unassign-project")]
+    UnassignProject {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+    },
+    #[serde(rename = "delete-project")]
+    DeleteProject {
+        #[serde(rename = "projectId")]
+        project_id: String,
+    },
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OperationStatus {
@@ -233,6 +261,22 @@ impl RestartSessionRequest {
     }
 }
 
+impl ProjectActionRequest {
+    pub fn validate(&self) -> Result<(), CommandError> {
+        match self {
+            Self::CreateAndAssign { session_id, .. }
+            | Self::UnassignProject { session_id }
+            | Self::AssignProject { session_id, .. } => validate_session_id(session_id),
+            Self::DeleteProject { project_id } => validate_project_id(project_id),
+        }?;
+
+        if let Self::AssignProject { project_id, .. } = self {
+            validate_project_id(project_id)?;
+        }
+        Ok(())
+    }
+}
+
 #[tauri::command]
 pub async fn load_snapshot() -> Result<Value, String> {
     run_blocking(helper_runner::load_snapshot).await
@@ -275,6 +319,11 @@ pub async fn kill_session(request: KillSessionRequest) -> Result<Value, CommandE
 #[tauri::command]
 pub async fn restart_session(request: RestartSessionRequest) -> Result<Value, CommandErrorPayload> {
     run_mutating_blocking(move || helper_runner::restart_session(request)).await
+}
+
+#[tauri::command]
+pub async fn update_project(request: ProjectActionRequest) -> Result<Value, CommandErrorPayload> {
+    run_mutating_blocking(move || helper_runner::update_project(request)).await
 }
 
 #[tauri::command]
@@ -414,6 +463,26 @@ fn validate_runtime_id(runtime_id: &str) -> Result<(), CommandError> {
     Ok(())
 }
 
+fn validate_session_id(session_id: &str) -> Result<(), CommandError> {
+    if session_id.is_empty() {
+        return Err(CommandError::new("sessionId must be a non-empty string."));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_project_id(project_id: &str) -> Result<(), CommandError> {
+    let bytes = project_id.as_bytes();
+    if bytes.len() != 36
+        || ![8, 13, 18, 23].iter().all(|index| bytes[*index] == b'-')
+        || !bytes.iter().enumerate().all(|(index, byte)| {
+            [8, 13, 18, 23].contains(&index) || byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')
+        })
+    {
+        return Err(CommandError::new("projectId must be a valid project ID."));
+    }
+    Ok(())
+}
+
 fn validate_custom_agent_dir(custom_dir: &str) -> Result<(), CommandError> {
     if custom_dir.contains('\0') || custom_dir.contains('\r') || custom_dir.contains('\n') {
         return Err(CommandError::new(
@@ -470,7 +539,7 @@ mod tests {
     use super::{
         CreateSessionAction, CreateSessionRequest, CreateWorktreeRequest, KillSessionRequest,
         LaunchAgentDirMode, LaunchMode, OpenTerminalRequest, PreviewWorktreeLaunchContextRequest,
-        RestartSessionRequest,
+        ProjectActionRequest, RestartSessionRequest,
     };
     use serde_json::json;
 
@@ -604,6 +673,48 @@ mod tests {
             "sessionFile": "/private/session.jsonl"
         }))
         .is_err());
+    }
+
+    #[test]
+    fn project_actions_accept_only_their_exact_identity_fields() {
+        for request in [
+            json!({"action": "create-and-assign", "sessionId": "session-1", "name": "One"}),
+            json!({"action": "assign-project", "sessionId": "session-1", "projectId": "123e4567-e89b-42d3-a456-426614174000"}),
+            json!({"action": "unassign-project", "sessionId": "session-1"}),
+            json!({"action": "delete-project", "projectId": "123e4567-e89b-42d3-a456-426614174000"}),
+        ] {
+            serde_json::from_value::<ProjectActionRequest>(request)
+                .unwrap()
+                .validate()
+                .unwrap();
+        }
+
+        for hint in ["cwd", "repo", "branch", "worktree", "runtimeId"] {
+            let mut request = json!({
+                "action": "assign-project",
+                "sessionId": "session-1",
+                "projectId": "123e4567-e89b-42d3-a456-426614174000"
+            });
+            request[hint] = json!("private");
+            assert!(serde_json::from_value::<ProjectActionRequest>(request).is_err());
+        }
+    }
+
+    #[test]
+    fn project_actions_reject_invalid_project_and_empty_session_ids() {
+        let invalid_project: ProjectActionRequest = serde_json::from_value(json!({
+            "action": "delete-project",
+            "projectId": "123E4567-E89B-42D3-A456-426614174000"
+        }))
+        .unwrap();
+        assert!(invalid_project.validate().is_err());
+
+        let empty_session: ProjectActionRequest = serde_json::from_value(json!({
+            "action": "unassign-project",
+            "sessionId": ""
+        }))
+        .unwrap();
+        assert!(empty_session.validate().is_err());
     }
 
     #[test]

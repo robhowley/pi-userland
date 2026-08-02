@@ -44,6 +44,7 @@ async function loadFreshHostFactory(): Promise<{
     loadSnapshot: () => Promise<unknown>;
     killSession: (runtimeId: string) => Promise<unknown>;
     restartSession: (request: unknown) => Promise<unknown>;
+    updateProject: (request: unknown) => Promise<unknown>;
     openExternal: (url: string) => Promise<unknown>;
     openTerminal: (runtimeId: string) => Promise<unknown>;
     previewWorktreeBaseRef: (request: unknown) => Promise<unknown>;
@@ -65,6 +66,7 @@ async function loadFreshHostFactory(): Promise<{
       loadSnapshot: () => Promise<unknown>;
       killSession: (runtimeId: string) => Promise<unknown>;
       restartSession: (request: unknown) => Promise<unknown>;
+      updateProject: (request: unknown) => Promise<unknown>;
       openExternal: (url: string) => Promise<unknown>;
       openTerminal: (runtimeId: string) => Promise<unknown>;
       previewWorktreeBaseRef: (request: unknown) => Promise<unknown>;
@@ -312,6 +314,38 @@ describe('SessionDeckIterm2Host', () => {
         generation: 'generation-1',
         operationId: 'operation-1',
       }),
+    });
+  });
+
+  it('posts project updates to the authenticated project route without adding identity hints', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, status: 'assigned' }),
+    }));
+    cleanupGlobals = installGlobals({
+      document: buildDocument('project-token'),
+      fetch: fetchMock,
+      window: {},
+    });
+
+    const { createHost } = await loadFreshHostFactory();
+    const request = {
+      action: 'assign-project',
+      sessionId: 'session-1',
+      projectId: '123e4567-e89b-42d3-a456-426614174000',
+    };
+    await createHost().updateProject(request);
+
+    expect(fetchMock).toHaveBeenCalledWith('/actions/project', {
+      method: 'POST',
+      cache: 'no-store',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-Session-Deck-Action-Token': 'project-token',
+      },
+      body: JSON.stringify(request),
     });
   });
 

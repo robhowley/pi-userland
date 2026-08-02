@@ -56,6 +56,11 @@ describe('tauri-host', () => {
       generation: 'generation-1',
       operationId: 'operation-1',
     });
+    await host.updateProject({
+      action: 'assign-project',
+      sessionId: 'session-1',
+      projectId: '123e4567-e89b-42d3-a456-426614174000',
+    });
     await host.openExternal('https://example.com');
     await host.copyText('copied');
     await host.doctorStatus();
@@ -101,6 +106,16 @@ describe('tauri-host', () => {
             runtimeId: 'runtime-1',
             generation: 'generation-1',
             operationId: 'operation-1',
+          },
+        },
+      ],
+      [
+        'update_project',
+        {
+          request: {
+            action: 'assign-project',
+            sessionId: 'session-1',
+            projectId: '123e4567-e89b-42d3-a456-426614174000',
           },
         },
       ],
