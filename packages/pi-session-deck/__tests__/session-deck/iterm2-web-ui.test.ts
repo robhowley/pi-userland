@@ -123,6 +123,18 @@ class FakeElement extends FakeNode {
     }
   }
 
+  removeAttribute(name: string): void {
+    if (name === 'class') {
+      this.classes.clear();
+      return;
+    }
+    if (name === 'id') {
+      this.id = '';
+      return;
+    }
+    this.attributes.delete(name);
+  }
+
   setAttribute(name: string, value: string): void {
     if (name === 'class') {
       this.className = value;
@@ -235,6 +247,8 @@ class FakeDocument extends FakeNode {
 
 interface HarnessElements {
   summary: FakeElement;
+  repositoryView: FakeButtonElement;
+  projectsView: FakeButtonElement;
   showAll: FakeInputElement;
   refresh: FakeButtonElement;
   banner: FakeElement;
@@ -540,6 +554,8 @@ async function setupPendingApp(): Promise<{
 
 function buildElements(document: FakeDocument): HarnessElements {
   const summary = withId(document.createElement('p'), 'summary');
+  const repositoryView = withId(document.createElement('button'), 'view-repository');
+  const projectsView = withId(document.createElement('button'), 'view-projects');
   const showAll = withId(document.createElement('input'), 'show-all');
   showAll.type = 'checkbox';
   const refresh = withId(document.createElement('button'), 'refresh');
@@ -560,10 +576,22 @@ function buildElements(document: FakeDocument): HarnessElements {
   const actionToken = withId(document.createElement('meta'), 'session-deck-action-token');
   actionToken.setAttribute('content', 'test-token');
 
-  document.append(summary, showAll, refresh, banner, listShell, diagnosticsPanel, actionToken);
+  document.append(
+    summary,
+    repositoryView,
+    projectsView,
+    showAll,
+    refresh,
+    banner,
+    listShell,
+    diagnosticsPanel,
+    actionToken,
+  );
 
   return {
     summary,
+    repositoryView,
+    projectsView,
     showAll,
     refresh,
     banner,
@@ -5011,6 +5039,7 @@ describe('Session Deck iTerm2 web UI', () => {
     expect(getDetailSectionTitles(detail)).toEqual([
       'IDENTITY',
       'WORKSPACE',
+      'PROJECT',
       'STATUS',
       'Record diagnostics',
     ]);

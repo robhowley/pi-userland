@@ -121,6 +121,18 @@ class FakeElement extends FakeNode {
     }
   }
 
+  removeAttribute(name: string): void {
+    if (name === 'class') {
+      this.classes.clear();
+      return;
+    }
+    if (name === 'id') {
+      this.id = '';
+      return;
+    }
+    this.attributes.delete(name);
+  }
+
   setAttribute(name: string, value: string): void {
     if (name === 'class') {
       this.className = value;
@@ -176,6 +188,7 @@ class FakeButtonElement extends FakeElement {
 
 class FakeInputElement extends FakeElement {
   checked = false;
+  disabled = false;
   value = '';
 
   constructor() {
@@ -183,9 +196,19 @@ class FakeInputElement extends FakeElement {
   }
 }
 
+class FakeSelectElement extends FakeElement {
+  disabled = false;
+  value = '';
+
+  constructor() {
+    super('select');
+  }
+}
+
 class FakeDocument extends FakeNode {
   createElement(tagName: 'button'): FakeButtonElement;
   createElement(tagName: 'input'): FakeInputElement;
+  createElement(tagName: 'select'): FakeSelectElement;
   createElement(tagName: string): FakeElement;
   createElement(tagName: string): FakeElement {
     switch (tagName.toLowerCase()) {
@@ -193,6 +216,8 @@ class FakeDocument extends FakeNode {
         return new FakeButtonElement();
       case 'input':
         return new FakeInputElement();
+      case 'select':
+        return new FakeSelectElement();
       default:
         return new FakeElement(tagName);
     }
@@ -209,6 +234,8 @@ class FakeDocument extends FakeNode {
 
 interface HarnessElements {
   summary: FakeElement;
+  repositoryView: FakeButtonElement;
+  projectsView: FakeButtonElement;
   showAll: FakeInputElement;
   refresh: FakeButtonElement;
   banner: FakeElement;
@@ -229,6 +256,7 @@ interface ScheduledTimeout {
 interface SharedUiHarness {
   elements: HarnessElements;
   createWorktreeMock: ReturnType<typeof vi.fn>;
+  updateProjectMock: ReturnType<typeof vi.fn>;
   copyTextMock: ReturnType<typeof vi.fn>;
   loadSnapshotMock: ReturnType<typeof vi.fn>;
   killSessionMock: ReturnType<typeof vi.fn>;
@@ -281,18 +309,21 @@ function buildSnapshot(
   options: {
     diagnostics?: SessionDeckDiagnostic[];
     records?: SessionDeckRecord[];
+    projectState?: SessionDeckSnapshot['projectState'];
   } = {},
 ): SessionDeckSnapshot {
   return {
     generatedAt: '2026-07-10T20:15:00.000Z',
     records: options.records ?? [buildRecord()],
     diagnostics: options.diagnostics ?? [],
-    projectState: { status: 'available', projects: [] },
+    projectState: options.projectState ?? { status: 'available', projects: [] },
   };
 }
 
 function buildElements(document: FakeDocument): HarnessElements {
   const summary = withId(document.createElement('p'), 'summary');
+  const repositoryView = withId(document.createElement('button'), 'view-repository');
+  const projectsView = withId(document.createElement('button'), 'view-projects');
   const showAll = withId(document.createElement('input'), 'show-all');
   showAll.type = 'checkbox';
   const refresh = withId(document.createElement('button'), 'refresh');
@@ -311,10 +342,21 @@ function buildElements(document: FakeDocument): HarnessElements {
   const diagnostics = withId(document.createElement('ul'), 'diagnostics');
   diagnosticsPanel.append(diagnostics);
 
-  document.append(summary, showAll, refresh, banner, listShell, diagnosticsPanel);
+  document.append(
+    summary,
+    repositoryView,
+    projectsView,
+    showAll,
+    refresh,
+    banner,
+    listShell,
+    diagnosticsPanel,
+  );
 
   return {
     summary,
+    repositoryView,
+    projectsView,
     showAll,
     refresh,
     banner,
@@ -395,6 +437,8 @@ async function setupSharedUi(
   options: {
     copyText?: ReturnType<typeof vi.fn>;
     createWorktree?: ReturnType<typeof vi.fn>;
+    updateProject?: ReturnType<typeof vi.fn>;
+    projectEditingSupported?: boolean;
     loadSnapshot?: ReturnType<typeof vi.fn>;
     killSession?: ReturnType<typeof vi.fn>;
     restartSession?: ReturnType<typeof vi.fn>;
@@ -444,6 +488,8 @@ async function setupSharedUi(
     options.previewWorktreeBaseRef ??
     vi.fn(async () => ({ ok: true, status: 'resolved', baseRef: 'origin/main' }));
   const createWorktreeMock = options.createWorktree ?? vi.fn();
+  const updateProjectMock =
+    options.updateProject ?? vi.fn(async () => ({ ok: true, status: 'assigned' }));
   const openTerminalMock = options.openTerminal ?? vi.fn();
   const killSessionMock = options.killSession ?? vi.fn();
   const restartSessionMock = options.restartSession ?? vi.fn();
@@ -459,6 +505,7 @@ async function setupSharedUi(
     host: {
       copyText: copyTextMock,
       createWorktree: createWorktreeMock,
+      ...(options.projectEditingSupported === false ? {} : { updateProject: updateProjectMock }),
       doctorCommand: '/session-deck iterm2 doctor',
       loadSnapshot: loadSnapshotMock,
       openExternal: openExternalMock,
@@ -480,6 +527,7 @@ async function setupSharedUi(
   return {
     elements,
     createWorktreeMock,
+    updateProjectMock,
     copyTextMock,
     loadSnapshotMock,
     killSessionMock,
@@ -552,6 +600,50 @@ function getRepoGroupByLabel(list: FakeElement, label: string): FakeElement {
     throw new Error(`Expected repo group ${label}.`);
   }
   return repoGroup;
+}
+
+function getProjectGroups(list: FakeElement): FakeElement[] {
+  return getRepoGroups(list).filter((group) => group.classList.contains('project-group'));
+}
+
+function getProjectGroupByLabel(list: FakeElement, label: string): FakeElement {
+  const projectGroup = getProjectGroups(list).find((group) =>
+    getRepoHeader(group).textContent.startsWith(`${label} · `),
+  );
+  if (!projectGroup) {
+    throw new Error(`Expected project group ${label}.`);
+  }
+  return projectGroup;
+}
+
+function getProjectSelect(card: FakeElement): FakeSelectElement {
+  const select = findAllByTag(card, 'select').find(
+    (candidate) => candidate.getAttribute('aria-label') === 'Project assignment',
+  );
+  if (!(select instanceof FakeSelectElement)) {
+    throw new Error('Expected project assignment select.');
+  }
+  return select;
+}
+
+function getProjectCreateInput(card: FakeElement): FakeInputElement {
+  const input = findAllByTag(card, 'input').find(
+    (candidate) => candidate.getAttribute('aria-label') === 'Project name',
+  );
+  if (!(input instanceof FakeInputElement)) {
+    throw new Error('Expected project name input.');
+  }
+  return input;
+}
+
+function getProjectCreateButton(card: FakeElement): FakeButtonElement {
+  const button = findAllByTag(card, 'button').find(
+    (candidate) => candidate.textContent === 'Create and assign',
+  );
+  if (!(button instanceof FakeButtonElement)) {
+    throw new Error('Expected project create button.');
+  }
+  return button;
 }
 
 function getRepoHeader(repoGroup: FakeElement): FakeButtonElement {
@@ -827,6 +919,7 @@ describe('SessionDeckUI shared controller', () => {
     });
     expect(harness.elements.list.textContent).toContain('Session launched');
     expect(harness.loadSnapshotMock).toHaveBeenCalledTimes(2);
+    expect(harness.updateProjectMock).not.toHaveBeenCalled();
   });
 
   it('refreshes once and reconciles a create timeout only after the requested worktree appears', async () => {
@@ -1066,6 +1159,309 @@ describe('SessionDeckUI shared controller', () => {
     expect(getCardOpenButton(getCards(harness.elements.list)[0]!).getAttribute('data-state')).toBe(
       null,
     );
+  });
+
+  it('starts in Repository and groups explicit project assignments without inferring fallback records', async () => {
+    const harness = await setupSharedUi({
+      snapshots: [
+        buildSnapshot({
+          records: [
+            buildRecord({ projectId: 'project-a', sessionName: 'assigned' }),
+            buildRecord({
+              projectId: null,
+              runtimeId: 'rt-unassigned',
+              sessionId: 'session-unassigned',
+              sessionName: 'unassigned',
+            }),
+          ],
+          projectState: {
+            status: 'available',
+            projects: [
+              { projectId: 'project-a', name: 'Same name' },
+              { projectId: 'project-b', name: 'Same name' },
+            ],
+          },
+        }),
+      ],
+    });
+
+    expect(harness.elements.repositoryView.getAttribute('aria-pressed')).toBe('true');
+    expect(harness.elements.projectsView.getAttribute('aria-pressed')).toBe('false');
+    expect(getRepoGroups(harness.elements.list)).toHaveLength(1);
+
+    harness.elements.projectsView.click();
+
+    expect(harness.elements.repositoryView.getAttribute('aria-pressed')).toBe('false');
+    expect(harness.elements.projectsView.getAttribute('aria-pressed')).toBe('true');
+    expect(getProjectGroups(harness.elements.list)).toHaveLength(2);
+    expect(harness.elements.list.textContent).toContain('Same name');
+    expect(harness.elements.list.textContent).toContain('project-a');
+    expect(harness.elements.list.textContent).toContain('project-b');
+    expect(
+      getRepoGroups(harness.elements.list).map((group) => getRepoHeader(group).textContent),
+    ).toEqual([
+      expect.stringContaining('Same name'),
+      expect.stringContaining('Same name'),
+      'owner/project · 1',
+    ]);
+    expect(getProjectGroupByLabel(harness.elements.list, 'Same name · project-a')).toBeDefined();
+    expect(getProjectGroupByLabel(harness.elements.list, 'Same name · project-b')).toBeDefined();
+    expect(
+      getProjectGroupByLabel(harness.elements.list, 'Same name · project-b').textContent,
+    ).toContain('· 0');
+    expect(
+      findAllByClass(
+        getProjectGroupByLabel(harness.elements.list, 'Same name · project-a'),
+        'repo-action-button',
+      ),
+    ).toHaveLength(0);
+
+    setShowAll(harness.elements, true);
+    expect(harness.elements.projectsView.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('assigns an expanded exact-session card through the host and moves it only after refresh', async () => {
+    const before = buildSnapshot({
+      records: [buildRecord({ projectId: null })],
+      projectState: { status: 'available', projects: [{ projectId: 'project-a', name: 'Alpha' }] },
+    });
+    const after = buildSnapshot({
+      records: [buildRecord({ projectId: 'project-a' })],
+      projectState: { status: 'available', projects: [{ projectId: 'project-a', name: 'Alpha' }] },
+    });
+    const updateProjectMock = vi.fn(async () => ({ ok: true, status: 'assigned' }));
+    const harness = await setupSharedUi({
+      updateProject: updateProjectMock,
+      snapshots: [before, after],
+    });
+
+    harness.elements.projectsView.click();
+    expandRepoGroup(harness.elements.list, 'owner/project');
+    const card = getCards(getRepoGroupByLabel(harness.elements.list, 'owner/project'))[0]!;
+    getCardToggle(card).click();
+    const select = getProjectSelect(getCards(harness.elements.list)[0]!);
+    select.value = 'project-a';
+    select.dispatchEvent({ type: 'change' });
+
+    expect(updateProjectMock).toHaveBeenCalledWith({
+      action: 'assign-project',
+      sessionId: 'session-1',
+      projectId: 'project-a',
+    });
+    expect(getProjectGroupByLabel(harness.elements.list, 'Alpha').textContent).toContain('· 0');
+    expect(getRepoGroupByLabel(harness.elements.list, 'owner/project').textContent).toContain(
+      '· 1',
+    );
+
+    await flushMicrotasks();
+
+    expect(harness.loadSnapshotMock).toHaveBeenCalledTimes(2);
+    expect(getProjectGroupByLabel(harness.elements.list, 'Alpha').textContent).toContain('· 1');
+    expect(
+      getRepoGroups(harness.elements.list).some((group) =>
+        getRepoHeader(group).textContent.startsWith('owner/project'),
+      ),
+    ).toBe(false);
+  });
+
+  it('shows failed unassignment without moving the card and refreshes after the result', async () => {
+    const snapshot = buildSnapshot({
+      records: [buildRecord({ projectId: 'project-a' })],
+      projectState: { status: 'available', projects: [{ projectId: 'project-a', name: 'Alpha' }] },
+    });
+    const updateProjectMock = vi.fn(async () => ({
+      ok: false,
+      status: 'failed',
+      reason: 'write-failed',
+      retryable: true,
+      message: 'Assignment failed.',
+    }));
+    const harness = await setupSharedUi({
+      updateProject: updateProjectMock,
+      snapshots: [snapshot, snapshot],
+    });
+
+    harness.elements.projectsView.click();
+    getRepoHeader(getProjectGroupByLabel(harness.elements.list, 'Alpha')).click();
+    getCardToggle(getCards(harness.elements.list)[0]!).click();
+    const select = getProjectSelect(getCards(harness.elements.list)[0]!);
+    select.value = '__repository__';
+    select.dispatchEvent({ type: 'change' });
+
+    expect(updateProjectMock).toHaveBeenCalledWith({
+      action: 'unassign-project',
+      sessionId: 'session-1',
+    });
+    expect(harness.elements.list.textContent).toContain('Updating project…');
+    expect(getProjectGroupByLabel(harness.elements.list, 'Alpha').textContent).toContain('· 1');
+
+    await flushMicrotasks();
+
+    expect(harness.loadSnapshotMock).toHaveBeenCalledTimes(2);
+    expect(harness.elements.list.textContent).toContain('Assignment failed.');
+    expect(getProjectGroupByLabel(harness.elements.list, 'Alpha').textContent).toContain('· 1');
+  });
+
+  it('keeps project controls read-only when the host has no mutation boundary', async () => {
+    const harness = await setupSharedUi({
+      projectEditingSupported: false,
+      snapshots: [
+        buildSnapshot({
+          records: [buildRecord({ projectId: 'project-a' })],
+          projectState: {
+            status: 'available',
+            projects: [{ projectId: 'project-a', name: 'Alpha' }],
+          },
+        }),
+      ],
+    });
+
+    expandRepoGroup(harness.elements.list, 'owner/project');
+    getCardToggle(getCards(harness.elements.list)[0]!).click();
+    const card = getCards(harness.elements.list)[0]!;
+
+    expect(getProjectSelect(card).disabled).toBe(true);
+    expect(getProjectCreateInput(card).disabled).toBe(true);
+    expect(getProjectCreateButton(card).disabled).toBe(true);
+    expect(card.textContent).toContain('Project editing is unavailable in this host.');
+
+    harness.elements.projectsView.click();
+    expect(
+      getButtonByText(getProjectGroupByLabel(harness.elements.list, 'Alpha'), 'Delete').disabled,
+    ).toBe(true);
+    expect(harness.updateProjectMock).not.toHaveBeenCalled();
+  });
+
+  it('supports create-and-assign, repository default, and disabled null-session editing', async () => {
+    const before = buildSnapshot({
+      records: [
+        buildRecord({ projectId: null }),
+        buildRecord({
+          runtimeId: 'rt-null-session',
+          sessionId: null,
+          sessionName: 'null session',
+          projectId: null,
+        }),
+      ],
+      projectState: { status: 'available', projects: [] },
+    });
+    const afterCreate = buildSnapshot({
+      records: [
+        buildRecord({ projectId: 'project-new' }),
+        buildRecord({
+          runtimeId: 'rt-null-session',
+          sessionId: null,
+          sessionName: 'null session',
+          projectId: null,
+        }),
+      ],
+      projectState: {
+        status: 'available',
+        projects: [{ projectId: 'project-new', name: 'New work' }],
+      },
+    });
+    const updateProjectMock = vi.fn(async (request) => {
+      if (request.action === 'create-and-assign') {
+        return { ok: true, status: 'created-and-assigned' };
+      }
+      return { ok: true, status: 'unassigned' };
+    });
+    const harness = await setupSharedUi({
+      updateProject: updateProjectMock,
+      snapshots: [before, afterCreate],
+    });
+
+    expandRepoGroup(harness.elements.list, 'owner/project');
+    const firstCard = getCards(harness.elements.list)[0]!;
+    getCardToggle(firstCard).click();
+    const nameInput = getProjectCreateInput(getCards(harness.elements.list)[0]!);
+    nameInput.value = 'New work';
+    getProjectCreateButton(getCards(harness.elements.list)[0]!).click();
+    await flushMicrotasks();
+
+    expect(updateProjectMock).toHaveBeenCalledWith({
+      action: 'create-and-assign',
+      sessionId: 'session-1',
+      name: 'New work',
+    });
+    harness.elements.projectsView.click();
+    expect(getProjectGroupByLabel(harness.elements.list, 'New work').textContent).toContain('· 1');
+
+    setShowAll(harness.elements, true);
+    expandRepoGroup(harness.elements.list, 'owner/project');
+    const nullSessionCard = getCards(harness.elements.list).find((candidate) =>
+      candidate.textContent.includes('null session'),
+    );
+    expect(nullSessionCard).toBeDefined();
+    getCardToggle(nullSessionCard!).click();
+    const expandedNullSessionCard = getCards(harness.elements.list).find((candidate) =>
+      candidate.textContent.includes('null session'),
+    );
+    expect(expandedNullSessionCard).toBeDefined();
+    expect(getCardDetail(expandedNullSessionCard!).textContent).toContain('no exact session ID');
+    expect(findAllByTag(expandedNullSessionCard!, 'select')).toHaveLength(0);
+    expect(findAllByTag(expandedNullSessionCard!, 'input')).toHaveLength(0);
+  });
+
+  it('confirms project deletion and leaves session organization unchanged until refresh', async () => {
+    const before = buildSnapshot({
+      records: [buildRecord({ projectId: 'project-a' })],
+      projectState: { status: 'available', projects: [{ projectId: 'project-a', name: 'Alpha' }] },
+    });
+    const after = buildSnapshot({
+      records: [buildRecord({ projectId: null })],
+      projectState: { status: 'available', projects: [] },
+    });
+    const updateProjectMock = vi.fn(async () => ({ ok: true, status: 'deleted' }));
+    const harness = await setupSharedUi({
+      updateProject: updateProjectMock,
+      snapshots: [before, after],
+    });
+
+    harness.elements.projectsView.click();
+    getProjectGroupByLabel(harness.elements.list, 'Alpha');
+    getButtonByText(getProjectGroupByLabel(harness.elements.list, 'Alpha'), 'Delete').click();
+    expect(harness.elements.list.textContent).toContain(
+      'Only the project and its assignments are removed.',
+    );
+    expect(harness.elements.list.textContent).toContain(
+      'Sessions, worktrees, branches, and history stay unchanged.',
+    );
+    getButtonByText(
+      getProjectGroupByLabel(harness.elements.list, 'Alpha'),
+      'Delete project',
+    ).click();
+
+    expect(updateProjectMock).toHaveBeenCalledWith({
+      action: 'delete-project',
+      projectId: 'project-a',
+    });
+    expect(getProjectGroupByLabel(harness.elements.list, 'Alpha').textContent).toContain('· 1');
+
+    await flushMicrotasks();
+
+    expect(getProjectGroups(harness.elements.list)).toHaveLength(0);
+    expect(getRepoGroupByLabel(harness.elements.list, 'owner/project').textContent).toContain(
+      '· 1',
+    );
+  });
+
+  it('disables the Projects view and keeps Repository usable for old snapshots without project fields', async () => {
+    const oldRecord = buildRecord();
+    delete (oldRecord as Partial<SessionDeckRecord>).projectId;
+    const oldSnapshot = {
+      generatedAt: '2026-07-10T20:15:00.000Z',
+      records: [oldRecord],
+      diagnostics: [],
+    };
+    const harness = await setupSharedUi({ snapshots: [oldSnapshot] });
+
+    expect(harness.elements.projectsView.disabled).toBe(true);
+    expect(getRepoHeader(harness.elements.list.childNodes[0] as FakeElement).textContent).toBe(
+      'owner/project · 1',
+    );
+    harness.elements.projectsView.click();
+    expect(harness.elements.repositoryView.getAttribute('aria-pressed')).toBe('true');
   });
 
   it('dismisses successful worktree feedback after the timeout fires', async () => {

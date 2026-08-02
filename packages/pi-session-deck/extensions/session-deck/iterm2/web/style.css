@@ -140,6 +140,45 @@ h2 {
   margin-left: auto;
 }
 
+.grouping-mode {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(76, 86, 106, 0.7);
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.grouping-mode-button {
+  border: 0;
+  border-radius: 2px;
+  padding: 2px 8px;
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+}
+
+.grouping-mode-button + .grouping-mode-button {
+  border-left: 1px solid rgba(76, 86, 106, 0.7);
+}
+
+.grouping-mode-button:hover:not(:disabled),
+.grouping-mode-button:focus-visible,
+.grouping-mode-button[aria-pressed='true'] {
+  background: var(--color-surface-raised);
+  color: var(--color-text-strong);
+}
+
+.grouping-mode-button[aria-pressed='true'] {
+  color: var(--color-accent);
+}
+
+.grouping-mode-button:disabled {
+  cursor: not-allowed;
+  color: var(--color-text-dim);
+  opacity: 0.55;
+}
+
 .toggle,
 #refresh,
 #summary {
@@ -283,6 +322,20 @@ h2 {
   position: relative;
   border-bottom: 1px solid var(--color-divider);
   background: var(--color-repo-row);
+}
+
+.project-header-row {
+  background: #25243a;
+}
+
+.project-header-row::before {
+  background: linear-gradient(
+    180deg,
+    rgba(180, 142, 173, 0.18),
+    rgba(180, 142, 173, 0.88),
+    rgba(180, 142, 173, 0.36)
+  );
+  box-shadow: 0 0 10px rgba(180, 142, 173, 0.16);
 }
 
 .repo-header-row::before {
@@ -485,6 +538,83 @@ button.card-toggle[aria-expanded='true']::after {
   border-bottom-color: var(--color-divider);
 }
 
+.project-header:hover {
+  background: rgba(180, 142, 173, 0.08);
+}
+
+.project-name {
+  font-weight: 700;
+}
+
+.project-id-suffix {
+  color: var(--color-text-dim);
+  font-weight: 400;
+}
+
+.project-delete-button {
+  position: absolute;
+  top: 50%;
+  right: 24px;
+  z-index: 1;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--color-text-dim);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.2;
+  opacity: 0.9;
+  transform: translateY(-50%);
+}
+
+.project-delete-button:hover:not(:disabled),
+.project-delete-button:focus-visible:not(:disabled) {
+  border-color: transparent;
+  background: transparent;
+  color: var(--color-danger);
+  opacity: 1;
+}
+
+.project-delete-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.project-delete-confirmation {
+  display: grid;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-divider);
+  background: rgba(191, 97, 106, 0.08);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.project-delete-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.project-delete-confirm,
+.project-delete-cancel {
+  padding: 0.26rem 0.58rem;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+}
+
+.project-delete-confirm {
+  border-color: rgba(191, 97, 106, 0.52);
+  color: var(--color-banner-text);
+}
+
+.project-delete-cancel {
+  border-color: var(--color-divider);
+}
+
 .card-toggle:hover,
 .card-toggle:focus {
   background: var(--color-card-interactive);
@@ -500,6 +630,84 @@ button.card-toggle[aria-expanded='true']::after {
   border-top: 1px solid var(--color-divider);
   border-left: 1px solid rgba(143, 188, 187, 0.46);
   background: var(--color-surface-raised);
+}
+
+.project-editor {
+  display: grid;
+  gap: 6px;
+}
+
+.project-editor-row,
+.project-create-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.project-editor select,
+.project-create-input {
+  min-width: 0;
+  height: 30px;
+  border: 1px solid var(--color-divider);
+  border-radius: 4px;
+  background: var(--color-chrome);
+  color: var(--color-text-strong);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.project-editor select {
+  flex: 1 1 auto;
+  padding: 0 6px;
+}
+
+.project-create-input {
+  flex: 1 1 auto;
+  padding: 0 0.56rem;
+}
+
+.project-create-button {
+  flex: 0 0 auto;
+  min-height: 30px;
+  padding: 0.22rem 0.58rem;
+  border-color: var(--color-divider);
+  background: rgba(136, 192, 208, 0.08);
+  color: var(--color-text-strong);
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+}
+
+.project-create-button:hover:not(:disabled),
+.project-create-button:focus-visible:not(:disabled) {
+  background: rgba(136, 192, 208, 0.14);
+  border-color: var(--color-divider-strong);
+}
+
+.project-editor select:disabled,
+.project-create-input:disabled,
+.project-create-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.project-editor-message {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.project-editor-message.error {
+  color: var(--color-banner-text);
+}
+
+.project-editor-message.pending {
+  color: var(--color-accent);
+}
+
+.project-editor-message.partial {
+  color: var(--color-warn);
 }
 
 .stop-action-row,
@@ -994,6 +1202,10 @@ button.card-toggle[aria-expanded='true']::after {
   }
 
   .card-open {
+    right: 24px;
+  }
+
+  .project-delete-button {
     right: 24px;
   }
 

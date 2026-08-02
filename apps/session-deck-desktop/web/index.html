@@ -12,6 +12,24 @@
         <div class="topbar-copy">
           <p id="summary" class="muted">Loading…</p>
           <div class="controls">
+            <div id="grouping-mode" class="grouping-mode" role="group" aria-label="Group sessions">
+              <button
+                id="view-repository"
+                class="grouping-mode-button active"
+                type="button"
+                aria-pressed="true"
+              >
+                Repository
+              </button>
+              <button
+                id="view-projects"
+                class="grouping-mode-button"
+                type="button"
+                aria-pressed="false"
+              >
+                Projects
+              </button>
+            </div>
             <label class="toggle">
               <input id="show-all" type="checkbox" />
               <span>Show all</span>
