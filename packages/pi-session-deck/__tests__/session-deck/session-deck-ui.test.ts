@@ -209,6 +209,7 @@ class FakeDocument extends FakeNode {
 
 interface HarnessElements {
   summary: FakeElement;
+  liveCount: FakeElement;
   showAll: FakeInputElement;
   refresh: FakeButtonElement;
   banner: FakeElement;
@@ -291,6 +292,8 @@ function buildSnapshot(
 
 function buildElements(document: FakeDocument): HarnessElements {
   const summary = withId(document.createElement('p'), 'summary');
+  const liveCount = withId(document.createElement('span'), 'live-count');
+  liveCount.className = 'summary-count';
   const showAll = withId(document.createElement('input'), 'show-all');
   showAll.type = 'checkbox';
   const refresh = withId(document.createElement('button'), 'refresh');
@@ -309,10 +312,11 @@ function buildElements(document: FakeDocument): HarnessElements {
   const diagnostics = withId(document.createElement('ul'), 'diagnostics');
   diagnosticsPanel.append(diagnostics);
 
-  document.append(summary, showAll, refresh, banner, listShell, diagnosticsPanel);
+  document.append(summary, liveCount, showAll, refresh, banner, listShell, diagnosticsPanel);
 
   return {
     summary,
+    liveCount,
     showAll,
     refresh,
     banner,

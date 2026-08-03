@@ -141,6 +141,7 @@ h2 {
 }
 
 .toggle,
+#live-count,
 #refresh,
 #summary {
   font-size: 0.82rem;
@@ -175,11 +176,6 @@ h2 {
   color: var(--color-text-strong);
   font-weight: 700;
   line-height: 1.2;
-}
-
-.summary-meta {
-  color: var(--color-text-dim);
-  font-variant-numeric: tabular-nums;
 }
 
 .toggle {

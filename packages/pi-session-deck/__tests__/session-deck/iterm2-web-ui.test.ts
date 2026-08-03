@@ -235,7 +235,10 @@ class FakeDocument extends FakeNode {
 
 interface HarnessElements {
   summary: FakeElement;
+  controls: FakeElement;
+  toggle: FakeElement;
   showAll: FakeInputElement;
+  liveCount: FakeElement;
   refresh: FakeButtonElement;
   banner: FakeElement;
   listShell: FakeElement;
@@ -538,9 +541,21 @@ async function setupPendingApp(): Promise<{
 
 function buildElements(document: FakeDocument): HarnessElements {
   const summary = withId(document.createElement('p'), 'summary');
+  const controls = document.createElement('div');
+  controls.className = 'controls';
+  const toggle = document.createElement('label');
+  toggle.className = 'toggle hidden';
   const showAll = withId(document.createElement('input'), 'show-all');
   showAll.type = 'checkbox';
+  const toggleLabel = document.createElement('span');
+  toggleLabel.textContent = 'Show all';
+  toggle.append(showAll, toggleLabel);
+  const liveCount = withId(document.createElement('span'), 'live-count');
+  liveCount.className = 'summary-count';
   const refresh = withId(document.createElement('button'), 'refresh');
+  refresh.setAttribute('aria-label', 'Refresh sessions');
+  refresh.setAttribute('title', 'Refresh sessions');
+  controls.append(toggle, liveCount, refresh);
   const banner = withId(document.createElement('section'), 'banner');
   banner.className = 'banner hidden';
   const listShell = withId(document.createElement('section'), 'list-shell');
@@ -558,11 +573,14 @@ function buildElements(document: FakeDocument): HarnessElements {
   const actionToken = withId(document.createElement('meta'), 'session-deck-action-token');
   actionToken.setAttribute('content', 'test-token');
 
-  document.append(summary, showAll, refresh, banner, listShell, diagnosticsPanel, actionToken);
+  document.append(summary, controls, banner, listShell, diagnosticsPanel, actionToken);
 
   return {
     summary,
+    controls,
+    toggle,
     showAll,
+    liveCount,
     refresh,
     banner,
     listShell,
@@ -945,6 +963,10 @@ function getSummaryCountTexts(root: FakeNode): string[] {
   return findAllByClass(root, 'summary-count').map((count) => count.textContent);
 }
 
+function getHeaderSummaryCountTexts(elements: HarnessElements): string[] {
+  return [elements.liveCount.textContent, ...getSummaryCountTexts(elements.summary)];
+}
+
 function getInlineChipTexts(card: FakeElement): string[] {
   const inlineChips = findAllByClass(card, 'chips-inline')[0];
   return inlineChips ? getChipTexts(inlineChips) : [];
@@ -968,12 +990,18 @@ describe('Session Deck iTerm2 web UI', () => {
 
     await harness.resolveSnapshot(buildSnapshot());
 
-    expect(getSummaryCountTexts(harness.elements.summary)).toEqual(['1 live']);
-    expect(harness.elements.summary.childNodes.every((child) => child instanceof FakeElement)).toBe(
-      true,
-    );
-    expect(findAllByClass(harness.elements.summary, 'summary-meta')[0]?.textContent).toContain(
-      'updated ',
+    expect(harness.elements.toggle.classList.contains('hidden')).toBe(true);
+    expect(harness.elements.controls.childNodes).toEqual([
+      harness.elements.toggle,
+      harness.elements.liveCount,
+      harness.elements.refresh,
+    ]);
+    expect(harness.elements.liveCount.textContent).toBe('1 live');
+    expect(harness.elements.summary.textContent).not.toContain('updated ');
+    expect(findAllByClass(harness.elements.summary, 'summary-meta')).toHaveLength(0);
+    expect(harness.elements.refresh.getAttribute('aria-label')).toBe('Refresh sessions');
+    expect(harness.elements.refresh.getAttribute('title')).toMatch(
+      /^updated \d{1,2}:\d{2} [AP]M$/u,
     );
   });
 
@@ -986,7 +1014,7 @@ describe('Session Deck iTerm2 web UI', () => {
       },
     ]);
 
-    expect(getSummaryCountTexts(harness.elements.summary)).toEqual(['0 live']);
+    expect(getHeaderSummaryCountTexts(harness.elements)).toEqual(['0 live']);
     expect(harness.elements.banner.classList.contains('hidden')).toBe(false);
     expect(harness.elements.banner.textContent).toBe(
       'Snapshot payload does not match SessionDeckSnapshot.',
@@ -1131,7 +1159,7 @@ describe('Session Deck iTerm2 web UI', () => {
       }),
     ]);
 
-    expect(getSummaryCountTexts(harness.elements.summary)).toEqual(['1 live']);
+    expect(getHeaderSummaryCountTexts(harness.elements)).toEqual(['1 live']);
     expect(getRepoHeaderTexts(harness.elements.list)).toEqual(['owner/project · 1']);
 
     expandRepoGroup(harness.elements.list, 'owner/project');
@@ -1148,11 +1176,7 @@ describe('Session Deck iTerm2 web UI', () => {
 
     setShowAll(harness.elements, true);
 
-    expect(getSummaryCountTexts(harness.elements.summary)).toEqual([
-      '1 live',
-      '0 dead',
-      '0 unknown',
-    ]);
+    expect(getHeaderSummaryCountTexts(harness.elements)).toEqual(['1 live', '0 dead', '0 unknown']);
     expect(getRepoHeaderTexts(harness.elements.list)).toEqual(['owner/project · 1']);
     expect(getCards(harness.elements.list)).toHaveLength(1);
     expect(harness.elements.list.textContent).not.toContain('worker');
@@ -1235,7 +1259,7 @@ describe('Session Deck iTerm2 web UI', () => {
       }),
     ]);
 
-    expect(getSummaryCountTexts(harness.elements.summary)).toEqual(['2 live']);
+    expect(getHeaderSummaryCountTexts(harness.elements)).toEqual(['2 live']);
 
     expandRepoGroup(harness.elements.list, 'owner/project');
     let cards = getCards(harness.elements.list);
@@ -1267,11 +1291,7 @@ describe('Session Deck iTerm2 web UI', () => {
 
     setShowAll(harness.elements, true);
 
-    expect(getSummaryCountTexts(harness.elements.summary)).toEqual([
-      '2 live',
-      '0 dead',
-      '0 unknown',
-    ]);
+    expect(getHeaderSummaryCountTexts(harness.elements)).toEqual(['2 live', '0 dead', '0 unknown']);
     expect(harness.elements.list.textContent).not.toContain('child live');
     expect(harness.elements.list.textContent).not.toContain('child dead');
   });
@@ -1341,7 +1361,7 @@ describe('Session Deck iTerm2 web UI', () => {
       }),
     ]);
 
-    expect(getSummaryCountTexts(harness.elements.summary)).toEqual(['0 live']);
+    expect(getHeaderSummaryCountTexts(harness.elements)).toEqual(['0 live']);
     expect(getRepoHeaderTexts(harness.elements.list)).toEqual([]);
     expect(getCards(harness.elements.list)).toHaveLength(0);
     expect(harness.elements.empty.classList.contains('hidden')).toBe(false);
@@ -1349,11 +1369,7 @@ describe('Session Deck iTerm2 web UI', () => {
 
     setShowAll(harness.elements, true);
 
-    expect(getSummaryCountTexts(harness.elements.summary)).toEqual([
-      '0 live',
-      '0 dead',
-      '0 unknown',
-    ]);
+    expect(getHeaderSummaryCountTexts(harness.elements)).toEqual(['0 live', '0 dead', '0 unknown']);
     expect(getRepoHeaderTexts(harness.elements.list)).toEqual([]);
     expect(getCards(harness.elements.list)).toHaveLength(0);
     expect(harness.elements.empty.classList.contains('hidden')).toBe(false);
@@ -3843,19 +3859,15 @@ describe('Session Deck iTerm2 web UI', () => {
     const harness = await setupApp([buildSnapshot()]);
     expandAllRepoGroups(harness.elements.list);
 
-    expect(getSummaryCountTexts(harness.elements.summary)).toEqual(['1 live']);
+    expect(getHeaderSummaryCountTexts(harness.elements)).toEqual(['1 live']);
 
     setShowAll(harness.elements, true);
 
-    expect(getSummaryCountTexts(harness.elements.summary)).toEqual([
-      '1 live',
-      '0 dead',
-      '0 unknown',
-    ]);
+    expect(getHeaderSummaryCountTexts(harness.elements)).toEqual(['1 live', '0 dead', '0 unknown']);
     expect(getCards(harness.elements.list)).toHaveLength(1);
   });
 
-  it('renders summary counts from visible non-temp rows and keeps updated meta visible', async () => {
+  it('renders live count in the controls and keeps updated time on refresh', async () => {
     const harness = await setupApp([
       buildSnapshot({
         records: [
@@ -3895,28 +3907,32 @@ describe('Session Deck iTerm2 web UI', () => {
       }),
     ]);
 
-    expect(harness.elements.summary.childNodes.length).toBeGreaterThan(1);
-    expect(getSummaryCountTexts(harness.elements.summary)).toEqual(['1 live', '1 stale']);
-    expect(harness.elements.summary.childNodes.every((child) => child instanceof FakeElement)).toBe(
-      true,
+    expect(harness.elements.summary.childNodes).toHaveLength(1);
+    expect(getSummaryCountTexts(harness.elements.summary)).toEqual(['1 stale']);
+    expect(harness.elements.liveCount.textContent).toBe('1 live');
+    expect(harness.elements.summary.textContent).not.toContain('updated ');
+    expect(findAllByClass(harness.elements.summary, 'summary-meta')).toHaveLength(0);
+    expect(harness.elements.refresh.getAttribute('aria-label')).toBe('Refresh sessions');
+    expect(harness.elements.refresh.getAttribute('title')).toMatch(
+      /^updated \d{1,2}:\d{2} [AP]M$/u,
     );
     expandAllRepoGroups(harness.elements.list);
-    expect(findAllByClass(harness.elements.summary, 'summary-meta')[0]?.textContent).toContain(
-      'updated ',
-    );
     expect(getCards(harness.elements.list)).toHaveLength(2);
 
     setShowAll(harness.elements, true);
 
     expect(getSummaryCountTexts(harness.elements.summary)).toEqual([
-      '1 live',
       '1 stale',
       '1 dead',
       '1 unknown',
     ]);
-    expect(findAllByClass(harness.elements.summary, 'summary-meta')[0]?.textContent).toContain(
-      'updated ',
+    expect(harness.elements.liveCount.textContent).toBe('1 live');
+    expect(harness.elements.summary.textContent).not.toContain('updated ');
+    expect(findAllByClass(harness.elements.summary, 'summary-meta')).toHaveLength(0);
+    expect(harness.elements.refresh.getAttribute('title')).toMatch(
+      /^updated \d{1,2}:\d{2} [AP]M$/u,
     );
+    expect(harness.elements.refresh.getAttribute('aria-label')).toBe('Refresh sessions');
     expect(getCards(harness.elements.list)).toHaveLength(4);
   });
 

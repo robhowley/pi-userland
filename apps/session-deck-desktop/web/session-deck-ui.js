@@ -134,6 +134,7 @@
     const elements = {
       summary: document.getElementById('summary'),
       showAll: document.getElementById('show-all'),
+      liveCount: document.getElementById('live-count'),
       refresh: document.getElementById('refresh'),
       banner: document.getElementById('banner'),
       listShell: document.getElementById('list-shell'),
@@ -789,13 +790,17 @@
     function renderSummary() {
       if (state.loading && state.snapshot === null) {
         elements.summary.textContent = 'Loading…';
+        elements.liveCount.textContent = '';
+        elements.refresh.setAttribute('title', 'Refresh sessions');
         return;
       }
 
       const snapshot = state.snapshot ?? emptySnapshot('Snapshot unavailable.');
       const records = snapshot.records.filter((record) => !isTempSession(record));
       const counts = countPresenceStates(records);
-      const summaryLabels = [`${counts.live} live`];
+      const summaryLabels = [];
+
+      elements.liveCount.textContent = `${counts.live} live`;
 
       if (counts.stale > 0) {
         summaryLabels.push(`${counts.stale} stale`);
@@ -807,8 +812,8 @@
 
       elements.summary.replaceChildren(
         ...summaryLabels.map((label) => createText('span', label, 'summary-count')),
-        createText('span', `updated ${formatTimestamp(snapshot.generatedAt)}`, 'summary-meta'),
       );
+      elements.refresh.setAttribute('title', `updated ${formatTimestamp(snapshot.generatedAt)}`);
     }
 
     function renderBanner() {
