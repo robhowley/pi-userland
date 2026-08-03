@@ -2,10 +2,13 @@ import { execFile as nodeExecFile } from 'node:child_process';
 import { lstat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import {
+  SESSION_DECK_DESKTOP_FIRST_LAUNCH_GUIDANCE,
+  getSessionDeckDesktopStatePath,
+} from './paths.js';
+import {
   readSessionDeckDesktopInstallState,
   type SessionDeckDesktopInstallState,
 } from './state.js';
-import { getSessionDeckDesktopStatePath } from './paths.js';
 import type { SessionDeckDesktopCommandResult } from './command.js';
 import type { SessionDeckDesktopExecFile } from './install.js';
 
@@ -61,7 +64,10 @@ export async function openSessionDeckDesktop(
 
   return {
     level: 'info',
-    message: `Opened Session Deck desktop app: ${state.installState.app.path}`,
+    message: [
+      `Opened Session Deck desktop app: ${state.installState.app.path}`,
+      SESSION_DECK_DESKTOP_FIRST_LAUNCH_GUIDANCE,
+    ].join('\n'),
   };
 }
 
