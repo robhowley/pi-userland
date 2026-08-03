@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.14.0](https://github.com/robhowley/pi-userland/compare/pi-session-deck-v0.13.1...pi-session-deck-v0.14.0) (2026-08-03)
+
+
+### Features
+
+* **pi-session-deck:** restart managed sessions ([#156](https://github.com/robhowley/pi-userland/issues/156)) ([4cef8e7](https://github.com/robhowley/pi-userland/commit/4cef8e783367cba8d67aa8a555cf5f1f4d78a415))
+* **pi-session-deck:** simplify webview header ([#159](https://github.com/robhowley/pi-userland/issues/159)) ([251bac3](https://github.com/robhowley/pi-userland/commit/251bac32a391034bfc762c308cebefc0a9125cbe))
+
 ## [0.13.1](https://github.com/robhowley/pi-userland/compare/pi-session-deck-v0.13.0...pi-session-deck-v0.13.1) (2026-07-29)
 
 
