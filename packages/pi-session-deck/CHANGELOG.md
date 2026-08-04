@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.1](https://github.com/robhowley/pi-userland/compare/pi-session-deck-v0.14.0...pi-session-deck-v0.14.1) (2026-08-04)
+
+
+### Bug Fixes
+
+* **pi-session-deck:** restore desktop Gatekeeper prompt ([#160](https://github.com/robhowley/pi-userland/issues/160)) ([52c7cb2](https://github.com/robhowley/pi-userland/commit/52c7cb2be49fad96f85a399672369534ede52296))
+
 ## [0.14.0](https://github.com/robhowley/pi-userland/compare/pi-session-deck-v0.13.1...pi-session-deck-v0.14.0) (2026-08-03)
 
 
