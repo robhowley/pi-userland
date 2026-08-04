@@ -25,7 +25,7 @@ Both builds are ad-hoc signed with Tauri's free identity `-`. They are **not Dev
 macOS may block the first launch. Users should:
 
 1. Verify the downloaded ZIP against its published `.sha256` sidecar.
-2. Extract the ZIP, move **Session Deck Desktop.app** to `/Applications`, and try to open it once.
+2. Extract the ZIP, move **Session Deck Desktop.app** to `/Applications`, and try to open it once; leave it installed at the initial warning.
 3. Only if they trust the release, use **System Settings → Privacy & Security → Open Anyway**.
 4. Confirm **Open** and authenticate if macOS asks.
 

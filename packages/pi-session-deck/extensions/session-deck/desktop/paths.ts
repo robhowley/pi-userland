@@ -17,6 +17,8 @@ export const SESSION_DECK_DESKTOP_BUNDLE_IDENTIFIER = 'dev.pi-userland.session-d
 export const SESSION_DECK_DESKTOP_STATE_FILENAME = 'install.json';
 export const SESSION_DECK_DESKTOP_RELEASE_OWNER = 'robhowley';
 export const SESSION_DECK_DESKTOP_RELEASE_REPO = 'pi-userland';
+export const SESSION_DECK_DESKTOP_FIRST_LAUNCH_GUIDANCE =
+  'If macOS blocks first launch, leave the app installed at the initial warning, then use System Settings → Privacy & Security → Open Anyway.';
 
 export interface SessionDeckDesktopRuntimePaths {
   packageRoot: string;

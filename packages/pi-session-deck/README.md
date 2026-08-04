@@ -68,6 +68,8 @@ Install the Session Deck desktop app:
 /session-deck desktop install
 ```
 
+If macOS blocks first launch, leave the app installed at the initial warning, then use **System Settings → Privacy & Security → Open Anyway**.
+
 ### iTerm2 Toolbelt
 
 Install Session Deck as an iTerm2 Toolbelt:

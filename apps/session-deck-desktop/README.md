@@ -25,6 +25,6 @@ Private Tauri desktop companion for Session Deck. This app lives under `apps/` s
 
 `artifact:macos` builds one native Tauri `.app`, verifies that its executable contains only the target architecture, and packages the app with `ditto`. It emits one deterministic `session-deck-desktop-v<version>-macos-<arch>.zip` and its `.sha256` sidecar.
 
-The app is ad-hoc signed with Tauri's `-` identity. It is not Developer ID signed and is not notarized. No Apple credentials are required. macOS may block the first launch; first try to open the app, then, only if you trust the release, use **System Settings → Privacy & Security → Open Anyway**.
+The app is ad-hoc signed with Tauri's `-` identity. It is not Developer ID signed and is not notarized. No Apple credentials are required. macOS may block the first launch; leave the app installed at the initial warning, then, only if you trust the release, use **System Settings → Privacy & Security → Open Anyway**.
 
 See [RELEASE.md](./RELEASE.md) for the dual-architecture release and publication contract.

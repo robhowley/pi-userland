@@ -8,6 +8,7 @@ import { findSessionDeckDesktopAppBundle, validateSessionDeckDesktopAppBundle } 
 import {
   getDefaultSessionDeckDesktopAppPath,
   getSessionDeckDesktopStatePath,
+  SESSION_DECK_DESKTOP_FIRST_LAUNCH_GUIDANCE,
   getSessionDeckDesktopTmpDir,
   resolveSessionDeckDesktopRuntimePaths,
   SESSION_DECK_DESKTOP_APP_BUNDLE_NAME,
@@ -26,7 +27,7 @@ import type { SessionDeckDesktopCommandResult } from './command.js';
 export type SessionDeckDesktopExecFile = (
   file: string,
   args: string[],
-  callback: (error: Error | null) => void,
+  callback: (error: Error | null, stdout?: string, stderr?: string) => void,
 ) => void;
 
 export interface InstallSessionDeckDesktopOptions {
@@ -48,8 +49,17 @@ export interface InstallSessionDeckDesktopOptions {
 
 interface PreparedDesktopArtifact {
   appPath: string;
+  rootQuarantine: string | null;
   source: SessionDeckDesktopSourceState;
 }
+
+interface ExtractedDmgArtifact {
+  appPath: string;
+  rootQuarantine: string | null;
+}
+
+const SESSION_DECK_DESKTOP_XATTR_PATH = '/usr/bin/xattr';
+const SESSION_DECK_DESKTOP_QUARANTINE_ATTRIBUTE = 'com.apple.quarantine';
 
 export async function installSessionDeckDesktop(
   options: InstallSessionDeckDesktopOptions = {},
@@ -139,6 +149,7 @@ export async function installSessionDeckDesktop(
   );
   const removePath = options.removePath ?? removeInstallPath;
   const renamePath = options.renamePath ?? rename;
+  const execFile = options.execFile ?? nodeExecFileAdapter;
   const cleanupWarnings: string[] = [];
 
   try {
@@ -147,7 +158,7 @@ export async function installSessionDeckDesktop(
       options.fromPath === undefined
         ? await prepareDownloadedArtifact({
             ...(options.arch === undefined ? {} : { arch: options.arch }),
-            ...(options.execFile === undefined ? {} : { execFile: options.execFile }),
+            execFile,
             ...(options.sha256 === undefined ? {} : { expectedSha256: options.sha256 }),
             ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
             platform,
@@ -155,7 +166,7 @@ export async function installSessionDeckDesktop(
             workDir,
           })
         : await prepareLocalArtifact({
-            ...(options.execFile === undefined ? {} : { execFile: options.execFile }),
+            execFile,
             ...(options.sha256 === undefined ? {} : { expectedSha256: options.sha256 }),
             fromPath: options.fromPath,
             platform,
@@ -175,12 +186,20 @@ export async function installSessionDeckDesktop(
     await mkdir(dirname(stagedAppPath), { recursive: true });
     await copyAppBundle(prepared.appPath, stagedAppPath);
     const installedSha256 = await hashSessionDeckDesktopPath(stagedAppPath);
+    const installedAt = (options.now ?? (() => new Date()))();
+    await applyRootQuarantine({
+      appPath: stagedAppPath,
+      execFile,
+      installedAt,
+      rootQuarantine: prepared.rootQuarantine,
+      source: prepared.source,
+    });
     const state: SessionDeckDesktopInstallState = {
       schemaVersion: 1,
       product: 'session-deck-desktop',
       packageName: SESSION_DECK_DESKTOP_PACKAGE_NAME,
       packageVersion: runtimePaths.packageVersion,
-      installedAt: (options.now ?? (() => new Date()))().toISOString(),
+      installedAt: installedAt.toISOString(),
       app: {
         path: targetAppPath,
         bundleIdentifier: bundle.bundleIdentifier,
@@ -219,6 +238,7 @@ export async function installSessionDeckDesktop(
         `Source: ${formatSource(prepared.source)}`,
         ...cleanupWarnings,
         'Next: double-click Session Deck Desktop in Applications, or run /session-deck desktop open.',
+        SESSION_DECK_DESKTOP_FIRST_LAUNCH_GUIDANCE,
         'For diagnostics, run /session-deck desktop doctor.',
       ].join('\n'),
     };
@@ -262,6 +282,7 @@ async function prepareDownloadedArtifact(options: {
 
   return {
     appPath,
+    rootQuarantine: null,
     source: {
       kind: 'github-release',
       releaseTag: downloaded.releaseTag,
@@ -283,6 +304,8 @@ async function prepareLocalArtifact(options: {
   const sourceSha256 = await hashSessionDeckDesktopPath(sourcePath);
   verifyExpectedSha256(sourceSha256, options.expectedSha256, sourcePath);
 
+  const execFile = options.execFile ?? nodeExecFileAdapter;
+  const sourceQuarantine = await readQuarantineAttribute(execFile, sourcePath);
   const source: SessionDeckDesktopSourceState = {
     kind: 'local-path',
     path: sourcePath,
@@ -290,7 +313,7 @@ async function prepareLocalArtifact(options: {
   };
   const sourceStat = await lstat(sourcePath);
   if (sourceStat.isDirectory() && extname(sourcePath) === '.app') {
-    return { appPath: sourcePath, source };
+    return { appPath: sourcePath, rootQuarantine: sourceQuarantine, source };
   }
 
   if (!sourceStat.isFile()) {
@@ -299,21 +322,25 @@ async function prepareLocalArtifact(options: {
 
   const extension = extname(sourcePath).toLowerCase();
   if (extension === '.zip') {
+    const appPath = await extractZipArtifact(sourcePath, options.workDir, {
+      execFile,
+      platform: options.platform,
+    });
     return {
-      appPath: await extractZipArtifact(sourcePath, options.workDir, {
-        execFile: options.execFile ?? nodeExecFileAdapter,
-        platform: options.platform,
-      }),
+      appPath,
+      rootQuarantine: sourceQuarantine ?? (await readQuarantineAttribute(execFile, appPath)),
       source,
     };
   }
 
   if (extension === '.dmg') {
+    const extracted = await extractDmgArtifact(sourcePath, options.workDir, {
+      execFile,
+      platform: options.platform,
+    });
     return {
-      appPath: await extractDmgArtifact(sourcePath, options.workDir, {
-        execFile: options.execFile ?? nodeExecFileAdapter,
-        platform: options.platform,
-      }),
+      appPath: extracted.appPath,
+      rootQuarantine: sourceQuarantine ?? extracted.rootQuarantine,
       source,
     };
   }
@@ -344,7 +371,7 @@ async function extractDmgArtifact(
   dmgPath: string,
   workDir: string,
   options: { execFile: SessionDeckDesktopExecFile; platform: NodeJS.Platform },
-): Promise<string> {
+): Promise<ExtractedDmgArtifact> {
   if (options.platform !== 'darwin') {
     throw new Error(
       'Installing Session Deck desktop .dmg artifacts requires macOS /usr/bin/hdiutil.',
@@ -367,9 +394,10 @@ async function extractDmgArtifact(
     ]);
     mounted = true;
     const mountedApp = await findSessionDeckDesktopAppBundle(mountDir);
+    const rootQuarantine = await readQuarantineAttribute(options.execFile, mountedApp);
     const extractedApp = join(extractedDir, basename(mountedApp));
     await copyAppBundle(mountedApp, extractedApp);
-    return extractedApp;
+    return { appPath: extractedApp, rootQuarantine };
   } finally {
     if (mounted) {
       await execFilePromise(options.execFile, '/usr/bin/hdiutil', ['detach', mountDir]).catch(
@@ -377,6 +405,85 @@ async function extractDmgArtifact(
       );
     }
   }
+}
+
+async function applyRootQuarantine(options: {
+  appPath: string;
+  execFile: SessionDeckDesktopExecFile;
+  installedAt: Date;
+  rootQuarantine: string | null;
+  source: SessionDeckDesktopSourceState;
+}): Promise<void> {
+  const quarantine =
+    options.source.kind === 'github-release'
+      ? formatGitHubReleaseQuarantine(options.installedAt)
+      : options.rootQuarantine;
+  if (quarantine === null) return;
+
+  await writeAndVerifyQuarantine(options.execFile, options.appPath, quarantine);
+}
+
+function formatGitHubReleaseQuarantine(installedAt: Date): string {
+  const unixTimestamp = Math.floor(installedAt.getTime() / 1000);
+  if (!Number.isSafeInteger(unixTimestamp) || unixTimestamp < 0) {
+    throw new Error('Install clock must produce a non-negative Unix timestamp.');
+  }
+
+  return `0081;${unixTimestamp.toString(16).toLowerCase()};Session Deck;${randomUUID().toUpperCase()}`;
+}
+
+async function writeAndVerifyQuarantine(
+  execFile: SessionDeckDesktopExecFile,
+  appPath: string,
+  expectedValue: string,
+): Promise<void> {
+  await execFilePromise(execFile, SESSION_DECK_DESKTOP_XATTR_PATH, [
+    '-w',
+    SESSION_DECK_DESKTOP_QUARANTINE_ATTRIBUTE,
+    expectedValue,
+    appPath,
+  ]);
+  const actualValue = await readQuarantineAttribute(execFile, appPath);
+  if (actualValue !== expectedValue) {
+    throw new Error(
+      `com.apple.quarantine verification failed for ${appPath}: expected ${expectedValue}, got ${actualValue ?? '<missing>'}.`,
+    );
+  }
+}
+
+async function readQuarantineAttribute(
+  execFile: SessionDeckDesktopExecFile,
+  appPath: string,
+): Promise<string | null> {
+  return new Promise<string | null>((resolvePromise, reject) => {
+    execFile(
+      SESSION_DECK_DESKTOP_XATTR_PATH,
+      ['-p', SESSION_DECK_DESKTOP_QUARANTINE_ATTRIBUTE, appPath],
+      (error, stdout, stderr) => {
+        if (error !== null) {
+          if (isMissingQuarantineAttributeError(error, stderr)) {
+            resolvePromise(null);
+            return;
+          }
+          reject(error);
+          return;
+        }
+
+        resolvePromise(stripXattrTrailingNewline(stdout ?? ''));
+      },
+    );
+  });
+}
+
+function stripXattrTrailingNewline(value: string): string {
+  return value.replace(/\r?\n$/u, '');
+}
+
+function isMissingQuarantineAttributeError(error: unknown, stderr: string | undefined): boolean {
+  if (!(error instanceof Error) || !('code' in error) || error.code !== 1) return false;
+
+  const diagnostic = `${stderr ?? ''}\n${error.message}`;
+  return /No such xattr:\s+com\.apple\.quarantine/u.test(diagnostic);
 }
 
 async function commitManagedAppInstall(options: {
@@ -522,7 +629,9 @@ async function execFilePromise(
 }
 
 const nodeExecFileAdapter: SessionDeckDesktopExecFile = (file, args, callback) => {
-  const child = nodeExecFile(file, args, (error) => callback(error));
+  const child = nodeExecFile(file, args, (error, stdout, stderr) =>
+    callback(error, stdout, stderr),
+  );
   child.stdin?.end();
 };
 

@@ -8,6 +8,7 @@ import { openSessionDeckDesktop } from '../../extensions/session-deck/desktop/op
 import {
   getDefaultSessionDeckDesktopAppPath,
   getSessionDeckDesktopCacheDir,
+  SESSION_DECK_DESKTOP_FIRST_LAUNCH_GUIDANCE,
   getSessionDeckDesktopStatePath,
   getSessionDeckDesktopTmpDir,
   type SessionDeckDesktopRuntimePaths,
@@ -116,7 +117,10 @@ describe('session-deck desktop open, doctor, and uninstall', () => {
 
     expect(result).toEqual({
       level: 'info',
-      message: `Opened Session Deck desktop app: ${appPath}`,
+      message: [
+        `Opened Session Deck desktop app: ${appPath}`,
+        SESSION_DECK_DESKTOP_FIRST_LAUNCH_GUIDANCE,
+      ].join('\n'),
     });
     expect(execFile).toHaveBeenCalledWith('/usr/bin/open', [appPath], expect.any(Function));
   });

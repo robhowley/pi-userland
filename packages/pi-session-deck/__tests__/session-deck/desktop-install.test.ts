@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
-  installSessionDeckDesktop,
+  installSessionDeckDesktop as installSessionDeckDesktopProduction,
   type SessionDeckDesktopExecFile,
 } from '../../extensions/session-deck/desktop/install.js';
 import type { SessionDeckDesktopFetch } from '../../extensions/session-deck/desktop/artifact.js';
@@ -125,6 +125,98 @@ function createDittoExtractor(version: string, marker: string): SessionDeckDeskt
   };
 }
 
+function createQuarantineExecFile(options: {
+  marker?: string;
+  quarantine?: Map<string, string>;
+  readValue?: (path: string, currentValue: string | undefined) => string | undefined;
+  version?: string;
+  writeError?: Error;
+}): {
+  calls: Array<{ file: string; args: string[] }>;
+  execFile: SessionDeckDesktopExecFile;
+  quarantine: Map<string, string>;
+} {
+  const calls: Array<{ file: string; args: string[] }> = [];
+  const quarantine = options.quarantine ?? new Map<string, string>();
+  const execFile: SessionDeckDesktopExecFile = (file, args, callback) => {
+    calls.push({ file, args: [...args] });
+    if (file === '/usr/bin/ditto') {
+      void createFakeApp(
+        join(args[3]!, 'Session Deck Desktop.app'),
+        options.version ?? RELEASE_VERSION,
+        options.marker ?? 'downloaded',
+      ).then(
+        () => callback(null),
+        (error: unknown) => callback(error as Error),
+      );
+      return;
+    }
+
+    if (file !== '/usr/bin/xattr') {
+      callback(new Error(`Unexpected executable: ${file}`));
+      return;
+    }
+
+    if (args[0] === '-p') {
+      const path = args[2]!;
+      const currentValue = quarantine.get(path);
+      const value = options.readValue?.(path, currentValue) ?? currentValue;
+      if (value === undefined) {
+        const error = Object.assign(
+          new Error(`No such xattr: ${SESSION_DECK_QUARANTINE_ATTRIBUTE}`),
+          { code: 1 },
+        );
+        callback(
+          error,
+          '',
+          `xattr: ${path}: No such xattr: ${SESSION_DECK_QUARANTINE_ATTRIBUTE}\n`,
+        );
+        return;
+      }
+      callback(null, `${value}\n`);
+      return;
+    }
+
+    if (args[0] === '-w') {
+      if (options.writeError !== undefined) {
+        callback(options.writeError);
+        return;
+      }
+      quarantine.set(args[3]!, args[2]!);
+      callback(null);
+      return;
+    }
+
+    callback(new Error(`Unexpected xattr arguments: ${args.join(' ')}`));
+  };
+
+  return { calls, execFile, quarantine };
+}
+
+function installSessionDeckDesktop(
+  options: Parameters<typeof installSessionDeckDesktopProduction>[0] = {},
+): ReturnType<typeof installSessionDeckDesktopProduction> {
+  return installSessionDeckDesktopProduction({
+    execFile: createQuarantineExecFile({}).execFile,
+    ...options,
+  });
+}
+
+const SESSION_DECK_QUARANTINE_ATTRIBUTE = 'com.apple.quarantine';
+
+async function renameWithQuarantine(
+  quarantine: Map<string, string>,
+  oldPath: string,
+  newPath: string,
+): Promise<void> {
+  await rename(oldPath, newPath);
+  const value = quarantine.get(oldPath);
+  if (value !== undefined) {
+    quarantine.delete(oldPath);
+    quarantine.set(newPath, value);
+  }
+}
+
 async function executableMarker(home: string): Promise<string> {
   return readFile(
     join(getDefaultSessionDeckDesktopAppPath(home), 'Contents', 'MacOS', 'session-deck-desktop'),
@@ -154,6 +246,9 @@ describe('session-deck desktop install', () => {
     const state = await readSessionDeckDesktopInstallState(getSessionDeckDesktopStatePath(home));
     expect(result.level).toBe('info');
     expect(result.message).toContain('Installed Session Deck desktop app.');
+    expect(result.message).toContain(
+      'leave the app installed at the initial warning, then use System Settings → Privacy & Security → Open Anyway.',
+    );
     expect(state).toMatchObject({
       installedAt: NOW.toISOString(),
       packageVersion: RELEASE_VERSION,
@@ -172,6 +267,259 @@ describe('session-deck desktop install', () => {
       },
       ownedPaths: [targetApp],
     });
+  });
+
+  it('marks a GitHub release app before commit and verifies the exact quarantine value', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pi-session-deck-desktop-install-'));
+    const home = join(root, 'home');
+    const archive = Buffer.from('release archive quarantine');
+    const release = createReleaseFetch({ arch: 'arm64', archive });
+    const quarantine = createQuarantineExecFile({
+      marker: 'release',
+      version: RELEASE_VERSION,
+    });
+    const targetAppPath = getDefaultSessionDeckDesktopAppPath(home);
+
+    const result = await installSessionDeckDesktop({
+      arch: 'arm64',
+      execFile: quarantine.execFile,
+      fetch: release.fetch,
+      homeDirectory: home,
+      now: () => NOW,
+      platform: 'darwin',
+      renamePath: (oldPath, newPath) =>
+        renameWithQuarantine(quarantine.quarantine, oldPath, newPath),
+      runtimePaths: runtimePaths(root),
+    });
+
+    const writes = quarantine.calls.filter(
+      (call) => call.file === '/usr/bin/xattr' && call.args[0] === '-w',
+    );
+    expect(result.level).toBe('info');
+    expect(writes).toHaveLength(1);
+    const value = writes[0]!.args[2]!;
+    expect(value).toMatch(
+      new RegExp(
+        `^0081;${Math.floor(NOW.getTime() / 1000).toString(16)};Session Deck;[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$`,
+      ),
+    );
+    expect(quarantine.quarantine.get(targetAppPath)).toBe(value);
+    expect(
+      quarantine.calls.some(
+        (call) =>
+          call.file === '/usr/bin/xattr' &&
+          call.args[0] === '-p' &&
+          call.args[1] === SESSION_DECK_QUARANTINE_ATTRIBUTE &&
+          call.args[2] === writes[0]!.args[3],
+      ),
+    ).toBe(true);
+  });
+
+  it('preserves the old app and state when quarantine marking fails before commit', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pi-session-deck-desktop-install-'));
+    const home = join(root, 'home');
+    const oldApp = join(root, 'old', 'Session Deck Desktop.app');
+    await createFakeApp(oldApp, '0.0.0', 'old');
+    await installSessionDeckDesktop({
+      fromPath: oldApp,
+      homeDirectory: home,
+      platform: 'darwin',
+      runtimePaths: runtimePaths(root),
+    });
+    const oldState = await readSessionDeckDesktopInstallState(getSessionDeckDesktopStatePath(home));
+    const release = createReleaseFetch({ arch: 'arm64', archive: Buffer.from('release archive') });
+    const quarantine = createQuarantineExecFile({
+      version: RELEASE_VERSION,
+      writeError: new Error('quarantine write blocked'),
+    });
+
+    const result = await installSessionDeckDesktop({
+      arch: 'arm64',
+      execFile: quarantine.execFile,
+      fetch: release.fetch,
+      homeDirectory: home,
+      platform: 'darwin',
+      runtimePaths: runtimePaths(root),
+    });
+
+    expect(result).toMatchObject({ level: 'error' });
+    expect(result.message).toContain('quarantine write blocked');
+    await expect(executableMarker(home)).resolves.toBe('old');
+    await expect(
+      readSessionDeckDesktopInstallState(getSessionDeckDesktopStatePath(home)),
+    ).resolves.toEqual(oldState);
+  });
+
+  it('preserves the old app and state when quarantine readback mismatches', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pi-session-deck-desktop-install-'));
+    const home = join(root, 'home');
+    const oldApp = join(root, 'old', 'Session Deck Desktop.app');
+    await createFakeApp(oldApp, '0.0.0', 'old');
+    await installSessionDeckDesktop({
+      fromPath: oldApp,
+      homeDirectory: home,
+      platform: 'darwin',
+      runtimePaths: runtimePaths(root),
+    });
+    const oldState = await readSessionDeckDesktopInstallState(getSessionDeckDesktopStatePath(home));
+    const release = createReleaseFetch({ arch: 'arm64', archive: Buffer.from('release archive') });
+    const quarantine = createQuarantineExecFile({
+      readValue: () => '0081;wrong;Session Deck;WRONG',
+      version: RELEASE_VERSION,
+    });
+
+    const result = await installSessionDeckDesktop({
+      arch: 'arm64',
+      execFile: quarantine.execFile,
+      fetch: release.fetch,
+      homeDirectory: home,
+      platform: 'darwin',
+      runtimePaths: runtimePaths(root),
+    });
+
+    expect(result).toMatchObject({ level: 'error' });
+    expect(result.message).toContain('com.apple.quarantine verification failed');
+    await expect(executableMarker(home)).resolves.toBe('old');
+    await expect(
+      readSessionDeckDesktopInstallState(getSessionDeckDesktopStatePath(home)),
+    ).resolves.toEqual(oldState);
+  });
+
+  it('preserves local quarantine and does not invent it when absent', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pi-session-deck-desktop-install-'));
+    const home = join(root, 'home');
+    const sourceApp = join(root, 'Session Deck Desktop.app');
+    await createFakeApp(sourceApp, '0.0.0', 'local');
+    const localValue = '0081;6798f6c0;Safari;ABCDEFAB-1234-5678-9ABC-DEF012345678';
+    const quarantine = createQuarantineExecFile({
+      quarantine: new Map([[resolve(sourceApp), localValue]]),
+    });
+
+    const preservedResult = await installSessionDeckDesktop({
+      execFile: quarantine.execFile,
+      fromPath: sourceApp,
+      homeDirectory: home,
+      platform: 'darwin',
+      renamePath: (oldPath, newPath) =>
+        renameWithQuarantine(quarantine.quarantine, oldPath, newPath),
+      runtimePaths: runtimePaths(root),
+    });
+
+    const targetAppPath = getDefaultSessionDeckDesktopAppPath(home);
+    expect(preservedResult.level).toBe('info');
+    expect(quarantine.quarantine.get(targetAppPath)).toBe(localValue);
+    expect(
+      quarantine.calls
+        .filter((call) => call.file === '/usr/bin/xattr' && call.args[0] === '-w')
+        .map((call) => call.args[2]),
+    ).toEqual([localValue]);
+
+    const noQuarantineSource = join(root, 'No Quarantine.app');
+    const noQuarantineHome = join(root, 'no-quarantine-home');
+    await createFakeApp(noQuarantineSource, '0.0.0', 'local-no-quarantine');
+    const noQuarantine = createQuarantineExecFile({});
+    const noQuarantineResult = await installSessionDeckDesktop({
+      execFile: noQuarantine.execFile,
+      fromPath: noQuarantineSource,
+      homeDirectory: noQuarantineHome,
+      platform: 'darwin',
+      runtimePaths: runtimePaths(root),
+    });
+
+    expect(noQuarantineResult.level).toBe('info');
+    expect(noQuarantine.quarantine.has(getDefaultSessionDeckDesktopAppPath(noQuarantineHome))).toBe(
+      false,
+    );
+    expect(
+      noQuarantine.calls.filter((call) => call.file === '/usr/bin/xattr' && call.args[0] === '-w'),
+    ).toHaveLength(0);
+  });
+
+  it('preserves quarantine from local ZIP and DMG sources', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pi-session-deck-desktop-install-'));
+    const localValue = '0081;6798f6c0;Browser;ABCDEFAB-1234-5678-9ABC-DEF012345678';
+
+    const zipPath = join(root, 'Session Deck Desktop.zip');
+    const zipHome = join(root, 'zip-home');
+    await writeFile(zipPath, 'zip bytes');
+    const zipQuarantine = createQuarantineExecFile({
+      quarantine: new Map([[resolve(zipPath), localValue]]),
+      marker: 'zip',
+      version: '0.0.0',
+    });
+    const zipResult = await installSessionDeckDesktop({
+      execFile: zipQuarantine.execFile,
+      fromPath: zipPath,
+      homeDirectory: zipHome,
+      platform: 'darwin',
+      renamePath: (oldPath, newPath) =>
+        renameWithQuarantine(zipQuarantine.quarantine, oldPath, newPath),
+      runtimePaths: runtimePaths(root),
+    });
+
+    const dmgPath = join(root, 'Session Deck Desktop.dmg');
+    const dmgHome = join(root, 'dmg-home');
+    await writeFile(dmgPath, 'dmg bytes');
+    const dmgQuarantine = createQuarantineExecFile({
+      quarantine: new Map([[resolve(dmgPath), localValue]]),
+      marker: 'dmg',
+      version: '0.0.0',
+    });
+    const dmgExecFile: SessionDeckDesktopExecFile = (file, args, callback) => {
+      if (file !== '/usr/bin/hdiutil') {
+        dmgQuarantine.execFile(file, args, callback);
+        return;
+      }
+      if (args[0] === 'attach') {
+        void createFakeApp(join(args[4]!, 'Session Deck Desktop.app'), '0.0.0', 'dmg').then(
+          () => callback(null),
+          (error: unknown) => callback(error as Error),
+        );
+        return;
+      }
+      callback(null);
+    };
+    const dmgResult = await installSessionDeckDesktop({
+      execFile: dmgExecFile,
+      fromPath: dmgPath,
+      homeDirectory: dmgHome,
+      platform: 'darwin',
+      renamePath: (oldPath, newPath) =>
+        renameWithQuarantine(dmgQuarantine.quarantine, oldPath, newPath),
+      runtimePaths: runtimePaths(root),
+    });
+
+    expect(zipResult.level).toBe('info');
+    expect(dmgResult.level).toBe('info');
+    expect(zipQuarantine.quarantine.get(getDefaultSessionDeckDesktopAppPath(zipHome))).toBe(
+      localValue,
+    );
+    expect(dmgQuarantine.quarantine.get(getDefaultSessionDeckDesktopAppPath(dmgHome))).toBe(
+      localValue,
+    );
+  });
+
+  it('fails a local quarantine read instead of hiding an unrelated xattr error', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pi-session-deck-desktop-install-'));
+    const home = join(root, 'home');
+    const sourceApp = join(root, 'Session Deck Desktop.app');
+    await createFakeApp(sourceApp, '0.0.0', 'local');
+    const quarantine = createQuarantineExecFile({
+      readValue: () => {
+        throw new Error('xattr helper failed unexpectedly');
+      },
+    });
+
+    const result = await installSessionDeckDesktop({
+      execFile: quarantine.execFile,
+      fromPath: sourceApp,
+      homeDirectory: home,
+      platform: 'darwin',
+      runtimePaths: runtimePaths(root),
+    });
+
+    expect(result).toMatchObject({ level: 'error' });
+    expect(result.message).toContain('xattr helper failed unexpectedly');
   });
 
   it('fails local checksum verification without writing app or state', async () => {
@@ -405,10 +753,14 @@ describe('session-deck desktop install', () => {
       const home = join(root, 'home');
       const archive = Buffer.from(`release archive ${arch}`);
       const release = createReleaseFetch({ arch, archive });
+      const quarantine = createQuarantineExecFile({
+        marker: `release-${arch}`,
+        version: RELEASE_VERSION,
+      });
 
       const result = await installSessionDeckDesktop({
         arch,
-        execFile: createDittoExtractor(RELEASE_VERSION, `release-${arch}`),
+        execFile: quarantine.execFile,
         fetch: release.fetch,
         homeDirectory: home,
         now: () => NOW,
