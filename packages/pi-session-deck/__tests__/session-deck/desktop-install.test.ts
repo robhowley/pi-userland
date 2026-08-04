@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
-  installSessionDeckDesktop,
+  installSessionDeckDesktop as installSessionDeckDesktopProduction,
   type SessionDeckDesktopExecFile,
 } from '../../extensions/session-deck/desktop/install.js';
 import type { SessionDeckDesktopFetch } from '../../extensions/session-deck/desktop/artifact.js';
@@ -191,6 +191,15 @@ function createQuarantineExecFile(options: {
   };
 
   return { calls, execFile, quarantine };
+}
+
+function installSessionDeckDesktop(
+  options: Parameters<typeof installSessionDeckDesktopProduction>[0] = {},
+): ReturnType<typeof installSessionDeckDesktopProduction> {
+  return installSessionDeckDesktopProduction({
+    execFile: createQuarantineExecFile({}).execFile,
+    ...options,
+  });
 }
 
 const SESSION_DECK_QUARANTINE_ATTRIBUTE = 'com.apple.quarantine';
