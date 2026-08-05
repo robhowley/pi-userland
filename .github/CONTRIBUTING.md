@@ -13,7 +13,6 @@ All PR titles must follow conventional commits with a **package scope**:
 | Scope                  | Meaning                                                          |
 | ---------------------- | ---------------------------------------------------------------- |
 | `[pi-package-name]`    | Changes to `packages/[pi-package-name]`                          |
-| `session-deck-desktop` | Changes to `apps/session-deck-desktop`                           |
 | `root`                 | Root-level changes (CI, workflows, configs, shared tooling)      |
 | _omit scope_           | Changes affecting all packages equally                           |
 

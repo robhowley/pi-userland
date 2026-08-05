@@ -1,8 +1,0 @@
-{
-  "schemaVersion": 1,
-  "snapshotHelperRelativePath": "dist/extensions/session-deck/iterm2/snapshot-cli.js",
-  "openActionHelperRelativePath": "dist/extensions/session-deck/iterm2/open-action-cli.js",
-  "killActionHelperRelativePath": "dist/extensions/session-deck/iterm2/kill-action-cli.js",
-  "worktreeActionHelperRelativePath": "dist/extensions/session-deck/worktree/action-cli.js",
-  "webRootRelativePath": "extensions/session-deck/iterm2/web"
-}

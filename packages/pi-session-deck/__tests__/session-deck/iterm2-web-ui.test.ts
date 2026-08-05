@@ -4234,7 +4234,7 @@ describe('Session Deck iTerm2 web UI', () => {
     let snapshotCount = 0;
     const timeout = Object.assign(
       new Error(
-        'The desktop helper timed out before Session Deck could confirm whether the action completed.',
+        'The action helper timed out before Session Deck could confirm whether the action completed.',
       ),
       { outcomeUnknown: true },
     );
