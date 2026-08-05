@@ -1,6 +1,6 @@
 {
   "name": "@robhowley/pi-session-deck",
-  "version": "0.14.1",
+  "version": "1.0.0",
   "type": "module",
   "description": "The full Pi session lifecycle in one place: create and organize sessions across repos and worktrees, see what each agent is doing or waiting on, and reopen or end them from a TUI or iTerm2 Toolbelt.",
   "files": [

@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0](https://github.com/robhowley/pi-userland/compare/pi-session-deck-v0.14.1...pi-session-deck-v1.0.0) (2026-08-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **pi-session-deck:** retire desktop app ([#162](https://github.com/robhowley/pi-userland/issues/162))
+
+### Miscellaneous Chores
+
+* **pi-session-deck:** retire desktop app ([#162](https://github.com/robhowley/pi-userland/issues/162)) ([d0e637d](https://github.com/robhowley/pi-userland/commit/d0e637d20d2e0d58aeaaf2199bf59aaed2eaa380))
+
 ## [0.14.1](https://github.com/robhowley/pi-userland/compare/pi-session-deck-v0.14.0...pi-session-deck-v0.14.1) (2026-08-04)
 
 
