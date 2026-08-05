@@ -1139,10 +1139,7 @@ export async function runMergeReadyWatchLoop(
 
       attemptedSignatures.add(signature);
       const repairSummary = `${classification.repairItems.map((openItem) => openItem.id).join(', ')} repair queued`;
-      setMergeReadyWatchStatus(
-        options.ctx,
-        `Repair queued ${formatStatusSubject(status)} · ${classification.repairItems.map((openItem) => openItem.id).join(', ')}`,
-      );
+      setMergeReadyWatchStatus(options.ctx, `🟠 ${formatStatusSubject(status)} Repairing…`);
       publishStatus?.({ lifecycle: 'repairing', status, summary: repairSummary });
       options.ctx.ui.notify(
         `Queued repair for ${formatStatusTargetLabel(status)} for ${classification.repairItems.map((openItem) => openItem.id).join(', ')}.`,

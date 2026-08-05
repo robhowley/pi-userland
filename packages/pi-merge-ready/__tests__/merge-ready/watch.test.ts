@@ -1524,8 +1524,24 @@ describe('merge-ready watch loop', () => {
     await flushMicrotasks();
 
     expect(checkDirtyWorkingTree).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(ctx.ui.setStatus!)).toHaveBeenLastCalledWith(
+      MERGE_READY_WATCH_STATUS_KEY,
+      '🟠 #42 Repairing…',
+    );
     expect(sendUserMessage).toHaveBeenCalledTimes(1);
     expect(sendUserMessage).toHaveBeenCalledWith(expect.any(String), { deliverAs: 'followUp' });
+    const repairingStatusCallIndex = vi
+      .mocked(ctx.ui.setStatus!)
+      .mock.calls.findIndex(
+        ([key, value]) => key === MERGE_READY_WATCH_STATUS_KEY && value === '🟠 #42 Repairing…',
+      );
+    expect(repairingStatusCallIndex).toBeGreaterThanOrEqual(0);
+    expect(
+      vi.mocked(ctx.ui.setStatus!).mock.invocationCallOrder[repairingStatusCallIndex],
+    ).toBeGreaterThan(checkDirtyWorkingTree.mock.invocationCallOrder[0] ?? 0);
+    expect(
+      vi.mocked(ctx.ui.setStatus!).mock.invocationCallOrder[repairingStatusCallIndex],
+    ).toBeLessThan(sendUserMessage.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY);
     expect(checkDirtyWorkingTree.mock.invocationCallOrder[0]).toBeLessThan(
       sendUserMessage.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
@@ -1544,11 +1560,7 @@ describe('merge-ready watch loop', () => {
     expect(sleep).toHaveBeenCalledTimes(1);
     expect(sleep).toHaveBeenCalledWith(30_000, expect.any(AbortSignal));
     expect(onSettled).not.toHaveBeenCalled();
-    expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(
-      MERGE_READY_WATCH_STATUS_KEY,
-      expect.stringContaining('Repair queued #42 · ci_failing'),
-    );
-    expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(
+    expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenLastCalledWith(
       MERGE_READY_WATCH_STATUS_KEY,
       expect.stringContaining('Watching #42 · Checks are still running'),
     );
@@ -2222,7 +2234,7 @@ describe('merge-ready watch loop', () => {
     );
     expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(
       MERGE_READY_WATCH_STATUS_KEY,
-      expect.stringContaining('Repair queued #64 · ci_failing'),
+      '🟠 #64 Repairing…',
     );
     expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(
       MERGE_READY_WATCH_STATUS_KEY,
