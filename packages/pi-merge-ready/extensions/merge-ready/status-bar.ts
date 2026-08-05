@@ -242,6 +242,10 @@ export function syncMergeReadyStatusBar(
   };
 }
 
+export function getMergeReadyStatusBarLabel(badgeId: MergeReadyBadgeId): string {
+  return BADGE_TEXT_BY_ID[badgeId];
+}
+
 export function renderMergeReadyStatusBar(status: MergeReadyStatus): string {
   const badgeId = selectMergeReadyBadgeId(status);
   const specialCase = renderStatusBarSpecialCase(status, badgeId);
@@ -280,10 +284,13 @@ function renderStatusBarSpecialCase(
 function renderStatusBarText(status: MergeReadyStatus, badgeId: MergeReadyBadgeId): string {
   const topOpenItemId = status.openItems[0]?.id;
   if (topOpenItemId) {
-    return STATUS_BAR_TEXT_OVERRIDE_BY_OPEN_ITEM_ID[topOpenItemId] ?? BADGE_TEXT_BY_ID[badgeId];
+    return (
+      STATUS_BAR_TEXT_OVERRIDE_BY_OPEN_ITEM_ID[topOpenItemId] ??
+      getMergeReadyStatusBarLabel(badgeId)
+    );
   }
 
-  return BADGE_TEXT_BY_ID[badgeId];
+  return getMergeReadyStatusBarLabel(badgeId);
 }
 
 function formatRequiredUnresolvedConversationText(status: MergeReadyStatus): string {

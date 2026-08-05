@@ -9,6 +9,7 @@ import { getMergeReadyStatus } from './merge-ready.js';
 import {
   claimMergeReadyStatusBarOwnership,
   isMergeReadyStatusBarSuspended,
+  getMergeReadyStatusBarLabel,
   refreshMergeReadyStatusBar,
   suspendMergeReadyStatusBar,
   syncMergeReadyStatusBar,
@@ -40,6 +41,12 @@ export const MERGE_READY_WATCH_STOP_SHORTCUT_LABEL = 'Ctrl-Shift-S';
 
 export const MERGE_READY_WATCH_REPAIR_OPEN_ITEM_IDS =
   MERGE_READY_REPAIR_GUIDANCE_IDS satisfies ReadonlyArray<MergeReadyOpenItemId>;
+
+const MERGE_READY_WATCH_REPAIR_REASON_ORDER = [
+  'merge_conflicts',
+  'branch_out_of_date',
+  'ci_failing',
+] as const satisfies ReadonlyArray<MergeReadyWatchRepairOpenItemId>;
 
 export const MERGE_READY_WATCH_WAIT_OPEN_ITEM_IDS = [
   'ci_running',
@@ -1139,7 +1146,10 @@ export async function runMergeReadyWatchLoop(
 
       attemptedSignatures.add(signature);
       const repairSummary = `${classification.repairItems.map((openItem) => openItem.id).join(', ')} repair queued`;
-      setMergeReadyWatchStatus(options.ctx, `🟠 ${formatStatusSubject(status)} Repairing…`);
+      setMergeReadyWatchStatus(
+        options.ctx,
+        `🟠 ${formatStatusSubject(status)} Repairing · ${formatMergeReadyWatchRepairReason(classification.repairItems)}`,
+      );
       publishStatus?.({ lifecycle: 'repairing', status, summary: repairSummary });
       options.ctx.ui.notify(
         `Queued repair for ${formatStatusTargetLabel(status)} for ${classification.repairItems.map((openItem) => openItem.id).join(', ')}.`,
@@ -1656,6 +1666,14 @@ function formatStatusSubject(status: MergeReadyStatus): string {
   }
 
   return status.target.branch ?? 'current branch';
+}
+
+function formatMergeReadyWatchRepairReason(repairItems: ReadonlyArray<MergeReadyOpenItem>): string {
+  const repairItemIds = new Set(repairItems.map((openItem) => openItem.id));
+
+  return MERGE_READY_WATCH_REPAIR_REASON_ORDER.filter((id) => repairItemIds.has(id))
+    .map((id) => getMergeReadyStatusBarLabel(id))
+    .join(', ');
 }
 
 function normalizeMergeReadyWatchSignatureTarget(target: MergeReadyTarget) {

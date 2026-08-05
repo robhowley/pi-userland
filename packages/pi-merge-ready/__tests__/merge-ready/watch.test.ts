@@ -197,6 +197,21 @@ function createCiFailingStatus(): MergeReadyStatus {
   });
 }
 
+function createMultipleRepairableStatus(): MergeReadyStatus {
+  return createMergeReadyStatus({
+    generatedAt: GENERATED_AT,
+    target: CURRENT_BRANCH_TARGET,
+    pr: buildRuntimeOpenPr(),
+    summary: 'Actionable blockers are present',
+    openItems: [
+      { id: 'branch_out_of_date', summary: 'Branch is out of date with base' },
+      { id: 'merge_conflicts', summary: 'Merge conflicts detected' },
+      { id: 'ci_failing', summary: 'Required checks are failing' },
+    ],
+    signals: BASE_SIGNALS,
+  });
+}
+
 function createCiRunningStatus(overrides: Partial<MergeReadyStatus> = {}): MergeReadyStatus {
   return {
     ...createMergeReadyStatus({
@@ -1526,14 +1541,15 @@ describe('merge-ready watch loop', () => {
     expect(checkDirtyWorkingTree).toHaveBeenCalledTimes(1);
     expect(vi.mocked(ctx.ui.setStatus!)).toHaveBeenLastCalledWith(
       MERGE_READY_WATCH_STATUS_KEY,
-      '🟠 #42 Repairing…',
+      '🟠 #42 Repairing · Checks failing',
     );
     expect(sendUserMessage).toHaveBeenCalledTimes(1);
     expect(sendUserMessage).toHaveBeenCalledWith(expect.any(String), { deliverAs: 'followUp' });
     const repairingStatusCallIndex = vi
       .mocked(ctx.ui.setStatus!)
       .mock.calls.findIndex(
-        ([key, value]) => key === MERGE_READY_WATCH_STATUS_KEY && value === '🟠 #42 Repairing…',
+        ([key, value]) =>
+          key === MERGE_READY_WATCH_STATUS_KEY && value === '🟠 #42 Repairing · Checks failing',
       );
     expect(repairingStatusCallIndex).toBeGreaterThanOrEqual(0);
     expect(
@@ -1585,6 +1601,52 @@ describe('merge-ready watch loop', () => {
     expect(prompt).toContain('Do not assume any specific subagent framework.');
     expect(prompt).toContain('ci_failing');
     expect(prompt).toContain('Do not start another watch loop.');
+  });
+
+  it('renders deterministic user-facing reasons for multiple repairable blockers', async () => {
+    const ctx = createWatchContext();
+    const sendUserMessage = vi.fn(
+      async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
+    );
+    const getStatus = createStatusSequence([
+      createMultipleRepairableStatus(),
+      createCiRunningStatus(),
+    ]);
+    const setStatus = vi.mocked(ctx.ui.setStatus!);
+
+    const result = await runMergeReadyWatchLoop({
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
+      api: { sendUserMessage },
+      ctx,
+      intervalSeconds: 30,
+      signal: new AbortController().signal,
+      loadConfig: vi.fn(async () => ({
+        autoCompactRepair: false,
+        cacheTTLSeconds: 60,
+        enableStatusBarDiagnostics: false,
+        repairGuidance: {},
+      })),
+      dependencies: {
+        getStatus,
+        sleep: vi.fn(async () => undefined),
+        syncStatusBar: vi.fn(),
+        checkDirtyWorkingTree: vi.fn(async () => ({ ok: true as const, dirty: false })),
+        waitForAgentEnd: vi.fn(async () => undefined),
+        maxIterations: 1,
+      },
+    });
+
+    expect(result).toMatchObject({ kind: 'stopped', reason: 'max_iterations' });
+    expect(setStatus).toHaveBeenCalledWith(
+      MERGE_READY_WATCH_STATUS_KEY,
+      '🟠 #42 Repairing · Conflicts, Out of date, Checks failing',
+    );
+    const repairFooters = setStatus.mock.calls
+      .filter(([key]) => key === MERGE_READY_WATCH_STATUS_KEY)
+      .map(([, value]) => value)
+      .filter((value): value is string => typeof value === 'string' && value.includes('Repairing'));
+    expect(repairFooters).toEqual(['🟠 #42 Repairing · Conflicts, Out of date, Checks failing']);
+    expect(repairFooters.join('\n')).not.toMatch(/merge_conflicts|branch_out_of_date|ci_failing/u);
   });
 
   it('injects configured guidance only for actionable repair ids in queued prompts', async () => {
@@ -2057,6 +2119,7 @@ describe('merge-ready watch loop', () => {
       vi.resetModules();
       vi.doMock('../../extensions/merge-ready/status-bar.js', () => ({
         claimMergeReadyStatusBarOwnership,
+        getMergeReadyStatusBarLabel: () => 'Checks failing',
         isMergeReadyStatusBarSuspended: () => false,
         refreshMergeReadyStatusBar: vi.fn(),
         suspendMergeReadyStatusBar: vi.fn(() => () => undefined),
@@ -2136,6 +2199,7 @@ describe('merge-ready watch loop', () => {
       vi.resetModules();
       vi.doMock('../../extensions/merge-ready/status-bar.js', () => ({
         claimMergeReadyStatusBarOwnership,
+        getMergeReadyStatusBarLabel: () => 'Checks failing',
         isMergeReadyStatusBarSuspended: () => false,
         refreshMergeReadyStatusBar: vi.fn(),
         suspendMergeReadyStatusBar: vi.fn(() => () => undefined),
@@ -2234,7 +2298,7 @@ describe('merge-ready watch loop', () => {
     );
     expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(
       MERGE_READY_WATCH_STATUS_KEY,
-      '🟠 #64 Repairing…',
+      '🟠 #64 Repairing · Checks failing',
     );
     expect(vi.mocked(ctx.ui.setStatus)).toHaveBeenCalledWith(
       MERGE_READY_WATCH_STATUS_KEY,

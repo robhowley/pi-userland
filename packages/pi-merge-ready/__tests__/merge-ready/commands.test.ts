@@ -1655,7 +1655,7 @@ describe('merge-ready command', () => {
       ).toBe(true);
       expect(ctx.ui.setStatus).toHaveBeenCalledWith(
         MERGE_READY_WATCH_STATUS_KEY,
-        '🟠 #64 Repairing…',
+        '🟠 #64 Repairing · Checks failing',
       );
       expect(vi.mocked(ctx.ui.notify).mock.calls).toContainEqual([
         `Stopping merge-ready watch for ${url}: the same actionable blocker is still present after one attempt.`,
