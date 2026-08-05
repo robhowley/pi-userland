@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/robhowley/pi-userland/compare/pi-merge-ready-v0.12.1...pi-merge-ready-v0.13.0) (2026-08-05)
+
+
+### Features
+
+* **pi-merge-ready:** show repairing status in watch footer ([#164](https://github.com/robhowley/pi-userland/issues/164)) ([bbe9289](https://github.com/robhowley/pi-userland/commit/bbe928991573869a7d6396a77a7452e9411bb84d))
+
 ## [0.12.1](https://github.com/robhowley/pi-userland/compare/pi-merge-ready-v0.12.0...pi-merge-ready-v0.12.1) (2026-07-29)
 
 
