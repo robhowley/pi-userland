@@ -2,10 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
   "packages": {
     "packages/pi-merge-ready": {},
-    "packages/pi-session-deck": {
-      "draft": true,
-      "force-tag-creation": true
-    },
+    "packages/pi-session-deck": {},
     "packages/pi-openrouter": {},
     "packages/pi-session-hygiene": {},
     "packages/pi-spinner-verbs": {},

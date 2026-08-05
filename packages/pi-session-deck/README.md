@@ -2,7 +2,9 @@
 
 **The full Pi session lifecycle in one place.**
 
-Create and organize Pi sessions across repos and worktrees, see what each agent is doing or waiting on, and reopen or end them from a TUI, desktop app, or iTerm2 Toolbelt.
+Create and organize Pi sessions across repos and worktrees, see what each agent is doing or waiting on, and reopen or end them from a TUI or iTerm2 Toolbelt.
+
+> The unsupported Session Deck desktop app has been retired. The `/session-deck desktop ...` commands are no longer available. If you still have the app installed, remove `~/Applications/Session Deck Desktop.app` and, if present, `~/.pi/session-deck/desktop/` manually. The TUI and iTerm2 Toolbelt integrations remain supported.
 
 <img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-session-deck/img/session-deck-iterm2-integrated.png" alt="Session Deck running as an iTerm2 Toolbelt beside an active Pi terminal session" width="1200">
 
@@ -24,15 +26,14 @@ Temporary child runtimes stay folded into their parent session, keeping the deck
 
 <img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-session-deck/img/session-deck-toolbelt-repos.png" alt="Session Deck iTerm2 Toolbelt showing Pi agents organized across betterby-bike and pi-userland repos" width="720">
 
-## One deck, three surfaces
+## One deck, two surfaces
 
 Use Session Deck wherever it fits your workflow:
 
 - **Native Pi TUI** for a fast, keyboard-driven view inside Pi.
-- **Desktop app** for a dedicated, always-available session window.
 - **iTerm2 Toolbelt** for an operational sidebar beside your terminals.
 
-Each surface shows the same underlying sessions and gives you the same path through their lifecycle: launch, monitor, reopen, restart, and end.
+Both surfaces show the same underlying sessions and give you the same path through their lifecycle: launch, monitor, reopen, restart, and end.
 
 ## Launch, reopen, restart, and end
 
@@ -60,16 +61,6 @@ Run inside Pi:
 /session-deck
 ```
 
-### Desktop app
-
-Install the Session Deck desktop app:
-
-```text
-/session-deck desktop install
-```
-
-If macOS blocks first launch, leave the app installed at the initial warning, then use **System Settings → Privacy & Security → Open Anyway**.
-
 ### iTerm2 Toolbelt
 
 Install Session Deck as an iTerm2 Toolbelt:
@@ -92,9 +83,6 @@ Enable the iTerm2 Python API if prompted, fully quit and reopen iTerm2, then ope
 | `/session-deck iterm2 install`           | Install the iTerm2 Toolbelt integration.    |
 | `/session-deck iterm2 doctor`            | Diagnose Toolbelt setup and runtime issues. |
 | `/session-deck iterm2 uninstall`         | Remove the iTerm2 Toolbelt integration.     |
-| `/session-deck desktop install`          | Install the desktop app.                    |
-| `/session-deck desktop doctor`           | Diagnose the desktop app setup and runtime. |
-| `/session-deck desktop uninstall`        | Remove the desktop app.                     |
 
 Flags can be combined.
 
@@ -121,4 +109,4 @@ Session Deck observes operational state, not conversation history.
 - Status chips contain sanitized visible text only.
 - Tool and assistant errors are reduced to compact, safe summaries.
 - Managed restart recipes are private user-only files. They contain only the fixed executable/PATH, agent/session directory intent, cwd, exact tmux target, session binding, and process generation needed to restart safely.
-- JSON output, restart results, the desktop app, and the Toolbelt omit recipes, session-file paths, commands, PATH, raw terminal metadata, and tmux attachment details.
+- JSON output, restart results, and the Toolbelt omit recipes, session-file paths, commands, PATH, raw terminal metadata, and tmux attachment details.

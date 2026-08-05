@@ -13,7 +13,7 @@ Small, focused packages to augment your Pi environment without adding unnecessar
 
 | Package                                                           | Description                                                                                                                                 |
 | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`pi-session-deck`](packages/pi-session-deck/README.md)           | The full Pi session lifecycle in one place: create and organize sessions across repos and worktrees, see what each agent is doing or waiting on, and reopen or end them from a TUI, desktop app, or iTerm2 Toolbelt. |
+| [`pi-session-deck`](packages/pi-session-deck/README.md)           | The full Pi session lifecycle in one place: create and organize sessions across repos and worktrees, see what each agent is doing or waiting on, and reopen or end them from a TUI or iTerm2 Toolbelt. |
 | [`pi-merge-ready`](packages/pi-merge-ready/README.md)             | Pull requests that explain and repair their own blockers. Give your agents the context they need to take your PR all the way to green. |
 | [`pi-openrouter`](packages/pi-openrouter/README.md)               | OpenRouter usage/account overlays, model sync, api key management, and session tagging for Pi.                                              |
 | [`pi-session-hygiene`](packages/pi-session-hygiene/README.md)     | Status bar indicator for session cost, context, and cache rate to track session health                                                      |

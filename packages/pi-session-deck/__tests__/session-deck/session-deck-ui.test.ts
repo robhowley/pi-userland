@@ -597,7 +597,7 @@ function getButtonByText(root: FakeNode, text: string): FakeButtonElement {
 function helperTimeoutError(): Error & { code: string; outcomeUnknown: true } {
   return Object.assign(
     new Error(
-      'The desktop helper timed out before Session Deck could confirm whether the action completed.',
+      'The action helper timed out before Session Deck could confirm whether the action completed.',
     ),
     { code: 'mutating-helper-timeout', outcomeUnknown: true as const },
   );
