@@ -2,11 +2,16 @@ import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { defaultProcessRunner, type ProcessResult, type ProcessRunner } from './process.js';
+
+const WORKTREE_ROOT_ENV = 'PI_CMUX_JUNCTION_WORKTREE_ROOT';
+const DEFAULT_WORKTREE_ROOT = '.pi/cmux-junction-worktrees';
 
 export interface WorktreeOptions {
   runner?: ProcessRunner;
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
   lockRoot?: string;
   timeoutMs?: number;
 }
@@ -42,6 +47,8 @@ export type WorktreeFailureReason =
   | 'path-collision'
   | 'branch-collision'
   | 'git-failed'
+  | 'invalid-worktree-root'
+  | 'worktree-root-failed'
   | 'lock-busy';
 
 export interface WorktreeFailure {
@@ -51,6 +58,34 @@ export interface WorktreeFailure {
 }
 
 export type WorktreePlanResult = WorktreePlan | WorktreeFailure;
+
+export type WorktreeRootResult =
+  | { ok: true; path: string }
+  | { ok: false; reason: 'invalid-worktree-root'; message: string };
+
+export function resolveWorktreeRoot(
+  options: Pick<WorktreeOptions, 'env' | 'homeDir'> = {},
+): WorktreeRootResult {
+  const home = resolve(options.homeDir ?? homedir());
+  const configured = (options.env ?? process.env)[WORKTREE_ROOT_ENV]?.trim() ?? '';
+  if (configured.length === 0) {
+    return { ok: true, path: resolve(home, DEFAULT_WORKTREE_ROOT) };
+  }
+  if (configured === '~') {
+    return { ok: true, path: home };
+  }
+  if (configured.startsWith('~/')) {
+    return { ok: true, path: resolve(home, configured.slice(2)) };
+  }
+  if (configured.startsWith('~') || !isAbsolute(configured)) {
+    return {
+      ok: false,
+      reason: 'invalid-worktree-root',
+      message: `Invalid worktree root: ${configured}. Use an absolute path, ~, or ~/... .`,
+    };
+  }
+  return { ok: true, path: resolve(configured) };
+}
 
 export interface WorktreeSuccess {
   ok: true;
@@ -68,6 +103,11 @@ export async function planWorktree(
   requestedBranch: string,
   options: WorktreeOptions = {},
 ): Promise<WorktreePlanResult> {
+  const root = resolveWorktreeRoot(options);
+  if (!root.ok) {
+    return root;
+  }
+
   const repository = await resolveRepository(cwd, options);
   if (repository === null) {
     return {
@@ -114,7 +154,11 @@ export async function planWorktree(
     };
   }
 
-  const path = resolve(dirname(repository.topLevel), `${repository.repoLabel}-wt-${branchSlug}`);
+  const path = join(
+    root.path,
+    `${repository.repoLabel}--${shortHash(repository.commonGitDir)}`,
+    `${branchSlug}--${shortHash(branch)}`,
+  );
   const worktrees = await listWorktrees(repository.topLevel, options);
   if (worktrees === null) {
     return {
@@ -148,7 +192,7 @@ export async function applyWorktreePlan(
   plan: WorktreePlan,
   options: WorktreeOptions = {},
 ): Promise<WorktreeApplyResult> {
-  const lock = await acquireWorktreeLock(plan.repository.commonGitDir, options.lockRoot);
+  const lock = await acquireWorktreeLock(plan.repository.commonGitDir, options);
   if (!lock.ok) {
     return lock;
   }
@@ -188,6 +232,11 @@ export async function applyWorktreePlan(
         reason: 'git-failed',
         message: 'Expected an existing reusable worktree, but it no longer exists.',
       };
+    }
+
+    const rootFailure = await ensureWorktreeParent(plan.path);
+    if (rootFailure !== null) {
+      return rootFailure;
     }
 
     const result = await git(
@@ -346,6 +395,10 @@ function repositoryLabel(commonGitDir: string): string {
   return slugPathLabel(raw.replace(/\.git$/u, ''), 64) ?? 'repo';
 }
 
+function shortHash(value: string): string {
+  return createHash('sha256').update(value).digest('hex').slice(0, 12);
+}
+
 function inspectWorktrees(
   worktrees: readonly GitWorktreeEntry[],
   path: string,
@@ -367,6 +420,20 @@ function inspectWorktrees(
 
 function isUnmanagedPath(path: string, worktrees: readonly GitWorktreeEntry[]): boolean {
   return existsSync(path) && !worktrees.some((entry) => resolve(entry.path) === path);
+}
+
+async function ensureWorktreeParent(path: string): Promise<WorktreeFailure | null> {
+  try {
+    await mkdir(dirname(path), { recursive: true });
+    return null;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      reason: 'worktree-root-failed',
+      message: `Could not create worktree root: ${detail}`,
+    };
+  }
 }
 
 function stripRefsHeads(branch: string): string {
@@ -413,10 +480,13 @@ function collision(
 
 async function acquireWorktreeLock(
   commonGitDir: string,
-  lockRoot = join(homedir(), '.pi', 'session-deck', 'worktree-locks'),
+  options: WorktreeOptions,
 ): Promise<
   { ok: true; release: () => Promise<void> } | { ok: false; reason: 'lock-busy'; message: string }
 > {
+  const lockRoot =
+    options.lockRoot ??
+    join(resolve(options.homeDir ?? homedir()), '.pi', 'session-deck', 'worktree-locks');
   await mkdir(lockRoot, { recursive: true });
   const hash = createHash('sha256').update(commonGitDir).digest('hex').slice(0, 32);
   const path = join(lockRoot, `${hash}.lock`);

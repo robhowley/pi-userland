@@ -1,13 +1,15 @@
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ProcessRunner } from '../extensions/cmux-junction/process.js';
 import {
   applyWorktreePlan,
   parseWorktreeList,
   planWorktree,
+  resolveWorktreeRoot,
   slugPathLabel,
   type GitWorktreeEntry,
 } from '../extensions/cmux-junction/worktree.js';
@@ -24,6 +26,25 @@ async function tempDir(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'pi-cmux-junction-'));
   tempDirectories.push(directory);
   return directory;
+}
+
+function shortHash(value: string): string {
+  return createHash('sha256').update(value).digest('hex').slice(0, 12);
+}
+
+function expectedWorktreePath(
+  homeDir: string,
+  commonGitDir: string,
+  branch: string,
+  repoLabel: string,
+): string {
+  return join(
+    homeDir,
+    '.pi',
+    'cmux-junction-worktrees',
+    `${repoLabel}--${shortHash(resolve(commonGitDir))}`,
+    `${slugPathLabel(branch, 48)}--${shortHash(branch)}`,
+  );
 }
 
 function mockGit(options: {
@@ -79,6 +100,32 @@ function mockGit(options: {
   };
 }
 
+describe('worktree root', () => {
+  const homeDir = '/tmp/pi-cmux-junction-home';
+
+  it.each([
+    [undefined, join(homeDir, '.pi', 'cmux-junction-worktrees')],
+    ['', join(homeDir, '.pi', 'cmux-junction-worktrees')],
+    ['   ', join(homeDir, '.pi', 'cmux-junction-worktrees')],
+    ['/tmp/worktrees/../central', '/tmp/central'],
+    ['  /tmp/worktrees/../central  ', '/tmp/central'],
+    ['~', homeDir],
+    ['~/worktrees/../central', join(homeDir, 'central')],
+  ])('resolves %j without global environment changes', (value, expected) => {
+    const env = value === undefined ? {} : { PI_CMUX_JUNCTION_WORKTREE_ROOT: value };
+    expect(resolveWorktreeRoot({ env, homeDir })).toEqual({ ok: true, path: expected });
+  });
+
+  it.each(['relative/path', './relative', '~other/path', '~other'])('rejects %j', (value) => {
+    expect(
+      resolveWorktreeRoot({
+        env: { PI_CMUX_JUNCTION_WORKTREE_ROOT: value },
+        homeDir,
+      }),
+    ).toMatchObject({ ok: false, reason: 'invalid-worktree-root' });
+  });
+});
+
 describe('worktree planning and apply', () => {
   it('uses ctx.cwd for repo resolution, common Git dir for repo slug, and branch only for path slug', async () => {
     const root = await tempDir();
@@ -94,12 +141,14 @@ describe('worktree planning and apply', () => {
 
     const plan = await planWorktree(join(topLevel, 'nested'), 'Feature/Keep-Case', {
       runner: mock.runner,
+      env: {},
+      homeDir: root,
     });
 
     expect(plan).toMatchObject({
       ok: true,
       branch: 'Feature/Keep-Case',
-      path: join(dirname(topLevel), 'primary-repo-wt-feature-keep-case'),
+      path: expectedWorktreePath(root, commonGitDir, 'Feature/Keep-Case', 'primary-repo'),
       repository: { topLevel, commonGitDir, repoLabel: 'primary-repo' },
     });
     expect(mock.calls.slice(0, 2)).toEqual([
@@ -121,6 +170,60 @@ describe('worktree planning and apply', () => {
     });
   });
 
+  it('disambiguates repository labels and branch slugs with exact identities', async () => {
+    const root = await tempDir();
+    const topLevelA = join(root, 'one', 'project');
+    const topLevelB = join(root, 'two', 'project');
+    const commonGitDirA = join(topLevelA, '.git');
+    const commonGitDirB = join(topLevelB, '.git');
+    await mkdir(topLevelA, { recursive: true });
+    await mkdir(topLevelB, { recursive: true });
+
+    const mockA = mockGit({
+      topLevel: topLevelA,
+      commonGitDir: commonGitDirA,
+      validRefs: { main: 'sha' },
+    });
+    const mockB = mockGit({
+      topLevel: topLevelB,
+      commonGitDir: commonGitDirB,
+      validRefs: { main: 'sha' },
+    });
+    const options = { env: {}, homeDir: root };
+    const planA = await planWorktree(topLevelA, 'feature/ship-it', {
+      ...options,
+      runner: mockA.runner,
+    });
+    const planB = await planWorktree(topLevelB, 'feature/ship-it', {
+      ...options,
+      runner: mockB.runner,
+    });
+    const branchSlugA = await planWorktree(topLevelA, 'feature/ship-it', {
+      ...options,
+      runner: mockA.runner,
+    });
+    const branchSlugB = await planWorktree(topLevelA, 'feature-ship-it', {
+      ...options,
+      runner: mockA.runner,
+    });
+    if (!planA.ok || !planB.ok || !branchSlugA.ok || !branchSlugB.ok) {
+      throw new Error('Expected all identity plans to succeed.');
+    }
+
+    expect(planA.path).toBe(
+      expectedWorktreePath(root, commonGitDirA, 'feature/ship-it', 'project'),
+    );
+    expect(planB.path).toBe(
+      expectedWorktreePath(root, commonGitDirB, 'feature/ship-it', 'project'),
+    );
+    expect(planA.path).not.toBe(planB.path);
+    expect(branchSlugA.path).toBe(planA.path);
+    expect(branchSlugB.path).toBe(
+      expectedWorktreePath(root, commonGitDirA, 'feature-ship-it', 'project'),
+    );
+    expect(branchSlugA.path).not.toBe(branchSlugB.path);
+  });
+
   it('rejects a branch that Git does not accept before worktree inspection', async () => {
     const root = await tempDir();
     const topLevel = join(root, 'project');
@@ -132,7 +235,7 @@ describe('worktree planning and apply', () => {
     });
 
     await expect(
-      planWorktree(topLevel, 'bad branch', { runner: mock.runner }),
+      planWorktree(topLevel, 'bad branch', { runner: mock.runner, env: {}, homeDir: root }),
     ).resolves.toMatchObject({
       ok: false,
       reason: 'invalid-branch',
@@ -162,13 +265,17 @@ describe('worktree planning and apply', () => {
       },
     });
 
-    const plan = await planWorktree(topLevel, 'feature/exact', { runner: mock.runner });
+    const plan = await planWorktree(topLevel, 'feature/exact', {
+      runner: mock.runner,
+      env: {},
+      homeDir: root,
+    });
     expect(plan).toMatchObject({ ok: true, baseRef: 'origin/main', baseSha: 'main-sha' });
     if (!plan.ok) throw new Error(plan.message);
 
-    await expect(applyWorktreePlan(plan, { runner: mock.runner, lockRoot })).resolves.toMatchObject(
-      { ok: true, status: 'created' },
-    );
+    await expect(
+      applyWorktreePlan(plan, { runner: mock.runner, env: {}, homeDir: root, lockRoot }),
+    ).resolves.toMatchObject({ ok: true, status: 'created' });
     expect(mock.calls).toContainEqual({
       file: 'git',
       args: ['worktree', 'add', '-b', 'feature/exact', plan.path, 'main-sha'],
@@ -188,7 +295,12 @@ describe('worktree planning and apply', () => {
     const root = await tempDir();
     const topLevel = join(root, 'project');
     await mkdir(topLevel);
-    const expectedPath = join(root, 'project-wt-feature-test');
+    const expectedPath = expectedWorktreePath(
+      root,
+      join(topLevel, '.git'),
+      'feature/test',
+      'project',
+    );
     const mock = mockGit({
       topLevel,
       commonGitDir: join(topLevel, '.git'),
@@ -196,36 +308,47 @@ describe('worktree planning and apply', () => {
       worktrees: [{ path: expectedPath, head: 'abc123', branch: 'feature/test' }],
     });
 
-    const plan = await planWorktree(topLevel, 'feature/test', { runner: mock.runner });
+    const plan = await planWorktree(topLevel, 'feature/test', {
+      runner: mock.runner,
+      env: {},
+      homeDir: root,
+    });
     expect(plan).toMatchObject({ ok: true, action: 'reuse', path: expectedPath });
     if (!plan.ok) throw new Error(plan.message);
     await expect(
-      applyWorktreePlan(plan, { runner: mock.runner, lockRoot: join(root, 'locks') }),
-    ).resolves.toMatchObject({
-      ok: true,
-      status: 'reused',
-    });
+      applyWorktreePlan(plan, {
+        runner: mock.runner,
+        env: {},
+        homeDir: root,
+        lockRoot: join(root, 'locks'),
+      }),
+    ).resolves.toMatchObject({ ok: true, status: 'reused' });
     expect(mock.calls.some((call) => call.args[0] === 'worktree' && call.args[1] === 'add')).toBe(
       false,
     );
   });
 
   it.each([
-    ['path-collision', 'other/branch', 'project-wt-feature-test'],
+    ['path-collision', 'other/branch', 'target'],
     ['branch-collision', 'feature/test', 'somewhere-else'],
   ] as const)('rejects %s without mutation', async (reason, existingBranch, directory) => {
     const root = await tempDir();
     const topLevel = join(root, 'project');
     await mkdir(topLevel);
+    const commonGitDir = join(topLevel, '.git');
+    const existingPath =
+      directory === 'target'
+        ? expectedWorktreePath(root, commonGitDir, 'feature/test', 'project')
+        : join(root, directory);
     const mock = mockGit({
       topLevel,
-      commonGitDir: join(topLevel, '.git'),
+      commonGitDir,
       validRefs: { main: 'abc123' },
-      worktrees: [{ path: join(root, directory), head: 'abc123', branch: existingBranch }],
+      worktrees: [{ path: existingPath, head: 'abc123', branch: existingBranch }],
     });
 
     await expect(
-      planWorktree(topLevel, 'feature/test', { runner: mock.runner }),
+      planWorktree(topLevel, 'feature/test', { runner: mock.runner, env: {}, homeDir: root }),
     ).resolves.toMatchObject({
       ok: false,
       reason,
@@ -235,11 +358,103 @@ describe('worktree planning and apply', () => {
     );
   });
 
+  it('keeps a same-branch worktree under an old root as a branch collision', async () => {
+    const root = await tempDir();
+    const topLevel = join(root, 'project');
+    const commonGitDir = join(topLevel, '.git');
+    await mkdir(topLevel);
+    const mock = mockGit({
+      topLevel,
+      commonGitDir,
+      validRefs: { main: 'abc123' },
+      worktrees: [
+        {
+          path: join(root, 'old-root', 'project-wt-feature-test'),
+          head: 'abc123',
+          branch: 'feature/test',
+        },
+      ],
+    });
+
+    await expect(
+      planWorktree(topLevel, 'feature/test', {
+        runner: mock.runner,
+        env: { PI_CMUX_JUNCTION_WORKTREE_ROOT: join(root, 'new-root') },
+        homeDir: root,
+      }),
+    ).resolves.toMatchObject({ ok: false, reason: 'branch-collision' });
+    expect(mock.calls.some((call) => call.args[0] === 'worktree' && call.args[1] === 'add')).toBe(
+      false,
+    );
+  });
+
+  it('creates the missing root and repository container before Git add', async () => {
+    const root = await tempDir();
+    const worktreeRoot = join(root, 'central');
+    const topLevel = join(root, 'project');
+    const commonGitDir = join(topLevel, '.git');
+    const lockRoot = join(root, 'locks');
+    await mkdir(topLevel);
+    const mock = mockGit({ topLevel, commonGitDir, validRefs: { main: 'abc123' } });
+    const rootOptions = {
+      env: { PI_CMUX_JUNCTION_WORKTREE_ROOT: worktreeRoot },
+      homeDir: root,
+    };
+    const plan = await planWorktree(topLevel, 'feature/test', {
+      ...rootOptions,
+      runner: mock.runner,
+    });
+    if (!plan.ok) throw new Error(plan.message);
+    expect(existsSync(worktreeRoot)).toBe(false);
+
+    let parentExistedAtAdd = false;
+    const runner: ProcessRunner = async (file, args, options) => {
+      if (file === 'git' && args[0] === 'worktree' && args[1] === 'add') {
+        parentExistedAtAdd = existsSync(dirname(plan.path));
+      }
+      return await mock.runner(file, args, options);
+    };
+    await expect(
+      applyWorktreePlan(plan, { ...rootOptions, runner, lockRoot }),
+    ).resolves.toMatchObject({ ok: true, status: 'created' });
+    expect(parentExistedAtAdd).toBe(true);
+    expect(existsSync(dirname(plan.path))).toBe(true);
+  });
+
+  it('returns a root-creation failure without running Git add', async () => {
+    const root = await tempDir();
+    const worktreeRoot = join(root, 'blocked-root');
+    const topLevel = join(root, 'project');
+    const commonGitDir = join(topLevel, '.git');
+    const lockRoot = join(root, 'locks');
+    await mkdir(topLevel);
+    await writeFile(worktreeRoot, 'not a directory');
+    const mock = mockGit({ topLevel, commonGitDir, validRefs: { main: 'abc123' } });
+    const rootOptions = {
+      env: { PI_CMUX_JUNCTION_WORKTREE_ROOT: worktreeRoot },
+      homeDir: root,
+    };
+    const plan = await planWorktree(topLevel, 'feature/test', {
+      ...rootOptions,
+      runner: mock.runner,
+    });
+    if (!plan.ok) throw new Error(plan.message);
+
+    await expect(
+      applyWorktreePlan(plan, { ...rootOptions, runner: mock.runner, lockRoot }),
+    ).resolves.toMatchObject({ ok: false, reason: 'worktree-root-failed' });
+    expect(mock.calls.some((call) => call.args[0] === 'worktree' && call.args[1] === 'add')).toBe(
+      false,
+    );
+  });
+
   it('rejects an unmanaged target directory', async () => {
     const root = await tempDir();
     const topLevel = join(root, 'project');
     await mkdir(topLevel);
-    await mkdir(join(root, 'project-wt-feature-test'));
+    await mkdir(expectedWorktreePath(root, join(topLevel, '.git'), 'feature/test', 'project'), {
+      recursive: true,
+    });
     const mock = mockGit({
       topLevel,
       commonGitDir: join(topLevel, '.git'),
@@ -247,7 +462,7 @@ describe('worktree planning and apply', () => {
     });
 
     await expect(
-      planWorktree(topLevel, 'feature/test', { runner: mock.runner }),
+      planWorktree(topLevel, 'feature/test', { runner: mock.runner, env: {}, homeDir: root }),
     ).resolves.toMatchObject({
       ok: false,
       reason: 'path-collision',
@@ -263,12 +478,21 @@ describe('worktree planning and apply', () => {
       commonGitDir: join(topLevel, '.git'),
       validRefs: { main: 'abc123' },
     });
-    const plan = await planWorktree(topLevel, 'feature/test', { runner: mock.runner });
+    const plan = await planWorktree(topLevel, 'feature/test', {
+      runner: mock.runner,
+      env: {},
+      homeDir: root,
+    });
     if (!plan.ok) throw new Error(plan.message);
 
     mock.setWorktrees([{ path: plan.path, head: 'abc123', branch: plan.branch }]);
     await expect(
-      applyWorktreePlan(plan, { runner: mock.runner, lockRoot: join(root, 'locks') }),
+      applyWorktreePlan(plan, {
+        runner: mock.runner,
+        env: {},
+        homeDir: root,
+        lockRoot: join(root, 'locks'),
+      }),
     ).resolves.toMatchObject({ ok: true, status: 'reused' });
     expect(mock.calls.some((call) => call.args[0] === 'worktree' && call.args[1] === 'add')).toBe(
       false,
@@ -282,14 +506,18 @@ describe('worktree planning and apply', () => {
     const lockRoot = join(root, 'locks');
     await mkdir(topLevel);
     const mock = mockGit({ topLevel, commonGitDir, validRefs: { main: 'abc123' } });
-    const plan = await planWorktree(topLevel, 'feature/test', { runner: mock.runner });
+    const plan = await planWorktree(topLevel, 'feature/test', {
+      runner: mock.runner,
+      env: {},
+      homeDir: root,
+    });
     if (!plan.ok) throw new Error(plan.message);
 
     const hash = createHash('sha256').update(commonGitDir).digest('hex').slice(0, 32);
     await mkdir(join(lockRoot, `${hash}.lock`), { recursive: true });
-    await expect(applyWorktreePlan(plan, { runner: mock.runner, lockRoot })).resolves.toMatchObject(
-      { ok: false, reason: 'lock-busy' },
-    );
+    await expect(
+      applyWorktreePlan(plan, { runner: mock.runner, env: {}, homeDir: root, lockRoot }),
+    ).resolves.toMatchObject({ ok: false, reason: 'lock-busy' });
   });
 
   it('parses NUL-delimited worktree porcelain', () => {

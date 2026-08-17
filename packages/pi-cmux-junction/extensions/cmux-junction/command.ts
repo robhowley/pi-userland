@@ -15,6 +15,7 @@ const USAGE = `Usage: /junction ${BRANCH_FLAG} <name>`;
 export interface JunctionCommandOptions {
   runner?: ProcessRunner;
   env?: NodeJS.ProcessEnv;
+  homeDir?: string;
   lockRoot?: string;
   timeoutMs?: number;
   plan?: typeof planWorktree;
@@ -161,6 +162,8 @@ function notifyResult(ctx: ExtensionCommandContext, result: JunctionResult): voi
 function buildWorktreeOptions(options: JunctionCommandOptions): WorktreeOptions {
   return {
     ...(options.runner === undefined ? {} : { runner: options.runner }),
+    ...(options.env === undefined ? {} : { env: options.env }),
+    ...(options.homeDir === undefined ? {} : { homeDir: options.homeDir }),
     ...(options.lockRoot === undefined ? {} : { lockRoot: options.lockRoot }),
     ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
   };

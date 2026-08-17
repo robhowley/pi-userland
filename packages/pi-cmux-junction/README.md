@@ -16,13 +16,19 @@ pi install npm:@robhowley/pi-cmux-junction
 
 The command accepts exactly one `--branch` value. The branch must pass `git check-ref-format --branch`. The exact branch name is used in Git and as the cmux workspace name; only its worktree path segment is cleaned and lowercased.
 
-Junction resolves the repository from Pi's current working directory. It creates a sibling worktree named:
+Junction resolves the repository from Pi's current working directory. Worktrees are placed under `~/.pi/cmux-junction-worktrees/` by default. Set `PI_CMUX_JUNCTION_WORKTREE_ROOT` to replace that root; blank values use the default. The value may be an absolute path, `~`, or `~/...` (tilde expansion is lexical). Relative paths and `~user` forms are rejected.
+
+The generated path is:
 
 ```text
-<repo>-wt-<branch-slug>
+<root>/<repo-slug>--<repo-id>/<branch-slug>--<branch-id>
 ```
 
-The base is pinned to a commit before creation. Junction tries `origin/HEAD`, `origin/main`, `origin/master`, `main`, `master`, then `HEAD`. It reuses a worktree only when both its absolute path and branch match. Existing path or branch collisions fail without mutation.
+`repo-slug` and `branch-slug` are filesystem labels. Each ID is the first 12 lowercase hex characters of SHA-256 over the absolute lexical common Git directory and exact trimmed branch, respectively. Git and cmux always receive the exact branch name.
+
+The base is pinned to a commit before creation. Junction tries `origin/HEAD`, `origin/main`, `origin/master`, `main`, `master`, then `HEAD`. It reuses a worktree only when both its generated absolute path and exact branch match. Existing path or branch collisions fail without mutation.
+
+Changing the root does not move, adopt, copy, or delete existing worktrees. A same-branch worktree under an old root remains a branch collision; restoring the old root enables exact reuse.
 
 Before changing Git, Junction requires:
 

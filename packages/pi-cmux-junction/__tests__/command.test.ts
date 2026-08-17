@@ -5,7 +5,7 @@ import {
   registerJunctionCommand,
   runJunctionCommand,
 } from '../extensions/cmux-junction/command.js';
-import type { WorktreePlan } from '../extensions/cmux-junction/worktree.js';
+import type { WorktreeOptions, WorktreePlan } from '../extensions/cmux-junction/worktree.js';
 import type { ExtensionCommandContext } from '@earendil-works/pi-coding-agent';
 
 const PLAN: WorktreePlan = {
@@ -96,6 +96,38 @@ describe('/junction command', () => {
       }),
     ).resolves.toMatchObject({ ok: true, status: 'created-and-launched' });
     expect(order).toEqual(['plan:/repo/subdirectory', 'preflight', 'apply', 'launch']);
+  });
+
+  it('passes env and homeDir into worktree planning and apply', async () => {
+    const env = {
+      PATH: '/usr/bin',
+      PI_CMUX_JUNCTION_WORKTREE_ROOT: '~/junction-worktrees',
+    };
+    const homeDir = '/tmp/pi-cmux-junction-home';
+    let plannedOptions: WorktreeOptions | undefined;
+    let appliedOptions: WorktreeOptions | undefined;
+    const plan = async (_cwd: string, _branch: string, options: WorktreeOptions = {}) => {
+      plannedOptions = options;
+      return PLAN;
+    };
+    const apply = async (_plan: WorktreePlan, options: WorktreeOptions = {}) => {
+      appliedOptions = options;
+      return WORKTREE;
+    };
+
+    await expect(
+      runJunctionCommand('--branch feature/test', '/repo', {
+        env,
+        homeDir,
+        plan,
+        preflight: async () => ({ ok: true }),
+        apply,
+        launch: async () => ({ ok: true }),
+      }),
+    ).resolves.toMatchObject({ ok: true });
+
+    expect(plannedOptions).toMatchObject({ env, homeDir });
+    expect(appliedOptions).toMatchObject({ env, homeDir });
   });
 
   it('does not apply Git when cmux preflight fails', async () => {
