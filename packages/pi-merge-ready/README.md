@@ -48,6 +48,8 @@ Optional unresolved conversations are not blockers, but they can still appear as
 ✅ #64 Mergeable · 💬 2 comments
 ```
 
+In cmux, pi-merge-ready also shows the current branch status in the workspace sidebar. It is on by default. Set `pi-merge-ready.cmux.enabled` to `false`, then reload Pi to hide it.
+
 ### Slash command
 
 Use `/merge-ready` to inspect the current branch PR:
@@ -139,6 +141,9 @@ Watch behavior and the current-branch status bar cache TTL can be configured in 
     "autoCompactRepair": true,
     "cacheTTLSeconds": 60,
     "enableStatusBarDiagnostics": false,
+    "cmux": {
+      "enabled": true
+    },
     "repairGuidance": {
       "ci_failing": "Start with pnpm --filter @robhowley/pi-merge-ready test -- __tests__/merge-ready/watch.test.ts",
       "merge_conflicts": "Rebase onto main before touching unrelated files."
@@ -152,6 +157,7 @@ Watch behavior and the current-branch status bar cache TTL can be configured in 
 | `autoCompactRepair`          | `true`  | Trigger conversation compaction after successful repair loop completion. Compaction runs before the watch continues polling. Set to `false` to disable.                                                                                                                                                              |
 | `cacheTTLSeconds`            | `60`    | Current-branch status bar cache TTL in seconds. Accepts positive integers only. New values apply on the next fresh ambient status write.                                                                                                                                                                             |
 | `enableStatusBarDiagnostics` | `false` | Opt in to status-bar JSONL diagnostics (`timer_armed`, `timer_fired`, `refresh_result`, `caught_error`). Logs stay off by default until this setting is enabled.                                                                                                                                                     |
+| `cmux.enabled`               | `true`  | Show the current branch status in cmux. Set to `false` to hide it.                                                                                                                                                                                                                                                   |
 | `repairGuidance`             | `{}`    | Map the repairable watch ids `branch_out_of_date`, `merge_conflicts`, and `ci_failing` to trimmed guidance strings. Watch injects only matching actionable ids in the queued repair turn. Current-branch repair turns use global + trusted-project guidance; explicit `--url` repair turns use global guidance only. |
 
 `repairGuidance` keys must be exactly `branch_out_of_date`, `merge_conflicts`, or `ci_failing`. Aliases such as `checks_failing` and other canonical but non-repairable ids such as `review_pending` or `unresolved_conversations` are ignored in v1.
