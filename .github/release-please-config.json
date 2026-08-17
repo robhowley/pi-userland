@@ -1,6 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
   "packages": {
+    "packages/pi-cmux-junction": {},
     "packages/pi-merge-ready": {},
     "packages/pi-session-deck": {},
     "packages/pi-openrouter": {},
