@@ -156,8 +156,7 @@ export async function planWorktree(
 
   const path = join(
     root.path,
-    `${repository.repoLabel}--${shortHash(repository.commonGitDir)}`,
-    `${branchSlug}--${shortHash(branch)}`,
+    `${repository.repoLabel}--${repositoryId(repository.commonGitDir)}-${branchSlug}`,
   );
   const worktrees = await listWorktrees(repository.topLevel, options);
   if (worktrees === null) {
@@ -395,8 +394,8 @@ function repositoryLabel(commonGitDir: string): string {
   return slugPathLabel(raw.replace(/\.git$/u, ''), 64) ?? 'repo';
 }
 
-function shortHash(value: string): string {
-  return createHash('sha256').update(value).digest('hex').slice(0, 12);
+function repositoryId(commonGitDir: string): string {
+  return createHash('sha256').update(commonGitDir).digest('hex').slice(0, 12);
 }
 
 function inspectWorktrees(

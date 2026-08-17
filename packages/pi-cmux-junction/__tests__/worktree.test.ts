@@ -28,8 +28,8 @@ async function tempDir(): Promise<string> {
   return directory;
 }
 
-function shortHash(value: string): string {
-  return createHash('sha256').update(value).digest('hex').slice(0, 12);
+function repositoryId(commonGitDir: string): string {
+  return createHash('sha256').update(resolve(commonGitDir)).digest('hex').slice(0, 12);
 }
 
 function expectedWorktreePath(
@@ -38,12 +38,13 @@ function expectedWorktreePath(
   branch: string,
   repoLabel: string,
 ): string {
+  const branchSlug = slugPathLabel(branch, 48);
+  if (branchSlug === null) throw new Error('Expected a valid branch slug.');
   return join(
     homeDir,
     '.pi',
     'cmux-junction-worktrees',
-    `${repoLabel}--${shortHash(resolve(commonGitDir))}`,
-    `${slugPathLabel(branch, 48)}--${shortHash(branch)}`,
+    `${repoLabel}--${repositoryId(commonGitDir)}-${branchSlug}`,
   );
 }
 
@@ -127,7 +128,7 @@ describe('worktree root', () => {
 });
 
 describe('worktree planning and apply', () => {
-  it('uses ctx.cwd for repo resolution, common Git dir for repo slug, and branch only for path slug', async () => {
+  it('uses ctx.cwd and builds a flat repo-and-branch path', async () => {
     const root = await tempDir();
     const topLevel = join(root, 'Current Checkout');
     const commonGitDir = join(root, 'Primary Repo.git');
@@ -170,7 +171,7 @@ describe('worktree planning and apply', () => {
     });
   });
 
-  it('disambiguates repository labels and branch slugs with exact identities', async () => {
+  it('uses repo IDs for same-label repositories and fails closed on slug collisions', async () => {
     const root = await tempDir();
     const topLevelA = join(root, 'one', 'project');
     const topLevelB = join(root, 'two', 'project');
@@ -198,16 +199,8 @@ describe('worktree planning and apply', () => {
       ...options,
       runner: mockB.runner,
     });
-    const branchSlugA = await planWorktree(topLevelA, 'feature/ship-it', {
-      ...options,
-      runner: mockA.runner,
-    });
-    const branchSlugB = await planWorktree(topLevelA, 'feature-ship-it', {
-      ...options,
-      runner: mockA.runner,
-    });
-    if (!planA.ok || !planB.ok || !branchSlugA.ok || !branchSlugB.ok) {
-      throw new Error('Expected all identity plans to succeed.');
+    if (!planA.ok || !planB.ok) {
+      throw new Error('Expected both repository plans to succeed.');
     }
 
     expect(planA.path).toBe(
@@ -217,11 +210,14 @@ describe('worktree planning and apply', () => {
       expectedWorktreePath(root, commonGitDirB, 'feature/ship-it', 'project'),
     );
     expect(planA.path).not.toBe(planB.path);
-    expect(branchSlugA.path).toBe(planA.path);
-    expect(branchSlugB.path).toBe(
-      expectedWorktreePath(root, commonGitDirA, 'feature-ship-it', 'project'),
-    );
-    expect(branchSlugA.path).not.toBe(branchSlugB.path);
+
+    mockA.setWorktrees([{ path: planA.path, head: 'sha', branch: 'feature/ship-it' }]);
+    await expect(
+      planWorktree(topLevelA, 'feature-ship-it', {
+        ...options,
+        runner: mockA.runner,
+      }),
+    ).resolves.toMatchObject({ ok: false, reason: 'path-collision' });
   });
 
   it('rejects a branch that Git does not accept before worktree inspection', async () => {
@@ -358,7 +354,7 @@ describe('worktree planning and apply', () => {
     );
   });
 
-  it('keeps a same-branch worktree under an old root as a branch collision', async () => {
+  it('keeps a same-branch worktree at an old nested path as a branch collision', async () => {
     const root = await tempDir();
     const topLevel = join(root, 'project');
     const commonGitDir = join(topLevel, '.git');
@@ -369,7 +365,7 @@ describe('worktree planning and apply', () => {
       validRefs: { main: 'abc123' },
       worktrees: [
         {
-          path: join(root, 'old-root', 'project-wt-feature-test'),
+          path: join(root, 'old-root', 'project--old-repo-id', 'feature-test--legacy-segment'),
           head: 'abc123',
           branch: 'feature/test',
         },
@@ -388,7 +384,7 @@ describe('worktree planning and apply', () => {
     );
   });
 
-  it('creates the missing root and repository container before Git add', async () => {
+  it('creates the missing flat-path root before Git add', async () => {
     const root = await tempDir();
     const worktreeRoot = join(root, 'central');
     const topLevel = join(root, 'project');
