@@ -448,9 +448,9 @@ describe('merge-ready status bar', () => {
     try {
       vi.resetModules();
       vi.doMock('../../extensions/merge-ready/merge-ready.js', async () => {
-        const actual = await vi.importActual<typeof import('../../extensions/merge-ready/merge-ready.js')>(
-          '../../extensions/merge-ready/merge-ready.js',
-        );
+        const actual = await vi.importActual<
+          typeof import('../../extensions/merge-ready/merge-ready.js')
+        >('../../extensions/merge-ready/merge-ready.js');
         return {
           ...actual,
           getMergeReadyStatus,
@@ -1804,5 +1804,174 @@ describe('merge-ready status bar', () => {
 
     assertDone();
     expect(ctx.ui?.setStatus).toHaveBeenCalledWith(MERGE_READY_STATUS_BAR_KEY, '❔ No PR');
+  });
+
+  describe('cmux integration', () => {
+    afterEach(() => {
+      vi.doUnmock('../../extensions/merge-ready/cmux-status.js');
+      vi.doUnmock('../../extensions/merge-ready/merge-ready.js');
+      vi.resetModules();
+    });
+
+    it('clears confirmed PR absence and publishes Unknown for ambiguity and errors', async () => {
+      const noPullRequest = createMergeReadyStatus({
+        generatedAt: '2026-08-17T00:00:00.000Z',
+        pr: null,
+      });
+      const ambiguous = createMergeReadyStatus({
+        generatedAt: '2026-08-17T00:00:01.000Z',
+        pr: null,
+        hasPr: true,
+        openItems: [{ id: 'status_ambiguous', summary: 'Unknown' }],
+      });
+      const getMergeReadyStatus = vi
+        .fn()
+        .mockResolvedValueOnce(noPullRequest)
+        .mockResolvedValueOnce(ambiguous)
+        .mockRejectedValueOnce(new Error('ambient fetch failed'));
+      const enqueue = vi.fn();
+      const shutdown = vi.fn(async () => undefined);
+
+      vi.resetModules();
+      vi.doMock('../../extensions/merge-ready/merge-ready.js', async () => ({
+        ...(await vi.importActual('../../extensions/merge-ready/merge-ready.js')),
+        getMergeReadyStatus,
+      }));
+      vi.doMock('../../extensions/merge-ready/cmux-status.js', async () => ({
+        ...(await vi.importActual('../../extensions/merge-ready/cmux-status.js')),
+        createMergeReadyCmuxPublisher: vi.fn(() => ({ enqueue, shutdown })),
+      }));
+
+      const statusBar = await import('../../extensions/merge-ready/status-bar.js');
+      const runtimes = [createMockAPI(), createMockAPI(), createMockAPI()];
+      const tuiContext = Object.assign(createStatusContext(), { mode: 'tui' });
+      for (const runtime of runtimes) {
+        statusBar.registerMergeReadyStatusBar(runtime.api);
+        await runtime.getHandler('session_start')?.({ reason: 'startup' }, tuiContext);
+      }
+
+      expect(enqueue).toHaveBeenNthCalledWith(1, { kind: 'clear' });
+      expect(enqueue).toHaveBeenNthCalledWith(2, { kind: 'set', value: '❔ Unknown' });
+      expect(enqueue).toHaveBeenNthCalledWith(3, { kind: 'set', value: '❔ Unknown' });
+    });
+
+    it('publishes only fresh ownership-approved current-branch applications', async () => {
+      const readyStatus = createMergeReadyStatus({
+        generatedAt: '2026-08-17T00:00:00.000Z',
+        pr: buildOpenPr(),
+        signals: {
+          mergeability: 'mergeable',
+          checks: 'passing',
+          review: 'approved',
+          unresolvedConversations: false,
+          unresolvedConversationRequirement: 'optional',
+        },
+      });
+      const runningStatus = createMergeReadyStatus({
+        generatedAt: '2026-08-17T00:00:01.000Z',
+        pr: buildOpenPr(),
+        signals: {
+          mergeability: 'mergeable',
+          checks: 'running',
+          review: 'approved',
+          unresolvedConversations: false,
+          unresolvedConversationRequirement: 'optional',
+        },
+      });
+      const urlStatus = {
+        ...runningStatus,
+        target: {
+          mode: 'url' as const,
+          url: buildOpenPr().url,
+          owner: 'robhowley',
+          repo: 'pi-userland',
+          prNumber: 42,
+        },
+      };
+      const enqueue = vi.fn();
+      const shutdown = vi.fn(async () => undefined);
+
+      vi.resetModules();
+      vi.doMock('../../extensions/merge-ready/merge-ready.js', async () => ({
+        ...(await vi.importActual('../../extensions/merge-ready/merge-ready.js')),
+        getMergeReadyStatus: vi.fn(async () => readyStatus),
+      }));
+      vi.doMock('../../extensions/merge-ready/cmux-status.js', async () => ({
+        ...(await vi.importActual('../../extensions/merge-ready/cmux-status.js')),
+        createMergeReadyCmuxPublisher: vi.fn(() => ({ enqueue, shutdown })),
+      }));
+
+      const statusBar = await import('../../extensions/merge-ready/status-bar.js');
+      const runtime = createMockAPI();
+      const ctx = { ...createStatusContext(), mode: 'tui' };
+      statusBar.registerMergeReadyStatusBar(runtime.api);
+      await runtime.getHandler('session_start')?.({ reason: 'startup' }, ctx);
+      expect(enqueue).toHaveBeenCalledTimes(1);
+
+      const branchProbe = createFakeExec([
+        createCurrentBranchProbeCall({ timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS }),
+      ]);
+      await statusBar.refreshMergeReadyStatusBar({ exec: branchProbe.exec, ctx, now: 1 });
+      branchProbe.assertDone();
+
+      statusBar.syncMergeReadyStatusBar({ ctx, status: urlStatus });
+      const staleOwnership = statusBar.claimMergeReadyStatusBarOwnership({ ctx });
+      const latestOwnership = statusBar.claimMergeReadyStatusBarOwnership({ ctx });
+      statusBar.syncMergeReadyStatusBar({
+        ctx,
+        status: runningStatus,
+        ownership: staleOwnership,
+      });
+      expect(enqueue).toHaveBeenCalledTimes(1);
+
+      statusBar.syncMergeReadyStatusBar({
+        ctx,
+        status: runningStatus,
+        ownership: latestOwnership,
+      });
+      expect(enqueue).toHaveBeenLastCalledWith({ kind: 'set', value: '⏳ #42 Checks running' });
+      expect(enqueue).toHaveBeenCalledTimes(2);
+    });
+
+    it('detaches ownership before awaiting final shutdown clear', async () => {
+      const readyStatus = createMergeReadyStatus({
+        generatedAt: '2026-08-17T00:00:00.000Z',
+        pr: buildOpenPr(),
+        signals: {
+          mergeability: 'mergeable',
+          checks: 'passing',
+          review: 'approved',
+          unresolvedConversations: false,
+          unresolvedConversationRequirement: 'optional',
+        },
+      });
+      const enqueue = vi.fn();
+
+      vi.resetModules();
+      vi.doMock('../../extensions/merge-ready/merge-ready.js', async () => ({
+        ...(await vi.importActual('../../extensions/merge-ready/merge-ready.js')),
+        getMergeReadyStatus: vi.fn(async () => readyStatus),
+      }));
+      const shutdown = vi.fn(async () => undefined);
+      vi.doMock('../../extensions/merge-ready/cmux-status.js', async () => ({
+        ...(await vi.importActual('../../extensions/merge-ready/cmux-status.js')),
+        createMergeReadyCmuxPublisher: vi.fn(() => ({ enqueue, shutdown })),
+      }));
+
+      const statusBar = await import('../../extensions/merge-ready/status-bar.js');
+      const runtime = createMockAPI();
+      const ctx = { ...createStatusContext(), mode: 'tui' };
+      statusBar.registerMergeReadyStatusBar(runtime.api);
+      await runtime.getHandler('session_start')?.({ reason: 'startup' }, ctx);
+      shutdown.mockImplementation(async () => {
+        statusBar.syncMergeReadyStatusBar({ ctx, status: readyStatus });
+        expect(enqueue).toHaveBeenCalledTimes(1);
+      });
+
+      await runtime.getHandler('session_shutdown')?.({}, ctx);
+
+      expect(shutdown).toHaveBeenCalledOnce();
+      expect(enqueue).toHaveBeenCalledTimes(1);
+    });
   });
 });

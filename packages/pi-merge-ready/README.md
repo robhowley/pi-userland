@@ -48,6 +48,10 @@ Optional unresolved conversations are not blockers, but they can still appear as
 ✅ #64 Mergeable · 💬 2 comments
 ```
 
+In a cmux TUI, the same current-branch text is also published as the workspace status pill `pi-merge-ready`. This requires nonblank `CMUX_WORKSPACE_ID` and `CMUX_SOCKET_PATH`; CI and Pi's RPC, JSON, and print modes remain inert. Nested `TMUX` sessions are allowed. Confirmed PR absence and graceful session shutdown clear the pill. Explicit URL checks, cached repaints, and stale refreshes do not publish.
+
+The integration uses the executable at `CMUX_BUNDLED_CLI_PATH` when available, otherwise `cmux` on `PATH`. Delivery is silent and best effort; a failed state is not retried until the state changes or a new Pi session starts. Multiple Pi sessions in one workspace are last-writer-wins, and abrupt process or machine termination may leave stale status.
+
 ### Slash command
 
 Use `/merge-ready` to inspect the current branch PR:
@@ -139,6 +143,9 @@ Watch behavior and the current-branch status bar cache TTL can be configured in 
     "autoCompactRepair": true,
     "cacheTTLSeconds": 60,
     "enableStatusBarDiagnostics": false,
+    "cmux": {
+      "enabled": true
+    },
     "repairGuidance": {
       "ci_failing": "Start with pnpm --filter @robhowley/pi-merge-ready test -- __tests__/merge-ready/watch.test.ts",
       "merge_conflicts": "Rebase onto main before touching unrelated files."
@@ -152,6 +159,7 @@ Watch behavior and the current-branch status bar cache TTL can be configured in 
 | `autoCompactRepair`          | `true`  | Trigger conversation compaction after successful repair loop completion. Compaction runs before the watch continues polling. Set to `false` to disable.                                                                                                                                                              |
 | `cacheTTLSeconds`            | `60`    | Current-branch status bar cache TTL in seconds. Accepts positive integers only. New values apply on the next fresh ambient status write.                                                                                                                                                                             |
 | `enableStatusBarDiagnostics` | `false` | Opt in to status-bar JSONL diagnostics (`timer_armed`, `timer_fired`, `refresh_result`, `caught_error`). Logs stay off by default until this setting is enabled.                                                                                                                                                     |
+| `cmux.enabled`               | `true`  | Publish current-branch status to an eligible cmux TUI workspace. Set to `false` globally or in a trusted project; changes apply on reload or the next session.                                                                                                                                                       |
 | `repairGuidance`             | `{}`    | Map the repairable watch ids `branch_out_of_date`, `merge_conflicts`, and `ci_failing` to trimmed guidance strings. Watch injects only matching actionable ids in the queued repair turn. Current-branch repair turns use global + trusted-project guidance; explicit `--url` repair turns use global guidance only. |
 
 `repairGuidance` keys must be exactly `branch_out_of_date`, `merge_conflicts`, or `ci_failing`. Aliases such as `checks_failing` and other canonical but non-repairable ids such as `review_pending` or `unresolved_conversations` are ignored in v1.

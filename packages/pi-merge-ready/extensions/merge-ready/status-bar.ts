@@ -2,6 +2,7 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { type MergeReadyCommandAPI } from './commands.js';
+import { createMergeReadyCmuxAction, createMergeReadyCmuxPublisher } from './cmux-status.js';
 import { type MergeReadyConfig, loadMergeReadyConfig } from './config.js';
 import {
   type MergeReadyExec,
@@ -95,6 +96,7 @@ export type MergeReadyStatusBarAmbientOwnership = {
 type MergeReadyStatusBarRuntime = {
   exec: MergeReadyExec | null;
   ctx: MergeReadyStatusBarAmbientSnapshot | null;
+  cmuxPublisher: ReturnType<typeof createMergeReadyCmuxPublisher>;
   timer: ReturnType<typeof setTimeout> | null;
   dueAtMs: number | null;
   generation: number;
@@ -141,18 +143,26 @@ let statusBarSuspensionCount = 0;
 let statusBarRuntime: MergeReadyStatusBarRuntime = createMergeReadyStatusBarRuntime();
 
 export function registerMergeReadyStatusBar(pi: MergeReadyStatusBarAPI): void {
-  pi.on('session_shutdown', () => {
-    invalidateMergeReadyStatusBarRuntime();
+  pi.on('session_shutdown', async () => {
+    const publisher = invalidateMergeReadyStatusBarRuntime();
+    await publisher?.shutdown();
   });
 
   pi.on('session_start', async (_event, ctx) => {
     invalidateMergeReadyStatusBarRuntime();
+    const projectTrusted = ctx.isProjectTrusted?.() ?? false;
+    const mode = resolveMergeReadyStatusBarMode(ctx);
+    statusBarRuntime.cmuxPublisher = createMergeReadyCmuxPublisher({
+      cwd: ctx.cwd,
+      ...(mode === undefined ? {} : { mode }),
+      projectTrusted,
+    });
 
     await refreshMergeReadyStatusBar({
       exec: createStatusBarExec(pi, ctx),
       ctx,
       force: true,
-      projectTrusted: ctx.isProjectTrusted?.() ?? false,
+      projectTrusted,
     });
   });
 
@@ -235,6 +245,7 @@ export function syncMergeReadyStatusBar(
     ttlMs,
     diagnosticsEnabled,
   });
+  statusBarRuntime.cmuxPublisher?.enqueue(createMergeReadyCmuxAction(options.status, text));
 
   return {
     text,
@@ -429,6 +440,7 @@ async function refreshMergeReadyStatusBarInternal(
     ttlMs,
     diagnosticsEnabled,
   });
+  statusBarRuntime.cmuxPublisher?.enqueue(entry.cmuxAction);
 
   return {
     text: entry.text,
@@ -441,7 +453,11 @@ async function loadMergeReadyStatusBarEntry(options: {
   cwd: string;
   timeout: number;
   diagnosticsEnabled: boolean;
-}): Promise<{ text: string; branchIdentity: string | null }> {
+}): Promise<{
+  text: string;
+  branchIdentity: string | null;
+  cmuxAction: ReturnType<typeof createMergeReadyCmuxAction>;
+}> {
   try {
     const status = await getMergeReadyStatus({
       exec: options.exec,
@@ -449,9 +465,11 @@ async function loadMergeReadyStatusBarEntry(options: {
       timeout: options.timeout,
     });
 
+    const text = renderMergeReadyStatusBar(status);
     return {
-      text: renderMergeReadyStatusBar(status),
+      text,
       branchIdentity: resolveAmbientBranchIdentity(status),
+      cmuxAction: createMergeReadyCmuxAction(status, text),
     };
   } catch (error) {
     logMergeReadyStatusBarCaughtError({
@@ -463,6 +481,7 @@ async function loadMergeReadyStatusBarEntry(options: {
     return {
       text: UNKNOWN_STATUS_BAR_TEXT,
       branchIdentity: null,
+      cmuxAction: { kind: 'set', value: UNKNOWN_STATUS_BAR_TEXT },
     };
   }
 }
@@ -560,6 +579,11 @@ function resolveMergeReadyStatusBarRuntimeSettings(options: {
   };
 }
 
+function resolveMergeReadyStatusBarMode(ctx: MergeReadyStatusBarContext): string | undefined {
+  const mode = (ctx as MergeReadyStatusBarContext & { mode?: unknown }).mode;
+  return typeof mode === 'string' ? mode : undefined;
+}
+
 function resolveNowMs(value: number | Date | undefined): number {
   if (typeof value === 'number') {
     return value;
@@ -652,6 +676,7 @@ function createMergeReadyStatusBarRuntime(): MergeReadyStatusBarRuntime {
   return {
     exec: null,
     ctx: null,
+    cmuxPublisher: null,
     timer: null,
     dueAtMs: null,
     generation: 0,
@@ -660,13 +685,16 @@ function createMergeReadyStatusBarRuntime(): MergeReadyStatusBarRuntime {
   };
 }
 
-function invalidateMergeReadyStatusBarRuntime(): void {
+function invalidateMergeReadyStatusBarRuntime(): ReturnType<typeof createMergeReadyCmuxPublisher> {
+  const publisher = statusBarRuntime.cmuxPublisher;
   clearMergeReadyStatusBarTimer();
   statusBarRuntime.exec = null;
   statusBarRuntime.ctx = null;
+  statusBarRuntime.cmuxPublisher = null;
   statusBarRuntime.dueAtMs = null;
   statusBarRuntime.diagnosticsEnabled = false;
   statusBarRuntime.generation += 1;
+  return publisher;
 }
 
 function clearMergeReadyStatusBarTimer(): void {
