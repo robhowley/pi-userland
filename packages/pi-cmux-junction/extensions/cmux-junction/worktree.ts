@@ -154,10 +154,7 @@ export async function planWorktree(
     };
   }
 
-  const path = join(
-    root.path,
-    `${repository.repoLabel}--${repositoryId(repository.commonGitDir)}-${branchSlug}`,
-  );
+  const path = join(root.path, `${repository.repoLabel}-${branchSlug}`);
   const worktrees = await listWorktrees(repository.topLevel, options);
   if (worktrees === null) {
     return {
@@ -270,10 +267,17 @@ export async function resolveRepository(
   }
 
   const absoluteCommonGitDir = resolve(commonGitDir);
+  const resolvedTopLevel = resolve(topLevel);
+  const [originRemote, remoteList] = await Promise.all([
+    safeGitText(resolvedTopLevel, ['remote', 'get-url', 'origin'], options),
+    safeGitText(resolvedTopLevel, ['remote', '-v'], options),
+  ]);
+  const qualifiedRepoName = resolveRemoteRepoIdentity(originRemote, remoteList);
+
   return {
-    topLevel: resolve(topLevel),
+    topLevel: resolvedTopLevel,
     commonGitDir: absoluteCommonGitDir,
-    repoLabel: repositoryLabel(absoluteCommonGitDir),
+    repoLabel: repositoryPathLabel(absoluteCommonGitDir, qualifiedRepoName),
   };
 }
 
@@ -282,8 +286,8 @@ export function slugPathLabel(value: string, limit: number): string | null {
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9._-]+/gu, '-')
-    .replace(/^-+|-+$/gu, '')
-    .slice(0, limit);
+    .slice(0, limit)
+    .replace(/^-+|-+$/gu, '');
   return slug.length === 0 ? null : slug;
 }
 
@@ -377,6 +381,18 @@ async function gitText(
   return text.length === 0 ? null : text;
 }
 
+async function safeGitText(
+  cwd: string,
+  args: readonly string[],
+  options: WorktreeOptions,
+): Promise<string | null> {
+  try {
+    return await gitText(cwd, args, options);
+  } catch {
+    return null;
+  }
+}
+
 async function git(
   cwd: string,
   args: readonly string[],
@@ -388,14 +404,123 @@ async function git(
   });
 }
 
+interface ParsedFetchRemote {
+  name: string;
+  url: string;
+}
+
+function repositoryPathLabel(commonGitDir: string, qualifiedRepoName: string | null): string {
+  const fallback = repositoryLabel(commonGitDir);
+  return slugPathLabel(qualifiedRepoName ?? fallback, 64) ?? fallback;
+}
+
 function repositoryLabel(commonGitDir: string): string {
   const raw =
     basename(commonGitDir) === '.git' ? basename(dirname(commonGitDir)) : basename(commonGitDir);
   return slugPathLabel(raw.replace(/\.git$/u, ''), 64) ?? 'repo';
 }
 
-function repositoryId(commonGitDir: string): string {
-  return createHash('sha256').update(commonGitDir).digest('hex').slice(0, 12);
+function resolveRemoteRepoIdentity(
+  originRemote: string | null,
+  remoteList: string | null,
+): string | null {
+  const originRepo = parseRemoteRepo(originRemote);
+  if (originRepo !== null) {
+    return originRepo;
+  }
+
+  const fallbackRemote = getFirstNonOriginFetchRemote(remoteList);
+  if (fallbackRemote === null) {
+    return null;
+  }
+
+  return parseRemoteRepo(fallbackRemote.url);
+}
+
+function getFirstNonOriginFetchRemote(remoteList: string | null): ParsedFetchRemote | null {
+  if (remoteList === null) {
+    return null;
+  }
+
+  for (const line of remoteList.split(/\r?\n/)) {
+    const match = line.trim().match(/^(\S+)\s+(\S+)\s+\((fetch|push)\)$/);
+    if (match === null) {
+      continue;
+    }
+
+    const name = match[1] ?? null;
+    const url = match[2] ?? null;
+    const direction = match[3] ?? null;
+    if (direction === 'fetch' && name !== null && name !== 'origin' && url !== null) {
+      return { name, url };
+    }
+  }
+
+  return null;
+}
+
+function parseRemoteRepo(remoteUrl: string | null): string | null {
+  if (remoteUrl === null) {
+    return null;
+  }
+
+  const qualifiedRepoName = extractQualifiedRepoName(remoteUrl.trim());
+  if (qualifiedRepoName === null) {
+    return null;
+  }
+
+  const separatorIndex = qualifiedRepoName.lastIndexOf('/');
+  const repoName = separatorIndex === -1 ? null : qualifiedRepoName.slice(separatorIndex + 1);
+  return repoName === null || repoName.length === 0 ? null : qualifiedRepoName;
+}
+
+function extractQualifiedRepoName(remoteUrl: string): string | null {
+  if (remoteUrl.length === 0) {
+    return null;
+  }
+
+  if (remoteUrl.includes('://')) {
+    try {
+      const parsedUrl = new URL(remoteUrl);
+      if (parsedUrl.protocol === 'file:') {
+        return null;
+      }
+
+      return extractQualifiedRepoNameFromPath(parsedUrl.pathname);
+    } catch {
+      return null;
+    }
+  }
+
+  const scpLikeMatch = remoteUrl.match(/^(?:[^@\s]+@)?[^:/\s]+:(.+)$/);
+  const scpLikePath = scpLikeMatch?.[1] ?? null;
+  return scpLikePath === null ? null : extractQualifiedRepoNameFromPath(scpLikePath);
+}
+
+function extractQualifiedRepoNameFromPath(pathValue: string): string | null {
+  const segments = splitPathSegments(pathValue);
+  if (segments.length < 2) {
+    return null;
+  }
+
+  const owner = segments[segments.length - 2] ?? null;
+  const repoName = stripGitSuffix(segments[segments.length - 1] ?? '');
+  if (owner === null || owner.length === 0 || repoName.length === 0) {
+    return null;
+  }
+
+  return `${owner}/${repoName}`;
+}
+
+function stripGitSuffix(value: string): string {
+  return value.endsWith('.git') ? value.slice(0, -4) : value;
+}
+
+function splitPathSegments(pathValue: string): string[] {
+  return pathValue
+    .replace(/[\\/]+$/u, '')
+    .split(/[\\/]+/)
+    .filter((segment) => segment.length > 0 && segment !== '.');
 }
 
 function inspectWorktrees(

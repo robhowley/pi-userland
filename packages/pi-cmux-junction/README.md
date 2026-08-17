@@ -21,16 +21,26 @@ Junction resolves the repository from Pi's current working directory. Worktrees 
 The generated path is flat:
 
 ```text
-<root>/<repo-slug>--<repo-id>-<branch-slug>
+<root>/<qualified-repo-slug>-<branch-slug>
 ```
 
-For example, repository `pi-userland` and exact branch `f/t` use:
+Junction chooses the repository label from Git remotes in this order:
+
+1. the parseable `origin` URL's `owner/repo`;
+2. the first non-`origin` fetch remote, if its URL is parseable;
+3. the short label derived from the common Git directory.
+
+HTTPS, SSH, and SCP-like Git URLs are supported. File and unparseable remotes use the local fallback and never become fake qualified names. The selected owner/repo is lowercased and cleaned only for the filesystem path; the host, any repository ID, and the exact branch name are not included.
+
+For `origin=https://github.com/robhowley/pi-userland.git` and exact branch `f/t`, the path is:
 
 ```text
-~/.pi/cmux-junction-worktrees/pi-userland--<repo-id>-f-t
+~/.pi/cmux-junction-worktrees/robhowley-pi-userland-f-t
 ```
 
-`repo-slug` and `branch-slug` are filesystem labels. `repo-id` is the first 12 lowercase hex characters of SHA-256 over the absolute lexical common Git directory. Branches do not add an ID. Git and cmux always receive the exact trimmed branch name. Different exact branches that clean to the same `branch-slug` target the same path and fail with a path collision; Junction does not add a disambiguating suffix.
+`qualified-repo-slug` and `branch-slug` are filesystem labels. Git and cmux always receive the exact trimmed branch name. Duplicate qualified names, duplicate local fallback labels, and different exact branches that clean to the same `branch-slug` target the same path and fail with a path collision; Junction does not add a suffix.
+
+Existing hashed, nested, sibling, or other-root worktrees are not moved, adopted, or deleted. A same-branch worktree at an old path remains a branch collision; Junction does not migrate it.
 
 The base is pinned to a commit before creation. Junction tries `origin/HEAD`, `origin/main`, `origin/master`, `main`, `master`, then `HEAD`. It reuses a worktree only when both its generated flat absolute path and exact branch match. Existing path or branch collisions fail without mutation.
 

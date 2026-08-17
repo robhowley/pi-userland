@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ProcessRunner } from '../extensions/cmux-junction/process.js';
 import {
@@ -28,24 +28,10 @@ async function tempDir(): Promise<string> {
   return directory;
 }
 
-function repositoryId(commonGitDir: string): string {
-  return createHash('sha256').update(resolve(commonGitDir)).digest('hex').slice(0, 12);
-}
-
-function expectedWorktreePath(
-  homeDir: string,
-  commonGitDir: string,
-  branch: string,
-  repoLabel: string,
-): string {
+function expectedWorktreePath(homeDir: string, branch: string, repoLabel: string): string {
   const branchSlug = slugPathLabel(branch, 48);
   if (branchSlug === null) throw new Error('Expected a valid branch slug.');
-  return join(
-    homeDir,
-    '.pi',
-    'cmux-junction-worktrees',
-    `${repoLabel}--${repositoryId(commonGitDir)}-${branchSlug}`,
-  );
+  return join(homeDir, '.pi', 'cmux-junction-worktrees', `${repoLabel}-${branchSlug}`);
 }
 
 function mockGit(options: {
@@ -55,6 +41,8 @@ function mockGit(options: {
   validRefs?: Record<string, string>;
   branchValid?: boolean;
   worktrees?: GitWorktreeEntry[];
+  originRemote?: string | null;
+  remoteList?: string | null;
 }) {
   const calls: Array<{ file: string; args: readonly string[]; cwd: string }> = [];
   let worktrees = options.worktrees ?? [];
@@ -68,6 +56,16 @@ function mockGit(options: {
     }
     if (args[0] === 'rev-parse' && args[1] === '--path-format=absolute') {
       return { stdout: `${options.commonGitDir}\n`, stderr: '', exitCode: 0 };
+    }
+    if (args[0] === 'remote' && args[1] === 'get-url' && args[2] === 'origin') {
+      return options.originRemote === undefined || options.originRemote === null
+        ? { stdout: '', stderr: 'origin not configured', exitCode: 1 }
+        : { stdout: `${options.originRemote}\n`, stderr: '', exitCode: 0 };
+    }
+    if (args[0] === 'remote' && args[1] === '-v') {
+      return options.remoteList === undefined || options.remoteList === null
+        ? { stdout: '', stderr: 'no remotes', exitCode: 1 }
+        : { stdout: `${options.remoteList}\n`, stderr: '', exitCode: 0 };
     }
     if (args[0] === 'check-ref-format') {
       return { stdout: '', stderr: '', exitCode: options.branchValid === false ? 1 : 0 };
@@ -138,6 +136,7 @@ describe('worktree planning and apply', () => {
       commonGitDir,
       remoteHead: 'origin/main',
       validRefs: { 'origin/main': 'abc123' },
+      originRemote: 'https://github.com/robhowley/pi-userland.git',
     });
 
     const plan = await planWorktree(join(topLevel, 'nested'), 'Feature/Keep-Case', {
@@ -149,8 +148,8 @@ describe('worktree planning and apply', () => {
     expect(plan).toMatchObject({
       ok: true,
       branch: 'Feature/Keep-Case',
-      path: expectedWorktreePath(root, commonGitDir, 'Feature/Keep-Case', 'primary-repo'),
-      repository: { topLevel, commonGitDir, repoLabel: 'primary-repo' },
+      path: expectedWorktreePath(root, 'Feature/Keep-Case', 'robhowley-pi-userland'),
+      repository: { topLevel, commonGitDir, repoLabel: 'robhowley-pi-userland' },
     });
     expect(mock.calls.slice(0, 2)).toEqual([
       {
@@ -171,7 +170,7 @@ describe('worktree planning and apply', () => {
     });
   });
 
-  it('uses repo IDs for same-label repositories and fails closed on slug collisions', async () => {
+  it('qualifies same-label repositories by remote owner and rejects branch-slug collisions', async () => {
     const root = await tempDir();
     const topLevelA = join(root, 'one', 'project');
     const topLevelB = join(root, 'two', 'project');
@@ -184,11 +183,13 @@ describe('worktree planning and apply', () => {
       topLevel: topLevelA,
       commonGitDir: commonGitDirA,
       validRefs: { main: 'sha' },
+      originRemote: 'https://github.com/owner-a/project.git',
     });
     const mockB = mockGit({
       topLevel: topLevelB,
       commonGitDir: commonGitDirB,
       validRefs: { main: 'sha' },
+      originRemote: 'git@github.com:owner-b/project.git',
     });
     const options = { env: {}, homeDir: root };
     const planA = await planWorktree(topLevelA, 'feature/ship-it', {
@@ -203,12 +204,8 @@ describe('worktree planning and apply', () => {
       throw new Error('Expected both repository plans to succeed.');
     }
 
-    expect(planA.path).toBe(
-      expectedWorktreePath(root, commonGitDirA, 'feature/ship-it', 'project'),
-    );
-    expect(planB.path).toBe(
-      expectedWorktreePath(root, commonGitDirB, 'feature/ship-it', 'project'),
-    );
+    expect(planA.path).toBe(expectedWorktreePath(root, 'feature/ship-it', 'owner-a-project'));
+    expect(planB.path).toBe(expectedWorktreePath(root, 'feature/ship-it', 'owner-b-project'));
     expect(planA.path).not.toBe(planB.path);
 
     mockA.setWorktrees([{ path: planA.path, head: 'sha', branch: 'feature/ship-it' }]);
@@ -217,6 +214,171 @@ describe('worktree planning and apply', () => {
         ...options,
         runner: mockA.runner,
       }),
+    ).resolves.toMatchObject({ ok: false, reason: 'path-collision' });
+  });
+
+  it('uses the exact qualified path for f/t from an SSH URL', async () => {
+    const root = await tempDir();
+    const topLevel = join(root, 'checkout');
+    await mkdir(topLevel);
+    const mock = mockGit({
+      topLevel,
+      commonGitDir: join(topLevel, '.git'),
+      originRemote: 'ssh://git@github.com/robhowley/pi-userland.git',
+      validRefs: { main: 'sha' },
+    });
+
+    const plan = await planWorktree(topLevel, 'f/t', {
+      runner: mock.runner,
+      env: {},
+      homeDir: root,
+    });
+
+    expect(plan).toMatchObject({
+      ok: true,
+      path: join(root, '.pi', 'cmux-junction-worktrees', 'robhowley-pi-userland-f-t'),
+      repository: { repoLabel: 'robhowley-pi-userland' },
+    });
+  });
+
+  it('falls back when the first non-origin fetch remote is unparseable', async () => {
+    const root = await tempDir();
+    const topLevel = join(root, 'checkout');
+    const commonGitDir = join(root, 'local-label.git');
+    await mkdir(topLevel);
+    const mock = mockGit({
+      topLevel,
+      commonGitDir,
+      originRemote: 'file:///srv/git/local.git',
+      remoteList:
+        'origin\tfile:///srv/git/local.git (fetch)\n' +
+        'mirror\tfile:///srv/git/mirror.git (fetch)\n' +
+        'upstream\tgit@github.com:Owner/Repo.git (fetch)\n',
+      validRefs: { main: 'sha' },
+    });
+
+    const plan = await planWorktree(topLevel, 'f/t', {
+      runner: mock.runner,
+      env: {},
+      homeDir: root,
+    });
+
+    expect(plan).toMatchObject({
+      ok: true,
+      path: join(root, '.pi', 'cmux-junction-worktrees', 'local-label-f-t'),
+      repository: { repoLabel: 'local-label' },
+    });
+  });
+
+  it('trims a truncated qualified repo label before adding the branch separator', async () => {
+    const root = await tempDir();
+    const topLevel = join(root, 'checkout');
+    const owner = 'o'.repeat(63);
+    await mkdir(topLevel);
+    const mock = mockGit({
+      topLevel,
+      commonGitDir: join(topLevel, '.git'),
+      originRemote: `https://github.com/${owner}/repo.git`,
+      validRefs: { main: 'sha' },
+    });
+
+    const plan = await planWorktree(topLevel, 'f/t', {
+      runner: mock.runner,
+      env: {},
+      homeDir: root,
+    });
+
+    if (!plan.ok) throw new Error(plan.message);
+    const pathLabel = basename(plan.path);
+    expect(pathLabel).toBe(`${owner}-f-t`);
+    expect(pathLabel.slice(owner.length, owner.length + 1)).toBe('-');
+    expect(pathLabel).not.toContain('--');
+  });
+
+  it.each([
+    [
+      'unparseable remotes',
+      'file:///srv/git/local-label.git',
+      'mirror\tfile:///srv/git/mirror.git (fetch)',
+    ],
+    ['missing remotes', null, null],
+  ] as const)(
+    'falls back to the common-Git-dir label for %s',
+    async (_case, originRemote, remoteList) => {
+      const root = await tempDir();
+      const topLevel = join(root, 'checkout');
+      const commonGitDir = join(root, 'local-label.git');
+      await mkdir(topLevel);
+      const mock = mockGit({
+        topLevel,
+        commonGitDir,
+        originRemote,
+        remoteList,
+        validRefs: { main: 'sha' },
+      });
+
+      const plan = await planWorktree(topLevel, 'f/t', {
+        runner: mock.runner,
+        env: {},
+        homeDir: root,
+      });
+
+      expect(plan).toMatchObject({
+        ok: true,
+        path: join(root, '.pi', 'cmux-junction-worktrees', 'local-label-f-t'),
+        repository: { repoLabel: 'local-label' },
+      });
+    },
+  );
+
+  it('fails closed when qualified or local labels collide at an existing target', async () => {
+    const root = await tempDir();
+    const topLevelA = join(root, 'one', 'project');
+    const topLevelB = join(root, 'two', 'project');
+    await mkdir(topLevelA, { recursive: true });
+    await mkdir(topLevelB, { recursive: true });
+    const options = { env: {}, homeDir: root };
+
+    const qualifiedA = mockGit({
+      topLevel: topLevelA,
+      commonGitDir: join(topLevelA, '.git'),
+      originRemote: 'https://github.com/owner/project.git',
+      validRefs: { main: 'sha' },
+    });
+    const qualifiedB = mockGit({
+      topLevel: topLevelB,
+      commonGitDir: join(topLevelB, '.git'),
+      originRemote: 'git@github.com:owner/project.git',
+      validRefs: { main: 'sha' },
+    });
+    const qualifiedPlan = await planWorktree(topLevelA, 'f/t', {
+      ...options,
+      runner: qualifiedA.runner,
+    });
+    if (!qualifiedPlan.ok) throw new Error(qualifiedPlan.message);
+    await mkdir(qualifiedPlan.path, { recursive: true });
+    await expect(
+      planWorktree(topLevelB, 'f/t', { ...options, runner: qualifiedB.runner }),
+    ).resolves.toMatchObject({ ok: false, reason: 'path-collision' });
+
+    const localA = mockGit({
+      topLevel: topLevelA,
+      commonGitDir: join(topLevelA, '.git'),
+      validRefs: { main: 'sha' },
+    });
+    const localB = mockGit({
+      topLevel: topLevelB,
+      commonGitDir: join(topLevelB, '.git'),
+      validRefs: { main: 'sha' },
+    });
+    const localPlan = await planWorktree(topLevelA, 'other/branch', {
+      ...options,
+      runner: localA.runner,
+    });
+    if (!localPlan.ok) throw new Error(localPlan.message);
+    await mkdir(localPlan.path, { recursive: true });
+    await expect(
+      planWorktree(topLevelB, 'other/branch', { ...options, runner: localB.runner }),
     ).resolves.toMatchObject({ ok: false, reason: 'path-collision' });
   });
 
@@ -291,12 +453,7 @@ describe('worktree planning and apply', () => {
     const root = await tempDir();
     const topLevel = join(root, 'project');
     await mkdir(topLevel);
-    const expectedPath = expectedWorktreePath(
-      root,
-      join(topLevel, '.git'),
-      'feature/test',
-      'project',
-    );
+    const expectedPath = expectedWorktreePath(root, 'feature/test', 'project');
     const mock = mockGit({
       topLevel,
       commonGitDir: join(topLevel, '.git'),
@@ -334,7 +491,7 @@ describe('worktree planning and apply', () => {
     const commonGitDir = join(topLevel, '.git');
     const existingPath =
       directory === 'target'
-        ? expectedWorktreePath(root, commonGitDir, 'feature/test', 'project')
+        ? expectedWorktreePath(root, 'feature/test', 'project')
         : join(root, directory);
     const mock = mockGit({
       topLevel,
@@ -354,7 +511,7 @@ describe('worktree planning and apply', () => {
     );
   });
 
-  it('keeps a same-branch worktree at an old nested path as a branch collision', async () => {
+  it('keeps a same-branch worktree at an old hashed path as a branch collision', async () => {
     const root = await tempDir();
     const topLevel = join(root, 'project');
     const commonGitDir = join(topLevel, '.git');
@@ -365,7 +522,7 @@ describe('worktree planning and apply', () => {
       validRefs: { main: 'abc123' },
       worktrees: [
         {
-          path: join(root, 'old-root', 'project--old-repo-id', 'feature-test--legacy-segment'),
+          path: join(root, 'old-root', 'project--0123456789ab-feature-test'),
           head: 'abc123',
           branch: 'feature/test',
         },
@@ -448,7 +605,7 @@ describe('worktree planning and apply', () => {
     const root = await tempDir();
     const topLevel = join(root, 'project');
     await mkdir(topLevel);
-    await mkdir(expectedWorktreePath(root, join(topLevel, '.git'), 'feature/test', 'project'), {
+    await mkdir(expectedWorktreePath(root, 'feature/test', 'project'), {
       recursive: true,
     });
     const mock = mockGit({
