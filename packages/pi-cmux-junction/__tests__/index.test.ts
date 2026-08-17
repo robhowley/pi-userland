@@ -26,6 +26,7 @@ describe('pi-cmux-junction', () => {
       'junction',
       expect.objectContaining({
         description: expect.any(String),
+        getArgumentCompletions: expect.any(Function),
         handler: expect.any(Function),
       }),
     );

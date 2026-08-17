@@ -9,7 +9,8 @@ import {
 } from './worktree.js';
 
 export const JUNCTION_COMMAND = 'junction';
-const USAGE = 'Usage: /junction --branch <name>';
+const BRANCH_FLAG = '--branch';
+const USAGE = `Usage: /junction ${BRANCH_FLAG} <name>`;
 
 export interface JunctionCommandOptions {
   runner?: ProcessRunner;
@@ -47,6 +48,7 @@ export function registerJunctionCommand(
 ): void {
   pi.registerCommand(JUNCTION_COMMAND, {
     description: 'Create or reuse a branch worktree and launch Pi in a new cmux workspace',
+    getArgumentCompletions: getJunctionArgumentCompletions,
     handler: async (args, ctx) => {
       const result = await runJunctionCommand(args, ctx.cwd, options);
       notifyResult(ctx, result);
@@ -54,14 +56,29 @@ export function registerJunctionCommand(
   });
 }
 
+export function getJunctionArgumentCompletions(prefix: string) {
+  const trimmedPrefix = prefix.trimStart();
+  if (!BRANCH_FLAG.startsWith(trimmedPrefix)) {
+    return null;
+  }
+
+  return [
+    {
+      value: BRANCH_FLAG,
+      label: BRANCH_FLAG,
+      description: 'Branch to create or reuse',
+    },
+  ];
+}
+
 export function parseJunctionArgs(
   args: string,
 ): { ok: true; branch: string } | { ok: false; message: string } {
   const tokens = args.trim().length === 0 ? [] : args.trim().split(/\s+/u);
-  if (tokens.length === 0 || (tokens.length === 1 && tokens[0] === '--branch')) {
+  if (tokens.length === 0 || (tokens.length === 1 && tokens[0] === BRANCH_FLAG)) {
     return { ok: false, message: `Branch name is required. ${USAGE}` };
   }
-  if (tokens[0] !== '--branch') {
+  if (tokens[0] !== BRANCH_FLAG) {
     return { ok: false, message: `Only --branch <name> is supported. ${USAGE}` };
   }
   if (

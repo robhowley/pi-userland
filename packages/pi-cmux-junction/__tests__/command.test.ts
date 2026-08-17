@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  getJunctionArgumentCompletions,
   parseJunctionArgs,
   registerJunctionCommand,
   runJunctionCommand,
@@ -30,6 +31,19 @@ const WORKTREE = {
 };
 
 describe('/junction command', () => {
+  it('completes the branch flag from partial input', () => {
+    expect(getJunctionArgumentCompletions('--b')).toEqual([
+      {
+        value: '--branch',
+        label: '--branch',
+        description: 'Branch to create or reuse',
+      },
+    ]);
+    expect(getJunctionArgumentCompletions('  --b')).toEqual(getJunctionArgumentCompletions('--b'));
+    expect(getJunctionArgumentCompletions('--branch ')).toBeNull();
+    expect(getJunctionArgumentCompletions('--unknown')).toBeNull();
+  });
+
   it.each([
     '',
     '--branch',
