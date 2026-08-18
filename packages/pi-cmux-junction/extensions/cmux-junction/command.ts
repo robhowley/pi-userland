@@ -1,4 +1,4 @@
-import { constants } from 'node:fs';
+import { constants, createReadStream } from 'node:fs';
 import { access, stat } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
 import type { ExtensionAPI, ExtensionCommandContext } from '@earendil-works/pi-coding-agent';
@@ -293,6 +293,41 @@ export async function captureForkSourceSession(
   } catch {
     return sourceFailure(
       `Fork source session is absent or unreadable: ${absolutePath}; no worktree was created.`,
+    );
+  }
+
+  let firstLine = '';
+  const source = createReadStream(absolutePath, { encoding: 'utf8' });
+  try {
+    for await (const chunk of source) {
+      const newline = chunk.indexOf('\n');
+      firstLine += newline === -1 ? chunk : chunk.slice(0, newline);
+      if (newline !== -1) break;
+    }
+  } catch {
+    return sourceFailure(
+      `Fork source session is absent or unreadable: ${absolutePath}; no worktree was created.`,
+    );
+  } finally {
+    source.destroy();
+  }
+
+  let firstRecord: unknown;
+  try {
+    firstRecord = JSON.parse(firstLine);
+  } catch {
+    return sourceFailure(
+      `Fork source session does not begin with a valid session record: ${absolutePath}; no worktree was created.`,
+    );
+  }
+  if (
+    typeof firstRecord !== 'object' ||
+    firstRecord === null ||
+    !('type' in firstRecord) ||
+    firstRecord.type !== 'session'
+  ) {
+    return sourceFailure(
+      `Fork source session does not begin with a valid session record: ${absolutePath}; no worktree was created.`,
     );
   }
 

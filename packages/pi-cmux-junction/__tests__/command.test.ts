@@ -219,6 +219,38 @@ describe('/junction command', () => {
     expect(plan).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['empty', ''],
+    ['malformed', 'not json\n{"type":"session"}\n'],
+    ['non-session', '{"type":"message"}\n{"type":"session"}\n'],
+  ])('rejects a %s source before any orchestration', async (_case, contents) => {
+    const directory = await mkdtemp(join(tmpdir(), 'pi-cmux-junction-session-'));
+    tempDirectories.push(directory);
+    const sourceSessionFile = join(directory, 'invalid.jsonl');
+    await writeFile(sourceSessionFile, contents);
+
+    const plan = vi.fn(async () => PLAN);
+    const preflight = vi.fn(async () => ({ ok: true as const }));
+    const apply = vi.fn(async () => WORKTREE);
+    const launch = vi.fn(async () => ({ ok: true as const }));
+
+    const result = await runJunctionCommand(
+      'fork --branch feature/test',
+      '/repo',
+      { plan, preflight, apply, launch },
+      {
+        waitForIdle: async () => undefined,
+        sessionManager: { getSessionFile: () => sourceSessionFile },
+      },
+    );
+
+    expect(result).toMatchObject({ ok: false, status: 'source-session-failed' });
+    expect(plan).not.toHaveBeenCalled();
+    expect(preflight).not.toHaveBeenCalled();
+    expect(apply).not.toHaveBeenCalled();
+    expect(launch).not.toHaveBeenCalled();
+  });
+
   it('captures a readable absolute source and passes it as a fork recipe', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'pi-cmux-junction-session-'));
     tempDirectories.push(directory);
@@ -226,8 +258,17 @@ describe('/junction command', () => {
     await writeFile(sourceSessionFile, '{"type":"session"}\n');
 
     const order: string[] = [];
+    let resolveIdle!: () => void;
+    const idle = new Promise<void>((resolve) => {
+      resolveIdle = resolve;
+    });
     const waitForIdle = vi.fn(async () => {
+      await idle;
       order.push('idle');
+    });
+    const getSessionFile = vi.fn(() => {
+      order.push('session');
+      return sourceSessionFile;
     });
     const plan = vi.fn(async () => {
       order.push('plan');
@@ -247,19 +288,27 @@ describe('/junction command', () => {
     });
     const environmentBefore = { ...process.env };
 
-    await expect(
-      runJunctionCommand(
-        'fork --branch feature/test',
-        '/repo',
-        { plan, preflight, apply, launch },
-        {
-          waitForIdle,
-          sessionManager: { getSessionFile: () => sourceSessionFile },
-        },
-      ),
-    ).resolves.toMatchObject({ ok: true, status: 'created-and-launched' });
+    const result = runJunctionCommand(
+      'fork --branch feature/test',
+      '/repo',
+      { plan, preflight, apply, launch },
+      {
+        waitForIdle,
+        sessionManager: { getSessionFile },
+      },
+    );
 
-    expect(order).toEqual(['idle', 'plan', 'preflight', 'apply', 'launch']);
+    expect(waitForIdle).toHaveBeenCalledOnce();
+    expect(getSessionFile).not.toHaveBeenCalled();
+    expect(plan).not.toHaveBeenCalled();
+    expect(preflight).not.toHaveBeenCalled();
+    expect(apply).not.toHaveBeenCalled();
+    expect(launch).not.toHaveBeenCalled();
+
+    resolveIdle();
+    await expect(result).resolves.toMatchObject({ ok: true, status: 'created-and-launched' });
+
+    expect(order).toEqual(['idle', 'session', 'plan', 'preflight', 'apply', 'launch']);
     expect(launch).toHaveBeenCalledWith(PLAN.branch, PLAN.path, expect.any(Object), {
       mode: 'fork',
       sourceSessionFile,
