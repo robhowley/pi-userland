@@ -141,6 +141,48 @@ describe('cmux boundary', () => {
     expect(calls).toEqual([{ file: 'cmux', args, cwd: '/tmp/repo-wt-feature-ship-it' }]);
   });
 
+  it('transports a fork source as one env argv without interpolating it into the command', async () => {
+    const { calls, runner } = successfulRunner();
+    const sourceSessionFile = '/tmp/source;$(touch should-not-run).jsonl';
+    const recipe = { mode: 'fork' as const, sourceSessionFile };
+    const environmentBefore = { ...process.env };
+    const args = buildWorkspaceCreateArgs(
+      'feature/Ship-It',
+      '/tmp/repo-wt-feature-ship-it',
+      recipe,
+    );
+
+    expect(args).toEqual([
+      'workspace',
+      'create',
+      '--name',
+      'feature/Ship-It',
+      '--cwd',
+      '/tmp/repo-wt-feature-ship-it',
+      '--env',
+      `PI_CMUX_JUNCTION_SOURCE_SESSION=${sourceSessionFile}`,
+      '--command',
+      'exec pi --fork "$PI_CMUX_JUNCTION_SOURCE_SESSION"',
+      '--focus',
+      'false',
+    ]);
+    expect(args).not.toContain('--window');
+
+    await expect(
+      launchCmuxWorkspace(
+        'feature/Ship-It',
+        '/tmp/repo-wt-feature-ship-it',
+        {
+          env: CALLER_ENV,
+          runner,
+        },
+        recipe,
+      ),
+    ).resolves.toEqual({ ok: true });
+    expect(calls).toEqual([{ file: 'cmux', args, cwd: '/tmp/repo-wt-feature-ship-it' }]);
+    expect(process.env).toEqual(environmentBefore);
+  });
+
   it.each([
     [{ outcome: 'timeout', timeoutMs: 10_000, signal: 'SIGTERM', stdout: '', stderr: '' } as const],
     [{ outcome: 'signal', signal: 'SIGTERM', stdout: '', stderr: '' } as const],
