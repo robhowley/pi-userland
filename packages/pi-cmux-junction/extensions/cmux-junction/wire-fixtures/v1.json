@@ -46,6 +46,70 @@
       }
     }
   ],
+  "validAcks": [
+    {
+      "name": "snapshot acknowledgement",
+      "messageName": "initial idle snapshot",
+      "message": {
+        "protocol": "pi-junction.lifecycle.v1",
+        "kind": "ack",
+        "workspaceId": "workspace-fixture",
+        "surfaceId": "surface-a",
+        "sessionId": "session-a",
+        "runtimeId": "runtime-a",
+        "pid": 4321,
+        "processStartedAt": 1700000000000,
+        "connectionId": "connection-a",
+        "acceptedGeneration": 1,
+        "acceptedRevision": 0,
+        "acceptedKind": "snapshot"
+      }
+    },
+    {
+      "name": "goodbye acknowledgement",
+      "messageName": "fenced goodbye",
+      "message": {
+        "protocol": "pi-junction.lifecycle.v1",
+        "kind": "ack",
+        "workspaceId": "workspace-fixture",
+        "surfaceId": "surface-a",
+        "sessionId": "session-a",
+        "runtimeId": "runtime-a",
+        "pid": 4321,
+        "processStartedAt": 1700000000000,
+        "connectionId": "connection-a",
+        "acceptedGeneration": 1,
+        "acceptedRevision": 4,
+        "acceptedKind": "goodbye"
+      }
+    }
+  ],
+  "invalidAcks": [
+    {
+      "name": "bare acknowledgement",
+      "message": {
+        "acceptedGeneration": 1,
+        "acceptedRevision": 0
+      }
+    },
+    {
+      "name": "wrong accepted message kind",
+      "message": {
+        "protocol": "pi-junction.lifecycle.v1",
+        "kind": "ack",
+        "workspaceId": "workspace-fixture",
+        "surfaceId": "surface-a",
+        "sessionId": "session-a",
+        "runtimeId": "runtime-a",
+        "pid": 4321,
+        "processStartedAt": 1700000000000,
+        "connectionId": "connection-a",
+        "acceptedGeneration": 1,
+        "acceptedRevision": 0,
+        "acceptedKind": "goodbye"
+      }
+    }
+  ],
   "invalid": [
     {
       "name": "version mismatch",

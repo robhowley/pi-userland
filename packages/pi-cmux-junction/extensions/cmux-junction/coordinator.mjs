@@ -55,6 +55,20 @@ const snapshotFields = [
   'compactionStartedAt',
   'compactionProgressAt',
 ];
+const ackFields = [
+  'protocol',
+  'kind',
+  'workspaceId',
+  'surfaceId',
+  'sessionId',
+  'runtimeId',
+  'pid',
+  'processStartedAt',
+  'connectionId',
+  'acceptedGeneration',
+  'acceptedRevision',
+  'acceptedKind',
+];
 const identityFields = ['workspaceId', 'surfaceId', 'sessionId', 'runtimeId', 'connectionId'];
 const toolNamePattern = /^[A-Za-z0-9][A-Za-z0-9._:+/@-]{0,63}$/u;
 
@@ -124,6 +138,7 @@ export function decodeWireLine(line, target) {
   ) {
     return fail('number');
   }
+  if (value.kind === 'goodbye' && value.ownerGeneration === null) return fail('generation');
   if (value.kind === 'snapshot') {
     if (!states.has(value.state)) return fail('state');
     if (
@@ -159,6 +174,57 @@ export function decodeWireMessage(value, target) {
     return fail('json');
   }
   return decodeWireLine(line, target);
+}
+
+export function createAck(message, acceptedGeneration, acceptedRevision) {
+  return {
+    protocol: PROTOCOL,
+    kind: 'ack',
+    workspaceId: message.workspaceId,
+    surfaceId: message.surfaceId,
+    sessionId: message.sessionId,
+    runtimeId: message.runtimeId,
+    pid: message.pid,
+    processStartedAt: message.processStartedAt,
+    connectionId: message.connectionId,
+    acceptedGeneration,
+    acceptedRevision,
+    acceptedKind: message.kind,
+  };
+}
+
+export function decodeAckLine(line, expected) {
+  if (typeof line !== 'string' || Buffer.byteLength(line, 'utf8') > MAX_FRAME_BYTES) {
+    return fail('size');
+  }
+  if (line.includes('\n') || line.includes('\r') || line.includes('\0')) return fail('control');
+  let value;
+  try {
+    value = JSON.parse(line);
+  } catch {
+    return fail('json');
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return fail('type');
+  if (!exactFields(value, ackFields)) return fail('fields');
+  if (
+    value.protocol !== PROTOCOL ||
+    value.kind !== 'ack' ||
+    value.workspaceId !== expected.workspaceId ||
+    value.surfaceId !== expected.surfaceId ||
+    value.sessionId !== expected.sessionId ||
+    value.runtimeId !== expected.runtimeId ||
+    value.pid !== expected.pid ||
+    value.processStartedAt !== expected.processStartedAt ||
+    value.connectionId !== expected.connectionId ||
+    value.acceptedKind !== expected.kind ||
+    !Number.isSafeInteger(value.acceptedGeneration) ||
+    value.acceptedGeneration <= 0 ||
+    !Number.isSafeInteger(value.acceptedRevision) ||
+    value.acceptedRevision !== expected.revision
+  ) {
+    return fail('ack');
+  }
+  return { ok: true, value };
 }
 
 function ownerStableIdentityMatches(owner, message) {
@@ -566,10 +632,20 @@ export function createCoordinatorCore(options) {
     return await mutate(() => {
       const owner = owners.get(message.surfaceId);
       if (!ownerFenceMatches(owner ?? {}, message) || message.revision <= owner.acceptedRevision) {
-        return { ok: true, removed: false };
+        return {
+          ok: true,
+          removed: false,
+          acceptedGeneration: message.ownerGeneration,
+          acceptedRevision: message.revision,
+        };
       }
       owners.delete(message.surfaceId);
-      return { ok: true, removed: true };
+      return {
+        ok: true,
+        removed: true,
+        acceptedGeneration: message.ownerGeneration,
+        acceptedRevision: message.revision,
+      };
     });
   };
 
@@ -664,6 +740,7 @@ export function createAtomicLedgerStore(path, filesystem = {}) {
       await io.mkdir(directory, { recursive: true, mode: 0o700 });
       await io.chmod(directory, 0o700);
       const handle = await io.open(temporary, 'w', 0o600);
+      await io.chmod(temporary, 0o600);
       try {
         await handle.writeFile(`${JSON.stringify(ledger)}\n`, 'utf8');
         await handle.sync();
@@ -671,6 +748,7 @@ export function createAtomicLedgerStore(path, filesystem = {}) {
         await handle.close();
       }
       await io.rename(temporary, path);
+      await io.chmod(path, 0o600);
       const directoryHandle = await io.open(directory, 'r');
       try {
         await directoryHandle.sync();
@@ -681,22 +759,25 @@ export function createAtomicLedgerStore(path, filesystem = {}) {
   };
 }
 
-function parseRuntimeArgs(argv) {
+export function parseRuntimeArgs(argv) {
+  const expected = new Set(['listen', 'ledger', 'cmux-socket', 'workspace']);
   const values = {};
+  if (argv.length !== expected.size * 2) throw new Error('invalid coordinator arguments');
   for (let index = 0; index < argv.length; index += 2) {
-    const name = argv[index];
+    const option = argv[index];
     const value = argv[index + 1];
-    if (!name?.startsWith('--') || value === undefined)
+    const name = option?.startsWith('--') ? option.slice(2) : '';
+    if (!expected.has(name) || value === undefined || Object.hasOwn(values, name)) {
       throw new Error('invalid coordinator arguments');
-    values[name.slice(2)] = value;
+    }
+    values[name] = value;
   }
-  for (const name of ['listen', 'ledger', 'cmux-socket', 'workspace']) {
-    if (!validIdentity(values[name]) && name === 'workspace')
-      throw new Error('invalid coordinator target');
+  for (const name of expected) {
     if (typeof values[name] !== 'string' || values[name].length === 0) {
       throw new Error('missing coordinator argument');
     }
   }
+  if (!validIdentity(values.workspace)) throw new Error('invalid coordinator target');
   return values;
 }
 
@@ -716,7 +797,7 @@ function runCmux(file, args, env) {
     execFile(
       file,
       args,
-      { env, timeout: 2_000, maxBuffer: 64 * 1024, windowsHide: true },
+      { env, timeout: 2_000, maxBuffer: 64 * 1024, windowsHide: true, shell: false },
       (error) => {
         if (!error) return resolve({ ok: true, outcome: 'delivered' });
         if (error.killed) return resolve({ ok: false, outcome: 'timed-out' });
@@ -801,7 +882,13 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
               ownerGeneration: result.acceptedGeneration,
             };
           }
-          socket.write(`${JSON.stringify(result)}\n`);
+          if (result.ok) {
+            socket.write(
+              `${JSON.stringify(
+                createAck(message, result.acceptedGeneration, result.acceptedRevision),
+              )}\n`,
+            );
+          }
         });
       }
     });

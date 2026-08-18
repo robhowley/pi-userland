@@ -1,26 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import cmuxJunction from '../extensions/cmux-junction/index.js';
 
-import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
+import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 
 describe('pi-cmux-junction', () => {
-  it('registers /junction and keeps the startup notification', () => {
-    let sessionStart: ((event: unknown, ctx: ExtensionContext) => void) | undefined;
+  it('registers /junction and lifecycle hooks without a startup notification', () => {
     const registerCommand = vi.fn();
-    const pi = {
-      registerCommand,
-      on: vi.fn((event, handler) => {
-        if (event === 'session_start') {
-          sessionStart = handler;
-        }
-      }),
-    } as unknown as ExtensionAPI;
-    const notify = vi.fn();
+    const on = vi.fn();
+    const pi = { registerCommand, on } as unknown as ExtensionAPI;
 
     cmuxJunction(pi);
-    sessionStart?.({ reason: 'startup' }, {
-      ui: { notify },
-    } as unknown as ExtensionContext);
 
     expect(registerCommand).toHaveBeenCalledWith(
       'junction',
@@ -30,6 +19,22 @@ describe('pi-cmux-junction', () => {
         handler: expect.any(Function),
       }),
     );
-    expect(notify).toHaveBeenCalledWith('Cmux Junction loaded', 'info');
+    expect(on.mock.calls.map(([event]) => event)).toEqual(
+      expect.arrayContaining([
+        'session_start',
+        'input',
+        'message_end',
+        'turn_start',
+        'tool_execution_start',
+        'tool_execution_update',
+        'tool_execution_end',
+        'turn_end',
+        'session_before_compact',
+        'session_compact',
+        'agent_end',
+        'agent_settled',
+        'session_shutdown',
+      ]),
+    );
   });
 });

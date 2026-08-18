@@ -23,6 +23,26 @@ Use a valid Git branch name. New branches start from the repository's default br
 
 Branch or path conflicts stop the command without changes.
 
+## Junction lifecycle status
+
+In eligible cmux TUI sessions, Junction publishes its own workspace status under the `pi-junction` key. It reports seven labels:
+
+- `Idle`
+- `Thinking`
+- `Tool running` or `Tool running: <name>`
+- `Needs input`
+- `Compacting`
+- `Error`
+- `Unknown`
+
+Lifecycle status activates only in Pi's TUI mode when `CMUX_SOCKET_PATH`, `CMUX_WORKSPACE_ID`, `CMUX_SURFACE_ID`, and the Pi session ID are all present and nonblank. It stays off when `CI` is nonblank. Set `PI_CMUX_JUNCTION_LIFECYCLE_DISABLED=1` to opt out without disabling `/junction`.
+
+Junction owns only `pi-junction`. It does not inspect, write, clear, suppress, or coordinate with the official cmux `pi` status or hook. Either extension can be installed alone, and both can be installed at once as independent pills.
+
+Lifecycle records only the inherited cmux and Pi IDs, a process/runtime identity, protocol counters and timestamps, one of the seven states, and a bounded safe tool name when available. It does not retain prompts, messages, tool arguments or output, raw errors, cwd, titles, branches, TTY data, terminal content, or the cmux socket password.
+
+cmux status keys have no lease or TTL. If the coordinator and all clients crash together, `pi-junction` can remain until a later Junction session reconciles it, it is manually cleared, or cmux resets the workspace. A cmux outage that outlasts the final bounded clear retries has the same residual limit. UI waits opened through Pi's public `select`, `input`, `editor`, and `confirm` methods are observed; core dialogs, custom components, and dialogs opened before lifecycle setup are not.
+
 ## Worktrees
 
 Worktrees live under:

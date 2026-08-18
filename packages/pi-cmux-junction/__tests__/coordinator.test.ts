@@ -9,7 +9,9 @@ import {
   classifyOwner,
   createAtomicLedgerStore,
   createCoordinatorCore,
+  decodeAckLine,
   decodeWireMessage,
+  parseRuntimeArgs,
   probePidStart,
 } from '../extensions/cmux-junction/coordinator.mjs';
 
@@ -104,6 +106,21 @@ describe('lifecycle v1 wire contract', () => {
     }
     for (const fixture of fixtures.invalid) {
       expect(decodeWireMessage(fixture.message, fixtures.target), fixture.name).toMatchObject({
+        ok: false,
+      });
+    }
+
+    for (const fixture of fixtures.validAcks) {
+      const expected = fixtures.valid.find(
+        (candidate: { name: string }) => candidate.name === fixture.messageName,
+      ).message;
+      expect(decodeAckLine(JSON.stringify(fixture.message), expected), fixture.name).toMatchObject({
+        ok: true,
+      });
+    }
+    const expected = fixtures.valid[0].message;
+    for (const fixture of fixtures.invalidAcks) {
+      expect(decodeAckLine(JSON.stringify(fixture.message), expected), fixture.name).toMatchObject({
         ok: false,
       });
     }
@@ -221,6 +238,28 @@ describe('owner liveness', () => {
   });
 });
 
+describe('coordinator runtime boundary', () => {
+  it('accepts the exact client-launched argument contract and rejects additions', () => {
+    const argv = [
+      '--listen',
+      '/tmp/coordinator.sock',
+      '--ledger',
+      '/tmp/ledger.json',
+      '--cmux-socket',
+      target.socketPath,
+      '--workspace',
+      target.workspaceId,
+    ];
+    expect(parseRuntimeArgs(argv)).toEqual({
+      listen: '/tmp/coordinator.sock',
+      ledger: '/tmp/ledger.json',
+      'cmux-socket': target.socketPath,
+      workspace: target.workspaceId,
+    });
+    expect(() => parseRuntimeArgs([...argv, '--extra', 'bad'])).toThrow();
+  });
+});
+
 describe('coordinator ownership and publication', () => {
   it('assigns generations and fences stale snapshots, goodbyes, and EOF callbacks', async () => {
     let now = 1_700_000_001_000;
@@ -250,7 +289,7 @@ describe('coordinator ownership and publication', () => {
     );
     expect(replacement).toMatchObject({ ok: true, acceptedGeneration: 2 });
 
-    expect(await core.goodbye(goodbye(1))).toEqual({ ok: true, removed: false });
+    expect(await core.goodbye(goodbye(1))).toMatchObject({ ok: true, removed: false });
     expect(
       await core.connectionClosed({
         surfaceId: 'surface-a',
