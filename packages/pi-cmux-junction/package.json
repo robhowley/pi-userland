@@ -1,0 +1,46 @@
+{
+  "name": "@robhowley/pi-cmux-junction",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Fork and run parallel Pi sessions in isolated Git worktrees and cmux workspaces, with fast session jumping and safe teardown.",
+  "files": [
+    "extensions",
+    "README.md",
+    "../LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-userland",
+    "cmux",
+    "git-worktree",
+    "agent-orchestrator"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/cmux-junction"
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/robhowley/pi-userland.git",
+    "directory": "packages/pi-cmux-junction"
+  },
+  "homepage": "https://github.com/robhowley/pi-userland/blob/main/packages/pi-cmux-junction/README.md",
+  "scripts": {
+    "lint": "eslint extensions/ __tests__/",
+    "format:check": "prettier --check extensions/ __tests__/",
+    "format:write": "prettier --write extensions/ __tests__/",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run __tests__"
+  },
+  "license": "MIT",
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.17"
+  }
+}
