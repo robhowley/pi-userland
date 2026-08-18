@@ -3,7 +3,13 @@ import { existsSync } from 'node:fs';
 import { mkdir, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
-import { defaultProcessRunner, type ProcessResult, type ProcessRunner } from './process.js';
+import {
+  defaultProcessRunner,
+  processError,
+  processSucceeded,
+  type ProcessResult,
+  type ProcessRunner,
+} from './process.js';
 
 const WORKTREE_ROOT_ENV = 'PI_CMUX_JUNCTION_WORKTREE_ROOT';
 const DEFAULT_WORKTREE_ROOT = '.pi/cmux-junction-worktrees';
@@ -26,11 +32,11 @@ export interface GitWorktreeEntry {
   path: string;
   head: string | null;
   branch: string | null;
+  prunable: string | null;
 }
 
 export interface WorktreePlan {
   ok: true;
-  action: 'create' | 'reuse';
   branch: string;
   path: string;
   baseRef: string;
@@ -49,7 +55,9 @@ export type WorktreeFailureReason =
   | 'git-failed'
   | 'invalid-worktree-root'
   | 'worktree-root-failed'
-  | 'lock-busy';
+  | 'lock-busy'
+  | 'prunable-worktree'
+  | 'git-add-unknown';
 
 export interface WorktreeFailure {
   ok: false;
@@ -123,7 +131,7 @@ export async function planWorktree(
     ['check-ref-format', '--branch', branch],
     options,
   );
-  if (validation.exitCode !== 0) {
+  if (!processSucceeded(validation)) {
     return {
       ok: false,
       reason: 'invalid-branch',
@@ -155,33 +163,7 @@ export async function planWorktree(
   }
 
   const path = join(root.path, `${repository.repoLabel}-${branchSlug}`);
-  const worktrees = await listWorktrees(repository.topLevel, options);
-  if (worktrees === null) {
-    return {
-      ok: false,
-      reason: 'git-failed',
-      message: 'Could not list existing Git worktrees.',
-    };
-  }
-
-  const state = inspectWorktrees(worktrees, path, branch);
-  if (state === 'exact-reuse') {
-    return buildPlan('reuse', repository, branch, path, base, baseSha);
-  }
-  if (state === 'path-collision') {
-    return collision('path-collision', 'An existing worktree already uses the requested path.');
-  }
-  if (state === 'branch-collision') {
-    return collision('branch-collision', 'An existing worktree already uses the requested branch.');
-  }
-  if (isUnmanagedPath(path, worktrees)) {
-    return collision(
-      'path-collision',
-      `Target path already exists and is not a Git worktree: ${path}`,
-    );
-  }
-
-  return buildPlan('create', repository, branch, path, base, baseSha);
+  return buildPlan(repository, branch, path, base, baseSha);
 }
 
 export async function applyWorktreePlan(
@@ -204,6 +186,9 @@ export async function applyWorktreePlan(
     }
 
     const state = inspectWorktrees(worktrees, plan.path, plan.branch);
+    if (state === 'prunable') {
+      return prunableFailure(plan, worktrees);
+    }
     if (state === 'exact-reuse') {
       return toSuccess(plan, 'reused');
     }
@@ -222,14 +207,6 @@ export async function applyWorktreePlan(
         `Target path already exists and is not a Git worktree: ${plan.path}`,
       );
     }
-    if (plan.action === 'reuse') {
-      return {
-        ok: false,
-        reason: 'git-failed',
-        message: 'Expected an existing reusable worktree, but it no longer exists.',
-      };
-    }
-
     const rootFailure = await ensureWorktreeParent(plan.path);
     if (rootFailure !== null) {
       return rootFailure;
@@ -240,12 +217,8 @@ export async function applyWorktreePlan(
       ['worktree', 'add', '-b', plan.branch, plan.path, plan.baseSha],
       options,
     );
-    if (result.exitCode !== 0) {
-      return {
-        ok: false,
-        reason: 'git-failed',
-        message: `Git worktree add failed: ${commandError(result)}`,
-      };
+    if (!processSucceeded(result)) {
+      return await reconcileFailedAdd(plan, result, options);
     }
 
     return toSuccess(plan, 'created');
@@ -311,11 +284,13 @@ export function parseWorktreeList(source: string): GitWorktreeEntry[] {
       if (current !== null) {
         entries.push(current);
       }
-      current = { path: value, head: null, branch: null };
+      current = { path: value, head: null, branch: null, prunable: null };
     } else if (current !== null && key === 'HEAD') {
       current.head = value;
     } else if (current !== null && key === 'branch') {
       current.branch = stripRefsHeads(value);
+    } else if (current !== null && key === 'prunable') {
+      current.prunable = value;
     }
   }
 
@@ -365,7 +340,7 @@ async function listWorktrees(
   options: WorktreeOptions,
 ): Promise<GitWorktreeEntry[] | null> {
   const result = await git(cwd, ['worktree', 'list', '--porcelain', '-z'], options);
-  return result.exitCode === 0 ? parseWorktreeList(result.stdout) : null;
+  return processSucceeded(result) ? parseWorktreeList(result.stdout) : null;
 }
 
 async function gitText(
@@ -374,7 +349,7 @@ async function gitText(
   options: WorktreeOptions,
 ): Promise<string | null> {
   const result = await git(cwd, args, options);
-  if (result.exitCode !== 0) {
+  if (!processSucceeded(result)) {
     return null;
   }
   const text = result.stdout.trim();
@@ -523,13 +498,29 @@ function splitPathSegments(pathValue: string): string[] {
     .filter((segment) => segment.length > 0 && segment !== '.');
 }
 
+type WorktreeState =
+  | 'prunable'
+  | 'exact-reuse'
+  | 'path-collision'
+  | 'branch-collision'
+  | 'available';
+
 function inspectWorktrees(
   worktrees: readonly GitWorktreeEntry[],
   path: string,
   branch: string,
-): 'exact-reuse' | 'path-collision' | 'branch-collision' | 'available' {
+): WorktreeState {
   const existingByPath = worktrees.find((entry) => resolve(entry.path) === path);
   const existingByBranch = worktrees.find((entry) => stripRefsHeads(entry.branch ?? '') === branch);
+  const prunable = worktrees.find(
+    (entry) =>
+      entry.prunable !== null &&
+      entry.prunable !== undefined &&
+      (resolve(entry.path) === path || stripRefsHeads(entry.branch ?? '') === branch),
+  );
+  if (prunable !== undefined) {
+    return 'prunable';
+  }
   if (
     (existingByPath !== undefined && stripRefsHeads(existingByPath.branch ?? '') === branch) ||
     (existingByBranch !== undefined && resolve(existingByBranch.path) === path)
@@ -565,7 +556,6 @@ function stripRefsHeads(branch: string): string {
 }
 
 function buildPlan(
-  action: WorktreePlan['action'],
   repository: ResolvedRepository,
   branch: string,
   path: string,
@@ -574,7 +564,6 @@ function buildPlan(
 ): WorktreePlan {
   return {
     ok: true,
-    action,
     repository,
     branch,
     path,
@@ -634,6 +623,76 @@ async function acquireWorktreeLock(
   };
 }
 
-function commandError(result: ProcessResult): string {
-  return (result.stderr || result.stdout).trim() || `exit ${result.exitCode}`;
+function prunableFailure(
+  plan: WorktreePlan,
+  worktrees: readonly GitWorktreeEntry[],
+): WorktreeFailure {
+  const entry = worktrees.find(
+    (candidate) =>
+      candidate.prunable !== null &&
+      candidate.prunable !== undefined &&
+      (resolve(candidate.path) === plan.path ||
+        stripRefsHeads(candidate.branch ?? '') === plan.branch),
+  );
+  return {
+    ok: false,
+    reason: 'prunable-worktree',
+    message: `A matching Git worktree is marked prunable (${entry?.prunable ?? 'stale metadata'}). Inspect it, then run git worktree repair or git worktree prune manually before retrying. Junction will not clean it automatically. Path: ${plan.path}`,
+  };
+}
+
+async function reconcileFailedAdd(
+  plan: WorktreePlan,
+  result: ProcessResult,
+  options: WorktreeOptions,
+): Promise<WorktreeApplyResult> {
+  const worktrees = await listWorktrees(plan.repository.topLevel, options);
+  if (worktrees === null) {
+    return unknownWorktreeState(
+      plan,
+      `Git worktree add failed (${processError(result)}), and Junction could not relist worktrees.`,
+    );
+  }
+
+  const state = inspectWorktrees(worktrees, plan.path, plan.branch);
+  if (state === 'prunable') {
+    return prunableFailure(plan, worktrees);
+  }
+  if (state === 'exact-reuse') {
+    // The failed command may have completed before reporting failure. Treat the retained exact
+    // worktree as reused because Junction cannot prove this invocation created it.
+    return toSuccess(plan, 'reused');
+  }
+  if (state === 'path-collision') {
+    return collision('path-collision', 'An existing worktree already uses the requested path.');
+  }
+  if (state === 'branch-collision') {
+    return collision('branch-collision', 'An existing worktree already uses the requested branch.');
+  }
+  if (isUnmanagedPath(plan.path, worktrees)) {
+    return collision(
+      'path-collision',
+      `Target path already exists and is not a Git worktree: ${plan.path}`,
+    );
+  }
+  if (result.outcome === 'exit' || result.outcome === 'spawn-failed') {
+    return {
+      ok: false,
+      reason: 'git-failed',
+      message: `Git worktree add failed: ${processError(result)}`,
+    };
+  }
+
+  return unknownWorktreeState(
+    plan,
+    `Git worktree add did not complete cleanly (${processError(result)}), and its effects could not be reconciled.`,
+  );
+}
+
+function unknownWorktreeState(plan: WorktreePlan, detail: string): WorktreeFailure {
+  return {
+    ok: false,
+    reason: 'git-add-unknown',
+    message: `${detail} Inspect git worktree list and the target path before retrying; Junction did not delete or prune anything. Path: ${plan.path}`,
+  };
 }

@@ -38,6 +38,6 @@ robhowley-pi-userland-feature-example
 
 Set `PI_CMUX_JUNCTION_WORKTREE_ROOT` to an absolute path, `~`, or a path under `~/` to use another root.
 
-Each command starts a fresh Pi session, including when reusing a worktree. If cmux fails after creating the worktree, the worktree remains; run the command again to retry.
+Each command starts a fresh Pi session, including when reusing a worktree. If launch fails, the worktree remains. Junction reports when it is safe to retry. If the outcome is uncertain, check cmux before retrying because a workspace may already exist.
 
 Junction does not delete branches or worktrees.

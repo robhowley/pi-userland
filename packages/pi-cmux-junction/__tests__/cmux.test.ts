@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   buildWorkspaceCreateArgs,
   launchCmuxWorkspace,
@@ -11,14 +14,30 @@ const CALLER_ENV = {
   CMUX_WORKSPACE_ID: 'workspace-1',
   CMUX_SURFACE_ID: 'surface-1',
 };
+const tempDirectories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    tempDirectories.splice(0).map((directory) => rm(directory, { force: true, recursive: true })),
+  );
+});
 
 function successfulRunner() {
   const calls: Array<{ file: string; args: readonly string[]; cwd: string }> = [];
   const runner: ProcessRunner = async (file, args, options) => {
     calls.push({ file, args, cwd: options.cwd });
-    return { stdout: '', stderr: '', exitCode: 0 };
+    return { outcome: 'exit', stdout: '', stderr: '', exitCode: 0 };
   };
   return { calls, runner };
+}
+
+async function executableFile(): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-cmux-junction-cmux-'));
+  tempDirectories.push(directory);
+  const path = join(directory, 'cmux');
+  await writeFile(path, '#!/bin/sh\nexit 0\n');
+  await chmod(path, 0o755);
+  return path;
 }
 
 describe('cmux boundary', () => {
@@ -48,8 +67,42 @@ describe('cmux boundary', () => {
     ]);
   });
 
+  it('uses an executable bundled cmux path for both preflight and launch', async () => {
+    const bundled = await executableFile();
+    const { calls, runner } = successfulRunner();
+    const env = { ...CALLER_ENV, CMUX_BUNDLED_CLI_PATH: `  ${bundled}  ` };
+
+    await expect(preflightCmux('/repo', { env, runner })).resolves.toEqual({ ok: true });
+    await expect(
+      launchCmuxWorkspace('feature/test', '/worktree', { env, runner }),
+    ).resolves.toEqual({
+      ok: true,
+    });
+
+    expect(calls.filter((call) => call.args[0] === 'capabilities')[0]?.file).toBe(bundled);
+    expect(calls.find((call) => call.args[0] === 'workspace')?.file).toBe(bundled);
+  });
+
+  it.each(['missing', 'not-executable'] as const)(
+    'falls back to cmux when the bundled path is %s',
+    async (kind) => {
+      const directory = await mkdtemp(join(tmpdir(), 'pi-cmux-junction-cmux-'));
+      tempDirectories.push(directory);
+      const bundled = join(directory, 'cmux');
+      if (kind === 'not-executable') await writeFile(bundled, '#!/bin/sh\nexit 0\n');
+      const { calls, runner } = successfulRunner();
+      const env = { ...CALLER_ENV, CMUX_BUNDLED_CLI_PATH: bundled };
+
+      await preflightCmux('/repo', { env, runner });
+      await launchCmuxWorkspace('feature/test', '/worktree', { env, runner });
+
+      expect(calls.filter((call) => call.file === 'cmux')).toHaveLength(2);
+    },
+  );
+
   it('stops when cmux capability discovery fails', async () => {
     const runner: ProcessRunner = async () => ({
+      outcome: 'exit',
       stdout: '',
       stderr: 'cmux unavailable',
       exitCode: 1,
@@ -85,12 +138,16 @@ describe('cmux boundary', () => {
         runner,
       }),
     ).resolves.toEqual({ ok: true });
-    expect(calls).toEqual([
-      {
-        file: 'cmux',
-        args,
-        cwd: '/tmp/repo-wt-feature-ship-it',
-      },
-    ]);
+    expect(calls).toEqual([{ file: 'cmux', args, cwd: '/tmp/repo-wt-feature-ship-it' }]);
+  });
+
+  it.each([
+    [{ outcome: 'timeout', timeoutMs: 10_000, signal: 'SIGTERM', stdout: '', stderr: '' } as const],
+    [{ outcome: 'signal', signal: 'SIGTERM', stdout: '', stderr: '' } as const],
+  ])('reports timeout or signal launch as unknown', async (processResult) => {
+    const runner: ProcessRunner = async () => processResult;
+    await expect(
+      launchCmuxWorkspace('feature/test', '/worktree', { env: CALLER_ENV, runner }),
+    ).resolves.toMatchObject({ ok: false, reason: 'launch-unknown' });
   });
 });

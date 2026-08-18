@@ -41,6 +41,15 @@ export type JunctionResult =
       path: string;
       worktreeRetained: true;
       message: string;
+    }
+  | {
+      ok: false;
+      status: 'partial-launch-unknown';
+      branch: string;
+      path: string;
+      worktreeRetained: true;
+      retrySafe: false;
+      message: string;
     };
 
 export function registerJunctionCommand(
@@ -126,6 +135,17 @@ export async function runJunctionCommand(
     cmuxOptions,
   );
   if (!launch.ok) {
+    if (launch.reason === 'launch-unknown') {
+      return {
+        ok: false,
+        status: 'partial-launch-unknown',
+        branch: worktree.branch,
+        path: worktree.path,
+        worktreeRetained: true,
+        retrySafe: false,
+        message: `Worktree retained, but cmux launch status is unknown: ${launch.message}\nBranch: ${worktree.branch}\nPath: ${worktree.path}\nThe workspace may exist; inspect cmux before taking further action.`,
+      };
+    }
     const retry = `/junction --branch ${worktree.branch}`;
     return {
       ok: false,

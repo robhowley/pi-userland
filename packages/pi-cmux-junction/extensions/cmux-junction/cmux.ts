@@ -1,4 +1,11 @@
-import { defaultProcessRunner, type ProcessRunner } from './process.js';
+import { constants } from 'node:fs';
+import { access } from 'node:fs/promises';
+import {
+  defaultProcessRunner,
+  processError,
+  processSucceeded,
+  type ProcessRunner,
+} from './process.js';
 
 export interface CmuxOptions {
   runner?: ProcessRunner;
@@ -16,7 +23,7 @@ export type CmuxPreflightResult =
 
 export type CmuxLaunchResult =
   | { ok: true }
-  | { ok: false; reason: 'launch-failed'; message: string };
+  | { ok: false; reason: 'launch-failed' | 'launch-unknown'; message: string };
 
 export async function preflightCmux(
   cwd: string,
@@ -32,17 +39,18 @@ export async function preflightCmux(
     };
   }
 
-  const cmux = await run('cmux', ['capabilities'], cwd, env, options);
-  if (cmux.exitCode !== 0) {
+  const cmuxFile = await resolveCmuxExecutable(env);
+  const cmux = await run(cmuxFile, ['capabilities'], cwd, env, options);
+  if (!processSucceeded(cmux)) {
     return {
       ok: false,
       reason: 'cmux-unavailable',
-      message: `Junction requires an available cmux CLI; no worktree was created. ${commandError(cmux)}`,
+      message: `Junction requires an available cmux CLI; no worktree was created. ${processError(cmux)}`,
     };
   }
 
   const pi = await run('which', ['pi'], cwd, env, options);
-  if (pi.exitCode !== 0) {
+  if (!processSucceeded(pi)) {
     return {
       ok: false,
       reason: 'pi-unavailable',
@@ -73,21 +81,41 @@ export async function launchCmuxWorkspace(
   worktreePath: string,
   options: CmuxOptions = {},
 ): Promise<CmuxLaunchResult> {
+  const env = options.env ?? process.env;
+  const cmuxFile = await resolveCmuxExecutable(env);
   const result = await run(
-    'cmux',
+    cmuxFile,
     buildWorkspaceCreateArgs(branch, worktreePath),
     worktreePath,
-    options.env ?? process.env,
+    env,
     options,
   );
-  if (result.exitCode !== 0) {
+  if (result.outcome === 'timeout' || result.outcome === 'signal') {
+    return {
+      ok: false,
+      reason: 'launch-unknown',
+      message: `${processError(result)}; cmux workspace creation may have completed.`,
+    };
+  }
+  if (!processSucceeded(result)) {
     return {
       ok: false,
       reason: 'launch-failed',
-      message: commandError(result),
+      message: processError(result),
     };
   }
   return { ok: true };
+}
+
+async function resolveCmuxExecutable(env: NodeJS.ProcessEnv): Promise<string> {
+  const bundled = env['CMUX_BUNDLED_CLI_PATH']?.trim();
+  if (bundled === undefined || bundled.length === 0) return 'cmux';
+  try {
+    await access(bundled, constants.X_OK);
+    return bundled;
+  } catch {
+    return 'cmux';
+  }
 }
 
 async function run(
@@ -102,8 +130,4 @@ async function run(
     env,
     ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
   });
-}
-
-function commandError(result: { stdout: string; stderr: string; exitCode: number }): string {
-  return (result.stderr || result.stdout).trim() || `exit ${result.exitCode}`;
 }

@@ -5,12 +5,12 @@ import {
   registerJunctionCommand,
   runJunctionCommand,
 } from '../extensions/cmux-junction/command.js';
+import type { ProcessRunner } from '../extensions/cmux-junction/process.js';
 import type { WorktreeOptions, WorktreePlan } from '../extensions/cmux-junction/worktree.js';
 import type { ExtensionCommandContext } from '@earendil-works/pi-coding-agent';
 
 const PLAN: WorktreePlan = {
   ok: true,
-  action: 'create',
   branch: 'feature/test',
   path: '/tmp/project-wt-feature-test',
   baseRef: 'origin/main',
@@ -169,12 +169,60 @@ describe('/junction command', () => {
     });
   });
 
+  it('maps an ambiguous real cmux launch without retry guidance', async () => {
+    const runner: ProcessRunner = async () => ({
+      outcome: 'timeout',
+      timeoutMs: 10_000,
+      signal: 'SIGTERM',
+      stdout: '',
+      stderr: '',
+    });
+
+    const result = await runJunctionCommand('--branch feature/test', '/repo', {
+      env: {},
+      runner,
+      plan: async () => PLAN,
+      preflight: async () => ({ ok: true }),
+      apply: async () => WORKTREE,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 'partial-launch-unknown',
+      branch: PLAN.branch,
+      path: PLAN.path,
+      worktreeRetained: true,
+      retrySafe: false,
+    });
+    if (result.ok) throw new Error('Expected launch to be unknown.');
+    expect(result.message).toContain('workspace may exist');
+    expect(result.message).toContain(`Path: ${PLAN.path}`);
+    expect(result.message).not.toContain('Retry:');
+  });
+
+  it('does not launch when worktree apply returns an unknown partial state', async () => {
+    const launch = vi.fn();
+    await expect(
+      runJunctionCommand('--branch feature/test', '/repo', {
+        plan: async () => PLAN,
+        preflight: async () => ({ ok: true }),
+        apply: async () => ({
+          ok: false,
+          reason: 'git-add-unknown',
+          message: 'inspect Git state',
+        }),
+        launch,
+      }),
+    ).resolves.toMatchObject({ ok: false, status: 'worktree-failed' });
+    expect(launch).not.toHaveBeenCalled();
+  });
+
   it('launches a new cmux workspace after worktree reuse', async () => {
     const launch = vi.fn(async () => ({ ok: true as const }));
 
     await expect(
       runJunctionCommand('--branch feature/test', '/repo', {
-        plan: async () => ({ ...PLAN, action: 'reuse' }),
+        plan: async () => PLAN,
         preflight: async () => ({ ok: true }),
         apply: async () => ({ ...WORKTREE, status: 'reused' }),
         launch,
