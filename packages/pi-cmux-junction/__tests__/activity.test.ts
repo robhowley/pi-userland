@@ -285,6 +285,27 @@ describe('Junction lifecycle reducer', () => {
     expect(snapshotAt(state, START).state).toBe('thinking');
   });
 
+  it('resets turn-index fencing for each agent run', () => {
+    let state = freshState();
+    state = reduce(state, { type: 'agent_start' }, START + 1).state;
+    state = reduce(state, { type: 'turn_start', turnIndex: 0 }, START + 2).state;
+    state = reduce(state, { type: 'turn_end', turnIndex: 0 }, START + 3).state;
+    state = reduce(state, { type: 'agent_settled', isIdle: true }, START + 4).state;
+
+    state = reduce(state, { type: 'agent_start' }, START + 5).state;
+    expect(state.agentRunEpoch).toBe(2);
+    expect(state.lastTurnIndex).toBeNull();
+    const secondPrompt = reduce(state, { type: 'turn_start', turnIndex: 0 }, START + 6);
+    expect(secondPrompt.accepted).toBe(true);
+
+    state = reduce(secondPrompt.state, { type: 'session_before_compact' }, START + 7).state;
+    state = reduce(state, { type: 'session_compact' }, START + 8).state;
+    state = reduce(state, { type: 'agent_start' }, START + 9).state;
+    const retry = reduce(state, { type: 'turn_start', turnIndex: 0 }, START + 10);
+    expect(retry.accepted).toBe(true);
+    expect(retry.state.agentRunEpoch).toBe(3);
+  });
+
   it('requires an active turn and matching turn index before settling idle', () => {
     let state = freshState();
     state = reduce(state, { type: 'turn_start', turnIndex: 4 }, START + 1).state;

@@ -70,6 +70,7 @@ export interface LifecycleReducerState {
   initialized: boolean;
   closed: boolean;
   eventSeq: number;
+  agentRunEpoch: number;
   activeTurn: { turnIndex: number; startedAt: number } | null;
   lastTurnIndex: number | null;
   settlementRequired: boolean;
@@ -115,6 +116,7 @@ export type LifecycleEvent =
       role: 'user' | 'assistant';
       stopReason?: string;
     })
+  | (TimedLifecycleEvent & { type: 'agent_start' })
   | (TimedLifecycleEvent & {
       type: 'turn_start';
       turnIndex: number;
@@ -204,6 +206,7 @@ export function createLifecycleState(
     initialized,
     closed: false,
     eventSeq: 0,
+    agentRunEpoch: 0,
     activeTurn: null,
     lastTurnIndex: null,
     settlementRequired: false,
@@ -421,6 +424,8 @@ function applyEvent(state: LifecycleReducerState, event: LifecycleEvent, nowMs: 
       return applyInput(state, event.source, eventTime);
     case 'message_end':
       return applyMessageEnd(state, event, eventTime);
+    case 'agent_start':
+      return applyAgentStart(state);
     case 'turn_start':
       return applyTurnStart(state, event.turnIndex, eventTime);
     case 'tool_execution_start':
@@ -531,6 +536,16 @@ function applyMessageEnd(
   }
 
   return acceptedMutation(state, next);
+}
+
+function applyAgentStart(state: LifecycleReducerState): Mutation {
+  return acceptedMutation(state, {
+    agentRunEpoch: state.agentRunEpoch + 1,
+    activeTurn: null,
+    lastTurnIndex: null,
+    activeTools: [],
+    lastToolUpdatePublishedAt: null,
+  });
 }
 
 function applyTurnStart(
@@ -868,6 +883,7 @@ function resetSession(
     sessionId,
     initialized: true,
     closed: false,
+    agentRunEpoch: 0,
     activeTurn: null,
     lastTurnIndex: null,
     settlementRequired: false,

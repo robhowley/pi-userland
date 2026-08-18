@@ -35,7 +35,10 @@ const temporary: string[] = [];
 class MockSocket extends EventEmitter {
   destroyed = false;
   readonly messages: any[] = [];
-  constructor(private readonly acknowledge = true) {
+  constructor(
+    private readonly acknowledge = true,
+    private readonly acceptedGeneration?: number,
+  ) {
     super();
   }
   override once(event: string | symbol, listener: (...args: any[]) => void): this {
@@ -61,7 +64,7 @@ class MockSocket extends EventEmitter {
         pid: message.pid,
         processStartedAt: message.processStartedAt,
         connectionId: message.connectionId,
-        acceptedGeneration: message.ownerGeneration ?? 7,
+        acceptedGeneration: this.acceptedGeneration ?? message.ownerGeneration ?? 7,
         acceptedRevision: message.revision,
         acceptedKind: message.kind,
       };
@@ -213,6 +216,21 @@ describe('lifecycle client wire contract', () => {
       revision: 2,
       state: 'thinking',
     });
+  });
+
+  it('adopts a newly assigned generation after its prior lease was reaped', async () => {
+    const firstSocket = new MockSocket();
+    const reregistered = new MockSocket(true, 8);
+    const sockets = [firstSocket, reregistered];
+    const value = client({ connect: () => sockets.shift() as any });
+    await value.start(snapshot);
+    firstSocket.destroy();
+    await vi.waitFor(() => expect(reregistered.messages).toHaveLength(1));
+    expect(reregistered.messages[0]).toMatchObject({ ownerGeneration: 7, revision: 1 });
+    expect(value.diagnostics()).toMatchObject({ generation: 8, revision: 1 });
+
+    await value.snapshot({ ...snapshot, state: 'thinking' });
+    expect(reregistered.messages[1]).toMatchObject({ ownerGeneration: 8, revision: 2 });
   });
 
   it('resets generation and revision for a changed Pi session', async () => {

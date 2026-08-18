@@ -1,11 +1,14 @@
+import { once } from 'node:events';
 import { readFile, stat } from 'node:fs/promises';
+import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   RECONNECT_GRACE_MS,
   aggregateOwners,
+  buildCmuxStatusArgs,
   classifyOwner,
   createAtomicLedgerStore,
   createCoordinatorCore,
@@ -13,6 +16,9 @@ import {
   decodeWireMessage,
   parseRuntimeArgs,
   probePidStart,
+  resolveCmuxExecutable,
+  runCmux,
+  runCoordinatorRuntime,
 } from '../extensions/cmux-junction/coordinator.mjs';
 
 const target = { socketPath: '/tmp/cmux fixture.sock', workspaceId: 'workspace-fixture' };
@@ -63,7 +69,15 @@ function generation(result: any): number {
   return result.acceptedGeneration;
 }
 
-function owner(state: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+function accept(core: any, message: Record<string, unknown>, socketToken = 'socket-a') {
+  return core.acceptSnapshot(message, socketToken);
+}
+
+function release(core: any, message: Record<string, unknown>, socketToken = 'socket-a') {
+  return core.goodbye(message, socketToken);
+}
+
+function owner(state: string, overrides: Record<string, unknown> = {}): any {
   return {
     surfaceId: 'surface-a',
     sessionId: 'session-a',
@@ -176,6 +190,77 @@ describe('workspace aggregation', () => {
     expect(aggregateOwners([], now)).toEqual({ state: null, label: null });
   });
 
+  it('validates every timestamp before Idle and accepts the exact future boundary', () => {
+    const exact = owner('idle', {
+      snapshot: {
+        ...owner('idle').snapshot,
+        transitionAt: now + 5_000,
+        lastEventAt: now + 5_000,
+      },
+    });
+    expect(aggregateOwners([exact], now)).toEqual({ state: 'idle', label: 'Idle' });
+
+    const future = owner('idle', {
+      surfaceId: 'surface-b',
+      snapshot: { ...owner('idle').snapshot, transitionAt: now + 5_001 },
+    });
+    expect(aggregateOwners([owner('idle'), future], now)).toEqual({
+      state: 'unknown',
+      label: 'Unknown',
+    });
+  });
+
+  it.each([
+    ['one-sided compaction', { compactionStartedAt: now, compactionProgressAt: null }],
+    [
+      'reversed compaction',
+      { compactionStartedAt: now, compactionProgressAt: now - 1, lastEventAt: now },
+    ],
+    [
+      'compaction newer than activity',
+      { compactionStartedAt: now, compactionProgressAt: now, lastEventAt: now - 1 },
+    ],
+    ['future compaction', { compactionStartedAt: now, compactionProgressAt: now + 5_001 }],
+    [
+      'expired compaction',
+      {
+        compactionStartedAt: now - 600_001,
+        compactionProgressAt: now - 600_001,
+        lastEventAt: now - 600_001,
+      },
+    ],
+  ])('treats %s timestamps as Unknown before state reduction', (_name, snapshotOverrides) => {
+    expect(
+      aggregateOwners(
+        [
+          owner('idle', {
+            snapshot: { ...owner('idle').snapshot, ...snapshotOverrides },
+          }),
+        ],
+        now,
+      ),
+    ).toEqual({ state: 'unknown', label: 'Unknown' });
+  });
+
+  it('accepts coherent compaction timestamps at the exact future boundary', () => {
+    expect(
+      aggregateOwners(
+        [
+          owner('compacting', {
+            snapshot: {
+              ...owner('compacting').snapshot,
+              transitionAt: now + 5_000,
+              lastEventAt: now + 5_000,
+              compactionStartedAt: now + 5_000,
+              compactionProgressAt: now + 5_000,
+            },
+          }),
+        ],
+        now,
+      ),
+    ).toEqual({ state: 'compacting', label: 'Compacting' });
+  });
+
   it('shows a safe tool name only for exactly one live non-idle owner', () => {
     expect(aggregateOwners([owner('tool-running')], now)).toEqual({
       state: 'tool-running',
@@ -258,51 +343,181 @@ describe('coordinator runtime boundary', () => {
     });
     expect(() => parseRuntimeArgs([...argv, '--extra', 'bad'])).toThrow();
   });
+
+  it('binds one owner per socket and closes tracked sockets after final clear', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pi-junction-runtime-'));
+    tempDirectories.push(directory);
+    const listen = join(directory, 'coordinator.sock');
+    const ledger = join(directory, 'ledger.json');
+    const scheduled: Array<{ callback: () => void; delay: number }> = [];
+    const published: unknown[] = [];
+    let now = 1_700_000_001_000;
+    const runtime = await runCoordinatorRuntime(
+      [
+        '--listen',
+        listen,
+        '--ledger',
+        ledger,
+        '--cmux-socket',
+        target.socketPath,
+        '--workspace',
+        target.workspaceId,
+      ],
+      {
+        randomId: () => 'private-socket-token',
+        now: () => now,
+        probePid: () => 'match',
+        schedule: (callback: () => void, delay: number) => scheduled.push({ callback, delay }),
+        publish: async (status: unknown) => {
+          published.push(status);
+          return { ok: true };
+        },
+      },
+    );
+    const socket = createConnection(listen);
+    await once(socket, 'connect');
+    let received = '';
+    socket.setEncoding('utf8');
+    socket.on('data', (chunk) => (received += chunk));
+
+    socket.write(`${JSON.stringify(snapshot())}\n`);
+    await vi.waitFor(() => expect(received.split('\n').filter(Boolean)).toHaveLength(1));
+    socket.write(`${JSON.stringify(goodbye(1))}\n`);
+    await vi.waitFor(() => expect(received.split('\n').filter(Boolean)).toHaveLength(2));
+    expect(scheduled[0]?.delay).toBe(RECONNECT_GRACE_MS);
+
+    const closed = once(socket, 'close');
+    now += RECONNECT_GRACE_MS;
+    scheduled.shift()!.callback();
+    await runtime.core.drain();
+    await closed;
+    expect(socket.destroyed).toBe(true);
+    expect(published).toEqual([
+      { state: 'idle', label: 'Idle' },
+      { state: null, label: null },
+    ]);
+  });
+});
+
+describe('coordinator cmux publisher boundary', () => {
+  it('selects only an executable bundled CLI and builds exact hostile set/clear argv', async () => {
+    const executableAccess = async () => undefined;
+    await expect(
+      resolveCmuxExecutable({ CMUX_BUNDLED_CLI_PATH: '  /bundle/cmux  ' }, executableAccess),
+    ).resolves.toBe('/bundle/cmux');
+    await expect(resolveCmuxExecutable({}, executableAccess)).resolves.toBe('cmux');
+    await expect(
+      resolveCmuxExecutable({ CMUX_BUNDLED_CLI_PATH: '/missing' }, async () => {
+        throw new Error('missing');
+      }),
+    ).resolves.toBe('cmux');
+
+    const hostile = { socketPath: '/tmp/socket; touch nope', workspaceId: 'workspace $(nope)' };
+    expect(buildCmuxStatusArgs(hostile, { state: 'thinking', label: 'Thinking' })).toEqual([
+      '--socket',
+      hostile.socketPath,
+      'set-status',
+      'pi-junction',
+      'Thinking',
+      '--workspace',
+      hostile.workspaceId,
+    ]);
+    expect(buildCmuxStatusArgs(hostile, { state: null, label: null })).toEqual([
+      '--socket',
+      hostile.socketPath,
+      'clear-status',
+      'pi-junction',
+      '--workspace',
+      hostile.workspaceId,
+    ]);
+  });
+
+  it.each([
+    [null, { ok: true, outcome: 'delivered' }],
+    [{ killed: true }, { ok: false, outcome: 'timed-out' }],
+    [{ signal: 'SIGTERM' }, { ok: false, outcome: 'signaled' }],
+    [{ code: 7 }, { ok: false, outcome: 'exit-failed' }],
+    [{ code: 'ENOENT' }, { ok: false, outcome: 'spawn-failed' }],
+  ])('uses shell-free execFile with bounded timeout and maps %#', async (error, expected) => {
+    const calls: any[] = [];
+    const execute = (file: string, args: string[], options: object, callback: Function) => {
+      calls.push({ file, args, options });
+      callback(error);
+    };
+    await expect(
+      runCmux(
+        'sentinel-not-a-real-cmux',
+        ['--socket', '/tmp/cmux.sock', 'clear-status', 'pi-junction'],
+        { CMUX_SOCKET_PASSWORD: 'memory-only' },
+        execute as any,
+      ),
+    ).resolves.toEqual(expected);
+    expect(calls).toEqual([
+      {
+        file: 'sentinel-not-a-real-cmux',
+        args: ['--socket', '/tmp/cmux.sock', 'clear-status', 'pi-junction'],
+        options: {
+          env: { CMUX_SOCKET_PASSWORD: 'memory-only' },
+          timeout: 2_000,
+          maxBuffer: 64 * 1024,
+          windowsHide: true,
+          shell: false,
+        },
+      },
+    ]);
+  });
 });
 
 describe('coordinator ownership and publication', () => {
-  it('assigns generations and fences stale snapshots, goodbyes, and EOF callbacks', async () => {
+  it('fences ownership by physical socket through reconnect and late EOF races', async () => {
     let now = 1_700_000_001_000;
     const core = createCoordinatorCore({ target, now: () => now, probePid: () => 'match' });
-    const first = await core.acceptSnapshot(snapshot());
+    const first = await accept(core, snapshot(), 'socket-old');
     expect(first).toMatchObject({ ok: true, acceptedGeneration: 1, acceptedRevision: 0 });
 
-    expect(await core.acceptSnapshot(snapshot({ ownerGeneration: 1, revision: 0 }))).toMatchObject({
-      ok: false,
-      reason: 'revision',
-    });
     expect(
-      await core.acceptSnapshot(
-        snapshot({ ownerGeneration: 1, connectionId: 'connection-reconnected', revision: 1 }),
+      await accept(core, snapshot({ ownerGeneration: 1, revision: 0 }), 'socket-old'),
+    ).toMatchObject({ ok: false, reason: 'revision' });
+    expect(
+      await accept(
+        core,
+        snapshot({ ownerGeneration: 1, revision: 1, state: 'error' }),
+        'socket-new',
       ),
     ).toMatchObject({ ok: true, acceptedGeneration: 1, acceptedRevision: 1 });
+
+    expect(await core.connectionClosed('socket-old')).toEqual({ ok: true, changed: false });
     expect(
-      await core.connectionClosed({
-        surfaceId: 'surface-a',
-        connectionId: 'connection-a',
-        ownerGeneration: 1,
-      }),
-    ).toEqual({ ok: true, changed: false });
-
-    const replacement = await core.acceptSnapshot(
-      snapshot({ runtimeId: 'runtime-b', connectionId: 'connection-b', revision: 0 }),
-    );
-    expect(replacement).toMatchObject({ ok: true, acceptedGeneration: 2 });
-
-    expect(await core.goodbye(goodbye(1))).toMatchObject({ ok: true, removed: false });
+      await accept(core, snapshot({ ownerGeneration: 1, revision: 2 }), 'socket-old'),
+    ).toMatchObject({ ok: false, reason: 'fence' });
     expect(
-      await core.connectionClosed({
-        surfaceId: 'surface-a',
-        connectionId: 'connection-a',
-        ownerGeneration: 1,
-      }),
-    ).toEqual({ ok: true, changed: false });
-    expect(core.ledger().owners).toHaveLength(1);
-    expect(core.ledger().owners[0]).toMatchObject({ runtimeId: 'runtime-b', ownerGeneration: 2 });
+      await accept(
+        core,
+        snapshot({
+          surfaceId: 'surface-b',
+          sessionId: 'session-b',
+          connectionId: 'connection-b',
+          ownerGeneration: null,
+          revision: 0,
+        }),
+        'socket-new',
+      ),
+    ).toMatchObject({ ok: false, reason: 'socket-owner' });
 
+    expect(await core.connectionClosed('socket-new')).toEqual({ ok: true, changed: true });
     now += RECONNECT_GRACE_MS;
     await core.maintain();
-    expect(core.ledger().owners).toHaveLength(1);
+    expect(core.ledger().owners).toHaveLength(0);
+
+    const reregistered = await accept(
+      core,
+      snapshot({ ownerGeneration: 1, revision: 2 }),
+      'socket-reregistered',
+    );
+    expect(reregistered).toMatchObject({ ok: true, acceptedGeneration: 2 });
+    expect(await core.connectionClosed('socket-old')).toEqual({ ok: true, changed: false });
+    expect(core.ledger().owners[0]).toMatchObject({ ownerGeneration: 2, acceptedRevision: 2 });
+    expect(core.ledger().owners[0]).not.toHaveProperty('socketToken');
   });
 
   it('does not retain an owner whose PID identity is already dead', async () => {
@@ -311,22 +526,21 @@ describe('coordinator ownership and publication', () => {
       now: () => 1_700_000_001_000,
       probePid: () => 'missing',
     });
-    expect(await core.acceptSnapshot(snapshot())).toMatchObject({ ok: false, reason: 'dead' });
+    expect(await accept(core, snapshot())).toMatchObject({ ok: false, reason: 'dead' });
     expect(core.ledger().owners).toHaveLength(0);
   });
 
   it('removes only the matching disconnected generation after grace', async () => {
     let now = 1_700_000_001_000;
     const core = createCoordinatorCore({ target, now: () => now, probePid: () => 'match' });
-    const first = await core.acceptSnapshot(snapshot());
-    await core.acceptSnapshot(
+    const first = await accept(core, snapshot(), 'socket-a');
+    await accept(
+      core,
       snapshot({ surfaceId: 'surface-b', sessionId: 'session-b', connectionId: 'connection-b' }),
+      'socket-b',
     );
-    await core.connectionClosed({
-      surfaceId: 'surface-a',
-      connectionId: 'connection-a',
-      ownerGeneration: generation(first),
-    });
+    expect(generation(first)).toBe(1);
+    await core.connectionClosed('socket-a');
 
     now += RECONNECT_GRACE_MS - 1;
     await core.maintain();
@@ -354,11 +568,11 @@ describe('coordinator ownership and publication', () => {
         return { ok: true };
       },
     });
-    const registration = await core.acceptSnapshot(snapshot());
+    const registration = await accept(core, snapshot());
     await core.drain();
     expect(events.slice(0, 3)).toEqual(['persist:idle:null', 'publish:idle', 'persist:idle:idle']);
 
-    await core.goodbye(goodbye(generation(registration)));
+    await release(core, goodbye(generation(registration)));
     await core.drain();
     expect(core.ledger()).toMatchObject({
       desired: { state: null, label: null },
@@ -387,7 +601,7 @@ describe('coordinator ownership and publication', () => {
         return succeed ? { ok: true } : { ok: false, outcome: 'timed-out' };
       },
     });
-    await core.acceptSnapshot(snapshot());
+    await accept(core, snapshot());
     await core.drain();
     expect(core.ledger()).toMatchObject({
       desired: { state: 'idle' },
@@ -415,7 +629,7 @@ describe('coordinator ownership and publication', () => {
       },
     });
 
-    await core.acceptSnapshot(snapshot());
+    await accept(core, snapshot());
     await core.drain();
     expect(scheduled.map(({ delay }) => delay)).toEqual([1_000]);
     scheduled.shift()?.callback();
@@ -441,9 +655,9 @@ describe('coordinator ownership and publication', () => {
         return { ok: false, outcome: 'exit-failed' };
       },
     });
-    const accepted = await core.acceptSnapshot(snapshot());
+    const accepted = await accept(core, snapshot());
     await core.drain();
-    await core.goodbye(goodbye(generation(accepted)));
+    await release(core, goodbye(generation(accepted)));
     expect(scheduled.map(({ delay }) => delay)).toEqual([RECONNECT_GRACE_MS]);
 
     now += RECONNECT_GRACE_MS;
@@ -466,13 +680,31 @@ describe('coordinator ownership and publication', () => {
     });
   });
 
-  it('accepts one exact durable replay while retaining its generation', async () => {
+  it('dedupes only a successfully applied identical aggregate', async () => {
+    const published: unknown[] = [];
+    const core = createCoordinatorCore({
+      target,
+      now: () => 1_700_000_001_000,
+      probePid: () => 'match',
+      publish: async (status: unknown) => {
+        published.push(status);
+        return { ok: true };
+      },
+    });
+    await accept(core, snapshot());
+    await core.drain();
+    await accept(core, snapshot({ ownerGeneration: 1, revision: 1, sentAt: 1_700_000_001_001 }));
+    await core.drain();
+    expect(published).toEqual([{ state: 'idle', label: 'Idle' }]);
+  });
+
+  it('requires a strictly newer revision for durable replay', async () => {
     const first = createCoordinatorCore({
       target,
       now: () => 1_700_000_001_000,
       probePid: () => 'match',
     });
-    const accepted = await first.acceptSnapshot(snapshot());
+    const accepted = await accept(first, snapshot());
     await first.drain();
 
     const restarted = createCoordinatorCore({
@@ -482,8 +714,24 @@ describe('coordinator ownership and publication', () => {
       probePid: () => 'match',
     });
     expect(
-      await restarted.acceptSnapshot(
+      await accept(
+        restarted,
         snapshot({ ownerGeneration: generation(accepted), revision: 0 }),
+        'socket-equal-same',
+      ),
+    ).toMatchObject({ ok: false, reason: 'revision' });
+    expect(
+      await accept(
+        restarted,
+        snapshot({ ownerGeneration: generation(accepted), revision: 0, state: 'error' }),
+        'socket-equal-different',
+      ),
+    ).toMatchObject({ ok: false, reason: 'revision' });
+    expect(
+      await accept(
+        restarted,
+        snapshot({ ownerGeneration: generation(accepted), revision: 1 }),
+        'socket-restarted',
       ),
     ).toMatchObject({ ok: true, acceptedGeneration: 1 });
     expect(restarted.ledger().owners[0]).toMatchObject({ replayPending: false, liveness: 'live' });
@@ -495,7 +743,7 @@ describe('coordinator ownership and publication', () => {
       now: () => 1_700_000_001_000,
       probePid: () => 'match',
     });
-    await core.acceptSnapshot(snapshot({ sessionId: 'private-session-identifier' }));
+    await accept(core, snapshot({ sessionId: 'private-session-identifier' }));
     const diagnostics = JSON.stringify(core.diagnostics());
     expect(diagnostics).not.toContain('private-session-identifier');
     expect(diagnostics).not.toContain(target.socketPath);

@@ -2,7 +2,7 @@
 
 import { Buffer } from 'node:buffer';
 import { execFile, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import { access, chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
@@ -303,28 +303,34 @@ export function classifyOwner(owner, now, probePid) {
 function displayState(owner, now) {
   if (owner.liveness !== 'live') return 'unknown';
   const snapshot = owner.snapshot;
-  if (snapshot.state === 'unknown') return 'unknown';
-  if (snapshot.state === 'idle') return 'idle';
+  const compactionTimesPresent =
+    snapshot.compactionStartedAt !== null && snapshot.compactionProgressAt !== null;
+  const compactionTimesAbsent =
+    snapshot.compactionStartedAt === null && snapshot.compactionProgressAt === null;
   if (
     snapshot.transitionAt > now + 5_000 ||
-    snapshot.lastEventAt === null ||
-    snapshot.lastEventAt > now + 5_000 ||
-    now - snapshot.lastEventAt > 120_000
+    (snapshot.lastEventAt !== null && snapshot.lastEventAt > now + 5_000) ||
+    (!compactionTimesPresent && !compactionTimesAbsent) ||
+    (compactionTimesPresent &&
+      (snapshot.compactionStartedAt > snapshot.compactionProgressAt ||
+        snapshot.compactionStartedAt > now + 5_000 ||
+        snapshot.compactionProgressAt > now + 5_000 ||
+        now - snapshot.compactionProgressAt > 600_000 ||
+        snapshot.lastEventAt === null ||
+        snapshot.compactionProgressAt > snapshot.lastEventAt))
   ) {
     return 'unknown';
   }
-  if (snapshot.state === 'compacting') {
-    const progressAt = snapshot.compactionProgressAt;
-    const startedAt = snapshot.compactionStartedAt;
-    if (
-      progressAt === null ||
-      startedAt === null ||
-      progressAt > now + 5_000 ||
-      now - progressAt > 120_000 ||
-      now - startedAt > 600_000
-    ) {
-      return 'unknown';
-    }
+  if (snapshot.state === 'unknown') return 'unknown';
+  if (snapshot.state === 'idle') return 'idle';
+  if (snapshot.lastEventAt === null || now - snapshot.lastEventAt > 120_000) return 'unknown';
+  if (
+    snapshot.state === 'compacting' &&
+    (!compactionTimesPresent ||
+      now - snapshot.compactionProgressAt > 120_000 ||
+      now - snapshot.compactionStartedAt > 600_000)
+  ) {
+    return 'unknown';
   }
   return snapshot.state;
 }
@@ -401,6 +407,7 @@ function safeInitialLedger(value, target, now) {
     owner.replayPending = true;
     owner.disconnectedAt = null;
     owner.liveness = 'stale';
+    owner.socketToken = null;
   }
   return ledger;
 }
@@ -419,6 +426,7 @@ export function createCoordinatorCore(options) {
   const publish = options.publish ?? (async () => ({ ok: true }));
   const ledger = safeInitialLedger(options.initialLedger, options.target, now());
   const owners = new Map(ledger.owners.map((owner) => [owner.surfaceId, owner]));
+  const socketBindings = new Map();
   let operationTail = Promise.resolve();
   let publication = null;
   let deliveryOutcome = null;
@@ -434,7 +442,11 @@ export function createCoordinatorCore(options) {
     nextGenerationBySurface: { ...ledger.nextGenerationBySurface },
     owners: [...owners.values()]
       .sort((left, right) => left.surfaceId.localeCompare(right.surfaceId))
-      .map((owner) => clone(owner)),
+      .map((owner) => {
+        const durableOwner = clone(owner);
+        delete durableOwner.socketToken;
+        return durableOwner;
+      }),
     desired: { ...ledger.desired },
     applied: { ...ledger.applied },
   });
@@ -538,55 +550,74 @@ export function createCoordinatorCore(options) {
       return result;
     });
 
-  const acceptSnapshot = async (input) => {
+  const assignGeneration = (surfaceId, existing) => {
+    const previousGeneration = Object.prototype.hasOwnProperty.call(
+      ledger.nextGenerationBySurface,
+      surfaceId,
+    )
+      ? Number(ledger.nextGenerationBySurface[surfaceId])
+      : 0;
+    const generation =
+      Math.max(
+        Number.isSafeInteger(previousGeneration) ? previousGeneration : 0,
+        existing?.ownerGeneration ?? 0,
+      ) + 1;
+    Object.defineProperty(ledger.nextGenerationBySurface, surfaceId, {
+      configurable: true,
+      enumerable: true,
+      value: generation,
+      writable: true,
+    });
+    return generation;
+  };
+
+  const bindingMatches = (binding, message, generation = message.ownerGeneration) =>
+    binding.surfaceId === message.surfaceId &&
+    binding.sessionId === message.sessionId &&
+    binding.runtimeId === message.runtimeId &&
+    binding.pid === message.pid &&
+    binding.processStartedAt === message.processStartedAt &&
+    binding.connectionId === message.connectionId &&
+    (generation === null || binding.ownerGeneration === generation);
+
+  const acceptSnapshot = async (input, socketToken) => {
     const decoded = decodeWireMessage(input, options.target);
     if (!decoded.ok || decoded.value.kind !== 'snapshot') return decoded;
+    if (!validIdentity(socketToken)) return fail('socket');
     const message = decoded.value;
     return await mutate(() => {
+      const binding = socketBindings.get(socketToken);
+      if (binding && !bindingMatches(binding, message)) return fail('socket-owner');
+
       const existing = owners.get(message.surfaceId);
+      if (binding && (!existing || existing.socketToken !== socketToken)) return fail('fence');
+
       let generation = message.ownerGeneration;
-      let replay = false;
       if (generation === null) {
         if (existing && ownerIdentityMatches(existing, message)) {
           generation = existing.ownerGeneration;
-          replay = existing.replayPending === true;
         } else {
-          const previousGeneration = Object.prototype.hasOwnProperty.call(
-            ledger.nextGenerationBySurface,
-            message.surfaceId,
-          )
-            ? Number(ledger.nextGenerationBySurface[message.surfaceId])
-            : 0;
-          generation =
-            Math.max(
-              Number.isSafeInteger(previousGeneration) ? previousGeneration : 0,
-              existing?.ownerGeneration ?? 0,
-            ) + 1;
-          Object.defineProperty(ledger.nextGenerationBySurface, message.surfaceId, {
-            configurable: true,
-            enumerable: true,
-            value: generation,
-            writable: true,
-          });
+          generation = assignGeneration(message.surfaceId, existing);
         }
+      } else if (!existing) {
+        // The prior lease was reaped. A fresh physical socket may safely register
+        // the same live process and receive a newly coordinator-assigned generation.
+        generation = assignGeneration(message.surfaceId, null);
       } else if (
-        !existing ||
         existing.ownerGeneration !== message.ownerGeneration ||
-        !ownerStableIdentityMatches(existing, message)
+        !ownerIdentityMatches(existing, message)
       ) {
         return fail('fence');
-      } else {
-        replay = existing.replayPending === true;
       }
+
       if (existing && generation === existing.ownerGeneration) {
-        if (!ownerStableIdentityMatches(existing, message)) return fail('fence');
-        if (
-          (!replay && message.revision <= existing.acceptedRevision) ||
-          (replay && message.revision < existing.acceptedRevision)
-        ) {
-          return fail('revision');
+        if (!ownerIdentityMatches(existing, message)) return fail('fence');
+        if (existing.socketToken !== null && existing.socketToken !== socketToken && binding) {
+          return fail('fence');
         }
+        if (message.revision <= existing.acceptedRevision) return fail('revision');
       }
+
       const owner = {
         workspaceId: message.workspaceId,
         surfaceId: message.surfaceId,
@@ -602,6 +633,7 @@ export function createCoordinatorCore(options) {
         replayPending: false,
         disconnectedAt: null,
         liveness: 'stale',
+        socketToken,
         snapshot: {
           state: message.state,
           toolName: message.toolName,
@@ -617,6 +649,15 @@ export function createCoordinatorCore(options) {
         return fail('dead');
       }
       owners.set(message.surfaceId, owner);
+      socketBindings.set(socketToken, {
+        surfaceId: message.surfaceId,
+        sessionId: message.sessionId,
+        runtimeId: message.runtimeId,
+        pid: message.pid,
+        processStartedAt: message.processStartedAt,
+        connectionId: message.connectionId,
+        ownerGeneration: generation,
+      });
       return {
         ok: true,
         acceptedGeneration: generation,
@@ -625,19 +666,23 @@ export function createCoordinatorCore(options) {
     });
   };
 
-  const goodbye = async (input) => {
+  const goodbye = async (input, socketToken) => {
     const decoded = decodeWireMessage(input, options.target);
     if (!decoded.ok || decoded.value.kind !== 'goodbye') return decoded;
+    if (!validIdentity(socketToken)) return fail('socket');
     const message = decoded.value;
     return await mutate(() => {
+      const binding = socketBindings.get(socketToken);
       const owner = owners.get(message.surfaceId);
-      if (!ownerFenceMatches(owner ?? {}, message) || message.revision <= owner.acceptedRevision) {
-        return {
-          ok: true,
-          removed: false,
-          acceptedGeneration: message.ownerGeneration,
-          acceptedRevision: message.revision,
-        };
+      if (
+        !binding ||
+        !bindingMatches(binding, message) ||
+        !owner ||
+        owner.socketToken !== socketToken ||
+        !ownerFenceMatches(owner, message) ||
+        message.revision <= owner.acceptedRevision
+      ) {
+        return fail('fence');
       }
       owners.delete(message.surfaceId);
       return {
@@ -649,20 +694,16 @@ export function createCoordinatorCore(options) {
     });
   };
 
-  const connectionClosed = async ({ surfaceId, connectionId, ownerGeneration }) =>
+  const connectionClosed = async (socketToken) =>
     await mutate(() => {
-      const owner = owners.get(surfaceId);
-      if (
-        !owner ||
-        owner.connectionId !== connectionId ||
-        owner.ownerGeneration !== ownerGeneration
-      ) {
-        return { ok: true, changed: false };
-      }
+      const binding = socketBindings.get(socketToken);
+      if (!binding) return { ok: true, changed: false };
+      const owner = owners.get(binding.surfaceId);
+      if (!owner || owner.socketToken !== socketToken) return { ok: true, changed: false };
       owner.connected = false;
       owner.disconnectedAt = now();
       owner.liveness = classifyOwner(owner, now(), probePid);
-      if (owner.liveness === 'dead') owners.delete(surfaceId);
+      if (owner.liveness === 'dead') owners.delete(binding.surfaceId);
       return { ok: true, changed: true };
     });
 
@@ -781,20 +822,34 @@ export function parseRuntimeArgs(argv) {
   return values;
 }
 
-async function resolveCmuxExecutable(env) {
+export async function resolveCmuxExecutable(env, executableAccess = access) {
   const bundled = env.CMUX_BUNDLED_CLI_PATH?.trim();
   if (!bundled) return 'cmux';
   try {
-    await access(bundled, fsConstants.X_OK);
+    await executableAccess(bundled, fsConstants.X_OK);
     return bundled;
   } catch {
     return 'cmux';
   }
 }
 
-function runCmux(file, args, env) {
+export function buildCmuxStatusArgs(target, status) {
+  return status.label === null
+    ? ['--socket', target.socketPath, 'clear-status', STATUS_KEY, '--workspace', target.workspaceId]
+    : [
+        '--socket',
+        target.socketPath,
+        'set-status',
+        STATUS_KEY,
+        status.label,
+        '--workspace',
+        target.workspaceId,
+      ];
+}
+
+export function runCmux(file, args, env, execute = execFile) {
   return new Promise((resolve) => {
-    execFile(
+    execute(
       file,
       args,
       { env, timeout: 2_000, maxBuffer: 64 * 1024, windowsHide: true, shell: false },
@@ -812,50 +867,34 @@ function runCmux(file, args, env) {
 export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtime = {}) {
   const args = parseRuntimeArgs(argv);
   const target = { socketPath: args['cmux-socket'], workspaceId: args.workspace };
-  const store = createAtomicLedgerStore(args.ledger);
+  const store = runtime.store ?? createAtomicLedgerStore(args.ledger);
   const initialLedger = await store.read();
   const env = runtime.env ?? process.env;
-  const cmuxFile = await resolveCmuxExecutable(env);
+  const cmuxFile = await resolveCmuxExecutable(env, runtime.access);
   let stopAfterClear = () => {};
   const core = createCoordinatorCore({
     target,
     initialLedger,
+    now: runtime.now,
     persist: (ledger) => store.write(ledger),
     probePid: runtime.probePid ?? probePidStart,
-    schedule: (callback, delay) => setTimeout(callback, delay).unref(),
+    schedule: runtime.schedule ?? ((callback, delay) => setTimeout(callback, delay).unref()),
     onFinalClear: () => stopAfterClear(),
-    publish: (status) =>
-      runCmux(
-        cmuxFile,
-        status.label === null
-          ? [
-              '--socket',
-              target.socketPath,
-              'clear-status',
-              STATUS_KEY,
-              '--workspace',
-              target.workspaceId,
-            ]
-          : [
-              '--socket',
-              target.socketPath,
-              'set-status',
-              STATUS_KEY,
-              status.label,
-              '--workspace',
-              target.workspaceId,
-            ],
-        env,
-      ),
+    publish:
+      runtime.publish ??
+      ((status) =>
+        runCmux(cmuxFile, buildCmuxStatusArgs(target, status), env, runtime.execFile ?? execFile)),
   });
 
   await mkdir(dirname(args.listen), { recursive: true, mode: 0o700 });
   await chmod(dirname(args.listen), 0o700);
   await rm(args.listen, { force: true });
+  const sockets = new Set();
   const server = createServer((socket) => {
+    const socketToken = (runtime.randomId ?? randomUUID)();
+    sockets.add(socket);
     let buffer = '';
     let malformed = 0;
-    let ownerFence = null;
     socket.setEncoding('utf8');
     socket.on('data', (chunk) => {
       buffer += chunk;
@@ -873,15 +912,10 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
         }
         const message = decoded.value;
         const operation =
-          message.kind === 'snapshot' ? core.acceptSnapshot(message) : core.goodbye(message);
+          message.kind === 'snapshot'
+            ? core.acceptSnapshot(message, socketToken)
+            : core.goodbye(message, socketToken);
         void operation.then((result) => {
-          if (result.ok && message.kind === 'snapshot') {
-            ownerFence = {
-              surfaceId: message.surfaceId,
-              connectionId: message.connectionId,
-              ownerGeneration: result.acceptedGeneration,
-            };
-          }
           if (result.ok) {
             socket.write(
               `${JSON.stringify(
@@ -893,9 +927,11 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
       }
     });
     socket.on('close', () => {
-      if (!ownerFence) return;
-      void core.connectionClosed(ownerFence).then(() => {
-        setTimeout(() => void core.maintain(), RECONNECT_GRACE_MS).unref();
+      sockets.delete(socket);
+      void core.connectionClosed(socketToken).then(() => {
+        const schedule =
+          runtime.schedule ?? ((callback, delay) => setTimeout(callback, delay).unref());
+        schedule(() => void core.maintain(), RECONNECT_GRACE_MS);
       });
     });
   });
@@ -908,11 +944,15 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
     void core.maintain().then(() => core.reconcile());
   }, 30_000);
   maintenance.unref();
+  let stopping = false;
   stopAfterClear = () => {
+    if (stopping) return;
+    stopping = true;
     clearInterval(maintenance);
+    for (const socket of sockets) socket.destroy();
     server.close(() => void rm(args.listen, { force: true }));
   };
-  return { server, core };
+  return { server, core, close: stopAfterClear };
 }
 
 const isDirect = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];

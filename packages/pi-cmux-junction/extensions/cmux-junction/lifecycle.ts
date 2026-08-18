@@ -29,22 +29,7 @@ export const LIFECYCLE_HEARTBEAT_MS = 10_000;
 const RUNTIME_ID_KEY = Symbol.for('pi-cmux-junction.lifecycle.runtime-id.v1');
 const UI_INSTALLATION_KEY = Symbol.for('pi-cmux-junction.lifecycle.ui-installation.v1');
 
-type LifecycleContext = ExtensionContext & { mode?: string };
-interface LifecyclePublicEvent {
-  source?: string;
-  message?: { role?: string; stopReason?: string };
-  turnIndex?: number;
-  timestamp?: number;
-  toolCallId?: string;
-  toolName?: string;
-  partialResult?: unknown;
-  isError?: boolean;
-  reason?: string;
-  willRetry?: boolean;
-  signal?: AbortSignal;
-}
-type LifecycleHandler = (event: LifecyclePublicEvent, ctx: LifecycleContext) => unknown;
-type LifecyclePi = { on(event: string, handler: LifecycleHandler): void };
+type LifecycleContext = ExtensionContext;
 type IntervalHandle = ReturnType<typeof setInterval>;
 
 export interface LifecycleEligibility {
@@ -133,7 +118,6 @@ export function registerJunctionLifecycle(
   pi: ExtensionAPI,
   dependencies: LifecycleDependencies = {},
 ): void {
-  const api = pi as unknown as LifecyclePi;
   const env = dependencies.env ?? process.env;
   const now = dependencies.now ?? Date.now;
   const runtimeId = dependencies.runtimeId ?? processRuntimeId;
@@ -147,7 +131,7 @@ export function registerJunctionLifecycle(
 
   let runtime: LifecycleRuntime | null = null;
 
-  api.on('session_start', async (_event, ctx) => {
+  pi.on('session_start', async (_event, ctx) => {
     try {
       const previous = runtime;
       runtime = null;
@@ -185,13 +169,13 @@ export function registerJunctionLifecycle(
     }
   });
 
-  api.on('input', (event) => {
+  pi.on('input', (event) => {
     if (event.source !== 'interactive' && event.source !== 'rpc' && event.source !== 'extension') {
       return;
     }
     return runtime?.deliver({ type: 'input', source: event.source });
   });
-  api.on('message_end', (event) => {
+  pi.on('message_end', (event) => {
     const message = event.message;
     if (message?.role !== 'user' && message?.role !== 'assistant') return;
     return runtime?.deliver({
@@ -202,7 +186,8 @@ export function registerJunctionLifecycle(
         : {}),
     });
   });
-  api.on('turn_start', (event) => {
+  pi.on('agent_start', () => runtime?.deliver({ type: 'agent_start' }));
+  pi.on('turn_start', (event) => {
     if (typeof event.turnIndex !== 'number') return;
     return runtime?.deliver({
       type: 'turn_start',
@@ -210,7 +195,7 @@ export function registerJunctionLifecycle(
       ...(typeof event.timestamp === 'number' ? { at: event.timestamp } : {}),
     });
   });
-  api.on('tool_execution_start', (event) => {
+  pi.on('tool_execution_start', (event) => {
     if (typeof event.toolCallId !== 'string') return;
     return runtime?.deliver({
       type: 'tool_execution_start',
@@ -218,15 +203,15 @@ export function registerJunctionLifecycle(
       ...(typeof event.toolName === 'string' ? { toolName: event.toolName } : {}),
     });
   });
-  api.on('tool_execution_update', (event) => {
+  pi.on('tool_execution_update', (event) => {
     if (typeof event.toolCallId !== 'string') return;
     return runtime?.deliver({
       type: 'tool_execution_update',
       toolCallId: event.toolCallId,
-      meaningful: event.partialResult !== undefined,
+      meaningful: isMeaningfulToolExecutionUpdate(event.partialResult),
     });
   });
-  api.on('tool_execution_end', (event) => {
+  pi.on('tool_execution_end', (event) => {
     if (typeof event.toolCallId !== 'string') return;
     return runtime?.deliver({
       type: 'tool_execution_end',
@@ -234,11 +219,11 @@ export function registerJunctionLifecycle(
       isError: event.isError === true,
     });
   });
-  api.on('turn_end', (event) => {
+  pi.on('turn_end', (event) => {
     if (typeof event.turnIndex !== 'number') return;
     return runtime?.deliver({ type: 'turn_end', turnIndex: event.turnIndex });
   });
-  api.on('session_before_compact', async (event) => {
+  pi.on('session_before_compact', async (event) => {
     const current = runtime;
     if (!current) return;
     const generation = await current.beginCompaction({
@@ -249,20 +234,21 @@ export function registerJunctionLifecycle(
       ...(typeof event.willRetry === 'boolean' ? { willRetry: event.willRetry } : {}),
       aborted: event.signal?.aborted === true,
     });
-    if (generation !== null && event.signal && !event.signal.aborted) {
-      event.signal.addEventListener(
-        'abort',
-        () => current.deliver({ type: 'compaction_abort', generation }),
-        { once: true },
-      );
+    if (generation !== null) {
+      const abort = () => current.deliver({ type: 'compaction_abort', generation });
+      if (event.signal.aborted) {
+        await abort();
+      } else {
+        event.signal.addEventListener('abort', abort, { once: true });
+      }
     }
   });
-  api.on('session_compact', () => runtime?.deliver({ type: 'session_compact' }));
-  api.on('agent_end', () => runtime?.deliver({ type: 'agent_end' }));
-  api.on('agent_settled', (_event, ctx) =>
+  pi.on('session_compact', () => runtime?.deliver({ type: 'session_compact' }));
+  pi.on('agent_end', () => runtime?.deliver({ type: 'agent_end' }));
+  pi.on('agent_settled', (_event, ctx) =>
     runtime?.deliver({ type: 'agent_settled', isIdle: ctx.isIdle() }),
   );
-  api.on('session_shutdown', async () => {
+  pi.on('session_shutdown', async () => {
     const current = runtime;
     runtime = null;
     await current?.shutdown();
@@ -335,8 +321,12 @@ class LifecycleRuntime {
     event: Omit<Extract<LifecycleEvent, { type: 'session_before_compact' }>, 'type'>,
   ): Promise<number | null> {
     if (!this.intakeOpen) return null;
+    const previousGeneration = this.state.compactionGeneration;
     await this.enqueue({ type: 'session_before_compact', ...event }, false, false);
-    return this.state.compaction?.generation ?? null;
+    const compaction = this.state.compaction;
+    return compaction !== null && compaction.generation > previousGeneration
+      ? compaction.generation
+      : null;
   }
 
   async shutdown(): Promise<void> {
@@ -402,6 +392,63 @@ class LifecycleRuntime {
   private safelySnapshot(snapshot: LifecycleSnapshot): void {
     void this.client.snapshot(snapshot).catch(() => undefined);
   }
+}
+
+export function isMeaningfulToolExecutionUpdate(partialResult: unknown): boolean {
+  if (!isObject(partialResult)) return hasMeaningfulToolUpdateValue(partialResult);
+
+  return (
+    hasMeaningfulToolUpdateContent(partialResult['content']) ||
+    hasMeaningfulToolUpdateValue(partialResult['details']) ||
+    partialResult['terminate'] === true ||
+    partialResult['completed'] === true ||
+    partialResult['complete'] === true ||
+    partialResult['done'] === true ||
+    partialResult['finished'] === true ||
+    partialResult['final'] === true ||
+    partialResult['isFinal'] === true ||
+    partialResult['progress'] === true
+  );
+}
+
+function hasMeaningfulToolUpdateContent(value: unknown): boolean {
+  return Array.isArray(value)
+    ? value.some(hasMeaningfulToolUpdateContentEntry)
+    : hasMeaningfulToolUpdateContentEntry(value);
+}
+
+function hasMeaningfulToolUpdateContentEntry(value: unknown): boolean {
+  if (typeof value === 'string') return value.trim().length > 0;
+  if (!isObject(value)) return false;
+
+  if (value['type'] === 'text') return hasMeaningfulToolUpdateValue(value['text']);
+  if (value['type'] === 'image' || value['type'] === 'image_url') {
+    return (
+      hasMeaningfulToolUpdateValue(value['image']) ||
+      hasMeaningfulToolUpdateValue(value['imageUrl']) ||
+      hasMeaningfulToolUpdateValue(value['url']) ||
+      hasMeaningfulToolUpdateValue(value['data'])
+    );
+  }
+  return (
+    hasMeaningfulToolUpdateValue(value['text']) ||
+    hasMeaningfulToolUpdateValue(value['image']) ||
+    hasMeaningfulToolUpdateValue(value['data'])
+  );
+}
+
+function hasMeaningfulToolUpdateValue(value: unknown): boolean {
+  if (value === undefined || value === null) return false;
+  if (typeof value === 'string') return value.trim().length > 0;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (Array.isArray(value)) return value.some(hasMeaningfulToolUpdateValue);
+  if (!isObject(value)) return false;
+  return Object.values(value).some(hasMeaningfulToolUpdateValue);
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }
 
 export function installUiWrappers(

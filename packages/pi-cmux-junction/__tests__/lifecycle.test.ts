@@ -4,6 +4,7 @@ import {
   LIFECYCLE_DISABLED_ENV,
   LIFECYCLE_HEARTBEAT_MS,
   installUiWrappers,
+  isMeaningfulToolExecutionUpdate,
   lifecycleEligibility,
   registerJunctionLifecycle,
   restoreUiWrappers,
@@ -134,6 +135,35 @@ describe('lifecycle eligibility', () => {
   });
 });
 
+describe('meaningful tool update boundary', () => {
+  it.each([
+    [undefined, false],
+    [null, false],
+    [false, false],
+    ['', false],
+    ['   ', false],
+    [[], false],
+    [['progress'], false],
+    [{}, false],
+    [{ content: '' }, false],
+    [{ content: [] }, false],
+    [{ content: [{ type: 'text', text: ' ' }] }, false],
+    [{ content: [{ type: 'image', url: '' }] }, false],
+    [{ details: { nested: [] } }, false],
+    [{ complete: false }, false],
+    ['progress', true],
+    [0, true],
+    [{ content: 'output' }, true],
+    [{ content: [{ type: 'text', text: 'output' }] }, true],
+    [{ content: [{ type: 'image_url', url: 'data:image/png' }] }, true],
+    [{ details: { count: 0 } }, true],
+    [{ completed: true }, true],
+    [{ done: true }, true],
+  ])('classifies %j as meaningful=%s', (partialResult, expected) => {
+    expect(isMeaningfulToolExecutionUpdate(partialResult)).toBe(expected);
+  });
+});
+
 describe('Pi lifecycle adapter', () => {
   it('maps public events in serialized order and settles only on the real idle event', async () => {
     const h = harness();
@@ -180,6 +210,79 @@ describe('Pi lifecycle adapter', () => {
     ]) {
       expect(retained).not.toContain(secret);
     }
+  });
+
+  it('starts a fresh turn-index fence for each prompt and compaction retry run', async () => {
+    const h = harness();
+    await h.emit('session_start');
+    await h.emit('agent_start');
+    await h.emit('turn_start', { turnIndex: 0 });
+    await h.emit('turn_end', { turnIndex: 0 });
+    await h.emit('agent_settled');
+
+    await h.emit('agent_start');
+    await h.emit('turn_start', { turnIndex: 0 });
+    expect(h.snapshots.at(-1)?.snapshot?.state).toBe('thinking');
+    await h.emit('turn_end', { turnIndex: 0 });
+    await h.emit('session_before_compact', {
+      reason: 'overflow',
+      willRetry: true,
+      signal: new AbortController().signal,
+    });
+    await h.emit('session_compact');
+    await h.emit('agent_start');
+    await h.emit('turn_start', { turnIndex: 0 });
+    expect(h.snapshots.at(-1)?.snapshot?.state).toBe('thinking');
+  });
+
+  it('does not let no-op tool updates refresh stuck-tool evidence', async () => {
+    const h = harness();
+    const startedAt = 1_700_000_000_000;
+    await h.emit('session_start');
+    await h.emit('agent_start');
+    await h.emit('turn_start', { turnIndex: 0, timestamp: startedAt });
+    await h.emit('tool_execution_start', { toolCallId: 'tool-1', toolName: 'bash' });
+
+    h.setNow(startedAt + LIFECYCLE_TIMINGS.toolStuckAfterMs + 1);
+    for (const partialResult of [null, false, '', [], {}, { content: [] }]) {
+      await h.emit('tool_execution_update', { toolCallId: 'tool-1', partialResult });
+    }
+    const maintenance = h.intervals.find(
+      ({ delay }) => delay === LIFECYCLE_TIMINGS.maintenanceIntervalMs,
+    )!;
+    maintenance.callback();
+    await vi.waitFor(() => expect(h.snapshots.at(-1)?.snapshot?.state).toBe('unknown'));
+  });
+
+  it('closes the compaction abort race while registration is queued', async () => {
+    const h = harness();
+    await h.emit('session_start');
+    const controller = new AbortController();
+    const registration = h.emit('session_before_compact', {
+      reason: 'manual',
+      signal: controller.signal,
+    });
+    controller.abort();
+    await registration;
+    expect(h.snapshots.map((entry) => entry.snapshot?.state).filter(Boolean)).toEqual([
+      'idle',
+      'compacting',
+      'idle',
+    ]);
+  });
+
+  it('ignores an already-aborted compaction without clearing the active generation', async () => {
+    const h = harness();
+    await h.emit('session_start');
+    await h.emit('session_before_compact', {
+      reason: 'threshold',
+      signal: new AbortController().signal,
+    });
+    const aborted = new AbortController();
+    aborted.abort();
+    await h.emit('session_before_compact', { reason: 'manual', signal: aborted.signal });
+    expect(h.snapshots.at(-1)?.snapshot?.state).toBe('compacting');
+    expect(h.snapshots).toHaveLength(2);
   });
 
   it('maps assistant errors and compaction without retaining raw errors or content', async () => {

@@ -25,6 +25,8 @@ Branch or path conflicts stop the command without changes.
 
 ## Junction lifecycle status
 
+Lifecycle status requires Pi 0.84.2 or newer.
+
 In eligible cmux TUI sessions, Junction publishes its own workspace status under the `pi-junction` key. It reports seven labels:
 
 - `Idle`
