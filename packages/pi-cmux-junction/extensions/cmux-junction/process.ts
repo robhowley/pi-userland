@@ -19,6 +19,8 @@ export interface ProcessOptions {
   cwd: string;
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
+  maxBufferBytes?: number;
+  shell?: false;
 }
 
 export type ProcessRunner = (
@@ -40,6 +42,8 @@ export const defaultProcessRunner: ProcessRunner = async (file, args, options) =
         ...(options.env === undefined ? {} : { env: options.env }),
         encoding: 'utf8',
         timeout: timeoutMs,
+        ...(options.maxBufferBytes === undefined ? {} : { maxBuffer: options.maxBufferBytes }),
+        shell: options.shell ?? false,
         windowsHide: true,
       },
       (error, stdout, stderr) => {
