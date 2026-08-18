@@ -427,11 +427,13 @@ describe('coordinator runtime boundary', () => {
     await vi.waitFor(() => expect(received.split('\n').filter(Boolean)).toHaveLength(2));
     expect(scheduled[0]?.delay).toBe(RECONNECT_GRACE_MS);
 
+    const serverClosed = once(runtime.server, 'close');
     const closed = once(socket, 'close');
     now += RECONNECT_GRACE_MS;
     scheduled.shift()!.callback();
-    await runtime.core.drain();
     await closed;
+    await serverClosed;
+    await runtime.core.drain();
     expect(socket.destroyed).toBe(true);
     expect(published).toEqual([
       { state: 'idle', label: 'Idle' },
