@@ -321,6 +321,13 @@ function displayState(owner, now) {
   ) {
     return 'unknown';
   }
+  if (
+    compactionTimesPresent &&
+    snapshot.state !== 'compacting' &&
+    now - snapshot.compactionProgressAt <= 120_000
+  ) {
+    return 'unknown';
+  }
   if (snapshot.state === 'unknown') return 'unknown';
   if (snapshot.state === 'idle') return 'idle';
   if (snapshot.lastEventAt === null || now - snapshot.lastEventAt > 120_000) return 'unknown';
@@ -618,7 +625,7 @@ export function createCoordinatorCore(options) {
         if (message.revision <= existing.acceptedRevision) return fail('revision');
       }
 
-      const owner = {
+      const candidate = {
         workspaceId: message.workspaceId,
         surfaceId: message.surfaceId,
         sessionId: message.sessionId,
@@ -643,12 +650,19 @@ export function createCoordinatorCore(options) {
           compactionProgressAt: message.compactionProgressAt,
         },
       };
-      owner.liveness = classifyOwner(owner, now(), probePid);
-      if (owner.liveness === 'dead') {
-        owners.delete(message.surfaceId);
+      candidate.liveness = classifyOwner(candidate, now(), probePid);
+      if (candidate.liveness === 'dead') {
+        if (
+          existing &&
+          existing.socketToken === socketToken &&
+          ownerIdentityMatches(existing, message) &&
+          existing.ownerGeneration === generation
+        ) {
+          owners.delete(message.surfaceId);
+        }
         return fail('dead');
       }
-      owners.set(message.surfaceId, owner);
+      owners.set(message.surfaceId, candidate);
       socketBindings.set(socketToken, {
         surfaceId: message.surfaceId,
         sessionId: message.sessionId,

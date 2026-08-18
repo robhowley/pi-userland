@@ -261,6 +261,47 @@ describe('workspace aggregation', () => {
     ).toEqual({ state: 'compacting', label: 'Compacting' });
   });
 
+  it.each(['idle', 'thinking'])('rejects fresh compaction evidence on %s', (state) => {
+    const current = owner(state, {
+      snapshot: {
+        ...owner(state).snapshot,
+        lastEventAt: now,
+        compactionStartedAt: now,
+        compactionProgressAt: now,
+      },
+    });
+    expect(aggregateOwners([current], now)).toEqual({ state: 'unknown', label: 'Unknown' });
+  });
+
+  it('exposes a lower state only after compaction demotion and before expiry', () => {
+    const at = (progressAt: number) =>
+      owner('thinking', {
+        snapshot: {
+          ...owner('thinking').snapshot,
+          lastEventAt: now,
+          compactionStartedAt: progressAt,
+          compactionProgressAt: progressAt,
+        },
+      });
+
+    expect(aggregateOwners([at(now - 120_000)], now)).toEqual({
+      state: 'unknown',
+      label: 'Unknown',
+    });
+    expect(aggregateOwners([at(now - 120_001)], now)).toEqual({
+      state: 'thinking',
+      label: 'Thinking',
+    });
+    expect(aggregateOwners([at(now - 600_000)], now)).toEqual({
+      state: 'thinking',
+      label: 'Thinking',
+    });
+    expect(aggregateOwners([at(now - 600_001)], now)).toEqual({
+      state: 'unknown',
+      label: 'Unknown',
+    });
+  });
+
   it('shows a safe tool name only for exactly one live non-idle owner', () => {
     expect(aggregateOwners([owner('tool-running')], now)).toEqual({
       state: 'tool-running',
@@ -528,6 +569,46 @@ describe('coordinator ownership and publication', () => {
     });
     expect(await accept(core, snapshot())).toMatchObject({ ok: false, reason: 'dead' });
     expect(core.ledger().owners).toHaveLength(0);
+  });
+
+  it('rejects a dead same-surface replacement without evicting the live owner', async () => {
+    const now = 1_700_000_001_000;
+    const core = createCoordinatorCore({
+      target,
+      now: () => now,
+      probePid: (pid: number) => (pid === 4321 ? 'match' : 'missing'),
+    });
+    await accept(core, snapshot(), 'socket-live');
+    await core.drain();
+
+    expect(
+      await accept(
+        core,
+        snapshot({
+          sessionId: 'session-dead',
+          runtimeId: 'runtime-dead',
+          connectionId: 'connection-dead',
+          pid: 9876,
+          processStartedAt: 1_700_000_000_000,
+          ownerGeneration: null,
+          revision: 0,
+        }),
+        'socket-dead',
+      ),
+    ).toMatchObject({ ok: false, reason: 'dead' });
+    await core.drain();
+
+    expect(core.ledger().owners).toHaveLength(1);
+    expect(core.ledger().owners[0]).toMatchObject({
+      surfaceId: 'surface-a',
+      sessionId: 'session-a',
+      runtimeId: 'runtime-a',
+      pid: 4321,
+      ownerGeneration: 1,
+    });
+    expect(core.ledger()).toMatchObject({
+      desired: { state: 'idle', label: 'Idle' },
+    });
   });
 
   it('removes only the matching disconnected generation after grace', async () => {
