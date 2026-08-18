@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   getJunctionArgumentCompletions,
   parseJunctionArgs,
@@ -8,6 +11,14 @@ import {
 import type { ProcessRunner } from '../extensions/cmux-junction/process.js';
 import type { WorktreeOptions, WorktreePlan } from '../extensions/cmux-junction/worktree.js';
 import type { ExtensionCommandContext } from '@earendil-works/pi-coding-agent';
+
+const tempDirectories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    tempDirectories.splice(0).map((directory) => rm(directory, { force: true, recursive: true })),
+  );
+});
 
 const PLAN: WorktreePlan = {
   ok: true,
@@ -44,6 +55,24 @@ describe('/junction command', () => {
     expect(getJunctionArgumentCompletions('--unknown')).toBeNull();
   });
 
+  it('completes the fork subcommand and its branch flag', () => {
+    expect(getJunctionArgumentCompletions('f')).toEqual([
+      {
+        value: 'fork',
+        label: 'fork',
+        description: 'Fork the current persisted session',
+      },
+    ]);
+    expect(getJunctionArgumentCompletions('fork --b')).toEqual([
+      {
+        value: '--branch',
+        label: '--branch',
+        description: 'Branch to create or reuse',
+      },
+    ]);
+    expect(getJunctionArgumentCompletions('fork --branch ')).toBeNull();
+  });
+
   it.each([
     '',
     '--branch',
@@ -66,6 +95,17 @@ describe('/junction command', () => {
       ok: true,
       branch: 'feature/Keep-Case',
     });
+  });
+
+  it('parses the strict fork grammar', () => {
+    expect(parseJunctionArgs(' fork --branch feature/forked ')).toEqual({
+      ok: true,
+      mode: 'fork',
+      branch: 'feature/forked',
+    });
+    for (const args of ['fork', 'fork --branch', 'fork --branch one two', 'fork --unknown one']) {
+      expect(parseJunctionArgs(args)).toMatchObject({ ok: false });
+    }
   });
 
   it('resolves planning from ctx.cwd and preflights before Git apply', async () => {
@@ -130,6 +170,152 @@ describe('/junction command', () => {
     expect(appliedOptions).toMatchObject({ env, homeDir });
   });
 
+  it('waits for idle and rejects an absent source before any Git work', async () => {
+    const waitForIdle = vi.fn(async () => undefined);
+    const plan = vi.fn(async () => PLAN);
+    const apply = vi.fn();
+    const launch = vi.fn();
+
+    const result = await runJunctionCommand(
+      'fork --branch feature/test',
+      '/repo',
+      { plan, apply, launch },
+      {
+        waitForIdle,
+        sessionManager: { getSessionFile: () => undefined },
+      },
+    );
+
+    expect(result).toMatchObject({ ok: false, status: 'source-session-failed' });
+    if (result.ok) throw new Error('Expected source validation to fail.');
+    expect(result.message).toContain('persisted session');
+    expect(waitForIdle).toHaveBeenCalledOnce();
+    expect(plan).not.toHaveBeenCalled();
+    expect(apply).not.toHaveBeenCalled();
+    expect(launch).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unreadable source before planning', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pi-cmux-junction-session-'));
+    tempDirectories.push(directory);
+    const sourceSessionFile = join(directory, 'unreadable.jsonl');
+    await writeFile(sourceSessionFile, '{"type":"session"}\n');
+    await chmod(sourceSessionFile, 0o000);
+
+    const plan = vi.fn(async () => PLAN);
+    const result = await runJunctionCommand(
+      'fork --branch feature/test',
+      '/repo',
+      { plan },
+      {
+        waitForIdle: async () => undefined,
+        sessionManager: { getSessionFile: () => sourceSessionFile },
+      },
+    );
+
+    expect(result).toMatchObject({ ok: false, status: 'source-session-failed' });
+    if (result.ok) throw new Error('Expected unreadable source validation to fail.');
+    expect(result.message).toContain('absent or unreadable');
+    expect(plan).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['empty', ''],
+    ['malformed', 'not json\n{"type":"session"}\n'],
+    ['non-session', '{"type":"message"}\n{"type":"session"}\n'],
+  ])('rejects a %s source before any orchestration', async (_case, contents) => {
+    const directory = await mkdtemp(join(tmpdir(), 'pi-cmux-junction-session-'));
+    tempDirectories.push(directory);
+    const sourceSessionFile = join(directory, 'invalid.jsonl');
+    await writeFile(sourceSessionFile, contents);
+
+    const plan = vi.fn(async () => PLAN);
+    const preflight = vi.fn(async () => ({ ok: true as const }));
+    const apply = vi.fn(async () => WORKTREE);
+    const launch = vi.fn(async () => ({ ok: true as const }));
+
+    const result = await runJunctionCommand(
+      'fork --branch feature/test',
+      '/repo',
+      { plan, preflight, apply, launch },
+      {
+        waitForIdle: async () => undefined,
+        sessionManager: { getSessionFile: () => sourceSessionFile },
+      },
+    );
+
+    expect(result).toMatchObject({ ok: false, status: 'source-session-failed' });
+    expect(plan).not.toHaveBeenCalled();
+    expect(preflight).not.toHaveBeenCalled();
+    expect(apply).not.toHaveBeenCalled();
+    expect(launch).not.toHaveBeenCalled();
+  });
+
+  it('captures a readable absolute source and passes it as a fork recipe', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pi-cmux-junction-session-'));
+    tempDirectories.push(directory);
+    const sourceSessionFile = join(directory, 'source;$(unsafe).jsonl');
+    await writeFile(sourceSessionFile, '{"type":"session"}\n');
+
+    const order: string[] = [];
+    let resolveIdle!: () => void;
+    const idle = new Promise<void>((resolve) => {
+      resolveIdle = resolve;
+    });
+    const waitForIdle = vi.fn(async () => {
+      await idle;
+      order.push('idle');
+    });
+    const getSessionFile = vi.fn(() => {
+      order.push('session');
+      return sourceSessionFile;
+    });
+    const plan = vi.fn(async () => {
+      order.push('plan');
+      return PLAN;
+    });
+    const preflight = vi.fn(async () => {
+      order.push('preflight');
+      return { ok: true as const };
+    });
+    const apply = vi.fn(async () => {
+      order.push('apply');
+      return WORKTREE;
+    });
+    const launch = vi.fn(async () => {
+      order.push('launch');
+      return { ok: true as const };
+    });
+    const environmentBefore = { ...process.env };
+
+    const result = runJunctionCommand(
+      'fork --branch feature/test',
+      '/repo',
+      { plan, preflight, apply, launch },
+      {
+        waitForIdle,
+        sessionManager: { getSessionFile },
+      },
+    );
+
+    expect(waitForIdle).toHaveBeenCalledOnce();
+    expect(getSessionFile).not.toHaveBeenCalled();
+    expect(plan).not.toHaveBeenCalled();
+    expect(preflight).not.toHaveBeenCalled();
+    expect(apply).not.toHaveBeenCalled();
+    expect(launch).not.toHaveBeenCalled();
+
+    resolveIdle();
+    await expect(result).resolves.toMatchObject({ ok: true, status: 'created-and-launched' });
+
+    expect(order).toEqual(['idle', 'session', 'plan', 'preflight', 'apply', 'launch']);
+    expect(launch).toHaveBeenCalledWith(PLAN.branch, PLAN.path, expect.any(Object), {
+      mode: 'fork',
+      sourceSessionFile,
+    });
+    expect(process.env).toEqual(environmentBefore);
+  });
+
   it('does not apply Git when cmux preflight fails', async () => {
     const apply = vi.fn();
     const launch = vi.fn();
@@ -167,6 +353,36 @@ describe('/junction command', () => {
       message:
         'Worktree retained after cmux launch failed: boom\nBranch: feature/test\nPath: /tmp/project-wt-feature-test\nRetry: /junction --branch feature/test',
     });
+  });
+
+  it('preserves the fork command in retry guidance after a retained worktree', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pi-cmux-junction-session-'));
+    tempDirectories.push(directory);
+    const sourceSessionFile = join(directory, 'source.jsonl');
+    await writeFile(sourceSessionFile, '{"type":"session"}\n');
+
+    const result = await runJunctionCommand(
+      'fork --branch feature/test',
+      '/repo',
+      {
+        plan: async () => PLAN,
+        preflight: async () => ({ ok: true }),
+        apply: async () => WORKTREE,
+        launch: async () => ({ ok: false, reason: 'launch-failed', message: 'boom' }),
+      },
+      {
+        waitForIdle: async () => undefined,
+        sessionManager: { getSessionFile: () => sourceSessionFile },
+      },
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 'partial-launch-failed',
+      worktreeRetained: true,
+    });
+    if (result.ok) throw new Error('Expected cmux launch to fail.');
+    expect(result.message).toContain('Retry: /junction fork --branch feature/test');
   });
 
   it('maps an ambiguous real cmux launch without retry guidance', async () => {

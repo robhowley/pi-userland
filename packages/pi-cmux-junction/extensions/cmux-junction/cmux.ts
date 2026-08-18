@@ -13,6 +13,12 @@ export interface CmuxOptions {
   timeoutMs?: number;
 }
 
+export type CmuxLaunchRecipe = { mode: 'fresh' } | { mode: 'fork'; sourceSessionFile: string };
+
+const SOURCE_SESSION_ENV = 'PI_CMUX_JUNCTION_SOURCE_SESSION';
+const FRESH_PI_COMMAND = 'exec pi';
+const FORK_PI_COMMAND = 'exec pi --fork "$PI_CMUX_JUNCTION_SOURCE_SESSION"';
+
 export type CmuxPreflightResult =
   | { ok: true }
   | {
@@ -61,7 +67,16 @@ export async function preflightCmux(
   return { ok: true };
 }
 
-export function buildWorkspaceCreateArgs(branch: string, worktreePath: string): string[] {
+export function buildWorkspaceCreateArgs(
+  branch: string,
+  worktreePath: string,
+  recipe: CmuxLaunchRecipe = { mode: 'fresh' },
+): string[] {
+  const launchArgs =
+    recipe.mode === 'fork'
+      ? ['--env', `${SOURCE_SESSION_ENV}=${recipe.sourceSessionFile}`, '--command', FORK_PI_COMMAND]
+      : ['--command', FRESH_PI_COMMAND];
+
   return [
     'workspace',
     'create',
@@ -69,8 +84,7 @@ export function buildWorkspaceCreateArgs(branch: string, worktreePath: string): 
     branch,
     '--cwd',
     worktreePath,
-    '--command',
-    'exec pi',
+    ...launchArgs,
     '--focus',
     'false',
   ];
@@ -80,12 +94,13 @@ export async function launchCmuxWorkspace(
   branch: string,
   worktreePath: string,
   options: CmuxOptions = {},
+  recipe: CmuxLaunchRecipe = { mode: 'fresh' },
 ): Promise<CmuxLaunchResult> {
   const env = options.env ?? process.env;
   const cmuxFile = await resolveCmuxExecutable(env);
   const result = await run(
     cmuxFile,
-    buildWorkspaceCreateArgs(branch, worktreePath),
+    buildWorkspaceCreateArgs(branch, worktreePath, recipe),
     worktreePath,
     env,
     options,
