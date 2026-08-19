@@ -140,12 +140,22 @@ export function registerJunctionLifecycle(
     dependencies.coordinatorPath ?? fileURLToPath(new URL('./coordinator.mjs', import.meta.url));
 
   let runtime: LifecycleRuntime | null = null;
+  let shutdownInFlight: Promise<void> | null = null;
+
+  const shutdownRuntime = (): Promise<void> => {
+    if (shutdownInFlight) return shutdownInFlight;
+    const current = runtime;
+    runtime = null;
+    if (!current) return Promise.resolve();
+    shutdownInFlight = current.shutdown().finally(() => {
+      shutdownInFlight = null;
+    });
+    return shutdownInFlight;
+  };
 
   pi.on('session_start', async (_event, ctx) => {
     try {
-      const previous = runtime;
-      runtime = null;
-      await previous?.shutdown();
+      await shutdownRuntime();
       const eligibility = lifecycleEligibility(ctx, env);
       if (!eligibility.eligible || !eligibility.target || !eligibility.sessionId) return;
       const resolved = await resolveTarget(ctx.cwd, eligibility.target, cmuxOptions);
@@ -177,9 +187,7 @@ export function registerJunctionLifecycle(
       });
       await runtime.start();
     } catch {
-      const failed = runtime;
-      runtime = null;
-      await failed?.shutdown();
+      await shutdownRuntime();
     }
   });
 
@@ -255,11 +263,7 @@ export function registerJunctionLifecycle(
   pi.on('agent_settled', (_event, ctx) =>
     runtime?.deliver({ type: 'agent_settled', isIdle: ctx.isIdle() }),
   );
-  pi.on('session_shutdown', async () => {
-    const current = runtime;
-    runtime = null;
-    await current?.shutdown();
-  });
+  pi.on('session_shutdown', shutdownRuntime);
 }
 
 class LifecycleRuntime {

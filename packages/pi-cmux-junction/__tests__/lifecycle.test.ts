@@ -492,6 +492,37 @@ describe('Pi lifecycle adapter', () => {
     expect(h.snapshots).toHaveLength(count);
   });
 
+  it('joins overlapping shutdown events to the same goodbye', async () => {
+    const h = harness();
+    let releaseGoodbye!: () => void;
+    h.client.goodbye.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          releaseGoodbye = () => resolve(true);
+        }),
+    );
+    await h.emit('session_start');
+
+    let firstSettled = false;
+    let secondSettled = false;
+    const first = h.emit('session_shutdown').then(() => {
+      firstSettled = true;
+    });
+    await vi.waitFor(() => expect(h.client.goodbye).toHaveBeenCalledOnce());
+    const second = h.emit('session_shutdown').then(() => {
+      secondSettled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(firstSettled).toBe(false);
+    expect(secondSettled).toBe(false);
+    expect(h.client.goodbye).toHaveBeenCalledOnce();
+
+    releaseGoodbye();
+    await Promise.all([first, second]);
+    expect(h.client.goodbye).toHaveBeenCalledOnce();
+  });
+
   it('fails open when process identity or delivery setup fails', async () => {
     const handlers = new Map<string, Function>();
     const pi = { on: (name: string, handler: Function) => handlers.set(name, handler) } as any;

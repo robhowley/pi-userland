@@ -139,6 +139,17 @@ describe('workspace aggregation', () => {
     });
   });
 
+  it.each([
+    ['awaiting-input', 'tool-running', 'awaiting-input', 'Needs input'],
+    ['tool-running', 'awaiting-input', 'awaiting-input', 'Needs input'],
+    ['error', 'awaiting-input', 'error', 'Error'],
+    ['awaiting-input', 'error', 'error', 'Error'],
+  ])('aggregates %s before %s as %s', (first, second, state, label) => {
+    expect(aggregateOwners([owner(first), owner(second, { surfaceId: 'surface-b' })], now)).toEqual(
+      { state, label },
+    );
+  });
+
   it('prevents false Idle, clears an empty workspace, and keeps siblings independent', () => {
     expect(aggregateOwners([owner('idle'), owner('idle', { liveness: 'stale' })], now)).toEqual({
       state: 'unknown',
