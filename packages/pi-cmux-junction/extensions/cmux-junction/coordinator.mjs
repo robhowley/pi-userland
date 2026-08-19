@@ -3,28 +3,29 @@
 import { Buffer } from 'node:buffer';
 import { execFile, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { constants as fsConstants } from 'node:fs';
-import { access, chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
+import { chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { dirname } from 'node:path';
 import process from 'node:process';
 import { clearInterval, setInterval, setTimeout } from 'node:timers';
 import { fileURLToPath } from 'node:url';
+import { classifyExecFileFailure, resolveCmuxExecutable } from './cmux-runtime.mjs';
+import {
+  LIFECYCLE_ACK_KIND,
+  LIFECYCLE_COMMON_FIELDS,
+  LIFECYCLE_IDENTITY_FIELDS,
+  LIFECYCLE_MESSAGE_KINDS,
+  LIFECYCLE_PROTOCOL,
+  LIFECYCLE_SNAPSHOT_FIELDS,
+  LIFECYCLE_STATES,
+  LIFECYCLE_TOOL_NAME_PATTERN,
+  MAX_LIFECYCLE_FRAME_BYTES,
+} from './lifecycle-protocol.mjs';
 
-export const PROTOCOL = 'pi-junction.lifecycle.v1';
 export const STATUS_KEY = 'pi-junction';
-export const MAX_FRAME_BYTES = 16 * 1024;
 export const RECONNECT_GRACE_MS = 5_000;
 
-const states = new Set([
-  'idle',
-  'thinking',
-  'tool-running',
-  'awaiting-input',
-  'compacting',
-  'error',
-  'unknown',
-]);
+const states = new Set(LIFECYCLE_STATES);
 const activeRanks = new Map([
   ['thinking', 1],
   ['tool-running', 2],
@@ -32,28 +33,6 @@ const activeRanks = new Map([
   ['error', 4],
   ['compacting', 5],
 ]);
-const commonFields = [
-  'protocol',
-  'kind',
-  'workspaceId',
-  'surfaceId',
-  'sessionId',
-  'runtimeId',
-  'pid',
-  'processStartedAt',
-  'connectionId',
-  'ownerGeneration',
-  'revision',
-  'sentAt',
-];
-const snapshotFields = [
-  ...commonFields,
-  'state',
-  'toolName',
-  'transitionAt',
-  'lastEventAt',
-  'compactionAt',
-];
 const ledgerFields = [
   'schemaVersion',
   'target',
@@ -82,22 +61,6 @@ const durableOwnerFields = [
   'snapshot',
 ];
 const durableSnapshotFields = ['state', 'toolName', 'transitionAt', 'lastEventAt', 'compactionAt'];
-const ackFields = [
-  'protocol',
-  'kind',
-  'workspaceId',
-  'surfaceId',
-  'sessionId',
-  'runtimeId',
-  'pid',
-  'processStartedAt',
-  'connectionId',
-  'acceptedGeneration',
-  'acceptedRevision',
-  'acceptedKind',
-];
-const identityFields = ['workspaceId', 'surfaceId', 'sessionId', 'runtimeId', 'connectionId'];
-const toolNamePattern = /^[A-Za-z0-9][A-Za-z0-9._:+/@-]{0,63}$/u;
 
 function hasControl(value) {
   for (const character of value) {
@@ -142,7 +105,7 @@ function validSnapshot(value, requireExactFields = true) {
   }
   if (
     (value.toolName !== null &&
-      (typeof value.toolName !== 'string' || !toolNamePattern.test(value.toolName))) ||
+      (typeof value.toolName !== 'string' || !LIFECYCLE_TOOL_NAME_PATTERN.test(value.toolName))) ||
     (value.toolName !== null && value.state !== 'tool-running') ||
     !validTime(value.transitionAt) ||
     !validTime(value.lastEventAt, true) ||
@@ -164,7 +127,7 @@ function validSnapshot(value, requireExactFields = true) {
 }
 
 export function decodeWireLine(line, target) {
-  if (typeof line !== 'string' || Buffer.byteLength(line, 'utf8') > MAX_FRAME_BYTES) {
+  if (typeof line !== 'string' || Buffer.byteLength(line, 'utf8') > MAX_LIFECYCLE_FRAME_BYTES) {
     return fail('size');
   }
   if (line.includes('\n') || line.includes('\r') || line.includes('\0')) return fail('control');
@@ -175,12 +138,17 @@ export function decodeWireLine(line, target) {
     return fail('json');
   }
   if (!value || typeof value !== 'object' || Array.isArray(value)) return fail('type');
-  if (value.protocol !== PROTOCOL) return fail('protocol');
-  if (value.kind !== 'snapshot' && value.kind !== 'goodbye') return fail('kind');
-  if (!exactFields(value, value.kind === 'snapshot' ? snapshotFields : commonFields)) {
+  if (value.protocol !== LIFECYCLE_PROTOCOL) return fail('protocol');
+  if (!LIFECYCLE_MESSAGE_KINDS.includes(value.kind)) return fail('kind');
+  if (
+    !exactFields(
+      value,
+      value.kind === 'snapshot' ? LIFECYCLE_SNAPSHOT_FIELDS : LIFECYCLE_COMMON_FIELDS,
+    )
+  ) {
     return fail('fields');
   }
-  for (const field of identityFields) {
+  for (const field of LIFECYCLE_IDENTITY_FIELDS) {
     if (!validIdentity(value[field])) return fail('identity');
   }
   if (value.workspaceId !== target.workspaceId) return fail('target');
@@ -213,8 +181,8 @@ export function decodeWireMessage(value, target) {
 
 export function createAck(message, acceptedGeneration, acceptedRevision) {
   return {
-    protocol: PROTOCOL,
-    kind: 'ack',
+    protocol: LIFECYCLE_PROTOCOL,
+    kind: LIFECYCLE_ACK_KIND,
     workspaceId: message.workspaceId,
     surfaceId: message.surfaceId,
     sessionId: message.sessionId,
@@ -226,40 +194,6 @@ export function createAck(message, acceptedGeneration, acceptedRevision) {
     acceptedRevision,
     acceptedKind: message.kind,
   };
-}
-
-export function decodeAckLine(line, expected) {
-  if (typeof line !== 'string' || Buffer.byteLength(line, 'utf8') > MAX_FRAME_BYTES) {
-    return fail('size');
-  }
-  if (line.includes('\n') || line.includes('\r') || line.includes('\0')) return fail('control');
-  let value;
-  try {
-    value = JSON.parse(line);
-  } catch {
-    return fail('json');
-  }
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return fail('type');
-  if (!exactFields(value, ackFields)) return fail('fields');
-  if (
-    value.protocol !== PROTOCOL ||
-    value.kind !== 'ack' ||
-    value.workspaceId !== expected.workspaceId ||
-    value.surfaceId !== expected.surfaceId ||
-    value.sessionId !== expected.sessionId ||
-    value.runtimeId !== expected.runtimeId ||
-    value.pid !== expected.pid ||
-    value.processStartedAt !== expected.processStartedAt ||
-    value.connectionId !== expected.connectionId ||
-    value.acceptedKind !== expected.kind ||
-    !Number.isSafeInteger(value.acceptedGeneration) ||
-    value.acceptedGeneration <= 0 ||
-    !Number.isSafeInteger(value.acceptedRevision) ||
-    value.acceptedRevision !== expected.revision
-  ) {
-    return fail('ack');
-  }
-  return { ok: true, value };
 }
 
 function ownerStableIdentityMatches(owner, message) {
@@ -434,7 +368,7 @@ function validStatus(value) {
     const toolName = value.label.startsWith('Tool running: ')
       ? value.label.slice('Tool running: '.length)
       : '';
-    return toolNamePattern.test(toolName);
+    return LIFECYCLE_TOOL_NAME_PATTERN.test(toolName);
   }
   return value.label === aggregateLabel(value.state);
 }
@@ -442,7 +376,7 @@ function validStatus(value) {
 function validDurableOwner(owner, target, counters, updatedAt) {
   if (!owner || typeof owner !== 'object' || Array.isArray(owner)) return false;
   if (!exactFields(owner, durableOwnerFields)) return false;
-  for (const field of identityFields) {
+  for (const field of LIFECYCLE_IDENTITY_FIELDS) {
     if (!validIdentity(owner[field])) return false;
   }
   return (
@@ -1000,17 +934,6 @@ export function parseRuntimeArgs(argv) {
   return values;
 }
 
-export async function resolveCmuxExecutable(env, executableAccess = access) {
-  const bundled = env.CMUX_BUNDLED_CLI_PATH?.trim();
-  if (!bundled) return 'cmux';
-  try {
-    await executableAccess(bundled, fsConstants.X_OK);
-    return bundled;
-  } catch {
-    return 'cmux';
-  }
-}
-
 const statusStyles = {
   idle: { icon: 'pause.circle.fill', color: '#8E8E93', priority: 0 },
   thinking: { icon: 'brain', color: '#4C8DFF', priority: 0 },
@@ -1062,10 +985,14 @@ export function runCmux(file, args, env, execute = execFile) {
       { env, timeout: 2_000, maxBuffer: 64 * 1024, windowsHide: true, shell: false },
       (error) => {
         if (!error) return resolve({ ok: true, outcome: 'delivered' });
-        if (error.killed) return resolve({ ok: false, outcome: 'timed-out' });
-        if (error.signal) return resolve({ ok: false, outcome: 'signaled' });
-        if (typeof error.code === 'number') return resolve({ ok: false, outcome: 'exit-failed' });
-        return resolve({ ok: false, outcome: 'spawn-failed' });
+        const failure = classifyExecFileFailure(error);
+        const outcome = {
+          timeout: 'timed-out',
+          signal: 'signaled',
+          exit: 'exit-failed',
+          spawn: 'spawn-failed',
+        }[failure.kind];
+        return resolve({ ok: false, outcome });
       },
     );
   });
@@ -1136,7 +1063,7 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
           })
           .catch(() => undefined);
       }
-      if (Buffer.byteLength(buffer, 'utf8') > MAX_FRAME_BYTES) socket.destroy();
+      if (Buffer.byteLength(buffer, 'utf8') > MAX_LIFECYCLE_FRAME_BYTES) socket.destroy();
     });
     socket.on('close', () => {
       sockets.delete(socket);

@@ -6,61 +6,38 @@ import { join } from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  MAX_FRAME_BYTES,
   RECONNECT_GRACE_MS,
   aggregateOwners,
   buildCmuxStatusArgs,
   classifyOwner,
   createAtomicLedgerStore,
   createCoordinatorCore,
-  decodeAckLine,
+  decodeWireLine,
   decodeWireMessage,
   parseRuntimeArgs,
   probePidStart,
-  resolveCmuxExecutable,
   runCmux,
   runCoordinatorRuntime,
 } from '../extensions/cmux-junction/coordinator.mjs';
+import { MAX_LIFECYCLE_FRAME_BYTES } from '../extensions/cmux-junction/lifecycle-protocol.mjs';
 
-const target = { socketPath: '/tmp/cmux fixture.sock', workspaceId: 'workspace-fixture' };
+const fixturePath = new URL('../extensions/cmux-junction/wire-fixtures/v1.json', import.meta.url);
+const wireFixtures = JSON.parse(await readFile(fixturePath, 'utf8'));
+const target = wireFixtures.target;
+const baselineSnapshot = wireFixtures.valid.find(
+  (fixture: { name: string }) => fixture.name === 'initial idle snapshot',
+).message;
+const baselineGoodbye = wireFixtures.valid.find(
+  (fixture: { name: string }) => fixture.name === 'fenced goodbye',
+).message;
 const tempDirectories: string[] = [];
 
 function snapshot(overrides: Record<string, unknown> = {}) {
-  return {
-    protocol: 'pi-junction.lifecycle.v1',
-    kind: 'snapshot',
-    workspaceId: target.workspaceId,
-    surfaceId: 'surface-a',
-    sessionId: 'session-a',
-    runtimeId: 'runtime-a',
-    pid: 4321,
-    processStartedAt: 1_700_000_000_000,
-    connectionId: 'connection-a',
-    ownerGeneration: null,
-    revision: 0,
-    sentAt: 1_700_000_001_000,
-    state: 'idle',
-    toolName: null,
-    transitionAt: 1_700_000_000_000,
-    lastEventAt: null,
-    compactionAt: null,
-    ...overrides,
-  };
+  return { ...baselineSnapshot, ...overrides };
 }
 
 function goodbye(ownerGeneration: number, overrides: Record<string, unknown> = {}) {
-  const value = snapshot({ ownerGeneration, revision: 1, ...overrides });
-  const snapshotOnly = new Set([
-    'state',
-    'toolName',
-    'transitionAt',
-    'lastEventAt',
-    'compactionAt',
-  ]);
-  return {
-    ...Object.fromEntries(Object.entries(value).filter(([field]) => !snapshotOnly.has(field))),
-    kind: 'goodbye',
-  };
+  return { ...baselineGoodbye, ownerGeneration, revision: 1, ...overrides };
 }
 
 function deferred<T = void>() {
@@ -114,38 +91,22 @@ afterEach(async () => {
 });
 
 describe('lifecycle v1 wire contract', () => {
-  it('accepts every valid fixture and rejects every invalid fixture', async () => {
-    const fixturePath = new URL(
-      '../extensions/cmux-junction/wire-fixtures/v1.json',
-      import.meta.url,
-    );
-    const fixtures = JSON.parse(await readFile(fixturePath, 'utf8'));
-
-    for (const fixture of fixtures.valid) {
-      expect(decodeWireMessage(fixture.message, fixtures.target), fixture.name).toMatchObject({
+  it('accepts every valid fixture and rejects every invalid fixture', () => {
+    for (const fixture of wireFixtures.valid) {
+      expect(decodeWireMessage(fixture.message, wireFixtures.target), fixture.name).toMatchObject({
         ok: true,
       });
     }
-    for (const fixture of fixtures.invalid) {
-      expect(decodeWireMessage(fixture.message, fixtures.target), fixture.name).toMatchObject({
+    for (const fixture of wireFixtures.invalid) {
+      expect(decodeWireMessage(fixture.message, wireFixtures.target), fixture.name).toMatchObject({
         ok: false,
       });
     }
+  });
 
-    for (const fixture of fixtures.validAcks) {
-      const expected = fixtures.valid.find(
-        (candidate: { name: string }) => candidate.name === fixture.messageName,
-      ).message;
-      expect(decodeAckLine(JSON.stringify(fixture.message), expected), fixture.name).toMatchObject({
-        ok: true,
-      });
-    }
-    const expected = fixtures.valid[0].message;
-    for (const fixture of fixtures.invalidAcks) {
-      expect(decodeAckLine(JSON.stringify(fixture.message), expected), fixture.name).toMatchObject({
-        ok: false,
-      });
-    }
+  it('rejects an oversized frame constructed at the decoder boundary', () => {
+    const line = JSON.stringify(snapshot({ surfaceId: 'x'.repeat(MAX_LIFECYCLE_FRAME_BYTES + 1) }));
+    expect(decodeWireLine(line, target)).toMatchObject({ ok: false, reason: 'size' });
   });
 
   it.each([
@@ -506,7 +467,7 @@ describe('coordinator runtime boundary', () => {
     const oversized = createConnection(listen);
     await once(oversized, 'connect');
     const oversizedClosed = once(oversized, 'close');
-    oversized.write('x'.repeat(MAX_FRAME_BYTES + 1));
+    oversized.write('x'.repeat(MAX_LIFECYCLE_FRAME_BYTES + 1));
     await oversizedClosed;
 
     const validClosed = once(valid, 'close');
@@ -628,18 +589,7 @@ describe('coordinator runtime boundary', () => {
 });
 
 describe('coordinator cmux publisher boundary', () => {
-  it('selects only an executable bundled CLI and builds exact hostile set/clear argv', async () => {
-    const executableAccess = async () => undefined;
-    await expect(
-      resolveCmuxExecutable({ CMUX_BUNDLED_CLI_PATH: '  /bundle/cmux  ' }, executableAccess),
-    ).resolves.toBe('/bundle/cmux');
-    await expect(resolveCmuxExecutable({}, executableAccess)).resolves.toBe('cmux');
-    await expect(
-      resolveCmuxExecutable({ CMUX_BUNDLED_CLI_PATH: '/missing' }, async () => {
-        throw new Error('missing');
-      }),
-    ).resolves.toBe('cmux');
-
+  it('builds exact hostile set and clear argv', () => {
     const hostile = { socketPath: '/tmp/socket; touch nope', workspaceId: 'workspace $(nope)' };
     const styles = [
       ['idle', 'Idle', 'pause.circle.fill', '#8E8E93', '0'],

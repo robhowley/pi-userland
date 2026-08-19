@@ -1,5 +1,4 @@
-import { constants } from 'node:fs';
-import { access } from 'node:fs/promises';
+import { resolveCmuxExecutable } from './cmux-runtime.mjs';
 import {
   defaultProcessRunner,
   processError,
@@ -196,17 +195,6 @@ export async function launchCmuxWorkspace(
     };
   }
   return { ok: true };
-}
-
-async function resolveCmuxExecutable(env: NodeJS.ProcessEnv): Promise<string> {
-  const bundled = env['CMUX_BUNDLED_CLI_PATH']?.trim();
-  if (bundled === undefined || bundled.length === 0) return 'cmux';
-  try {
-    await access(bundled, constants.X_OK);
-    return bundled;
-  } catch {
-    return 'cmux';
-  }
 }
 
 async function run(

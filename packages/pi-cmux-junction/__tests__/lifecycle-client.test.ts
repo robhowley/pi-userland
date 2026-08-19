@@ -13,6 +13,15 @@ import {
   prepareLifecycleTarget,
 } from '../extensions/cmux-junction/lifecycle-client.js';
 
+const fixturePath = new URL('../extensions/cmux-junction/wire-fixtures/v1.json', import.meta.url);
+const wireFixtures = JSON.parse(await readFile(fixturePath, 'utf8'));
+const baselineWireSnapshot = wireFixtures.valid.find(
+  (fixture: { name: string }) => fixture.name === 'initial idle snapshot',
+).message;
+const baselineWireAck = wireFixtures.validAcks.find(
+  (fixture: { name: string }) => fixture.name === 'snapshot acknowledgement',
+).message;
+
 const target = {
   socketPath: '/tmp/cmux hostile socket.sock',
   workspaceId: 'workspace --hostile',
@@ -32,6 +41,27 @@ const snapshot: LifecycleSnapshot = {
   compaction: null,
 };
 const temporary: string[] = [];
+
+function wireSnapshot(overrides: Record<string, unknown> = {}) {
+  return { ...baselineWireSnapshot, ...overrides };
+}
+
+function wireAck(message: Record<string, any>, overrides: Record<string, unknown> = {}) {
+  return {
+    ...baselineWireAck,
+    workspaceId: message['workspaceId'],
+    surfaceId: message['surfaceId'],
+    sessionId: message['sessionId'],
+    runtimeId: message['runtimeId'],
+    pid: message['pid'],
+    processStartedAt: message['processStartedAt'],
+    connectionId: message['connectionId'],
+    acceptedGeneration: message['ownerGeneration'] ?? 7,
+    acceptedRevision: message['revision'],
+    acceptedKind: message['kind'],
+    ...overrides,
+  };
+}
 
 class MockSocket extends EventEmitter {
   destroyed = false;
@@ -65,20 +95,9 @@ class MockSocket extends EventEmitter {
   acknowledgeLatest(splitAt?: number) {
     const message = this.messages.at(-1);
     if (!message) throw new Error('No message to acknowledge');
-    const ack = {
-      protocol: message.protocol,
-      kind: 'ack',
-      workspaceId: message.workspaceId,
-      surfaceId: message.surfaceId,
-      sessionId: message.sessionId,
-      runtimeId: message.runtimeId,
-      pid: message.pid,
-      processStartedAt: message.processStartedAt,
-      connectionId: message.connectionId,
+    const ack = wireAck(message, {
       acceptedGeneration: this.acceptedGeneration ?? message.ownerGeneration ?? 7,
-      acceptedRevision: message.revision,
-      acceptedKind: message.kind,
-    };
+    });
     const line = `${JSON.stringify(ack)}\n`;
     if (splitAt === undefined) {
       this.emit('data', line);
@@ -114,14 +133,9 @@ function client(overrides: Record<string, unknown> = {}) {
 }
 
 describe('lifecycle client wire contract', () => {
-  it('matches the shared valid and invalid acknowledgement fixtures', async () => {
-    const fixturePath = new URL(
-      '../extensions/cmux-junction/wire-fixtures/v1.json',
-      import.meta.url,
-    );
-    const fixtures = JSON.parse(await readFile(fixturePath, 'utf8'));
-    for (const fixture of fixtures.validAcks) {
-      const expected = fixtures.valid.find(
+  it('matches the shared valid and invalid acknowledgement fixtures', () => {
+    for (const fixture of wireFixtures.validAcks) {
+      const expected = wireFixtures.valid.find(
         (candidate: { name: string }) => candidate.name === fixture.messageName,
       ).message;
       expect(
@@ -129,8 +143,8 @@ describe('lifecycle client wire contract', () => {
         fixture.name,
       ).not.toBeNull();
     }
-    const expected = fixtures.valid[0].message;
-    for (const fixture of fixtures.invalidAcks) {
+    const expected = wireFixtures.valid[0].message;
+    for (const fixture of wireFixtures.invalidAcks) {
       expect(
         decodeLifecycleAckLine(JSON.stringify(fixture.message), expected),
         fixture.name,
@@ -139,39 +153,8 @@ describe('lifecycle client wire contract', () => {
   });
 
   it('decodes only the strict one-line v1 acknowledgement envelope', () => {
-    const message = {
-      protocol: 'pi-junction.lifecycle.v1' as const,
-      kind: 'snapshot' as const,
-      workspaceId: target.workspaceId,
-      surfaceId: target.surfaceId,
-      sessionId: owner.sessionId,
-      runtimeId: owner.runtimeId,
-      pid: owner.pid,
-      processStartedAt: owner.processStartedAt,
-      connectionId: 'connection-a',
-      ownerGeneration: null,
-      revision: 0,
-      sentAt: 1_700_000_001_000,
-      state: 'idle' as const,
-      toolName: null,
-      transitionAt: 1_700_000_000_000,
-      lastEventAt: null,
-      compactionAt: null,
-    };
-    const ack = {
-      protocol: message.protocol,
-      kind: 'ack',
-      workspaceId: message.workspaceId,
-      surfaceId: message.surfaceId,
-      sessionId: message.sessionId,
-      runtimeId: message.runtimeId,
-      pid: message.pid,
-      processStartedAt: message.processStartedAt,
-      connectionId: message.connectionId,
-      acceptedGeneration: 1,
-      acceptedRevision: 0,
-      acceptedKind: 'snapshot',
-    };
+    const message = wireSnapshot();
+    const ack = wireAck(message, { acceptedGeneration: 1 });
     expect(decodeLifecycleAckLine(JSON.stringify(ack), message)).toEqual(ack);
     const invalidFences: Array<[string, Record<string, unknown>]> = [
       ['protocol', { protocol: 'pi-junction.lifecycle.v2' }],

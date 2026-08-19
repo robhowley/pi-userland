@@ -1,3 +1,7 @@
+import { MAX_LIFECYCLE_TOOL_NAME_LENGTH as MAX_TOOL_NAME_LENGTH } from './lifecycle-protocol.mjs';
+
+export { MAX_TOOL_NAME_LENGTH };
+
 export const LIFECYCLE_TIMINGS = {
   activityStaleAfterMs: 2 * 60 * 1000,
   toolStuckAfterMs: 10 * 60 * 1000,
@@ -7,8 +11,6 @@ export const LIFECYCLE_TIMINGS = {
   compactionDemoteAfterMs: 2 * 60 * 1000,
   compactionExpireAfterMs: 10 * 60 * 1000,
 } as const;
-
-export const MAX_TOOL_NAME_LENGTH = 64;
 
 const ANSI_ESCAPE_PATTERN = new RegExp(`${String.fromCharCode(0x1b)}\\[[0-?]*[ -/]*[@-~]`, 'g');
 

@@ -7,9 +7,14 @@ import { join, normalize } from 'node:path';
 import { createConnection, type Socket } from 'node:net';
 import { promisify } from 'node:util';
 import type { LifecycleSnapshot } from './activity.js';
+import {
+  LIFECYCLE_ACK_FIELDS,
+  LIFECYCLE_ACK_KIND,
+  LIFECYCLE_PROTOCOL,
+  MAX_LIFECYCLE_FRAME_BYTES,
+} from './lifecycle-protocol.mjs';
 
-export const LIFECYCLE_PROTOCOL = 'pi-junction.lifecycle.v1';
-export const MAX_LIFECYCLE_FRAME_BYTES = 16 * 1024;
+export { LIFECYCLE_PROTOCOL, MAX_LIFECYCLE_FRAME_BYTES };
 export const LIFECYCLE_ACK_TIMEOUT_MS = 2_000;
 
 export interface LifecycleTarget {
@@ -188,24 +193,10 @@ export function decodeLifecycleAckLine(line: string, expected: WireMessage): Lif
   }
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const ack = value as Record<string, unknown>;
-  const fields = [
-    'protocol',
-    'kind',
-    'workspaceId',
-    'surfaceId',
-    'sessionId',
-    'runtimeId',
-    'pid',
-    'processStartedAt',
-    'connectionId',
-    'acceptedGeneration',
-    'acceptedRevision',
-    'acceptedKind',
-  ];
-  if (!exactFields(ack, fields)) return null;
+  if (!exactFields(ack, LIFECYCLE_ACK_FIELDS)) return null;
   if (
     ack['protocol'] !== LIFECYCLE_PROTOCOL ||
-    ack['kind'] !== 'ack' ||
+    ack['kind'] !== LIFECYCLE_ACK_KIND ||
     ack['workspaceId'] !== expected.workspaceId ||
     ack['surfaceId'] !== expected.surfaceId ||
     ack['sessionId'] !== expected.sessionId ||

@@ -11,9 +11,6 @@
   "publishConfig": {
     "access": "public"
   },
-  "bin": {
-    "pi-cmux-junction-coordinator": "extensions/cmux-junction/coordinator.mjs"
-  },
   "keywords": [
     "pi-package",
     "pi-userland",
