@@ -150,11 +150,8 @@ export function registerJunctionLifecycle(
       if (!eligibility.eligible || !eligibility.target || !eligibility.sessionId) return;
       const resolved = await resolveTarget(ctx.cwd, eligibility.target, cmuxOptions);
       if (!resolved.ok) return;
-      const target: LifecycleTarget = {
-        ...eligibility.target,
-        workspaceId: resolved.workspaceId,
-        surfaceId: resolved.surfaceId,
-      };
+      const { socketPath, workspaceId, surfaceId } = resolved;
+      const target: LifecycleTarget = { socketPath, workspaceId, surfaceId };
       const processStartedAt = await observeStart(pid);
       if (processStartedAt === null) return;
       const owner: LifecycleOwnerIdentity = {
@@ -243,11 +240,6 @@ export function registerJunctionLifecycle(
     const current = runtime;
     if (!current) return;
     const generation = await current.beginCompaction({
-      reason:
-        event.reason === 'manual' || event.reason === 'threshold' || event.reason === 'overflow'
-          ? event.reason
-          : null,
-      ...(typeof event.willRetry === 'boolean' ? { willRetry: event.willRetry } : {}),
       aborted: event.signal?.aborted === true,
     });
     if (generation !== null) {
@@ -310,7 +302,6 @@ class LifecycleRuntime {
         runtimeId: this.owner.runtimeId,
       },
       true,
-      true,
     );
     this.maintenance =
       this.scheduleInterval?.(() => {
@@ -329,7 +320,7 @@ class LifecycleRuntime {
 
   deliver(event: LifecycleEvent): Promise<void> {
     if (!this.intakeOpen) return Promise.resolve();
-    return this.enqueue(event, false, false);
+    return this.enqueue(event, false);
   }
 
   async beginCompaction(
@@ -337,7 +328,7 @@ class LifecycleRuntime {
   ): Promise<number | null> {
     if (!this.intakeOpen) return null;
     const previousGeneration = this.state.compactionGeneration;
-    await this.enqueue({ type: 'session_before_compact', ...event }, false, false);
+    await this.enqueue({ type: 'session_before_compact', ...event }, false);
     const compaction = this.state.compaction;
     return compaction !== null && compaction.generation > previousGeneration
       ? compaction.generation
@@ -353,7 +344,6 @@ class LifecycleRuntime {
     this.heartbeat = null;
     restoreUiWrappers(this.ctx.ui, this.uiInstallation);
     this.uiInstallation = null;
-    await this.enqueue({ type: 'session_shutdown' }, true, false);
     await this.tail;
     try {
       await this.client.goodbye();
@@ -384,12 +374,11 @@ class LifecycleRuntime {
     });
   }
 
-  private enqueue(event: LifecycleEvent, internal: boolean, initial: boolean): Promise<void> {
-    if (!internal && !this.intakeOpen) return Promise.resolve();
+  private enqueue(event: LifecycleEvent, initial: boolean): Promise<void> {
+    if (!this.intakeOpen) return Promise.resolve();
     return this.append(async () => {
       const transition = reduceLifecycle(this.state, event, this.now());
       this.state = transition.state;
-      if (event.type === 'session_shutdown') return;
       if (initial) {
         void this.client.start(transition.snapshot).catch(() => undefined);
       } else if (transition.shouldPublish) {

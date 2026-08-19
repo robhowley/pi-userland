@@ -59,16 +59,18 @@ function harness() {
   } as unknown as ExtensionAPI;
   const snapshots: Array<{ operation: string; snapshot?: LifecycleSnapshot; session?: string }> =
     [];
+  let clientSession = 'session-a';
   const client = {
     start: vi.fn(async (snapshot: LifecycleSnapshot) => {
       snapshots.push({ operation: 'start', snapshot });
       return true;
     }),
     snapshot: vi.fn(async (snapshot: LifecycleSnapshot) => {
-      snapshots.push({ operation: 'snapshot', snapshot });
+      snapshots.push({ operation: 'snapshot', snapshot, session: clientSession });
       return true;
     }),
     changeSession: vi.fn(async (session: string) => {
+      clientSession = session;
       snapshots.push({ operation: 'session', session });
     }),
     goodbye: vi.fn(async () => {
@@ -88,6 +90,7 @@ function harness() {
     createClient: () => client,
     resolveTarget: async (_cwd, target) => ({
       ok: true,
+      socketPath: target.socketPath,
       workspaceId: target.workspaceId,
       surfaceId: target.surfaceId,
     }),
@@ -217,7 +220,10 @@ describe('Pi lifecycle adapter', () => {
     };
     let selectedTarget: unknown;
     registerJunctionLifecycle(pi, {
-      env: env({ CMUX_WORKSPACE_ID: 'workspace-stale' }),
+      env: env({
+        CMUX_SOCKET_PATH: '  /tmp/cmux.sock  ',
+        CMUX_WORKSPACE_ID: 'workspace-stale',
+      }),
       runner,
       runtimeId: () => 'runtime-a',
       pid: 4321,
@@ -239,6 +245,43 @@ describe('Pi lifecycle adapter', () => {
       workspaceId: 'workspace-live',
       surfaceId: 'surface-a',
     });
+  });
+
+  it('restores UI wrappers through adapter shutdown before reinstalling them', async () => {
+    const h = harness();
+    const ui = h.ctx.ui as any;
+    const releases: Array<(value: string) => void> = [];
+    const originalInput = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          releases.push(resolve);
+        }),
+    );
+    ui.input = originalInput;
+
+    await h.emit('session_start');
+    const firstWrapper = ui.input;
+    const firstCall = ui.input('first');
+    await h.emit('session_shutdown');
+
+    expect(h.snapshots.some((entry) => entry.snapshot?.state === 'awaiting-input')).toBe(true);
+    expect(ui.input).toBe(originalInput);
+
+    await h.emit('session_start');
+    const secondWrapper = ui.input;
+    expect(secondWrapper).not.toBe(originalInput);
+    expect(secondWrapper).not.toBe(firstWrapper);
+
+    const snapshotsBeforeFirstRelease = h.snapshots.length;
+    releases[0]?.('first');
+    await expect(firstCall).resolves.toBe('first');
+    expect(h.snapshots).toHaveLength(snapshotsBeforeFirstRelease);
+    expect(ui.input).toBe(secondWrapper);
+
+    const secondCall = ui.input('second');
+    expect(releases).toHaveLength(2);
+    releases[1]?.('second');
+    await expect(secondCall).resolves.toBe('second');
   });
 
   it('keeps lifecycle disabled when target resolution fails', async () => {
@@ -423,8 +466,17 @@ describe('Pi lifecycle adapter', () => {
     const maintenance = h.intervals.find(
       ({ delay }) => delay === LIFECYCLE_TIMINGS.maintenanceIntervalMs,
     )!;
+    const rolloverStart = h.snapshots.length;
     maintenance.callback();
-    await vi.waitFor(() => expect(h.client.changeSession).toHaveBeenCalledWith('session-b'));
+    await vi.waitFor(() =>
+      expect(
+        h.snapshots.slice(rolloverStart).map(({ operation, session }) => ({ operation, session })),
+      ).toEqual([
+        { operation: 'session', session: 'session-b' },
+        { operation: 'snapshot', session: 'session-b' },
+      ]),
+    );
+    expect(h.client.changeSession).toHaveBeenCalledWith('session-b');
     expect(h.snapshots.at(-1)?.snapshot?.state).toBe('idle');
   });
 
@@ -447,6 +499,7 @@ describe('Pi lifecycle adapter', () => {
       env: env(),
       resolveTarget: async (_cwd, target) => ({
         ok: true,
+        socketPath: target.socketPath,
         workspaceId: target.workspaceId,
         surfaceId: target.surfaceId,
       }),

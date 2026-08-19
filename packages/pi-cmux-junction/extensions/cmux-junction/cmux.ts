@@ -20,7 +20,7 @@ export interface CmuxTarget {
 }
 
 export type CmuxTargetResolution =
-  | { ok: true; workspaceId: string; surfaceId: string }
+  | ({ ok: true } & CmuxTarget)
   | { ok: false; reason: 'process-failed' | 'invalid-response'; message: string };
 
 export type CmuxLaunchRecipe = { mode: 'fresh' } | { mode: 'fork'; sourceSessionFile: string };
@@ -140,7 +140,7 @@ export async function resolveCmuxTarget(
       message: 'cmux returned an invalid delivery target',
     };
   }
-  return { ok: true, ...resolved };
+  return { ok: true, socketPath, ...resolved };
 }
 
 export function buildWorkspaceCreateArgs(

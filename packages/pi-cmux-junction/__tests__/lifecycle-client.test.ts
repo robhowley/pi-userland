@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LifecycleSnapshot } from '../extensions/cmux-junction/activity.js';
 import {
+  LIFECYCLE_ACK_TIMEOUT_MS,
   LifecycleClient,
   coordinatorLaunchArgs,
   decodeLifecycleAckLine,
@@ -36,14 +37,19 @@ class MockSocket extends EventEmitter {
   destroyed = false;
   readonly messages: any[] = [];
   constructor(
-    private readonly acknowledge = true,
+    private readonly autoAcknowledge = true,
     private readonly acceptedGeneration?: number,
+    private readonly connectionOutcome: 'connect' | 'error' = 'connect',
   ) {
     super();
   }
   override once(event: string | symbol, listener: (...args: any[]) => void): this {
     super.once(event, listener);
-    if (event === 'connect') queueMicrotask(() => this.emit('connect'));
+    if (event === this.connectionOutcome) {
+      queueMicrotask(() =>
+        this.emit(event, event === 'error' ? new Error('asynchronous connect failure') : undefined),
+      );
+    }
     return this;
   }
   setEncoding() {
@@ -53,24 +59,33 @@ class MockSocket extends EventEmitter {
     const message = JSON.parse(value.trim());
     this.messages.push(message);
     callback?.();
-    if (this.acknowledge) {
-      const ack = {
-        protocol: message.protocol,
-        kind: 'ack',
-        workspaceId: message.workspaceId,
-        surfaceId: message.surfaceId,
-        sessionId: message.sessionId,
-        runtimeId: message.runtimeId,
-        pid: message.pid,
-        processStartedAt: message.processStartedAt,
-        connectionId: message.connectionId,
-        acceptedGeneration: this.acceptedGeneration ?? message.ownerGeneration ?? 7,
-        acceptedRevision: message.revision,
-        acceptedKind: message.kind,
-      };
-      queueMicrotask(() => this.emit('data', `${JSON.stringify(ack)}\n`));
-    }
+    if (this.autoAcknowledge) queueMicrotask(() => this.acknowledgeLatest());
     return true;
+  }
+  acknowledgeLatest(splitAt?: number) {
+    const message = this.messages.at(-1);
+    if (!message) throw new Error('No message to acknowledge');
+    const ack = {
+      protocol: message.protocol,
+      kind: 'ack',
+      workspaceId: message.workspaceId,
+      surfaceId: message.surfaceId,
+      sessionId: message.sessionId,
+      runtimeId: message.runtimeId,
+      pid: message.pid,
+      processStartedAt: message.processStartedAt,
+      connectionId: message.connectionId,
+      acceptedGeneration: this.acceptedGeneration ?? message.ownerGeneration ?? 7,
+      acceptedRevision: message.revision,
+      acceptedKind: message.kind,
+    };
+    const line = `${JSON.stringify(ack)}\n`;
+    if (splitAt === undefined) {
+      this.emit('data', line);
+    } else {
+      this.emit('data', line.slice(0, splitAt));
+      this.emit('data', line.slice(splitAt));
+    }
   }
   destroy() {
     if (this.destroyed) return this;
@@ -81,6 +96,7 @@ class MockSocket extends EventEmitter {
 }
 
 afterEach(async () => {
+  vi.useRealTimers();
   await Promise.all(temporary.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
@@ -140,8 +156,7 @@ describe('lifecycle client wire contract', () => {
       toolName: null,
       transitionAt: 1_700_000_000_000,
       lastEventAt: null,
-      compactionStartedAt: null,
-      compactionProgressAt: null,
+      compactionAt: null,
     };
     const ack = {
       protocol: message.protocol,
@@ -158,6 +173,26 @@ describe('lifecycle client wire contract', () => {
       acceptedKind: 'snapshot',
     };
     expect(decodeLifecycleAckLine(JSON.stringify(ack), message)).toEqual(ack);
+    const invalidFences: Array<[string, Record<string, unknown>]> = [
+      ['protocol', { protocol: 'pi-junction.lifecycle.v2' }],
+      ['kind', { kind: 'nack' }],
+      ['workspaceId', { workspaceId: 'workspace-b' }],
+      ['surfaceId', { surfaceId: 'surface-b' }],
+      ['sessionId', { sessionId: 'session-b' }],
+      ['runtimeId', { runtimeId: 'runtime-b' }],
+      ['pid', { pid: owner.pid + 1 }],
+      ['processStartedAt', { processStartedAt: owner.processStartedAt + 1 }],
+      ['connectionId', { connectionId: 'connection-b' }],
+      ['acceptedGeneration', { acceptedGeneration: 0 }],
+      ['acceptedRevision', { acceptedRevision: 1 }],
+      ['acceptedKind', { acceptedKind: 'goodbye' }],
+    ];
+    for (const [field, override] of invalidFences) {
+      expect(
+        decodeLifecycleAckLine(JSON.stringify({ ...ack, ...override }), message),
+        field,
+      ).toBeNull();
+    }
     expect(decodeLifecycleAckLine(JSON.stringify({ acceptedGeneration: 1 }), message)).toBeNull();
     expect(decodeLifecycleAckLine(`${JSON.stringify(ack)}\n`, message)).toBeNull();
     expect(decodeLifecycleAckLine('x'.repeat(17 * 1024), message)).toBeNull();
@@ -194,6 +229,115 @@ describe('lifecycle client wire contract', () => {
     expect(value.diagnostics()).toMatchObject({ generation: 7, revision: 2 });
   });
 
+  it('emits only the allowed snapshot and goodbye keys', async () => {
+    const socket = new MockSocket();
+    const value = client({ connect: () => socket as any });
+    await value.start(snapshot);
+    await value.goodbye();
+
+    expect(Object.keys(socket.messages[0]).sort()).toEqual(
+      [
+        'protocol',
+        'kind',
+        'workspaceId',
+        'surfaceId',
+        'sessionId',
+        'runtimeId',
+        'pid',
+        'processStartedAt',
+        'connectionId',
+        'ownerGeneration',
+        'revision',
+        'sentAt',
+        'state',
+        'toolName',
+        'transitionAt',
+        'lastEventAt',
+        'compactionAt',
+      ].sort(),
+    );
+    expect(Object.keys(socket.messages[1]).sort()).toEqual(
+      [
+        'protocol',
+        'kind',
+        'workspaceId',
+        'surfaceId',
+        'sessionId',
+        'runtimeId',
+        'pid',
+        'processStartedAt',
+        'connectionId',
+        'ownerGeneration',
+        'revision',
+        'sentAt',
+      ].sort(),
+    );
+  });
+
+  it('preserves concurrent operation wire order while acknowledgements are deferred', async () => {
+    const first = new MockSocket(false);
+    const replacement = new MockSocket(false);
+    const sockets = [first, replacement];
+    const value = client({ connect: () => sockets.shift() as any });
+
+    const registration = value.start(snapshot);
+    const update = value.snapshot({ ...snapshot, state: 'thinking' });
+    const sessionChange = value.changeSession('session-b');
+    const sessionSnapshot = value.snapshot(snapshot);
+    const disposal = value.goodbye();
+
+    await vi.waitFor(() => expect(first.messages).toHaveLength(1));
+    expect(first.messages[0]).toMatchObject({
+      kind: 'snapshot',
+      revision: 0,
+      sessionId: 'session-a',
+    });
+    first.acknowledgeLatest();
+    await vi.waitFor(() => expect(first.messages).toHaveLength(2));
+    expect(first.messages[1]).toMatchObject({
+      kind: 'snapshot',
+      revision: 1,
+      sessionId: 'session-a',
+    });
+    first.acknowledgeLatest();
+
+    await vi.waitFor(() => expect(replacement.messages).toHaveLength(1));
+    expect(replacement.messages[0]).toMatchObject({
+      kind: 'snapshot',
+      revision: 0,
+      sessionId: 'session-b',
+      ownerGeneration: null,
+    });
+    replacement.acknowledgeLatest();
+    await vi.waitFor(() => expect(replacement.messages).toHaveLength(2));
+    expect(replacement.messages[1]).toMatchObject({
+      kind: 'goodbye',
+      revision: 1,
+      sessionId: 'session-b',
+      ownerGeneration: 7,
+    });
+    replacement.acknowledgeLatest();
+
+    await expect(
+      Promise.all([registration, update, sessionChange, sessionSnapshot, disposal]),
+    ).resolves.toEqual([true, true, undefined, true, true]);
+    expect([...first.messages, ...replacement.messages].map((message) => message.kind)).toEqual([
+      'snapshot',
+      'snapshot',
+      'snapshot',
+      'goodbye',
+    ]);
+  });
+
+  it('accepts an acknowledgement split across socket chunks', async () => {
+    const socket = new MockSocket(false);
+    const value = client({ connect: () => socket as any });
+    const registration = value.start(snapshot);
+    await vi.waitFor(() => expect(socket.messages).toHaveLength(1));
+    socket.acknowledgeLatest(23);
+    await expect(registration).resolves.toBe(true);
+  });
+
   it('reconnects with the accepted generation and a full latest snapshot', async () => {
     const firstSocket = new MockSocket();
     const reconnect = new MockSocket();
@@ -216,6 +360,27 @@ describe('lifecycle client wire contract', () => {
       revision: 2,
       state: 'thinking',
     });
+  });
+
+  it('releases an unacknowledged delivery and replays it exactly once after disconnect', async () => {
+    const first = new MockSocket(false);
+    const replacement = new MockSocket(false);
+    const sockets = [first, replacement];
+    const value = client({ connect: () => sockets.shift() as any });
+
+    const registration = value.start(snapshot);
+    await vi.waitFor(() => expect(first.messages).toHaveLength(1));
+    first.destroy();
+    await expect(registration).resolves.toBe(false);
+    await vi.waitFor(() => expect(replacement.messages).toHaveLength(1));
+    expect(replacement.messages[0]).toEqual({
+      ...first.messages[0],
+      revision: 1,
+    });
+    replacement.acknowledgeLatest();
+    await vi.waitFor(() => expect(value.diagnostics().generation).toBe(7));
+    await Promise.resolve();
+    expect(replacement.messages).toHaveLength(1);
   });
 
   it('adopts a newly assigned generation after its prior lease was reaped', async () => {
@@ -275,6 +440,79 @@ describe('coordinator election and target paths', () => {
       expect.objectContaining({ shell: false, detached: true, stdio: 'ignore' }),
     );
     expect(spawned.mock.results[0]!.value.unref).toHaveBeenCalled();
+  });
+
+  it('launches and retries after the first socket reports an asynchronous error', async () => {
+    const failed = new MockSocket(false, undefined, 'error');
+    const connected = new MockSocket();
+    const sockets = [failed, connected];
+    const spawned = vi.fn(() => ({ unref: vi.fn() }));
+    const value = client({
+      spawn: spawned,
+      connect: () => sockets.shift() as any,
+      connectAttempts: 1,
+    });
+
+    await expect(value.start(snapshot)).resolves.toBe(true);
+    expect(failed.destroyed).toBe(true);
+    expect(spawned).toHaveBeenCalledOnce();
+    expect(connected.messages).toHaveLength(1);
+  });
+
+  it('retries path preparation on a later snapshot after initial registration fails', async () => {
+    const preparePaths = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error('transient path failure'))
+      .mockResolvedValue(undefined);
+    const socket = new MockSocket();
+    const connect = vi.fn(() => socket as any);
+    const value = client({ preparePaths, connect });
+
+    await expect(value.start(snapshot)).resolves.toBe(false);
+    expect(connect).not.toHaveBeenCalled();
+    await expect(value.snapshot({ ...snapshot, state: 'thinking' })).resolves.toBe(true);
+    expect(preparePaths).toHaveBeenCalledTimes(2);
+    expect(connect).toHaveBeenCalledOnce();
+    expect(socket.messages).toHaveLength(1);
+    expect(socket.messages[0]).toMatchObject({ state: 'thinking', revision: 1 });
+  });
+
+  it('times out a silent peer, discards it, and releases the delivery queue', async () => {
+    vi.useFakeTimers();
+    const silent = new MockSocket(false);
+    const replacement = new MockSocket();
+    const sockets = [silent, replacement];
+    const value = client({ connect: () => sockets.shift() as any });
+
+    const registration = value.start(snapshot);
+    const next = value.snapshot({ ...snapshot, state: 'thinking' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(silent.messages).toHaveLength(1);
+    expect(replacement.messages).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(LIFECYCLE_ACK_TIMEOUT_MS);
+    await expect(registration).resolves.toBe(false);
+    expect(silent.destroyed).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(next).resolves.toBe(true);
+    expect(replacement.messages).toHaveLength(1);
+    expect(replacement.messages[0]).toMatchObject({ state: 'thinking', revision: 1 });
+  });
+
+  it('rejects closed operations before preparing, connecting, or launching', async () => {
+    const preparePaths = vi.fn(async () => undefined);
+    const connect = vi.fn(() => new MockSocket() as any);
+    const spawn = vi.fn(() => ({ unref: vi.fn() }));
+    const value = client({ preparePaths, connect, spawn });
+
+    await expect(value.goodbye()).resolves.toBe(true);
+    await expect(value.start(snapshot)).resolves.toBe(false);
+    await expect(value.snapshot(snapshot)).resolves.toBe(false);
+    await value.changeSession('session-b');
+    expect(preparePaths).not.toHaveBeenCalled();
+    expect(connect).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+    expect(value.diagnostics()).toMatchObject({ generation: null, revision: -1, connected: false });
   });
 
   it('creates only an isolated 0700 target directory and 0600 lock', async () => {

@@ -88,7 +88,7 @@ describe('cmux boundary', () => {
       resolveCmuxTarget(
         '/repo',
         {
-          socketPath: '/tmp/cmux.sock',
+          socketPath: '  /tmp/cmux.sock  ',
           workspaceId: 'workspace-stale',
           surfaceId: 'surface-1',
         },
@@ -96,6 +96,7 @@ describe('cmux boundary', () => {
       ),
     ).resolves.toEqual({
       ok: true,
+      socketPath: '/tmp/cmux.sock',
       workspaceId: 'workspace-live',
       surfaceId: 'surface-1',
     });

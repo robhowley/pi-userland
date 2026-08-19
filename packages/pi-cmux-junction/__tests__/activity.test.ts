@@ -30,7 +30,7 @@ function snapshotAt(state: LifecycleReducerState, at: number): LifecycleSnapshot
 }
 
 describe('Junction lifecycle reducer', () => {
-  it('owns exactly seven states and derives the trusted idle/thinking/tool path', () => {
+  it('derives the trusted idle/thinking/tool path', () => {
     const initial = createLifecycleState({ runtimeId: 'runtime-1', now: START });
     expect(snapshotAt(initial, START).state).toBe('unknown');
 
@@ -64,17 +64,6 @@ describe('Junction lifecycle reducer', () => {
     expect(snapshotAt(state, START + 4_000).state).toBe('unknown');
     state = reduce(state, { type: 'agent_settled', isIdle: true }, START + 5_000).state;
     expect(snapshotAt(state, START + 5_000).state).toBe('idle');
-
-    const labels = [
-      'Compacting',
-      'Error',
-      'Needs input',
-      'Tool running',
-      'Thinking',
-      'Unknown',
-      'Idle',
-    ];
-    expect(new Set(labels)).toHaveLength(7);
   });
 
   it('applies compacting, error, wait, tool, thinking, idle precedence', () => {
@@ -92,7 +81,7 @@ describe('Junction lifecycle reducer', () => {
     ).state;
     expect(snapshotAt(state, START + 3).state).toBe('awaiting-input');
 
-    state = reduce(state, { type: 'session_before_compact', reason: 'threshold' }, START + 4).state;
+    state = reduce(state, { type: 'session_before_compact' }, START + 4).state;
     expect(snapshotAt(state, START + 4).state).toBe('compacting');
 
     state = reduce(
@@ -150,7 +139,7 @@ describe('Junction lifecycle reducer', () => {
 
     let transition = reduce(
       state,
-      { type: 'tool_execution_update', toolCallId: 'unknown' },
+      { type: 'tool_execution_update', toolCallId: 'unknown', meaningful: true },
       START + 4,
     );
     expect(transition.accepted).toBe(false);
@@ -165,7 +154,11 @@ describe('Junction lifecycle reducer', () => {
     state = reduce(state, { type: 'tool_execution_end', toolCallId: 'read-1' }, START + 6).state;
     expect(snapshotAt(state, START + 6).state).toBe('thinking');
 
-    transition = reduce(state, { type: 'tool_execution_update', toolCallId: 'read-1' }, START + 7);
+    transition = reduce(
+      state,
+      { type: 'tool_execution_update', toolCallId: 'read-1', meaningful: true },
+      START + 7,
+    );
     expect(transition.accepted).toBe(false);
     expect(transition.state).toBe(state);
   });
@@ -413,7 +406,7 @@ describe('Junction lifecycle reducer', () => {
   it('fences compaction abort callbacks by generation and clears current completion in order', () => {
     let state = freshState();
     state = reduce(state, { type: 'turn_start', turnIndex: 0 }, START + 1).state;
-    state = reduce(state, { type: 'session_before_compact', reason: 'manual' }, START + 2).state;
+    state = reduce(state, { type: 'session_before_compact' }, START + 2).state;
     const firstGeneration = state.compaction?.generation;
     expect(firstGeneration).toBe(1);
     expect(snapshotAt(state, START + 2).state).toBe('compacting');
@@ -425,7 +418,7 @@ describe('Junction lifecycle reducer', () => {
     ).state;
     expect(state.compaction?.generation).toBe(firstGeneration);
 
-    state = reduce(state, { type: 'session_before_compact', reason: 'overflow' }, START + 4).state;
+    state = reduce(state, { type: 'session_before_compact' }, START + 4).state;
     const secondGeneration = state.compaction?.generation;
     expect(secondGeneration).toBe(2);
 
@@ -445,11 +438,11 @@ describe('Junction lifecycle reducer', () => {
   it('demotes stale compaction, expires it after ten minutes, and never refreshes it generically', () => {
     let state = freshState();
     state = reduce(state, { type: 'turn_start', turnIndex: 0 }, START).state;
-    state = reduce(state, { type: 'session_before_compact', reason: 'threshold' }, START + 1).state;
-    const compactionUpdatedAt = state.compaction?.updatedAt;
+    state = reduce(state, { type: 'session_before_compact' }, START + 1).state;
+    const compactionAt = state.compaction?.at;
 
     state = reduce(state, { type: 'input', source: 'extension' }, START + 60_000).state;
-    expect(state.compaction?.updatedAt).toBe(compactionUpdatedAt);
+    expect(state.compaction?.at).toBe(compactionAt);
     expect(snapshotAt(state, START + 60_000).state).toBe('compacting');
 
     const demoteBoundary = START + 1 + LIFECYCLE_TIMINGS.compactionDemoteAfterMs;
@@ -474,33 +467,10 @@ describe('Junction lifecycle reducer', () => {
     state = reduce(state, { type: 'ui_wait_end', waitId: 'select-1' }, START + 2).state;
     expect(snapshotAt(state, START + 2).state).toBe('idle');
 
-    state = reduce(state, { type: 'session_before_compact', reason: 'manual' }, START + 3).state;
+    state = reduce(state, { type: 'session_before_compact' }, START + 3).state;
     expect(snapshotAt(state, START + 3).state).toBe('compacting');
     state = reduce(state, { type: 'session_compact' }, START + 4).state;
     expect(snapshotAt(state, START + 4).state).toBe('idle');
-  });
-
-  it('clears local facts on shutdown and rejects events after intake closes', () => {
-    let state = freshState();
-    state = reduce(state, { type: 'turn_start', turnIndex: 0 }, START + 1).state;
-    state = reduce(
-      state,
-      { type: 'ui_wait_start', waitId: 'confirm-1', kind: 'confirm' },
-      START + 2,
-    ).state;
-    state = reduce(state, { type: 'session_before_compact' }, START + 3).state;
-    const shutdown = reduce(state, { type: 'session_shutdown' }, START + 4);
-
-    expect(shutdown.shouldPublish).toBe(true);
-    expect(shutdown.state.closed).toBe(true);
-    expect(shutdown.state.activeTools).toEqual([]);
-    expect(shutdown.state.uiWaits).toEqual([]);
-    expect(shutdown.state.compaction).toBeNull();
-    expect(shutdown.snapshot.state).toBe('idle');
-
-    const lateTurn = reduce(shutdown.state, { type: 'turn_start', turnIndex: 1 }, START + 5);
-    expect(lateTurn.accepted).toBe(false);
-    expect(lateTurn.state).toBe(shutdown.state);
   });
 
   it('treats malformed stored timestamps as unknown evidence', () => {

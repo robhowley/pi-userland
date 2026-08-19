@@ -52,9 +52,36 @@ const snapshotFields = [
   'toolName',
   'transitionAt',
   'lastEventAt',
-  'compactionStartedAt',
-  'compactionProgressAt',
+  'compactionAt',
 ];
+const ledgerFields = [
+  'schemaVersion',
+  'target',
+  'nextGenerationBySurface',
+  'owners',
+  'desired',
+  'applied',
+  'updatedAt',
+];
+const statusFields = ['state', 'label', 'revision', 'transitionAt'];
+const durableOwnerFields = [
+  'workspaceId',
+  'surfaceId',
+  'sessionId',
+  'runtimeId',
+  'pid',
+  'processStartedAt',
+  'connectionId',
+  'ownerGeneration',
+  'acceptedRevision',
+  'heartbeatAt',
+  'connected',
+  'replayPending',
+  'disconnectedAt',
+  'liveness',
+  'snapshot',
+];
+const durableSnapshotFields = ['state', 'toolName', 'transitionAt', 'lastEventAt', 'compactionAt'];
 const ackFields = [
   'protocol',
   'kind',
@@ -105,6 +132,37 @@ function validTime(value, nullable = false) {
   );
 }
 
+function validSnapshot(value, requireExactFields = true) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  if (
+    (requireExactFields && !exactFields(value, durableSnapshotFields)) ||
+    !states.has(value.state)
+  ) {
+    return false;
+  }
+  if (
+    (value.toolName !== null &&
+      (typeof value.toolName !== 'string' || !toolNamePattern.test(value.toolName))) ||
+    (value.toolName !== null && value.state !== 'tool-running') ||
+    !validTime(value.transitionAt) ||
+    !validTime(value.lastEventAt, true) ||
+    !validTime(value.compactionAt, true)
+  ) {
+    return false;
+  }
+  if (value.state !== 'idle' && value.state !== 'unknown' && value.lastEventAt === null) {
+    return false;
+  }
+  if (value.state === 'compacting' && value.compactionAt === null) return false;
+  if (
+    value.compactionAt !== null &&
+    (value.lastEventAt === null || value.compactionAt > value.lastEventAt)
+  ) {
+    return false;
+  }
+  return true;
+}
+
 export function decodeWireLine(line, target) {
   if (typeof line !== 'string' || Buffer.byteLength(line, 'utf8') > MAX_FRAME_BYTES) {
     return fail('size');
@@ -139,30 +197,7 @@ export function decodeWireLine(line, target) {
     return fail('number');
   }
   if (value.kind === 'goodbye' && value.ownerGeneration === null) return fail('generation');
-  if (value.kind === 'snapshot') {
-    if (!states.has(value.state)) return fail('state');
-    if (
-      (value.toolName !== null &&
-        (typeof value.toolName !== 'string' || !toolNamePattern.test(value.toolName))) ||
-      (value.toolName !== null && value.state !== 'tool-running')
-    ) {
-      return fail('toolName');
-    }
-    if (
-      !validTime(value.transitionAt) ||
-      !validTime(value.lastEventAt, true) ||
-      !validTime(value.compactionStartedAt, true) ||
-      !validTime(value.compactionProgressAt, true)
-    ) {
-      return fail('number');
-    }
-    if (
-      value.state === 'compacting' &&
-      (value.compactionStartedAt === null || value.compactionProgressAt === null)
-    ) {
-      return fail('compaction');
-    }
-  }
+  if (value.kind === 'snapshot' && !validSnapshot(value, false)) return fail('snapshot');
   return { ok: true, value };
 }
 
@@ -295,7 +330,7 @@ export function classifyOwner(owner, now, probePid) {
   const probe = probePid(owner.pid, owner.processStartedAt);
   const age = now - owner.heartbeatAt;
   if (probe === 'missing' || probe === 'reused' || age > 300_000) return 'dead';
-  if (owner.heartbeatAt > now + 10_000) return 'stale';
+  if (owner.replayPending || owner.heartbeatAt > now + 10_000) return 'stale';
   if (probe === 'match' && age <= 30_000 && !owner.disconnectedAt) return 'live';
   return 'stale';
 }
@@ -303,28 +338,22 @@ export function classifyOwner(owner, now, probePid) {
 function displayState(owner, now) {
   if (owner.liveness !== 'live') return 'unknown';
   const snapshot = owner.snapshot;
-  const compactionTimesPresent =
-    snapshot.compactionStartedAt !== null && snapshot.compactionProgressAt !== null;
-  const compactionTimesAbsent =
-    snapshot.compactionStartedAt === null && snapshot.compactionProgressAt === null;
+  const compactionPresent = snapshot.compactionAt !== null;
   if (
     snapshot.transitionAt > now + 5_000 ||
     (snapshot.lastEventAt !== null && snapshot.lastEventAt > now + 5_000) ||
-    (!compactionTimesPresent && !compactionTimesAbsent) ||
-    (compactionTimesPresent &&
-      (snapshot.compactionStartedAt > snapshot.compactionProgressAt ||
-        snapshot.compactionStartedAt > now + 5_000 ||
-        snapshot.compactionProgressAt > now + 5_000 ||
-        now - snapshot.compactionProgressAt > 600_000 ||
+    (compactionPresent &&
+      (snapshot.compactionAt > now + 5_000 ||
+        now - snapshot.compactionAt > 600_000 ||
         snapshot.lastEventAt === null ||
-        snapshot.compactionProgressAt > snapshot.lastEventAt))
+        snapshot.compactionAt > snapshot.lastEventAt))
   ) {
     return 'unknown';
   }
   if (
-    compactionTimesPresent &&
+    compactionPresent &&
     snapshot.state !== 'compacting' &&
-    now - snapshot.compactionProgressAt <= 120_000
+    now - snapshot.compactionAt <= 120_000
   ) {
     return 'unknown';
   }
@@ -333,9 +362,7 @@ function displayState(owner, now) {
   if (snapshot.lastEventAt === null || now - snapshot.lastEventAt > 120_000) return 'unknown';
   if (
     snapshot.state === 'compacting' &&
-    (!compactionTimesPresent ||
-      now - snapshot.compactionProgressAt > 120_000 ||
-      now - snapshot.compactionStartedAt > 600_000)
+    (!compactionPresent || now - snapshot.compactionAt > 120_000)
   ) {
     return 'unknown';
   }
@@ -343,18 +370,13 @@ function displayState(owner, now) {
 }
 
 export function aggregateOwners(owners, now) {
-  const ordered = [...owners].sort((left, right) =>
-    `${left.surfaceId}\0${left.sessionId}\0${String(left.ownerGeneration).padStart(16, '0')}`.localeCompare(
-      `${right.surfaceId}\0${right.sessionId}\0${String(right.ownerGeneration).padStart(16, '0')}`,
-    ),
-  );
-  if (ordered.length === 0) return { state: null, label: null };
-
+  let ownerCount = 0;
   let winner = null;
   let winnerRank = 0;
   let unresolved = false;
   const liveNonIdle = [];
-  for (const owner of ordered) {
+  for (const owner of owners) {
+    ownerCount += 1;
     const state = displayState(owner, now);
     const rank = activeRanks.get(state) ?? 0;
     if (owner.liveness === 'live' && state !== 'idle') liveNonIdle.push({ owner, state });
@@ -367,6 +389,7 @@ export function aggregateOwners(owners, now) {
       unresolved = true;
     }
   }
+  if (ownerCount === 0) return { state: null, label: null };
   if (winner) {
     const toolName =
       winner === 'tool-running' &&
@@ -392,27 +415,106 @@ function emptyLedger(target, now) {
   };
 }
 
-function safeInitialLedger(value, target, now) {
+function validStatus(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  if (!exactFields(value, statusFields)) return false;
   if (
-    !value ||
-    value.schemaVersion !== 1 ||
-    value.target?.socketPath !== target.socketPath ||
-    value.target?.workspaceId !== target.workspaceId ||
+    !Number.isSafeInteger(value.revision) ||
+    value.revision < 0 ||
+    !validTime(value.transitionAt)
+  ) {
+    return false;
+  }
+  if (value.state === null) return value.label === null;
+  if (!states.has(value.state) || typeof value.label !== 'string' || hasControl(value.label)) {
+    return false;
+  }
+  if (value.state === 'tool-running') {
+    if (value.label === 'Tool running') return true;
+    const toolName = value.label.startsWith('Tool running: ')
+      ? value.label.slice('Tool running: '.length)
+      : '';
+    return toolNamePattern.test(toolName);
+  }
+  return value.label === aggregateLabel(value.state);
+}
+
+function validDurableOwner(owner, target, counters, updatedAt) {
+  if (!owner || typeof owner !== 'object' || Array.isArray(owner)) return false;
+  if (!exactFields(owner, durableOwnerFields)) return false;
+  for (const field of identityFields) {
+    if (!validIdentity(owner[field])) return false;
+  }
+  return (
+    owner.workspaceId === target.workspaceId &&
+    Number.isSafeInteger(owner.pid) &&
+    owner.pid > 0 &&
+    validTime(owner.processStartedAt) &&
+    Number.isSafeInteger(owner.ownerGeneration) &&
+    owner.ownerGeneration > 0 &&
+    Number.isSafeInteger(owner.acceptedRevision) &&
+    owner.acceptedRevision >= 0 &&
+    validTime(owner.heartbeatAt) &&
+    owner.heartbeatAt <= updatedAt &&
+    typeof owner.connected === 'boolean' &&
+    typeof owner.replayPending === 'boolean' &&
+    validTime(owner.disconnectedAt, true) &&
+    (owner.connected ? owner.disconnectedAt === null : owner.disconnectedAt !== null) &&
+    (owner.liveness === 'live'
+      ? owner.connected && !owner.replayPending && owner.disconnectedAt === null
+      : owner.liveness === 'stale') &&
+    counters[owner.surfaceId] >= owner.ownerGeneration &&
+    validSnapshot(owner.snapshot)
+  );
+}
+
+function safeInitialLedger(value, target, now) {
+  const invalid = () => emptyLedger(target, now);
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return invalid();
+  if (!exactFields(value, ledgerFields) || value.schemaVersion !== 1) return invalid();
+  if (
+    !value.target ||
+    typeof value.target !== 'object' ||
+    Array.isArray(value.target) ||
+    !exactFields(value.target, ['socketPath', 'workspaceId']) ||
+    value.target.socketPath !== target.socketPath ||
+    value.target.workspaceId !== target.workspaceId ||
+    !validIdentity(value.target.socketPath) ||
+    !validIdentity(value.target.workspaceId) ||
     !Array.isArray(value.owners) ||
     !value.nextGenerationBySurface ||
-    typeof value.nextGenerationBySurface !== 'object'
+    typeof value.nextGenerationBySurface !== 'object' ||
+    Array.isArray(value.nextGenerationBySurface) ||
+    !validStatus(value.desired) ||
+    !validStatus(value.applied) ||
+    !validTime(value.updatedAt) ||
+    value.applied.revision > value.desired.revision ||
+    value.desired.transitionAt > value.updatedAt ||
+    value.applied.transitionAt > value.updatedAt
   ) {
-    return emptyLedger(target, now);
+    return invalid();
   }
+  for (const [surfaceId, generation] of Object.entries(value.nextGenerationBySurface)) {
+    if (!validIdentity(surfaceId) || !Number.isSafeInteger(generation) || generation <= 0) {
+      return invalid();
+    }
+  }
+  const surfaces = new Set();
+  for (const owner of value.owners) {
+    if (
+      !validDurableOwner(owner, target, value.nextGenerationBySurface, value.updatedAt) ||
+      surfaces.has(owner.surfaceId)
+    ) {
+      return invalid();
+    }
+    surfaces.add(owner.surfaceId);
+  }
+
   const ledger = clone(value);
-  ledger.owners = ledger.owners.filter(
-    (owner) =>
-      owner && typeof owner.surfaceId === 'string' && Number.isSafeInteger(owner.ownerGeneration),
-  );
   for (const owner of ledger.owners) {
     owner.connected = false;
     owner.replayPending = true;
-    owner.disconnectedAt = null;
+    owner.disconnectedAt = now;
     owner.liveness = 'stale';
     owner.socketToken = null;
   }
@@ -431,56 +533,85 @@ export function createCoordinatorCore(options) {
   const probePid = options.probePid ?? (() => 'unverifiable');
   const persist = options.persist ?? (async () => {});
   const publish = options.publish ?? (async () => ({ ok: true }));
-  const ledger = safeInitialLedger(options.initialLedger, options.target, now());
-  const owners = new Map(ledger.owners.map((owner) => [owner.surfaceId, owner]));
-  const socketBindings = new Map();
+  let ledger = safeInitialLedger(options.initialLedger, options.target, now());
+  let owners = new Map(ledger.owners.map((owner) => [owner.surfaceId, owner]));
+  let socketBindings = new Map();
+  const pendingClosures = new Map();
   let operationTail = Promise.resolve();
   let publication = null;
   let deliveryOutcome = null;
   let retryScheduled = false;
+  let finalClearObligated = false;
   let finalClearReadyAt = null;
   let finalClearStartedAt = null;
   let finalClearAttempts = 0;
 
-  const snapshotLedger = () => ({
-    ...ledger,
-    target: { ...ledger.target },
-    nextGenerationBySurface: { ...ledger.nextGenerationBySurface },
-    owners: [...owners.values()]
+  const snapshotLedger = (sourceLedger = ledger, sourceOwners = owners) => ({
+    ...sourceLedger,
+    target: { ...sourceLedger.target },
+    nextGenerationBySurface: { ...sourceLedger.nextGenerationBySurface },
+    owners: [...sourceOwners.values()]
       .sort((left, right) => left.surfaceId.localeCompare(right.surfaceId))
       .map((owner) => {
         const durableOwner = clone(owner);
         delete durableOwner.socketToken;
         return durableOwner;
       }),
-    desired: { ...ledger.desired },
-    applied: { ...ledger.applied },
+    desired: { ...sourceLedger.desired },
+    applied: { ...sourceLedger.applied },
   });
 
-  const persistCurrent = async () => {
-    ledger.updatedAt = now();
-    ledger.owners = [...owners.values()];
-    await persist(snapshotLedger());
-  };
-
-  const recompute = () => {
-    const aggregate = aggregateOwners(owners.values(), now());
-    if (!statusEqual(aggregate, ledger.desired)) {
-      if (aggregate.state === null && ledger.desired.state !== null) {
-        finalClearReadyAt = now() + RECONNECT_GRACE_MS;
-        finalClearStartedAt = null;
-        finalClearAttempts = 0;
-      } else if (aggregate.state !== null) {
-        finalClearReadyAt = null;
-        finalClearStartedAt = null;
-        finalClearAttempts = 0;
+  const recompute = (draft) => {
+    const aggregate = aggregateOwners(draft.owners.values(), now());
+    if (!statusEqual(aggregate, draft.ledger.desired)) {
+      if (aggregate.state === null) {
+        draft.finalClearObligated = true;
+        draft.finalClearReadyAt = draft.clearImmediately ? now() : now() + RECONNECT_GRACE_MS;
+        draft.finalClearStartedAt = null;
+        draft.finalClearAttempts = 0;
+      } else {
+        draft.finalClearObligated = false;
+        draft.finalClearReadyAt = null;
+        draft.finalClearStartedAt = null;
+        draft.finalClearAttempts = 0;
       }
-      ledger.desired = {
+      draft.ledger.desired = {
         ...aggregate,
-        revision: ledger.desired.revision + 1,
+        revision: draft.ledger.desired.revision + 1,
         transitionAt: now(),
       };
     }
+  };
+
+  const createDraft = () => {
+    const draftLedger = clone(ledger);
+    const draftOwners = new Map([...owners].map(([key, owner]) => [key, clone(owner)]));
+    return {
+      ledger: draftLedger,
+      owners: draftOwners,
+      socketBindings: new Map([...socketBindings].map(([key, binding]) => [key, clone(binding)])),
+      finalClearObligated,
+      finalClearReadyAt,
+      finalClearStartedAt,
+      finalClearAttempts,
+      clearImmediately: false,
+    };
+  };
+
+  const commitDraft = (draft) => {
+    ledger = draft.ledger;
+    owners = draft.owners;
+    socketBindings = draft.socketBindings;
+    finalClearObligated = draft.finalClearObligated;
+    finalClearReadyAt = draft.finalClearReadyAt;
+    finalClearStartedAt = draft.finalClearStartedAt;
+    finalClearAttempts = draft.finalClearAttempts;
+  };
+
+  const persistDraft = async (draft) => {
+    draft.ledger.updatedAt = now();
+    draft.ledger.owners = [...draft.owners.values()];
+    await persist(snapshotLedger(draft.ledger, draft.owners));
   };
 
   const enqueue = (operation) => {
@@ -502,16 +633,22 @@ export function createCoordinatorCore(options) {
   };
 
   const kickPublication = () => {
-    if (publication || statusEqual(ledger.desired, ledger.applied)) return;
-    if (ledger.desired.state === null && finalClearReadyAt !== null && now() < finalClearReadyAt) {
-      scheduleReconcile(finalClearReadyAt - now());
+    if (
+      publication ||
+      (!finalClearObligated && statusEqual(ledger.desired, ledger.applied)) ||
+      (ledger.desired.state === null && finalClearAttempts >= 3)
+    ) {
       return;
     }
-    if (ledger.desired.state === null && finalClearAttempts >= 3) return;
     publication = (async () => {
-      while (!statusEqual(ledger.desired, ledger.applied)) {
+      while (finalClearObligated || !statusEqual(ledger.desired, ledger.applied)) {
         const attempted = { ...ledger.desired };
         const clearing = attempted.state === null;
+        if (clearing && finalClearReadyAt !== null && now() < finalClearReadyAt) {
+          scheduleReconcile(finalClearReadyAt - now());
+          return;
+        }
+        if (clearing && finalClearAttempts >= 3) return;
         if (clearing) {
           finalClearStartedAt ??= now();
           finalClearAttempts += 1;
@@ -532,38 +669,50 @@ export function createCoordinatorCore(options) {
           return;
         }
         await enqueue(async () => {
-          ledger.applied = attempted;
-          await persistCurrent();
-          if (attempted.state === null && owners.size === 0) options.onFinalClear?.();
+          const draft = createDraft();
+          draft.ledger.applied = attempted;
+          await persistDraft(draft);
+          commitDraft(draft);
+          if (attempted.state === null && statusEqual(attempted, ledger.desired)) {
+            finalClearObligated = false;
+            if (owners.size === 0) options.onFinalClear?.();
+          }
         });
       }
-    })().finally(() => {
-      publication = null;
-    });
+    })()
+      .catch(() => {
+        deliveryOutcome = 'persistence-failed';
+      })
+      .finally(() => {
+        publication = null;
+      });
   };
 
   const mutate = (operation) =>
     enqueue(async () => {
-      const result = operation();
-      recompute();
-      await persistCurrent();
+      const draft = createDraft();
+      const result = operation(draft);
+      if (result?.ok === false) return result;
+      recompute(draft);
+      await persistDraft(draft);
+      commitDraft(draft);
       kickPublication();
       return result;
     });
 
-  const assignGeneration = (surfaceId, existing) => {
+  const assignGeneration = (draftLedger, surfaceId, existing) => {
     const previousGeneration = Object.prototype.hasOwnProperty.call(
-      ledger.nextGenerationBySurface,
+      draftLedger.nextGenerationBySurface,
       surfaceId,
     )
-      ? Number(ledger.nextGenerationBySurface[surfaceId])
+      ? Number(draftLedger.nextGenerationBySurface[surfaceId])
       : 0;
     const generation =
       Math.max(
         Number.isSafeInteger(previousGeneration) ? previousGeneration : 0,
         existing?.ownerGeneration ?? 0,
       ) + 1;
-    Object.defineProperty(ledger.nextGenerationBySurface, surfaceId, {
+    Object.defineProperty(draftLedger.nextGenerationBySurface, surfaceId, {
       configurable: true,
       enumerable: true,
       value: generation,
@@ -586,11 +735,11 @@ export function createCoordinatorCore(options) {
     if (!decoded.ok || decoded.value.kind !== 'snapshot') return decoded;
     if (!validIdentity(socketToken)) return fail('socket');
     const message = decoded.value;
-    return await mutate(() => {
-      const binding = socketBindings.get(socketToken);
+    return await mutate((draft) => {
+      const binding = draft.socketBindings.get(socketToken);
       if (binding && !bindingMatches(binding, message)) return fail('socket-owner');
 
-      const existing = owners.get(message.surfaceId);
+      const existing = draft.owners.get(message.surfaceId);
       if (binding && (!existing || existing.socketToken !== socketToken)) return fail('fence');
 
       let generation = message.ownerGeneration;
@@ -598,12 +747,12 @@ export function createCoordinatorCore(options) {
         if (existing && ownerIdentityMatches(existing, message)) {
           generation = existing.ownerGeneration;
         } else {
-          generation = assignGeneration(message.surfaceId, existing);
+          generation = assignGeneration(draft.ledger, message.surfaceId, existing);
         }
       } else if (!existing) {
         // The prior lease was reaped. A fresh physical socket may safely register
         // the same live process and receive a newly coordinator-assigned generation.
-        generation = assignGeneration(message.surfaceId, null);
+        generation = assignGeneration(draft.ledger, message.surfaceId, null);
       } else if (
         existing.ownerGeneration !== message.ownerGeneration ||
         !ownerIdentityMatches(existing, message)
@@ -629,7 +778,7 @@ export function createCoordinatorCore(options) {
         connectionId: message.connectionId,
         ownerGeneration: generation,
         acceptedRevision: message.revision,
-        heartbeatAt: message.sentAt,
+        heartbeatAt: now(),
         connected: true,
         replayPending: false,
         disconnectedAt: null,
@@ -640,8 +789,7 @@ export function createCoordinatorCore(options) {
           toolName: message.toolName,
           transitionAt: message.transitionAt,
           lastEventAt: message.lastEventAt,
-          compactionStartedAt: message.compactionStartedAt,
-          compactionProgressAt: message.compactionProgressAt,
+          compactionAt: message.compactionAt,
         },
       };
       candidate.liveness = classifyOwner(candidate, now(), probePid);
@@ -652,12 +800,12 @@ export function createCoordinatorCore(options) {
           ownerIdentityMatches(existing, message) &&
           existing.ownerGeneration === generation
         ) {
-          owners.delete(message.surfaceId);
+          draft.owners.delete(message.surfaceId);
         }
         return fail('dead');
       }
-      owners.set(message.surfaceId, candidate);
-      socketBindings.set(socketToken, {
+      draft.owners.set(message.surfaceId, candidate);
+      draft.socketBindings.set(socketToken, {
         surfaceId: message.surfaceId,
         sessionId: message.sessionId,
         runtimeId: message.runtimeId,
@@ -679,9 +827,9 @@ export function createCoordinatorCore(options) {
     if (!decoded.ok || decoded.value.kind !== 'goodbye') return decoded;
     if (!validIdentity(socketToken)) return fail('socket');
     const message = decoded.value;
-    return await mutate(() => {
-      const binding = socketBindings.get(socketToken);
-      const owner = owners.get(message.surfaceId);
+    return await mutate((draft) => {
+      const binding = draft.socketBindings.get(socketToken);
+      const owner = draft.owners.get(message.surfaceId);
       if (
         !binding ||
         !bindingMatches(binding, message) ||
@@ -692,7 +840,8 @@ export function createCoordinatorCore(options) {
       ) {
         return fail('fence');
       }
-      owners.delete(message.surfaceId);
+      draft.owners.delete(message.surfaceId);
+      draft.socketBindings.delete(socketToken);
       return {
         ok: true,
         removed: true,
@@ -702,32 +851,53 @@ export function createCoordinatorCore(options) {
     });
   };
 
-  const connectionClosed = async (socketToken) =>
-    await mutate(() => {
-      const binding = socketBindings.get(socketToken);
-      if (!binding) return { ok: true, changed: false };
-      const owner = owners.get(binding.surfaceId);
-      if (!owner || owner.socketToken !== socketToken) return { ok: true, changed: false };
-      owner.connected = false;
-      owner.disconnectedAt = now();
-      owner.liveness = classifyOwner(owner, now(), probePid);
-      if (owner.liveness === 'dead') owners.delete(binding.surfaceId);
-      return { ok: true, changed: true };
-    });
-
-  const maintain = async () =>
-    await mutate(() => {
-      for (const [surfaceId, owner] of owners) {
+  const connectionClosed = async (socketToken) => {
+    const binding = socketBindings.get(socketToken);
+    socketBindings.delete(socketToken);
+    if (!binding) return { ok: true, changed: false };
+    const disconnectedAt = now();
+    try {
+      return await mutate((draft) => {
+        draft.socketBindings.delete(socketToken);
+        const owner = draft.owners.get(binding.surfaceId);
+        if (!owner || owner.socketToken !== socketToken) return { ok: true, changed: false };
+        owner.connected = false;
+        owner.disconnectedAt = disconnectedAt;
         owner.liveness = classifyOwner(owner, now(), probePid);
+        if (owner.liveness === 'dead') draft.owners.delete(binding.surfaceId);
+        return { ok: true, changed: true };
+      });
+    } catch (error) {
+      pendingClosures.set(socketToken, { binding, disconnectedAt });
+      throw error;
+    }
+  };
+
+  const maintain = async () => {
+    const closures = [...pendingClosures];
+    const result = await mutate((draft) => {
+      for (const [socketToken, closure] of closures) {
+        const owner = draft.owners.get(closure.binding.surfaceId);
+        if (owner?.socketToken !== socketToken) continue;
+        owner.connected = false;
+        owner.disconnectedAt = closure.disconnectedAt;
+      }
+      for (const [surfaceId, owner] of draft.owners) {
+        owner.liveness = classifyOwner(owner, now(), probePid);
+        if (owner.replayPending) owner.liveness = 'stale';
         if (
           owner.liveness === 'dead' ||
           (owner.disconnectedAt !== null && now() - owner.disconnectedAt >= RECONNECT_GRACE_MS)
         ) {
-          owners.delete(surfaceId);
+          if (owner.replayPending) draft.clearImmediately = true;
+          draft.owners.delete(surfaceId);
         }
       }
       return { ok: true };
     });
+    for (const [socketToken] of closures) pendingClosures.delete(socketToken);
+    return result;
+  };
 
   const reconcile = async () => {
     await operationTail;
@@ -789,8 +959,8 @@ export function createAtomicLedgerStore(path, filesystem = {}) {
       await io.mkdir(directory, { recursive: true, mode: 0o700 });
       await io.chmod(directory, 0o700);
       const handle = await io.open(temporary, 'w', 0o600);
-      await io.chmod(temporary, 0o600);
       try {
+        await io.chmod(temporary, 0o600);
         await handle.writeFile(`${JSON.stringify(ledger)}\n`, 'utf8');
         await handle.sync();
       } finally {
@@ -923,9 +1093,12 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
         runCmux(cmuxFile, buildCmuxStatusArgs(target, status), env, runtime.execFile ?? execFile)),
   });
 
-  await mkdir(dirname(args.listen), { recursive: true, mode: 0o700 });
-  await chmod(dirname(args.listen), 0o700);
-  await rm(args.listen, { force: true });
+  const runtimeMkdir = runtime.mkdir ?? mkdir;
+  const runtimeChmod = runtime.chmod ?? chmod;
+  const runtimeRm = runtime.rm ?? rm;
+  await runtimeMkdir(dirname(args.listen), { recursive: true, mode: 0o700 });
+  await runtimeChmod(dirname(args.listen), 0o700);
+  await runtimeRm(args.listen, { force: true });
   const sockets = new Set();
   const server = createServer((socket) => {
     const socketToken = (runtime.randomId ?? randomUUID)();
@@ -935,7 +1108,6 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
     socket.setEncoding('utf8');
     socket.on('data', (chunk) => {
       buffer += chunk;
-      if (Buffer.byteLength(buffer, 'utf8') > MAX_FRAME_BYTES * 2) return socket.destroy();
       for (;;) {
         const newline = buffer.indexOf('\n');
         if (newline < 0) break;
@@ -952,33 +1124,54 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
           message.kind === 'snapshot'
             ? core.acceptSnapshot(message, socketToken)
             : core.goodbye(message, socketToken);
-        void operation.then((result) => {
-          if (result.ok) {
-            socket.write(
-              `${JSON.stringify(
-                createAck(message, result.acceptedGeneration, result.acceptedRevision),
-              )}\n`,
-            );
-          }
-        });
+        void operation
+          .then((result) => {
+            if (result.ok) {
+              socket.write(
+                `${JSON.stringify(
+                  createAck(message, result.acceptedGeneration, result.acceptedRevision),
+                )}\n`,
+              );
+            }
+          })
+          .catch(() => undefined);
       }
+      if (Buffer.byteLength(buffer, 'utf8') > MAX_FRAME_BYTES) socket.destroy();
     });
     socket.on('close', () => {
       sockets.delete(socket);
-      void core.connectionClosed(socketToken).then(() => {
-        const schedule =
-          runtime.schedule ?? ((callback, delay) => setTimeout(callback, delay).unref());
-        schedule(() => void core.maintain(), RECONNECT_GRACE_MS);
-      });
+      void core
+        .connectionClosed(socketToken)
+        .catch(() => undefined)
+        .finally(() => {
+          const schedule =
+            runtime.schedule ?? ((callback, delay) => setTimeout(callback, delay).unref());
+          schedule(() => void core.maintain().catch(() => undefined), RECONNECT_GRACE_MS);
+        });
     });
   });
-  await new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(args.listen, () => resolve());
-  });
-  await chmod(args.listen, 0o600);
+  let bound = false;
+  try {
+    await new Promise((resolve, reject) => {
+      const onError = (error) => reject(error);
+      server.once('error', onError);
+      server.listen(args.listen, () => {
+        server.off('error', onError);
+        bound = true;
+        resolve();
+      });
+    });
+    await runtimeChmod(args.listen, 0o600);
+  } catch (error) {
+    if (bound) await new Promise((resolve) => server.close(() => resolve()));
+    await runtimeRm(args.listen, { force: true });
+    throw error;
+  }
   const maintenance = setInterval(() => {
-    void core.maintain().then(() => core.reconcile());
+    void core
+      .maintain()
+      .then(() => core.reconcile())
+      .catch(() => undefined);
   }, 30_000);
   maintenance.unref();
   let stopping = false;
@@ -987,7 +1180,7 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
     stopping = true;
     clearInterval(maintenance);
     for (const socket of sockets) socket.destroy();
-    server.close(() => void rm(args.listen, { force: true }));
+    server.close(() => void runtimeRm(args.listen, { force: true }));
   };
   return { server, core, close: stopAfterClear };
 }

@@ -64,8 +64,7 @@ interface SnapshotMessage {
   toolName: string | null;
   transitionAt: number;
   lastEventAt: number | null;
-  compactionStartedAt: number | null;
-  compactionProgressAt: number | null;
+  compactionAt: number | null;
 }
 
 interface GoodbyeMessage {
@@ -279,18 +278,14 @@ export class LifecycleClient {
   start(snapshot: LifecycleSnapshot): Promise<boolean> {
     if (this.closed) return Promise.resolve(false);
     return this.enqueue(async () => {
-      try {
-        await this.options.preparePaths(this.paths);
-        const message = this.createSnapshot(snapshot);
-        this.latestSnapshot = message;
-        return await this.deliver(message);
-      } catch {
-        return false;
-      }
+      const message = this.createSnapshot(snapshot);
+      this.latestSnapshot = message;
+      return await this.deliver(message);
     });
   }
 
   snapshot(snapshot: LifecycleSnapshot): Promise<boolean> {
+    if (this.closed) return Promise.resolve(false);
     return this.enqueue(async () => {
       const message = this.createSnapshot(snapshot);
       this.latestSnapshot = message;
@@ -299,8 +294,9 @@ export class LifecycleClient {
   }
 
   async changeSession(sessionId: string): Promise<void> {
+    if (this.closed) return;
     await this.enqueue(async () => {
-      if (sessionId === this.sessionId || this.closed) return true;
+      if (sessionId === this.sessionId) return true;
       this.sessionId = sessionId;
       this.ownerGeneration = null;
       this.revision = -1;
@@ -354,8 +350,7 @@ export class LifecycleClient {
       toolName: snapshot.toolName,
       transitionAt: snapshot.transitionAt,
       lastEventAt: snapshot.lastEventAt,
-      compactionStartedAt: snapshot.compaction?.startedAt ?? null,
-      compactionProgressAt: snapshot.compaction?.updatedAt ?? null,
+      compactionAt: snapshot.compaction?.at ?? null,
     };
   }
 
@@ -378,7 +373,7 @@ export class LifecycleClient {
 
   private async deliver(message: WireMessage): Promise<boolean> {
     const socket = await this.ensureConnected();
-    if (!socket || (this.closed && message.kind !== 'goodbye')) return false;
+    if (!socket) return false;
     const ack = await new Promise<LifecycleAck | null>((resolve) => {
       const timer = this.options.setTimeout(() => {
         if (this.waiting?.message === message) this.waiting = null;
@@ -405,12 +400,19 @@ export class LifecycleClient {
     if (this.socket && !this.socket.destroyed) return this.socket;
     if (this.connectPromise) return await this.connectPromise;
     this.connectPromise = this.openSocket();
-    const socket = await this.connectPromise;
-    this.connectPromise = null;
-    return socket;
+    try {
+      return await this.connectPromise;
+    } finally {
+      this.connectPromise = null;
+    }
   }
 
   private async openSocket(): Promise<Socket | null> {
+    try {
+      await this.options.preparePaths(this.paths);
+    } catch {
+      return null;
+    }
     const first = await this.trySocket();
     if (first) return first;
     this.launchCoordinator();

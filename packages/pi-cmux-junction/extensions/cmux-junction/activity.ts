@@ -25,14 +25,9 @@ export type LifecycleTime = number | Date;
 export type LifecycleInputSource = 'interactive' | 'rpc' | 'extension';
 export type LifecycleUiWaitKind = 'select' | 'input' | 'editor' | 'confirm';
 export type LifecycleAssistantError = 'error' | 'aborted';
-export type LifecycleCompactionReason = 'manual' | 'threshold' | 'overflow' | null;
-
 export interface LifecycleCompaction {
   generation: number;
-  startedAt: number;
-  updatedAt: number;
-  reason: LifecycleCompactionReason;
-  willRetry: boolean;
+  at: number;
 }
 
 export interface LifecycleTool {
@@ -49,10 +44,7 @@ export interface LifecycleUiWait {
 }
 
 export interface LifecycleCompactionSnapshot {
-  startedAt: number;
-  updatedAt: number;
-  reason: LifecycleCompactionReason;
-  willRetry: boolean;
+  at: number;
   stale: boolean;
 }
 
@@ -68,7 +60,6 @@ export interface LifecycleReducerState {
   runtimeId: string | null;
   sessionId: string | null;
   initialized: boolean;
-  closed: boolean;
   activeTurn: { turnIndex: number; startedAt: number } | null;
   lastTurnIndex: number | null;
   settlementRequired: boolean;
@@ -125,7 +116,7 @@ export type LifecycleEvent =
   | (TimedLifecycleEvent & {
       type: 'tool_execution_update';
       toolCallId: string;
-      meaningful?: boolean;
+      meaningful: boolean;
     })
   | (TimedLifecycleEvent & {
       type: 'tool_execution_end';
@@ -146,8 +137,6 @@ export type LifecycleEvent =
     })
   | (TimedLifecycleEvent & {
       type: 'session_before_compact';
-      reason?: LifecycleCompactionReason;
-      willRetry?: boolean;
       aborted?: boolean;
     })
   | (TimedLifecycleEvent & {
@@ -162,8 +151,7 @@ export type LifecycleEvent =
   | (TimedLifecycleEvent & {
       type: 'agent_settled';
       isIdle: boolean;
-    })
-  | (TimedLifecycleEvent & { type: 'session_shutdown' });
+    });
 
 export interface LifecycleTransition {
   state: LifecycleReducerState;
@@ -193,7 +181,6 @@ export function createLifecycleState(
     runtimeId,
     sessionId,
     initialized,
-    closed: false,
     activeTurn: null,
     lastTurnIndex: null,
     settlementRequired: false,
@@ -219,16 +206,6 @@ export function reduceLifecycle(
 ): LifecycleTransition {
   const nowMs = toTimeMs(now);
   const beforeSnapshot = state.lastSnapshot ?? deriveLifecycleSnapshot(state, nowMs);
-
-  if (state.closed) {
-    return {
-      state,
-      snapshot: deriveLifecycleSnapshot(state, nowMs),
-      accepted: false,
-      changed: false,
-      shouldPublish: false,
-    };
-  }
 
   const mutation = applyEvent(state, event, nowMs);
   if (!mutation.accepted) {
@@ -413,8 +390,6 @@ function applyEvent(state: LifecycleReducerState, event: LifecycleEvent, nowMs: 
       return applyMaintenance(state, event, eventTime);
     case 'agent_settled':
       return applyAgentSettled(state, event.isIdle, eventTime);
-    case 'session_shutdown':
-      return applyShutdown(state, eventTime);
   }
 }
 
@@ -564,7 +539,7 @@ function applyToolUpdate(
   event: Extract<LifecycleEvent, { type: 'tool_execution_update' }>,
   eventTime: number,
 ): Mutation {
-  if (state.activeTurn === null || event.meaningful === false) {
+  if (state.activeTurn === null || event.meaningful !== true) {
     return noMutation(state);
   }
 
@@ -677,17 +652,6 @@ function applyCompactionStart(
     return noMutation(state);
   }
 
-  const reason = normalizeCompactionReason(event.reason);
-  const willRetry = event.willRetry === true;
-  if (
-    state.compaction !== null &&
-    state.compaction.startedAt === eventTime &&
-    state.compaction.reason === reason &&
-    state.compaction.willRetry === willRetry
-  ) {
-    return noMutation(state);
-  }
-
   const nextGeneration = state.compactionGeneration + 1;
   const next = recordActivity(state, eventTime);
   return acceptedMutation(state, {
@@ -695,10 +659,7 @@ function applyCompactionStart(
     compactionGeneration: nextGeneration,
     compaction: {
       generation: nextGeneration,
-      startedAt: eventTime,
-      updatedAt: eventTime,
-      reason,
-      willRetry,
+      at: eventTime,
     },
   });
 }
@@ -777,26 +738,6 @@ function applyAgentSettled(
   });
 }
 
-function applyShutdown(state: LifecycleReducerState, eventTime: number): Mutation {
-  const next = recordActivity(state, eventTime);
-  return {
-    state: acceptedMutation(state, {
-      ...next,
-      closed: true,
-      activeTurn: null,
-      activeTools: [],
-      uiWaits: [],
-      assistantError: null,
-      compaction: null,
-      settlementRequired: false,
-      idleTrusted: true,
-      lastToolUpdatePublishedAt: null,
-    }).state,
-    accepted: true,
-    forcePublish: true,
-  };
-}
-
 function resetSession(
   state: LifecycleReducerState,
   sessionId: string | null,
@@ -807,7 +748,6 @@ function resetSession(
     runtimeId,
     sessionId,
     initialized: true,
-    closed: false,
     activeTurn: null,
     lastTurnIndex: null,
     settlementRequired: false,
@@ -830,8 +770,8 @@ function expireCompaction(state: LifecycleReducerState, nowMs: number): Lifecycl
   const compaction = state.compaction;
   if (
     compaction === null ||
-    !Number.isFinite(compaction.updatedAt) ||
-    nowMs - compaction.updatedAt <= LIFECYCLE_TIMINGS.compactionExpireAfterMs
+    !Number.isFinite(compaction.at) ||
+    nowMs - compaction.at <= LIFECYCLE_TIMINGS.compactionExpireAfterMs
   ) {
     return state;
   }
@@ -852,26 +792,18 @@ function inspectCompaction(
     return { snapshot: null, stale: false, expired: false, malformedOrFuture: false };
   }
 
-  if (
-    !Number.isFinite(compaction.startedAt) ||
-    !Number.isFinite(compaction.updatedAt) ||
-    compaction.startedAt - nowMs > LIFECYCLE_TIMINGS.futureSkewMs ||
-    compaction.updatedAt - nowMs > LIFECYCLE_TIMINGS.futureSkewMs
-  ) {
+  if (!Number.isFinite(compaction.at) || compaction.at - nowMs > LIFECYCLE_TIMINGS.futureSkewMs) {
     return { snapshot: null, stale: false, expired: false, malformedOrFuture: true };
   }
 
-  const updatedAge = Math.max(0, nowMs - compaction.updatedAt);
-  const stale = updatedAge > LIFECYCLE_TIMINGS.compactionDemoteAfterMs;
-  const expired = updatedAge > LIFECYCLE_TIMINGS.compactionExpireAfterMs;
+  const age = Math.max(0, nowMs - compaction.at);
+  const stale = age > LIFECYCLE_TIMINGS.compactionDemoteAfterMs;
+  const expired = age > LIFECYCLE_TIMINGS.compactionExpireAfterMs;
   return {
     snapshot: expired
       ? null
       : {
-          startedAt: compaction.startedAt,
-          updatedAt: compaction.updatedAt,
-          reason: compaction.reason,
-          willRetry: compaction.willRetry,
+          at: compaction.at,
           stale,
         },
     stale,
@@ -970,13 +902,7 @@ function sameCompaction(
   if (left === null || right === null) {
     return left === right;
   }
-  return (
-    left.startedAt === right.startedAt &&
-    left.updatedAt === right.updatedAt &&
-    left.reason === right.reason &&
-    left.willRetry === right.willRetry &&
-    left.stale === right.stale
-  );
+  return left.at === right.at && left.stale === right.stale;
 }
 
 function copySnapshot(snapshot: LifecycleSnapshot): LifecycleSnapshot {
@@ -1068,17 +994,6 @@ function replaceControlCharacters(value: string): string {
     result += code <= 0x1f || (code >= 0x7f && code <= 0x9f) ? ' ' : character;
   }
   return result;
-}
-
-function normalizeCompactionReason(value: unknown): LifecycleCompactionReason {
-  switch (value) {
-    case 'manual':
-    case 'threshold':
-    case 'overflow':
-      return value;
-    default:
-      return null;
-  }
 }
 
 function isInputSource(value: unknown): value is LifecycleInputSource {

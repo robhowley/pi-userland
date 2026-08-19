@@ -1,11 +1,12 @@
 import { once } from 'node:events';
-import { readFile, stat } from 'node:fs/promises';
+import { chmod, readFile, stat, writeFile } from 'node:fs/promises';
 import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  MAX_FRAME_BYTES,
   RECONNECT_GRACE_MS,
   aggregateOwners,
   buildCmuxStatusArgs,
@@ -42,8 +43,7 @@ function snapshot(overrides: Record<string, unknown> = {}) {
     toolName: null,
     transitionAt: 1_700_000_000_000,
     lastEventAt: null,
-    compactionStartedAt: null,
-    compactionProgressAt: null,
+    compactionAt: null,
     ...overrides,
   };
 }
@@ -55,13 +55,22 @@ function goodbye(ownerGeneration: number, overrides: Record<string, unknown> = {
     'toolName',
     'transitionAt',
     'lastEventAt',
-    'compactionStartedAt',
-    'compactionProgressAt',
+    'compactionAt',
   ]);
   return {
     ...Object.fromEntries(Object.entries(value).filter(([field]) => !snapshotOnly.has(field))),
     kind: 'goodbye',
   };
+}
+
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
 }
 
 function generation(result: any): number {
@@ -92,8 +101,7 @@ function owner(state: string, overrides: Record<string, unknown> = {}): any {
       toolName: state === 'tool-running' ? 'bash' : null,
       transitionAt: 1_700_000_001_000,
       lastEventAt: state === 'idle' || state === 'unknown' ? null : 1_700_000_001_000,
-      compactionStartedAt: state === 'compacting' ? 1_700_000_001_000 : null,
-      compactionProgressAt: state === 'compacting' ? 1_700_000_001_000 : null,
+      compactionAt: state === 'compacting' ? 1_700_000_001_000 : null,
     },
     ...overrides,
   };
@@ -140,22 +148,16 @@ describe('lifecycle v1 wire contract', () => {
     }
   });
 
-  it('contains no content-bearing protocol fields', async () => {
-    const fixturePath = new URL(
-      '../extensions/cmux-junction/wire-fixtures/v1.json',
-      import.meta.url,
-    );
-    const text = await readFile(fixturePath, 'utf8');
-    for (const forbidden of [
-      'transcript',
-      'toolArgs',
-      'toolResult',
-      'cwd',
-      'branch',
-      'socketPassword',
-    ]) {
-      expect(text).not.toContain(`"${forbidden}"`);
-    }
+  it.each([
+    ['active state without activity', { state: 'thinking', lastEventAt: null }],
+    ['compacting state without compaction', { state: 'compacting', compactionAt: null }],
+    ['compaction without activity', { compactionAt: 1_700_000_001_000, lastEventAt: null }],
+    [
+      'compaction newer than activity',
+      { compactionAt: 1_700_000_001_000, lastEventAt: 1_700_000_000_999 },
+    ],
+  ])('rejects incoherent %s snapshots at ingress', (_name, overrides) => {
+    expect(decodeWireMessage(snapshot(overrides), target)).toMatchObject({ ok: false });
   });
 });
 
@@ -211,24 +213,9 @@ describe('workspace aggregation', () => {
   });
 
   it.each([
-    ['one-sided compaction', { compactionStartedAt: now, compactionProgressAt: null }],
-    [
-      'reversed compaction',
-      { compactionStartedAt: now, compactionProgressAt: now - 1, lastEventAt: now },
-    ],
-    [
-      'compaction newer than activity',
-      { compactionStartedAt: now, compactionProgressAt: now, lastEventAt: now - 1 },
-    ],
-    ['future compaction', { compactionStartedAt: now, compactionProgressAt: now + 5_001 }],
-    [
-      'expired compaction',
-      {
-        compactionStartedAt: now - 600_001,
-        compactionProgressAt: now - 600_001,
-        lastEventAt: now - 600_001,
-      },
-    ],
+    ['compaction newer than activity', { compactionAt: now, lastEventAt: now - 1 }],
+    ['future compaction', { compactionAt: now + 5_001 }],
+    ['expired compaction', { compactionAt: now - 600_001, lastEventAt: now - 600_001 }],
   ])('treats %s timestamps as Unknown before state reduction', (_name, snapshotOverrides) => {
     expect(
       aggregateOwners(
@@ -251,8 +238,7 @@ describe('workspace aggregation', () => {
               ...owner('compacting').snapshot,
               transitionAt: now + 5_000,
               lastEventAt: now + 5_000,
-              compactionStartedAt: now + 5_000,
-              compactionProgressAt: now + 5_000,
+              compactionAt: now + 5_000,
             },
           }),
         ],
@@ -266,8 +252,7 @@ describe('workspace aggregation', () => {
       snapshot: {
         ...owner(state).snapshot,
         lastEventAt: now,
-        compactionStartedAt: now,
-        compactionProgressAt: now,
+        compactionAt: now,
       },
     });
     expect(aggregateOwners([current], now)).toEqual({ state: 'unknown', label: 'Unknown' });
@@ -279,8 +264,7 @@ describe('workspace aggregation', () => {
         snapshot: {
           ...owner('thinking').snapshot,
           lastEventAt: now,
-          compactionStartedAt: progressAt,
-          compactionProgressAt: progressAt,
+          compactionAt: progressAt,
         },
       });
 
@@ -390,6 +374,7 @@ describe('coordinator runtime boundary', () => {
     tempDirectories.push(directory);
     const listen = join(directory, 'coordinator.sock');
     const ledger = join(directory, 'ledger.json');
+    await chmod(directory, 0o777);
     const scheduled: Array<{ callback: () => void; delay: number }> = [];
     const published: unknown[] = [];
     let now = 1_700_000_001_000;
@@ -415,6 +400,8 @@ describe('coordinator runtime boundary', () => {
         },
       },
     );
+    expect((await stat(directory)).mode & 0o777).toBe(0o700);
+    expect((await stat(listen)).mode & 0o777).toBe(0o600);
     const socket = createConnection(listen);
     await once(socket, 'connect');
     let received = '';
@@ -439,6 +426,204 @@ describe('coordinator runtime boundary', () => {
       { state: 'idle', label: 'Idle' },
       { state: null, label: null },
     ]);
+  });
+
+  it('cleans up a bound socket when post-bind initialization fails', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pi-junction-startup-'));
+    tempDirectories.push(directory);
+    const listen = join(directory, 'coordinator.sock');
+    const ledger = join(directory, 'ledger.json');
+
+    await expect(
+      runCoordinatorRuntime(
+        [
+          '--listen',
+          listen,
+          '--ledger',
+          ledger,
+          '--cmux-socket',
+          target.socketPath,
+          '--workspace',
+          target.workspaceId,
+        ],
+        {
+          chmod: async (path: string, mode: number) => {
+            if (path === listen) throw new Error('socket chmod failed');
+            await chmod(path, mode);
+          },
+        },
+      ),
+    ).rejects.toThrow('socket chmod failed');
+    await expect(stat(listen)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('frames fragmented and coalesced input and closes malformed or oversized streams', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pi-junction-framing-'));
+    tempDirectories.push(directory);
+    const listen = join(directory, 'coordinator.sock');
+    let token = 0;
+    const runtime = await runCoordinatorRuntime(
+      [
+        '--listen',
+        listen,
+        '--ledger',
+        join(directory, 'ledger.json'),
+        '--cmux-socket',
+        target.socketPath,
+        '--workspace',
+        target.workspaceId,
+      ],
+      {
+        randomId: () => `socket-${++token}`,
+        now: () => 1_700_000_001_000,
+        probePid: () => 'match',
+        schedule: () => undefined,
+        publish: async () => ({ ok: true }),
+      },
+    );
+
+    const valid = createConnection(listen);
+    await once(valid, 'connect');
+    valid.setEncoding('utf8');
+    let received = '';
+    valid.on('data', (chunk) => (received += chunk));
+    const first = `${JSON.stringify(snapshot())}\n`;
+    valid.write(first.slice(0, 17));
+    valid.write(first.slice(17));
+    valid.write(
+      `${JSON.stringify(snapshot({ ownerGeneration: 1, revision: 1 }))}\n${JSON.stringify(
+        snapshot({ ownerGeneration: 1, revision: 2 }),
+      )}\n`,
+    );
+    await vi.waitFor(() => expect(received.split('\n').filter(Boolean)).toHaveLength(3));
+
+    const malformed = createConnection(listen);
+    await once(malformed, 'connect');
+    const malformedClosed = once(malformed, 'close');
+    malformed.write('{bad}\n[]\nnull\n');
+    await malformedClosed;
+
+    const oversized = createConnection(listen);
+    await once(oversized, 'connect');
+    const oversizedClosed = once(oversized, 'close');
+    oversized.write('x'.repeat(MAX_FRAME_BYTES + 1));
+    await oversizedClosed;
+
+    const validClosed = once(valid, 'close');
+    valid.destroy();
+    await validClosed;
+    await runtime.core.drain();
+    const serverClosed = once(runtime.server, 'close');
+    runtime.close();
+    await serverClosed;
+    await vi.waitFor(
+      async () => await expect(stat(listen)).rejects.toMatchObject({ code: 'ENOENT' }),
+    );
+  });
+
+  it('contains runtime persistence rejections and accepts a retry', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pi-junction-runtime-persist-'));
+    tempDirectories.push(directory);
+    const listen = join(directory, 'coordinator.sock');
+    let writes = 0;
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    const runtime = await runCoordinatorRuntime(
+      [
+        '--listen',
+        listen,
+        '--ledger',
+        join(directory, 'ledger.json'),
+        '--cmux-socket',
+        target.socketPath,
+        '--workspace',
+        target.workspaceId,
+      ],
+      {
+        store: {
+          read: async () => null,
+          write: async () => {
+            writes += 1;
+            if (writes === 1) throw new Error('transient persistence failure');
+          },
+        },
+        randomId: () => 'socket-a',
+        now: () => 1_700_000_001_000,
+        probePid: () => 'match',
+        schedule: () => undefined,
+        publish: async () => ({ ok: true }),
+      },
+    );
+    try {
+      const socket = createConnection(listen);
+      await once(socket, 'connect');
+      let received = '';
+      socket.setEncoding('utf8');
+      socket.on('data', (chunk) => (received += chunk));
+      socket.write(`${JSON.stringify(snapshot())}\n`);
+      await vi.waitFor(() => expect(writes).toBe(1));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(unhandled).not.toHaveBeenCalled();
+
+      socket.write(`${JSON.stringify(snapshot())}\n`);
+      await vi.waitFor(() => expect(received.split('\n').filter(Boolean)).toHaveLength(1));
+      await runtime.core.drain();
+      socket.destroy();
+    } finally {
+      process.off('unhandledRejection', unhandled);
+      const closed = once(runtime.server, 'close');
+      runtime.close();
+      await closed;
+      await vi.waitFor(
+        async () => await expect(stat(listen)).rejects.toMatchObject({ code: 'ENOENT' }),
+      );
+    }
+  });
+
+  it('shuts down after the third failed final clear', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pi-junction-exhausted-clear-'));
+    tempDirectories.push(directory);
+    const listen = join(directory, 'coordinator.sock');
+    const scheduled: Array<{ callback: () => void; delay: number }> = [];
+    let now = 1_700_000_001_000;
+    const runtime = await runCoordinatorRuntime(
+      [
+        '--listen',
+        listen,
+        '--ledger',
+        join(directory, 'ledger.json'),
+        '--cmux-socket',
+        target.socketPath,
+        '--workspace',
+        target.workspaceId,
+      ],
+      {
+        randomId: () => 'socket-a',
+        now: () => now,
+        probePid: () => 'match',
+        schedule: (callback: () => void, delay: number) => scheduled.push({ callback, delay }),
+        publish: async (status: any) =>
+          status.state === null ? { ok: false, outcome: 'exit-failed' } : { ok: true },
+      },
+    );
+    const socket = createConnection(listen);
+    await once(socket, 'connect');
+    let received = '';
+    socket.setEncoding('utf8');
+    socket.on('data', (chunk) => (received += chunk));
+    socket.write(`${JSON.stringify(snapshot())}\n`);
+    await vi.waitFor(() => expect(received.split('\n').filter(Boolean)).toHaveLength(1));
+    socket.write(`${JSON.stringify(goodbye(1))}\n`);
+    await vi.waitFor(() => expect(received.split('\n').filter(Boolean)).toHaveLength(2));
+
+    const closed = once(runtime.server, 'close');
+    for (const advance of [RECONNECT_GRACE_MS, 500, 1_000]) {
+      now += advance;
+      scheduled.shift()!.callback();
+      await runtime.core.drain();
+    }
+    await closed;
+    expect(runtime.core.diagnostics()).toMatchObject({ deliveryOutcome: 'exit-failed' });
   });
 });
 
@@ -544,15 +729,17 @@ describe('coordinator ownership and publication', () => {
     expect(
       await accept(
         core,
-        snapshot({ ownerGeneration: 1, revision: 1, state: 'error' }),
+        snapshot({
+          ownerGeneration: 1,
+          revision: 1,
+          state: 'error',
+          lastEventAt: 1_700_000_001_000,
+        }),
         'socket-new',
       ),
     ).toMatchObject({ ok: true, acceptedGeneration: 1, acceptedRevision: 1 });
 
     expect(await core.connectionClosed('socket-old')).toEqual({ ok: true, changed: false });
-    expect(
-      await accept(core, snapshot({ ownerGeneration: 1, revision: 2 }), 'socket-old'),
-    ).toMatchObject({ ok: false, reason: 'fence' });
     expect(
       await accept(
         core,
@@ -581,6 +768,42 @@ describe('coordinator ownership and publication', () => {
     expect(await core.connectionClosed('socket-old')).toEqual({ ok: true, changed: false });
     expect(core.ledger().owners[0]).toMatchObject({ ownerGeneration: 2, acceptedRevision: 2 });
     expect(core.ledger().owners[0]).not.toHaveProperty('socketToken');
+  });
+
+  it('rejects an old socket goodbye after replacement and releases closed bindings', async () => {
+    const core = createCoordinatorCore({
+      target,
+      now: () => 1_700_000_001_000,
+      probePid: () => 'match',
+    });
+    await accept(core, snapshot(), 'socket-reused');
+    await accept(core, snapshot({ ownerGeneration: 1, revision: 1 }), 'socket-replacement');
+
+    expect(await release(core, goodbye(1, { revision: 2 }), 'socket-reused')).toMatchObject({
+      ok: false,
+      reason: 'fence',
+    });
+    expect(core.ledger().owners[0]).toMatchObject({ acceptedRevision: 1 });
+
+    await core.connectionClosed('socket-reused');
+    expect(
+      await accept(
+        core,
+        snapshot({
+          surfaceId: 'surface-b',
+          sessionId: 'session-b',
+          connectionId: 'connection-b',
+        }),
+        'socket-reused',
+      ),
+    ).toMatchObject({ ok: true });
+  });
+
+  it('uses coordinator receipt time rather than sender time for the lease', async () => {
+    const now = 1_700_000_301_000;
+    const core = createCoordinatorCore({ target, now: () => now, probePid: () => 'match' });
+    await expect(accept(core, snapshot({ sentAt: 1 }))).resolves.toMatchObject({ ok: true });
+    expect(core.ledger().owners[0]).toMatchObject({ heartbeatAt: now, liveness: 'live' });
   });
 
   it('does not retain an owner whose PID identity is already dead', async () => {
@@ -692,6 +915,70 @@ describe('coordinator ownership and publication', () => {
     });
   });
 
+  it('keeps desired owner and generation changes private when persistence rejects', async () => {
+    const gate = deferred();
+    let attempts = 0;
+    const core = createCoordinatorCore({
+      target,
+      now: () => 1_700_000_001_000,
+      probePid: () => 'match',
+      persist: async () => {
+        attempts += 1;
+        if (attempts === 1) await gate.promise;
+      },
+    });
+
+    const registration = accept(core, snapshot());
+    await vi.waitFor(() => expect(attempts).toBe(1));
+    expect(core.ledger()).toMatchObject({
+      owners: [],
+      nextGenerationBySurface: {},
+      desired: { state: null, revision: 0 },
+    });
+    gate.reject(new Error('desired persistence failed'));
+    await expect(registration).rejects.toThrow('desired persistence failed');
+    expect(core.ledger()).toMatchObject({ owners: [], nextGenerationBySurface: {} });
+
+    await expect(accept(core, snapshot())).resolves.toMatchObject({
+      ok: true,
+      acceptedGeneration: 1,
+    });
+  });
+
+  it('keeps applied state private and retryable when its persistence rejects', async () => {
+    const appliedGate = deferred();
+    let persistCount = 0;
+    const published: unknown[] = [];
+    const core = createCoordinatorCore({
+      target,
+      now: () => 1_700_000_001_000,
+      probePid: () => 'match',
+      persist: async () => {
+        persistCount += 1;
+        if (persistCount === 2) await appliedGate.promise;
+      },
+      publish: async (status: unknown) => {
+        published.push(status);
+        return { ok: true };
+      },
+    });
+
+    await accept(core, snapshot());
+    await vi.waitFor(() => expect(persistCount).toBe(2));
+    expect(core.ledger()).toMatchObject({
+      desired: { state: 'idle' },
+      applied: { state: null },
+    });
+    appliedGate.reject(new Error('applied persistence failed'));
+    await core.drain();
+    expect(core.ledger()).toMatchObject({ applied: { state: null } });
+
+    await accept(core, snapshot({ ownerGeneration: 1, revision: 1 }));
+    await core.drain();
+    expect(published).toHaveLength(2);
+    expect(core.ledger()).toMatchObject({ applied: { state: 'idle' } });
+  });
+
   it('keeps failed active publication unapplied without a retry timer and retries on a heartbeat', async () => {
     let succeed = false;
     const calls: unknown[] = [];
@@ -721,6 +1008,96 @@ describe('coordinator ownership and publication', () => {
     await core.drain();
     expect(calls).toHaveLength(2);
     expect(core.ledger()).toMatchObject({ applied: { state: 'idle' } });
+  });
+
+  it('clears after a failed active publication when the final owner exits', async () => {
+    let now = 1_700_000_001_000;
+    const scheduled: Array<{ callback: () => void; delay: number }> = [];
+    const published: any[] = [];
+    const core = createCoordinatorCore({
+      target,
+      now: () => now,
+      probePid: () => 'match',
+      schedule: (callback: () => void, delay: number) => scheduled.push({ callback, delay }),
+      publish: async (status: any) => {
+        published.push(status);
+        return status.state === null ? { ok: true } : { ok: false, outcome: 'timed-out' };
+      },
+    });
+    const accepted = await accept(core, snapshot());
+    await core.drain();
+    await release(core, goodbye(generation(accepted)));
+    expect(core.ledger()).toMatchObject({
+      desired: { state: null },
+      applied: { state: null },
+    });
+    expect(scheduled.map(({ delay }) => delay)).toEqual([RECONNECT_GRACE_MS]);
+
+    now += RECONNECT_GRACE_MS;
+    scheduled.shift()!.callback();
+    await core.drain();
+    expect(published).toEqual([
+      { state: 'idle', label: 'Idle' },
+      { state: null, label: null },
+    ]);
+  });
+
+  it('rechecks grace when a deferred active set finishes after final-owner exit', async () => {
+    let now = 1_700_000_001_000;
+    const activeGate = deferred<{ ok: true }>();
+    const scheduled: Array<{ callback: () => void; delay: number }> = [];
+    const published: any[] = [];
+    const core = createCoordinatorCore({
+      target,
+      now: () => now,
+      probePid: () => 'match',
+      schedule: (callback: () => void, delay: number) => scheduled.push({ callback, delay }),
+      publish: async (status: any) => {
+        published.push(status);
+        return status.state === null ? { ok: true } : await activeGate.promise;
+      },
+    });
+    const accepted = await accept(core, snapshot());
+    await vi.waitFor(() => expect(published).toHaveLength(1));
+    await release(core, goodbye(generation(accepted)));
+    activeGate.resolve({ ok: true });
+    await core.drain();
+
+    expect(published).toEqual([{ state: 'idle', label: 'Idle' }]);
+    expect(scheduled.map(({ delay }) => delay)).toEqual([RECONNECT_GRACE_MS]);
+    now += RECONNECT_GRACE_MS;
+    scheduled.shift()!.callback();
+    await core.drain();
+    expect(published.at(-1)).toEqual({ state: null, label: null });
+  });
+
+  it('cancels an obligated clear when the owner reconnects before grace', async () => {
+    let now = 1_700_000_001_000;
+    const scheduled: Array<{ callback: () => void; delay: number }> = [];
+    const published: any[] = [];
+    const core = createCoordinatorCore({
+      target,
+      now: () => now,
+      probePid: () => 'match',
+      schedule: (callback: () => void, delay: number) => scheduled.push({ callback, delay }),
+      publish: async (status: any) => {
+        published.push(status);
+        return { ok: true };
+      },
+    });
+    const accepted = await accept(core, snapshot());
+    await core.drain();
+    await release(core, goodbye(generation(accepted)));
+    await accept(core, snapshot({ ownerGeneration: 1, revision: 2 }), 'socket-reconnected');
+    await core.drain();
+
+    now += RECONNECT_GRACE_MS;
+    scheduled.shift()!.callback();
+    await core.drain();
+    expect(published).toEqual([{ state: 'idle', label: 'Idle' }]);
+    expect(core.ledger()).toMatchObject({
+      owners: [expect.objectContaining({ ownerGeneration: 2 })],
+    });
   });
 
   it('bounds final-owner clear to three attempts after reconnect grace', async () => {
@@ -781,6 +1158,38 @@ describe('coordinator ownership and publication', () => {
     expect(published).toEqual([{ state: 'idle', label: 'Idle' }]);
   });
 
+  it('reaps restored owners without replay and clears instead of reviving them', async () => {
+    let now = 1_700_000_001_000;
+    const first = createCoordinatorCore({ target, now: () => now, probePid: () => 'match' });
+    await accept(first, snapshot());
+    await first.drain();
+    const published: unknown[] = [];
+    const restarted = createCoordinatorCore({
+      target,
+      initialLedger: first.ledger(),
+      now: () => now,
+      probePid: () => 'match',
+      publish: async (status: unknown) => {
+        published.push(status);
+        return { ok: true };
+      },
+    });
+
+    expect(restarted.ledger().owners[0]).toMatchObject({
+      replayPending: true,
+      liveness: 'stale',
+    });
+    now += RECONNECT_GRACE_MS;
+    await restarted.maintain();
+    await restarted.drain();
+    expect(restarted.ledger()).toMatchObject({
+      owners: [],
+      desired: { state: null },
+      applied: { state: null },
+    });
+    expect(published).toEqual([{ state: null, label: null }]);
+  });
+
   it('requires a strictly newer revision for durable replay', async () => {
     const first = createCoordinatorCore({
       target,
@@ -806,7 +1215,12 @@ describe('coordinator ownership and publication', () => {
     expect(
       await accept(
         restarted,
-        snapshot({ ownerGeneration: generation(accepted), revision: 0, state: 'error' }),
+        snapshot({
+          ownerGeneration: generation(accepted),
+          revision: 0,
+          state: 'error',
+          lastEventAt: 1_700_000_001_000,
+        }),
         'socket-equal-different',
       ),
     ).toMatchObject({ ok: false, reason: 'revision' });
@@ -818,6 +1232,52 @@ describe('coordinator ownership and publication', () => {
       ),
     ).toMatchObject({ ok: true, acceptedGeneration: 1 });
     expect(restarted.ledger().owners[0]).toMatchObject({ replayPending: false, liveness: 'live' });
+  });
+
+  it('discards the whole ledger when any semantic v1 field is malformed', async () => {
+    const source = createCoordinatorCore({
+      target,
+      now: () => 1_700_000_001_000,
+      probePid: () => 'match',
+    });
+    await accept(source, snapshot());
+    await source.drain();
+    const valid = source.ledger();
+    const cases: Array<[string, (ledger: any) => void]> = [
+      ['status field', (ledger) => delete ledger.desired.label],
+      ['status state', (ledger) => (ledger.applied.state = 'running')],
+      ['status label', (ledger) => (ledger.desired.label = 'Definitely idle')],
+      ['owner identity', (ledger) => (ledger.owners[0].sessionId = '')],
+      ['owner counter', (ledger) => (ledger.nextGenerationBySurface['surface-a'] = 0)],
+      ['owner timestamp', (ledger) => (ledger.owners[0].heartbeatAt = 'yesterday')],
+      ['owner connection state', (ledger) => (ledger.owners[0].connected = false)],
+      ['snapshot timestamp', (ledger) => (ledger.owners[0].snapshot.transitionAt = null)],
+      ['snapshot shape', (ledger) => delete ledger.owners[0].snapshot.compactionAt],
+      [
+        'snapshot compaction timestamp',
+        (ledger) =>
+          (ledger.owners[0].snapshot.compactionAt = ledger.owners[0].snapshot.lastEventAt + 1),
+      ],
+      ['target shape', (ledger) => (ledger.target.extra = true)],
+      ['ledger timestamp', (ledger) => (ledger.updatedAt = -1)],
+    ];
+
+    for (const [name, corrupt] of cases) {
+      const malformed = structuredClone(valid);
+      corrupt(malformed);
+      const restored = createCoordinatorCore({
+        target,
+        initialLedger: malformed,
+        now: () => 1_700_000_002_000,
+        probePid: () => 'match',
+      });
+      expect(restored.ledger(), name).toMatchObject({
+        owners: [],
+        nextGenerationBySurface: {},
+        desired: { state: null, revision: 0 },
+        applied: { state: null, revision: 0 },
+      });
+    }
   });
 
   it('keeps diagnostics bounded and free of full identities', async () => {
@@ -845,7 +1305,32 @@ describe('atomic ledger store', () => {
     expect(await store.read()).toEqual(ledger);
     expect((await stat(path)).mode & 0o777).toBe(0o600);
 
-    await (await import('node:fs/promises')).writeFile(path, '{truncated', { mode: 0o600 });
+    await chmod(join(directory, 'nested'), 0o777);
+    await chmod(path, 0o666);
+    await store.write(ledger);
+    expect((await stat(join(directory, 'nested'))).mode & 0o777).toBe(0o700);
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+
+    await writeFile(path, '{truncated', { mode: 0o600 });
     await expect(store.read()).resolves.toBeNull();
+  });
+
+  it('closes the temporary descriptor when chmod rejects', async () => {
+    const handle = {
+      close: vi.fn(async () => undefined),
+      sync: vi.fn(async () => undefined),
+      writeFile: vi.fn(async () => undefined),
+    };
+    const store = createAtomicLedgerStore('/tmp/ledger-fixture/ledger.json', {
+      mkdir: async () => undefined,
+      chmod: async (path: string) => {
+        if (path.includes('.tmp-')) throw new Error('chmod failed');
+      },
+      open: async () => handle,
+    });
+
+    await expect(store.write({ schemaVersion: 1 })).rejects.toThrow('chmod failed');
+    expect(handle.close).toHaveBeenCalledOnce();
+    expect(handle.writeFile).not.toHaveBeenCalled();
   });
 });
