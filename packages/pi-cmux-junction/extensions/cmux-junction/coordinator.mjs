@@ -473,6 +473,7 @@ export function createCoordinatorCore(options) {
   const pendingClosures = new Map();
   let operationTail = Promise.resolve();
   let publication = null;
+  let pendingApplied = null;
   let deliveryOutcome = null;
   let retryScheduled = false;
   let finalClearObligated = false;
@@ -569,13 +570,34 @@ export function createCoordinatorCore(options) {
   const kickPublication = () => {
     if (
       publication ||
-      (!finalClearObligated && statusEqual(ledger.desired, ledger.applied)) ||
-      (ledger.desired.state === null && finalClearAttempts >= 3)
+      (!pendingApplied && !finalClearObligated && statusEqual(ledger.desired, ledger.applied)) ||
+      (!pendingApplied && ledger.desired.state === null && finalClearAttempts >= 3)
     ) {
       return;
     }
     publication = (async () => {
-      while (finalClearObligated || !statusEqual(ledger.desired, ledger.applied)) {
+      while (
+        pendingApplied ||
+        finalClearObligated ||
+        !statusEqual(ledger.desired, ledger.applied)
+      ) {
+        if (pendingApplied) {
+          const attempted = pendingApplied;
+          await enqueue(async () => {
+            const draft = createDraft();
+            draft.ledger.applied = attempted;
+            await persistDraft(draft);
+            commitDraft(draft);
+          });
+          pendingApplied = null;
+          deliveryOutcome = 'delivered';
+          if (attempted.state === null && statusEqual(attempted, ledger.desired)) {
+            finalClearObligated = false;
+            if (owners.size === 0) options.onFinalClear?.();
+          }
+          continue;
+        }
+
         const attempted = { ...ledger.desired };
         const clearing = attempted.state === null;
         if (clearing && finalClearReadyAt !== null && now() < finalClearReadyAt) {
@@ -602,16 +624,7 @@ export function createCoordinatorCore(options) {
           }
           return;
         }
-        await enqueue(async () => {
-          const draft = createDraft();
-          draft.ledger.applied = attempted;
-          await persistDraft(draft);
-          commitDraft(draft);
-          if (attempted.state === null && statusEqual(attempted, ledger.desired)) {
-            finalClearObligated = false;
-            if (owners.size === 0) options.onFinalClear?.();
-          }
-        });
+        pendingApplied = attempted;
       }
     })()
       .catch(() => {
@@ -785,32 +798,37 @@ export function createCoordinatorCore(options) {
     });
   };
 
-  const connectionClosed = async (socketToken) => {
-    const binding = socketBindings.get(socketToken);
-    socketBindings.delete(socketToken);
-    if (!binding) return { ok: true, changed: false };
-    const disconnectedAt = now();
-    try {
-      return await mutate((draft) => {
-        draft.socketBindings.delete(socketToken);
-        const owner = draft.owners.get(binding.surfaceId);
-        if (!owner || owner.socketToken !== socketToken) return { ok: true, changed: false };
+  const connectionClosed = async (socketToken) =>
+    await enqueue(async () => {
+      const binding = socketBindings.get(socketToken);
+      if (!binding) return { ok: true, changed: false };
+      const disconnectedAt = now();
+      const draft = createDraft();
+      draft.socketBindings.delete(socketToken);
+      const owner = draft.owners.get(binding.surfaceId);
+      if (owner?.socketToken === socketToken) {
         owner.connected = false;
         owner.disconnectedAt = disconnectedAt;
         owner.liveness = classifyOwner(owner, now(), probePid);
         if (owner.liveness === 'dead') draft.owners.delete(binding.surfaceId);
-        return { ok: true, changed: true };
-      });
-    } catch (error) {
-      pendingClosures.set(socketToken, { binding, disconnectedAt });
-      throw error;
-    }
-  };
+      }
+      recompute(draft);
+      try {
+        await persistDraft(draft);
+      } catch (error) {
+        pendingClosures.set(socketToken, { binding, disconnectedAt });
+        throw error;
+      }
+      commitDraft(draft);
+      kickPublication();
+      return { ok: true, changed: owner?.socketToken === socketToken };
+    });
 
   const maintain = async () => {
     const closures = [...pendingClosures];
     const result = await mutate((draft) => {
       for (const [socketToken, closure] of closures) {
+        draft.socketBindings.delete(socketToken);
         const owner = draft.owners.get(closure.binding.surfaceId);
         if (owner?.socketToken !== socketToken) continue;
         owner.connected = false;
@@ -1090,7 +1108,10 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
     });
     await runtimeChmod(args.listen, 0o600);
   } catch (error) {
-    if (bound) await new Promise((resolve) => server.close(() => resolve()));
+    if (bound) {
+      for (const socket of sockets) socket.destroy();
+      await new Promise((resolve) => server.close(() => resolve()));
+    }
     await runtimeRm(args.listen, { force: true });
     throw error;
   }

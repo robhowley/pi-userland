@@ -389,32 +389,53 @@ describe('coordinator runtime boundary', () => {
     ]);
   });
 
-  it('cleans up a bound socket when post-bind initialization fails', async () => {
+  it('destroys accepted sockets before cleaning up a failed post-bind initialization', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'pi-junction-startup-'));
     tempDirectories.push(directory);
     const listen = join(directory, 'coordinator.sock');
     const ledger = join(directory, 'ledger.json');
+    let client: ReturnType<typeof createConnection> | undefined;
+    const clientClosed = deferred();
 
-    await expect(
-      runCoordinatorRuntime(
-        [
-          '--listen',
-          listen,
-          '--ledger',
-          ledger,
-          '--cmux-socket',
-          target.socketPath,
-          '--workspace',
-          target.workspaceId,
-        ],
-        {
-          chmod: async (path: string, mode: number) => {
-            if (path === listen) throw new Error('socket chmod failed');
-            await chmod(path, mode);
-          },
+    const startup = runCoordinatorRuntime(
+      [
+        '--listen',
+        listen,
+        '--ledger',
+        ledger,
+        '--cmux-socket',
+        target.socketPath,
+        '--workspace',
+        target.workspaceId,
+      ],
+      {
+        chmod: async (path: string, mode: number) => {
+          if (path === listen) {
+            client = createConnection(listen);
+            client.on('error', () => undefined);
+            client.on('close', () => clientClosed.resolve());
+            await once(client, 'connect');
+            throw new Error('socket chmod failed');
+          }
+          await chmod(path, mode);
         },
-      ),
-    ).rejects.toThrow('socket chmod failed');
+      },
+    );
+
+    let cleanupTimeout: ReturnType<typeof setTimeout> | undefined;
+    const boundedStartup = Promise.race([
+      startup,
+      new Promise((_, reject) => {
+        cleanupTimeout = setTimeout(() => reject(new Error('startup cleanup timed out')), 1_000);
+      }),
+    ]);
+    try {
+      await expect(boundedStartup).rejects.toThrow('socket chmod failed');
+    } finally {
+      clearTimeout(cleanupTimeout);
+    }
+    await clientClosed.promise;
+    expect(client?.destroyed).toBe(true);
     await expect(stat(listen)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
@@ -806,6 +827,69 @@ describe('coordinator ownership and publication', () => {
     });
   });
 
+  it('applies a queued close after deferred first-snapshot persistence commits', async () => {
+    const firstWrite = deferred();
+    let writes = 0;
+    const core = createCoordinatorCore({
+      target,
+      now: () => 1_700_000_001_000,
+      probePid: () => 'match',
+      persist: async () => {
+        writes += 1;
+        if (writes === 1) await firstWrite.promise;
+      },
+    });
+
+    const registration = accept(core, snapshot(), 'socket-racing');
+    await vi.waitFor(() => expect(writes).toBe(1));
+    const closed = core.connectionClosed('socket-racing');
+    firstWrite.resolve();
+
+    await expect(registration).resolves.toMatchObject({ ok: true });
+    await expect(closed).resolves.toEqual({ ok: true, changed: true });
+    await core.drain();
+    expect(core.ledger().owners).toEqual([
+      expect.objectContaining({ connected: false, disconnectedAt: 1_700_000_001_000 }),
+    ]);
+    await expect(core.connectionClosed('socket-racing')).resolves.toEqual({
+      ok: true,
+      changed: false,
+    });
+  });
+
+  it('retries a failed durable close during maintenance', async () => {
+    let rejectClose = false;
+    const core = createCoordinatorCore({
+      target,
+      now: () => 1_700_000_001_000,
+      probePid: () => 'match',
+      persist: async () => {
+        if (rejectClose) {
+          rejectClose = false;
+          throw new Error('close persistence failed');
+        }
+      },
+    });
+    await accept(core, snapshot(), 'socket-closing');
+    await core.drain();
+
+    rejectClose = true;
+    await expect(core.connectionClosed('socket-closing')).rejects.toThrow(
+      'close persistence failed',
+    );
+    expect(core.ledger().owners[0]).toMatchObject({ connected: true });
+
+    await core.maintain();
+    expect(core.ledger().owners[0]).toMatchObject({
+      connected: false,
+      disconnectedAt: 1_700_000_001_000,
+    });
+    await expect(core.connectionClosed('socket-closing')).resolves.toEqual({
+      ok: true,
+      changed: false,
+    });
+  });
+
   it('removes only the matching disconnected generation after grace', async () => {
     let now = 1_700_000_001_000;
     const core = createCoordinatorCore({ target, now: () => now, probePid: () => 'match' });
@@ -895,7 +979,7 @@ describe('coordinator ownership and publication', () => {
     });
   });
 
-  it('keeps applied state private and retryable when its persistence rejects', async () => {
+  it('keeps applied state private and retries persistence without republishing', async () => {
     const appliedGate = deferred();
     let persistCount = 0;
     const published: unknown[] = [];
@@ -925,8 +1009,61 @@ describe('coordinator ownership and publication', () => {
 
     await accept(core, snapshot({ ownerGeneration: 1, revision: 1 }));
     await core.drain();
-    expect(published).toHaveLength(2);
+    expect(published).toHaveLength(1);
     expect(core.ledger()).toMatchObject({ applied: { state: 'idle' } });
+  });
+
+  it('commits a successful final clear after persistence recovers without republishing', async () => {
+    let now = 1_700_000_001_000;
+    let rejectFinalApplied = true;
+    const published: unknown[] = [];
+    const finalized = vi.fn();
+    const core = createCoordinatorCore({
+      target,
+      now: () => now,
+      probePid: () => 'match',
+      onFinalClear: finalized,
+      persist: async (ledger: any) => {
+        if (
+          rejectFinalApplied &&
+          ledger.desired.state === null &&
+          ledger.applied.state === null &&
+          ledger.applied.revision === ledger.desired.revision
+        ) {
+          rejectFinalApplied = false;
+          throw new Error('final applied persistence failed');
+        }
+      },
+      publish: async (status: unknown) => {
+        published.push(status);
+        return { ok: true };
+      },
+    });
+
+    const registration = await accept(core, snapshot());
+    await core.drain();
+    await release(core, goodbye(generation(registration)));
+    now += RECONNECT_GRACE_MS;
+    await core.maintain();
+    await core.drain();
+
+    expect(published).toEqual([
+      { state: 'idle', label: 'Idle' },
+      { state: null, label: null },
+    ]);
+    expect(core.ledger()).toMatchObject({
+      desired: { state: null },
+      applied: { state: 'idle' },
+    });
+    expect(finalized).not.toHaveBeenCalled();
+
+    await core.reconcile();
+    expect(published).toHaveLength(2);
+    expect(core.ledger()).toMatchObject({
+      desired: { state: null },
+      applied: { state: null },
+    });
+    expect(finalized).toHaveBeenCalledOnce();
   });
 
   it('keeps failed active publication unapplied without a retry timer and retries on a heartbeat', async () => {
