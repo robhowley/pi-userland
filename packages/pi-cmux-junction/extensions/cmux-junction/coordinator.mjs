@@ -437,7 +437,6 @@ export function createCoordinatorCore(options) {
   let operationTail = Promise.resolve();
   let publication = null;
   let deliveryOutcome = null;
-  let retryCount = 0;
   let retryScheduled = false;
   let finalClearReadyAt = null;
   let finalClearStartedAt = null;
@@ -529,14 +528,9 @@ export function createCoordinatorCore(options) {
             } else {
               options.onFinalClear?.();
             }
-          } else {
-            const delays = [1_000, 2_000, 5_000, 10_000];
-            scheduleReconcile(delays[Math.min(retryCount, delays.length - 1)]);
-            retryCount += 1;
           }
           return;
         }
-        retryCount = 0;
         await enqueue(async () => {
           ledger.applied = attempted;
           await persistCurrent();

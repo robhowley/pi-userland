@@ -672,13 +672,15 @@ describe('coordinator ownership and publication', () => {
     });
   });
 
-  it('keeps failed desired state unapplied and replays it on reconcile', async () => {
+  it('keeps failed active publication unapplied without a retry timer and retries on a heartbeat', async () => {
     let succeed = false;
     const calls: unknown[] = [];
+    const scheduled: Array<{ callback: () => void; delay: number }> = [];
     const core = createCoordinatorCore({
       target,
       now: () => 1_700_000_001_000,
       probePid: () => 'match',
+      schedule: (callback: () => void, delay: number) => scheduled.push({ callback, delay }),
       publish: async (status: unknown) => {
         calls.push(status);
         return succeed ? { ok: true } : { ok: false, outcome: 'timed-out' };
@@ -691,35 +693,13 @@ describe('coordinator ownership and publication', () => {
       applied: { state: null },
     });
     expect(core.diagnostics()).toMatchObject({ deliveryOutcome: 'timed-out' });
+    expect(calls).toHaveLength(1);
+    expect(scheduled).toEqual([]);
 
     succeed = true;
-    await core.reconcile();
+    await accept(core, snapshot({ ownerGeneration: 1, revision: 1, sentAt: 1_700_000_001_001 }));
+    await core.drain();
     expect(calls).toHaveLength(2);
-    expect(core.ledger()).toMatchObject({ applied: { state: 'idle' } });
-  });
-
-  it('retries active-owner publication with capped backoff', async () => {
-    const scheduled: Array<{ callback: () => void; delay: number }> = [];
-    let attempts = 0;
-    const core = createCoordinatorCore({
-      target,
-      now: () => 1_700_000_001_000,
-      probePid: () => 'match',
-      schedule: (callback: () => void, delay: number) => scheduled.push({ callback, delay }),
-      publish: async () => {
-        attempts += 1;
-        return attempts < 3 ? { ok: false, outcome: 'exit-failed' } : { ok: true };
-      },
-    });
-
-    await accept(core, snapshot());
-    await core.drain();
-    expect(scheduled.map(({ delay }) => delay)).toEqual([1_000]);
-    scheduled.shift()?.callback();
-    await core.drain();
-    expect(scheduled.map(({ delay }) => delay)).toEqual([2_000]);
-    scheduled.shift()?.callback();
-    await core.drain();
     expect(core.ledger()).toMatchObject({ applied: { state: 'idle' } });
   });
 

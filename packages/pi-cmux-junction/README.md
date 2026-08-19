@@ -37,7 +37,7 @@ In eligible cmux TUI sessions, Junction publishes its own workspace status under
 - `Error`
 - `Unknown`
 
-Lifecycle status activates only in Pi's TUI mode when `CMUX_SOCKET_PATH`, `CMUX_WORKSPACE_ID`, `CMUX_SURFACE_ID`, and the Pi session ID are all present and nonblank. It stays off when `CI` is nonblank. Set `PI_CMUX_JUNCTION_LIFECYCLE_DISABLED=1` to opt out without disabling `/junction`.
+Lifecycle status activates only in Pi's TUI mode when `CMUX_SOCKET_PATH`, `CMUX_WORKSPACE_ID`, `CMUX_SURFACE_ID`, and the Pi session ID are all present and nonblank. Set `PI_CMUX_JUNCTION_LIFECYCLE_DISABLED=1` to opt out without disabling `/junction`.
 
 Junction owns only `pi-junction`. It does not inspect, write, clear, suppress, or coordinate with the official cmux `pi` status or hook. Either extension can be installed alone, and both can be installed at once as independent pills.
 

@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   createLifecycleState,
   deriveLifecycleSnapshot,
-  formatLifecycleLabel,
   LIFECYCLE_TIMINGS,
   reduceLifecycle,
   sanitizeToolName,
@@ -53,7 +52,6 @@ describe('Junction lifecycle reducer', () => {
       state: 'tool-running',
       toolName: 'read_file',
     });
-    expect(formatLifecycleLabel(snapshotAt(state, START + 2_000))).toBe('Tool running: read_file');
 
     state = reduce(
       state,
@@ -124,10 +122,14 @@ describe('Junction lifecycle reducer', () => {
     ).state;
     expect(snapshotAt(state, START + 2).state).toBe('tool-running');
 
-    state = reduce(state, { type: 'ui_wait_start', kind: 'input' }, START + 3).state;
+    state = reduce(
+      state,
+      { type: 'ui_wait_start', waitId: 'wait-2', kind: 'input' },
+      START + 3,
+    ).state;
     expect(snapshotAt(state, START + 3).state).toBe('awaiting-input');
 
-    state = reduce(state, { type: 'ui_wait_clear' }, START + 4).state;
+    state = reduce(state, { type: 'ui_wait_end', waitId: 'wait-2' }, START + 4).state;
     expect(snapshotAt(state, START + 4).state).toBe('tool-running');
   });
 
@@ -293,7 +295,6 @@ describe('Junction lifecycle reducer', () => {
     state = reduce(state, { type: 'agent_settled', isIdle: true }, START + 4).state;
 
     state = reduce(state, { type: 'agent_start' }, START + 5).state;
-    expect(state.agentRunEpoch).toBe(2);
     expect(state.lastTurnIndex).toBeNull();
     const secondPrompt = reduce(state, { type: 'turn_start', turnIndex: 0 }, START + 6);
     expect(secondPrompt.accepted).toBe(true);
@@ -303,7 +304,7 @@ describe('Junction lifecycle reducer', () => {
     state = reduce(state, { type: 'agent_start' }, START + 9).state;
     const retry = reduce(state, { type: 'turn_start', turnIndex: 0 }, START + 10);
     expect(retry.accepted).toBe(true);
-    expect(retry.state.agentRunEpoch).toBe(3);
+    expect(retry.state.lastTurnIndex).toBe(0);
   });
 
   it('requires an active turn and matching turn index before settling idle', () => {
@@ -329,18 +330,6 @@ describe('Junction lifecycle reducer', () => {
     state = reduce(state, { type: 'agent_settled', isIdle: true }, START + 6).state;
     expect(state.settlementRequired).toBe(false);
     expect(snapshotAt(state, START + 6).state).toBe('idle');
-  });
-
-  it('does not let agent_end force idle before settlement', () => {
-    let state = freshState();
-    state = reduce(state, { type: 'turn_start', turnIndex: 0 }, START + 1).state;
-    state = reduce(state, { type: 'agent_end' }, START + 2).state;
-    expect(state.lastAgentEndAt).toBe(START + 2);
-    expect(snapshotAt(state, START + 2).state).toBe('thinking');
-
-    state = reduce(state, { type: 'turn_end', turnIndex: 0 }, START + 3).state;
-    state = reduce(state, { type: 'agent_end' }, START + 4).state;
-    expect(snapshotAt(state, START + 4).state).toBe('unknown');
   });
 
   it('keeps assistant errors sticky through turn end and settlement', () => {
@@ -376,28 +365,31 @@ describe('Junction lifecycle reducer', () => {
       { type: 'tool_execution_start', toolCallId: 'tool-1', toolName: 'bash' },
       START + 2,
     ).state;
-    state = reduce(
-      state,
-      { type: 'tool_execution_end', toolCallId: 'tool-1', isError: true },
-      START + 3,
-    ).state;
+    state = reduce(state, { type: 'tool_execution_end', toolCallId: 'tool-1' }, START + 3).state;
     expect(state.assistantError).toBeNull();
     expect(snapshotAt(state, START + 3).state).toBe('thinking');
   });
 
-  it('generates private UI wait ids, supports overlap, and returns to the underlying state', () => {
+  it('tracks explicit UI wait ids, supports overlap, and returns to the underlying state', () => {
     let state = freshState();
     state = reduce(state, { type: 'turn_start', turnIndex: 0 }, START + 1).state;
-    let transition = reduce(state, { type: 'ui_wait_start', kind: 'input' }, START + 2);
-    expect(transition.generatedWaitId).toBe('input-1');
+    let transition = reduce(
+      state,
+      { type: 'ui_wait_start', waitId: 'input-1', kind: 'input' },
+      START + 2,
+    );
     expect(transition.state.uiWaits).toHaveLength(1);
+    expect(transition.state.uiWaits[0]?.waitId).toBe('input-1');
     expect(snapshotAt(transition.state, START + 2).state).toBe('awaiting-input');
     state = transition.state;
 
-    transition = reduce(state, { type: 'ui_wait_start', kind: 'input' }, START + 3);
-    expect(transition.generatedWaitId).toBe('input-2');
+    transition = reduce(
+      state,
+      { type: 'ui_wait_start', waitId: 'input-2', kind: 'input' },
+      START + 3,
+    );
     state = transition.state;
-    expect(state.uiWaits).toHaveLength(2);
+    expect(state.uiWaits.map((wait) => wait.waitId)).toEqual(['input-1', 'input-2']);
 
     state = reduce(state, { type: 'ui_wait_end', waitId: 'input-1' }, START + 4).state;
     expect(snapshotAt(state, START + 4).state).toBe('awaiting-input');
@@ -408,22 +400,15 @@ describe('Junction lifecycle reducer', () => {
     expect(unknownEnd.accepted).toBe(false);
   });
 
-  it.each(['select', 'input', 'editor', 'confirm'] as const)(
-    'tracks generated %s waits',
-    (kind) => {
-      let state = freshState();
-      const started = reduce(state, { type: 'ui_wait_start', kind }, START + 1);
-      expect(started.generatedWaitId).toBe(`${kind}-1`);
-      expect(started.snapshot.state).toBe('awaiting-input');
+  it.each(['select', 'input', 'editor', 'confirm'] as const)('tracks explicit %s waits', (kind) => {
+    let state = freshState();
+    const waitId = `junction-${kind}-1`;
+    const started = reduce(state, { type: 'ui_wait_start', waitId, kind }, START + 1);
+    expect(started.snapshot.state).toBe('awaiting-input');
 
-      state = reduce(
-        started.state,
-        { type: 'ui_wait_end', waitId: started.generatedWaitId! },
-        START + 2,
-      ).state;
-      expect(snapshotAt(state, START + 2).state).toBe('idle');
-    },
-  );
+    state = reduce(started.state, { type: 'ui_wait_end', waitId }, START + 2).state;
+    expect(snapshotAt(state, START + 2).state).toBe('idle');
+  });
 
   it('fences compaction abort callbacks by generation and clears current completion in order', () => {
     let state = freshState();
@@ -480,7 +465,11 @@ describe('Junction lifecycle reducer', () => {
 
   it('returns direct to idle when waits or compaction never belonged to a turn', () => {
     let state = freshState();
-    state = reduce(state, { type: 'ui_wait_start', kind: 'select' }, START + 1).state;
+    state = reduce(
+      state,
+      { type: 'ui_wait_start', waitId: 'select-1', kind: 'select' },
+      START + 1,
+    ).state;
     expect(snapshotAt(state, START + 1).state).toBe('awaiting-input');
     state = reduce(state, { type: 'ui_wait_end', waitId: 'select-1' }, START + 2).state;
     expect(snapshotAt(state, START + 2).state).toBe('idle');
@@ -494,7 +483,11 @@ describe('Junction lifecycle reducer', () => {
   it('clears local facts on shutdown and rejects events after intake closes', () => {
     let state = freshState();
     state = reduce(state, { type: 'turn_start', turnIndex: 0 }, START + 1).state;
-    state = reduce(state, { type: 'ui_wait_start', kind: 'confirm' }, START + 2).state;
+    state = reduce(
+      state,
+      { type: 'ui_wait_start', waitId: 'confirm-1', kind: 'confirm' },
+      START + 2,
+    ).state;
     state = reduce(state, { type: 'session_before_compact' }, START + 3).state;
     const shutdown = reduce(state, { type: 'session_shutdown' }, START + 4);
 
@@ -532,7 +525,11 @@ describe('Junction lifecycle reducer', () => {
       { type: 'tool_execution_start', toolCallId: 'tool-1', toolName: 'bash' },
       START + 2,
     ).state;
-    state = reduce(state, { type: 'ui_wait_start', kind: 'confirm' }, START + 3).state;
+    state = reduce(
+      state,
+      { type: 'ui_wait_start', waitId: 'confirm-1', kind: 'confirm' },
+      START + 3,
+    ).state;
     state = reduce(
       state,
       { type: 'message_end', role: 'assistant', stopReason: 'aborted' },
@@ -593,7 +590,6 @@ describe('Junction lifecycle reducer', () => {
     expect(JSON.stringify(snapshot)).not.toContain('secret');
     expect(JSON.stringify(snapshot)).not.toContain('prompt');
     expect(JSON.stringify(snapshot)).not.toContain('session-1');
-    expect(formatLifecycleLabel(snapshot)).toBe('Tool running: bash');
   });
 
   it('makes duplicate and malformed events no-ops', () => {

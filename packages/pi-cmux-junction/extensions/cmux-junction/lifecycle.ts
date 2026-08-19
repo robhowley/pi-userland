@@ -34,7 +34,7 @@ type IntervalHandle = ReturnType<typeof setInterval>;
 
 export interface LifecycleEligibility {
   eligible: boolean;
-  reason: 'eligible' | 'mode' | 'socket' | 'workspace' | 'surface' | 'session' | 'ci' | 'disabled';
+  reason: 'eligible' | 'mode' | 'socket' | 'workspace' | 'surface' | 'session' | 'disabled';
   target?: LifecycleTarget;
   sessionId?: string;
 }
@@ -80,7 +80,6 @@ export function lifecycleEligibility(
   if (surfaceId === null) return { eligible: false, reason: 'surface' };
   const sessionId = inheritedIdentity(ctx.sessionManager.getSessionId());
   if (sessionId === null) return { eligible: false, reason: 'session' };
-  if ((env['CI'] ?? '').trim() !== '') return { eligible: false, reason: 'ci' };
   if (env[LIFECYCLE_DISABLED_ENV] === '1') return { eligible: false, reason: 'disabled' };
   return {
     eligible: true,
@@ -216,7 +215,6 @@ export function registerJunctionLifecycle(
     return runtime?.deliver({
       type: 'tool_execution_end',
       toolCallId: event.toolCallId,
-      isError: event.isError === true,
     });
   });
   pi.on('turn_end', (event) => {
@@ -244,7 +242,6 @@ export function registerJunctionLifecycle(
     }
   });
   pi.on('session_compact', () => runtime?.deliver({ type: 'session_compact' }));
-  pi.on('agent_end', () => runtime?.deliver({ type: 'agent_end' }));
   pi.on('agent_settled', (_event, ctx) =>
     runtime?.deliver({ type: 'agent_settled', isIdle: ctx.isIdle() }),
   );

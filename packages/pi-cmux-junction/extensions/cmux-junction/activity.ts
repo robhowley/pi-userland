@@ -69,14 +69,11 @@ export interface LifecycleReducerState {
   sessionId: string | null;
   initialized: boolean;
   closed: boolean;
-  eventSeq: number;
-  agentRunEpoch: number;
   activeTurn: { turnIndex: number; startedAt: number } | null;
   lastTurnIndex: number | null;
   settlementRequired: boolean;
   activeTools: readonly LifecycleTool[];
   uiWaits: readonly LifecycleUiWait[];
-  nextWaitId: number;
   assistantError: LifecycleAssistantError | null;
   compactionGeneration: number;
   compaction: LifecycleCompaction | null;
@@ -86,7 +83,6 @@ export interface LifecycleReducerState {
   transitionAt: number;
   idleTrusted: boolean;
   lastToolUpdatePublishedAt: number | null;
-  lastAgentEndAt: number | null;
   lastSnapshot: LifecycleSnapshot | null;
 }
 
@@ -134,23 +130,19 @@ export type LifecycleEvent =
   | (TimedLifecycleEvent & {
       type: 'tool_execution_end';
       toolCallId: string;
-      isError?: boolean;
     })
   | (TimedLifecycleEvent & {
       type: 'turn_end';
       turnIndex: number;
     })
   | (TimedLifecycleEvent & {
-      type: 'ui_wait_start' | 'ui_dialog_start';
-      waitId?: string;
+      type: 'ui_wait_start';
+      waitId: string;
       kind: LifecycleUiWaitKind;
     })
   | (TimedLifecycleEvent & {
-      type: 'ui_wait_end' | 'ui_dialog_end';
+      type: 'ui_wait_end';
       waitId: string;
-    })
-  | (TimedLifecycleEvent & {
-      type: 'ui_wait_clear' | 'ui_dialog_clear';
     })
   | (TimedLifecycleEvent & {
       type: 'session_before_compact';
@@ -167,7 +159,6 @@ export type LifecycleEvent =
       type: 'maintenance';
       sessionId?: string | null;
     })
-  | (TimedLifecycleEvent & { type: 'agent_end' })
   | (TimedLifecycleEvent & {
       type: 'agent_settled';
       isIdle: boolean;
@@ -180,7 +171,6 @@ export interface LifecycleTransition {
   accepted: boolean;
   changed: boolean;
   shouldPublish: boolean;
-  generatedWaitId: string | null;
 }
 
 interface Mutation {
@@ -188,7 +178,6 @@ interface Mutation {
   accepted: boolean;
   forcePublish?: boolean;
   toolUpdateAccepted?: boolean;
-  generatedWaitId?: string;
 }
 
 export function createLifecycleState(
@@ -205,14 +194,11 @@ export function createLifecycleState(
     sessionId,
     initialized,
     closed: false,
-    eventSeq: 0,
-    agentRunEpoch: 0,
     activeTurn: null,
     lastTurnIndex: null,
     settlementRequired: false,
     activeTools: [],
     uiWaits: [],
-    nextWaitId: 0,
     assistantError: null,
     compactionGeneration: 0,
     compaction: null,
@@ -222,7 +208,6 @@ export function createLifecycleState(
     transitionAt: nowMs,
     idleTrusted: trustedSession,
     lastToolUpdatePublishedAt: null,
-    lastAgentEndAt: null,
     lastSnapshot: null,
   };
 }
@@ -242,7 +227,6 @@ export function reduceLifecycle(
       accepted: false,
       changed: false,
       shouldPublish: false,
-      generatedWaitId: null,
     };
   }
 
@@ -254,7 +238,6 @@ export function reduceLifecycle(
       accepted: false,
       changed: false,
       shouldPublish: false,
-      generatedWaitId: null,
     };
   }
 
@@ -300,7 +283,6 @@ export function reduceLifecycle(
     accepted: true,
     changed: true,
     shouldPublish,
-    generatedWaitId: mutation.generatedWaitId ?? null,
   };
 }
 
@@ -376,25 +358,6 @@ export function deriveLifecycleSnapshot(
   return unknown();
 }
 
-export function formatLifecycleLabel(snapshot: LifecycleSnapshot): string {
-  switch (snapshot.state) {
-    case 'compacting':
-      return 'Compacting';
-    case 'error':
-      return 'Error';
-    case 'awaiting-input':
-      return 'Needs input';
-    case 'tool-running':
-      return snapshot.toolName === null ? 'Tool running' : `Tool running: ${snapshot.toolName}`;
-    case 'thinking':
-      return 'Thinking';
-    case 'idle':
-      return 'Idle';
-    case 'unknown':
-      return 'Unknown';
-  }
-}
-
 export function sanitizeToolName(value: unknown): string | null {
   if (typeof value !== 'string') {
     return null;
@@ -437,14 +400,9 @@ function applyEvent(state: LifecycleReducerState, event: LifecycleEvent, nowMs: 
     case 'turn_end':
       return applyTurnEnd(state, event.turnIndex, eventTime);
     case 'ui_wait_start':
-    case 'ui_dialog_start':
       return applyUiWaitStart(state, event, eventTime);
     case 'ui_wait_end':
-    case 'ui_dialog_end':
       return applyUiWaitEnd(state, event.waitId, eventTime);
-    case 'ui_wait_clear':
-    case 'ui_dialog_clear':
-      return applyUiWaitClear(state, eventTime);
     case 'session_before_compact':
       return applyCompactionStart(state, event, eventTime);
     case 'compaction_abort':
@@ -453,10 +411,6 @@ function applyEvent(state: LifecycleReducerState, event: LifecycleEvent, nowMs: 
       return applyCompactionComplete(state, eventTime);
     case 'maintenance':
       return applyMaintenance(state, event, eventTime);
-    case 'agent_end':
-      return acceptedMutation(state, {
-        lastAgentEndAt: maxTimestamp(state.lastAgentEndAt, eventTime),
-      });
     case 'agent_settled':
       return applyAgentSettled(state, event.isIdle, eventTime);
     case 'session_shutdown':
@@ -540,7 +494,6 @@ function applyMessageEnd(
 
 function applyAgentStart(state: LifecycleReducerState): Mutation {
   return acceptedMutation(state, {
-    agentRunEpoch: state.agentRunEpoch + 1,
     activeTurn: null,
     lastTurnIndex: null,
     activeTools: [],
@@ -679,42 +632,23 @@ function applyTurnEnd(
 
 function applyUiWaitStart(
   state: LifecycleReducerState,
-  event: Extract<LifecycleEvent, { type: 'ui_wait_start' | 'ui_dialog_start' }>,
+  event: Extract<LifecycleEvent, { type: 'ui_wait_start' }>,
   eventTime: number,
 ): Mutation {
   if (!isUiWaitKind(event.kind)) {
     return noMutation(state);
   }
 
-  let waitId: string;
-  let nextWaitId = state.nextWaitId;
-  if (event.waitId === undefined) {
-    do {
-      nextWaitId += 1;
-      waitId = `${event.kind}-${nextWaitId}`;
-    } while (state.uiWaits.some((wait) => wait.waitId === waitId));
-  } else {
-    const normalizedWaitId = normalizeOpaqueId(event.waitId);
-    if (normalizedWaitId === null) {
-      return noMutation(state);
-    }
-    waitId = normalizedWaitId;
-  }
-
-  if (state.uiWaits.some((wait) => wait.waitId === waitId)) {
+  const waitId = normalizeOpaqueId(event.waitId);
+  if (waitId === null || state.uiWaits.some((wait) => wait.waitId === waitId)) {
     return noMutation(state);
   }
 
   const next = recordActivity(state, eventTime);
-  return {
-    state: acceptedMutation(state, {
-      ...next,
-      uiWaits: state.uiWaits.concat({ waitId, kind: event.kind, startedAt: eventTime }),
-      nextWaitId,
-    }).state,
-    accepted: true,
-    ...(event.waitId === undefined ? { generatedWaitId: waitId } : {}),
-  };
+  return acceptedMutation(state, {
+    ...next,
+    uiWaits: state.uiWaits.concat({ waitId, kind: event.kind, startedAt: eventTime }),
+  });
 }
 
 function applyUiWaitEnd(
@@ -732,15 +666,6 @@ function applyUiWaitEnd(
     ...next,
     uiWaits: state.uiWaits.filter((wait) => wait.waitId !== waitId),
   });
-}
-
-function applyUiWaitClear(state: LifecycleReducerState, eventTime: number): Mutation {
-  if (state.uiWaits.length === 0) {
-    return noMutation(state);
-  }
-
-  const next = recordActivity(state, eventTime);
-  return acceptedMutation(state, { ...next, uiWaits: [] });
 }
 
 function applyCompactionStart(
@@ -883,7 +808,6 @@ function resetSession(
     sessionId,
     initialized: true,
     closed: false,
-    agentRunEpoch: 0,
     activeTurn: null,
     lastTurnIndex: null,
     settlementRequired: false,
@@ -899,7 +823,6 @@ function resetSession(
     activityUpdatedAt: eventTime,
     idleTrusted: sessionId !== null,
     lastToolUpdatePublishedAt: null,
-    lastAgentEndAt: null,
   }).state;
 }
 
@@ -1068,7 +991,7 @@ function acceptedMutation(
   patch: Partial<LifecycleReducerState>,
 ): Mutation {
   return {
-    state: { ...state, ...patch, eventSeq: state.eventSeq + 1 },
+    state: { ...state, ...patch },
     accepted: true,
   };
 }

@@ -19,7 +19,8 @@ describe('pi-cmux-junction', () => {
         handler: expect.any(Function),
       }),
     );
-    expect(on.mock.calls.map(([event]) => event)).toEqual(
+    const events = on.mock.calls.map(([event]) => event);
+    expect(events).toEqual(
       expect.arrayContaining([
         'session_start',
         'input',
@@ -31,10 +32,10 @@ describe('pi-cmux-junction', () => {
         'turn_end',
         'session_before_compact',
         'session_compact',
-        'agent_end',
         'agent_settled',
         'session_shutdown',
       ]),
     );
+    expect(events).not.toContain('agent_end');
   });
 });

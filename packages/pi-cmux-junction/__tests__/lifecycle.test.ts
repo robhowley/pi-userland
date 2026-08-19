@@ -9,7 +9,11 @@ import {
   registerJunctionLifecycle,
   restoreUiWrappers,
 } from '../extensions/cmux-junction/lifecycle.js';
-import { LIFECYCLE_TIMINGS, type LifecycleSnapshot } from '../extensions/cmux-junction/activity.js';
+import {
+  LIFECYCLE_TIMINGS,
+  type LifecycleEvent,
+  type LifecycleSnapshot,
+} from '../extensions/cmux-junction/activity.js';
 
 function context(overrides: Record<string, unknown> = {}) {
   let sessionId = 'session-a';
@@ -120,12 +124,18 @@ describe('lifecycle eligibility', () => {
     ['socket', {}, env({ CMUX_SOCKET_PATH: ' ' })],
     ['workspace', {}, env({ CMUX_WORKSPACE_ID: '' })],
     ['surface', {}, env({ CMUX_SURFACE_ID: '\0bad' })],
-    ['ci', {}, env({ CI: 'true' })],
     ['disabled', {}, env({ [LIFECYCLE_DISABLED_ENV]: '1' })],
   ])('is inert for %s', (reason, ctxOverrides, environment) => {
     expect(lifecycleEligibility(context(ctxOverrides).value, environment)).toEqual({
       eligible: false,
       reason,
+    });
+  });
+
+  it('allows a valid TUI session when CI is nonblank', () => {
+    expect(lifecycleEligibility(context().value, env({ CI: 'true' }))).toMatchObject({
+      eligible: true,
+      reason: 'eligible',
     });
   });
 
@@ -183,10 +193,8 @@ describe('Pi lifecycle adapter', () => {
     await h.emit('tool_execution_end', {
       toolCallId: 'tool-1',
       result: { content: 'secret result' },
-      isError: true,
     });
     await h.emit('turn_end', { turnIndex: 0, message: { content: 'private' }, toolResults: [] });
-    await h.emit('agent_end', { messages: [{ content: 'private' }] });
     await h.emit('agent_settled', {}, { ...h.ctx.value, isIdle: () => false } as any);
 
     expect(h.snapshots.map((entry) => entry.snapshot?.state).filter(Boolean)).toEqual([
@@ -364,15 +372,21 @@ describe('UI wait wrappers', () => {
     'wraps %s with ordered start/end and restores the owned method',
     async (kind) => {
       const ui = context().ui as any;
-      const calls: string[] = [];
+      const calls: LifecycleEvent[] = [];
       const original = ui[kind];
       const installation = installUiWrappers(ui, async (event) => {
-        calls.push(event.type);
+        calls.push(event);
       });
       const wrapper = ui[kind];
       expect(installUiWrappers(ui, async () => undefined)).toBe(installation);
       await wrapper.call(ui, 'title', kind === 'confirm' ? 'message' : undefined);
-      expect(calls).toEqual(['ui_wait_start', 'ui_wait_end']);
+      expect(calls.map((event) => event.type)).toEqual(['ui_wait_start', 'ui_wait_end']);
+      expect(calls[0]).toMatchObject({
+        type: 'ui_wait_start',
+        waitId: `junction-${kind}-1`,
+        kind,
+      });
+      expect(calls[1]).toMatchObject({ type: 'ui_wait_end', waitId: `junction-${kind}-1` });
       restoreUiWrappers(ui, installation);
       expect(ui[kind]).toBe(original);
     },
@@ -384,12 +398,14 @@ describe('UI wait wrappers', () => {
     ui.input = vi.fn(async () => {
       throw rejected;
     });
-    const calls: string[] = [];
+    const calls: LifecycleEvent[] = [];
     const installation = installUiWrappers(ui, async (event) => {
-      calls.push(event.type);
+      calls.push(event);
     });
     await expect(ui.input('title')).rejects.toBe(rejected);
-    expect(calls).toEqual(['ui_wait_start', 'ui_wait_end']);
+    expect(calls.map((event) => event.type)).toEqual(['ui_wait_start', 'ui_wait_end']);
+    expect(calls[0]).toMatchObject({ type: 'ui_wait_start', waitId: 'junction-input-1' });
+    expect(calls[1]).toMatchObject({ type: 'ui_wait_end', waitId: 'junction-input-1' });
 
     const later = vi.fn();
     ui.input = later;
