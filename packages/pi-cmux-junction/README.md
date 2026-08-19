@@ -1,6 +1,6 @@
 # pi-cmux-junction
 
-Start work on another Git branch in a new cmux workspace without leaving your current Pi session.
+Branch into parallel Pi sessions: open Git worktrees in new cmux workspaces, fork conversations, and see what every agent is doing at a glance.
 
 ## Install
 
