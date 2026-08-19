@@ -1,6 +1,6 @@
 # pi-cmux-junction
 
-Create or reuse a Git worktree and start a fresh Pi session in a new cmux workspace without leaving the current workspace.
+Start work on another Git branch in a new cmux workspace without leaving your current Pi session.
 
 ## Install
 
@@ -17,17 +17,21 @@ From Pi running inside cmux in a Git repository:
 /junction fork --branch feature/example
 ```
 
-Junction creates the branch and worktree, or reuses an exact match. It opens a new cmux workspace and leaves the current one focused. The `fork` form waits for Pi to become idle, then starts the new session with the current persisted session history.
+Junction creates or reuses the branch's worktree, opens it in a new cmux workspace, and keeps your current workspace focused.
 
-Use a valid Git branch name. New branches start from the repository's default branch, with `main`, `master`, and the current `HEAD` as fallbacks.
+`/junction` starts a fresh Pi session. `/junction fork` waits for the current session to become idle, then starts with its saved conversation. It carries the conversation, not uncommitted files.
 
-Branch or path conflicts stop the command without changes.
+New branches start from the repository's default branch.
 
-## Junction lifecycle status
+## Detailed agent status
 
-Lifecycle status requires Pi 0.84.2 or newer.
+Junction adds a live status pill that follows Pi's lifecycle events. Compared with cmux's standard Pi session hook, it can show `Tool running: subagent` instead of just `Running`, and `Thinking` instead of leaving an earlier error as the current status.
 
-In eligible cmux TUI sessions, Junction publishes its own workspace status under the `pi-junction` key. It reports seven labels:
+<img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-cmux-junction/img/status-tool-running-comparison.png" alt="Junction reports Tool running: subagent while the standard cmux status reports Running" width="666">
+
+<img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-cmux-junction/img/status-thinking-comparison.png" alt="Junction reports Thinking while the standard cmux status still reports an earlier error" width="670">
+
+The pill reports:
 
 - `Idle`
 - `Thinking`
@@ -37,13 +41,9 @@ In eligible cmux TUI sessions, Junction publishes its own workspace status under
 - `Error`
 - `Unknown`
 
-Lifecycle status activates only in Pi's TUI mode when `CMUX_SOCKET_PATH`, `CMUX_WORKSPACE_ID`, `CMUX_SURFACE_ID`, and the Pi session ID are all present and nonblank. Set `PI_CMUX_JUNCTION_LIFECYCLE_DISABLED=1` to opt out without disabling `/junction`.
+It works alongside cmux's standard Pi status, so you can keep both visible. It does not inspect or retain your conversation or terminal contents.
 
-Junction owns only `pi-junction`. It does not inspect, write, clear, suppress, or coordinate with the official cmux `pi` status or hook. Either extension can be installed alone, and both can be installed at once as independent pills.
-
-Lifecycle records only the inherited cmux and Pi IDs, a process/runtime identity, protocol counters and timestamps, one of the seven states, and a bounded safe tool name when available. It does not retain prompts, messages, tool arguments or output, raw errors, cwd, titles, branches, TTY data, terminal content, or the cmux socket password.
-
-cmux status keys have no lease or TTL. If the coordinator and all clients crash together, `pi-junction` can remain until a later Junction session reconciles it, it is manually cleared, or cmux resets the workspace. A cmux outage that outlasts the final bounded clear retries has the same residual limit. UI waits opened through Pi's public `select`, `input`, `editor`, and `confirm` methods are observed; core dialogs, custom components, and dialogs opened before lifecycle setup are not.
+Detailed status requires Pi 0.84.2 or newer. Set `PI_CMUX_JUNCTION_LIFECYCLE_DISABLED=1` to hide it while keeping `/junction` available.
 
 ## Worktrees
 
@@ -53,14 +53,12 @@ Worktrees live under:
 ~/.pi/cmux-junction-worktrees/
 ```
 
-Names include the repository owner, repository, and branch when available:
+Their names include the repository owner, repository, and branch when available:
 
 ```text
 robhowley-pi-userland-feature-example
 ```
 
-Set `PI_CMUX_JUNCTION_WORKTREE_ROOT` to an absolute path, `~`, or a path under `~/` to use another root.
+Set `PI_CMUX_JUNCTION_WORKTREE_ROOT` to another location. It accepts an absolute path, `~`, or a path under `~/`.
 
-The regular form starts a fresh Pi session, including when reusing a worktree. The `fork` form is session-only: it carries persisted session history, not uncommitted files or an exact in-memory tree position, and requires a readable persisted source session. If launch fails, the worktree remains. Junction reports when it is safe to retry. If the outcome is uncertain, check cmux before retrying because a workspace may already exist.
-
-Junction does not delete branches or worktrees.
+Junction leaves worktrees in place for reuse. It never deletes branches or worktrees.
