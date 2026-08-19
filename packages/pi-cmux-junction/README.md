@@ -25,7 +25,7 @@ New branches start from the repository's default branch.
 
 ## Detailed agent status
 
-Junction adds a live status pill that follows Pi's lifecycle events. Compared with cmux's standard Pi session hook, it can show `Tool running: subagent` instead of just `Running`, and `Thinking` instead of leaving an earlier error as the current status.
+Junction adds detailed and accurate live status updates to get quick insight into what your Pi agents are doing. Upgrade from the standard cmux Pi session hook to get better insights.
 
 <img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-cmux-junction/img/status-tool-running-comparison.png" alt="Junction reports Tool running: subagent while the standard cmux status reports Running" width="666">
 
@@ -41,15 +41,13 @@ The pill reports:
 - `Error`
 - `Unknown`
 
-It works alongside cmux's standard Pi status, so you can keep both visible. It does not inspect or retain your conversation or terminal contents.
-
-Detailed status requires Pi 0.84.2 or newer and is enabled by default (`disableStatus` is `false` or omitted). To hide it, add this setting to the global `~/.pi/agent/settings.json` or a trusted project's `.pi/settings.json`:
+Status pills are enabled by default, but can be disabled in either the global or project `settings.json`:
 
 ```json
 { "pi-cmux-junction": { "disableStatus": true } }
 ```
 
-A project setting overrides the global setting. After editing a settings file directly, run `/reload`; settings from untrusted projects do not apply. Disabling status only hides the pill; `/junction` and `/junction fork` remain available.
+A project setting overrides the global setting. After editing a settings file directly, run `/reload`; settings from untrusted projects do not apply. Disabling status only hides the pill; `/junction` commands remain available.
 
 ## Worktrees
 
