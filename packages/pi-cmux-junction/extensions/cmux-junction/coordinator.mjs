@@ -841,18 +841,47 @@ export async function resolveCmuxExecutable(env, executableAccess = access) {
   }
 }
 
+const statusStyles = {
+  idle: { icon: 'pause.circle.fill', color: '#8E8E93', priority: 0 },
+  thinking: { icon: 'brain', color: '#4C8DFF', priority: 0 },
+  'tool-running': { icon: 'wrench.fill', color: '#4C8DFF', priority: 0 },
+  'awaiting-input': { icon: 'bell.fill', color: '#FF9F0A', priority: 100 },
+  compacting: { icon: 'trash.fill', color: '#4C8DFF', priority: 0 },
+  error: { icon: 'exclamationmark.triangle.fill', color: '#FF453A', priority: 100 },
+  unknown: { icon: 'questionmark.circle', color: '#8E8E93', priority: 50 },
+};
+
 export function buildCmuxStatusArgs(target, status) {
-  return status.label === null
-    ? ['--socket', target.socketPath, 'clear-status', STATUS_KEY, '--workspace', target.workspaceId]
-    : [
-        '--socket',
-        target.socketPath,
-        'set-status',
-        STATUS_KEY,
-        status.label,
-        '--workspace',
-        target.workspaceId,
-      ];
+  if (status.label === null) {
+    return [
+      '--socket',
+      target.socketPath,
+      'clear-status',
+      STATUS_KEY,
+      '--workspace',
+      target.workspaceId,
+    ];
+  }
+
+  if (!Object.hasOwn(statusStyles, status.state)) {
+    throw new Error(`missing cmux status style for state: ${String(status.state)}`);
+  }
+  const style = statusStyles[status.state];
+  return [
+    '--socket',
+    target.socketPath,
+    'set-status',
+    STATUS_KEY,
+    status.label,
+    '--workspace',
+    target.workspaceId,
+    '--icon',
+    style.icon,
+    '--color',
+    style.color,
+    '--priority',
+    String(style.priority),
+  ];
 }
 
 export function runCmux(file, args, env, execute = execFile) {

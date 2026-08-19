@@ -456,15 +456,35 @@ describe('coordinator cmux publisher boundary', () => {
     ).resolves.toBe('cmux');
 
     const hostile = { socketPath: '/tmp/socket; touch nope', workspaceId: 'workspace $(nope)' };
-    expect(buildCmuxStatusArgs(hostile, { state: 'thinking', label: 'Thinking' })).toEqual([
-      '--socket',
-      hostile.socketPath,
-      'set-status',
-      'pi-junction',
-      'Thinking',
-      '--workspace',
-      hostile.workspaceId,
-    ]);
+    const styles = [
+      ['idle', 'Idle', 'pause.circle.fill', '#8E8E93', '0'],
+      ['thinking', 'Thinking', 'brain', '#4C8DFF', '0'],
+      ['tool-running', 'Tool running: bash', 'wrench.fill', '#4C8DFF', '0'],
+      ['awaiting-input', 'Needs input', 'bell.fill', '#FF9F0A', '100'],
+      ['compacting', 'Compacting', 'trash.fill', '#4C8DFF', '0'],
+      ['error', 'Error', 'exclamationmark.triangle.fill', '#FF453A', '100'],
+      ['unknown', 'Unknown', 'questionmark.circle', '#8E8E93', '50'],
+    ] as const;
+    for (const [state, label, icon, color, priority] of styles) {
+      expect(buildCmuxStatusArgs(hostile, { state, label })).toEqual([
+        '--socket',
+        hostile.socketPath,
+        'set-status',
+        'pi-junction',
+        label,
+        '--workspace',
+        hostile.workspaceId,
+        '--icon',
+        icon,
+        '--color',
+        color,
+        '--priority',
+        priority,
+      ]);
+    }
+    expect(() => buildCmuxStatusArgs(hostile, { state: 'unhandled', label: 'Unhandled' })).toThrow(
+      'missing cmux status style',
+    );
     expect(buildCmuxStatusArgs(hostile, { state: null, label: null })).toEqual([
       '--socket',
       hostile.socketPath,
