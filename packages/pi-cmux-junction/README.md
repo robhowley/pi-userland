@@ -21,6 +21,8 @@ Junction creates or reuses the branch's worktree, opens it in a new cmux workspa
 
 `/junction` starts a fresh Pi session. `/junction fork` waits for the current session to become idle, then starts with its saved conversation. It carries the conversation, not uncommitted files.
 
+New sessions use the same effective Pi config directory as the Pi running Junction. Wrapper arguments such as pi-rh's `--provider personal` are not replayed.
+
 New branches start from the repository's default branch.
 
 ## Detailed agent status
