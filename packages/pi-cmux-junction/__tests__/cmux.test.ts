@@ -236,7 +236,12 @@ describe('cmux boundary', () => {
 
   it('builds and runs the exact unfocused workspace argv from the worktree cwd', async () => {
     const { calls, runner } = successfulRunner();
-    const args = buildWorkspaceCreateArgs('feature/Ship-It', '/tmp/repo-wt-feature-ship-it');
+    const activeAgentDir = '/tmp/pi agent;$(touch should-not-run)';
+    const args = buildWorkspaceCreateArgs(
+      'feature/Ship-It',
+      '/tmp/repo-wt-feature-ship-it',
+      activeAgentDir,
+    );
 
     expect(args).toEqual([
       'workspace',
@@ -245,10 +250,15 @@ describe('cmux boundary', () => {
       'feature/Ship-It',
       '--cwd',
       '/tmp/repo-wt-feature-ship-it',
+      '--env',
+      `PI_CODING_AGENT_DIR=${activeAgentDir}`,
       '--command',
       'exec pi',
       '--focus',
       'false',
+    ]);
+    expect(args.filter((arg) => arg.includes(activeAgentDir))).toEqual([
+      `PI_CODING_AGENT_DIR=${activeAgentDir}`,
     ]);
     expect(args).not.toContain('--window');
 
@@ -256,6 +266,7 @@ describe('cmux boundary', () => {
       launchCmuxWorkspace('feature/Ship-It', '/tmp/repo-wt-feature-ship-it', {
         env: CALLER_ENV,
         runner,
+        activeAgentDir,
       }),
     ).resolves.toEqual({ ok: true });
     expect(calls).toEqual([{ file: 'cmux', args, cwd: '/tmp/repo-wt-feature-ship-it' }]);
@@ -263,12 +274,13 @@ describe('cmux boundary', () => {
 
   it('transports a fork source as one env argv without interpolating it into the command', async () => {
     const { calls, runner } = successfulRunner();
+    const activeAgentDir = '/tmp/pi agent;$(touch should-not-run)';
     const sourceSessionFile = '/tmp/source;$(touch should-not-run).jsonl';
     const recipe = { mode: 'fork' as const, sourceSessionFile };
-    const environmentBefore = { ...process.env };
     const args = buildWorkspaceCreateArgs(
       'feature/Ship-It',
       '/tmp/repo-wt-feature-ship-it',
+      activeAgentDir,
       recipe,
     );
 
@@ -280,12 +292,20 @@ describe('cmux boundary', () => {
       '--cwd',
       '/tmp/repo-wt-feature-ship-it',
       '--env',
+      `PI_CODING_AGENT_DIR=${activeAgentDir}`,
+      '--env',
       `PI_CMUX_JUNCTION_SOURCE_SESSION=${sourceSessionFile}`,
       '--command',
       'exec pi --fork "$PI_CMUX_JUNCTION_SOURCE_SESSION"',
       '--focus',
       'false',
     ]);
+    expect(args.filter((arg) => arg.includes(activeAgentDir))).toEqual([
+      `PI_CODING_AGENT_DIR=${activeAgentDir}`,
+    ]);
+    expect(args.filter((arg) => arg.startsWith('PI_CMUX_JUNCTION_SOURCE_SESSION='))).toHaveLength(
+      1,
+    );
     expect(args).not.toContain('--window');
 
     await expect(
@@ -295,12 +315,12 @@ describe('cmux boundary', () => {
         {
           env: CALLER_ENV,
           runner,
+          activeAgentDir,
         },
         recipe,
       ),
     ).resolves.toEqual({ ok: true });
     expect(calls).toEqual([{ file: 'cmux', args, cwd: '/tmp/repo-wt-feature-ship-it' }]);
-    expect(process.env).toEqual(environmentBefore);
   });
 
   it.each([

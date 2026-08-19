@@ -1,3 +1,5 @@
+import { resolve } from 'node:path';
+import { getAgentDir } from '@earendil-works/pi-coding-agent';
 import { resolveCmuxExecutable } from './cmux-runtime.mjs';
 import {
   defaultProcessRunner,
@@ -10,6 +12,7 @@ export interface CmuxOptions {
   runner?: ProcessRunner;
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
+  activeAgentDir?: string;
 }
 
 export interface CmuxTarget {
@@ -24,6 +27,7 @@ export type CmuxTargetResolution =
 
 export type CmuxLaunchRecipe = { mode: 'fresh' } | { mode: 'fork'; sourceSessionFile: string };
 
+const PI_CODING_AGENT_DIR_ENV = 'PI_CODING_AGENT_DIR';
 const SOURCE_SESSION_ENV = 'PI_CMUX_JUNCTION_SOURCE_SESSION';
 const FRESH_PI_COMMAND = 'exec pi';
 const FORK_PI_COMMAND = 'exec pi --fork "$PI_CMUX_JUNCTION_SOURCE_SESSION"';
@@ -145,12 +149,16 @@ export async function resolveCmuxTarget(
 export function buildWorkspaceCreateArgs(
   branch: string,
   worktreePath: string,
+  activeAgentDir: string,
   recipe: CmuxLaunchRecipe = { mode: 'fresh' },
 ): string[] {
-  const launchArgs =
-    recipe.mode === 'fork'
+  const launchArgs = [
+    '--env',
+    `${PI_CODING_AGENT_DIR_ENV}=${activeAgentDir}`,
+    ...(recipe.mode === 'fork'
       ? ['--env', `${SOURCE_SESSION_ENV}=${recipe.sourceSessionFile}`, '--command', FORK_PI_COMMAND]
-      : ['--command', FRESH_PI_COMMAND];
+      : ['--command', FRESH_PI_COMMAND]),
+  ];
 
   return [
     'workspace',
@@ -172,10 +180,11 @@ export async function launchCmuxWorkspace(
   recipe: CmuxLaunchRecipe = { mode: 'fresh' },
 ): Promise<CmuxLaunchResult> {
   const env = options.env ?? process.env;
+  const activeAgentDir = options.activeAgentDir ?? resolve(process.cwd(), getAgentDir());
   const cmuxFile = await resolveCmuxExecutable(env);
   const result = await run(
     cmuxFile,
-    buildWorkspaceCreateArgs(branch, worktreePath, recipe),
+    buildWorkspaceCreateArgs(branch, worktreePath, activeAgentDir, recipe),
     worktreePath,
     env,
     options,
