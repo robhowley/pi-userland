@@ -6,6 +6,7 @@ import type {
   ExtensionContext,
   ExtensionUIContext,
 } from '@earendil-works/pi-coding-agent';
+import { resolveCmuxTarget, type CmuxOptions } from './cmux.js';
 import {
   LIFECYCLE_TIMINGS,
   createLifecycleState,
@@ -22,6 +23,7 @@ import {
   type LifecycleOwnerIdentity,
   type LifecycleTarget,
 } from './lifecycle-client.js';
+import type { ProcessRunner } from './process.js';
 
 export const LIFECYCLE_DISABLED_ENV = 'PI_CMUX_JUNCTION_LIFECYCLE_DISABLED';
 export const LIFECYCLE_HEARTBEAT_MS = 10_000;
@@ -53,6 +55,9 @@ export interface LifecycleDependencies {
   pid?: number;
   observeProcessStart?: (pid: number) => Promise<number | null>;
   createClient?: (options: LifecycleClientOptions) => LifecycleDeliveryClient;
+  resolveTarget?: typeof resolveCmuxTarget;
+  runner?: ProcessRunner;
+  timeoutMs?: number;
   setInterval?: (callback: () => void, delay: number) => IntervalHandle;
   clearInterval?: (handle: IntervalHandle) => void;
   coordinatorPath?: string;
@@ -123,6 +128,12 @@ export function registerJunctionLifecycle(
   const pid = dependencies.pid ?? process.pid;
   const observeStart = dependencies.observeProcessStart ?? observeProcessStartedAt;
   const createClient = dependencies.createClient ?? ((options) => new LifecycleClient(options));
+  const resolveTarget = dependencies.resolveTarget ?? resolveCmuxTarget;
+  const cmuxOptions: CmuxOptions = {
+    env,
+    ...(dependencies.runner === undefined ? {} : { runner: dependencies.runner }),
+    ...(dependencies.timeoutMs === undefined ? {} : { timeoutMs: dependencies.timeoutMs }),
+  };
   const scheduleInterval = dependencies.setInterval ?? globalThis.setInterval;
   const cancelInterval = dependencies.clearInterval ?? globalThis.clearInterval;
   const coordinatorPath =
@@ -137,6 +148,13 @@ export function registerJunctionLifecycle(
       await previous?.shutdown();
       const eligibility = lifecycleEligibility(ctx, env);
       if (!eligibility.eligible || !eligibility.target || !eligibility.sessionId) return;
+      const resolved = await resolveTarget(ctx.cwd, eligibility.target, cmuxOptions);
+      if (!resolved.ok) return;
+      const target: LifecycleTarget = {
+        ...eligibility.target,
+        workspaceId: resolved.workspaceId,
+        surfaceId: resolved.surfaceId,
+      };
       const processStartedAt = await observeStart(pid);
       if (processStartedAt === null) return;
       const owner: LifecycleOwnerIdentity = {
@@ -146,7 +164,7 @@ export function registerJunctionLifecycle(
         processStartedAt,
       };
       const client = createClient({
-        target: eligibility.target,
+        target,
         owner,
         coordinatorPath,
         env,

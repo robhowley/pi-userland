@@ -14,6 +14,7 @@ import {
   type LifecycleEvent,
   type LifecycleSnapshot,
 } from '../extensions/cmux-junction/activity.js';
+import type { ProcessRunner } from '../extensions/cmux-junction/process.js';
 
 function context(overrides: Record<string, unknown> = {}) {
   let sessionId = 'session-a';
@@ -27,6 +28,7 @@ function context(overrides: Record<string, unknown> = {}) {
   return {
     value: {
       mode: 'tui',
+      cwd: '/repo',
       isIdle: () => true,
       sessionManager: { getSessionId: () => sessionId },
       ui,
@@ -84,6 +86,11 @@ function harness() {
     pid: 4321,
     observeProcessStart: async () => 1_699_999_000_000,
     createClient: () => client,
+    resolveTarget: async (_cwd, target) => ({
+      ok: true,
+      workspaceId: target.workspaceId,
+      surfaceId: target.surfaceId,
+    }),
     setInterval: ((callback: () => void, delay: number) => {
       const timer = { callback, delay };
       intervals.push(timer);
@@ -175,6 +182,86 @@ describe('meaningful tool update boundary', () => {
 });
 
 describe('Pi lifecycle adapter', () => {
+  it('resolves a stale workspace before coordinator selection', async () => {
+    const handlers = new Map<string, Function>();
+    const sequence: string[] = [];
+    const pi = {
+      on: (name: string, handler: Function) => handlers.set(name, handler),
+    } as any;
+    const client = {
+      start: vi.fn(async () => true),
+      snapshot: vi.fn(async () => true),
+      changeSession: vi.fn(async () => undefined),
+      goodbye: vi.fn(async () => true),
+    };
+    const runner: ProcessRunner = async (_file, args, options) => {
+      sequence.push('resolve');
+      expect(options.shell).toBe(false);
+      expect(args).toEqual([
+        '--socket',
+        '/tmp/cmux.sock',
+        'rpc',
+        'agent.resolve_delivery_target',
+        '{"surface_id":"surface-a","workspace_id":"workspace-stale"}',
+      ]);
+      return {
+        outcome: 'exit',
+        stdout: JSON.stringify({
+          source: 'surface',
+          workspace_id: 'workspace-live',
+          surface_id: 'surface-a',
+        }),
+        stderr: '',
+        exitCode: 0,
+      };
+    };
+    let selectedTarget: unknown;
+    registerJunctionLifecycle(pi, {
+      env: env({ CMUX_WORKSPACE_ID: 'workspace-stale' }),
+      runner,
+      runtimeId: () => 'runtime-a',
+      pid: 4321,
+      observeProcessStart: async () => 1_699_999_000_000,
+      createClient: (options) => {
+        sequence.push('select');
+        selectedTarget = options.target;
+        return client;
+      },
+      setInterval: (() => ({}) as ReturnType<typeof setInterval>) as typeof setInterval,
+      clearInterval: vi.fn(),
+    });
+
+    await handlers.get('session_start')?.({}, context().value);
+
+    expect(sequence).toEqual(['resolve', 'select']);
+    expect(selectedTarget).toEqual({
+      socketPath: '/tmp/cmux.sock',
+      workspaceId: 'workspace-live',
+      surfaceId: 'surface-a',
+    });
+  });
+
+  it('keeps lifecycle disabled when target resolution fails', async () => {
+    const handlers = new Map<string, Function>();
+    const pi = { on: (name: string, handler: Function) => handlers.set(name, handler) } as any;
+    const createClient = vi.fn();
+    const runner: ProcessRunner = async () => ({
+      outcome: 'exit',
+      stdout: '',
+      stderr: 'not found',
+      exitCode: 1,
+    });
+    registerJunctionLifecycle(pi, {
+      env: env(),
+      runner,
+      createClient,
+      observeProcessStart: vi.fn(async () => 1_699_999_000_000),
+    });
+
+    await expect(handlers.get('session_start')?.({}, context().value)).resolves.toBeUndefined();
+    expect(createClient).not.toHaveBeenCalled();
+  });
+
   it('maps public events in serialized order and settles only on the real idle event', async () => {
     const h = harness();
     await h.emit('session_start', { reason: 'startup' });
@@ -358,6 +445,11 @@ describe('Pi lifecycle adapter', () => {
     const pi = { on: (name: string, handler: Function) => handlers.set(name, handler) } as any;
     registerJunctionLifecycle(pi, {
       env: env(),
+      resolveTarget: async (_cwd, target) => ({
+        ok: true,
+        workspaceId: target.workspaceId,
+        surfaceId: target.surfaceId,
+      }),
       observeProcessStart: async () => null,
       createClient: () => {
         throw new Error('must not run');

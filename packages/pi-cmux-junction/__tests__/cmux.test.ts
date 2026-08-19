@@ -6,6 +6,7 @@ import {
   buildWorkspaceCreateArgs,
   launchCmuxWorkspace,
   preflightCmux,
+  resolveCmuxTarget,
 } from '../extensions/cmux-junction/cmux.js';
 import type { ProcessRunner } from '../extensions/cmux-junction/process.js';
 
@@ -65,6 +66,124 @@ describe('cmux boundary', () => {
       { file: 'cmux', args: ['capabilities'], cwd: '/repo' },
       { file: 'which', args: ['pi'], cwd: '/repo' },
     ]);
+  });
+
+  it('resolves an inherited surface through cmux using the workspace as a hint', async () => {
+    const calls: Array<{ file: string; args: readonly string[]; options: unknown }> = [];
+    const runner: ProcessRunner = async (file, args, options) => {
+      calls.push({ file, args, options });
+      return {
+        outcome: 'exit',
+        stdout: JSON.stringify({
+          source: 'surface',
+          workspace_id: 'workspace-live',
+          surface_id: 'surface-1',
+        }),
+        stderr: '',
+        exitCode: 0,
+      };
+    };
+
+    await expect(
+      resolveCmuxTarget(
+        '/repo',
+        {
+          socketPath: '/tmp/cmux.sock',
+          workspaceId: 'workspace-stale',
+          surfaceId: 'surface-1',
+        },
+        { env: CALLER_ENV, runner },
+      ),
+    ).resolves.toEqual({
+      ok: true,
+      workspaceId: 'workspace-live',
+      surfaceId: 'surface-1',
+    });
+    expect(calls).toEqual([
+      {
+        file: 'cmux',
+        args: [
+          '--socket',
+          '/tmp/cmux.sock',
+          'rpc',
+          'agent.resolve_delivery_target',
+          '{"surface_id":"surface-1","workspace_id":"workspace-stale"}',
+        ],
+        options: {
+          cwd: '/repo',
+          env: CALLER_ENV,
+          shell: false,
+          timeoutMs: 2_000,
+          maxBufferBytes: 64 * 1024,
+        },
+      },
+    ]);
+  });
+
+  it.each([
+    {
+      name: 'nonzero exit',
+      result: { outcome: 'exit', stdout: '{}', stderr: 'rpc failed', exitCode: 1 } as const,
+    },
+    {
+      name: 'timeout',
+      result: {
+        outcome: 'timeout',
+        stdout: '',
+        stderr: '',
+        timeoutMs: 2_000,
+        signal: 'SIGTERM',
+      } as const,
+    },
+    {
+      name: 'malformed output',
+      result: { outcome: 'exit', stdout: '{not-json', stderr: '', exitCode: 0 } as const,
+    },
+    {
+      name: 'wrong source',
+      result: {
+        outcome: 'exit',
+        stdout: JSON.stringify({
+          source: 'workspace',
+          workspace_id: 'workspace-live',
+          surface_id: 'surface-1',
+        }),
+        stderr: '',
+        exitCode: 0,
+      } as const,
+    },
+    {
+      name: 'missing workspace',
+      result: {
+        outcome: 'exit',
+        stdout: JSON.stringify({ source: 'surface', surface_id: 'surface-1' }),
+        stderr: '',
+        exitCode: 0,
+      } as const,
+    },
+    {
+      name: 'mismatched surface',
+      result: {
+        outcome: 'exit',
+        stdout: JSON.stringify({
+          source: 'surface',
+          workspace_id: 'workspace-live',
+          surface_id: 'surface-other',
+        }),
+        stderr: '',
+        exitCode: 0,
+      } as const,
+    },
+  ])('fails closed for $name', async ({ result }) => {
+    const runner: ProcessRunner = async () => result;
+
+    await expect(
+      resolveCmuxTarget(
+        '/repo',
+        { socketPath: '/tmp/cmux.sock', workspaceId: 'workspace-stale', surfaceId: 'surface-1' },
+        { env: CALLER_ENV, runner },
+      ),
+    ).resolves.toMatchObject({ ok: false });
   });
 
   it('uses an executable bundled cmux path for both preflight and launch', async () => {
