@@ -1,4 +1,5 @@
 import { execFile as nodeExecFile } from 'node:child_process';
+import { classifyExecFileFailure } from './cmux-runtime.mjs';
 
 interface ProcessOutput {
   stdout: string;
@@ -19,6 +20,8 @@ export interface ProcessOptions {
   cwd: string;
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
+  maxBufferBytes?: number;
+  shell?: false;
 }
 
 export type ProcessRunner = (
@@ -40,6 +43,8 @@ export const defaultProcessRunner: ProcessRunner = async (file, args, options) =
         ...(options.env === undefined ? {} : { env: options.env }),
         encoding: 'utf8',
         timeout: timeoutMs,
+        ...(options.maxBufferBytes === undefined ? {} : { maxBuffer: options.maxBufferBytes }),
+        shell: options.shell ?? false,
         windowsHide: true,
       },
       (error, stdout, stderr) => {
@@ -47,31 +52,26 @@ export const defaultProcessRunner: ProcessRunner = async (file, args, options) =
           resolve({ outcome: 'exit', exitCode: 0, stdout, stderr });
           return;
         }
-        if (error.killed) {
-          resolve({
-            outcome: 'timeout',
-            timeoutMs,
-            signal: error.signal ?? 'SIGTERM',
-            stdout,
-            stderr,
-          });
-          return;
+        const failure = classifyExecFileFailure(error);
+        switch (failure.kind) {
+          case 'timeout':
+            resolve({ outcome: 'timeout', timeoutMs, signal: failure.signal, stdout, stderr });
+            return;
+          case 'signal':
+            resolve({ outcome: 'signal', signal: failure.signal, stdout, stderr });
+            return;
+          case 'exit':
+            resolve({ outcome: 'exit', exitCode: failure.exitCode, stdout, stderr });
+            return;
+          case 'spawn':
+            resolve({
+              outcome: 'spawn-failed',
+              message: failure.message,
+              ...(failure.code === undefined ? {} : { code: failure.code }),
+              stdout,
+              stderr,
+            });
         }
-        if (error.signal !== undefined && error.signal !== null) {
-          resolve({ outcome: 'signal', signal: error.signal, stdout, stderr });
-          return;
-        }
-        if (typeof error.code === 'number') {
-          resolve({ outcome: 'exit', exitCode: error.code, stdout, stderr });
-          return;
-        }
-        resolve({
-          outcome: 'spawn-failed',
-          message: error.message,
-          ...(typeof error.code === 'string' ? { code: error.code } : {}),
-          stdout,
-          stderr,
-        });
       },
     );
     child.stdin?.end();

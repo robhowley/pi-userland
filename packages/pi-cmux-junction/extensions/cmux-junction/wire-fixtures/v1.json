@@ -1,0 +1,335 @@
+{
+  "protocol": "pi-junction.lifecycle.v1",
+  "target": {
+    "socketPath": "/tmp/cmux fixture.sock",
+    "workspaceId": "workspace-fixture"
+  },
+  "valid": [
+    {
+      "name": "initial idle snapshot",
+      "message": {
+        "protocol": "pi-junction.lifecycle.v1",
+        "kind": "snapshot",
+        "workspaceId": "workspace-fixture",
+        "surfaceId": "surface-a",
+        "sessionId": "session-a",
+        "runtimeId": "runtime-a",
+        "pid": 4321,
+        "processStartedAt": 1700000000000,
+        "connectionId": "connection-a",
+        "ownerGeneration": null,
+        "revision": 0,
+        "sentAt": 1700000001000,
+        "state": "idle",
+        "toolName": null,
+        "transitionAt": 1700000000000,
+        "lastEventAt": null,
+        "compactionAt": null
+      }
+    },
+    {
+      "name": "fenced goodbye",
+      "message": {
+        "protocol": "pi-junction.lifecycle.v1",
+        "kind": "goodbye",
+        "workspaceId": "workspace-fixture",
+        "surfaceId": "surface-a",
+        "sessionId": "session-a",
+        "runtimeId": "runtime-a",
+        "pid": 4321,
+        "processStartedAt": 1700000000000,
+        "connectionId": "connection-a",
+        "ownerGeneration": 1,
+        "revision": 4,
+        "sentAt": 1700000001000
+      }
+    }
+  ],
+  "validAcks": [
+    {
+      "name": "snapshot acknowledgement",
+      "messageName": "initial idle snapshot",
+      "message": {
+        "protocol": "pi-junction.lifecycle.v1",
+        "kind": "ack",
+        "workspaceId": "workspace-fixture",
+        "surfaceId": "surface-a",
+        "sessionId": "session-a",
+        "runtimeId": "runtime-a",
+        "pid": 4321,
+        "processStartedAt": 1700000000000,
+        "connectionId": "connection-a",
+        "acceptedGeneration": 1,
+        "acceptedRevision": 0,
+        "acceptedKind": "snapshot"
+      }
+    },
+    {
+      "name": "goodbye acknowledgement",
+      "messageName": "fenced goodbye",
+      "message": {
+        "protocol": "pi-junction.lifecycle.v1",
+        "kind": "ack",
+        "workspaceId": "workspace-fixture",
+        "surfaceId": "surface-a",
+        "sessionId": "session-a",
+        "runtimeId": "runtime-a",
+        "pid": 4321,
+        "processStartedAt": 1700000000000,
+        "connectionId": "connection-a",
+        "acceptedGeneration": 1,
+        "acceptedRevision": 4,
+        "acceptedKind": "goodbye"
+      }
+    }
+  ],
+  "invalidAcks": [
+    {
+      "name": "bare acknowledgement",
+      "message": {
+        "acceptedGeneration": 1,
+        "acceptedRevision": 0
+      }
+    },
+    {
+      "name": "wrong accepted message kind",
+      "message": {
+        "protocol": "pi-junction.lifecycle.v1",
+        "kind": "ack",
+        "workspaceId": "workspace-fixture",
+        "surfaceId": "surface-a",
+        "sessionId": "session-a",
+        "runtimeId": "runtime-a",
+        "pid": 4321,
+        "processStartedAt": 1700000000000,
+        "connectionId": "connection-a",
+        "acceptedGeneration": 1,
+        "acceptedRevision": 0,
+        "acceptedKind": "goodbye"
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "version mismatch",
+      "message": {
+        "protocol": "pi-junction.lifecycle.v2",
+        "kind": "snapshot",
+        "workspaceId": "workspace-fixture",
+        "surfaceId": "surface-a",
+        "sessionId": "session-a",
+        "runtimeId": "runtime-a",
+        "pid": 4321,
+        "processStartedAt": 1700000000000,
+        "connectionId": "connection-a",
+        "ownerGeneration": null,
+        "revision": 0,
+        "sentAt": 1700000001000,
+        "state": "idle",
+        "toolName": null,
+        "transitionAt": 1700000000000,
+        "lastEventAt": null,
+        "compactionAt": null
+      }
+    },
+    {
+      "name": "kind mismatch",
+      "message": {
+        "protocol": "pi-junction.lifecycle.v1",
+        "kind": "delta",
+        "workspaceId": "workspace-fixture",
+        "surfaceId": "surface-a",
+        "sessionId": "session-a",
+        "runtimeId": "runtime-a",
+        "pid": 4321,
+        "processStartedAt": 1700000000000,
+        "connectionId": "connection-a",
+        "ownerGeneration": null,
+        "revision": 0,
+        "sentAt": 1700000001000,
+        "state": "idle",
+        "toolName": null,
+        "transitionAt": 1700000000000,
+        "lastEventAt": null,
+        "compactionAt": null
+      }
+    },
+    {
+      "name": "unknown field",
+      "message": {
+        "protocol": "pi-junction.lifecycle.v1",
+        "kind": "snapshot",
+        "workspaceId": "workspace-fixture",
+        "surfaceId": "surface-a",
+        "sessionId": "session-a",
+        "runtimeId": "runtime-a",
+        "pid": 4321,
+        "processStartedAt": 1700000000000,
+        "connectionId": "connection-a",
+        "ownerGeneration": null,
+        "revision": 0,
+        "sentAt": 1700000001000,
+        "state": "idle",
+        "toolName": null,
+        "transitionAt": 1700000000000,
+        "lastEventAt": null,
+        "compactionAt": null,
+        "extra": true
+      }
+    },
+    {
+      "name": "type mismatch",
+      "message": {
+        "protocol": "pi-junction.lifecycle.v1",
+        "kind": "snapshot",
+        "workspaceId": "workspace-fixture",
+        "surfaceId": "surface-a",
+        "sessionId": "session-a",
+        "runtimeId": "runtime-a",
+        "pid": "4321",
+        "processStartedAt": 1700000000000,
+        "connectionId": "connection-a",
+        "ownerGeneration": null,
+        "revision": 0,
+        "sentAt": 1700000001000,
+        "state": "idle",
+        "toolName": null,
+        "transitionAt": 1700000000000,
+        "lastEventAt": null,
+        "compactionAt": null
+      }
+    },
+    {
+      "name": "control identity",
+      "message": {
+        "protocol": "pi-junction.lifecycle.v1",
+        "kind": "snapshot",
+        "workspaceId": "workspace-fixture",
+        "surfaceId": "surface-a",
+        "sessionId": "session\u0000secret",
+        "runtimeId": "runtime-a",
+        "pid": 4321,
+        "processStartedAt": 1700000000000,
+        "connectionId": "connection-a",
+        "ownerGeneration": null,
+        "revision": 0,
+        "sentAt": 1700000001000,
+        "state": "idle",
+        "toolName": null,
+        "transitionAt": 1700000000000,
+        "lastEventAt": null,
+        "compactionAt": null
+      }
+    },
+    {
+      "name": "target mismatch",
+      "message": {
+        "protocol": "pi-junction.lifecycle.v1",
+        "kind": "snapshot",
+        "workspaceId": "another-workspace",
+        "surfaceId": "surface-a",
+        "sessionId": "session-a",
+        "runtimeId": "runtime-a",
+        "pid": 4321,
+        "processStartedAt": 1700000000000,
+        "connectionId": "connection-a",
+        "ownerGeneration": null,
+        "revision": 0,
+        "sentAt": 1700000001000,
+        "state": "idle",
+        "toolName": null,
+        "transitionAt": 1700000000000,
+        "lastEventAt": null,
+        "compactionAt": null
+      }
+    },
+    {
+      "name": "invalid state",
+      "message": {
+        "protocol": "pi-junction.lifecycle.v1",
+        "kind": "snapshot",
+        "workspaceId": "workspace-fixture",
+        "surfaceId": "surface-a",
+        "sessionId": "session-a",
+        "runtimeId": "runtime-a",
+        "pid": 4321,
+        "processStartedAt": 1700000000000,
+        "connectionId": "connection-a",
+        "ownerGeneration": null,
+        "revision": 0,
+        "sentAt": 1700000001000,
+        "state": "running",
+        "toolName": null,
+        "transitionAt": 1700000000000,
+        "lastEventAt": null,
+        "compactionAt": null
+      }
+    },
+    {
+      "name": "unsafe tool name",
+      "message": {
+        "protocol": "pi-junction.lifecycle.v1",
+        "kind": "snapshot",
+        "workspaceId": "workspace-fixture",
+        "surfaceId": "surface-a",
+        "sessionId": "session-a",
+        "runtimeId": "runtime-a",
+        "pid": 4321,
+        "processStartedAt": 1700000000000,
+        "connectionId": "connection-a",
+        "ownerGeneration": null,
+        "revision": 0,
+        "sentAt": 1700000001000,
+        "state": "tool-running",
+        "toolName": "bash $(bad)",
+        "transitionAt": 1700000000000,
+        "lastEventAt": null,
+        "compactionAt": null
+      }
+    },
+    {
+      "name": "nonfinite representation",
+      "message": {
+        "protocol": "pi-junction.lifecycle.v1",
+        "kind": "snapshot",
+        "workspaceId": "workspace-fixture",
+        "surfaceId": "surface-a",
+        "sessionId": "session-a",
+        "runtimeId": "runtime-a",
+        "pid": 4321,
+        "processStartedAt": 1700000000000,
+        "connectionId": "connection-a",
+        "ownerGeneration": null,
+        "revision": 0,
+        "sentAt": "NaN",
+        "state": "idle",
+        "toolName": null,
+        "transitionAt": 1700000000000,
+        "lastEventAt": null,
+        "compactionAt": null
+      }
+    },
+    {
+      "name": "compaction timestamps missing",
+      "message": {
+        "protocol": "pi-junction.lifecycle.v1",
+        "kind": "snapshot",
+        "workspaceId": "workspace-fixture",
+        "surfaceId": "surface-a",
+        "sessionId": "session-a",
+        "runtimeId": "runtime-a",
+        "pid": 4321,
+        "processStartedAt": 1700000000000,
+        "connectionId": "connection-a",
+        "ownerGeneration": null,
+        "revision": 0,
+        "sentAt": 1700000001000,
+        "state": "compacting",
+        "toolName": null,
+        "transitionAt": 1700000000000,
+        "lastEventAt": 1700000001000,
+        "compactionAt": null
+      }
+    }
+  ]
+}

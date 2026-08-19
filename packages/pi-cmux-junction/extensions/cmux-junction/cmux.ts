@@ -1,5 +1,4 @@
-import { constants } from 'node:fs';
-import { access } from 'node:fs/promises';
+import { resolveCmuxExecutable } from './cmux-runtime.mjs';
 import {
   defaultProcessRunner,
   processError,
@@ -12,6 +11,16 @@ export interface CmuxOptions {
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
 }
+
+export interface CmuxTarget {
+  socketPath: string;
+  workspaceId: string;
+  surfaceId: string;
+}
+
+export type CmuxTargetResolution =
+  | ({ ok: true } & CmuxTarget)
+  | { ok: false; reason: 'process-failed' | 'invalid-response'; message: string };
 
 export type CmuxLaunchRecipe = { mode: 'fresh' } | { mode: 'fork'; sourceSessionFile: string };
 
@@ -65,6 +74,72 @@ export async function preflightCmux(
   }
 
   return { ok: true };
+}
+
+const CMUX_TARGET_RESOLUTION_TIMEOUT_MS = 2_000;
+const CMUX_TARGET_RESOLUTION_MAX_BUFFER_BYTES = 64 * 1024;
+
+export async function resolveCmuxTarget(
+  cwd: string,
+  target: CmuxTarget,
+  options: CmuxOptions = {},
+): Promise<CmuxTargetResolution> {
+  const env = options.env ?? process.env;
+  const socketPath = normalizeTargetIdentity(target.socketPath);
+  const workspaceId = normalizeTargetIdentity(target.workspaceId);
+  const surfaceId = normalizeTargetIdentity(target.surfaceId);
+  if (socketPath === null || workspaceId === null || surfaceId === null) {
+    return {
+      ok: false,
+      reason: 'invalid-response',
+      message: 'cmux target resolution requires nonblank target identities',
+    };
+  }
+
+  const cmuxFile = await resolveCmuxExecutable(env);
+  const args = [
+    '--socket',
+    socketPath,
+    'rpc',
+    'agent.resolve_delivery_target',
+    JSON.stringify({ surface_id: surfaceId, workspace_id: workspaceId }),
+  ];
+  let result: Awaited<ReturnType<ProcessRunner>>;
+  try {
+    result = await run(
+      cmuxFile,
+      args,
+      cwd,
+      env,
+      options.timeoutMs === undefined
+        ? { ...options, timeoutMs: CMUX_TARGET_RESOLUTION_TIMEOUT_MS }
+        : options,
+      CMUX_TARGET_RESOLUTION_MAX_BUFFER_BYTES,
+    );
+  } catch {
+    return {
+      ok: false,
+      reason: 'process-failed',
+      message: 'cmux target resolution could not run',
+    };
+  }
+  if (!processSucceeded(result)) {
+    return {
+      ok: false,
+      reason: 'process-failed',
+      message: `cmux target resolution failed: ${processError(result)}`,
+    };
+  }
+
+  const resolved = parseResolvedTarget(result.stdout, surfaceId);
+  if (resolved === null) {
+    return {
+      ok: false,
+      reason: 'invalid-response',
+      message: 'cmux returned an invalid delivery target',
+    };
+  }
+  return { ok: true, socketPath, ...resolved };
 }
 
 export function buildWorkspaceCreateArgs(
@@ -122,27 +197,54 @@ export async function launchCmuxWorkspace(
   return { ok: true };
 }
 
-async function resolveCmuxExecutable(env: NodeJS.ProcessEnv): Promise<string> {
-  const bundled = env['CMUX_BUNDLED_CLI_PATH']?.trim();
-  if (bundled === undefined || bundled.length === 0) return 'cmux';
-  try {
-    await access(bundled, constants.X_OK);
-    return bundled;
-  } catch {
-    return 'cmux';
-  }
-}
-
 async function run(
   file: string,
   args: readonly string[],
   cwd: string,
   env: NodeJS.ProcessEnv,
   options: CmuxOptions,
+  maxBufferBytes?: number,
 ) {
   return await (options.runner ?? defaultProcessRunner)(file, args, {
     cwd,
     env,
+    shell: false,
     ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+    ...(maxBufferBytes === undefined ? {} : { maxBufferBytes }),
   });
+}
+
+function parseResolvedTarget(
+  stdout: string,
+  claimedSurfaceId: string,
+): { workspaceId: string; surfaceId: string } | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(stdout.trim());
+  } catch {
+    return null;
+  }
+  if (!isRecord(value) || value['source'] !== 'surface') return null;
+
+  const workspaceId = normalizeTargetIdentity(value['workspace_id']);
+  const surfaceId = normalizeTargetIdentity(value['surface_id']);
+  if (workspaceId === null || surfaceId === null || surfaceId !== claimedSurfaceId) {
+    return null;
+  }
+  return { workspaceId, surfaceId };
+}
+
+function normalizeTargetIdentity(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim();
+  if (normalized.length === 0 || normalized.length > 256) return null;
+  for (const character of normalized) {
+    const code = character.codePointAt(0) ?? 0;
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) return null;
+  }
+  return normalized;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
