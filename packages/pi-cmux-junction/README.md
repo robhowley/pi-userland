@@ -43,7 +43,13 @@ The pill reports:
 
 It works alongside cmux's standard Pi status, so you can keep both visible. It does not inspect or retain your conversation or terminal contents.
 
-Detailed status requires Pi 0.84.2 or newer. Set `PI_CMUX_JUNCTION_LIFECYCLE_DISABLED=1` to hide it while keeping `/junction` available.
+Detailed status requires Pi 0.84.2 or newer and is enabled by default (`disableStatus` is `false` or omitted). To hide it, add this setting to the global `~/.pi/agent/settings.json` or a trusted project's `.pi/settings.json`:
+
+```json
+{ "pi-cmux-junction": { "disableStatus": true } }
+```
+
+A project setting overrides the global setting. After editing a settings file directly, run `/reload`; settings from untrusted projects do not apply. Disabling status only hides the pill; `/junction` and `/junction fork` remain available.
 
 ## Worktrees
 

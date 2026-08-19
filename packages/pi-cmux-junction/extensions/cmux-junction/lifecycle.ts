@@ -24,8 +24,8 @@ import {
   type LifecycleTarget,
 } from './lifecycle-client.js';
 import type { ProcessRunner } from './process.js';
+import { loadJunctionConfig } from './config.js';
 
-export const LIFECYCLE_DISABLED_ENV = 'PI_CMUX_JUNCTION_LIFECYCLE_DISABLED';
 export const LIFECYCLE_HEARTBEAT_MS = 10_000;
 
 const RUNTIME_ID_KEY = Symbol.for('pi-cmux-junction.lifecycle.runtime-id.v1');
@@ -61,6 +61,7 @@ export interface LifecycleDependencies {
   setInterval?: (callback: () => void, delay: number) => IntervalHandle;
   clearInterval?: (handle: IntervalHandle) => void;
   coordinatorPath?: string;
+  loadConfig?: typeof loadJunctionConfig;
 }
 
 type UiMethod = (...args: unknown[]) => unknown;
@@ -75,7 +76,9 @@ const UI_METHODS: readonly LifecycleUiWaitKind[] = ['select', 'input', 'editor',
 export function lifecycleEligibility(
   ctx: LifecycleContext,
   env: NodeJS.ProcessEnv = process.env,
+  disableStatus = false,
 ): LifecycleEligibility {
+  if (disableStatus) return { eligible: false, reason: 'disabled' };
   if (ctx.mode !== 'tui') return { eligible: false, reason: 'mode' };
   const socketPath = inheritedIdentity(env['CMUX_SOCKET_PATH']);
   if (socketPath === null) return { eligible: false, reason: 'socket' };
@@ -85,7 +88,6 @@ export function lifecycleEligibility(
   if (surfaceId === null) return { eligible: false, reason: 'surface' };
   const sessionId = inheritedIdentity(ctx.sessionManager.getSessionId());
   if (sessionId === null) return { eligible: false, reason: 'session' };
-  if (env[LIFECYCLE_DISABLED_ENV] === '1') return { eligible: false, reason: 'disabled' };
   return {
     eligible: true,
     reason: 'eligible',
@@ -138,6 +140,7 @@ export function registerJunctionLifecycle(
   const cancelInterval = dependencies.clearInterval ?? globalThis.clearInterval;
   const coordinatorPath =
     dependencies.coordinatorPath ?? fileURLToPath(new URL('./coordinator.mjs', import.meta.url));
+  const loadConfig = dependencies.loadConfig ?? loadJunctionConfig;
 
   let runtime: LifecycleRuntime | null = null;
   let shutdownInFlight: Promise<void> | null = null;
@@ -156,7 +159,8 @@ export function registerJunctionLifecycle(
   pi.on('session_start', async (_event, ctx) => {
     try {
       await shutdownRuntime();
-      const eligibility = lifecycleEligibility(ctx, env);
+      const config = loadConfig(ctx.cwd, ctx.isProjectTrusted());
+      const eligibility = lifecycleEligibility(ctx, env, config.disableStatus);
       if (!eligibility.eligible || !eligibility.target || !eligibility.sessionId) return;
       const resolved = await resolveTarget(ctx.cwd, eligibility.target, cmuxOptions);
       if (!resolved.ok) return;

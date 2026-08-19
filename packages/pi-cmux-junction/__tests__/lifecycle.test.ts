@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import {
-  LIFECYCLE_DISABLED_ENV,
   LIFECYCLE_HEARTBEAT_MS,
   installUiWrappers,
   isMeaningfulToolExecutionUpdate,
@@ -30,6 +29,7 @@ function context(overrides: Record<string, unknown> = {}) {
       mode: 'tui',
       cwd: '/repo',
       isIdle: () => true,
+      isProjectTrusted: () => true,
       sessionManager: { getSessionId: () => sessionId },
       ui,
       ...overrides,
@@ -50,7 +50,12 @@ function env(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   };
 }
 
-function harness() {
+function harness(
+  options: {
+    loadConfig?: (cwd: string, projectTrusted: boolean) => { disableStatus: boolean };
+    contextOverrides?: Record<string, unknown>;
+  } = {},
+) {
   const handlers = new Map<string, (event: any, ctx: any) => unknown>();
   const pi = {
     on: vi.fn((name: string, handler: (event: any, ctx: any) => unknown) =>
@@ -79,27 +84,33 @@ function harness() {
     }),
   };
   const intervals: Array<{ callback: () => void; delay: number }> = [];
-  const ctx = context();
+  const ctx = context(options.contextOverrides);
+  const loadConfig = options.loadConfig ?? vi.fn(() => ({ disableStatus: false }));
+  const createClient = vi.fn(() => client);
+  const resolveTarget = vi.fn(async (_cwd: string, target: any) => ({
+    ok: true as const,
+    socketPath: target.socketPath,
+    workspaceId: target.workspaceId,
+    surfaceId: target.surfaceId,
+  }));
+  const observeProcessStart = vi.fn(async () => 1_699_999_000_000);
+  const clearInterval = vi.fn();
   let now = 1_700_000_000_000;
   registerJunctionLifecycle(pi, {
     env: env(),
+    loadConfig,
     now: () => now,
     runtimeId: () => 'runtime-a',
     pid: 4321,
-    observeProcessStart: async () => 1_699_999_000_000,
-    createClient: () => client,
-    resolveTarget: async (_cwd, target) => ({
-      ok: true,
-      socketPath: target.socketPath,
-      workspaceId: target.workspaceId,
-      surfaceId: target.surfaceId,
-    }),
+    observeProcessStart,
+    createClient,
+    resolveTarget,
     setInterval: ((callback: () => void, delay: number) => {
       const timer = { callback, delay };
       intervals.push(timer);
       return timer as unknown as ReturnType<typeof setInterval>;
     }) as typeof setInterval,
-    clearInterval: vi.fn(),
+    clearInterval,
   });
   const emit = async (name: string, event: Record<string, unknown> = {}, custom = ctx.value) => {
     await handlers.get(name)?.({ type: name, ...event }, custom);
@@ -111,6 +122,11 @@ function harness() {
     intervals,
     ctx,
     emit,
+    loadConfig,
+    createClient,
+    resolveTarget,
+    observeProcessStart,
+    clearInterval,
     setNow: (value: number) => (now = value),
   };
 }
@@ -134,7 +150,6 @@ describe('lifecycle eligibility', () => {
     ['socket', {}, env({ CMUX_SOCKET_PATH: ' ' })],
     ['workspace', {}, env({ CMUX_WORKSPACE_ID: '' })],
     ['surface', {}, env({ CMUX_SURFACE_ID: '\0bad' })],
-    ['disabled', {}, env({ [LIFECYCLE_DISABLED_ENV]: '1' })],
   ])('is inert for %s', (reason, ctxOverrides, environment) => {
     expect(lifecycleEligibility(context(ctxOverrides).value, environment)).toEqual({
       eligible: false,
@@ -142,12 +157,22 @@ describe('lifecycle eligibility', () => {
     });
   });
 
-  it('allows a valid TUI session when CI is nonblank', () => {
-    expect(lifecycleEligibility(context().value, env({ CI: 'true' }))).toMatchObject({
-      eligible: true,
-      reason: 'eligible',
+  it('is inert when settings disable status', () => {
+    expect(lifecycleEligibility(context().value, env(), true)).toEqual({
+      eligible: false,
+      reason: 'disabled',
     });
   });
+
+  it.each([{ CI: 'true' }, { UNRELATED_SETTING: '1' }])(
+    'allows a valid TUI session with unrelated environment values',
+    (environment) => {
+      expect(lifecycleEligibility(context().value, env(environment))).toMatchObject({
+        eligible: true,
+        reason: 'eligible',
+      });
+    },
+  );
 
   it('is inert without a real nonblank Pi session id', () => {
     const ctx = context({ sessionManager: { getSessionId: () => ' ' } }).value;
@@ -185,6 +210,70 @@ describe('meaningful tool update boundary', () => {
 });
 
 describe('Pi lifecycle adapter', () => {
+  it('loads config with the exact cwd and trust state before disabled startup work', async () => {
+    const loadConfig = vi.fn(() => ({ disableStatus: true }));
+    const h = harness({
+      loadConfig,
+      contextOverrides: {
+        cwd: '/untrusted/repo',
+        isProjectTrusted: () => false,
+      },
+    });
+    const originalUi = { ...h.ctx.ui };
+
+    await h.emit('session_start');
+
+    expect(loadConfig).toHaveBeenCalledExactlyOnceWith('/untrusted/repo', false);
+    expect(h.resolveTarget).not.toHaveBeenCalled();
+    expect(h.observeProcessStart).not.toHaveBeenCalled();
+    expect(h.createClient).not.toHaveBeenCalled();
+    expect(h.ctx.ui).toEqual(originalUi);
+    expect(h.intervals).toEqual([]);
+  });
+
+  it('shuts down an enabled runtime before staying disabled without a replacement', async () => {
+    const loadConfig = vi
+      .fn()
+      .mockReturnValueOnce({ disableStatus: false })
+      .mockReturnValueOnce({ disableStatus: true });
+    const h = harness({ loadConfig });
+    const originalInput = h.ctx.ui.input;
+
+    await h.emit('session_start');
+    expect(h.ctx.ui.input).not.toBe(originalInput);
+
+    await h.emit('session_start');
+
+    expect(h.client.goodbye).toHaveBeenCalledOnce();
+    expect(h.ctx.ui.input).toBe(originalInput);
+    expect(h.clearInterval).toHaveBeenCalledTimes(2);
+    expect(h.createClient).toHaveBeenCalledOnce();
+    expect(h.client.start).toHaveBeenCalledOnce();
+    expect(h.intervals).toHaveLength(2);
+  });
+
+  it('starts normally when a disabled session becomes enabled', async () => {
+    const loadConfig = vi
+      .fn()
+      .mockReturnValueOnce({ disableStatus: true })
+      .mockReturnValueOnce({ disableStatus: false });
+    const h = harness({ loadConfig });
+    const originalInput = h.ctx.ui.input;
+
+    await h.emit('session_start');
+    expect(h.createClient).not.toHaveBeenCalled();
+    expect(h.ctx.ui.input).toBe(originalInput);
+
+    await h.emit('session_start');
+
+    expect(h.resolveTarget).toHaveBeenCalledOnce();
+    expect(h.observeProcessStart).toHaveBeenCalledOnce();
+    expect(h.createClient).toHaveBeenCalledOnce();
+    expect(h.client.start).toHaveBeenCalledOnce();
+    expect(h.ctx.ui.input).not.toBe(originalInput);
+    expect(h.intervals).toHaveLength(2);
+  });
+
   it('resolves a stale workspace before coordinator selection', async () => {
     const handlers = new Map<string, Function>();
     const sequence: string[] = [];
@@ -224,6 +313,7 @@ describe('Pi lifecycle adapter', () => {
         CMUX_SOCKET_PATH: '  /tmp/cmux.sock  ',
         CMUX_WORKSPACE_ID: 'workspace-stale',
       }),
+      loadConfig: () => ({ disableStatus: false }),
       runner,
       runtimeId: () => 'runtime-a',
       pid: 4321,
@@ -296,6 +386,7 @@ describe('Pi lifecycle adapter', () => {
     });
     registerJunctionLifecycle(pi, {
       env: env(),
+      loadConfig: () => ({ disableStatus: false }),
       runner,
       createClient,
       observeProcessStart: vi.fn(async () => 1_699_999_000_000),
@@ -528,6 +619,7 @@ describe('Pi lifecycle adapter', () => {
     const pi = { on: (name: string, handler: Function) => handlers.set(name, handler) } as any;
     registerJunctionLifecycle(pi, {
       env: env(),
+      loadConfig: () => ({ disableStatus: false }),
       resolveTarget: async (_cwd, target) => ({
         ok: true,
         socketPath: target.socketPath,
