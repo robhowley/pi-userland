@@ -1,7 +1,7 @@
-import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   getJunctionArgumentCompletions,
   parseJunctionArgs,
@@ -20,26 +20,49 @@ afterEach(async () => {
   );
 });
 
-const PLAN: WorktreePlan = {
-  ok: true,
-  branch: 'feature/test',
-  path: '/tmp/project-wt-feature-test',
-  baseRef: 'origin/main',
-  baseSha: 'abc123',
-  repository: {
-    topLevel: '/tmp/project',
-    commonGitDir: '/tmp/project/.git',
-    repoLabel: 'project',
-  },
+type SuccessfulWorktreePlan = Extract<WorktreePlan, { ok: true }>;
+
+let cwd: string;
+let sourceRoot: string;
+let worktreeRoot: string;
+let PLAN: SuccessfulWorktreePlan;
+let WORKTREE: {
+  ok: true;
+  status: 'created';
+  branch: string;
+  path: string;
+  baseRef: string;
 };
 
-const WORKTREE = {
-  ok: true as const,
-  status: 'created' as const,
-  branch: PLAN.branch,
-  path: PLAN.path,
-  baseRef: PLAN.baseRef,
-};
+beforeEach(async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-cmux-junction-command-'));
+  tempDirectories.push(directory);
+  sourceRoot = join(directory, 'source');
+  worktreeRoot = join(directory, 'worktree');
+  await Promise.all([mkdir(sourceRoot), mkdir(worktreeRoot)]);
+  sourceRoot = await realpath(sourceRoot);
+  worktreeRoot = await realpath(worktreeRoot);
+  cwd = sourceRoot;
+  PLAN = {
+    ok: true,
+    branch: 'feature/test',
+    path: worktreeRoot,
+    baseRef: 'origin/main',
+    baseSha: 'abc123',
+    repository: {
+      topLevel: sourceRoot,
+      commonGitDir: join(sourceRoot, '.git'),
+      repoLabel: 'project',
+    },
+  };
+  WORKTREE = {
+    ok: true,
+    status: 'created',
+    branch: PLAN.branch,
+    path: PLAN.path,
+    baseRef: PLAN.baseRef,
+  };
+});
 
 describe('/junction command', () => {
   it('completes the branch flag from partial input', () => {
@@ -128,14 +151,125 @@ describe('/junction command', () => {
     });
 
     await expect(
-      runJunctionCommand('--branch feature/test', '/repo/subdirectory', {
+      runJunctionCommand('--branch feature/test', cwd, {
         plan,
         preflight,
         apply,
         launch,
       }),
     ).resolves.toMatchObject({ ok: true, status: 'created-and-launched' });
-    expect(order).toEqual(['plan:/repo/subdirectory', 'preflight', 'apply', 'launch']);
+    expect(order).toEqual([`plan:${cwd}`, 'preflight', 'apply', 'launch']);
+    expect(launch).toHaveBeenCalledWith(PLAN.branch, worktreeRoot, expect.any(Object));
+  });
+
+  it('launches an existing repository-relative directory through a source path alias', async () => {
+    const nested = join('packages', 'app');
+    await Promise.all([
+      mkdir(join(sourceRoot, nested), { recursive: true }),
+      mkdir(join(worktreeRoot, nested), { recursive: true }),
+    ]);
+    const sourceAlias = join(sourceRoot, '..', 'source-alias');
+    await symlink(sourceRoot, sourceAlias, 'dir');
+    const launch = vi.fn(async () => ({ ok: true as const }));
+    const expectedLaunchCwd = await realpath(join(worktreeRoot, nested));
+
+    const result = await runJunctionCommand('--branch feature/test', join(sourceAlias, nested), {
+      plan: async () => PLAN,
+      preflight: async () => ({ ok: true }),
+      apply: async () => WORKTREE,
+      launch,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      status: 'created-and-launched',
+      worktree: WORKTREE,
+      launchCwd: expectedLaunchCwd,
+    });
+    expect(launch).toHaveBeenCalledWith(PLAN.branch, expectedLaunchCwd, expect.any(Object));
+  });
+
+  it.each(['missing', 'file'] as const)(
+    'falls back to the worktree root when the relative destination is a %s',
+    async (kind) => {
+      const nested = join('packages', 'app');
+      await mkdir(join(sourceRoot, nested), { recursive: true });
+      if (kind === 'file') {
+        await mkdir(join(worktreeRoot, 'packages'));
+        await writeFile(join(worktreeRoot, nested), 'not a directory');
+      }
+      const launch = vi.fn(async () => ({ ok: true as const }));
+
+      const result = await runJunctionCommand('--branch feature/test', join(sourceRoot, nested), {
+        plan: async () => PLAN,
+        preflight: async () => ({ ok: true }),
+        apply: async () => WORKTREE,
+        launch,
+      });
+
+      expect(result).toEqual({
+        ok: true,
+        status: 'created-and-launched',
+        worktree: WORKTREE,
+        launchCwd: worktreeRoot,
+        launchCwdWarning: `Could not preserve "${nested}" because it is absent or unsafe in the target worktree; launched at the worktree root.`,
+      });
+      expect(launch).toHaveBeenCalledWith(PLAN.branch, worktreeRoot, expect.any(Object));
+    },
+  );
+
+  it.each([
+    ['in-tree', true],
+    ['escaping', false],
+  ] as const)(
+    'accepts %s destination symlinks only when they remain contained',
+    async (_case, safe) => {
+      const nested = join('packages', 'app');
+      await mkdir(join(sourceRoot, nested), { recursive: true });
+      await mkdir(join(worktreeRoot, 'packages'));
+      const target = safe ? join(worktreeRoot, 'shared') : join(sourceRoot, '..', 'outside');
+      await mkdir(target);
+      await symlink(target, join(worktreeRoot, nested), 'dir');
+      const launch = vi.fn(async () => ({ ok: true as const }));
+
+      const result = await runJunctionCommand('--branch feature/test', join(sourceRoot, nested), {
+        plan: async () => PLAN,
+        preflight: async () => ({ ok: true }),
+        apply: async () => WORKTREE,
+        launch,
+      });
+
+      const expectedLaunchCwd = safe ? await realpath(target) : worktreeRoot;
+      expect(result).toMatchObject({ ok: true, launchCwd: expectedLaunchCwd });
+      expect(launch).toHaveBeenCalledWith(PLAN.branch, expectedLaunchCwd, expect.any(Object));
+    },
+  );
+
+  it('fails planning before mutation when cwd resolves outside the planned repository', async () => {
+    const otherRoot = join(sourceRoot, '..', 'other-repository');
+    await mkdir(otherRoot);
+    const preflight = vi.fn();
+    const apply = vi.fn();
+    const launch = vi.fn();
+
+    const result = await runJunctionCommand('--branch feature/test', cwd, {
+      plan: async () => ({
+        ...PLAN,
+        repository: { ...PLAN.repository, topLevel: await realpath(otherRoot) },
+      }),
+      preflight,
+      apply,
+      launch,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 'planning-failed',
+      message: 'Current cwd resolves outside the repository; no worktree was created.',
+    });
+    expect(preflight).not.toHaveBeenCalled();
+    expect(apply).not.toHaveBeenCalled();
+    expect(launch).not.toHaveBeenCalled();
   });
 
   it('passes env and homeDir into worktree planning and apply', async () => {
@@ -156,7 +290,7 @@ describe('/junction command', () => {
     };
 
     await expect(
-      runJunctionCommand('--branch feature/test', '/repo', {
+      runJunctionCommand('--branch feature/test', cwd, {
         env,
         homeDir,
         plan,
@@ -178,7 +312,7 @@ describe('/junction command', () => {
 
     const result = await runJunctionCommand(
       'fork --branch feature/test',
-      '/repo',
+      cwd,
       { plan, apply, launch },
       {
         waitForIdle,
@@ -205,7 +339,7 @@ describe('/junction command', () => {
     const plan = vi.fn(async () => PLAN);
     const result = await runJunctionCommand(
       'fork --branch feature/test',
-      '/repo',
+      cwd,
       { plan },
       {
         waitForIdle: async () => undefined,
@@ -236,7 +370,7 @@ describe('/junction command', () => {
 
     const result = await runJunctionCommand(
       'fork --branch feature/test',
-      '/repo',
+      cwd,
       { plan, preflight, apply, launch },
       {
         waitForIdle: async () => undefined,
@@ -256,6 +390,13 @@ describe('/junction command', () => {
     tempDirectories.push(directory);
     const sourceSessionFile = join(directory, 'source;$(unsafe).jsonl');
     await writeFile(sourceSessionFile, '{"type":"session"}\n');
+    const nested = join('packages', 'forked');
+    await Promise.all([
+      mkdir(join(sourceRoot, nested), { recursive: true }),
+      mkdir(join(worktreeRoot, nested), { recursive: true }),
+    ]);
+    const nestedCwd = join(sourceRoot, nested);
+    const destinationCwd = await realpath(join(worktreeRoot, nested));
 
     const order: string[] = [];
     let resolveIdle!: () => void;
@@ -290,7 +431,7 @@ describe('/junction command', () => {
 
     const result = runJunctionCommand(
       'fork --branch feature/test',
-      '/repo',
+      nestedCwd,
       { plan, preflight, apply, launch },
       {
         waitForIdle,
@@ -309,7 +450,7 @@ describe('/junction command', () => {
     await expect(result).resolves.toMatchObject({ ok: true, status: 'created-and-launched' });
 
     expect(order).toEqual(['idle', 'session', 'plan', 'preflight', 'apply', 'launch']);
-    expect(launch).toHaveBeenCalledWith(PLAN.branch, PLAN.path, expect.any(Object), {
+    expect(launch).toHaveBeenCalledWith(PLAN.branch, destinationCwd, expect.any(Object), {
       mode: 'fork',
       sourceSessionFile,
     });
@@ -321,7 +462,7 @@ describe('/junction command', () => {
     const launch = vi.fn();
 
     await expect(
-      runJunctionCommand('--branch feature/test', '/repo', {
+      runJunctionCommand('--branch feature/test', cwd, {
         plan: async () => PLAN,
         preflight: async () => ({
           ok: false,
@@ -336,23 +477,34 @@ describe('/junction command', () => {
     expect(launch).not.toHaveBeenCalled();
   });
 
-  it('retains and reports a created worktree with exact retry guidance on cmux failure', async () => {
-    const result = await runJunctionCommand('--branch feature/test', '/repo', {
+  it('reports the attempted root when destination lookup and cmux launch fail', async () => {
+    const nested = join('packages', 'app');
+    await mkdir(join(sourceRoot, nested), { recursive: true });
+    const launch = vi.fn(async () => ({
+      ok: false as const,
+      reason: 'launch-failed' as const,
+      message: 'boom',
+    }));
+    const result = await runJunctionCommand('--branch feature/test', join(sourceRoot, nested), {
       plan: async () => PLAN,
       preflight: async () => ({ ok: true }),
-      apply: async () => WORKTREE,
-      launch: async () => ({ ok: false, reason: 'launch-failed', message: 'boom' }),
+      apply: async () => {
+        await rm(worktreeRoot, { recursive: true });
+        return WORKTREE;
+      },
+      launch,
     });
 
     expect(result).toEqual({
       ok: false,
       status: 'partial-launch-failed',
       branch: 'feature/test',
-      path: '/tmp/project-wt-feature-test',
+      path: worktreeRoot,
+      launchCwd: worktreeRoot,
       worktreeRetained: true,
-      message:
-        'Worktree retained after cmux launch failed: boom\nBranch: feature/test\nPath: /tmp/project-wt-feature-test\nRetry: /junction --branch feature/test',
+      message: `Worktree retained after cmux launch failed: boom\nBranch: feature/test\nPath: ${worktreeRoot}\nLaunch cwd: ${worktreeRoot}\nRetry: /junction --branch feature/test`,
     });
+    expect(launch).toHaveBeenCalledWith(PLAN.branch, worktreeRoot, expect.any(Object));
   });
 
   it('preserves the fork command in retry guidance after a retained worktree', async () => {
@@ -363,7 +515,7 @@ describe('/junction command', () => {
 
     const result = await runJunctionCommand(
       'fork --branch feature/test',
-      '/repo',
+      cwd,
       {
         plan: async () => PLAN,
         preflight: async () => ({ ok: true }),
@@ -394,7 +546,7 @@ describe('/junction command', () => {
       stderr: '',
     });
 
-    const result = await runJunctionCommand('--branch feature/test', '/repo', {
+    const result = await runJunctionCommand('--branch feature/test', cwd, {
       env: {},
       runner,
       plan: async () => PLAN,
@@ -402,24 +554,22 @@ describe('/junction command', () => {
       apply: async () => WORKTREE,
     });
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       ok: false,
       status: 'partial-launch-unknown',
       branch: PLAN.branch,
-      path: PLAN.path,
+      path: worktreeRoot,
+      launchCwd: worktreeRoot,
       worktreeRetained: true,
       retrySafe: false,
+      message: `Worktree retained, but cmux launch status is unknown: command timed out; cmux workspace creation may have completed.\nBranch: feature/test\nPath: ${worktreeRoot}\nLaunch cwd: ${worktreeRoot}\nThe workspace may exist; inspect cmux before taking further action.`,
     });
-    if (result.ok) throw new Error('Expected launch to be unknown.');
-    expect(result.message).toContain('workspace may exist');
-    expect(result.message).toContain(`Path: ${PLAN.path}`);
-    expect(result.message).not.toContain('Retry:');
   });
 
   it('does not launch when worktree apply returns an unknown partial state', async () => {
     const launch = vi.fn();
     await expect(
-      runJunctionCommand('--branch feature/test', '/repo', {
+      runJunctionCommand('--branch feature/test', cwd, {
         plan: async () => PLAN,
         preflight: async () => ({ ok: true }),
         apply: async () => ({
@@ -433,25 +583,33 @@ describe('/junction command', () => {
     expect(launch).not.toHaveBeenCalled();
   });
 
-  it('launches a new cmux workspace after worktree reuse', async () => {
+  it('uses the repository-relative directory after worktree reuse', async () => {
+    const nested = join('packages', 'reused');
+    await Promise.all([
+      mkdir(join(sourceRoot, nested), { recursive: true }),
+      mkdir(join(worktreeRoot, nested), { recursive: true }),
+    ]);
     const launch = vi.fn(async () => ({ ok: true as const }));
+    const expectedLaunchCwd = await realpath(join(worktreeRoot, nested));
 
     await expect(
-      runJunctionCommand('--branch feature/test', '/repo', {
+      runJunctionCommand('--branch feature/test', join(sourceRoot, nested), {
         plan: async () => PLAN,
         preflight: async () => ({ ok: true }),
         apply: async () => ({ ...WORKTREE, status: 'reused' }),
         launch,
       }),
-    ).resolves.toMatchObject({ ok: true, status: 'reused-and-launched' });
-    expect(launch).toHaveBeenCalledWith(
-      'feature/test',
-      '/tmp/project-wt-feature-test',
-      expect.any(Object),
-    );
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 'reused-and-launched',
+      launchCwd: expectedLaunchCwd,
+    });
+    expect(launch).toHaveBeenCalledWith('feature/test', expectedLaunchCwd, expect.any(Object));
   });
 
-  it('notifies successful creation with branch and path', async () => {
+  it('notifies a successful root fallback without replacing the base warning', async () => {
+    const nested = join('packages', 'missing');
+    await mkdir(join(sourceRoot, nested), { recursive: true });
     let handler: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
     const pi = {
       registerCommand: vi.fn((_name, options) => {
@@ -463,16 +621,16 @@ describe('/junction command', () => {
     registerJunctionCommand(pi, {
       plan: async () => PLAN,
       preflight: async () => ({ ok: true }),
-      apply: async () => WORKTREE,
+      apply: async () => ({ ...WORKTREE, warning: 'Base reference changed during apply.' }),
       launch: async () => ({ ok: true }),
     });
     await handler?.('--branch feature/test', {
-      cwd: '/repo',
+      cwd: join(sourceRoot, nested),
       ui: { notify },
     } as unknown as ExtensionCommandContext);
 
     expect(notify).toHaveBeenCalledWith(
-      'Created worktree and launched cmux workspace.\nBranch: feature/test\nPath: /tmp/project-wt-feature-test',
+      `Created worktree and launched cmux workspace.\nBranch: feature/test\nPath: ${worktreeRoot}\nLaunch cwd: ${worktreeRoot}\nWarning: Base reference changed during apply.\nWarning: Could not preserve "${nested}" because it is absent or unsafe in the target worktree; launched at the worktree root.`,
       'info',
     );
   });
