@@ -104,6 +104,11 @@ type MergeReadyStatusBarRuntime = {
   diagnosticsEnabled: boolean;
 };
 
+type MergeReadyStatusBarAttentionObservation =
+  | { kind: 'attention'; status: MergeReadyStatus }
+  | { kind: 'unknown' }
+  | null;
+
 type MergeReadyStatusBarInternalRefreshOptions = MergeReadyStatusBarRefreshOptions & {
   ownership?: MergeReadyStatusBarAmbientOwnership;
   ttlMs?: number;
@@ -149,7 +154,8 @@ export function registerMergeReadyStatusBar(pi: MergeReadyStatusBarAPI): void {
   });
 
   pi.on('session_start', async (_event, ctx) => {
-    invalidateMergeReadyStatusBarRuntime();
+    const publisher = invalidateMergeReadyStatusBarRuntime();
+    await publisher?.shutdown();
     const projectTrusted = ctx.isProjectTrusted?.() ?? false;
     const mode = resolveMergeReadyStatusBarMode(ctx);
     statusBarRuntime.cmuxPublisher = createMergeReadyCmuxPublisher({
@@ -245,7 +251,9 @@ export function syncMergeReadyStatusBar(
     ttlMs,
     diagnosticsEnabled,
   });
-  statusBarRuntime.cmuxPublisher?.enqueue(createMergeReadyCmuxAction(options.status, text));
+  const cmuxAction = createMergeReadyCmuxAction(options.status, text);
+  statusBarRuntime.cmuxPublisher?.enqueue(cmuxAction);
+  statusBarRuntime.cmuxPublisher?.observeAttention(options.status);
 
   return {
     text,
@@ -441,11 +449,22 @@ async function refreshMergeReadyStatusBarInternal(
     diagnosticsEnabled,
   });
   statusBarRuntime.cmuxPublisher?.enqueue(entry.cmuxAction);
+  observeMergeReadyStatusBarAttention(entry.observation);
 
   return {
     text: entry.text,
     cached: false,
   };
+}
+
+function observeMergeReadyStatusBarAttention(
+  observation: MergeReadyStatusBarAttentionObservation,
+): void {
+  if (observation?.kind === 'attention') {
+    statusBarRuntime.cmuxPublisher?.observeAttention(observation.status);
+  } else if (observation?.kind === 'unknown') {
+    statusBarRuntime.cmuxPublisher?.observeUnknown();
+  }
 }
 
 async function loadMergeReadyStatusBarEntry(options: {
@@ -457,6 +476,7 @@ async function loadMergeReadyStatusBarEntry(options: {
   text: string;
   branchIdentity: string | null;
   cmuxAction: ReturnType<typeof createMergeReadyCmuxAction>;
+  observation: MergeReadyStatusBarAttentionObservation;
 }> {
   try {
     const status = await getMergeReadyStatus({
@@ -470,6 +490,7 @@ async function loadMergeReadyStatusBarEntry(options: {
       text,
       branchIdentity: resolveAmbientBranchIdentity(status),
       cmuxAction: createMergeReadyCmuxAction(status, text),
+      observation: status.target.mode === 'current_branch' ? { kind: 'attention', status } : null,
     };
   } catch (error) {
     logMergeReadyStatusBarCaughtError({
@@ -482,6 +503,7 @@ async function loadMergeReadyStatusBarEntry(options: {
       text: UNKNOWN_STATUS_BAR_TEXT,
       branchIdentity: null,
       cmuxAction: { kind: 'set', value: UNKNOWN_STATUS_BAR_TEXT },
+      observation: isMergeReadyStatusBarAbortError(error) ? null : { kind: 'unknown' },
     };
   }
 }
@@ -656,6 +678,15 @@ function logMergeReadyStatusBarCaughtError(options: {
     ...(options.dueAtMs === undefined ? {} : { dueAtMs: options.dueAtMs }),
     ...formatMergeReadyStatusBarDebugError(options.error),
   });
+}
+
+function isMergeReadyStatusBarAbortError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'name' in error &&
+    (error as { name?: unknown }).name === 'AbortError'
+  );
 }
 
 function formatMergeReadyStatusBarDebugError(error: unknown): Record<string, unknown> {

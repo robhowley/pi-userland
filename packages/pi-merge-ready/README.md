@@ -51,6 +51,12 @@ When Pi runs in an eligible cmux workspace, the same current-branch status appea
 
 `PR #N` links to the pull request in GitHub. cmux publishing is enabled by default when available. Set `pi-merge-ready.cmux.enabled` to `false`, then reload Pi to hide it.
 
+### Attention notifications
+
+The cmux pill owns continuous current-branch status. Notifications request attention only when a ready or waiting PR enters an actionable blocker—merge conflicts, an out-of-date branch, a generic merge block, failing required checks, or changes requested—or when a PR becomes ready from waiting or blocked.
+
+The first observation establishes a baseline. Notifications stay silent for PR target changes, unknown transitions, new comments or unresolved conversations, drafts, detail-only changes, and blocker-to-blocker churn. They cover the current-branch PR only; URL-targeted checks do not notify, and restarting or reloading Pi resets the session baseline. Notifications reuse the existing `pi-merge-ready.cmux.enabled` opt-out; set it to `false` to disable cmux status and attention notifications.
+
 ### `/merge-ready`
 
 Inspect the current branch PR:
