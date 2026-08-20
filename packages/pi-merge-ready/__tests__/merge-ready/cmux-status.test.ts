@@ -17,6 +17,33 @@ function createRunMock(implementation: CmuxRun = async () => undefined) {
   return vi.fn(implementation);
 }
 
+function createPullRequestStatus(
+  options: {
+    number?: number;
+    url?: string;
+  } = {},
+) {
+  const number = options.number ?? 170;
+  return createMergeReadyStatus({
+    generatedAt: '2026-08-17T00:00:00.000Z',
+    pr: {
+      lifecycle: 'open',
+      number,
+      title: 'Link the cmux status pill',
+      url: options.url ?? `https://github.com/robhowley/pi-userland/pull/${String(number)}`,
+      headRefName: 'feat/linked-cmux-pill',
+      baseRefName: 'main',
+    },
+    signals: {
+      mergeability: 'mergeable',
+      checks: 'passing',
+      review: 'approved',
+      unresolvedConversations: false,
+      unresolvedConversationRequirement: 'optional',
+    },
+  });
+}
+
 function createSandbox() {
   const originalAgentDir = process.env['PI_CODING_AGENT_DIR'];
   const root = mkdtempSync(join(tmpdir(), 'pi-merge-ready-cmux-'));
@@ -103,6 +130,36 @@ describe('merge-ready cmux status', () => {
       kind: 'set',
       value: '❔ Unknown',
     });
+  });
+
+  it('links only the PR token and sends Markdown format for PR-backed sets', async () => {
+    const status = createPullRequestStatus();
+    const action = createMergeReadyCmuxAction(status, '✅ #170 Ready');
+
+    expect(action).toEqual({
+      kind: 'set',
+      value: '✅ [PR #170](https://github.com/robhowley/pi-userland/pull/170) Ready',
+      format: 'markdown',
+    });
+
+    const run = createRunMock();
+    const publisher = createPublisher({ run });
+    publisher!.enqueue(action);
+    await publisher!.shutdown();
+
+    expect(run.mock.calls[0]?.[0]).toBe('cmux');
+    expect(run.mock.calls[0]?.[1]).toEqual([
+      '--socket',
+      '/tmp/cmux.sock',
+      'set-status',
+      'pi-merge-ready',
+      '✅ [PR #170](https://github.com/robhowley/pi-userland/pull/170) Ready',
+      '--format',
+      'markdown',
+      '--workspace',
+      'workspace:1',
+    ]);
+    expect(run.mock.calls[0]?.[1]).not.toContain('--url');
   });
 
   it.each([
@@ -231,6 +288,76 @@ describe('merge-ready cmux status', () => {
         ],
       ],
     ]);
+  });
+
+  it.each([
+    {
+      name: 'malformed URL',
+      url: 'https://github.com/robhowley/pi-userland/pull/not-a-number',
+      renderedStatus: '✅ #170 Ready',
+    },
+    {
+      name: 'mismatched URL number',
+      url: 'https://github.com/robhowley/pi-userland/pull/171',
+      renderedStatus: '✅ #170 Ready',
+    },
+    {
+      name: 'unencodable URL',
+      url: 'https://github.com/robhowley/repo\uD800/pull/170',
+      renderedStatus: '✅ #170 Ready',
+    },
+    {
+      name: 'missing PR token',
+      url: 'https://github.com/robhowley/pi-userland/pull/170',
+      renderedStatus: '✅ 170 Ready',
+    },
+  ])('$name keeps the plain action', ({ url, renderedStatus }) => {
+    expect(createMergeReadyCmuxAction(createPullRequestStatus({ url }), renderedStatus)).toEqual({
+      kind: 'set',
+      value: renderedStatus,
+    });
+  });
+
+  it('percent-encodes owner and repository segments before linking', () => {
+    const status = createPullRequestStatus({
+      url: 'https://github.com/owner&team/repo+name/pull/170',
+    });
+
+    expect(createMergeReadyCmuxAction(status, '✅ #170 Ready')).toEqual({
+      kind: 'set',
+      value: '✅ [PR #170](https://github.com/owner%26team/repo%2Bname/pull/170) Ready',
+      format: 'markdown',
+    });
+  });
+
+  it('links repository names containing underscores', () => {
+    const status = createPullRequestStatus({
+      url: 'https://github.com/owner/repo_name/pull/170',
+    });
+
+    expect(createMergeReadyCmuxAction(status, '✅ #170 Ready')).toEqual({
+      kind: 'set',
+      value: '✅ [PR #170](https://github.com/owner/repo_name/pull/170) Ready',
+      format: 'markdown',
+    });
+  });
+
+  it('treats plain and Markdown set formats as different requests', async () => {
+    const run = createRunMock();
+    const publisher = createPublisher({ run });
+
+    publisher!.enqueue({ kind: 'set', value: '✅ #170 Ready' });
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+    publisher!.enqueue({
+      kind: 'set',
+      value: '✅ #170 Ready',
+      format: 'markdown',
+    });
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
+    await publisher!.shutdown();
+
+    expect(run.mock.calls[0]?.[1]).toContain('✅ #170 Ready');
+    expect(run.mock.calls[0]?.[1]).not.toContain('--format');
   });
 
   it('prefers an executable bundled cmux CLI', async () => {
