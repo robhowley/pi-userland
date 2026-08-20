@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/robhowley/pi-userland/compare/pi-yolo-seatbelt-v0.4.0...pi-yolo-seatbelt-v0.5.0) (2026-08-20)
+
+
+### Features
+
+* **pi-yolo-seatbelt:** add blockedTools configuration ([#176](https://github.com/robhowley/pi-userland/issues/176)) ([2be0fc6](https://github.com/robhowley/pi-userland/commit/2be0fc6a8523ab9304bc2bba15008ee6d2521693))
+
 ## [0.4.0](https://github.com/robhowley/pi-userland/compare/pi-yolo-seatbelt-v0.3.0...pi-yolo-seatbelt-v0.4.0) (2026-06-19)
 
 
