@@ -1,7 +1,7 @@
 {
   "name": "@robhowley/pi-merge-ready",
   "version": "0.13.0",
-  "description": "Pull requests that explain and repair their own blockers. Give your agents the context they need to take your PR all the way to green.",
+  "description": "See whether a GitHub pull request can merge, understand its blockers, and queue one bounded agent repair attempt when possible.",
   "license": "MIT",
   "type": "module",
   "files": [
