@@ -53,21 +53,16 @@ When Pi runs in an eligible cmux workspace, the same current-branch status appea
 
 ### Attention notifications
 
-The sidebar pill shows the current status continuously. cmux also sends a notification when the current-branch PR:
+cmux sends a notification when the current-branch PR has an actionable merge-readiness change:
 
-- moves from ready or waiting into a blocker that needs action: merge conflicts, an out-of-date branch, a generic merge block, failing required checks, or changes requested
-- becomes ready after waiting or being blocked
+| From    | To              |
+| ------- | --------------- |
+| Ready   | Action required |
+| Waiting | Ready           |
+| Waiting | Action required |
+| Blocked | Ready           |
 
-No notification is sent for:
-
-- the first status check or switching to a different PR
-- a PR becoming a draft or gaining unresolved conversations
-- new comments and other detail-only changes
-- changes from one blocker to another
-- status becoming unknown or recovering from unknown
-- exact-URL checks
-
-Notifications are session-scoped, so restarting or reloading Pi establishes a new baseline. To disable both cmux sidebar status and notifications, set `pi-merge-ready.cmux.enabled` to `false` and reload Pi.
+Action required means merge conflicts, an out-of-date branch, a generic merge block, failing required checks, or changes requested.
 
 ### `/merge-ready`
 
