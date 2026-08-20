@@ -21,7 +21,7 @@ Junction creates or reuses the branch's worktree, opens it in a new cmux workspa
 
 `/junction` starts a fresh Pi session. `/junction fork` waits for the current session to become idle, then starts with its saved conversation. It carries the conversation, not uncommitted files.
 
-Junction preserves the repository-relative invocation directory when the equivalent destination exists and safely resolves within the worktree. Otherwise, it launches at the worktree root and reports a warning. This rule applies to both fresh and forked sessions. The destination may be tracked, ignored, or untracked; Junction does not create missing directories or copy files.
+New sessions open in the same directory in the new worktree. If that directory is unavailable, Junction opens the worktree root and warns you. It does not create missing directories or copy files.
 
 New sessions use the same effective Pi config directory as the Pi running Junction.
 
