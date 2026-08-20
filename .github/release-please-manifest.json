@@ -6,5 +6,5 @@
   "packages/pi-session-hygiene": "0.2.4",
   "packages/pi-spinner-verbs": "3.5.0",
   "packages/pi-structured-return": "1.10.1",
-  "packages/pi-yolo-seatbelt": "0.4.0"
+  "packages/pi-yolo-seatbelt": "0.5.0"
 }
