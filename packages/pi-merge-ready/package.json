@@ -1,6 +1,6 @@
 {
   "name": "@robhowley/pi-merge-ready",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "description": "See if your pull request is ready, what’s blocking it, and let Pi fix what it can.",
   "license": "MIT",
   "type": "module",
