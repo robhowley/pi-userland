@@ -1,7 +1,33 @@
-import { describe, expect, it, vi } from 'vitest';
-import { DEFAULT_CONFIG, getConfigPath, loadConfig } from '../../extensions/yolo-seatbelt/config.js';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  DEFAULT_CONFIG,
+  getConfigPath,
+  loadConfig,
+} from '../../extensions/yolo-seatbelt/config.js';
 import { logDecision } from '../../extensions/yolo-seatbelt/logger.js';
 import { RuleSeverity } from '../../extensions/yolo-seatbelt/rules';
+
+const temporaryDirectories: string[] = [];
+
+function makeConfigPath(content?: string): string {
+  const directory = mkdtempSync(join(tmpdir(), 'pi-yolo-seatbelt-'));
+  temporaryDirectories.push(directory);
+
+  const configPath = join(directory, 'yolo-seatbelt.json');
+  if (content !== undefined) {
+    writeFileSync(configPath, content);
+  }
+  return configPath;
+}
+
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) {
+    rmSync(directory, { force: true, recursive: true });
+  }
+});
 
 describe('config', () => {
   describe('getConfigPath', () => {
@@ -13,8 +39,52 @@ describe('config', () => {
   });
 
   it('returns default config when file does not exist', () => {
-    const config = loadConfig('/tmp/yolo-seatbelt-test-nonexistent.json');
-    expect(config).toEqual(DEFAULT_CONFIG);
+    expect(loadConfig(makeConfigPath())).toEqual(DEFAULT_CONFIG);
+  });
+
+  it('returns default config for malformed JSON', () => {
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      expect(loadConfig(makeConfigPath('{ malformed'))).toEqual(DEFAULT_CONFIG);
+      expect(consoleWarn).toHaveBeenCalledWith(
+        expect.stringContaining('[seatbelt] Failed to load config from'),
+      );
+    } finally {
+      consoleWarn.mockRestore();
+    }
+  });
+
+  it.each([
+    ['valid list', { blockedTools: ['slack_post', 'bash'] }, ['slack_post', 'bash']],
+    ['missing field', {}, []],
+    ['string', { blockedTools: 'slack_post' }, []],
+    ['object', { blockedTools: { name: 'bash' } }, []],
+    ['number', { blockedTools: 7 }, []],
+    ['null', { blockedTools: null }, []],
+    ['mixed list', { blockedTools: ['slack_post', 7] }, []],
+  ])('normalizes a %s blockedTools value', (_description, userConfig, blockedTools) => {
+    const config = loadConfig(makeConfigPath(JSON.stringify(userConfig)));
+
+    expect(config.blockedTools).toEqual(blockedTools);
+  });
+
+  it('preserves valid settings when blockedTools is invalid', () => {
+    const config = loadConfig(
+      makeConfigPath(
+        JSON.stringify({
+          blockedTools: ['slack_post', 7],
+          logLevel: 'debug',
+          rules: { 'git.push-force': 'allow' },
+        }),
+      ),
+    );
+
+    expect(config).toMatchObject({
+      blockedTools: [],
+      logLevel: 'debug',
+      rules: { 'git.push-force': 'allow' },
+    });
   });
 });
 
