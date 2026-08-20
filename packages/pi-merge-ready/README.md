@@ -52,9 +52,9 @@ Optional unresolved conversations are not blockers, but they can still appear as
 
 Tight cmux integration keeps the current branch's merge-ready status visible in the workspace sidebar:
 
-<img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-merge-ready/img/cmux-pr-status.png" alt="cmux workspace sidebar showing PR #173 ready in pi-userland" width="236">
+<img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-merge-ready/img/cmux-pr-status.png" alt="cmux workspace sidebar showing Pi thinking and PR #173 mergeable with one comment" width="422">
 
-Only `PR #N` links to GitHub (Markdown verified with cmux `0.64.22`). The status is on by default. Set `pi-merge-ready.cmux.enabled` to `false`, then reload Pi to hide it.
+`PR #N` links to the pull request in GitHub. The status is on by default. Set `pi-merge-ready.cmux.enabled` to `false`, then reload Pi to hide it.
 
 ### Slash command
 
