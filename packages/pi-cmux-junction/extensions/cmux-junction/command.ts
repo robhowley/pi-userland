@@ -1,6 +1,6 @@
 import { constants, createReadStream } from 'node:fs';
-import { access, stat } from 'node:fs/promises';
-import { isAbsolute, resolve } from 'node:path';
+import { access, realpath, stat } from 'node:fs/promises';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 import type { ExtensionAPI, ExtensionCommandContext } from '@earendil-works/pi-coding-agent';
 import {
   launchCmuxWorkspace,
@@ -47,6 +47,8 @@ export type JunctionResult =
       ok: true;
       status: 'created-and-launched' | 'reused-and-launched';
       worktree: WorktreeSuccess;
+      launchCwd: string;
+      launchCwdWarning?: string;
     }
   | { ok: false; status: 'invalid-command'; message: string }
   | { ok: false; status: 'source-session-failed'; message: string }
@@ -58,6 +60,7 @@ export type JunctionResult =
       status: 'partial-launch-failed';
       branch: string;
       path: string;
+      launchCwd: string;
       worktreeRetained: true;
       message: string;
     }
@@ -66,6 +69,7 @@ export type JunctionResult =
       status: 'partial-launch-unknown';
       branch: string;
       path: string;
+      launchCwd: string;
       worktreeRetained: true;
       retrySafe: false;
       message: string;
@@ -181,6 +185,25 @@ export async function runJunctionCommand(
     return { ok: false, status: 'planning-failed', message: plan.message };
   }
 
+  let canonicalSourceCwd: string;
+  try {
+    canonicalSourceCwd = await realpath(cwd);
+  } catch {
+    return {
+      ok: false,
+      status: 'planning-failed',
+      message: 'Could not resolve the current working directory; no worktree was created.',
+    };
+  }
+  if (!isContained(plan.repository.topLevel, canonicalSourceCwd)) {
+    return {
+      ok: false,
+      status: 'planning-failed',
+      message: 'Current cwd resolves outside the repository; no worktree was created.',
+    };
+  }
+  const relativeCwd = relative(plan.repository.topLevel, canonicalSourceCwd);
+
   const cmuxOptions = buildCmuxOptions(options);
   const preflight = await (options.preflight ?? preflightCmux)(cwd, cmuxOptions);
   if (!preflight.ok) {
@@ -192,12 +215,13 @@ export async function runJunctionCommand(
     return { ok: false, status: 'worktree-failed', message: worktree.message };
   }
 
+  const launchCwd = await chooseLaunchCwd(worktree.path, relativeCwd);
   const launch =
     recipe === undefined
-      ? await (options.launch ?? launchCmuxWorkspace)(worktree.branch, worktree.path, cmuxOptions)
+      ? await (options.launch ?? launchCmuxWorkspace)(worktree.branch, launchCwd.path, cmuxOptions)
       : await (options.launch ?? launchCmuxWorkspace)(
           worktree.branch,
-          worktree.path,
+          launchCwd.path,
           cmuxOptions,
           recipe,
         );
@@ -208,9 +232,10 @@ export async function runJunctionCommand(
         status: 'partial-launch-unknown',
         branch: worktree.branch,
         path: worktree.path,
+        launchCwd: launchCwd.path,
         worktreeRetained: true,
         retrySafe: false,
-        message: `Worktree retained, but cmux launch status is unknown: ${launch.message}\nBranch: ${worktree.branch}\nPath: ${worktree.path}\nThe workspace may exist; inspect cmux before taking further action.`,
+        message: `Worktree retained, but cmux launch status is unknown: ${launch.message}\nBranch: ${worktree.branch}\nPath: ${worktree.path}\nLaunch cwd: ${launchCwd.path}\nThe workspace may exist; inspect cmux before taking further action.`,
       };
     }
     const retry =
@@ -222,8 +247,9 @@ export async function runJunctionCommand(
       status: 'partial-launch-failed',
       branch: worktree.branch,
       path: worktree.path,
+      launchCwd: launchCwd.path,
       worktreeRetained: true,
-      message: `Worktree retained after cmux launch failed: ${launch.message}\nBranch: ${worktree.branch}\nPath: ${worktree.path}\nRetry: ${retry}`,
+      message: `Worktree retained after cmux launch failed: ${launch.message}\nBranch: ${worktree.branch}\nPath: ${worktree.path}\nLaunch cwd: ${launchCwd.path}\nRetry: ${retry}`,
     };
   }
 
@@ -231,6 +257,12 @@ export async function runJunctionCommand(
     ok: true,
     status: worktree.status === 'created' ? 'created-and-launched' : 'reused-and-launched',
     worktree,
+    launchCwd: launchCwd.path,
+    ...(launchCwd.fellBack
+      ? {
+          launchCwdWarning: `Could not preserve "${relativeCwd}" because it is absent or unsafe in the target worktree; launched at the worktree root.`,
+        }
+      : {}),
   };
 }
 
@@ -345,12 +377,45 @@ function notifyResult(ctx: ExtensionCommandContext, result: JunctionResult): voi
   }
 
   const verb = result.worktree.status === 'created' ? 'Created' : 'Reused';
-  const warning =
-    result.worktree.warning === undefined ? '' : `\nWarning: ${result.worktree.warning}`;
+  const warnings = [result.worktree.warning, result.launchCwdWarning]
+    .filter((warning) => warning !== undefined)
+    .map((warning) => `\nWarning: ${warning}`)
+    .join('');
   ctx.ui.notify(
-    `${verb} worktree and launched cmux workspace.\nBranch: ${result.worktree.branch}\nPath: ${result.worktree.path}${warning}`,
+    `${verb} worktree and launched cmux workspace.\nBranch: ${result.worktree.branch}\nPath: ${result.worktree.path}\nLaunch cwd: ${result.launchCwd}${warnings}`,
     'info',
   );
+}
+
+function isContained(root: string, candidate: string): boolean {
+  const remainder = relative(root, candidate);
+  return (
+    remainder === '' ||
+    (!isAbsolute(remainder) && remainder !== '..' && !remainder.startsWith(`..${sep}`))
+  );
+}
+
+async function chooseLaunchCwd(
+  worktreeRoot: string,
+  relativeCwd: string,
+): Promise<{ path: string; fellBack: boolean }> {
+  if (relativeCwd === '') {
+    return { path: worktreeRoot, fellBack: false };
+  }
+
+  try {
+    const canonicalRoot = await realpath(worktreeRoot);
+    const canonicalCandidate = await realpath(resolve(canonicalRoot, relativeCwd));
+    if (
+      !isContained(canonicalRoot, canonicalCandidate) ||
+      !(await stat(canonicalCandidate)).isDirectory()
+    ) {
+      return { path: worktreeRoot, fellBack: true };
+    }
+    return { path: canonicalCandidate, fellBack: false };
+  } catch {
+    return { path: worktreeRoot, fellBack: true };
+  }
 }
 
 function buildWorktreeOptions(options: JunctionCommandOptions): WorktreeOptions {
