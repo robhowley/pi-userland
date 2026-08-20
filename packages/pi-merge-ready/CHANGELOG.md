@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.14.0](https://github.com/robhowley/pi-userland/compare/pi-merge-ready-v0.13.0...pi-merge-ready-v0.14.0) (2026-08-20)
+
+
+### Features
+
+* **pi-merge-ready:** link PR in cmux status ([#173](https://github.com/robhowley/pi-userland/issues/173)) ([3c637cf](https://github.com/robhowley/pi-userland/commit/3c637cf3e794ea34166e0ff3a681ad738f432eb1))
+* **pi-merge-ready:** publish status to cmux ([#166](https://github.com/robhowley/pi-userland/issues/166)) ([2137c9d](https://github.com/robhowley/pi-userland/commit/2137c9d4dab6cccf4e17c59e3f8dcdf36e966d98))
+
 ## [0.13.0](https://github.com/robhowley/pi-userland/compare/pi-merge-ready-v0.12.1...pi-merge-ready-v0.13.0) (2026-08-05)
 
 
