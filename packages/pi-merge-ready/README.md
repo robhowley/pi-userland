@@ -1,8 +1,8 @@
 # pi-merge-ready
 
-Know whether a GitHub pull request can merge, why it cannot, and what Pi can do next.
+Know if a GitHub pull request is ready to merge, what’s blocking it, and let Pi fix what it can.
 
-`pi-merge-ready` keeps current-branch status visible, inspects an exact GitHub PR URL, waits on checks and review, and queues one bounded agent repair attempt for failing CI, merge conflicts, or an out-of-date branch.
+`pi-merge-ready` keeps current-branch status visible, inspects any exact GitHub PR URL, waits on checks and review, and queues one bounded agent repair attempt for failing CI, merge conflicts, or an out-of-date branch.
 
 ## Install
 

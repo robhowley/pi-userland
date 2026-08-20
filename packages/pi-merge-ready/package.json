@@ -1,7 +1,7 @@
 {
   "name": "@robhowley/pi-merge-ready",
   "version": "0.13.0",
-  "description": "See whether a GitHub pull request can merge, understand its blockers, and queue one bounded agent repair attempt when possible.",
+  "description": "See if your pull request is ready, what’s blocking it, and let Pi fix what it can.",
   "license": "MIT",
   "type": "module",
   "files": [
