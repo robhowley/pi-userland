@@ -60,6 +60,10 @@ Create `~/.pi/agent/yolo-seatbelt.json`:
 }
 ```
 
+Protect yourself from bots sending embarrassing messages on your behalf:
+
+![A Slack message blocked by yolo-seatbelt](img/blocked-slack-message.png)
+
 ### Config Schema
 
 - `logLevel`: `"none" | "warn" | "debug"` - Log level for debugging
