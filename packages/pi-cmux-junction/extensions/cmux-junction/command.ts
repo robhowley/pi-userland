@@ -185,9 +185,9 @@ export async function runJunctionCommand(
     return { ok: false, status: 'planning-failed', message: plan.message };
   }
 
-  let canonicalSourceCwd: string;
+  let sourceCwd: string;
   try {
-    canonicalSourceCwd = await realpath(cwd);
+    sourceCwd = await realpath(cwd);
   } catch {
     return {
       ok: false,
@@ -195,14 +195,14 @@ export async function runJunctionCommand(
       message: 'Could not resolve the current working directory; no worktree was created.',
     };
   }
-  if (!isContained(plan.repository.topLevel, canonicalSourceCwd)) {
+  if (!isContained(plan.repository.topLevel, sourceCwd)) {
     return {
       ok: false,
       status: 'planning-failed',
       message: 'Current cwd resolves outside the repository; no worktree was created.',
     };
   }
-  const relativeCwd = relative(plan.repository.topLevel, canonicalSourceCwd);
+  const relativeCwd = relative(plan.repository.topLevel, sourceCwd);
 
   const cmuxOptions = buildCmuxOptions(options);
   const preflight = await (options.preflight ?? preflightCmux)(cwd, cmuxOptions);
@@ -404,15 +404,15 @@ async function chooseLaunchCwd(
   }
 
   try {
-    const canonicalRoot = await realpath(worktreeRoot);
-    const canonicalCandidate = await realpath(resolve(canonicalRoot, relativeCwd));
+    const worktreeDirectory = await realpath(worktreeRoot);
+    const launchDirectory = await realpath(resolve(worktreeDirectory, relativeCwd));
     if (
-      !isContained(canonicalRoot, canonicalCandidate) ||
-      !(await stat(canonicalCandidate)).isDirectory()
+      !isContained(worktreeDirectory, launchDirectory) ||
+      !(await stat(launchDirectory)).isDirectory()
     ) {
       return { path: worktreeRoot, fellBack: true };
     }
-    return { path: canonicalCandidate, fellBack: false };
+    return { path: launchDirectory, fellBack: false };
   } catch {
     return { path: worktreeRoot, fellBack: true };
   }

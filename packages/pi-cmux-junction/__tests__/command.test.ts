@@ -245,7 +245,7 @@ describe('/junction command', () => {
     },
   );
 
-  it('fails planning before mutation when canonical cwd is outside the planned repository', async () => {
+  it('fails planning before mutation when cwd resolves outside the planned repository', async () => {
     const otherRoot = join(sourceRoot, '..', 'other-repository');
     await mkdir(otherRoot);
     const preflight = vi.fn();
