@@ -1,12 +1,18 @@
 import { accessSync, constants } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { SettingsManager } from '@earendil-works/pi-coding-agent';
+import { parseGitHubPullRequestUrl } from './target.js';
 import type { MergeReadyStatus } from './types.js';
 
 const CMUX_STATUS_KEY = 'pi-merge-ready';
 const CMUX_OPERATION_TIMEOUT_MS = 2_000;
 
-type MergeReadyCmuxAction = { kind: 'set'; value: string } | { kind: 'clear' };
+type MergeReadyCmuxSetAction = {
+  kind: 'set';
+  value: string;
+  format?: 'markdown';
+};
+type MergeReadyCmuxAction = MergeReadyCmuxSetAction | { kind: 'clear' };
 
 type MergeReadyCmuxPublisher = {
   enqueue: (action: MergeReadyCmuxAction) => void;
@@ -32,9 +38,48 @@ export function createMergeReadyCmuxAction(
   status: MergeReadyStatus,
   renderedStatus: string,
 ): MergeReadyCmuxAction {
-  return status.openItems.some((item) => item.id === 'no_pull_request')
-    ? { kind: 'clear' }
-    : { kind: 'set', value: renderedStatus };
+  if (status.openItems.some((item) => item.id === 'no_pull_request')) {
+    return { kind: 'clear' };
+  }
+
+  const linkedStatus = createLinkedCmuxStatus(status, renderedStatus);
+  return linkedStatus === null
+    ? { kind: 'set', value: renderedStatus }
+    : { kind: 'set', value: linkedStatus, format: 'markdown' };
+}
+
+function createLinkedCmuxStatus(status: MergeReadyStatus, renderedStatus: string): string | null {
+  const pr = status.pr;
+  if (!pr) {
+    return null;
+  }
+
+  const target = parseGitHubPullRequestUrl(pr.url);
+  if (!target || target.prNumber !== pr.number) {
+    return null;
+  }
+
+  const owner = encodeGitHubPathSegment(target.owner);
+  const repo = encodeGitHubPathSegment(target.repo);
+  if (owner === null || repo === null) {
+    return null;
+  }
+
+  const token = ` #${String(pr.number)} `;
+  const replacement = ` [PR #${String(pr.number)}](https://github.com/${owner}/${repo}/pull/${String(pr.number)}) `;
+  const linkedStatus = renderedStatus.replace(token, replacement);
+  return linkedStatus === renderedStatus ? null : linkedStatus;
+}
+
+function encodeGitHubPathSegment(segment: string): string | null {
+  try {
+    return encodeURIComponent(segment).replace(
+      /[!'()*]/gu,
+      (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+    );
+  } catch {
+    return null;
+  }
 }
 
 export function createMergeReadyCmuxPublisher(
@@ -65,6 +110,7 @@ export function createMergeReadyCmuxPublisher(
             'set-status',
             CMUX_STATUS_KEY,
             action.value,
+            ...(action.format === 'markdown' ? ['--format', 'markdown'] : []),
             '--workspace',
             workspace,
           ]
@@ -175,7 +221,7 @@ function createSessionPublisher(
 }
 
 function serializeAction(action: MergeReadyCmuxAction): string {
-  return action.kind === 'clear' ? 'clear' : `set:${action.value}`;
+  return action.kind === 'clear' ? 'clear' : `set:${action.format ?? 'plain'}:${action.value}`;
 }
 
 function resolveCmuxCommand(env: NodeJS.ProcessEnv): string {

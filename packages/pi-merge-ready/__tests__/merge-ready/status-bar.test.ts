@@ -1929,7 +1929,11 @@ describe('merge-ready status bar', () => {
         status: runningStatus,
         ownership: latestOwnership,
       });
-      expect(enqueue).toHaveBeenLastCalledWith({ kind: 'set', value: '⏳ #42 Checks running' });
+      expect(enqueue).toHaveBeenLastCalledWith({
+        kind: 'set',
+        value: '⏳ [PR #42](https://github.com/robhowley/pi-userland/pull/42) Checks running',
+        format: 'markdown',
+      });
       expect(enqueue).toHaveBeenCalledTimes(2);
     });
 

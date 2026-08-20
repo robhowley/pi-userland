@@ -48,7 +48,13 @@ Optional unresolved conversations are not blockers, but they can still appear as
 ✅ #64 Mergeable · 💬 2 comments
 ```
 
-In cmux, pi-merge-ready also shows the current branch status in the workspace sidebar. It is on by default. Set `pi-merge-ready.cmux.enabled` to `false`, then reload Pi to hide it.
+#### cmux integration
+
+Tight cmux integration keeps the current branch's merge-ready status visible in the workspace sidebar:
+
+<img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-merge-ready/img/cmux-pr-status.png" alt="cmux workspace sidebar showing Pi thinking and PR #173 mergeable with one comment" width="422">
+
+`PR #N` links to the pull request in GitHub. The status is on by default. Set `pi-merge-ready.cmux.enabled` to `false`, then reload Pi to hide it.
 
 ### Slash command
 
