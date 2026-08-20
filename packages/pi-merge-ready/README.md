@@ -53,9 +53,21 @@ When Pi runs in an eligible cmux workspace, the same current-branch status appea
 
 ### Attention notifications
 
-The cmux pill owns continuous current-branch status. Notifications request attention only when a ready or waiting PR enters an actionable blocker—merge conflicts, an out-of-date branch, a generic merge block, failing required checks, or changes requested—or when a PR becomes ready from waiting or blocked.
+The sidebar pill shows the current status continuously. cmux also sends a notification when the current-branch PR:
 
-The first observation establishes a baseline. Notifications stay silent for PR target changes, unknown transitions, new comments or unresolved conversations, drafts, detail-only changes, and blocker-to-blocker churn. They cover the current-branch PR only; URL-targeted checks do not notify, and restarting or reloading Pi resets the session baseline. Notifications reuse the existing `pi-merge-ready.cmux.enabled` opt-out; set it to `false` to disable cmux status and attention notifications.
+- moves from ready or waiting into a blocker that needs action: merge conflicts, an out-of-date branch, a generic merge block, failing required checks, or changes requested
+- becomes ready after waiting or being blocked
+
+No notification is sent for:
+
+- the first status check or switching to a different PR
+- a PR becoming a draft or gaining unresolved conversations
+- new comments and other detail-only changes
+- changes from one blocker to another
+- status becoming unknown or recovering from unknown
+- exact-URL checks
+
+Notifications are session-scoped, so restarting or reloading Pi establishes a new baseline. To disable both cmux sidebar status and notifications, set `pi-merge-ready.cmux.enabled` to `false` and reload Pi.
 
 ### `/merge-ready`
 
@@ -187,13 +199,13 @@ Configure the package in Pi's `settings.json`:
 }
 ```
 
-| Option                       | Default | Description                                                                     |
-| ---------------------------- | ------- | ------------------------------------------------------------------------------- |
-| `autoCompactRepair`          | `true`  | Compact the conversation after a successful repair turn before polling resumes. |
-| `cacheTTLSeconds`            | `60`    | Cache the current-branch status bar result for this many seconds.               |
-| `enableStatusBarDiagnostics` | `false` | Write status refresh diagnostics as JSONL.                                      |
-| `cmux.enabled`               | `true`  | Publish current-branch status to an eligible cmux workspace.                    |
-| `repairGuidance`             | `{}`    | Add blocker-specific instructions to repair handoffs.                           |
+| Option                       | Default | Description                                                                              |
+| ---------------------------- | ------- | ---------------------------------------------------------------------------------------- |
+| `autoCompactRepair`          | `true`  | Compact the conversation after a successful repair turn before polling resumes.          |
+| `cacheTTLSeconds`            | `60`    | Cache the current-branch status bar result for this many seconds.                        |
+| `enableStatusBarDiagnostics` | `false` | Write status refresh diagnostics as JSONL.                                               |
+| `cmux.enabled`               | `true`  | Publish current-branch status and attention notifications to an eligible cmux workspace. |
+| `repairGuidance`             | `{}`    | Add blocker-specific instructions to repair handoffs.                                    |
 
 `repairGuidance` accepts only `branch_out_of_date`, `merge_conflicts`, and `ci_failing`. Current-branch repairs combine global and trusted-project guidance. URL-targeted repairs use global guidance only.
 
