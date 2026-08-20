@@ -52,6 +52,7 @@ Create `~/.pi/agent/yolo-seatbelt.json`:
 ```json
 {
   "logLevel": "warn",
+  "blockedTools": ["slack_post"],
   "rules": {
     "git.push-force": "allow",
     "rm-rf-root": "block"
@@ -62,7 +63,10 @@ Create `~/.pi/agent/yolo-seatbelt.json`:
 ### Config Schema
 
 - `logLevel`: `"none" | "warn" | "debug"` - Log level for debugging
+- `blockedTools`: `string[]` (default `[]`) - Exact, case-sensitive tool names blocked at Pi's `tool_call` boundary. Tool inputs are not inspected.
 - `rules`: `Record<string, "block" | "ask" | "allow">` - Override rule behavior by rule ID
+
+Missing or invalid `blockedTools` values are ignored as an empty list.
 
 ### Utility
 

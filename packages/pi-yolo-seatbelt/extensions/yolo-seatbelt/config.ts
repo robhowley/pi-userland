@@ -20,6 +20,8 @@ import { RuleSeverity } from './rules.js';
 export interface Config {
   /** Log level: "none", "warn", or "debug" */
   logLevel: 'none' | 'warn' | 'debug';
+  /** Exact tool names to block before tool-specific evaluation. */
+  blockedTools: string[];
   /**
    * Rule severity overrides by rule ID.
    * Keys are rule IDs values are severity levels.
@@ -33,6 +35,7 @@ export interface Config {
  */
 export const DEFAULT_CONFIG: Config = {
   logLevel: 'none',
+  blockedTools: [],
   rules: {},
 };
 
@@ -58,11 +61,28 @@ export function loadConfig(configPath?: string): Config {
     }
 
     const rawContent = fs.readFileSync(configPath, 'utf8');
-    const userConfig = JSON.parse(rawContent) as Config;
+    const parsedConfig: unknown = JSON.parse(rawContent);
+
+    if (typeof parsedConfig !== 'object' || parsedConfig === null || Array.isArray(parsedConfig)) {
+      return DEFAULT_CONFIG;
+    }
+
+    const userConfig = parsedConfig as {
+      logLevel?: Config['logLevel'];
+      rules?: Config['rules'];
+      blockedTools?: unknown;
+    };
+    const blockedTools =
+      userConfig.blockedTools === undefined ||
+      (Array.isArray(userConfig.blockedTools) &&
+        userConfig.blockedTools.every((tool) => typeof tool === 'string'))
+        ? (userConfig.blockedTools ?? [])
+        : [];
 
     // Merge with defaults - user rules take precedence
     return {
       logLevel: userConfig.logLevel ?? DEFAULT_CONFIG.logLevel,
+      blockedTools,
       rules: {
         ...DEFAULT_CONFIG.rules,
         ...userConfig.rules,

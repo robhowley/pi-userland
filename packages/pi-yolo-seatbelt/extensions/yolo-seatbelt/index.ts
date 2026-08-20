@@ -71,15 +71,21 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on('tool_call', async (event, ctx) => {
+    const config = loadConfig();
+
+    if (config.blockedTools.includes(event.toolName)) {
+      return {
+        block: true,
+        reason: `Blocked by yolo-seatbelt: tool ${event.toolName}`,
+      };
+    }
+
     // Only intercept bash tool calls
     if (!isToolCallEventType('bash', event)) {
       return;
     }
 
     const command = event.input.command;
-
-    // Load config (cached after first load)
-    const config = loadConfig();
 
     // Evaluate the command using the full pipeline with config
     const result = evaluate(command, config);
