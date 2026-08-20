@@ -33,6 +33,30 @@ describe('yolo-seatbelt extension', () => {
     vi.mocked(loadConfig).mockReturnValue(DEFAULT_CONFIG);
   });
 
+  it('shows configured blocked tools in /yolo-seatbelt-rules', async () => {
+    vi.mocked(loadConfig).mockReturnValue({
+      ...DEFAULT_CONFIG,
+      blockedTools: ['slack_post', 'bash'],
+    });
+    const pi = { on: vi.fn(), registerCommand: vi.fn(), getCommands: vi.fn() } as any;
+    let commandHandler: any;
+    pi.registerCommand.mockImplementation((name: string, command: any) => {
+      if (name === 'yolo-seatbelt-rules') {
+        commandHandler = command.handler;
+      }
+    });
+    const extensionModule = await import('../../extensions/yolo-seatbelt/index.js');
+    extensionModule.default(pi);
+    const select = vi.fn().mockResolvedValue(undefined);
+
+    await commandHandler('', { ui: { select } });
+
+    expect(select).toHaveBeenCalledWith(
+      'yolo-seatbelt Rules',
+      expect.arrayContaining(['  🛑 blockedTools: slack_post, bash']),
+    );
+  });
+
   it('blocks an exact configured tool name without inspecting input or prompting', async () => {
     const config = { ...DEFAULT_CONFIG, blockedTools: ['slack_post'] };
     vi.mocked(loadConfig).mockReturnValue(config);

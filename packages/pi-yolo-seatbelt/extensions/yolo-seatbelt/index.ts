@@ -52,6 +52,10 @@ export default function (pi: ExtensionAPI) {
         configInfo.push(`  ⚙️  Custom rules: ${ruleCount}`);
       }
 
+      if (config.blockedTools.length > 0) {
+        configInfo.push(`  🛑 blockedTools: ${config.blockedTools.join(', ')}`);
+      }
+
       // Show in a selector
       const items = [
         '--- yolo-seatbelt Configuration ---',

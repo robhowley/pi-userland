@@ -74,7 +74,7 @@ Missing or invalid `blockedTools` values are ignored as an empty list.
 
 ### Utility
 
-View the active rule set and permissions
+View the active blocked tools, rule set, and permissions:
 
 ```shell
 /yolo-seatbelt-rules
