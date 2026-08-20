@@ -1,7 +1,7 @@
 {
   "name": "@robhowley/pi-merge-ready",
   "version": "0.13.0",
-  "description": "Pull requests that explain and repair their own blockers. Give your agents the context they need to take your PR all the way to green.",
+  "description": "See if your pull request is ready, what’s blocking it, and let Pi fix what it can.",
   "license": "MIT",
   "type": "module",
   "files": [
