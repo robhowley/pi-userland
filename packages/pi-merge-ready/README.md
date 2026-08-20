@@ -1,35 +1,34 @@
 # pi-merge-ready
 
-A [Pi](https://pi.dev/) package for getting pull requests to green: merge-readiness signal, blocker context, and automated agent repair loops.
+Know whether a GitHub pull request can merge, why it cannot, and what Pi can do next.
 
-It adds:
+`pi-merge-ready` keeps current-branch status visible, inspects an exact GitHub PR URL, waits on checks and review, and queues one bounded agent repair attempt for failing CI, merge conflicts, or an out-of-date branch.
 
-- a current-branch status bar signal
-- `/merge-ready` for current-branch or exact-URL status
-- `/merge-ready watch` for polling PRs and handing actionable blockers off to the agent for automated repairs.
-- a `merge_ready_status({ url? })` agent tool
-- a `merge-ready-loop` skill for working the returned blockers
-
-## Installation
+## Install
 
 ```bash
 pi install npm:@robhowley/pi-merge-ready
 ```
 
-## Requirements
+Requires `git` and an authenticated GitHub CLI (`gh`) on Pi's `PATH`.
 
-- Authenticated GitHub CLI (`gh`).
-- `git` and `gh` available in Pi's environment.
+## Quick start
 
-The package is fail-closed: if GitHub data is missing, truncated, or ambiguous, it reports `status_ambiguous` instead of claiming the PR is ready.
+| Goal                           | Command                                                           |
+| ------------------------------ | ----------------------------------------------------------------- |
+| Check the current branch PR    | `/merge-ready`                                                    |
+| Check another PR               | `/merge-ready --url https://github.com/OWNER/REPO/pull/64`        |
+| Return machine-readable status | `/merge-ready --url https://github.com/OWNER/REPO/pull/64 --json` |
+| Wait and repair when possible  | `/merge-ready watch`                                              |
+| Watch another PR               | `/merge-ready watch --url https://github.com/OWNER/REPO/pull/64`  |
 
-## What it adds
+`openItems` is the authoritative list of merge-readiness work. When readiness-critical GitHub data is ambiguous, the package reports `status_ambiguous` instead of `ready`.
 
-### Status bar
+## See PR status
 
-The Pi status bar shows the current branch PR's top merge-readiness state and PR number.
+### Status bar and cmux
 
-Examples:
+The Pi status bar shows the current branch PR number and its top readiness state:
 
 ```text
 ✅ #64 Ready
@@ -40,48 +39,34 @@ Examples:
 ❔ No PR
 ```
 
-`✅ #64 Ready` means there is no current merge-readiness review blocker. If GitHub still requires review, Pi shows `👀 #64 Review pending` instead.
-
-Optional unresolved conversations are not blockers, but they can still appear as context:
+`✅ #64 Ready` means an open PR has no `openItems`. Optional unresolved conversations can still appear as context without blocking readiness:
 
 ```text
 ✅ #64 Mergeable · 💬 2 comments
 ```
 
-#### cmux integration
-
-Tight cmux integration keeps the current branch's merge-ready status visible in the workspace sidebar:
+When Pi runs in an eligible cmux workspace, the same current-branch status appears in the workspace sidebar:
 
 <img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-merge-ready/img/cmux-pr-status.png" alt="cmux workspace sidebar showing Pi thinking and PR #173 mergeable with one comment" width="422">
 
-`PR #N` links to the pull request in GitHub. The status is on by default. Set `pi-merge-ready.cmux.enabled` to `false`, then reload Pi to hide it.
+`PR #N` links to the pull request in GitHub. cmux publishing is enabled by default when available. Set `pi-merge-ready.cmux.enabled` to `false`, then reload Pi to hide it.
 
-### Slash command
+### `/merge-ready`
 
-Use `/merge-ready` to inspect the current branch PR:
+Inspect the current branch PR:
 
 ```bash
 /merge-ready
 ```
 
-Example:
-
-```text
-✅ Ready to merge
-Target: current branch feat/my-branch (owner/repo)
-PR: #64 — Add PR merge-readiness extension
-State: ready
-Open items: none
-```
-
-You can also target an exact GitHub pull request URL:
+Or target one exact GitHub pull request URL:
 
 ```bash
 /merge-ready --url https://github.com/OWNER/REPO/pull/64
 /merge-ready --url https://github.com/OWNER/REPO/pull/64 --json
 ```
 
-Example blocked/pending output:
+Example:
 
 ```text
 ⏳ Checks are still running
@@ -92,13 +77,11 @@ Open items:
 - Checks are still running
 ```
 
-Only full HTTPS GitHub PR URLs are accepted.
+Only full HTTPS GitHub PR URLs are accepted. Detail URLs support a returned blocker; they are not separate action items.
 
-Detail URLs are supporting links for blocker context, not separate action items.
+## Keep a PR moving
 
-### Watch mode
-
-Start a watcher with:
+Start a foreground watcher for the current branch or one exact PR URL:
 
 ```bash
 /merge-ready watch
@@ -106,110 +89,34 @@ Start a watcher with:
 /merge-ready watch --url https://github.com/OWNER/REPO/pull/64 --interval 30
 ```
 
-`watch` is a long-lived foreground command that polls merge readiness.
-In the TUI, press `Ctrl-Shift-S` to stop it. In headless SDK sessions, stop it by aborting or disposing the backing session.
+In the TUI, press `Ctrl-Shift-S` to stop it. In a headless SDK session, abort or dispose the backing session.
 
-It will:
+| Returned status or lifecycle                                                                                                               | Watch behavior                                   |
+| ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------ |
+| `branch_out_of_date`, `merge_conflicts`, `ci_failing`                                                                                      | Queue one bounded agent repair attempt.          |
+| `ci_running`, `review_pending`, or an open PR with no `openItems`                                                                          | Keep polling for GitHub or review state changes. |
+| `changes_requested`, `unresolved_conversations`, `merge_blocked`, `draft`, `status_ambiguous`, `no_pull_request`, or a closed or merged PR | Report the blocker or terminal state and stop.   |
 
-- keep polling while checks or required review are still pending
-- attempt to repair PR blockers for `branch_out_of_date`, `merge_conflicts`, or `ci_failing`
-- inject matching `repairGuidance` text into the queued repair handoff only for those actionable blocker ids
-- use global + trusted-project `repairGuidance` for current-branch repairs, but global-only `repairGuidance` for explicit `--url` repairs
-- stop on non-repairable blockers or terminal PR states
+Current-branch repair turns use the current checkout and refuse to start with a dirty worktree. URL-targeted repair turns are handed off with instructions to use an isolated worktree for the PR head repo and branch without mutating the current checkout.
 
-Repair model:
+After attempting a blocker, the watcher does not retry it until the status changes or the watcher is restarted. Matching `repairGuidance` from settings is included in the repair handoff.
 
-- current-branch watch repairs use the ambient checkout after dirty-worktree preflight
-- explicit `--url` watch repairs must not mutate the ambient checkout; they use an isolated worktree for the PR head repo/branch
-- `--url` accepts only the same exact GitHub PR URL form as `/merge-ready --url`
+## Agent integration
 
-Watch actionability:
-
-| Status / lifecycle                                                                                                                           | Watch behavior                                                                                                                                                                                                   |
-| -------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `branch_out_of_date`, `merge_conflicts`, `ci_failing`                                                                                        | Auto-attempt one bounded repair turn. Current-branch watches repair in the ambient checkout after dirty-worktree preflight; explicit `--url` watches repair in an isolated worktree for the PR head repo/branch. |
-| `ci_running`, `review_pending`, open PR with no `openItems` (`ready`)                                                                        | Keep polling and wait for GitHub or review state to change.                                                                                                                                                      |
-| `changes_requested`, `unresolved_conversations`, `merge_blocked`, `draft`, `status_ambiguous`, `no_pull_request`, closed/merged PR lifecycle | Do not auto-repair; report the blocker or terminal state and stop.                                                                                                                                               |
-
-Watch safety:
-
-- Repeated-blocker guard: after one repair attempt for a blocker, `watch` does not keep retrying it without a fresh status change or explicit restart.
-- Dirty-worktree preflight: current-branch `watch` repairs refuse to run when local changes are already present in the ambient checkout.
-- Explicit `--url` watch repairs are instructed to use an isolated worktree for the PR head repo/branch and skip ambient dirty-worktree preflight.
-
-### Configuration
-
-Watch behavior and the current-branch status bar cache TTL can be configured in Pi's `settings.json` (global: `~/.pi/agent/settings.json`, project-local: `.pi/settings.json`). Project-local settings are only honored in trusted projects.
-
-```json
-{
-  "pi-merge-ready": {
-    "autoCompactRepair": true,
-    "cacheTTLSeconds": 60,
-    "enableStatusBarDiagnostics": false,
-    "cmux": {
-      "enabled": true
-    },
-    "repairGuidance": {
-      "ci_failing": "Start with pnpm --filter @robhowley/pi-merge-ready test -- __tests__/merge-ready/watch.test.ts",
-      "merge_conflicts": "Rebase onto main before touching unrelated files."
-    }
-  }
-}
-```
-
-| Option                       | Default | Description                                                                                                                                                                                                                                                                                                          |
-| ---------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `autoCompactRepair`          | `true`  | Trigger conversation compaction after successful repair loop completion. Compaction runs before the watch continues polling. Set to `false` to disable.                                                                                                                                                              |
-| `cacheTTLSeconds`            | `60`    | Current-branch status bar cache TTL in seconds. Accepts positive integers only. New values apply on the next fresh ambient status write.                                                                                                                                                                             |
-| `enableStatusBarDiagnostics` | `false` | Opt in to status-bar JSONL diagnostics (`timer_armed`, `timer_fired`, `refresh_result`, `caught_error`). Logs stay off by default until this setting is enabled.                                                                                                                                                     |
-| `cmux.enabled`               | `true`  | Show the current branch status in cmux. Set to `false` to hide it.                                                                                                                                                                                                                                                   |
-| `repairGuidance`             | `{}`    | Map the repairable watch ids `branch_out_of_date`, `merge_conflicts`, and `ci_failing` to trimmed guidance strings. Watch injects only matching actionable ids in the queued repair turn. Current-branch repair turns use global + trusted-project guidance; explicit `--url` repair turns use global guidance only. |
-
-`repairGuidance` keys must be exactly `branch_out_of_date`, `merge_conflicts`, or `ci_failing`. Aliases such as `checks_failing` and other canonical but non-repairable ids such as `review_pending` or `unresolved_conversations` are ignored in v1.
-
-Status-bar diagnostics are controlled only by `pi-merge-ready.enableStatusBarDiagnostics`. When diagnostics are enabled, `PI_MERGE_READY_DEBUG_DIR` overrides the log destination for the current process.
-
-### Watch UI
-
-Launch the local multi-watch UI with:
-
-```bash
-/merge-ready watch-ui
-```
-
-Stop the detached watch-ui supervisor with:
-
-```bash
-/merge-ready watch-ui stop
-```
-
-It starts or reuses a detached localhost supervisor, opens a browser when possible, and always reports a fallback URL. The stop command shuts down that detached supervisor and stops any active watches it owns.
-
-V1 notes:
-
-- watches are URL-targeted headless Pi SDK sessions backed by persisted Pi JSONL sessions
-- child watch sessions inherit the launching session's captured Pi runtime snapshot (agentDir, model, thinking level, and resolved auth); launch fails early if that runtime cannot be resolved safely
-- the UI polls a token-gated `127.0.0.1` API only; there is no hosted service
-- transcript inspection is read-only and uses the stored session file for the selected watch
-- supported watch controls are stop, restart, and remove; the UI also shows session id/path metadata for debugging and supportability
-- if the supervisor restarts, previously active watches are shown as stale rather than assumed ready
-
-### Agent tool
-
-Agents get a `merge_ready_status` tool:
+Agents receive a `merge_ready_status` tool:
 
 ```ts
 merge_ready_status({});
 merge_ready_status({ url: 'https://github.com/OWNER/REPO/pull/64' });
 ```
 
-Rules:
+The contract is small:
 
-- `state` plus `pr.lifecycle` tells you whether the PR is merge-ready
-- `openItems` is the authoritative blocker list
-- `openItems[].details[]` and detail URLs are provenance only
-- do not pass branch names, PR numbers, repo names, or inferred targets
+- `state` and `pr.lifecycle` describe the overall result
+- `openItems` is the only authoritative blocker list
+- `openItems[].details[]` and their URLs are supporting context
+- targets are either the current branch or one full GitHub PR URL
+- branch names, PR numbers, repo names, and inferred targets are not accepted
 
 Example response:
 
@@ -231,89 +138,109 @@ Example response:
     "baseRefName": "main"
   },
   "summary": "Required checks are failing",
-  "openItems": [{ "id": "ci_failing", "summary": "Required checks are failing" }],
+  "openItems": [
+    {
+      "id": "ci_failing",
+      "summary": "Required checks are failing",
+      "details": [
+        {
+          "label": "lint",
+          "status": "failing",
+          "url": "https://github.com/OWNER/REPO/actions/runs/123/jobs/456"
+        }
+      ]
+    }
+  ],
   "generatedAt": "2026-05-27T00:00:00.000Z"
 }
 ```
 
-`openItems[].details[]` rows are supporting provenance for an open item.
+The included `merge-ready-loop` skill handles requests such as "make this PR ready to merge." It works one returned blocker at a time, verifies local changes, and distinguishes local fixes from blockers GitHub has confirmed as cleared.
+
+## Configuration
+
+Configure the package in Pi's `settings.json`:
+
+- global: `~/.pi/agent/settings.json`
+- project: `.pi/settings.json` in a trusted project
 
 ```json
 {
-  "id": "ci_failing",
-  "summary": "Required checks are failing",
-  "details": [
-    {
-      "label": "lint",
-      "status": "failing",
-      "url": "https://github.com/OWNER/REPO/actions/runs/123/jobs/456"
+  "pi-merge-ready": {
+    "autoCompactRepair": true,
+    "cacheTTLSeconds": 60,
+    "enableStatusBarDiagnostics": false,
+    "cmux": {
+      "enabled": true
+    },
+    "repairGuidance": {
+      "ci_failing": "Start with the focused package test.",
+      "merge_conflicts": "Rebase onto main before changing unrelated files."
     }
-  ]
-}
-```
-
-Advanced notes:
-
-- The top-level `pr.url` is already the PR URL; do not treat it as a source link.
-- When `target.mode` is `"url"`, `pr.headRepository` is also returned so callers can verify whether the editable head repo matches the targeted PR repo before changing code:
-
-```json
-{
-  "headRepository": {
-    "owner": "fork-owner",
-    "repo": "fork-repo"
   }
 }
 ```
 
-- URL-targeted command results do not update the ambient status bar cache; the status bar remains current-branch only.
+| Option                       | Default | Description                                                                     |
+| ---------------------------- | ------- | ------------------------------------------------------------------------------- |
+| `autoCompactRepair`          | `true`  | Compact the conversation after a successful repair turn before polling resumes. |
+| `cacheTTLSeconds`            | `60`    | Cache the current-branch status bar result for this many seconds.               |
+| `enableStatusBarDiagnostics` | `false` | Write status refresh diagnostics as JSONL.                                      |
+| `cmux.enabled`               | `true`  | Publish current-branch status to an eligible cmux workspace.                    |
+| `repairGuidance`             | `{}`    | Add blocker-specific instructions to repair handoffs.                           |
 
-### Merge-ready loop skill
+`repairGuidance` accepts only `branch_out_of_date`, `merge_conflicts`, and `ci_failing`. Current-branch repairs combine global and trusted-project guidance. URL-targeted repairs use global guidance only.
 
-The package includes a `merge-ready-loop` skill for requests like "make this PR ready to merge".
+When diagnostics are enabled, `PI_MERGE_READY_DEBUG_DIR` overrides their destination for the current process.
 
-The skill:
+## Advanced
 
-- resolves the current branch or exact PR URL target
-- calls `merge_ready_status`
-- works only from the returned `openItems`
-- makes one small verified fix at a time
-- distinguishes "addressed locally" from "confirmed cleared by GitHub"
-- for watch-triggered URL repairs, uses the PR head repo/branch in an isolated worktree without mutating the ambient checkout
+### Experimental watch UI
 
-## Status states
+The local watch UI can run several exact-URL watches:
+
+```bash
+/merge-ready watch-ui
+/merge-ready watch-ui stop
+```
+
+After a successful launch, it opens a browser when possible and reports a token-gated localhost URL. It supports stop, restart, remove, and read-only transcript inspection. If its supervisor restarts, previously active watches appear as stale rather than ready.
+
+### Target and lifecycle details
+
+- Closed and merged PRs remain valid exact-URL targets and report their lifecycle.
+- URL-targeted results include `pr.headRepository` so agents can verify the editable head repo before changing code.
+- URL-targeted command results do not replace the current-branch status bar cache.
+- Required unresolved conversations block readiness; optional conversations remain context only.
+- Unknown conversation requirements produce `status_ambiguous`.
+- A generic `merge_blocked` item is omitted when a more specific blocker already explains the state.
+
+## Reference
+
+### Status states
 
 | State     | Meaning                                                         |
 | --------- | --------------------------------------------------------------- |
 | `ready`   | An open PR exists and no merge-readiness open items were found. |
 | `blocked` | A blocker requires action before merge.                         |
-| `pending` | Waiting on checks or required review.                           |
+| `pending` | Checks or required review are still pending.                    |
 | `unknown` | No PR was found, readiness is ambiguous, or the PR is terminal. |
 
-## Open item ids
+### Open item IDs
 
-| id                         | Meaning                                                         |
-| -------------------------- | --------------------------------------------------------------- |
-| `no_pull_request`          | No pull request was found for the branch or exact targeted URL. |
-| `status_ambiguous`         | Readiness could not be determined safely.                       |
-| `merge_conflicts`          | GitHub reports merge conflicts.                                 |
-| `branch_out_of_date`       | The branch is behind the base branch.                           |
-| `merge_blocked`            | GitHub reports a mergeability blocker.                          |
-| `draft`                    | The pull request is still a draft.                              |
-| `ci_failing`               | Required checks are failing.                                    |
-| `changes_requested`        | A reviewer requested changes.                                   |
-| `unresolved_conversations` | Required review conversations remain open.                      |
-| `ci_running`               | Required checks are still running.                              |
-| `review_pending`           | Required review is still pending.                               |
-
-Unresolved conversations are requirement-aware:
-
-- Required unresolved conversations block merge readiness.
-- Optional unresolved conversations remain in `signals`, but not in `openItems`.
-- Unknown conversation requirements produce `status_ambiguous`.
-- Generic `merge_blocked` is suppressed when a concrete blocker such as failing checks, draft state, required review, or required conversations already explains GitHub's blocked state.
-- Closed or merged PRs remain valid targets. They report `pr.lifecycle` plus lifecycle-aware summaries like `PR is closed` or `PR is already merged`.
-- URL-targeted command results do not update the ambient status bar cache; the status bar remains current-branch only.
+| ID                         | Meaning                                             |
+| -------------------------- | --------------------------------------------------- |
+| `no_pull_request`          | No pull request was found for the requested target. |
+| `status_ambiguous`         | Readiness could not be determined safely.           |
+| `merge_conflicts`          | GitHub reports merge conflicts.                     |
+| `branch_out_of_date`       | The branch is behind the base branch.               |
+| `merge_blocked`            | GitHub reports a mergeability blocker.              |
+| `draft`                    | The pull request is still a draft.                  |
+| `ci_failing`               | Required checks are failing.                        |
+| `changes_requested`        | A reviewer requested changes.                       |
+| `unresolved_conversations` | Required review conversations remain open.          |
+| `ci_running`               | Required checks are still running.                  |
+| `review_pending`           | Required review is still pending.                   |
 
 ## License
 
