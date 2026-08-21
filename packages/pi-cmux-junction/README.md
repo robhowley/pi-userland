@@ -29,11 +29,13 @@ New branches start from the repository's default branch.
 
 ## Detailed agent status
 
-Junction adds detailed and accurate live status updates to get quick insight into what your Pi agents are doing. Upgrade from the standard cmux Pi session hook to get better insights.
+Junction adds detailed and accurate live status updates to get quick insight into what your Pi agents are doing. It distinguishes input waits that need your attention from active work:
+
+<img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-cmux-junction/img/status-needs-input-comparison.png" alt="Junction reports Needs input while the standard cmux status reports Running" width="670">
+
+It also identifies the active tool instead of reporting only `Running`:
 
 <img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-cmux-junction/img/status-tool-running-comparison.png" alt="Junction reports Tool running: subagent while the standard cmux status reports Running" width="666">
-
-<img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-cmux-junction/img/status-thinking-comparison.png" alt="Junction reports Thinking while the standard cmux status still reports an earlier error" width="670">
 
 The pill reports:
 
