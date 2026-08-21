@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.13.0...pi-openrouter-v0.14.0) (2026-08-21)
+
+
+### Features
+
+* **pi-merge-ready:** add cmux attention notifications ([#178](https://github.com/robhowley/pi-userland/issues/178)) ([5eac358](https://github.com/robhowley/pi-userland/commit/5eac3584d0914d6dbee6fd75509e504c62c5da09))
+
 ## [0.13.0](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.12.1...pi-openrouter-v0.13.0) (2026-07-06)
 
 
