@@ -121,11 +121,12 @@ describe('writeLocalUsage', () => {
   });
 
   it('appends multiple events to same daily file', async () => {
+    const usageDate = addUtcDays(getCurrentUtcDate(), -1);
     const event1: LocalUsageEvent = {
       id: 'test-1',
       generationId: 'gen-1',
       sessionId: 'session-1',
-      completedAt: '2026-05-22T10:00:00.000Z',
+      completedAt: `${usageDate}T10:00:00.000Z`,
       cost: 0.001,
     };
 
@@ -133,14 +134,14 @@ describe('writeLocalUsage', () => {
       id: 'test-2',
       generationId: 'gen-2',
       sessionId: 'session-2',
-      completedAt: '2026-05-22T15:00:00.000Z',
+      completedAt: `${usageDate}T15:00:00.000Z`,
       cost: 0.002,
     };
 
     await writeLocalUsage(event1);
     await writeLocalUsage(event2);
 
-    const filePath = path.join(testDir, '2026-05-22.jsonl');
+    const filePath = path.join(testDir, `${usageDate}.jsonl`);
     const content = await fs.readFile(filePath, 'utf8');
     const lines = content.trim().split('\n');
 
@@ -150,11 +151,13 @@ describe('writeLocalUsage', () => {
   });
 
   it('writes to different files for different UTC dates', async () => {
+    const firstDate = addUtcDays(getCurrentUtcDate(), -2);
+    const secondDate = addUtcDays(firstDate, 1);
     const event1: LocalUsageEvent = {
       id: 'test-1',
       generationId: 'gen-1',
       sessionId: 'session-1',
-      completedAt: '2026-05-22T23:59:59.999Z',
+      completedAt: `${firstDate}T23:59:59.999Z`,
       cost: 0.001,
     };
 
@@ -162,15 +165,15 @@ describe('writeLocalUsage', () => {
       id: 'test-2',
       generationId: 'gen-2',
       sessionId: 'session-2',
-      completedAt: '2026-05-23T00:00:00.000Z',
+      completedAt: `${secondDate}T00:00:00.000Z`,
       cost: 0.002,
     };
 
     await writeLocalUsage(event1);
     await writeLocalUsage(event2);
 
-    const file1 = await fs.readFile(path.join(testDir, '2026-05-22.jsonl'), 'utf8');
-    const file2 = await fs.readFile(path.join(testDir, '2026-05-23.jsonl'), 'utf8');
+    const file1 = await fs.readFile(path.join(testDir, `${firstDate}.jsonl`), 'utf8');
+    const file2 = await fs.readFile(path.join(testDir, `${secondDate}.jsonl`), 'utf8');
 
     expect(JSON.parse(file1.trim())).toEqual(event1);
     expect(JSON.parse(file2.trim())).toEqual(event2);
