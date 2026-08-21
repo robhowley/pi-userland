@@ -3,6 +3,7 @@ import {
   createLifecycleState,
   deriveLifecycleSnapshot,
   LIFECYCLE_TIMINGS,
+  LIFECYCLE_UI_WAIT_KINDS,
   reduceLifecycle,
   sanitizeToolName,
   type LifecycleEvent,
@@ -393,7 +394,7 @@ describe('Junction lifecycle reducer', () => {
     expect(unknownEnd.accepted).toBe(false);
   });
 
-  it.each(['select', 'input', 'editor', 'confirm'] as const)('tracks explicit %s waits', (kind) => {
+  it.each(LIFECYCLE_UI_WAIT_KINDS)('tracks explicit %s waits', (kind) => {
     let state = freshState();
     const waitId = `junction-${kind}-1`;
     const started = reduce(state, { type: 'ui_wait_start', waitId, kind }, START + 1);
@@ -401,6 +402,18 @@ describe('Junction lifecycle reducer', () => {
 
     state = reduce(started.state, { type: 'ui_wait_end', waitId }, START + 2).state;
     expect(snapshotAt(state, START + 2).state).toBe('idle');
+  });
+
+  it('accepts custom waits explicitly', () => {
+    const state = freshState();
+    const started = reduce(
+      state,
+      { type: 'ui_wait_start', waitId: 'custom-1', kind: 'custom' },
+      START + 1,
+    );
+
+    expect(started.accepted).toBe(true);
+    expect(started.snapshot.state).toBe('awaiting-input');
   });
 
   it('fences compaction abort callbacks by generation and clears current completion in order', () => {

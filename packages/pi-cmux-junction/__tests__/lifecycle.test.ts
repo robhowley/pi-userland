@@ -10,6 +10,7 @@ import {
 } from '../extensions/cmux-junction/lifecycle.js';
 import {
   LIFECYCLE_TIMINGS,
+  LIFECYCLE_UI_WAIT_KINDS,
   type LifecycleEvent,
   type LifecycleSnapshot,
 } from '../extensions/cmux-junction/activity.js';
@@ -22,6 +23,7 @@ function context(overrides: Record<string, unknown> = {}) {
     input: vi.fn(async () => 'text'),
     editor: vi.fn(async () => 'edited'),
     confirm: vi.fn(async () => true),
+    custom: vi.fn(async () => 'custom-result'),
     notify: vi.fn(),
   };
   return {
@@ -441,6 +443,38 @@ describe('Pi lifecycle adapter', () => {
     }
   });
 
+  it('tracks a deferred custom wait through real settlement', async () => {
+    const h = harness();
+    let release!: (value: string) => void;
+    const originalCustom = vi.fn(function (_factory: unknown, _options: unknown) {
+      return new Promise<string>((resolve) => {
+        release = resolve;
+      });
+    });
+    (h.ctx.ui as any).custom = originalCustom;
+
+    await h.emit('session_start');
+    await h.emit('turn_start', { turnIndex: 0 });
+    await h.emit('turn_end', { turnIndex: 0 });
+    const factory = vi.fn();
+    const options = { overlay: true };
+    const customCall = (h.ctx.ui as any).custom(factory, options);
+    const states = () => h.snapshots.map((entry) => entry.snapshot?.state).filter(Boolean);
+
+    await vi.waitFor(() =>
+      expect(states()).toEqual(['idle', 'thinking', 'unknown', 'awaiting-input']),
+    );
+
+    release('custom-result');
+    await expect(customCall).resolves.toBe('custom-result');
+    await vi.waitFor(() =>
+      expect(states()).toEqual(['idle', 'thinking', 'unknown', 'awaiting-input', 'unknown']),
+    );
+
+    await h.emit('agent_settled');
+    expect(states()).toEqual(['idle', 'thinking', 'unknown', 'awaiting-input', 'unknown', 'idle']);
+  });
+
   it('starts a fresh turn-index fence for each prompt and compaction retry run', async () => {
     const h = harness();
     await h.emit('session_start');
@@ -636,7 +670,7 @@ describe('Pi lifecycle adapter', () => {
 });
 
 describe('UI wait wrappers', () => {
-  it.each(['select', 'input', 'editor', 'confirm'] as const)(
+  it.each(LIFECYCLE_UI_WAIT_KINDS)(
     'wraps %s with ordered start/end and restores the owned method',
     async (kind) => {
       const ui = context().ui as any;
@@ -647,7 +681,11 @@ describe('UI wait wrappers', () => {
       });
       const wrapper = ui[kind];
       expect(installUiWrappers(ui, async () => undefined)).toBe(installation);
-      await wrapper.call(ui, 'title', kind === 'confirm' ? 'message' : undefined);
+      const args =
+        kind === 'custom'
+          ? [vi.fn(), { overlay: true }]
+          : ['title', kind === 'confirm' ? 'message' : undefined];
+      await wrapper.call(ui, ...args);
       expect(calls.map((event) => event.type)).toEqual(['ui_wait_start', 'ui_wait_end']);
       expect(calls[0]).toMatchObject({
         type: 'ui_wait_start',
@@ -659,6 +697,46 @@ describe('UI wait wrappers', () => {
       expect(ui[kind]).toBe(original);
     },
   );
+
+  it('keeps a deferred custom wait open and restores the original method', async () => {
+    const ui = context().ui as any;
+    const factory = vi.fn();
+    const options = { overlay: true, overlayOptions: { width: 40 } };
+    const result = 'custom-result';
+    let release!: (value: string) => void;
+    const original = vi.fn(function (
+      this: unknown,
+      actualFactory: unknown,
+      actualOptions: unknown,
+    ) {
+      expect(this).toBe(ui);
+      expect(actualFactory).toBe(factory);
+      expect(actualOptions).toBe(options);
+      return new Promise<string>((resolve) => {
+        release = resolve;
+      });
+    });
+    ui.custom = original;
+    const calls: LifecycleEvent[] = [];
+    const installation = installUiWrappers(ui, async (event) => {
+      calls.push(event);
+    });
+
+    const pending = ui.custom(factory, options);
+    expect(calls).toEqual([{ type: 'ui_wait_start', waitId: 'junction-custom-1', kind: 'custom' }]);
+    expect(original).toHaveBeenCalledExactlyOnceWith(factory, options);
+    expect(calls).toHaveLength(1);
+
+    release(result);
+    await expect(pending).resolves.toBe(result);
+    expect(calls).toEqual([
+      { type: 'ui_wait_start', waitId: 'junction-custom-1', kind: 'custom' },
+      { type: 'ui_wait_end', waitId: 'junction-custom-1' },
+    ]);
+
+    restoreUiWrappers(ui, installation);
+    expect(ui.custom).toBe(original);
+  });
 
   it('ends waits in finally and does not overwrite a later wrapper during restoration', async () => {
     const ui = context().ui as any;

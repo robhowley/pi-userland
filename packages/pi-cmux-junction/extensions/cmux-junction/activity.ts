@@ -25,7 +25,8 @@ export type LifecycleActivityState =
 
 export type LifecycleTime = number | Date;
 export type LifecycleInputSource = 'interactive' | 'rpc' | 'extension';
-export type LifecycleUiWaitKind = 'select' | 'input' | 'editor' | 'confirm';
+export const LIFECYCLE_UI_WAIT_KINDS = ['select', 'input', 'editor', 'confirm', 'custom'] as const;
+export type LifecycleUiWaitKind = (typeof LIFECYCLE_UI_WAIT_KINDS)[number];
 export type LifecycleAssistantError = 'error' | 'aborted';
 export interface LifecycleCompaction {
   generation: number;
@@ -1003,7 +1004,7 @@ function isInputSource(value: unknown): value is LifecycleInputSource {
 }
 
 function isUiWaitKind(value: unknown): value is LifecycleUiWaitKind {
-  return value === 'select' || value === 'input' || value === 'editor' || value === 'confirm';
+  return typeof value === 'string' && LIFECYCLE_UI_WAIT_KINDS.some((kind) => kind === value);
 }
 
 function isTurnIndex(value: unknown): value is number {
