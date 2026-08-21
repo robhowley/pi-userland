@@ -14,8 +14,44 @@ type MergeReadyCmuxSetAction = {
 };
 type MergeReadyCmuxAction = MergeReadyCmuxSetAction | { kind: 'clear' };
 
+export type MergeReadyAttentionBucket =
+  | 'unknown'
+  | 'ready'
+  | 'waiting'
+  | 'action_required'
+  | 'quiet_blocked';
+
+type MergeReadyActionReason =
+  | 'merge_conflicts'
+  | 'branch_out_of_date'
+  | 'merge_blocked'
+  | 'ci_failing'
+  | 'changes_requested';
+
+type MergeReadyPullRequestIdentity = {
+  owner: string;
+  repo: string;
+  prNumber: number;
+};
+
+export type MergeReadyAttention =
+  | { bucket: 'unknown' }
+  | {
+      bucket: Exclude<MergeReadyAttentionBucket, 'unknown'>;
+      identity: MergeReadyPullRequestIdentity;
+      reason: MergeReadyActionReason | null;
+    };
+
+type MergeReadyNotification = {
+  title: 'Merge Ready';
+  subtitle: string;
+  body: string;
+};
+
 type MergeReadyCmuxPublisher = {
   enqueue: (action: MergeReadyCmuxAction) => void;
+  observeAttention: (status: MergeReadyStatus) => void;
+  observeUnknown: () => void;
   shutdown: () => Promise<void>;
 };
 
@@ -82,6 +118,55 @@ function encodeGitHubPathSegment(segment: string): string | null {
   }
 }
 
+const ACTION_REASON_PRECEDENCE: readonly MergeReadyActionReason[] = [
+  'merge_conflicts',
+  'branch_out_of_date',
+  'merge_blocked',
+  'ci_failing',
+  'changes_requested',
+];
+
+export function classifyMergeReadyAttention(status: MergeReadyStatus): MergeReadyAttention {
+  const pr = status.pr;
+  if (!pr || pr.lifecycle !== 'open') {
+    return { bucket: 'unknown' };
+  }
+
+  const { number, url } = pr;
+  if (!Number.isSafeInteger(number) || number <= 0) {
+    return { bucket: 'unknown' };
+  }
+
+  const target = parseGitHubPullRequestUrl(url);
+  if (!target || target.prNumber !== number) {
+    return { bucket: 'unknown' };
+  }
+
+  const ids = new Set(status.openItems.map((item) => item.id));
+  let bucket: Exclude<MergeReadyAttentionBucket, 'unknown'>;
+  let reason: MergeReadyActionReason | null = null;
+  if (ids.has('no_pull_request') || ids.has('status_ambiguous')) {
+    return { bucket: 'unknown' };
+  }
+
+  reason = ACTION_REASON_PRECEDENCE.find((candidate) => ids.has(candidate)) ?? null;
+  if (reason !== null) {
+    bucket = 'action_required';
+  } else if (ids.has('draft') || ids.has('unresolved_conversations')) {
+    bucket = 'quiet_blocked';
+  } else if (ids.has('ci_running') || ids.has('review_pending')) {
+    bucket = 'waiting';
+  } else {
+    bucket = 'ready';
+  }
+
+  return {
+    bucket,
+    identity: { owner: target.owner, repo: target.repo, prNumber: target.prNumber },
+    reason,
+  };
+}
+
 export function createMergeReadyCmuxPublisher(
   options: CreateMergeReadyCmuxPublisherOptions,
 ): MergeReadyCmuxPublisher | null {
@@ -101,7 +186,7 @@ export function createMergeReadyCmuxPublisher(
 
   const command = resolveCmuxCommand(env);
   const run = options.run ?? runCmuxProcess;
-  const transport = (action: MergeReadyCmuxAction) => {
+  const statusTransport = (action: MergeReadyCmuxAction) => {
     const args =
       action.kind === 'set'
         ? [
@@ -117,8 +202,26 @@ export function createMergeReadyCmuxPublisher(
         : ['--socket', socket, 'clear-status', CMUX_STATUS_KEY, '--workspace', workspace];
     return run(command, args, env);
   };
+  const notificationTransport = (notification: MergeReadyNotification) =>
+    run(
+      command,
+      [
+        '--socket',
+        socket,
+        'notify',
+        '--title',
+        notification.title,
+        '--subtitle',
+        notification.subtitle,
+        '--body',
+        notification.body,
+        '--workspace',
+        workspace,
+      ],
+      env,
+    );
 
-  return createSessionPublisher(transport);
+  return createSessionPublisher(statusTransport, notificationTransport);
 }
 
 export function createCmuxProcessRunner(
@@ -171,25 +274,68 @@ export function createCmuxProcessRunner(
 const runCmuxProcess = createCmuxProcessRunner();
 
 function createSessionPublisher(
-  transport: (action: MergeReadyCmuxAction) => Promise<void>,
+  statusTransport: (action: MergeReadyCmuxAction) => Promise<void>,
+  notificationTransport: (notification: MergeReadyNotification) => Promise<void>,
 ): MergeReadyCmuxPublisher {
-  let active: Promise<void> | null = null;
-  let pending: MergeReadyCmuxAction | null = null;
+  let activeStatus: Promise<void> | null = null;
+  let pendingStatus: MergeReadyCmuxAction | null = null;
   let lastRequested: string | null = null;
+  let attention: MergeReadyAttention | null = null;
+  let activeNotification: Promise<void> | null = null;
+  const pendingNotifications: MergeReadyNotification[] = [];
   let closed = false;
+  let shutdownPromise: Promise<void> | null = null;
 
-  const start = (action: MergeReadyCmuxAction) => {
-    active = Promise.resolve()
-      .then(() => transport(action))
+  const startStatus = (action: MergeReadyCmuxAction) => {
+    activeStatus = Promise.resolve()
+      .then(() => statusTransport(action))
       .catch(() => undefined)
       .then(() => {
-        active = null;
-        if (!closed && pending !== null) {
-          const next = pending;
-          pending = null;
-          start(next);
+        activeStatus = null;
+        if (!closed && pendingStatus !== null) {
+          const next = pendingStatus;
+          pendingStatus = null;
+          startStatus(next);
         }
       });
+  };
+
+  const startNotification = (notification: MergeReadyNotification) => {
+    activeNotification = Promise.resolve()
+      .then(() => notificationTransport(notification))
+      .catch(() => undefined)
+      .then(() => {
+        activeNotification = null;
+        if (!closed) {
+          const next = pendingNotifications.shift();
+          if (next !== undefined) {
+            startNotification(next);
+          }
+        }
+      });
+  };
+
+  const observe = (next: MergeReadyAttention) => {
+    if (closed) {
+      return;
+    }
+
+    const previous = attention;
+    attention = next;
+    if (previous === null || !samePullRequest(previous, next)) {
+      return;
+    }
+
+    const notification = createAttentionNotification(previous, next);
+    if (notification === null) {
+      return;
+    }
+
+    if (activeNotification === null) {
+      startNotification(notification);
+    } else {
+      pendingNotifications.push(notification);
+    }
   };
 
   return {
@@ -199,25 +345,91 @@ function createSessionPublisher(
       }
 
       lastRequested = serializeAction(action);
-      if (active === null) {
-        start(action);
+      if (activeStatus === null) {
+        startStatus(action);
       } else {
-        pending = action;
+        pendingStatus = action;
       }
     },
-    async shutdown() {
-      if (closed) {
-        return;
+    observeAttention(status) {
+      observe(classifyMergeReadyAttention(status));
+    },
+    observeUnknown() {
+      observe({ bucket: 'unknown' });
+    },
+    shutdown() {
+      if (shutdownPromise !== null) {
+        return shutdownPromise;
       }
 
       closed = true;
-      pending = null;
-      await active;
-      await Promise.resolve()
-        .then(() => transport({ kind: 'clear' }))
+      pendingStatus = null;
+      pendingNotifications.length = 0;
+      shutdownPromise = Promise.all([activeStatus, activeNotification])
+        .then(() => statusTransport({ kind: 'clear' }))
         .catch(() => undefined);
+      return shutdownPromise;
     },
   };
+}
+
+function samePullRequest(previous: MergeReadyAttention, next: MergeReadyAttention): boolean {
+  if (previous.bucket === 'unknown' || next.bucket === 'unknown') {
+    return true;
+  }
+
+  return (
+    previous.identity.owner === next.identity.owner &&
+    previous.identity.repo === next.identity.repo &&
+    previous.identity.prNumber === next.identity.prNumber
+  );
+}
+
+function createAttentionNotification(
+  previous: MergeReadyAttention,
+  next: MergeReadyAttention,
+): MergeReadyNotification | null {
+  if (previous.bucket === 'unknown' || next.bucket === 'unknown') {
+    return null;
+  }
+
+  const shouldNotify =
+    (previous.bucket === 'ready' && next.bucket === 'action_required') ||
+    (previous.bucket === 'waiting' &&
+      (next.bucket === 'ready' || next.bucket === 'action_required')) ||
+    (previous.bucket === 'action_required' && next.bucket === 'ready') ||
+    (previous.bucket === 'quiet_blocked' && next.bucket === 'ready');
+  if (!shouldNotify) {
+    return null;
+  }
+
+  const identity = `${next.identity.owner}/${next.identity.repo} PR #${String(next.identity.prNumber)}`;
+  return {
+    title: 'Merge Ready',
+    subtitle: identity,
+    body: `${identity} · ${notificationBody(next)}`,
+  };
+}
+
+function notificationBody(attention: Exclude<MergeReadyAttention, { bucket: 'unknown' }>): string {
+  if (attention.bucket === 'ready') {
+    return '✅ Ready to merge';
+  }
+
+  switch (attention.reason) {
+    case 'merge_conflicts':
+      return '❌ Merge conflicts need attention';
+    case 'branch_out_of_date':
+      return '🔄 Branch is out of date';
+    case 'merge_blocked':
+      return '❌ GitHub reports merge is blocked';
+    case 'ci_failing':
+      return '❌ Required checks are failing';
+    case 'changes_requested':
+      return '❌ Changes requested by reviewers';
+    default:
+      throw new Error('Action notification requires a reason');
+  }
 }
 
 function serializeAction(action: MergeReadyCmuxAction): string {

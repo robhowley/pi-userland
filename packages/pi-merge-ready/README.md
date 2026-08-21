@@ -51,6 +51,19 @@ When Pi runs in an eligible cmux workspace, the same current-branch status appea
 
 `PR #N` links to the pull request in GitHub. cmux publishing is enabled by default when available. Set `pi-merge-ready.cmux.enabled` to `false`, then reload Pi to hide it.
 
+### Attention notifications
+
+cmux sends a notification when the current-branch PR has an actionable merge-readiness change:
+
+| From    | To              |
+| ------- | --------------- |
+| Ready   | Action required |
+| Waiting | Ready           |
+| Waiting | Action required |
+| Blocked | Ready           |
+
+Action required means merge conflicts, an out-of-date branch, a generic merge block, failing required checks, or changes requested. Each notification body starts with `owner/repo PR #N` so the PR remains identifiable in cmux's Notifications panel.
+
 ### `/merge-ready`
 
 Inspect the current branch PR:
@@ -181,13 +194,13 @@ Configure the package in Pi's `settings.json`:
 }
 ```
 
-| Option                       | Default | Description                                                                     |
-| ---------------------------- | ------- | ------------------------------------------------------------------------------- |
-| `autoCompactRepair`          | `true`  | Compact the conversation after a successful repair turn before polling resumes. |
-| `cacheTTLSeconds`            | `60`    | Cache the current-branch status bar result for this many seconds.               |
-| `enableStatusBarDiagnostics` | `false` | Write status refresh diagnostics as JSONL.                                      |
-| `cmux.enabled`               | `true`  | Publish current-branch status to an eligible cmux workspace.                    |
-| `repairGuidance`             | `{}`    | Add blocker-specific instructions to repair handoffs.                           |
+| Option                       | Default | Description                                                                              |
+| ---------------------------- | ------- | ---------------------------------------------------------------------------------------- |
+| `autoCompactRepair`          | `true`  | Compact the conversation after a successful repair turn before polling resumes.          |
+| `cacheTTLSeconds`            | `60`    | Cache the current-branch status bar result for this many seconds.                        |
+| `enableStatusBarDiagnostics` | `false` | Write status refresh diagnostics as JSONL.                                               |
+| `cmux.enabled`               | `true`  | Publish current-branch status and attention notifications to an eligible cmux workspace. |
+| `repairGuidance`             | `{}`    | Add blocker-specific instructions to repair handoffs.                                    |
 
 `repairGuidance` accepts only `branch_out_of_date`, `merge_conflicts`, and `ci_failing`. Current-branch repairs combine global and trusted-project guidance. URL-targeted repairs use global guidance only.
 
