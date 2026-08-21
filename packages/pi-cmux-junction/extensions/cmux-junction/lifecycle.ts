@@ -9,6 +9,7 @@ import type {
 import { resolveCmuxTarget, type CmuxOptions } from './cmux.js';
 import {
   LIFECYCLE_TIMINGS,
+  LIFECYCLE_UI_WAIT_KINDS,
   createLifecycleState,
   deriveLifecycleSnapshot,
   reduceLifecycle,
@@ -70,8 +71,6 @@ interface UiInstallation {
   originals: Partial<Record<LifecycleUiWaitKind, UiMethod>>;
   wrappers: Partial<Record<LifecycleUiWaitKind, UiMethod>>;
 }
-
-const UI_METHODS: readonly LifecycleUiWaitKind[] = ['select', 'input', 'editor', 'confirm'];
 
 export function lifecycleEligibility(
   ctx: LifecycleContext,
@@ -473,7 +472,7 @@ export function installUiWrappers(
   const installation: UiInstallation = { originals: {}, wrappers: {} };
   let nextWait = 0;
 
-  for (const kind of UI_METHODS) {
+  for (const kind of LIFECYCLE_UI_WAIT_KINDS) {
     const original = target[kind] as unknown as UiMethod;
     installation.originals[kind] = original;
     const wrapper = async function (this: unknown, ...args: unknown[]) {
@@ -504,7 +503,7 @@ export function restoreUiWrappers(
   const target = ui as ExtensionUIContext & { [UI_INSTALLATION_KEY]?: UiInstallation };
   if (target[UI_INSTALLATION_KEY] !== installation) return;
   const methods = target as unknown as Record<string, unknown>;
-  for (const kind of UI_METHODS) {
+  for (const kind of LIFECYCLE_UI_WAIT_KINDS) {
     if (methods[kind] === installation.wrappers[kind]) {
       methods[kind] = installation.originals[kind];
     }
