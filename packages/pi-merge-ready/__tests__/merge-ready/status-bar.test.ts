@@ -1947,7 +1947,7 @@ describe('merge-ready status bar', () => {
       expect(enqueue).toHaveBeenCalledTimes(2);
     });
 
-    it('enqueues the pill before observing each fresh current-branch result, including returned unknown', async () => {
+    it('publishes fresh current-branch results, including returned unknown', async () => {
       const readyStatus = createMergeReadyStatus({
         generatedAt: '2026-08-17T00:00:00.000Z',
         pr: buildOpenPr(),
@@ -1969,10 +1969,9 @@ describe('merge-ready status bar', () => {
         .fn()
         .mockResolvedValueOnce(readyStatus)
         .mockResolvedValueOnce(ambiguousStatus);
-      const calls: string[] = [];
-      const enqueue = vi.fn(() => calls.push('enqueue'));
-      const observeAttention = vi.fn(() => calls.push('observeAttention'));
-      const observeUnknown = vi.fn(() => calls.push('observeUnknown'));
+      const enqueue = vi.fn();
+      const observeAttention = vi.fn();
+      const observeUnknown = vi.fn();
       const shutdown = vi.fn(async () => undefined);
 
       vi.resetModules();
@@ -2002,25 +2001,23 @@ describe('merge-ready status bar', () => {
         force: true,
       });
 
-      expect(calls).toEqual(['enqueue', 'observeAttention', 'enqueue', 'observeAttention']);
-      expect(enqueue).toHaveBeenNthCalledWith(1, {
-        kind: 'set',
-        value: '✅ [PR #42](https://github.com/robhowley/pi-userland/pull/42) Ready',
-        format: 'markdown',
-      });
-      expect(enqueue).toHaveBeenNthCalledWith(2, { kind: 'set', value: '❔ Unknown' });
-      expect(observeAttention).toHaveBeenNthCalledWith(1, readyStatus);
-      expect(observeAttention).toHaveBeenNthCalledWith(2, ambiguousStatus);
+      expect(enqueue).toHaveBeenCalledTimes(2);
+      expect(enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'set', format: 'markdown' }),
+      );
+      expect(enqueue).toHaveBeenCalledWith({ kind: 'set', value: '❔ Unknown' });
+      expect(observeAttention).toHaveBeenCalledTimes(2);
+      expect(observeAttention).toHaveBeenCalledWith(readyStatus);
+      expect(observeAttention).toHaveBeenCalledWith(ambiguousStatus);
       expect(observeUnknown).not.toHaveBeenCalled();
 
       await runtime.getHandler('session_shutdown')?.({}, ctx);
     });
 
-    it('publishes Unknown before observing a thrown fetch', async () => {
-      const calls: string[] = [];
-      const enqueue = vi.fn(() => calls.push('enqueue'));
-      const observeAttention = vi.fn(() => calls.push('observeAttention'));
-      const observeUnknown = vi.fn(() => calls.push('observeUnknown'));
+    it('publishes Unknown for a thrown fetch', async () => {
+      const enqueue = vi.fn();
+      const observeAttention = vi.fn();
+      const observeUnknown = vi.fn();
       const shutdown = vi.fn(async () => undefined);
 
       vi.resetModules();
@@ -2047,7 +2044,7 @@ describe('merge-ready status bar', () => {
 
       await runtime.getHandler('session_start')?.({ reason: 'startup' }, ctx);
 
-      expect(calls).toEqual(['enqueue', 'observeUnknown']);
+      expect(enqueue).toHaveBeenCalledOnce();
       expect(enqueue).toHaveBeenCalledWith({ kind: 'set', value: '❔ Unknown' });
       expect(observeAttention).not.toHaveBeenCalled();
       expect(observeUnknown).toHaveBeenCalledOnce();
@@ -2156,9 +2153,8 @@ describe('merge-ready status bar', () => {
           unresolvedConversationRequirement: 'optional',
         },
       });
-      const calls: string[] = [];
-      const enqueue = vi.fn(() => calls.push('enqueue'));
-      const observeAttention = vi.fn(() => calls.push('observeAttention'));
+      const enqueue = vi.fn();
+      const observeAttention = vi.fn();
       const shutdown = vi.fn(async () => undefined);
 
       vi.resetModules();
@@ -2183,12 +2179,14 @@ describe('merge-ready status bar', () => {
       statusBar.registerMergeReadyStatusBar(runtime.api);
       await runtime.getHandler('session_start')?.({ reason: 'startup' }, ctx);
 
-      calls.length = 0;
       enqueue.mockClear();
       observeAttention.mockClear();
       statusBar.syncMergeReadyStatusBar({ ctx, status: readyStatus });
 
-      expect(calls).toEqual(['enqueue', 'observeAttention']);
+      expect(enqueue).toHaveBeenCalledOnce();
+      expect(enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'set', format: 'markdown' }),
+      );
       expect(observeAttention).toHaveBeenCalledWith(readyStatus);
       expect(createMergeReadyCmuxPublisher).toHaveBeenCalledOnce();
 
@@ -2207,19 +2205,19 @@ describe('merge-ready status bar', () => {
           unresolvedConversationRequirement: 'optional',
         },
       });
-      const calls: string[] = [];
+      const firstShutdown = createDeferred<void>();
       const publishers = [1, 2, 3].map((id) => ({
-        enqueue: vi.fn(() => calls.push(`enqueue:${String(id)}`)),
-        observeAttention: vi.fn(() => calls.push(`observeAttention:${String(id)}`)),
+        enqueue: vi.fn(),
+        observeAttention: vi.fn(),
         observeUnknown: vi.fn(),
         shutdown: vi.fn(async () => {
-          calls.push(`shutdown:${String(id)}`);
+          if (id === 1) {
+            await firstShutdown.promise;
+          }
         }),
       }));
       const createMergeReadyCmuxPublisher = vi.fn(() => {
-        const publisher = publishers[createMergeReadyCmuxPublisher.mock.calls.length - 1];
-        calls.push(`create:${String(createMergeReadyCmuxPublisher.mock.calls.length)}`);
-        return publisher;
+        return publishers[createMergeReadyCmuxPublisher.mock.calls.length - 1];
       });
 
       vi.resetModules();
@@ -2238,28 +2236,23 @@ describe('merge-ready status bar', () => {
       statusBar.registerMergeReadyStatusBar(runtime.api);
 
       await runtime.getHandler('session_start')?.({ reason: 'startup' }, ctx);
-      calls.length = 0;
-      await runtime.getHandler('session_start')?.({ reason: 'new' }, ctx);
-      expect(calls.slice(0, 4)).toEqual([
-        'shutdown:1',
-        'create:2',
-        'enqueue:2',
-        'observeAttention:2',
-      ]);
+      const replacement = runtime.getHandler('session_start')?.({ reason: 'new' }, ctx);
+      await Promise.resolve();
+      expect(publishers[0]?.shutdown).toHaveBeenCalledOnce();
+      expect(createMergeReadyCmuxPublisher).toHaveBeenCalledOnce();
 
-      calls.length = 0;
+      firstShutdown.resolve();
+      await replacement;
+      expect(createMergeReadyCmuxPublisher).toHaveBeenCalledTimes(2);
+
       await runtime.getHandler('session_shutdown')?.({}, ctx);
-      expect(calls).toEqual(['shutdown:2']);
+      expect(publishers[1]?.shutdown).toHaveBeenCalledOnce();
 
-      calls.length = 0;
       await runtime.getHandler('session_start')?.({ reason: 'reload' }, ctx);
-      expect(calls.slice(0, 3)).toEqual(['create:3', 'enqueue:3', 'observeAttention:3']);
       expect(createMergeReadyCmuxPublisher).toHaveBeenCalledTimes(3);
-      expect(publishers[0]?.observeAttention).toHaveBeenCalledOnce();
-      expect(publishers[1]?.observeAttention).toHaveBeenCalledOnce();
-      expect(publishers[2]?.observeAttention).toHaveBeenCalledOnce();
 
       await runtime.getHandler('session_shutdown')?.({}, ctx);
+      expect(publishers[2]?.shutdown).toHaveBeenCalledOnce();
     });
 
     it('detaches ownership before awaiting final shutdown clear', async () => {

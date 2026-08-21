@@ -126,29 +126,14 @@ const ACTION_REASON_PRECEDENCE: readonly MergeReadyActionReason[] = [
   'changes_requested',
 ];
 
-const KNOWN_OPEN_ITEM_IDS = new Set([
-  'no_pull_request',
-  'status_ambiguous',
-  ...ACTION_REASON_PRECEDENCE,
-  'draft',
-  'unresolved_conversations',
-  'ci_running',
-  'review_pending',
-]);
-
 export function classifyMergeReadyAttention(status: MergeReadyStatus): MergeReadyAttention {
-  if (!isRecord(status) || !Array.isArray(status.openItems) || !isRecord(status.pr)) {
-    return { bucket: 'unknown' };
-  }
-
   const pr = status.pr;
-  if (pr['lifecycle'] !== 'open') {
+  if (!pr || pr.lifecycle !== 'open') {
     return { bucket: 'unknown' };
   }
 
-  const number = pr['number'];
-  const url = pr['url'];
-  if (!Number.isSafeInteger(number) || (number as number) <= 0 || typeof url !== 'string') {
+  const { number, url } = pr;
+  if (!Number.isSafeInteger(number) || number <= 0) {
     return { bucket: 'unknown' };
   }
 
@@ -157,14 +142,7 @@ export function classifyMergeReadyAttention(status: MergeReadyStatus): MergeRead
     return { bucket: 'unknown' };
   }
 
-  const ids = new Set<string>();
-  for (const item of status.openItems) {
-    if (!isRecord(item) || typeof item['id'] !== 'string' || !KNOWN_OPEN_ITEM_IDS.has(item['id'])) {
-      return { bucket: 'unknown' };
-    }
-    ids.add(item['id']);
-  }
-
+  const ids = new Set(status.openItems.map((item) => item.id));
   let bucket: Exclude<MergeReadyAttentionBucket, 'unknown'>;
   let reason: MergeReadyActionReason | null = null;
   if (ids.has('no_pull_request') || ids.has('status_ambiguous')) {
@@ -180,11 +158,6 @@ export function classifyMergeReadyAttention(status: MergeReadyStatus): MergeRead
     bucket = 'waiting';
   } else {
     bucket = 'ready';
-  }
-
-  const expectedState = bucket === 'ready' ? 'ready' : bucket === 'waiting' ? 'pending' : 'blocked';
-  if (status.state !== expectedState) {
-    return { bucket: 'unknown' };
   }
 
   return {

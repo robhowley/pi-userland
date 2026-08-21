@@ -605,7 +605,6 @@ describe('merge-ready cmux status', () => {
 
     it.each([
       ['no PR', createMergeReadyStatus({ generatedAt: '2026-08-17T00:00:00.000Z', pr: null })],
-      ['malformed status', null as unknown as MergeReadyStatus],
       [
         'malformed PR URL',
         createStatusWithItems([], { url: 'https://github.com/owner/repo/pull/nope' }),
@@ -616,17 +615,6 @@ describe('merge-ready cmux status', () => {
       ],
       ['closed PR', createStatusWithItems([], { lifecycle: 'closed' })],
       ['merged PR', createStatusWithItems([], { lifecycle: 'merged' })],
-      [
-        'unknown open item',
-        {
-          ...createStatusWithItems([]),
-          openItems: [{ id: 'new_blocker', summary: 'New blocker' }],
-        } as unknown as MergeReadyStatus,
-      ],
-      [
-        'inconsistent public state',
-        { ...createStatusWithItems(['ci_failing']), state: 'ready' } as MergeReadyStatus,
-      ],
     ])('maps %s to unknown', (_name, status) => {
       expect(classifyMergeReadyAttention(status).bucket).toBe('unknown');
     });
