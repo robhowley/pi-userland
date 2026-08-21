@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/robhowley/pi-userland/compare/pi-cmux-junction-v0.2.0...pi-cmux-junction-v0.2.1) (2026-08-21)
+
+
+### Bug Fixes
+
+* **pi-cmux-junction:** track custom UI waits ([#180](https://github.com/robhowley/pi-userland/issues/180)) ([a943d14](https://github.com/robhowley/pi-userland/commit/a943d14de05baa4b32b4f391c912125b2cf81167))
+
 ## [0.2.0](https://github.com/robhowley/pi-userland/compare/pi-cmux-junction-v0.1.0...pi-cmux-junction-v0.2.0) (2026-08-20)
 
 
