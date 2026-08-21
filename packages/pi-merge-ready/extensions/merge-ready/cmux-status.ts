@@ -403,10 +403,11 @@ function createAttentionNotification(
     return null;
   }
 
+  const identity = `${next.identity.owner}/${next.identity.repo} PR #${String(next.identity.prNumber)}`;
   return {
     title: 'Merge Ready',
-    subtitle: `${next.identity.owner}/${next.identity.repo} PR #${String(next.identity.prNumber)}`,
-    body: notificationBody(next),
+    subtitle: identity,
+    body: `${identity} · ${notificationBody(next)}`,
   };
 }
 

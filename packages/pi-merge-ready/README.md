@@ -62,7 +62,7 @@ cmux sends a notification when the current-branch PR has an actionable merge-rea
 | Waiting | Action required |
 | Blocked | Ready           |
 
-Action required means merge conflicts, an out-of-date branch, a generic merge block, failing required checks, or changes requested.
+Action required means merge conflicts, an out-of-date branch, a generic merge block, failing required checks, or changes requested. Each notification body starts with `owner/repo PR #N` so the PR remains identifiable in cmux's Notifications panel.
 
 ### `/merge-ready`
 

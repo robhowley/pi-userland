@@ -733,7 +733,7 @@ describe('merge-ready cmux status', () => {
           '--subtitle',
           'robhowley/pi-userland PR #170',
           '--body',
-          body,
+          `robhowley/pi-userland PR #170 · ${body}`,
           '--workspace',
           'workspace:1',
         ]);
@@ -753,7 +753,7 @@ describe('merge-ready cmux status', () => {
         '--subtitle',
         'robhowley/pi-userland PR #170',
         '--body',
-        '✅ Ready to merge',
+        'robhowley/pi-userland PR #170 · ✅ Ready to merge',
         '--workspace',
         'workspace:1',
       ]);
@@ -773,8 +773,8 @@ describe('merge-ready cmux status', () => {
 
       expect(notificationCalls(run)).toHaveLength(2);
       expect(notificationCalls(run).map(([, args]) => args[8])).toEqual([
-        '❌ Required checks are failing',
-        '✅ Ready to merge',
+        'robhowley/pi-userland PR #171 · ❌ Required checks are failing',
+        'robhowley/pi-userland PR #171 · ✅ Ready to merge',
       ]);
     });
 
@@ -847,7 +847,9 @@ describe('merge-ready cmux status', () => {
 
       publisher.observeAttention(createAttentionStatus('waiting'));
       publisher.observeAttention(createAttentionStatus('ready'));
-      await vi.waitFor(() => expect(bodies).toEqual(['✅ Ready to merge']));
+      await vi.waitFor(() =>
+        expect(bodies).toEqual(['robhowley/pi-userland PR #170 · ✅ Ready to merge']),
+      );
       publisher.observeAttention(createAttentionStatus('action_required'));
       publisher.observeAttention(createAttentionStatus('ready'));
       releaseFirst();
@@ -855,9 +857,9 @@ describe('merge-ready cmux status', () => {
       await publisher.shutdown();
 
       expect(bodies).toEqual([
-        '✅ Ready to merge',
-        '❌ Required checks are failing',
-        '✅ Ready to merge',
+        'robhowley/pi-userland PR #170 · ✅ Ready to merge',
+        'robhowley/pi-userland PR #170 · ❌ Required checks are failing',
+        'robhowley/pi-userland PR #170 · ✅ Ready to merge',
       ]);
     });
 
