@@ -14,8 +14,11 @@ From Pi running inside cmux in a Git repository:
 
 ```text
 /junction --branch feature/example
-/junction fork --branch feature/example
+/junction --branch feature/example --from HEAD
+/junction fork --branch feature/example --from HEAD
 ```
+
+The grammar is strict. `--from` is optional and must be the final flag with one commit-ish value. The accepted forms are `/junction --branch B [--from C]` and `/junction fork --branch B [--from C]`.
 
 Junction creates or reuses the branch's worktree, opens it in a new cmux workspace, and keeps your current workspace focused.
 
@@ -25,7 +28,19 @@ New sessions open in the same directory in the new worktree. If that directory i
 
 New sessions use the same effective Pi config directory as the Pi running Junction.
 
-New branches start from the repository's default branch.
+Without `--from`, new branches start from the repository's default branch. With `--from C`, Junction resolves C to a commit while planning, records its full SHA, and creates the new branch from that pinned commit. `--from HEAD` means the commit currently checked out in the repository containing the current cwd. Detached `HEAD` is valid.
+
+`--from` uses committed Git state only. Staged, unstaged, untracked, and ignored files are not copied. A nested cwd uses the `HEAD` of the repository that contains that cwd; a nested repository or submodule has its own `HEAD`.
+
+Explicit `--from` creates are creation-only: an existing target branch, exact worktree, path collision, attached branch, or prunable worktree is an error. Junction does not reset, adopt, force, or repair an existing worktree.
+
+Successful explicit creates report the source and pinned commit:
+
+```text
+From: HEAD -> 0123456789abcdef...
+```
+
+If cmux definitely fails after an explicit create, Junction verifies the retained worktree's path, branch, and `HEAD` before suggesting a retry. Only a passing proof gets a mode-preserving retry without `--from`. Failed or unavailable proof, and unknown cmux launch outcomes, are inspection-only; inspect Git/cmux state before retrying.
 
 ## Detailed agent status
 

@@ -9,18 +9,21 @@ import {
   type CmuxOptions,
 } from './cmux.js';
 import type { ProcessRunner } from './process.js';
+import * as worktreeApi from './worktree.js';
 import {
   applyWorktreePlan,
   planWorktree,
   type WorktreeOptions,
+  type WorktreePlan,
   type WorktreeSuccess,
 } from './worktree.js';
 
 export const JUNCTION_COMMAND = 'junction';
 const FORK_SUBCOMMAND = 'fork';
 const BRANCH_FLAG = '--branch';
-const FRESH_USAGE = `Usage: /junction ${BRANCH_FLAG} <name>`;
-const FORK_USAGE = `Usage: /junction ${FORK_SUBCOMMAND} ${BRANCH_FLAG} <name>`;
+const FROM_FLAG = '--from';
+const FRESH_USAGE = `Usage: /junction ${BRANCH_FLAG} <name> [${FROM_FLAG} <commit-ish>]`;
+const FORK_USAGE = `Usage: /junction ${FORK_SUBCOMMAND} ${BRANCH_FLAG} <name> [${FROM_FLAG} <commit-ish>]`;
 const USAGE = FRESH_USAGE;
 
 export interface JunctionSessionContext {
@@ -30,16 +33,40 @@ export interface JunctionSessionContext {
   };
 }
 
+type JunctionPlanner = (
+  cwd: string,
+  branch: string,
+  options: WorktreeOptions,
+  from?: string,
+) => ReturnType<typeof planWorktree>;
+
+export type RetainedWorktreeProofResult = { ok: true } | { ok: false; message: string };
+
+/**
+ * Read-only proof that an explicit create retained the exact path, branch, and pinned commit.
+ * The core worktree implementation owns the Git checks; the command only gates retry guidance.
+ */
+export type RetainedWorktreeProof = (
+  plan: WorktreePlan,
+  options: WorktreeOptions,
+) => Promise<RetainedWorktreeProofResult>;
+
+interface JunctionFromReport {
+  input: string;
+  sha: string;
+}
+
 export interface JunctionCommandOptions {
   runner?: ProcessRunner;
   env?: NodeJS.ProcessEnv;
   homeDir?: string;
   lockRoot?: string;
   timeoutMs?: number;
-  plan?: typeof planWorktree;
+  plan?: JunctionPlanner;
   preflight?: typeof preflightCmux;
   apply?: typeof applyWorktreePlan;
   launch?: typeof launchCmuxWorkspace;
+  proveRetained?: RetainedWorktreeProof;
 }
 
 export type JunctionResult =
@@ -49,6 +76,7 @@ export type JunctionResult =
       worktree: WorktreeSuccess;
       launchCwd: string;
       launchCwdWarning?: string;
+      from?: JunctionFromReport;
     }
   | { ok: false; status: 'invalid-command'; message: string }
   | { ok: false; status: 'source-session-failed'; message: string }
@@ -80,7 +108,8 @@ export function registerJunctionCommand(
   options: JunctionCommandOptions = {},
 ): void {
   pi.registerCommand(JUNCTION_COMMAND, {
-    description: 'Create or reuse a branch worktree and launch Pi in a new cmux workspace',
+    description:
+      'Create or reuse a branch worktree from a committed Git ref and launch Pi in a new cmux workspace',
     getArgumentCompletions: getJunctionArgumentCompletions,
     handler: async (args, ctx) => {
       const result = await runJunctionCommand(args, ctx.cwd, options, ctx);
@@ -99,35 +128,82 @@ const FORK_COMPLETION = {
   label: FORK_SUBCOMMAND,
   description: 'Fork the current persisted session',
 };
+const FROM_COMPLETION = {
+  value: FROM_FLAG,
+  label: FROM_FLAG,
+  description: 'Create from a committed Git ref; working-tree changes are not copied',
+};
+const HEAD_COMPLETION = {
+  value: 'HEAD',
+  label: 'HEAD',
+  description:
+    'Current committed commit; staged, unstaged, untracked, and ignored changes are not copied',
+};
 
 export function getJunctionArgumentCompletions(prefix: string) {
-  const trimmedPrefix = prefix.trimStart();
-  if (trimmedPrefix.length === 0) {
+  const input = prefix.trimStart();
+  if (input.length === 0) {
     return [FORK_COMPLETION, BRANCH_COMPLETION];
   }
 
-  const forkArguments = trimmedPrefix.match(/^fork(?:\s+)(.*)$/u);
-  if (forkArguments !== null) {
-    const branchPrefix = forkArguments[1] ?? '';
-    if (branchPrefix.trim().length === 0) {
-      return [BRANCH_COMPLETION];
-    }
-    return BRANCH_FLAG.startsWith(branchPrefix) && !/\s$/u.test(branchPrefix)
-      ? [BRANCH_COMPLETION]
+  const trailingWhitespace = /\s$/u.test(input);
+  const tokens = input.trim().split(/\s+/u);
+  const mode = tokens[0] === FORK_SUBCOMMAND ? 'fork' : 'fresh';
+  const argumentsStart = mode === 'fork' ? 1 : 0;
+
+  if (mode === 'fresh' && tokens[0] !== undefined && !tokens[0].startsWith('-')) {
+    return FORK_SUBCOMMAND.startsWith(tokens[0]) && !trailingWhitespace && tokens.length === 1
+      ? [FORK_COMPLETION]
       : null;
   }
-  if (FORK_SUBCOMMAND.startsWith(trimmedPrefix) && !trimmedPrefix.includes(' ')) {
-    return [FORK_COMPLETION];
-  }
-  if (BRANCH_FLAG.startsWith(trimmedPrefix) && !/\s$/u.test(trimmedPrefix)) {
+  if (mode === 'fork' && tokens.length === 1 && trailingWhitespace) {
     return [BRANCH_COMPLETION];
+  }
+  if (mode === 'fork' && tokens.length === 1) {
+    return FORK_SUBCOMMAND.startsWith(tokens[0] ?? '') ? [FORK_COMPLETION] : null;
+  }
+
+  const argumentTokens = tokens.slice(argumentsStart);
+  if (argumentTokens.length === 0) {
+    return [BRANCH_COMPLETION];
+  }
+  if (argumentTokens.length === 1) {
+    const token = argumentTokens[0] ?? '';
+    return BRANCH_FLAG.startsWith(token) && !trailingWhitespace ? [BRANCH_COMPLETION] : null;
+  }
+  if (argumentTokens[0] !== BRANCH_FLAG) {
+    return null;
+  }
+  if (argumentTokens[1]?.startsWith('--')) {
+    return null;
+  }
+  if (argumentTokens.length === 2) {
+    if (trailingWhitespace) {
+      return [FROM_COMPLETION];
+    }
+    return null;
+  }
+
+  const afterBranch = argumentTokens.slice(2);
+  if (afterBranch.length === 1) {
+    const token = afterBranch[0] ?? '';
+    if (token === FROM_FLAG && trailingWhitespace) {
+      return [HEAD_COMPLETION];
+    }
+    return FROM_FLAG.startsWith(token) && !trailingWhitespace ? [FROM_COMPLETION] : null;
+  }
+  if (afterBranch[0] !== FROM_FLAG) {
+    return null;
+  }
+  if (afterBranch.length === 2 && !trailingWhitespace) {
+    return 'HEAD'.startsWith(afterBranch[1] ?? '') ? [HEAD_COMPLETION] : null;
   }
   return null;
 }
 
 export type JunctionParseResult =
-  | { ok: true; branch: string }
-  | { ok: true; mode: 'fork'; branch: string }
+  | { ok: true; branch: string; from?: string }
+  | { ok: true; mode: 'fork'; branch: string; from?: string }
   | { ok: false; message: string };
 
 export function parseJunctionArgs(args: string): JunctionParseResult {
@@ -145,17 +221,23 @@ function parseBranchArgs(tokens: string[], usage: string, fork: boolean): Juncti
   if (tokens[0] !== BRANCH_FLAG) {
     return { ok: false, message: `Only ${BRANCH_FLAG} <name> is supported. ${usage}` };
   }
-  if (
-    tokens.length !== 2 ||
-    tokens[1] === undefined ||
-    tokens[1].trim().length === 0 ||
-    tokens[1].startsWith('--')
-  ) {
+
+  const branch = tokens[1];
+  if (branch === undefined || branch.length === 0 || branch.startsWith('--')) {
     return { ok: false, message: `Expected exactly one branch and no other arguments. ${usage}` };
   }
-  return fork
-    ? { ok: true, mode: 'fork', branch: tokens[1].trim() }
-    : { ok: true, branch: tokens[1].trim() };
+  if (tokens.length === 2) {
+    return fork ? { ok: true, mode: 'fork', branch } : { ok: true, branch };
+  }
+  if (tokens[2] !== FROM_FLAG) {
+    return { ok: false, message: `Expected ${FROM_FLAG} after the branch. ${usage}` };
+  }
+
+  const from = tokens[3];
+  if (from === undefined || from.length === 0 || from.startsWith('--') || tokens.length !== 4) {
+    return { ok: false, message: `Expected one commit-ish after ${FROM_FLAG}. ${usage}` };
+  }
+  return fork ? { ok: true, mode: 'fork', branch, from } : { ok: true, branch, from };
 }
 
 export async function runJunctionCommand(
@@ -180,7 +262,12 @@ export async function runJunctionCommand(
   }
 
   const worktreeOptions = buildWorktreeOptions(options);
-  const plan = await (options.plan ?? planWorktree)(cwd, parsed.branch, worktreeOptions);
+  const plan = await (options.plan ?? planWorktree)(
+    cwd,
+    parsed.branch,
+    worktreeOptions,
+    parsed.from,
+  );
   if (!plan.ok) {
     return { ok: false, status: 'planning-failed', message: plan.message };
   }
@@ -216,6 +303,7 @@ export async function runJunctionCommand(
   }
 
   const launchCwd = await chooseLaunchCwd(worktree.path, relativeCwd);
+  const fromReport = getExplicitFromReport(parsed.from, plan, worktree);
   const launch =
     recipe === undefined
       ? await (options.launch ?? launchCmuxWorkspace)(worktree.branch, launchCwd.path, cmuxOptions)
@@ -238,10 +326,40 @@ export async function runJunctionCommand(
         message: `Worktree retained, but cmux launch status is unknown: ${launch.message}\nBranch: ${worktree.branch}\nPath: ${worktree.path}\nLaunch cwd: ${launchCwd.path}\nThe workspace may exist; inspect cmux before taking further action.`,
       };
     }
+
     const retry =
       mode === 'fork'
         ? `/junction ${FORK_SUBCOMMAND} ${BRANCH_FLAG} ${worktree.branch}`
         : `/junction ${BRANCH_FLAG} ${worktree.branch}`;
+    if (parsed.from !== undefined) {
+      const proof = await proveExplicitRetention(plan, worktreeOptions, options.proveRetained);
+      const sourceLine =
+        fromReport === undefined ? '' : `\nFrom: ${fromReport.input} -> ${fromReport.sha}`;
+      if (proof.ok && fromReport !== undefined) {
+        return {
+          ok: false,
+          status: 'partial-launch-failed',
+          branch: worktree.branch,
+          path: worktree.path,
+          launchCwd: launchCwd.path,
+          worktreeRetained: true,
+          message: `Worktree retained after cmux launch failed: ${launch.message}\nBranch: ${worktree.branch}\nPath: ${worktree.path}\nLaunch cwd: ${launchCwd.path}${sourceLine}\nRetry: ${retry}`,
+        };
+      }
+      const proofDetail = proof.ok
+        ? 'the pinned commit was not available for reporting'
+        : proof.message;
+      return {
+        ok: false,
+        status: 'partial-launch-failed',
+        branch: worktree.branch,
+        path: worktree.path,
+        launchCwd: launchCwd.path,
+        worktreeRetained: true,
+        message: `Worktree retained after cmux launch failed: ${launch.message}\nBranch: ${worktree.branch}\nPath: ${worktree.path}\nLaunch cwd: ${launchCwd.path}${sourceLine}\nRetained-state proof did not pass (${proofDetail}); inspect Git state before retrying.`,
+      };
+    }
+
     return {
       ok: false,
       status: 'partial-launch-failed',
@@ -258,12 +376,80 @@ export async function runJunctionCommand(
     status: worktree.status === 'created' ? 'created-and-launched' : 'reused-and-launched',
     worktree,
     launchCwd: launchCwd.path,
+    ...(fromReport === undefined ? {} : { from: fromReport }),
     ...(launchCwd.fellBack
       ? {
           launchCwdWarning: `Could not preserve "${relativeCwd}" because it is absent or unsafe in the target worktree; launched at the worktree root.`,
         }
       : {}),
   };
+}
+
+interface WorktreeBaseShape {
+  kind?: unknown;
+  baseSha?: unknown;
+}
+
+function getExplicitFromReport(
+  input: string | undefined,
+  plan: WorktreePlan,
+  worktree: WorktreeSuccess,
+): JunctionFromReport | undefined {
+  if (input === undefined || worktree.status !== 'created') {
+    return undefined;
+  }
+
+  const planShape = plan as WorktreeBaseShape;
+  const worktreeShape = worktree as WorktreeBaseShape;
+  if (
+    (planShape.kind !== undefined && planShape.kind !== 'create-explicit') ||
+    (worktreeShape.kind !== undefined && worktreeShape.kind !== 'create-explicit')
+  ) {
+    return undefined;
+  }
+
+  const sha =
+    typeof worktreeShape.baseSha === 'string'
+      ? worktreeShape.baseSha
+      : typeof planShape.baseSha === 'string'
+        ? planShape.baseSha
+        : '';
+  return sha.length === 0 ? undefined : { input, sha };
+}
+
+interface WorktreeModuleWithProof {
+  proveRetainedWorktree?: RetainedWorktreeProof;
+}
+
+async function proveExplicitRetention(
+  plan: WorktreePlan,
+  options: WorktreeOptions,
+  injected: RetainedWorktreeProof | undefined,
+): Promise<RetainedWorktreeProofResult> {
+  const proof = injected ?? (worktreeApi as WorktreeModuleWithProof).proveRetainedWorktree;
+  if (proof === undefined) {
+    return { ok: false, message: 'retained-state proof is unavailable' };
+  }
+
+  try {
+    const result: unknown = await proof(plan, options);
+    if (
+      result === true ||
+      (typeof result === 'object' && result !== null && 'ok' in result && result.ok === true)
+    ) {
+      return { ok: true };
+    }
+    return {
+      ok: false,
+      message:
+        typeof result === 'object' && result !== null && 'message' in result
+          ? String(result.message)
+          : 'retained-state proof failed',
+    };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return { ok: false, message: `retained-state proof could not run: ${detail}` };
+  }
 }
 
 interface ForkSourceSuccess {
@@ -381,8 +567,10 @@ function notifyResult(ctx: ExtensionCommandContext, result: JunctionResult): voi
     .filter((warning) => warning !== undefined)
     .map((warning) => `\nWarning: ${warning}`)
     .join('');
+  const from =
+    result.from === undefined ? '' : `\nFrom: ${result.from.input} -> ${result.from.sha}`;
   ctx.ui.notify(
-    `${verb} worktree and launched cmux workspace.\nBranch: ${result.worktree.branch}\nPath: ${result.worktree.path}\nLaunch cwd: ${result.launchCwd}${warnings}`,
+    `${verb} worktree and launched cmux workspace.\nBranch: ${result.worktree.branch}\nPath: ${result.worktree.path}\nLaunch cwd: ${result.launchCwd}${from}${warnings}`,
     'info',
   );
 }
