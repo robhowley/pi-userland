@@ -490,7 +490,10 @@ function notifyResult(ctx: ExtensionCommandContext, result: JunctionResult): voi
   }
 
   const verb = result.worktree.status === 'created' ? 'Created' : 'Reused';
-  const warnings = [result.worktree.warning, result.launchCwdWarning]
+  const warnings = [
+    result.worktree.kind === 'checkout' ? undefined : result.worktree.warning,
+    result.launchCwdWarning,
+  ]
     .filter((warning) => warning !== undefined)
     .map((warning) => `\nWarning: ${warning}`)
     .join('');
