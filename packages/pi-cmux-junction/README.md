@@ -19,17 +19,17 @@ From Pi running inside cmux in a Git repository:
 /junction checkout --branch feature/existing
 ```
 
-Junction opens the branch's worktree in a new cmux workspace and keeps your current workspace focused.
+Junction creates or reuses a Git worktree, opens it in a new cmux workspace, and starts Pi there. Your current workspace stays focused.
 
-`/junction` starts a fresh Pi session. `/junction fork` waits for the current session to become idle, then starts with its saved conversation. It carries the conversation, not uncommitted files. `/junction checkout` opens an existing local branch in a fresh Pi session and never reads or forks the current conversation.
+- `/junction --branch B` creates `B` and starts a fresh Pi session.
+- `/junction fork --branch B` waits until the current session is idle, then creates `B` and forks the conversation.
+- `/junction checkout --branch B` uses an existing local `B` and starts a fresh Pi session.
 
-New sessions open in the same directory in the new worktree. If that directory is unavailable, Junction opens the worktree root and warns you. It does not create missing directories or copy files.
+New sessions open in the same directory in the new worktree. If that directory is unavailable, Junction opens the worktree root and warns you. It uses the same Pi config directory and does not create missing directories or copy uncommitted files.
 
-New sessions use the same effective Pi config directory as the Pi running Junction.
+New branches start from the repository's default branch. Use `--from <commit-ish>` to choose another commit; `--from HEAD` uses your current committed work and requires a new target branch.
 
-New branches created by `/junction` or `/junction fork` start from the repository's default branch. Add `--from <commit-ish>` to either create command to start from a different commit. For example, `--from HEAD` starts from your current committed work. Uncommitted files are not copied. When `--from` is used, the target branch must be new.
-
-`/junction checkout` accepts only the exact name of an existing local branch. It does not infer a branch from remote or default refs, does not resolve tags or other refs, does not accept `--from`, and rejects `refs/...`-qualified input. Junction uses the branch tip when it applies the worktree change, so the tip may differ from when the command began.
+`checkout` requires the exact name of an existing local branch, uses its current tip, and does not accept `--from`.
 
 ## Detailed agent status
 
@@ -75,6 +75,4 @@ robhowley-pi-userland-feature-example
 
 Set `PI_CMUX_JUNCTION_WORKTREE_ROOT` to another location. It accepts an absolute path, `~`, or a path under `~/`.
 
-Junction leaves worktrees in place for reuse. An existing Junction worktree is reused only when its exact expected path already has the requested branch. A branch at another path, another branch at the target path, prunable worktree metadata, or an unmanaged target path fails without moving, deleting, or repairing anything.
-
-Junction never deletes branches or worktrees and does not automatically prune or repair Git worktree state. Inspect and resolve collisions or stale metadata manually.
+Junction leaves worktrees in place. It reuses one only when the expected path and branch match; otherwise, it stops without changing existing Git state.
