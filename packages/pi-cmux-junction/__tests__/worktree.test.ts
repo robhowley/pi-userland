@@ -457,7 +457,12 @@ describe('worktree planning and apply', () => {
       env: {},
       homeDir: root,
     });
-    expect(plan).toMatchObject({ ok: true, baseRef: 'origin/main', baseSha: 'main-sha' });
+    expect(plan).toMatchObject({
+      ok: true,
+      kind: 'create-default',
+      baseRef: 'origin/main',
+      baseSha: 'main-sha',
+    });
     if (!plan.ok) throw new Error(plan.message);
 
     await expect(
@@ -892,6 +897,7 @@ describe('worktree planning and apply', () => {
       'HEAD',
     );
     if (!plan.ok) throw new Error(plan.message);
+    if (plan.kind !== 'create-explicit') throw new Error('Expected an explicit create plan.');
 
     await expect(
       proveRetainedWorktree(plan, { runner: mock.runner, homeDir: root, lockRoot }),
@@ -926,6 +932,7 @@ describe('worktree planning and apply', () => {
       'HEAD',
     );
     if (!plan.ok) throw new Error(plan.message);
+    if (plan.kind !== 'create-explicit') throw new Error('Expected an explicit create plan.');
 
     await expect(
       proveRetainedWorktree(plan, {

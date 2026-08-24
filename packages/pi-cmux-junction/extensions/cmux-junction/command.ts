@@ -9,12 +9,12 @@ import {
   type CmuxOptions,
 } from './cmux.js';
 import type { ProcessRunner } from './process.js';
-import * as worktreeApi from './worktree.js';
 import {
   applyWorktreePlan,
   planWorktree,
+  proveRetainedWorktree,
+  type ExplicitWorktreePlan,
   type WorktreeOptions,
-  type WorktreePlan,
   type WorktreeSuccess,
 } from './worktree.js';
 
@@ -40,16 +40,14 @@ type JunctionPlanner = (
   from?: string,
 ) => ReturnType<typeof planWorktree>;
 
-export type RetainedWorktreeProofResult = { ok: true } | { ok: false; message: string };
-
 /**
  * Read-only proof that an explicit create retained the exact path, branch, and pinned commit.
  * The core worktree implementation owns the Git checks; the command only gates retry guidance.
  */
 export type RetainedWorktreeProof = (
-  plan: WorktreePlan,
+  plan: ExplicitWorktreePlan,
   options: WorktreeOptions,
-) => Promise<RetainedWorktreeProofResult>;
+) => Promise<boolean>;
 
 interface JunctionFromReport {
   input: string;
@@ -303,7 +301,10 @@ export async function runJunctionCommand(
   }
 
   const launchCwd = await chooseLaunchCwd(worktree.path, relativeCwd);
-  const fromReport = getExplicitFromReport(parsed.from, plan, worktree);
+  const fromReport =
+    worktree.kind === 'create-explicit'
+      ? { input: worktree.baseRef, sha: worktree.baseSha }
+      : undefined;
   const launch =
     recipe === undefined
       ? await (options.launch ?? launchCmuxWorkspace)(worktree.branch, launchCwd.path, cmuxOptions)
@@ -331,24 +332,16 @@ export async function runJunctionCommand(
       mode === 'fork'
         ? `/junction ${FORK_SUBCOMMAND} ${BRANCH_FLAG} ${worktree.branch}`
         : `/junction ${BRANCH_FLAG} ${worktree.branch}`;
-    if (parsed.from !== undefined) {
-      const proof = await proveExplicitRetention(plan, worktreeOptions, options.proveRetained);
-      const sourceLine =
-        fromReport === undefined ? '' : `\nFrom: ${fromReport.input} -> ${fromReport.sha}`;
-      if (proof.ok && fromReport !== undefined) {
-        return {
-          ok: false,
-          status: 'partial-launch-failed',
-          branch: worktree.branch,
-          path: worktree.path,
-          launchCwd: launchCwd.path,
-          worktreeRetained: true,
-          message: `Worktree retained after cmux launch failed: ${launch.message}\nBranch: ${worktree.branch}\nPath: ${worktree.path}\nLaunch cwd: ${launchCwd.path}${sourceLine}\nRetry: ${retry}`,
-        };
-      }
-      const proofDetail = proof.ok
-        ? 'the pinned commit was not available for reporting'
-        : proof.message;
+    if (plan.kind === 'create-explicit') {
+      const proofPassed = await proveExplicitRetention(
+        plan,
+        worktreeOptions,
+        options.proveRetained,
+      );
+      const sourceLine = `\nFrom: ${plan.baseRef} -> ${plan.baseSha}`;
+      const guidance = proofPassed
+        ? `Retry: ${retry}`
+        : 'Retained-state proof did not pass; inspect Git state before retrying.';
       return {
         ok: false,
         status: 'partial-launch-failed',
@@ -356,7 +349,7 @@ export async function runJunctionCommand(
         path: worktree.path,
         launchCwd: launchCwd.path,
         worktreeRetained: true,
-        message: `Worktree retained after cmux launch failed: ${launch.message}\nBranch: ${worktree.branch}\nPath: ${worktree.path}\nLaunch cwd: ${launchCwd.path}${sourceLine}\nRetained-state proof did not pass (${proofDetail}); inspect Git state before retrying.`,
+        message: `Worktree retained after cmux launch failed: ${launch.message}\nBranch: ${worktree.branch}\nPath: ${worktree.path}\nLaunch cwd: ${launchCwd.path}${sourceLine}\n${guidance}`,
       };
     }
 
@@ -385,70 +378,15 @@ export async function runJunctionCommand(
   };
 }
 
-interface WorktreeBaseShape {
-  kind?: unknown;
-  baseSha?: unknown;
-}
-
-function getExplicitFromReport(
-  input: string | undefined,
-  plan: WorktreePlan,
-  worktree: WorktreeSuccess,
-): JunctionFromReport | undefined {
-  if (input === undefined || worktree.status !== 'created') {
-    return undefined;
-  }
-
-  const planShape = plan as WorktreeBaseShape;
-  const worktreeShape = worktree as WorktreeBaseShape;
-  if (
-    (planShape.kind !== undefined && planShape.kind !== 'create-explicit') ||
-    (worktreeShape.kind !== undefined && worktreeShape.kind !== 'create-explicit')
-  ) {
-    return undefined;
-  }
-
-  const sha =
-    typeof worktreeShape.baseSha === 'string'
-      ? worktreeShape.baseSha
-      : typeof planShape.baseSha === 'string'
-        ? planShape.baseSha
-        : '';
-  return sha.length === 0 ? undefined : { input, sha };
-}
-
-interface WorktreeModuleWithProof {
-  proveRetainedWorktree?: RetainedWorktreeProof;
-}
-
 async function proveExplicitRetention(
-  plan: WorktreePlan,
+  plan: ExplicitWorktreePlan,
   options: WorktreeOptions,
   injected: RetainedWorktreeProof | undefined,
-): Promise<RetainedWorktreeProofResult> {
-  const proof = injected ?? (worktreeApi as WorktreeModuleWithProof).proveRetainedWorktree;
-  if (proof === undefined) {
-    return { ok: false, message: 'retained-state proof is unavailable' };
-  }
-
+): Promise<boolean> {
   try {
-    const result: unknown = await proof(plan, options);
-    if (
-      result === true ||
-      (typeof result === 'object' && result !== null && 'ok' in result && result.ok === true)
-    ) {
-      return { ok: true };
-    }
-    return {
-      ok: false,
-      message:
-        typeof result === 'object' && result !== null && 'message' in result
-          ? String(result.message)
-          : 'retained-state proof failed',
-    };
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    return { ok: false, message: `retained-state proof could not run: ${detail}` };
+    return (await (injected ?? proveRetainedWorktree)(plan, options)) === true;
+  } catch {
+    return false;
   }
 }
 

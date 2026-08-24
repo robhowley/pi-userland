@@ -43,9 +43,7 @@ interface WorktreePlanBase {
 }
 
 export interface DefaultWorktreePlan extends WorktreePlanBase {
-  // Optional keeps hand-built no-from plans compatible with existing callers. Plans returned by
-  // planWorktree always include the discriminator.
-  kind?: 'create-default';
+  kind: 'create-default';
   baseRef: string;
   baseSha: string;
   warning?: string;
@@ -111,8 +109,7 @@ export function resolveWorktreeRoot(
 
 interface DefaultWorktreeSuccess {
   ok: true;
-  // Optional keeps injected no-from apply results compatible with existing callers.
-  kind?: 'create-default';
+  kind: 'create-default';
   status: 'created' | 'reused';
   branch: string;
   path: string;
@@ -184,7 +181,15 @@ export async function planWorktree(
     if (!base.ok) {
       return base;
     }
-    return buildExplicitPlan(repository, branch, path, from, base.sha);
+    return {
+      ok: true,
+      kind: 'create-explicit',
+      repository,
+      branch,
+      path,
+      baseRef: from,
+      baseSha: base.sha,
+    };
   }
 
   const base = await resolveDefaultBase(repository.topLevel, options);
@@ -290,13 +295,9 @@ export async function applyWorktreePlan(
  * This only relists Git metadata under the common-Git-dir lock; it never repairs or mutates it.
  */
 export async function proveRetainedWorktree(
-  plan: WorktreePlan,
+  plan: ExplicitWorktreePlan,
   options: WorktreeOptions = {},
 ): Promise<boolean> {
-  if (!isExplicitPlan(plan)) {
-    return false;
-  }
-
   let lock: Awaited<ReturnType<typeof acquireWorktreeLock>>;
   try {
     lock = await acquireWorktreeLock(plan.repository.commonGitDir, options);
@@ -792,24 +793,6 @@ function buildDefaultPlan(
     baseRef: base.baseRef,
     baseSha,
     ...(base.warning === undefined ? {} : { warning: base.warning }),
-  };
-}
-
-function buildExplicitPlan(
-  repository: ResolvedRepository,
-  branch: string,
-  path: string,
-  baseRef: string,
-  baseSha: string,
-): ExplicitWorktreePlan {
-  return {
-    ok: true,
-    kind: 'create-explicit',
-    repository,
-    branch,
-    path,
-    baseRef,
-    baseSha,
   };
 }
 

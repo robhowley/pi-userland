@@ -9,7 +9,11 @@ import {
   runJunctionCommand,
 } from '../extensions/cmux-junction/command.js';
 import type { ProcessRunner } from '../extensions/cmux-junction/process.js';
-import type { WorktreeOptions, WorktreePlan } from '../extensions/cmux-junction/worktree.js';
+import type {
+  WorktreeOptions,
+  WorktreePlan,
+  WorktreeSuccess,
+} from '../extensions/cmux-junction/worktree.js';
 import type { ExtensionCommandContext } from '@earendil-works/pi-coding-agent';
 
 const tempDirectories: string[] = [];
@@ -20,19 +24,14 @@ afterEach(async () => {
   );
 });
 
-type SuccessfulWorktreePlan = Extract<WorktreePlan, { ok: true }>;
+type DefaultWorktreePlan = Extract<WorktreePlan, { kind: 'create-default' }>;
+type DefaultWorktreeSuccess = Extract<WorktreeSuccess, { kind: 'create-default' }>;
 
 let cwd: string;
 let sourceRoot: string;
 let worktreeRoot: string;
-let PLAN: SuccessfulWorktreePlan;
-let WORKTREE: {
-  ok: true;
-  status: 'created';
-  branch: string;
-  path: string;
-  baseRef: string;
-};
+let PLAN: DefaultWorktreePlan;
+let WORKTREE: DefaultWorktreeSuccess;
 
 beforeEach(async () => {
   const directory = await mkdtemp(join(tmpdir(), 'pi-cmux-junction-command-'));
@@ -45,6 +44,7 @@ beforeEach(async () => {
   cwd = sourceRoot;
   PLAN = {
     ok: true,
+    kind: 'create-default',
     branch: 'feature/test',
     path: worktreeRoot,
     baseRef: 'origin/main',
@@ -57,6 +57,7 @@ beforeEach(async () => {
   };
   WORKTREE = {
     ok: true,
+    kind: 'create-default',
     status: 'created',
     branch: PLAN.branch,
     path: PLAN.path,
@@ -232,6 +233,8 @@ describe('/junction command', () => {
     const apply = vi.fn(async () => ({
       ...WORKTREE,
       kind: 'create-explicit' as const,
+      status: 'created' as const,
+      baseRef: source,
       baseSha: sha,
     }));
 
@@ -643,11 +646,13 @@ describe('/junction command', () => {
     const explicitWorktree = {
       ...WORKTREE,
       kind: 'create-explicit' as const,
+      status: 'created' as const,
+      baseRef: source,
       baseSha: sha,
     };
     const proof = vi.fn(async (plan: WorktreePlan) => {
       expect(plan).toBe(explicitPlan);
-      return { ok: true as const };
+      return true;
     });
 
     const result = await runJunctionCommand('--branch feature/test --from HEAD', cwd, {
@@ -674,12 +679,18 @@ describe('/junction command', () => {
       baseRef: 'HEAD',
       baseSha: sha,
     };
-    const proof = vi.fn(async () => ({ ok: false as const, message: 'HEAD changed' }));
+    const proof = vi.fn(async () => false);
 
     const result = await runJunctionCommand('--branch feature/test --from HEAD', cwd, {
       plan: async () => explicitPlan,
       preflight: async () => ({ ok: true }),
-      apply: async () => ({ ...WORKTREE, kind: 'create-explicit' as const, baseSha: sha }),
+      apply: async () => ({
+        ...WORKTREE,
+        kind: 'create-explicit' as const,
+        status: 'created' as const,
+        baseRef: 'HEAD',
+        baseSha: sha,
+      }),
       launch: async () => ({ ok: false, reason: 'launch-failed', message: 'cmux stopped' }),
       proveRetained: proof,
     });
@@ -691,13 +702,27 @@ describe('/junction command', () => {
     expect(result.message).not.toContain('Retry:');
   });
 
-  it('does not suggest an explicit retry when retained proof is unavailable', async () => {
+  it('does not suggest an explicit retry when retained proof errors', async () => {
     const sha = '0123456789abcdef0123456789abcdef01234567';
     const result = await runJunctionCommand('--branch feature/test --from HEAD', cwd, {
-      plan: async () => ({ ...PLAN, kind: 'create-explicit' as const, baseSha: sha }),
+      plan: async () => ({
+        ...PLAN,
+        kind: 'create-explicit' as const,
+        baseRef: 'HEAD',
+        baseSha: sha,
+      }),
       preflight: async () => ({ ok: true }),
-      apply: async () => ({ ...WORKTREE, kind: 'create-explicit' as const, baseSha: sha }),
+      apply: async () => ({
+        ...WORKTREE,
+        kind: 'create-explicit' as const,
+        status: 'created' as const,
+        baseRef: 'HEAD',
+        baseSha: sha,
+      }),
       launch: async () => ({ ok: false, reason: 'launch-failed', message: 'cmux stopped' }),
+      proveRetained: async () => {
+        throw new Error('proof unavailable');
+      },
     });
 
     expect(result).toMatchObject({ ok: false, status: 'partial-launch-failed' });
@@ -708,11 +733,22 @@ describe('/junction command', () => {
 
   it('keeps explicit unknown launch outcomes inspection-only without a proof call', async () => {
     const sha = '0123456789abcdef0123456789abcdef01234567';
-    const proof = vi.fn(async () => ({ ok: true as const }));
+    const proof = vi.fn(async () => true);
     const result = await runJunctionCommand('--branch feature/test --from HEAD', cwd, {
-      plan: async () => ({ ...PLAN, kind: 'create-explicit' as const, baseSha: sha }),
+      plan: async () => ({
+        ...PLAN,
+        kind: 'create-explicit' as const,
+        baseRef: 'HEAD',
+        baseSha: sha,
+      }),
       preflight: async () => ({ ok: true }),
-      apply: async () => ({ ...WORKTREE, kind: 'create-explicit' as const, baseSha: sha }),
+      apply: async () => ({
+        ...WORKTREE,
+        kind: 'create-explicit' as const,
+        status: 'created' as const,
+        baseRef: 'HEAD',
+        baseSha: sha,
+      }),
       launch: async () => ({ ok: false, reason: 'launch-unknown', message: 'timed out' }),
       proveRetained: proof,
     });
@@ -804,9 +840,20 @@ describe('/junction command', () => {
     const notify = vi.fn();
 
     registerJunctionCommand(pi, {
-      plan: async () => ({ ...PLAN, kind: 'create-explicit' as const, baseSha: sha }),
+      plan: async () => ({
+        ...PLAN,
+        kind: 'create-explicit' as const,
+        baseRef: 'HEAD',
+        baseSha: sha,
+      }),
       preflight: async () => ({ ok: true }),
-      apply: async () => ({ ...WORKTREE, kind: 'create-explicit' as const, baseSha: sha }),
+      apply: async () => ({
+        ...WORKTREE,
+        kind: 'create-explicit' as const,
+        status: 'created' as const,
+        baseRef: 'HEAD',
+        baseSha: sha,
+      }),
       launch: async () => ({ ok: true }),
     });
     await handler?.('--branch feature/test --from HEAD', {
