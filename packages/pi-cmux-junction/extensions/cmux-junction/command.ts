@@ -49,11 +49,6 @@ export type RetainedWorktreeProof = (
   options: WorktreeOptions,
 ) => Promise<boolean>;
 
-interface JunctionFromReport {
-  input: string;
-  sha: string;
-}
-
 export interface JunctionCommandOptions {
   runner?: ProcessRunner;
   env?: NodeJS.ProcessEnv;
@@ -74,7 +69,6 @@ export type JunctionResult =
       worktree: WorktreeSuccess;
       launchCwd: string;
       launchCwdWarning?: string;
-      from?: JunctionFromReport;
     }
   | { ok: false; status: 'invalid-command'; message: string }
   | { ok: false; status: 'source-session-failed'; message: string }
@@ -301,10 +295,6 @@ export async function runJunctionCommand(
   }
 
   const launchCwd = await chooseLaunchCwd(worktree.path, relativeCwd);
-  const fromReport =
-    worktree.kind === 'create-explicit'
-      ? { input: worktree.baseRef, sha: worktree.baseSha }
-      : undefined;
   const launch =
     recipe === undefined
       ? await (options.launch ?? launchCmuxWorkspace)(worktree.branch, launchCwd.path, cmuxOptions)
@@ -369,7 +359,6 @@ export async function runJunctionCommand(
     status: worktree.status === 'created' ? 'created-and-launched' : 'reused-and-launched',
     worktree,
     launchCwd: launchCwd.path,
-    ...(fromReport === undefined ? {} : { from: fromReport }),
     ...(launchCwd.fellBack
       ? {
           launchCwdWarning: `Could not preserve "${relativeCwd}" because it is absent or unsafe in the target worktree; launched at the worktree root.`,
@@ -506,7 +495,9 @@ function notifyResult(ctx: ExtensionCommandContext, result: JunctionResult): voi
     .map((warning) => `\nWarning: ${warning}`)
     .join('');
   const from =
-    result.from === undefined ? '' : `\nFrom: ${result.from.input} -> ${result.from.sha}`;
+    result.worktree.kind === 'create-explicit'
+      ? `\nFrom: ${result.worktree.baseRef} -> ${result.worktree.baseSha}`
+      : '';
   ctx.ui.notify(
     `${verb} worktree and launched cmux workspace.\nBranch: ${result.worktree.branch}\nPath: ${result.worktree.path}\nLaunch cwd: ${result.launchCwd}${from}${warnings}`,
     'info',

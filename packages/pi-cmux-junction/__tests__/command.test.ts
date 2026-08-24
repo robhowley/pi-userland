@@ -219,7 +219,7 @@ describe('/junction command', () => {
     expect(launch).toHaveBeenCalledWith(PLAN.branch, worktreeRoot, expect.any(Object));
   });
 
-  it('passes the exact --from token to planning and reports the pinned SHA on success', async () => {
+  it('passes the exact --from token to planning and returns the explicit worktree source', async () => {
     const source = 'refs/tags/Release-1';
     const sha = '0123456789abcdef0123456789abcdef01234567';
     const plan = vi.fn(
@@ -248,8 +248,9 @@ describe('/junction command', () => {
     expect(result).toMatchObject({
       ok: true,
       status: 'created-and-launched',
-      from: { input: source, sha },
+      worktree: { kind: 'create-explicit', baseRef: source, baseSha: sha },
     });
+    expect(result).not.toHaveProperty('from');
     expect(plan).toHaveBeenCalledWith(cwd, 'feature/test', expect.any(Object), source);
   });
 
