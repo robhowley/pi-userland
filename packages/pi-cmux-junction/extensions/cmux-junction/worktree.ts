@@ -35,15 +35,29 @@ export interface GitWorktreeEntry {
   prunable: string | null;
 }
 
-export interface WorktreePlan {
+interface WorktreePlanBase {
   ok: true;
   branch: string;
   path: string;
+  repository: ResolvedRepository;
+}
+
+export interface DefaultWorktreePlan extends WorktreePlanBase {
+  // Optional keeps hand-built no-from plans compatible with existing callers. Plans returned by
+  // planWorktree always include the discriminator.
+  kind?: 'create-default';
   baseRef: string;
   baseSha: string;
-  repository: ResolvedRepository;
   warning?: string;
 }
+
+export interface ExplicitWorktreePlan extends WorktreePlanBase {
+  kind: 'create-explicit';
+  baseRef: string;
+  baseSha: string;
+}
+
+export type WorktreePlan = DefaultWorktreePlan | ExplicitWorktreePlan;
 
 export type WorktreeFailureReason =
   | 'not-a-repository'
@@ -95,8 +109,10 @@ export function resolveWorktreeRoot(
   return { ok: true, path: resolve(configured) };
 }
 
-export interface WorktreeSuccess {
+interface DefaultWorktreeSuccess {
   ok: true;
+  // Optional keeps injected no-from apply results compatible with existing callers.
+  kind?: 'create-default';
   status: 'created' | 'reused';
   branch: string;
   path: string;
@@ -104,12 +120,26 @@ export interface WorktreeSuccess {
   warning?: string;
 }
 
+interface ExplicitWorktreeSuccess {
+  ok: true;
+  kind: 'create-explicit';
+  status: 'created';
+  branch: string;
+  path: string;
+  baseRef: string;
+  baseSha: string;
+  warning?: string;
+}
+
+export type WorktreeSuccess = DefaultWorktreeSuccess | ExplicitWorktreeSuccess;
+
 export type WorktreeApplyResult = WorktreeSuccess | WorktreeFailure;
 
 export async function planWorktree(
   cwd: string,
   requestedBranch: string,
   options: WorktreeOptions = {},
+  from?: string,
 ): Promise<WorktreePlanResult> {
   const root = resolveWorktreeRoot(options);
   if (!root.ok) {
@@ -148,6 +178,15 @@ export async function planWorktree(
     };
   }
 
+  const path = join(root.path, `${repository.repoLabel}-${branchSlug}`);
+  if (from !== undefined) {
+    const base = await resolveExplicitBase(repository.topLevel, from, options);
+    if (!base.ok) {
+      return base;
+    }
+    return buildExplicitPlan(repository, branch, path, from, base.sha);
+  }
+
   const base = await resolveDefaultBase(repository.topLevel, options);
   const baseSha = await gitText(
     repository.topLevel,
@@ -162,8 +201,7 @@ export async function planWorktree(
     };
   }
 
-  const path = join(root.path, `${repository.repoLabel}-${branchSlug}`);
-  return buildPlan(repository, branch, path, base, baseSha);
+  return buildDefaultPlan(repository, branch, path, base, baseSha);
 }
 
 export async function applyWorktreePlan(
@@ -185,28 +223,36 @@ export async function applyWorktreePlan(
       };
     }
 
-    const state = inspectWorktrees(worktrees, plan.path, plan.branch);
-    if (state === 'prunable') {
-      return prunableFailure(plan, worktrees);
+    if (isExplicitPlan(plan)) {
+      const collisionFailure = await inspectExplicitAvailability(plan, worktrees, options);
+      if (collisionFailure !== null) {
+        return collisionFailure;
+      }
+    } else {
+      const state = inspectWorktrees(worktrees, plan.path, plan.branch);
+      if (state === 'prunable') {
+        return prunableFailure(plan, worktrees);
+      }
+      if (state === 'exact-reuse') {
+        return toSuccess(plan, 'reused');
+      }
+      if (state === 'path-collision') {
+        return collision('path-collision', 'An existing worktree already uses the requested path.');
+      }
+      if (state === 'branch-collision') {
+        return collision(
+          'branch-collision',
+          'An existing worktree already uses the requested branch.',
+        );
+      }
+      if (isUnmanagedPath(plan.path, worktrees)) {
+        return collision(
+          'path-collision',
+          `Target path already exists and is not a Git worktree: ${plan.path}`,
+        );
+      }
     }
-    if (state === 'exact-reuse') {
-      return toSuccess(plan, 'reused');
-    }
-    if (state === 'path-collision') {
-      return collision('path-collision', 'An existing worktree already uses the requested path.');
-    }
-    if (state === 'branch-collision') {
-      return collision(
-        'branch-collision',
-        'An existing worktree already uses the requested branch.',
-      );
-    }
-    if (isUnmanagedPath(plan.path, worktrees)) {
-      return collision(
-        'path-collision',
-        `Target path already exists and is not a Git worktree: ${plan.path}`,
-      );
-    }
+
     const rootFailure = await ensureWorktreeParent(plan.path);
     if (rootFailure !== null) {
       return rootFailure;
@@ -218,10 +264,52 @@ export async function applyWorktreePlan(
       options,
     );
     if (!processSucceeded(result)) {
-      return await reconcileFailedAdd(plan, result, options);
+      return isExplicitPlan(plan)
+        ? await reconcileFailedExplicitAdd(plan, result, options)
+        : await reconcileFailedAdd(plan, result, options);
+    }
+
+    if (isExplicitPlan(plan)) {
+      const postAddWorktrees = await listWorktrees(plan.repository.topLevel, options);
+      if (postAddWorktrees === null || !matchesRetainedWorktree(plan, postAddWorktrees)) {
+        return unknownWorktreeState(
+          plan,
+          'Git worktree add succeeded, but Junction could not prove the exact retained worktree state.',
+        );
+      }
     }
 
     return toSuccess(plan, 'created');
+  } finally {
+    await lock.release();
+  }
+}
+
+/**
+ * Proves an explicit worktree is still safe to retain after a definite launch failure.
+ * This only relists Git metadata under the common-Git-dir lock; it never repairs or mutates it.
+ */
+export async function proveRetainedWorktree(
+  plan: WorktreePlan,
+  options: WorktreeOptions = {},
+): Promise<boolean> {
+  if (!isExplicitPlan(plan)) {
+    return false;
+  }
+
+  let lock: Awaited<ReturnType<typeof acquireWorktreeLock>>;
+  try {
+    lock = await acquireWorktreeLock(plan.repository.commonGitDir, options);
+  } catch {
+    return false;
+  }
+  if (!lock.ok) {
+    return false;
+  }
+
+  try {
+    const worktrees = await listWorktrees(plan.repository.topLevel, options);
+    return worktrees !== null && matchesRetainedWorktree(plan, worktrees);
   } finally {
     await lock.release();
   }
@@ -303,6 +391,47 @@ export function parseWorktreeList(source: string): GitWorktreeEntry[] {
 interface ResolvedBase {
   baseRef: string;
   warning?: string;
+}
+
+interface ExplicitBaseResolution {
+  ok: true;
+  sha: string;
+}
+
+async function resolveExplicitBase(
+  cwd: string,
+  input: string,
+  options: WorktreeOptions,
+): Promise<ExplicitBaseResolution | WorktreeFailure> {
+  const result = await git(
+    cwd,
+    ['rev-parse', '--verify', '--end-of-options', `${input}^{commit}`],
+    options,
+  );
+  if (result.outcome !== 'exit') {
+    return {
+      ok: false,
+      reason: 'git-failed',
+      message: `Could not resolve base ref ${input}: ${processError(result)}`,
+    };
+  }
+  if (result.exitCode !== 0) {
+    return {
+      ok: false,
+      reason: 'invalid-base-ref',
+      message: `Base ref does not resolve to a commit: ${input}`,
+    };
+  }
+
+  const sha = result.stdout.trim();
+  if (sha.length === 0) {
+    return {
+      ok: false,
+      reason: 'invalid-base-ref',
+      message: `Base ref does not resolve to a commit: ${input}`,
+    };
+  }
+  return { ok: true, sha };
 }
 
 async function resolveDefaultBase(cwd: string, options: WorktreeOptions): Promise<ResolvedBase> {
@@ -533,8 +662,100 @@ function inspectWorktrees(
   return existingByBranch === undefined ? 'available' : 'branch-collision';
 }
 
+async function inspectExplicitAvailability(
+  plan: ExplicitWorktreePlan,
+  worktrees: readonly GitWorktreeEntry[],
+  options: WorktreeOptions,
+): Promise<WorktreeFailure | null> {
+  const state = inspectWorktrees(worktrees, plan.path, plan.branch);
+  if (state === 'prunable') {
+    return prunableFailure(plan, worktrees);
+  }
+  if (state === 'exact-reuse') {
+    return collision(
+      'branch-collision',
+      'An existing worktree already uses the requested branch; explicit creation never reuses worktrees.',
+    );
+  }
+  if (state === 'path-collision') {
+    return collision('path-collision', 'An existing worktree already uses the requested path.');
+  }
+  if (state === 'branch-collision') {
+    return collision('branch-collision', 'An existing worktree already uses the requested branch.');
+  }
+  if (isUnmanagedPath(plan.path, worktrees)) {
+    return collision(
+      'path-collision',
+      `Target path already exists and is not a Git worktree: ${plan.path}`,
+    );
+  }
+
+  const branchState = await localBranchState(plan.repository.topLevel, plan.branch, options);
+  if (branchState === 'present') {
+    return collision(
+      'branch-collision',
+      'The requested local branch already exists; explicit creation never reuses branches.',
+    );
+  }
+  if (branchState === 'unknown') {
+    return {
+      ok: false,
+      reason: 'git-failed',
+      message: `Could not verify whether local branch refs/heads/${plan.branch} exists.`,
+    };
+  }
+  return null;
+}
+
+type LocalBranchState = 'present' | 'absent' | 'unknown';
+
+async function localBranchState(
+  cwd: string,
+  branch: string,
+  options: WorktreeOptions,
+): Promise<LocalBranchState> {
+  const result = await git(
+    cwd,
+    ['show-ref', '--verify', '--quiet', '--', `refs/heads/${branch}`],
+    options,
+  );
+  if (result.outcome !== 'exit') {
+    return 'unknown';
+  }
+  if (result.exitCode === 0) {
+    return 'present';
+  }
+  return result.exitCode === 1 ? 'absent' : 'unknown';
+}
+
 function isUnmanagedPath(path: string, worktrees: readonly GitWorktreeEntry[]): boolean {
   return existsSync(path) && !worktrees.some((entry) => resolve(entry.path) === path);
+}
+
+function matchesRetainedWorktree(
+  plan: ExplicitWorktreePlan,
+  worktrees: readonly GitWorktreeEntry[],
+): boolean {
+  const matching = worktrees.filter(
+    (entry) =>
+      resolve(entry.path) === resolve(plan.path) &&
+      entry.branch !== null &&
+      stripRefsHeads(entry.branch) === plan.branch,
+  );
+  return (
+    matching.length === 1 && matching[0]?.prunable === null && matching[0]?.head === plan.baseSha
+  );
+}
+
+function hasExplicitTargetState(
+  plan: ExplicitWorktreePlan,
+  worktrees: readonly GitWorktreeEntry[],
+): boolean {
+  return worktrees.some(
+    (entry) =>
+      resolve(entry.path) === resolve(plan.path) ||
+      (entry.branch !== null && stripRefsHeads(entry.branch) === plan.branch),
+  );
 }
 
 async function ensureWorktreeParent(path: string): Promise<WorktreeFailure | null> {
@@ -555,15 +776,16 @@ function stripRefsHeads(branch: string): string {
   return branch.startsWith('refs/heads/') ? branch.slice('refs/heads/'.length) : branch;
 }
 
-function buildPlan(
+function buildDefaultPlan(
   repository: ResolvedRepository,
   branch: string,
   path: string,
   base: ResolvedBase,
   baseSha: string,
-): WorktreePlan {
+): DefaultWorktreePlan {
   return {
     ok: true,
+    kind: 'create-default',
     repository,
     branch,
     path,
@@ -573,9 +795,44 @@ function buildPlan(
   };
 }
 
-function toSuccess(plan: WorktreePlan, status: WorktreeSuccess['status']): WorktreeSuccess {
+function buildExplicitPlan(
+  repository: ResolvedRepository,
+  branch: string,
+  path: string,
+  baseRef: string,
+  baseSha: string,
+): ExplicitWorktreePlan {
   return {
     ok: true,
+    kind: 'create-explicit',
+    repository,
+    branch,
+    path,
+    baseRef,
+    baseSha,
+  };
+}
+
+function isExplicitPlan(plan: WorktreePlan): plan is ExplicitWorktreePlan {
+  return plan.kind === 'create-explicit';
+}
+
+function toSuccess(plan: WorktreePlan, status: WorktreeSuccess['status']): WorktreeSuccess {
+  if (isExplicitPlan(plan)) {
+    return {
+      ok: true,
+      kind: 'create-explicit',
+      status: 'created',
+      branch: plan.branch,
+      path: plan.path,
+      baseRef: plan.baseRef,
+      baseSha: plan.baseSha,
+    };
+  }
+
+  return {
+    ok: true,
+    kind: 'create-default',
     status,
     branch: plan.branch,
     path: plan.path,
@@ -639,6 +896,46 @@ function prunableFailure(
     reason: 'prunable-worktree',
     message: `A matching Git worktree is marked prunable (${entry?.prunable ?? 'stale metadata'}). Inspect it, then run git worktree repair or git worktree prune manually before retrying. Junction will not clean it automatically. Path: ${plan.path}`,
   };
+}
+
+async function reconcileFailedExplicitAdd(
+  plan: ExplicitWorktreePlan,
+  result: ProcessResult,
+  options: WorktreeOptions,
+): Promise<WorktreeApplyResult> {
+  const worktrees = await listWorktrees(plan.repository.topLevel, options);
+  if (worktrees === null) {
+    return unknownWorktreeState(
+      plan,
+      `Explicit Git worktree add failed (${processError(result)}), and Junction could not relist worktrees.`,
+    );
+  }
+
+  const branchState = await localBranchState(plan.repository.topLevel, plan.branch, options);
+  if (
+    branchState === 'unknown' ||
+    branchState === 'present' ||
+    hasExplicitTargetState(plan, worktrees) ||
+    existsSync(plan.path)
+  ) {
+    return unknownWorktreeState(
+      plan,
+      `Explicit Git worktree add did not leave a provably empty target state (${processError(result)}).`,
+    );
+  }
+
+  if (result.outcome === 'exit' || result.outcome === 'spawn-failed') {
+    return {
+      ok: false,
+      reason: 'git-failed',
+      message: `Git worktree add failed: ${processError(result)}`,
+    };
+  }
+
+  return unknownWorktreeState(
+    plan,
+    `Explicit Git worktree add did not complete cleanly (${processError(result)}), and its effects could not be reconciled.`,
+  );
 }
 
 async function reconcileFailedAdd(

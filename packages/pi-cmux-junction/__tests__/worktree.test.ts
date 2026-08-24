@@ -14,6 +14,7 @@ import {
   applyWorktreePlan,
   parseWorktreeList,
   planWorktree,
+  proveRetainedWorktree,
   resolveWorktreeRoot,
   slugPathLabel,
   type GitWorktreeEntry,
@@ -50,12 +51,14 @@ function mockGit(options: {
   validRefs?: Record<string, string>;
   branchValid?: boolean;
   worktrees?: GitWorktreeEntry[];
+  localBranches?: string[];
   originRemote?: string | null;
   remoteList?: string | null;
   addResult?: ProcessResult;
 }) {
   const calls: Array<{ file: string; args: readonly string[]; cwd: string }> = [];
   let worktrees = options.worktrees ?? [];
+  let localBranches = new Set(options.localBranches ?? []);
   const runner: ProcessRunner = async (file, args, processOptions) => {
     calls.push({ file, args, cwd: processOptions.cwd });
     if (file !== 'git') return gitExit(1, '', 'unexpected command');
@@ -82,9 +85,14 @@ function mockGit(options: {
       return options.remoteHead ? gitExit(0, `${options.remoteHead}\n`) : gitExit(1);
     }
     if (args[0] === 'rev-parse' && args[1] === '--verify') {
-      const ref = String(args[2]).replace(/\^\{commit\}$/u, '');
+      const refArgument = args[2] === '--end-of-options' ? args[3] : args[2];
+      const ref = String(refArgument).replace(/\^\{commit\}$/u, '');
       const sha = options.validRefs?.[ref];
       return sha === undefined ? gitExit(1, '', 'unknown ref') : gitExit(0, `${sha}\n`);
+    }
+    if (args[0] === 'show-ref' && args[1] === '--verify') {
+      const ref = String(args[4]);
+      return localBranches.has(ref) ? gitExit(0) : gitExit(1);
     }
     if (args[0] === 'worktree' && args[1] === 'list') {
       return gitExit(0, porcelain(worktrees));
@@ -99,6 +107,9 @@ function mockGit(options: {
     runner,
     setWorktrees(value: GitWorktreeEntry[]) {
       worktrees = value;
+    },
+    setLocalBranches(value: string[]) {
+      localBranches = new Set(value);
     },
   };
 }
@@ -465,6 +476,464 @@ describe('worktree planning and apply', () => {
       'origin/main^{commit}',
       'origin/main^{commit}',
     ]);
+  });
+
+  it('resolves an explicit base with option-safe argv and skips default discovery', async () => {
+    const root = await tempDir();
+    const topLevel = join(root, 'project');
+    const sha = 'a'.repeat(40);
+    await mkdir(topLevel);
+    const mock = mockGit({
+      topLevel,
+      commonGitDir: join(topLevel, '.git'),
+      remoteHead: 'origin/main',
+      validRefs: { 'HEAD~2': sha, 'origin/main': 'default-sha' },
+    });
+
+    const plan = await planWorktree(
+      topLevel,
+      'feature/explicit',
+      { runner: mock.runner, env: {}, homeDir: root },
+      'HEAD~2',
+    );
+
+    expect(plan).toMatchObject({
+      ok: true,
+      kind: 'create-explicit',
+      baseRef: 'HEAD~2',
+      baseSha: sha,
+    });
+    expect(
+      mock.calls.filter((call) => call.args[0] === 'rev-parse' && call.args[1] === '--verify'),
+    ).toEqual([
+      {
+        file: 'git',
+        args: ['rev-parse', '--verify', '--end-of-options', 'HEAD~2^{commit}'],
+        cwd: topLevel,
+      },
+    ]);
+    expect(mock.calls.some((call) => call.args[0] === 'symbolic-ref')).toBe(false);
+  });
+
+  it.each([
+    ['invalid ref', gitExit(1, '', 'unknown ref'), 'invalid-base-ref'],
+    [
+      'Git process failure',
+      { outcome: 'timeout', timeoutMs: 10_000, signal: 'SIGTERM', stdout: '', stderr: '' },
+      'git-failed',
+    ],
+  ] as const)('distinguishes an explicit %s during planning', async (_case, result, reason) => {
+    const root = await tempDir();
+    const topLevel = join(root, 'project');
+    await mkdir(topLevel);
+    const mock = mockGit({
+      topLevel,
+      commonGitDir: join(topLevel, '.git'),
+      validRefs: {},
+    });
+    const runner: ProcessRunner = async (file, args, options) => {
+      if (
+        file === 'git' &&
+        args[0] === 'rev-parse' &&
+        args[1] === '--verify' &&
+        args[2] === '--end-of-options'
+      ) {
+        return result;
+      }
+      return await mock.runner(file, args, options);
+    };
+
+    await expect(
+      planWorktree(topLevel, 'feature/explicit', { runner, env: {}, homeDir: root }, 'HEAD~2'),
+    ).resolves.toMatchObject({ ok: false, reason });
+    expect(mock.calls.some((call) => call.args[0] === 'symbolic-ref')).toBe(false);
+  });
+
+  it('creates an explicit worktree only after proving the pinned result', async () => {
+    const root = await tempDir();
+    const topLevel = join(root, 'project');
+    const sha = 'b'.repeat(40);
+    await mkdir(topLevel);
+    const mock = mockGit({
+      topLevel,
+      commonGitDir: join(topLevel, '.git'),
+      validRefs: { HEAD: sha },
+    });
+    const plan = await planWorktree(
+      topLevel,
+      'feature/explicit',
+      { runner: mock.runner, env: {}, homeDir: root },
+      'HEAD',
+    );
+    if (!plan.ok) throw new Error(plan.message);
+
+    const runner: ProcessRunner = async (file, args, options) => {
+      if (args[0] === 'worktree' && args[1] === 'add') {
+        mock.setWorktrees([{ path: plan.path, head: sha, branch: plan.branch, prunable: null }]);
+      }
+      return await mock.runner(file, args, options);
+    };
+    const result = await applyWorktreePlan(plan, {
+      runner,
+      env: {},
+      homeDir: root,
+      lockRoot: join(root, 'locks'),
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      kind: 'create-explicit',
+      status: 'created',
+      baseRef: 'HEAD',
+      baseSha: sha,
+    });
+    expect(mock.calls).toContainEqual({
+      file: 'git',
+      args: ['worktree', 'add', '-b', plan.branch, plan.path, sha],
+      cwd: topLevel,
+    });
+    expect(
+      mock.calls.filter((call) => call.args[0] === 'worktree' && call.args[1] === 'list'),
+    ).toHaveLength(2);
+  });
+
+  it('returns unknown when an explicit successful add cannot prove its retained state', async () => {
+    const root = await tempDir();
+    const topLevel = join(root, 'project');
+    await mkdir(topLevel);
+    const mock = mockGit({
+      topLevel,
+      commonGitDir: join(topLevel, '.git'),
+      validRefs: { HEAD: 'c'.repeat(40) },
+    });
+    const plan = await planWorktree(
+      topLevel,
+      'feature/explicit',
+      { runner: mock.runner, env: {}, homeDir: root },
+      'HEAD',
+    );
+    if (!plan.ok) throw new Error(plan.message);
+
+    await expect(
+      applyWorktreePlan(plan, {
+        runner: mock.runner,
+        env: {},
+        homeDir: root,
+        lockRoot: join(root, 'locks'),
+      }),
+    ).resolves.toMatchObject({ ok: false, reason: 'git-add-unknown' });
+  });
+
+  it.each([
+    [
+      'exact reuse',
+      (path: string, branch: string) => [{ path, head: 'd'.repeat(40), branch, prunable: null }],
+    ],
+    [
+      'attached branch',
+      (_path: string, branch: string) => [
+        { path: '/elsewhere', head: 'd'.repeat(40), branch, prunable: null },
+      ],
+    ],
+    [
+      'wrong target path',
+      (path: string) => [{ path, head: 'd'.repeat(40), branch: 'other', prunable: null }],
+    ],
+    [
+      'prunable target',
+      (path: string, branch: string) => [
+        { path, head: 'd'.repeat(40), branch, prunable: 'missing gitdir' },
+      ],
+    ],
+  ] as const)('rejects explicit %s before add', async (_case, buildWorktrees) => {
+    const root = await tempDir();
+    const topLevel = join(root, 'project');
+    const path = expectedWorktreePath(root, 'feature/explicit', 'project');
+    await mkdir(topLevel);
+    const mock = mockGit({
+      topLevel,
+      commonGitDir: join(topLevel, '.git'),
+      validRefs: { HEAD: 'd'.repeat(40) },
+      worktrees: buildWorktrees(path, 'feature/explicit'),
+    });
+    const plan = await planWorktree(
+      topLevel,
+      'feature/explicit',
+      { runner: mock.runner, env: {}, homeDir: root },
+      'HEAD',
+    );
+    if (!plan.ok) throw new Error(plan.message);
+
+    const result = await applyWorktreePlan(plan, {
+      runner: mock.runner,
+      env: {},
+      homeDir: root,
+      lockRoot: join(root, 'locks'),
+    });
+    expect(result.ok).toBe(false);
+    expect(mock.calls.some((call) => call.args[0] === 'worktree' && call.args[1] === 'add')).toBe(
+      false,
+    );
+  });
+
+  it('rejects an unattached local target branch with an option-safe exact ref check', async () => {
+    const root = await tempDir();
+    const topLevel = join(root, 'project');
+    await mkdir(topLevel);
+    const mock = mockGit({
+      topLevel,
+      commonGitDir: join(topLevel, '.git'),
+      validRefs: { HEAD: 'e'.repeat(40) },
+      localBranches: ['refs/heads/feature/explicit'],
+    });
+    const plan = await planWorktree(
+      topLevel,
+      'feature/explicit',
+      { runner: mock.runner, env: {}, homeDir: root },
+      'HEAD',
+    );
+    if (!plan.ok) throw new Error(plan.message);
+
+    await expect(
+      applyWorktreePlan(plan, {
+        runner: mock.runner,
+        env: {},
+        homeDir: root,
+        lockRoot: join(root, 'locks'),
+      }),
+    ).resolves.toMatchObject({ ok: false, reason: 'branch-collision' });
+    expect(mock.calls).toContainEqual({
+      file: 'git',
+      args: ['show-ref', '--verify', '--quiet', '--', 'refs/heads/feature/explicit'],
+      cwd: topLevel,
+    });
+  });
+
+  it('rejects an unmanaged explicit target path without running add', async () => {
+    const root = await tempDir();
+    const topLevel = join(root, 'project');
+    await mkdir(topLevel);
+    const mock = mockGit({
+      topLevel,
+      commonGitDir: join(topLevel, '.git'),
+      validRefs: { HEAD: 'e'.repeat(40) },
+    });
+    const plan = await planWorktree(
+      topLevel,
+      'feature/explicit',
+      { runner: mock.runner, env: {}, homeDir: root },
+      'HEAD',
+    );
+    if (!plan.ok) throw new Error(plan.message);
+    await mkdir(plan.path, { recursive: true });
+
+    await expect(
+      applyWorktreePlan(plan, {
+        runner: mock.runner,
+        env: {},
+        homeDir: root,
+        lockRoot: join(root, 'locks'),
+      }),
+    ).resolves.toMatchObject({ ok: false, reason: 'path-collision' });
+    expect(mock.calls.some((call) => call.args[0] === 'worktree' && call.args[1] === 'add')).toBe(
+      false,
+    );
+  });
+
+  it('rechecks an explicit branch race under the common-Git-dir lock', async () => {
+    const root = await tempDir();
+    const topLevel = join(root, 'project');
+    await mkdir(topLevel);
+    const mock = mockGit({
+      topLevel,
+      commonGitDir: join(topLevel, '.git'),
+      validRefs: { HEAD: 'e'.repeat(40) },
+    });
+    const plan = await planWorktree(
+      topLevel,
+      'feature/explicit',
+      { runner: mock.runner, env: {}, homeDir: root },
+      'HEAD',
+    );
+    if (!plan.ok) throw new Error(plan.message);
+    let lists = 0;
+    const runner: ProcessRunner = async (file, args, options) => {
+      if (args[0] === 'worktree' && args[1] === 'list' && ++lists === 1) {
+        mock.setLocalBranches(['refs/heads/feature/explicit']);
+      }
+      return await mock.runner(file, args, options);
+    };
+
+    await expect(
+      applyWorktreePlan(plan, {
+        runner,
+        env: {},
+        homeDir: root,
+        lockRoot: join(root, 'locks'),
+      }),
+    ).resolves.toMatchObject({ ok: false, reason: 'branch-collision' });
+  });
+
+  it('keeps an explicit timeout unknown even when no state is visible', async () => {
+    const root = await tempDir();
+    const topLevel = join(root, 'project');
+    await mkdir(topLevel);
+    const mock = mockGit({
+      topLevel,
+      commonGitDir: join(topLevel, '.git'),
+      validRefs: { HEAD: 'e'.repeat(40) },
+      addResult: {
+        outcome: 'timeout',
+        timeoutMs: 10_000,
+        signal: 'SIGTERM',
+        stdout: '',
+        stderr: '',
+      },
+    });
+    const plan = await planWorktree(
+      topLevel,
+      'feature/explicit',
+      { runner: mock.runner, env: {}, homeDir: root },
+      'HEAD',
+    );
+    if (!plan.ok) throw new Error(plan.message);
+
+    await expect(
+      applyWorktreePlan(plan, {
+        runner: mock.runner,
+        env: {},
+        homeDir: root,
+        lockRoot: join(root, 'locks'),
+      }),
+    ).resolves.toMatchObject({ ok: false, reason: 'git-add-unknown' });
+  });
+
+  it('returns definite Git failure only when an explicit failed add leaves no state', async () => {
+    const root = await tempDir();
+    const topLevel = join(root, 'project');
+    await mkdir(topLevel);
+    const mock = mockGit({
+      topLevel,
+      commonGitDir: join(topLevel, '.git'),
+      validRefs: { HEAD: 'f'.repeat(40) },
+      addResult: gitExit(1, '', 'add failed'),
+    });
+    const plan = await planWorktree(
+      topLevel,
+      'feature/explicit',
+      { runner: mock.runner, env: {}, homeDir: root },
+      'HEAD',
+    );
+    if (!plan.ok) throw new Error(plan.message);
+
+    await expect(
+      applyWorktreePlan(plan, {
+        runner: mock.runner,
+        env: {},
+        homeDir: root,
+        lockRoot: join(root, 'locks'),
+      }),
+    ).resolves.toMatchObject({ ok: false, reason: 'git-failed' });
+  });
+
+  it('never reconciles an explicit failed add to reuse', async () => {
+    const root = await tempDir();
+    const topLevel = join(root, 'project');
+    await mkdir(topLevel);
+    const mock = mockGit({
+      topLevel,
+      commonGitDir: join(topLevel, '.git'),
+      validRefs: { HEAD: '1'.repeat(40) },
+      addResult: gitExit(1, '', 'reported failure'),
+    });
+    const plan = await planWorktree(
+      topLevel,
+      'feature/explicit',
+      { runner: mock.runner, env: {}, homeDir: root },
+      'HEAD',
+    );
+    if (!plan.ok) throw new Error(plan.message);
+    const runner: ProcessRunner = async (file, args, options) => {
+      if (args[0] === 'worktree' && args[1] === 'add') {
+        mock.setWorktrees([
+          { path: plan.path, head: plan.baseSha, branch: plan.branch, prunable: null },
+        ]);
+      }
+      return await mock.runner(file, args, options);
+    };
+
+    await expect(
+      applyWorktreePlan(plan, {
+        runner,
+        env: {},
+        homeDir: root,
+        lockRoot: join(root, 'locks'),
+      }),
+    ).resolves.toMatchObject({ ok: false, reason: 'git-add-unknown' });
+  });
+
+  it('proves only the exact explicit retained state under the repository lock', async () => {
+    const root = await tempDir();
+    const topLevel = join(root, 'project');
+    const lockRoot = join(root, 'locks');
+    const sha = '2'.repeat(40);
+    await mkdir(topLevel);
+    const expectedPath = expectedWorktreePath(root, 'feature/explicit', 'project');
+    const mock = mockGit({
+      topLevel,
+      commonGitDir: join(topLevel, '.git'),
+      validRefs: { HEAD: sha },
+      worktrees: [{ path: expectedPath, head: sha, branch: 'feature/explicit', prunable: null }],
+    });
+    const plan = await planWorktree(
+      topLevel,
+      'feature/explicit',
+      { runner: mock.runner, env: {}, homeDir: root },
+      'HEAD',
+    );
+    if (!plan.ok) throw new Error(plan.message);
+
+    await expect(
+      proveRetainedWorktree(plan, { runner: mock.runner, homeDir: root, lockRoot }),
+    ).resolves.toBe(true);
+    expect(mock.calls.some((call) => call.args[0] === 'worktree' && call.args[1] === 'add')).toBe(
+      false,
+    );
+    const lockKey = createHash('sha256').update(join(topLevel, '.git')).digest('hex').slice(0, 32);
+    expect(existsSync(join(lockRoot, `${lockKey}.lock`))).toBe(false);
+  });
+
+  it.each([
+    ['wrong HEAD', { head: '3'.repeat(40), prunable: null }],
+    ['prunable', { head: '2'.repeat(40), prunable: 'missing gitdir' }],
+    ['detached', { head: '2'.repeat(40), branch: null, prunable: null }],
+  ] as const)('rejects a retained proof with %s', async (_case, entry) => {
+    const root = await tempDir();
+    const topLevel = join(root, 'project');
+    const sha = '2'.repeat(40);
+    await mkdir(topLevel);
+    const path = expectedWorktreePath(root, 'feature/explicit', 'project');
+    const mock = mockGit({
+      topLevel,
+      commonGitDir: join(topLevel, '.git'),
+      validRefs: { HEAD: sha },
+      worktrees: [{ path, branch: 'feature/explicit', ...entry }],
+    });
+    const plan = await planWorktree(
+      topLevel,
+      'feature/explicit',
+      { runner: mock.runner, env: {}, homeDir: root },
+      'HEAD',
+    );
+    if (!plan.ok) throw new Error(plan.message);
+
+    await expect(
+      proveRetainedWorktree(plan, {
+        runner: mock.runner,
+        homeDir: root,
+        lockRoot: join(root, 'locks'),
+      }),
+    ).resolves.toBe(false);
   });
 
   it('reuses only the exact branch and path pair', async () => {
