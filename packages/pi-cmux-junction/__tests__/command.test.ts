@@ -26,12 +26,16 @@ afterEach(async () => {
 
 type DefaultWorktreePlan = Extract<WorktreePlan, { kind: 'create-default' }>;
 type DefaultWorktreeSuccess = Extract<WorktreeSuccess, { kind: 'create-default' }>;
+type CheckoutWorktreePlan = Extract<WorktreePlan, { kind: 'checkout' }>;
+type CheckoutWorktreeSuccess = Extract<WorktreeSuccess, { kind: 'checkout' }>;
 
 let cwd: string;
 let sourceRoot: string;
 let worktreeRoot: string;
 let PLAN: DefaultWorktreePlan;
 let WORKTREE: DefaultWorktreeSuccess;
+let CHECKOUT_PLAN: CheckoutWorktreePlan;
+let CHECKOUT_WORKTREE: CheckoutWorktreeSuccess;
 
 beforeEach(async () => {
   const directory = await mkdtemp(join(tmpdir(), 'pi-cmux-junction-command-'));
@@ -62,6 +66,21 @@ beforeEach(async () => {
     branch: PLAN.branch,
     path: PLAN.path,
     baseRef: PLAN.baseRef,
+  };
+  CHECKOUT_PLAN = {
+    ok: true,
+    kind: 'checkout',
+    branch: 'feature/Keep-Case',
+    branchRef: 'refs/heads/feature/Keep-Case',
+    path: worktreeRoot,
+    repository: PLAN.repository,
+  };
+  CHECKOUT_WORKTREE = {
+    ok: true,
+    kind: 'checkout',
+    status: 'created',
+    branch: CHECKOUT_PLAN.branch,
+    path: CHECKOUT_PLAN.path,
   };
 });
 
@@ -95,6 +114,41 @@ describe('/junction command', () => {
       },
     ]);
     expect(getJunctionArgumentCompletions('fork --branch ')).toBeNull();
+  });
+
+  it('completes checkout only through its branch flag', () => {
+    const checkout = {
+      value: 'checkout',
+      label: 'checkout',
+      description: 'Open an existing local branch in a fresh session',
+    };
+    const branch = {
+      value: '--branch',
+      label: '--branch',
+      description: 'Branch to create or reuse',
+    };
+
+    expect(getJunctionArgumentCompletions('')).toEqual([
+      expect.objectContaining({ value: 'fork' }),
+      checkout,
+      branch,
+    ]);
+    expect(getJunctionArgumentCompletions('c')).toEqual([checkout]);
+    expect(getJunctionArgumentCompletions('checkout ')).toEqual([branch]);
+    expect(getJunctionArgumentCompletions('checkout --b')).toEqual([branch]);
+    for (const input of [
+      'checkout --branch ',
+      'checkout --branch feature/test',
+      'checkout --branch feature/test ',
+      'checkout --branch feature/test --f',
+      'checkout --branch feature/test --from ',
+      'checkout --branch refs/foo',
+      'checkout --branch refs/foo ',
+      'checkout unknown',
+      'checkout fork --branch feature/test',
+    ]) {
+      expect(getJunctionArgumentCompletions(input)).toBeNull();
+    }
   });
 
   it('offers --from only after a complete branch and HEAD only as a static commit hint', () => {
@@ -142,6 +196,7 @@ describe('/junction command', () => {
   it('trims and returns the exact branch value', () => {
     expect(parseJunctionArgs('  --branch feature/Keep-Case  ')).toEqual({
       ok: true,
+      mode: 'fresh',
       branch: 'feature/Keep-Case',
     });
   });
@@ -160,6 +215,7 @@ describe('/junction command', () => {
   it('parses explicit sources without normalizing the input token', () => {
     expect(parseJunctionArgs('--branch feature/test --from refs/tags/Release-1 ')).toEqual({
       ok: true,
+      mode: 'fresh',
       branch: 'feature/test',
       from: 'refs/tags/Release-1',
     });
@@ -169,6 +225,41 @@ describe('/junction command', () => {
       branch: 'feature/test',
       from: 'HEAD',
     });
+  });
+
+  it('parses only the exact checkout grammar and preserves the local branch name', () => {
+    expect(parseJunctionArgs('  checkout --branch Feature/Keep-Case  ')).toEqual({
+      ok: true,
+      mode: 'checkout',
+      branch: 'Feature/Keep-Case',
+    });
+    expect(parseJunctionArgs('  checkout --branch refs/foo  ')).toEqual({
+      ok: true,
+      mode: 'checkout',
+      branch: 'refs/foo',
+    });
+  });
+
+  it.each([
+    'checkout',
+    'checkout --branch',
+    'checkout --branch --unknown',
+    'checkout --branch=feature/test',
+    'checkout --branch feature/test extra',
+    'checkout --branch feature/test --branch other',
+    'checkout --unknown feature/test',
+    'checkout feature/test --branch other',
+    'checkout --branch feature/test --from HEAD',
+    'checkout --branch feature/test --from=HEAD',
+    'checkout --from HEAD --branch feature/test',
+    'checkout --branch -option',
+    'fork checkout --branch feature/test',
+    'checkout fork --branch feature/test',
+    'fork --branch feature/test checkout',
+    'checkout --branch feature/test fork',
+  ])('rejects malformed checkout grammar before orchestration: %j', (args) => {
+    const result = parseJunctionArgs(args);
+    expect(result).toMatchObject({ ok: false });
   });
 
   it.each([
@@ -186,6 +277,26 @@ describe('/junction command', () => {
     'fork --branch feature/test --from HEAD extra',
   ])('rejects malformed explicit grammar: %j', (args) => {
     expect(parseJunctionArgs(args)).toMatchObject({ ok: false });
+  });
+
+  it('rejects fork and checkout compositions before reading the fork source', async () => {
+    const waitForIdle = vi.fn(async () => undefined);
+    const getSessionFile = vi.fn(() => undefined);
+    const plan = vi.fn(async () => PLAN);
+    const planCheckout = vi.fn(async () => CHECKOUT_PLAN);
+
+    const result = await runJunctionCommand(
+      'fork checkout --branch feature/test',
+      cwd,
+      { plan, planCheckout },
+      { waitForIdle, sessionManager: { getSessionFile } },
+    );
+
+    expect(result).toMatchObject({ ok: false, status: 'invalid-command' });
+    expect(waitForIdle).not.toHaveBeenCalled();
+    expect(getSessionFile).not.toHaveBeenCalled();
+    expect(plan).not.toHaveBeenCalled();
+    expect(planCheckout).not.toHaveBeenCalled();
   });
 
   it('resolves planning from ctx.cwd and preflights before Git apply', async () => {
@@ -252,6 +363,94 @@ describe('/junction command', () => {
     });
     expect(result).not.toHaveProperty('from');
     expect(plan).toHaveBeenCalledWith(cwd, 'feature/test', expect.any(Object), source);
+  });
+
+  it('uses the checkout planner and launches a fresh session from the matching relative cwd', async () => {
+    const nested = join('packages', 'checkout');
+    await Promise.all([
+      mkdir(join(sourceRoot, nested), { recursive: true }),
+      mkdir(join(worktreeRoot, nested), { recursive: true }),
+    ]);
+    const nestedCwd = join(sourceRoot, nested);
+    const destinationCwd = await realpath(join(worktreeRoot, nested));
+    const order: string[] = [];
+    const plan = vi.fn(async () => PLAN);
+    const planCheckout = vi.fn(async () => {
+      order.push('checkout-plan');
+      return CHECKOUT_PLAN;
+    });
+    const preflight = vi.fn(async () => {
+      order.push('preflight');
+      return { ok: true as const };
+    });
+    const apply = vi.fn(async () => {
+      order.push('apply');
+      return CHECKOUT_WORKTREE;
+    });
+    const launch = vi.fn(async () => {
+      order.push('launch');
+      return { ok: true as const };
+    });
+    const waitForIdle = vi.fn(async () => undefined);
+    const getSessionFile = vi.fn(() => undefined);
+    const env = { PATH: '/usr/bin' };
+    const homeDir = '/tmp/pi-cmux-junction-home';
+
+    const result = await runJunctionCommand(
+      'checkout --branch feature/Keep-Case',
+      nestedCwd,
+      { env, homeDir, plan, planCheckout, preflight, apply, launch },
+      { waitForIdle, sessionManager: { getSessionFile } },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      status: 'created-and-launched',
+      worktree: CHECKOUT_WORKTREE,
+      launchCwd: destinationCwd,
+    });
+    expect(order).toEqual(['checkout-plan', 'preflight', 'apply', 'launch']);
+    expect(planCheckout).toHaveBeenCalledWith(
+      nestedCwd,
+      'feature/Keep-Case',
+      expect.objectContaining({ env, homeDir }),
+    );
+    expect(plan).not.toHaveBeenCalled();
+    expect(apply).toHaveBeenCalledWith(CHECKOUT_PLAN, expect.objectContaining({ env, homeDir }));
+    expect(launch).toHaveBeenCalledWith(
+      CHECKOUT_WORKTREE.branch,
+      destinationCwd,
+      expect.any(Object),
+    );
+    expect(waitForIdle).not.toHaveBeenCalled();
+    expect(getSessionFile).not.toHaveBeenCalled();
+  });
+
+  it('maps checkout reuse and missing relative cwd through the shared root fallback', async () => {
+    const nested = join('packages', 'missing-checkout');
+    await mkdir(join(sourceRoot, nested), { recursive: true });
+    const launch = vi.fn(async () => ({ ok: true as const }));
+    const reused = { ...CHECKOUT_WORKTREE, status: 'reused' as const };
+
+    const result = await runJunctionCommand(
+      'checkout --branch feature/Keep-Case',
+      join(sourceRoot, nested),
+      {
+        planCheckout: async () => CHECKOUT_PLAN,
+        preflight: async () => ({ ok: true }),
+        apply: async () => reused,
+        launch,
+      },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      status: 'reused-and-launched',
+      worktree: reused,
+      launchCwd: worktreeRoot,
+      launchCwdWarning: `Could not preserve "${nested}" because it is absent or unsafe in the target worktree; launched at the worktree root.`,
+    });
+    expect(launch).toHaveBeenCalledWith(CHECKOUT_PLAN.branch, worktreeRoot, expect.any(Object));
   });
 
   it('launches an existing repository-relative directory through a source path alias', async () => {
@@ -337,32 +536,40 @@ describe('/junction command', () => {
     },
   );
 
-  it('fails planning before mutation when cwd resolves outside the planned repository', async () => {
-    const otherRoot = join(sourceRoot, '..', 'other-repository');
-    await mkdir(otherRoot);
-    const preflight = vi.fn();
-    const apply = vi.fn();
-    const launch = vi.fn();
+  it.each(['--branch feature/test', 'checkout --branch feature/Keep-Case'])(
+    'fails %s before mutation when cwd resolves outside the planned repository',
+    async (args) => {
+      const otherRoot = join(sourceRoot, '..', 'other-repository');
+      await mkdir(otherRoot);
+      const topLevel = await realpath(otherRoot);
+      const preflight = vi.fn();
+      const apply = vi.fn();
+      const launch = vi.fn();
 
-    const result = await runJunctionCommand('--branch feature/test', cwd, {
-      plan: async () => ({
-        ...PLAN,
-        repository: { ...PLAN.repository, topLevel: await realpath(otherRoot) },
-      }),
-      preflight,
-      apply,
-      launch,
-    });
+      const result = await runJunctionCommand(args, cwd, {
+        plan: async () => ({
+          ...PLAN,
+          repository: { ...PLAN.repository, topLevel },
+        }),
+        planCheckout: async () => ({
+          ...CHECKOUT_PLAN,
+          repository: { ...CHECKOUT_PLAN.repository, topLevel },
+        }),
+        preflight,
+        apply,
+        launch,
+      });
 
-    expect(result).toEqual({
-      ok: false,
-      status: 'planning-failed',
-      message: 'Current cwd resolves outside the repository; no worktree was created.',
-    });
-    expect(preflight).not.toHaveBeenCalled();
-    expect(apply).not.toHaveBeenCalled();
-    expect(launch).not.toHaveBeenCalled();
-  });
+      expect(result).toEqual({
+        ok: false,
+        status: 'planning-failed',
+        message: 'Current cwd resolves outside the repository; no worktree was created.',
+      });
+      expect(preflight).not.toHaveBeenCalled();
+      expect(apply).not.toHaveBeenCalled();
+      expect(launch).not.toHaveBeenCalled();
+    },
+  );
 
   it('passes env and homeDir into worktree planning and apply', async () => {
     const env = {
@@ -575,6 +782,27 @@ describe('/junction command', () => {
     expect(launch).not.toHaveBeenCalled();
   });
 
+  it('propagates checkout apply failures without launching or repairing state', async () => {
+    const launch = vi.fn();
+    const result = await runJunctionCommand('checkout --branch feature/Keep-Case', cwd, {
+      planCheckout: async () => CHECKOUT_PLAN,
+      preflight: async () => ({ ok: true }),
+      apply: async () => ({
+        ok: false,
+        reason: 'prunable-worktree',
+        message: 'Prunable worktree metadata requires manual inspection.',
+      }),
+      launch,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 'worktree-failed',
+      message: 'Prunable worktree metadata requires manual inspection.',
+    });
+    expect(launch).not.toHaveBeenCalled();
+  });
+
   it('reports the attempted root when destination lookup and cmux launch fail', async () => {
     const nested = join('packages', 'app');
     await mkdir(join(sourceRoot, nested), { recursive: true });
@@ -603,6 +831,49 @@ describe('/junction command', () => {
       message: `Worktree retained after cmux launch failed: boom\nBranch: feature/test\nPath: ${worktreeRoot}\nLaunch cwd: ${worktreeRoot}\nRetry: /junction --branch feature/test`,
     });
     expect(launch).toHaveBeenCalledWith(PLAN.branch, worktreeRoot, expect.any(Object));
+  });
+
+  it('uses the exact checkout command after a definite fresh launch failure', async () => {
+    const proof = vi.fn(async () => true);
+    const result = await runJunctionCommand('checkout --branch feature/Keep-Case', cwd, {
+      planCheckout: async () => CHECKOUT_PLAN,
+      preflight: async () => ({ ok: true }),
+      apply: async () => CHECKOUT_WORKTREE,
+      launch: async () => ({ ok: false, reason: 'launch-failed', message: 'boom' }),
+      proveRetained: proof,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 'partial-launch-failed',
+      branch: CHECKOUT_WORKTREE.branch,
+      path: worktreeRoot,
+      launchCwd: worktreeRoot,
+      worktreeRetained: true,
+      message: `Worktree retained after cmux launch failed: boom\nBranch: feature/Keep-Case\nPath: ${worktreeRoot}\nLaunch cwd: ${worktreeRoot}\nRetry: /junction checkout --branch feature/Keep-Case`,
+    });
+    expect(proof).not.toHaveBeenCalled();
+  });
+
+  it('keeps an unknown checkout launch inspection-only without retained-state proof', async () => {
+    const proof = vi.fn(async () => true);
+    const result = await runJunctionCommand('checkout --branch feature/Keep-Case', cwd, {
+      planCheckout: async () => CHECKOUT_PLAN,
+      preflight: async () => ({ ok: true }),
+      apply: async () => CHECKOUT_WORKTREE,
+      launch: async () => ({ ok: false, reason: 'launch-unknown', message: 'timed out' }),
+      proveRetained: proof,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 'partial-launch-unknown',
+      retrySafe: false,
+    });
+    if (result.ok) throw new Error('Expected cmux launch to be unknown.');
+    expect(result.message).toContain('inspect cmux');
+    expect(result.message).not.toContain('Retry:');
+    expect(proof).not.toHaveBeenCalled();
   });
 
   it('preserves the fork command in retry guidance after a retained worktree', async () => {
@@ -829,6 +1100,37 @@ describe('/junction command', () => {
     });
     expect(launch).toHaveBeenCalledWith('feature/test', expectedLaunchCwd, expect.any(Object));
   });
+
+  it.each(['created', 'reused'] as const)(
+    'notifies checkout %s without a create source',
+    async (status) => {
+      let handler: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
+      const pi = {
+        registerCommand: vi.fn((_name, options) => {
+          handler = options.handler;
+        }),
+      };
+      const notify = vi.fn();
+
+      registerJunctionCommand(pi, {
+        planCheckout: async () => CHECKOUT_PLAN,
+        preflight: async () => ({ ok: true }),
+        apply: async () => ({ ...CHECKOUT_WORKTREE, status }),
+        launch: async () => ({ ok: true }),
+      });
+      await handler?.('checkout --branch feature/Keep-Case', {
+        cwd,
+        ui: { notify },
+      } as unknown as ExtensionCommandContext);
+
+      const verb = status === 'created' ? 'Created' : 'Reused';
+      expect(notify).toHaveBeenCalledWith(
+        `${verb} worktree and launched cmux workspace.\nBranch: feature/Keep-Case\nPath: ${worktreeRoot}\nLaunch cwd: ${worktreeRoot}`,
+        'info',
+      );
+      expect(notify.mock.calls[0]?.[0]).not.toContain('From:');
+    },
+  );
 
   it('notifies the pinned source for an explicit create', async () => {
     const sha = '0123456789abcdef0123456789abcdef01234567';
