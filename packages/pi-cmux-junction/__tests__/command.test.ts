@@ -80,7 +80,6 @@ beforeEach(async () => {
     kind: 'checkout',
     status: 'created',
     branch: CHECKOUT_PLAN.branch,
-    branchRef: CHECKOUT_PLAN.branchRef,
     path: CHECKOUT_PLAN.path,
   };
 });
@@ -143,6 +142,8 @@ describe('/junction command', () => {
       'checkout --branch feature/test ',
       'checkout --branch feature/test --f',
       'checkout --branch feature/test --from ',
+      'checkout --branch refs/foo',
+      'checkout --branch refs/foo ',
       'checkout unknown',
       'checkout fork --branch feature/test',
     ]) {
@@ -232,6 +233,11 @@ describe('/junction command', () => {
       mode: 'checkout',
       branch: 'Feature/Keep-Case',
     });
+    expect(parseJunctionArgs('  checkout --branch refs/foo  ')).toEqual({
+      ok: true,
+      mode: 'checkout',
+      branch: 'refs/foo',
+    });
   });
 
   it.each([
@@ -246,8 +252,6 @@ describe('/junction command', () => {
     'checkout --branch feature/test --from HEAD',
     'checkout --branch feature/test --from=HEAD',
     'checkout --from HEAD --branch feature/test',
-    'checkout --branch refs/heads/feature/test',
-    'checkout --branch refs/remotes/origin/feature/test',
     'checkout --branch -option',
     'fork checkout --branch feature/test',
     'checkout fork --branch feature/test',

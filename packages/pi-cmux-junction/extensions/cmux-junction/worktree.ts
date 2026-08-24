@@ -140,7 +140,6 @@ interface CheckoutWorktreeSuccess {
   status: 'created' | 'reused';
   branch: string;
   path: string;
-  branchRef: string;
 }
 
 export type WorktreeSuccess =
@@ -154,7 +153,6 @@ async function planWorktreeTarget(
   cwd: string,
   requestedBranch: string,
   options: WorktreeOptions,
-  rejectQualifiedRef = false,
 ): Promise<WorktreePlanBase | WorktreeFailure> {
   const root = resolveWorktreeRoot(options);
   if (!root.ok) {
@@ -171,14 +169,6 @@ async function planWorktreeTarget(
   }
 
   const branch = requestedBranch.trim();
-  if (rejectQualifiedRef && branch.startsWith('refs/')) {
-    return {
-      ok: false,
-      reason: 'invalid-branch',
-      message: `Invalid Git branch name: ${branch}`,
-    };
-  }
-
   const validation = await git(
     repository.topLevel,
     ['check-ref-format', '--branch', branch],
@@ -258,7 +248,7 @@ export async function planCheckoutWorktree(
   requestedBranch: string,
   options: WorktreeOptions = {},
 ): Promise<CheckoutWorktreePlan | WorktreeFailure> {
-  const target = await planWorktreeTarget(cwd, requestedBranch, options, true);
+  const target = await planWorktreeTarget(cwd, requestedBranch, options);
   if (!target.ok) {
     return target;
   }
@@ -388,9 +378,6 @@ export async function applyWorktreePlan(
       options,
     );
     if (!processSucceeded(result)) {
-      if (isCheckoutPlan(plan)) {
-        return await reconcileFailedCheckoutAdd(plan, result, options);
-      }
       return isExplicitPlan(plan)
         ? await reconcileFailedExplicitAdd(plan, result, options)
         : await reconcileFailedAdd(plan, result, options);
@@ -950,7 +937,6 @@ function toSuccess(plan: WorktreePlan, status: WorktreeSuccess['status']): Workt
       status,
       branch: plan.branch,
       path: plan.path,
-      branchRef: plan.branchRef,
     };
   }
   if (isExplicitPlan(plan)) {
@@ -1041,63 +1027,6 @@ function prunableFailure(
   };
 }
 
-async function reconcileFailedCheckoutAdd(
-  plan: CheckoutWorktreePlan,
-  result: ProcessResult,
-  options: WorktreeOptions,
-): Promise<WorktreeApplyResult> {
-  const worktrees = await listWorktrees(plan.repository.topLevel, options);
-  if (worktrees === null) {
-    return unknownWorktreeState(
-      plan,
-      `Checkout Git worktree add failed (${processError(result)}), and Junction could not relist worktrees.`,
-    );
-  }
-
-  const state = inspectWorktrees(worktrees, plan.path, plan.branch);
-  if (state === 'prunable') {
-    return prunableFailure(plan, worktrees);
-  }
-  if (state === 'exact-reuse') {
-    return toSuccess(plan, 'reused');
-  }
-  if (state === 'path-collision') {
-    return collision('path-collision', 'An existing worktree already uses the requested path.');
-  }
-  if (state === 'branch-collision') {
-    return collision('branch-collision', 'An existing worktree already uses the requested branch.');
-  }
-  if (isUnmanagedPath(plan.path, worktrees)) {
-    return collision(
-      'path-collision',
-      `Target path already exists and is not a Git worktree: ${plan.path}`,
-    );
-  }
-
-  const branchState = await checkoutBranchState(plan.repository.topLevel, plan.branchRef, options);
-  if (branchState === 'missing') {
-    return missingLocalBranch(plan.branch);
-  }
-  if (branchState === 'unknown') {
-    return unknownWorktreeState(
-      plan,
-      `Checkout Git worktree add failed (${processError(result)}), and Junction could not verify the local branch.`,
-    );
-  }
-  if (result.outcome === 'exit' || result.outcome === 'spawn-failed') {
-    return {
-      ok: false,
-      reason: 'git-failed',
-      message: `Git worktree add failed: ${processError(result)}`,
-    };
-  }
-
-  return unknownWorktreeState(
-    plan,
-    `Checkout Git worktree add did not complete cleanly (${processError(result)}), and its effects could not be reconciled.`,
-  );
-}
-
 async function reconcileFailedExplicitAdd(
   plan: ExplicitWorktreePlan,
   result: ProcessResult,
@@ -1171,6 +1100,22 @@ async function reconcileFailedAdd(
       'path-collision',
       `Target path already exists and is not a Git worktree: ${plan.path}`,
     );
+  }
+  if (isCheckoutPlan(plan)) {
+    const branchState = await checkoutBranchState(
+      plan.repository.topLevel,
+      plan.branchRef,
+      options,
+    );
+    if (branchState === 'missing') {
+      return missingLocalBranch(plan.branch);
+    }
+    if (branchState === 'unknown') {
+      return unknownWorktreeState(
+        plan,
+        `Checkout Git worktree add failed (${processError(result)}), and Junction could not verify the local branch.`,
+      );
+    }
   }
   if (result.outcome === 'exit' || result.outcome === 'spawn-failed') {
     return {

@@ -635,21 +635,35 @@ describe('worktree planning and apply', () => {
     });
   });
 
-  it('rejects ref-qualified checkout input at the planning boundary', async () => {
+  it('accepts a local branch short name beginning with refs/', async () => {
     const root = await tempDir();
     const topLevel = join(root, 'project');
+    const branch = 'refs/foo';
+    const branchRef = `refs/heads/${branch}`;
     await mkdir(topLevel);
-    const mock = mockGit({ topLevel, commonGitDir: join(topLevel, '.git') });
+    const mock = mockGit({
+      topLevel,
+      commonGitDir: join(topLevel, '.git'),
+      validRefs: { [branchRef]: 'tip' },
+    });
 
     await expect(
-      planCheckoutWorktree(topLevel, 'refs/heads/feature/existing', {
+      planCheckoutWorktree(topLevel, branch, {
         runner: mock.runner,
         env: {},
         homeDir: root,
       }),
-    ).resolves.toMatchObject({ ok: false, reason: 'invalid-branch' });
-    expect(mock.calls.some((call) => call.args[0] === 'check-ref-format')).toBe(false);
-    expect(mock.calls.some((call) => call.args[1] === '--verify')).toBe(false);
+    ).resolves.toMatchObject({ ok: true, kind: 'checkout', branch, branchRef });
+    expect(mock.calls).toContainEqual({
+      file: 'git',
+      args: ['check-ref-format', '--branch', branch],
+      cwd: topLevel,
+    });
+    expect(mock.calls).toContainEqual({
+      file: 'git',
+      args: ['rev-parse', '--verify', '--quiet', '--end-of-options', `${branchRef}^{commit}`],
+      cwd: topLevel,
+    });
   });
 
   it.each([
@@ -710,7 +724,6 @@ describe('worktree planning and apply', () => {
       kind: 'checkout',
       status: 'created',
       branch,
-      branchRef,
       path: plan.path,
     });
     expect(mock.calls).toContainEqual({

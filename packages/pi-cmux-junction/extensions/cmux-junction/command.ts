@@ -248,8 +248,7 @@ function parseCheckoutArgs(tokens: string[]): JunctionParseResult {
     tokens[0] !== BRANCH_FLAG ||
     branch === undefined ||
     branch.length === 0 ||
-    branch.startsWith('-') ||
-    branch.startsWith('refs/')
+    branch.startsWith('-')
   ) {
     return {
       ok: false,
