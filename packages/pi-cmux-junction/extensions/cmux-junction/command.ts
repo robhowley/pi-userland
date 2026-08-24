@@ -11,6 +11,7 @@ import {
 import type { ProcessRunner } from './process.js';
 import {
   applyWorktreePlan,
+  planCheckoutWorktree,
   planWorktree,
   proveRetainedWorktree,
   type ExplicitWorktreePlan,
@@ -20,11 +21,12 @@ import {
 
 export const JUNCTION_COMMAND = 'junction';
 const FORK_SUBCOMMAND = 'fork';
+const CHECKOUT_SUBCOMMAND = 'checkout';
 const BRANCH_FLAG = '--branch';
 const FROM_FLAG = '--from';
 const FRESH_USAGE = `Usage: /junction ${BRANCH_FLAG} <name> [${FROM_FLAG} <commit-ish>]`;
 const FORK_USAGE = `Usage: /junction ${FORK_SUBCOMMAND} ${BRANCH_FLAG} <name> [${FROM_FLAG} <commit-ish>]`;
-const USAGE = FRESH_USAGE;
+const CHECKOUT_USAGE = `Usage: /junction ${CHECKOUT_SUBCOMMAND} ${BRANCH_FLAG} <local-branch>`;
 
 export interface JunctionSessionContext {
   waitForIdle: () => Promise<void>;
@@ -39,6 +41,12 @@ type JunctionPlanner = (
   options: WorktreeOptions,
   from?: string,
 ) => ReturnType<typeof planWorktree>;
+
+type JunctionCheckoutPlanner = (
+  cwd: string,
+  branch: string,
+  options: WorktreeOptions,
+) => ReturnType<typeof planCheckoutWorktree>;
 
 /**
  * Read-only proof that an explicit create retained the exact path, branch, and pinned commit.
@@ -56,6 +64,7 @@ export interface JunctionCommandOptions {
   lockRoot?: string;
   timeoutMs?: number;
   plan?: JunctionPlanner;
+  planCheckout?: JunctionCheckoutPlanner;
   preflight?: typeof preflightCmux;
   apply?: typeof applyWorktreePlan;
   launch?: typeof launchCmuxWorkspace;
@@ -101,7 +110,7 @@ export function registerJunctionCommand(
 ): void {
   pi.registerCommand(JUNCTION_COMMAND, {
     description:
-      'Create or reuse a branch worktree from a committed Git ref and launch Pi in a new cmux workspace',
+      'Create a branch worktree or check out an existing local branch, then launch Pi in a new cmux workspace',
     getArgumentCompletions: getJunctionArgumentCompletions,
     handler: async (args, ctx) => {
       const result = await runJunctionCommand(args, ctx.cwd, options, ctx);
@@ -120,6 +129,11 @@ const FORK_COMPLETION = {
   label: FORK_SUBCOMMAND,
   description: 'Fork the current persisted session',
 };
+const CHECKOUT_COMPLETION = {
+  value: CHECKOUT_SUBCOMMAND,
+  label: CHECKOUT_SUBCOMMAND,
+  description: 'Open an existing local branch in a fresh session',
+};
 const FROM_COMPLETION = {
   value: FROM_FLAG,
   label: FROM_FLAG,
@@ -135,24 +149,38 @@ const HEAD_COMPLETION = {
 export function getJunctionArgumentCompletions(prefix: string) {
   const input = prefix.trimStart();
   if (input.length === 0) {
-    return [FORK_COMPLETION, BRANCH_COMPLETION];
+    return [FORK_COMPLETION, CHECKOUT_COMPLETION, BRANCH_COMPLETION];
   }
 
   const trailingWhitespace = /\s$/u.test(input);
   const tokens = input.trim().split(/\s+/u);
-  const mode = tokens[0] === FORK_SUBCOMMAND ? 'fork' : 'fresh';
+  const firstToken = tokens[0] ?? '';
+
+  if (firstToken === CHECKOUT_SUBCOMMAND) {
+    if (tokens.length === 1) {
+      return trailingWhitespace ? [BRANCH_COMPLETION] : [CHECKOUT_COMPLETION];
+    }
+    if (tokens.length === 2) {
+      const token = tokens[1] ?? '';
+      return BRANCH_FLAG.startsWith(token) && !trailingWhitespace ? [BRANCH_COMPLETION] : null;
+    }
+    return null;
+  }
+
+  const mode = firstToken === FORK_SUBCOMMAND ? 'fork' : 'fresh';
   const argumentsStart = mode === 'fork' ? 1 : 0;
 
-  if (mode === 'fresh' && tokens[0] !== undefined && !tokens[0].startsWith('-')) {
-    return FORK_SUBCOMMAND.startsWith(tokens[0]) && !trailingWhitespace && tokens.length === 1
-      ? [FORK_COMPLETION]
-      : null;
+  if (mode === 'fresh' && !firstToken.startsWith('-')) {
+    if (trailingWhitespace || tokens.length !== 1) return null;
+    if (FORK_SUBCOMMAND.startsWith(firstToken)) return [FORK_COMPLETION];
+    if (CHECKOUT_SUBCOMMAND.startsWith(firstToken)) return [CHECKOUT_COMPLETION];
+    return null;
   }
   if (mode === 'fork' && tokens.length === 1 && trailingWhitespace) {
     return [BRANCH_COMPLETION];
   }
   if (mode === 'fork' && tokens.length === 1) {
-    return FORK_SUBCOMMAND.startsWith(tokens[0] ?? '') ? [FORK_COMPLETION] : null;
+    return FORK_SUBCOMMAND.startsWith(firstToken) ? [FORK_COMPLETION] : null;
   }
 
   const argumentTokens = tokens.slice(argumentsStart);
@@ -194,19 +222,48 @@ export function getJunctionArgumentCompletions(prefix: string) {
 }
 
 export type JunctionParseResult =
-  | { ok: true; branch: string; from?: string }
+  | { ok: true; mode: 'fresh'; branch: string; from?: string }
   | { ok: true; mode: 'fork'; branch: string; from?: string }
+  | { ok: true; mode: 'checkout'; branch: string }
   | { ok: false; message: string };
 
 export function parseJunctionArgs(args: string): JunctionParseResult {
   const tokens = args.trim().length === 0 ? [] : args.trim().split(/\s+/u);
   if (tokens[0] === FORK_SUBCOMMAND) {
-    return parseBranchArgs(tokens.slice(1), FORK_USAGE, true);
+    return parseBranchArgs(tokens.slice(1), FORK_USAGE, 'fork');
   }
-  return parseBranchArgs(tokens, USAGE, false);
+  if (tokens[0] === CHECKOUT_SUBCOMMAND) {
+    return parseCheckoutArgs(tokens.slice(1));
+  }
+  return parseBranchArgs(tokens, FRESH_USAGE, 'fresh');
 }
 
-function parseBranchArgs(tokens: string[], usage: string, fork: boolean): JunctionParseResult {
+function parseCheckoutArgs(tokens: string[]): JunctionParseResult {
+  if (tokens.length === 0 || (tokens.length === 1 && tokens[0] === BRANCH_FLAG)) {
+    return { ok: false, message: `Local branch name is required. ${CHECKOUT_USAGE}` };
+  }
+  const branch = tokens[1];
+  if (
+    tokens.length !== 2 ||
+    tokens[0] !== BRANCH_FLAG ||
+    branch === undefined ||
+    branch.length === 0 ||
+    branch.startsWith('-') ||
+    branch.startsWith('refs/')
+  ) {
+    return {
+      ok: false,
+      message: `Expected exactly ${BRANCH_FLAG} <local-branch>. ${CHECKOUT_USAGE}`,
+    };
+  }
+  return { ok: true, mode: 'checkout', branch };
+}
+
+function parseBranchArgs(
+  tokens: string[],
+  usage: string,
+  mode: 'fresh' | 'fork',
+): JunctionParseResult {
   if (tokens.length === 0 || (tokens.length === 1 && tokens[0] === BRANCH_FLAG)) {
     return { ok: false, message: `Branch name is required. ${usage}` };
   }
@@ -219,7 +276,7 @@ function parseBranchArgs(tokens: string[], usage: string, fork: boolean): Juncti
     return { ok: false, message: `Expected exactly one branch and no other arguments. ${usage}` };
   }
   if (tokens.length === 2) {
-    return fork ? { ok: true, mode: 'fork', branch } : { ok: true, branch };
+    return { ok: true, mode, branch };
   }
   if (tokens[2] !== FROM_FLAG) {
     return { ok: false, message: `Expected ${FROM_FLAG} after the branch. ${usage}` };
@@ -229,7 +286,7 @@ function parseBranchArgs(tokens: string[], usage: string, fork: boolean): Juncti
   if (from === undefined || from.length === 0 || from.startsWith('--') || tokens.length !== 4) {
     return { ok: false, message: `Expected one commit-ish after ${FROM_FLAG}. ${usage}` };
   }
-  return fork ? { ok: true, mode: 'fork', branch, from } : { ok: true, branch, from };
+  return { ok: true, mode, branch, from };
 }
 
 export async function runJunctionCommand(
@@ -243,7 +300,7 @@ export async function runJunctionCommand(
     return { ok: false, status: 'invalid-command', message: parsed.message };
   }
 
-  const mode = 'mode' in parsed ? parsed.mode : 'fresh';
+  const { mode } = parsed;
   let recipe: CmuxLaunchRecipe | undefined;
   if (mode === 'fork') {
     const source = await captureForkSourceSession(context);
@@ -254,12 +311,10 @@ export async function runJunctionCommand(
   }
 
   const worktreeOptions = buildWorktreeOptions(options);
-  const plan = await (options.plan ?? planWorktree)(
-    cwd,
-    parsed.branch,
-    worktreeOptions,
-    parsed.from,
-  );
+  const plan =
+    mode === 'checkout'
+      ? await (options.planCheckout ?? planCheckoutWorktree)(cwd, parsed.branch, worktreeOptions)
+      : await (options.plan ?? planWorktree)(cwd, parsed.branch, worktreeOptions, parsed.from);
   if (!plan.ok) {
     return { ok: false, status: 'planning-failed', message: plan.message };
   }
@@ -321,7 +376,9 @@ export async function runJunctionCommand(
     const retry =
       mode === 'fork'
         ? `/junction ${FORK_SUBCOMMAND} ${BRANCH_FLAG} ${worktree.branch}`
-        : `/junction ${BRANCH_FLAG} ${worktree.branch}`;
+        : mode === 'checkout'
+          ? `/junction ${CHECKOUT_SUBCOMMAND} ${BRANCH_FLAG} ${worktree.branch}`
+          : `/junction ${BRANCH_FLAG} ${worktree.branch}`;
     if (plan.kind === 'create-explicit') {
       const proofPassed = await proveExplicitRetention(
         plan,
