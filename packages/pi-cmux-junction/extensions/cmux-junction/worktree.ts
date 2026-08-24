@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, realpath, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import {
@@ -276,7 +276,7 @@ export async function applyWorktreePlan(
 
     if (isExplicitPlan(plan)) {
       const postAddWorktrees = await listWorktrees(plan.repository.topLevel, options);
-      if (postAddWorktrees === null || !matchesRetainedWorktree(plan, postAddWorktrees)) {
+      if (postAddWorktrees === null || !(await matchesRetainedWorktree(plan, postAddWorktrees))) {
         return unknownWorktreeState(
           plan,
           'Git worktree add succeeded, but Junction could not prove the exact retained worktree state.',
@@ -310,7 +310,7 @@ export async function proveRetainedWorktree(
 
   try {
     const worktrees = await listWorktrees(plan.repository.topLevel, options);
-    return worktrees !== null && matchesRetainedWorktree(plan, worktrees);
+    return worktrees !== null && (await matchesRetainedWorktree(plan, worktrees));
   } finally {
     await lock.release();
   }
@@ -733,29 +733,25 @@ function isUnmanagedPath(path: string, worktrees: readonly GitWorktreeEntry[]): 
   return existsSync(path) && !worktrees.some((entry) => resolve(entry.path) === path);
 }
 
-function matchesRetainedWorktree(
+async function matchesRetainedWorktree(
   plan: ExplicitWorktreePlan,
   worktrees: readonly GitWorktreeEntry[],
-): boolean {
+): Promise<boolean> {
+  let physicalPath: string;
+  try {
+    physicalPath = await realpath(plan.path);
+  } catch {
+    return false;
+  }
+
   const matching = worktrees.filter(
     (entry) =>
-      resolve(entry.path) === resolve(plan.path) &&
+      resolve(entry.path) === physicalPath &&
       entry.branch !== null &&
       stripRefsHeads(entry.branch) === plan.branch,
   );
   return (
     matching.length === 1 && matching[0]?.prunable === null && matching[0]?.head === plan.baseSha
-  );
-}
-
-function hasExplicitTargetState(
-  plan: ExplicitWorktreePlan,
-  worktrees: readonly GitWorktreeEntry[],
-): boolean {
-  return worktrees.some(
-    (entry) =>
-      resolve(entry.path) === resolve(plan.path) ||
-      (entry.branch !== null && stripRefsHeads(entry.branch) === plan.branch),
   );
 }
 
@@ -898,7 +894,7 @@ async function reconcileFailedExplicitAdd(
   if (
     branchState === 'unknown' ||
     branchState === 'present' ||
-    hasExplicitTargetState(plan, worktrees) ||
+    inspectWorktrees(worktrees, plan.path, plan.branch) !== 'available' ||
     existsSync(plan.path)
   ) {
     return unknownWorktreeState(

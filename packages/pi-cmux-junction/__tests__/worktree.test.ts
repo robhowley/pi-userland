@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -574,7 +574,10 @@ describe('worktree planning and apply', () => {
 
     const runner: ProcessRunner = async (file, args, options) => {
       if (args[0] === 'worktree' && args[1] === 'add') {
-        mock.setWorktrees([{ path: plan.path, head: sha, branch: plan.branch, prunable: null }]);
+        await mkdir(plan.path, { recursive: true });
+        mock.setWorktrees([
+          { path: await realpath(plan.path), head: sha, branch: plan.branch, prunable: null },
+        ]);
       }
       return await mock.runner(file, args, options);
     };
@@ -600,6 +603,59 @@ describe('worktree planning and apply', () => {
     expect(
       mock.calls.filter((call) => call.args[0] === 'worktree' && call.args[1] === 'list'),
     ).toHaveLength(2);
+  });
+
+  it('proves an explicit worktree through a symlinked configured root', async () => {
+    const root = await tempDir();
+    const topLevel = join(root, 'project');
+    const configuredRoot = join(root, 'configured-root');
+    const physicalRoot = join(root, 'physical-root');
+    const lockRoot = join(root, 'locks');
+    const sha = 'c'.repeat(40);
+    await Promise.all([mkdir(topLevel), mkdir(physicalRoot)]);
+    await symlink(physicalRoot, configuredRoot, 'dir');
+    const mock = mockGit({
+      topLevel,
+      commonGitDir: join(topLevel, '.git'),
+      validRefs: { HEAD: sha },
+    });
+    const options = {
+      runner: mock.runner,
+      env: { PI_CMUX_JUNCTION_WORKTREE_ROOT: configuredRoot },
+      homeDir: root,
+      lockRoot,
+    };
+    const plan = await planWorktree(topLevel, 'feature/explicit', options, 'HEAD');
+    if (!plan.ok) throw new Error(plan.message);
+    if (plan.kind !== 'create-explicit') throw new Error('Expected an explicit create plan.');
+    expect(plan.path).toBe(join(configuredRoot, 'project-feature-explicit'));
+
+    const runner: ProcessRunner = async (file, args, processOptions) => {
+      if (args[0] === 'worktree' && args[1] === 'add') {
+        await mkdir(plan.path, { recursive: true });
+        mock.setWorktrees([
+          {
+            path: await realpath(plan.path),
+            head: sha,
+            branch: plan.branch,
+            prunable: null,
+          },
+        ]);
+      }
+      return await mock.runner(file, args, processOptions);
+    };
+
+    await expect(applyWorktreePlan(plan, { ...options, runner })).resolves.toMatchObject({
+      ok: true,
+      status: 'created',
+      path: plan.path,
+    });
+    expect(mock.calls).toContainEqual({
+      file: 'git',
+      args: ['worktree', 'add', '-b', plan.branch, plan.path, sha],
+      cwd: topLevel,
+    });
+    await expect(proveRetainedWorktree(plan, options)).resolves.toBe(true);
   });
 
   it('returns unknown when an explicit successful add cannot prove its retained state', async () => {
@@ -888,7 +944,6 @@ describe('worktree planning and apply', () => {
       topLevel,
       commonGitDir: join(topLevel, '.git'),
       validRefs: { HEAD: sha },
-      worktrees: [{ path: expectedPath, head: sha, branch: 'feature/explicit', prunable: null }],
     });
     const plan = await planWorktree(
       topLevel,
@@ -898,6 +953,15 @@ describe('worktree planning and apply', () => {
     );
     if (!plan.ok) throw new Error(plan.message);
     if (plan.kind !== 'create-explicit') throw new Error('Expected an explicit create plan.');
+    await mkdir(expectedPath, { recursive: true });
+    mock.setWorktrees([
+      {
+        path: await realpath(expectedPath),
+        head: sha,
+        branch: 'feature/explicit',
+        prunable: null,
+      },
+    ]);
 
     await expect(
       proveRetainedWorktree(plan, { runner: mock.runner, homeDir: root, lockRoot }),
@@ -919,11 +983,12 @@ describe('worktree planning and apply', () => {
     const sha = '2'.repeat(40);
     await mkdir(topLevel);
     const path = expectedWorktreePath(root, 'feature/explicit', 'project');
+    await mkdir(path, { recursive: true });
     const mock = mockGit({
       topLevel,
       commonGitDir: join(topLevel, '.git'),
       validRefs: { HEAD: sha },
-      worktrees: [{ path, branch: 'feature/explicit', ...entry }],
+      worktrees: [{ path: await realpath(path), branch: 'feature/explicit', ...entry }],
     });
     const plan = await planWorktree(
       topLevel,
