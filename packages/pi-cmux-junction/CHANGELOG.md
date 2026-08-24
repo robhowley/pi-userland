@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0](https://github.com/robhowley/pi-userland/compare/pi-cmux-junction-v0.2.1...pi-cmux-junction-v0.3.0) (2026-08-24)
+
+
+### Features
+
+* **pi-cmux-junction:** add existing local branch checkout ([#186](https://github.com/robhowley/pi-userland/issues/186)) ([4ebd181](https://github.com/robhowley/pi-userland/commit/4ebd1815767a9958652dfec93095876213eb3a5b))
+* **pi-cmux-junction:** add explicit worktree base ([#184](https://github.com/robhowley/pi-userland/issues/184)) ([04cf749](https://github.com/robhowley/pi-userland/commit/04cf7494f7f4364e83d4fc04fc534535759d4783))
+
 ## [0.2.1](https://github.com/robhowley/pi-userland/compare/pi-cmux-junction-v0.2.0...pi-cmux-junction-v0.2.1) (2026-08-21)
 
 
