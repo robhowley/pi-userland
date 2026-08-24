@@ -9,7 +9,11 @@ import {
   runJunctionCommand,
 } from '../extensions/cmux-junction/command.js';
 import type { ProcessRunner } from '../extensions/cmux-junction/process.js';
-import type { WorktreeOptions, WorktreePlan } from '../extensions/cmux-junction/worktree.js';
+import type {
+  WorktreeOptions,
+  WorktreePlan,
+  WorktreeSuccess,
+} from '../extensions/cmux-junction/worktree.js';
 import type { ExtensionCommandContext } from '@earendil-works/pi-coding-agent';
 
 const tempDirectories: string[] = [];
@@ -20,19 +24,14 @@ afterEach(async () => {
   );
 });
 
-type SuccessfulWorktreePlan = Extract<WorktreePlan, { ok: true }>;
+type DefaultWorktreePlan = Extract<WorktreePlan, { kind: 'create-default' }>;
+type DefaultWorktreeSuccess = Extract<WorktreeSuccess, { kind: 'create-default' }>;
 
 let cwd: string;
 let sourceRoot: string;
 let worktreeRoot: string;
-let PLAN: SuccessfulWorktreePlan;
-let WORKTREE: {
-  ok: true;
-  status: 'created';
-  branch: string;
-  path: string;
-  baseRef: string;
-};
+let PLAN: DefaultWorktreePlan;
+let WORKTREE: DefaultWorktreeSuccess;
 
 beforeEach(async () => {
   const directory = await mkdtemp(join(tmpdir(), 'pi-cmux-junction-command-'));
@@ -45,6 +44,7 @@ beforeEach(async () => {
   cwd = sourceRoot;
   PLAN = {
     ok: true,
+    kind: 'create-default',
     branch: 'feature/test',
     path: worktreeRoot,
     baseRef: 'origin/main',
@@ -57,6 +57,7 @@ beforeEach(async () => {
   };
   WORKTREE = {
     ok: true,
+    kind: 'create-default',
     status: 'created',
     branch: PLAN.branch,
     path: PLAN.path,
@@ -96,6 +97,31 @@ describe('/junction command', () => {
     expect(getJunctionArgumentCompletions('fork --branch ')).toBeNull();
   });
 
+  it('offers --from only after a complete branch and HEAD only as a static commit hint', () => {
+    const from = {
+      value: '--from',
+      label: '--from',
+      description: 'Create from a committed Git ref; working-tree changes are not copied',
+    };
+    const head = {
+      value: 'HEAD',
+      label: 'HEAD',
+      description:
+        'Current committed commit; staged, unstaged, untracked, and ignored changes are not copied',
+    };
+
+    expect(getJunctionArgumentCompletions('--branch feature/test ')).toEqual([from]);
+    expect(getJunctionArgumentCompletions('fork --branch feature/test ')).toEqual([from]);
+    expect(getJunctionArgumentCompletions('--branch feature/test --f')).toEqual([from]);
+    expect(getJunctionArgumentCompletions('--branch feature/test --from ')).toEqual([head]);
+    expect(getJunctionArgumentCompletions('--branch feature/test --from H')).toEqual([head]);
+    expect(getJunctionArgumentCompletions('--branch feature/test --from HEAD ')).toBeNull();
+    expect(
+      getJunctionArgumentCompletions('--branch feature/test --from refs/heads/main'),
+    ).toBeNull();
+    expect(getJunctionArgumentCompletions('--branch --from ')).toBeNull();
+  });
+
   it.each([
     '',
     '--branch',
@@ -131,6 +157,37 @@ describe('/junction command', () => {
     }
   });
 
+  it('parses explicit sources without normalizing the input token', () => {
+    expect(parseJunctionArgs('--branch feature/test --from refs/tags/Release-1 ')).toEqual({
+      ok: true,
+      branch: 'feature/test',
+      from: 'refs/tags/Release-1',
+    });
+    expect(parseJunctionArgs('fork --branch feature/test --from HEAD')).toEqual({
+      ok: true,
+      mode: 'fork',
+      branch: 'feature/test',
+      from: 'HEAD',
+    });
+  });
+
+  it.each([
+    '--branch',
+    '--branch --from HEAD',
+    '--branch feature/test --from',
+    '--branch feature/test --from --unknown',
+    '--branch feature/test --from HEAD --from main',
+    '--branch feature/test --from HEAD --branch other',
+    '--from HEAD --branch feature/test',
+    '--branch=feature/test',
+    '--branch feature/test --from=HEAD',
+    '--branch feature/test positional',
+    'fork --from HEAD --branch feature/test',
+    'fork --branch feature/test --from HEAD extra',
+  ])('rejects malformed explicit grammar: %j', (args) => {
+    expect(parseJunctionArgs(args)).toMatchObject({ ok: false });
+  });
+
   it('resolves planning from ctx.cwd and preflights before Git apply', async () => {
     const order: string[] = [];
     const plan = vi.fn(async (cwd: string) => {
@@ -160,6 +217,41 @@ describe('/junction command', () => {
     ).resolves.toMatchObject({ ok: true, status: 'created-and-launched' });
     expect(order).toEqual([`plan:${cwd}`, 'preflight', 'apply', 'launch']);
     expect(launch).toHaveBeenCalledWith(PLAN.branch, worktreeRoot, expect.any(Object));
+  });
+
+  it('passes the exact --from token to planning and returns the explicit worktree source', async () => {
+    const source = 'refs/tags/Release-1';
+    const sha = '0123456789abcdef0123456789abcdef01234567';
+    const plan = vi.fn(
+      async (_cwd: string, _branch: string, _options: WorktreeOptions, from?: string) => ({
+        ...PLAN,
+        kind: 'create-explicit' as const,
+        baseRef: from ?? '',
+        baseSha: sha,
+      }),
+    );
+    const apply = vi.fn(async () => ({
+      ...WORKTREE,
+      kind: 'create-explicit' as const,
+      status: 'created' as const,
+      baseRef: source,
+      baseSha: sha,
+    }));
+
+    const result = await runJunctionCommand(`--branch feature/test --from ${source}`, cwd, {
+      plan,
+      preflight: async () => ({ ok: true }),
+      apply,
+      launch: async () => ({ ok: true }),
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'created-and-launched',
+      worktree: { kind: 'create-explicit', baseRef: source, baseSha: sha },
+    });
+    expect(result).not.toHaveProperty('from');
+    expect(plan).toHaveBeenCalledWith(cwd, 'feature/test', expect.any(Object), source);
   });
 
   it('launches an existing repository-relative directory through a source path alias', async () => {
@@ -311,7 +403,7 @@ describe('/junction command', () => {
     const launch = vi.fn();
 
     const result = await runJunctionCommand(
-      'fork --branch feature/test',
+      'fork --branch feature/test --from HEAD',
       cwd,
       { plan, apply, launch },
       {
@@ -430,7 +522,7 @@ describe('/junction command', () => {
     const environmentBefore = { ...process.env };
 
     const result = runJunctionCommand(
-      'fork --branch feature/test',
+      'fork --branch feature/test --from refs/tags/source',
       nestedCwd,
       { plan, preflight, apply, launch },
       {
@@ -450,6 +542,12 @@ describe('/junction command', () => {
     await expect(result).resolves.toMatchObject({ ok: true, status: 'created-and-launched' });
 
     expect(order).toEqual(['idle', 'session', 'plan', 'preflight', 'apply', 'launch']);
+    expect(plan).toHaveBeenCalledWith(
+      nestedCwd,
+      'feature/test',
+      expect.any(Object),
+      'refs/tags/source',
+    );
     expect(launch).toHaveBeenCalledWith(PLAN.branch, destinationCwd, expect.any(Object), {
       mode: 'fork',
       sourceSessionFile,
@@ -537,6 +635,131 @@ describe('/junction command', () => {
     expect(result.message).toContain('Retry: /junction fork --branch feature/test');
   });
 
+  it('reports an explicit source and preserves mode in a proof-gated retry', async () => {
+    const source = 'HEAD';
+    const sha = '0123456789abcdef0123456789abcdef01234567';
+    const explicitPlan = {
+      ...PLAN,
+      kind: 'create-explicit' as const,
+      baseRef: source,
+      baseSha: sha,
+    };
+    const explicitWorktree = {
+      ...WORKTREE,
+      kind: 'create-explicit' as const,
+      status: 'created' as const,
+      baseRef: source,
+      baseSha: sha,
+    };
+    const proof = vi.fn(async (plan: WorktreePlan) => {
+      expect(plan).toBe(explicitPlan);
+      return true;
+    });
+
+    const result = await runJunctionCommand('--branch feature/test --from HEAD', cwd, {
+      plan: async () => explicitPlan,
+      preflight: async () => ({ ok: true }),
+      apply: async () => explicitWorktree,
+      launch: async () => ({ ok: false, reason: 'launch-failed', message: 'cmux stopped' }),
+      proveRetained: proof,
+    });
+
+    expect(result).toMatchObject({ ok: false, status: 'partial-launch-failed' });
+    if (result.ok) throw new Error('Expected cmux launch to fail.');
+    expect(result.message).toContain(`From: ${source} -> ${sha}`);
+    expect(result.message).toContain('Retry: /junction --branch feature/test');
+    expect(result.message).not.toContain('--from');
+    expect(proof).toHaveBeenCalledWith(explicitPlan, expect.any(Object));
+  });
+
+  it('keeps explicit launch failures inspection-only when retained proof fails', async () => {
+    const sha = '0123456789abcdef0123456789abcdef01234567';
+    const explicitPlan = {
+      ...PLAN,
+      kind: 'create-explicit' as const,
+      baseRef: 'HEAD',
+      baseSha: sha,
+    };
+    const proof = vi.fn(async () => false);
+
+    const result = await runJunctionCommand('--branch feature/test --from HEAD', cwd, {
+      plan: async () => explicitPlan,
+      preflight: async () => ({ ok: true }),
+      apply: async () => ({
+        ...WORKTREE,
+        kind: 'create-explicit' as const,
+        status: 'created' as const,
+        baseRef: 'HEAD',
+        baseSha: sha,
+      }),
+      launch: async () => ({ ok: false, reason: 'launch-failed', message: 'cmux stopped' }),
+      proveRetained: proof,
+    });
+
+    expect(result).toMatchObject({ ok: false, status: 'partial-launch-failed' });
+    if (result.ok) throw new Error('Expected cmux launch to fail.');
+    expect(result.message).toContain(`From: HEAD -> ${sha}`);
+    expect(result.message).toContain('inspect Git state');
+    expect(result.message).not.toContain('Retry:');
+  });
+
+  it('does not suggest an explicit retry when retained proof errors', async () => {
+    const sha = '0123456789abcdef0123456789abcdef01234567';
+    const result = await runJunctionCommand('--branch feature/test --from HEAD', cwd, {
+      plan: async () => ({
+        ...PLAN,
+        kind: 'create-explicit' as const,
+        baseRef: 'HEAD',
+        baseSha: sha,
+      }),
+      preflight: async () => ({ ok: true }),
+      apply: async () => ({
+        ...WORKTREE,
+        kind: 'create-explicit' as const,
+        status: 'created' as const,
+        baseRef: 'HEAD',
+        baseSha: sha,
+      }),
+      launch: async () => ({ ok: false, reason: 'launch-failed', message: 'cmux stopped' }),
+      proveRetained: async () => {
+        throw new Error('proof unavailable');
+      },
+    });
+
+    expect(result).toMatchObject({ ok: false, status: 'partial-launch-failed' });
+    if (result.ok) throw new Error('Expected cmux launch to fail.');
+    expect(result.message).toContain('inspect Git state');
+    expect(result.message).not.toContain('Retry:');
+  });
+
+  it('keeps explicit unknown launch outcomes inspection-only without a proof call', async () => {
+    const sha = '0123456789abcdef0123456789abcdef01234567';
+    const proof = vi.fn(async () => true);
+    const result = await runJunctionCommand('--branch feature/test --from HEAD', cwd, {
+      plan: async () => ({
+        ...PLAN,
+        kind: 'create-explicit' as const,
+        baseRef: 'HEAD',
+        baseSha: sha,
+      }),
+      preflight: async () => ({ ok: true }),
+      apply: async () => ({
+        ...WORKTREE,
+        kind: 'create-explicit' as const,
+        status: 'created' as const,
+        baseRef: 'HEAD',
+        baseSha: sha,
+      }),
+      launch: async () => ({ ok: false, reason: 'launch-unknown', message: 'timed out' }),
+      proveRetained: proof,
+    });
+
+    expect(result).toMatchObject({ ok: false, status: 'partial-launch-unknown' });
+    if (result.ok) throw new Error('Expected cmux launch to be unknown.');
+    expect(result.message).not.toContain('Retry:');
+    expect(proof).not.toHaveBeenCalled();
+  });
+
   it('maps an ambiguous real cmux launch without retry guidance', async () => {
     const runner: ProcessRunner = async () => ({
       outcome: 'timeout',
@@ -605,6 +828,44 @@ describe('/junction command', () => {
       launchCwd: expectedLaunchCwd,
     });
     expect(launch).toHaveBeenCalledWith('feature/test', expectedLaunchCwd, expect.any(Object));
+  });
+
+  it('notifies the pinned source for an explicit create', async () => {
+    const sha = '0123456789abcdef0123456789abcdef01234567';
+    let handler: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
+    const pi = {
+      registerCommand: vi.fn((_name, options) => {
+        handler = options.handler;
+      }),
+    };
+    const notify = vi.fn();
+
+    registerJunctionCommand(pi, {
+      plan: async () => ({
+        ...PLAN,
+        kind: 'create-explicit' as const,
+        baseRef: 'HEAD',
+        baseSha: sha,
+      }),
+      preflight: async () => ({ ok: true }),
+      apply: async () => ({
+        ...WORKTREE,
+        kind: 'create-explicit' as const,
+        status: 'created' as const,
+        baseRef: 'HEAD',
+        baseSha: sha,
+      }),
+      launch: async () => ({ ok: true }),
+    });
+    await handler?.('--branch feature/test --from HEAD', {
+      cwd,
+      ui: { notify },
+    } as unknown as ExtensionCommandContext);
+
+    expect(notify).toHaveBeenCalledWith(
+      `Created worktree and launched cmux workspace.\nBranch: feature/test\nPath: ${worktreeRoot}\nLaunch cwd: ${worktreeRoot}\nFrom: HEAD -> ${sha}`,
+      'info',
+    );
   });
 
   it('notifies a successful root fallback without replacing the base warning', async () => {

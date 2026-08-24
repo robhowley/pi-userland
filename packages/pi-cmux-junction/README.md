@@ -15,6 +15,7 @@ From Pi running inside cmux in a Git repository:
 ```text
 /junction --branch feature/example
 /junction fork --branch feature/example
+/junction --branch feature/example --from HEAD
 ```
 
 Junction creates or reuses the branch's worktree, opens it in a new cmux workspace, and keeps your current workspace focused.
@@ -25,7 +26,7 @@ New sessions open in the same directory in the new worktree. If that directory i
 
 New sessions use the same effective Pi config directory as the Pi running Junction.
 
-New branches start from the repository's default branch.
+New branches start from the repository's default branch. Add `--from <commit-ish>` to either command to start from a different commit. For example, `--from HEAD` starts from your current committed work. Uncommitted files are not copied, and the target branch must be new.
 
 ## Detailed agent status
 
