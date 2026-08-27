@@ -133,6 +133,8 @@ interface Notification {
 }
 
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:+/@-]{0,63}$/;
+// The C0/C1 ranges are intentional and must remain exact.
+// eslint-disable-next-line no-control-regex
 const CONTROL_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
 const URL_WHITESPACE_PATTERN = /\s/u;
 
