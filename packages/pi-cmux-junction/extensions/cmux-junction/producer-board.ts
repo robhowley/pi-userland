@@ -99,7 +99,6 @@ export type ProducerBoardValidationResult =
 export type ProducerBoardUpdateResult =
   | {
       readonly accepted: true;
-      readonly changed: boolean;
       readonly action: 'replaced' | 'withdrawn' | 'none';
     }
   | { readonly accepted: false; readonly code: ProducerBoardErrorCode; readonly path?: string };
@@ -198,7 +197,7 @@ export function createProducerBoardStore(): ProducerBoardStore {
     const ordered = [...entries.entries()].sort(([left], [right]) =>
       left < right ? -1 : left > right ? 1 : 0,
     );
-    return freezeSnapshot(ordered.map(([, entry]) => cloneBoard(entry.board)));
+    return freezeSnapshot(ordered.map(([, entry]) => entry.board));
   }
 
   function enqueueNotification(): void {
@@ -217,7 +216,7 @@ export function createProducerBoardStore(): ProducerBoardStore {
         if (notification === undefined) continue;
         for (const listener of notification.listeners) {
           try {
-            listener(cloneSnapshot(notification.snapshot));
+            listener(notification.snapshot);
           } catch {
             reportSubscriberError();
           }
@@ -245,7 +244,7 @@ export function createProducerBoardStore(): ProducerBoardStore {
 
       if (board.cards.length === 0) {
         if (previous === undefined) {
-          return { accepted: true, changed: false, action: 'none' };
+          return { accepted: true, action: 'none' };
         }
 
         entries.delete(key);
@@ -253,12 +252,12 @@ export function createProducerBoardStore(): ProducerBoardStore {
         totalRows -= previous.rowCount;
         enqueueNotification();
         drainNotifications();
-        return { accepted: true, changed: true, action: 'withdrawn' };
+        return { accepted: true, action: 'withdrawn' };
       }
 
       const json = JSON.stringify(board);
       if (previous?.json === json) {
-        return { accepted: true, changed: false, action: 'none' };
+        return { accepted: true, action: 'none' };
       }
 
       const cardCount = board.cards.length;
@@ -281,7 +280,7 @@ export function createProducerBoardStore(): ProducerBoardStore {
       totalRows = nextRowCount;
       enqueueNotification();
       drainNotifications();
-      return { accepted: true, changed: true, action: 'replaced' };
+      return { accepted: true, action: 'replaced' };
     },
 
     snapshot(): readonly NormalizedProducerBoard[] {
@@ -612,42 +611,8 @@ function freezeBoard(board: NormalizedProducerBoard): NormalizedProducerBoard {
   return Object.freeze(board);
 }
 
-function cloneBoard(board: NormalizedProducerBoard): NormalizedProducerBoard {
-  return freezeBoard({
-    producer: { key: board.producer.key, label: board.producer.label },
-    cards: board.cards.map((card) => ({
-      key: card.key,
-      title: card.title,
-      ...(card.status === undefined ? {} : { status: card.status }),
-      ...(card.summary === undefined ? {} : { summary: card.summary }),
-      ...(card.progress === undefined
-        ? {}
-        : {
-            progress: {
-              label: card.progress.label,
-              value: card.progress.value,
-              max: card.progress.max,
-            },
-          }),
-      rows: card.rows.map((row) => ({
-        ...(row.label === undefined ? {} : { label: row.label }),
-        value: row.value,
-        ...(row.detail === undefined ? {} : { detail: row.detail }),
-        ...(row.href === undefined ? {} : { href: row.href }),
-      })),
-      ...(card.href === undefined ? {} : { href: card.href }),
-    })),
-  });
-}
-
 function freezeSnapshot(snapshot: NormalizedProducerBoard[]): readonly NormalizedProducerBoard[] {
   return Object.freeze(snapshot);
-}
-
-function cloneSnapshot(
-  snapshot: readonly NormalizedProducerBoard[],
-): readonly NormalizedProducerBoard[] {
-  return freezeSnapshot(snapshot.map(cloneBoard));
 }
 
 function reportSubscriberError(): void {
