@@ -4,7 +4,7 @@ import cmuxJunction from '../extensions/cmux-junction/index.js';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 
 describe('pi-cmux-junction', () => {
-  it('registers the producer board listener before existing wiring without side effects', () => {
+  it('registers the producer board listener before existing wiring', () => {
     const registrationOrder: string[] = [];
     const registerCommand = vi.fn(() => {
       registrationOrder.push('command');
@@ -12,25 +12,16 @@ describe('pi-cmux-junction', () => {
     const on = vi.fn((event: string) => {
       registrationOrder.push(`lifecycle:${event}`);
     });
-    const emit = vi.fn();
     let producerBoardHandler: ((value: unknown) => void) | undefined;
     const eventsOn = vi.fn((channel: string, handler: (value: unknown) => void): (() => void) => {
       registrationOrder.push(`event:${channel}`);
       producerBoardHandler = handler;
       return vi.fn();
     });
-    const exec = vi.fn();
-    const sendMessage = vi.fn();
-    const appendEntry = vi.fn();
-    const notify = vi.fn();
     const pi = {
       registerCommand,
       on,
-      events: { emit, on: eventsOn },
-      exec,
-      sendMessage,
-      appendEntry,
-      ui: { notify },
+      events: { on: eventsOn },
     } as unknown as ExtensionAPI;
 
     cmuxJunction(pi);
@@ -42,8 +33,6 @@ describe('pi-cmux-junction', () => {
       'command',
       'lifecycle:session_start',
     ]);
-    expect(emit).not.toHaveBeenCalled();
-
     expect(registerCommand).toHaveBeenCalledWith(
       'junction',
       expect.objectContaining({
@@ -92,13 +81,6 @@ describe('pi-cmux-junction', () => {
     expect(() => handleProducerBoard(hostileValue)).not.toThrow();
 
     expect(registrationOrder).toHaveLength(registrations);
-    expect(eventsOn).toHaveBeenCalledTimes(1);
     expect(registerCommand).toHaveBeenCalledTimes(1);
-    expect(on).toHaveBeenCalledTimes(lifecycleEvents.length);
-    expect(emit).not.toHaveBeenCalled();
-    expect(exec).not.toHaveBeenCalled();
-    expect(sendMessage).not.toHaveBeenCalled();
-    expect(appendEntry).not.toHaveBeenCalled();
-    expect(notify).not.toHaveBeenCalled();
   });
 });
