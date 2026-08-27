@@ -136,7 +136,7 @@ function cardsOf(count: number, rowsPerCard = 0): RawFields[] {
   );
 }
 
-function boardWithRowCount(producerKey: string, count: number): RawFields {
+function boardWithRowCount(producerKey: string, count: number, fields: RawFields = {}): RawFields {
   const cards: RawFields[] = [];
   let remaining = count;
   while (remaining > 0) {
@@ -144,7 +144,7 @@ function boardWithRowCount(producerKey: string, count: number): RawFields {
     cards.push(makeCard(`card-${cards.length}`, { rows: cardsOfRows(rows) }));
     remaining -= rows;
   }
-  return makeBoard(producerKey, cards);
+  return makeBoard(producerKey, cards, fields);
 }
 
 function cardsOfRows(count: number): RawFields[] {
@@ -1229,6 +1229,54 @@ describe('producer board source contract', () => {
       expect(third).toHaveBeenCalledOnce();
     });
 
+    it('captures subscriber membership when a reentrant commit is queued', () => {
+      const store = createProducerBoardStore();
+      const events: string[] = [];
+      let removeSecond: () => void = () => undefined;
+      let removeThird: () => void = () => undefined;
+      let changedMembership = false;
+      const snapshotLabel = (snapshot: readonly NormalizedProducerBoard[]): 'A' | 'B' =>
+        snapshot.some((entry) => entry.producer.key === 'B') ? 'B' : 'A';
+      const second = vi.fn((snapshot: readonly NormalizedProducerBoard[]) => {
+        events.push(`second:${snapshotLabel(snapshot)}`);
+      });
+      const third = vi.fn((snapshot: readonly NormalizedProducerBoard[]) => {
+        events.push(`third:${snapshotLabel(snapshot)}`);
+      });
+      const fourth = vi.fn((snapshot: readonly NormalizedProducerBoard[]) => {
+        events.push(`fourth:${snapshotLabel(snapshot)}`);
+      });
+      const first = vi.fn((snapshot: readonly NormalizedProducerBoard[]) => {
+        const label = snapshotLabel(snapshot);
+        events.push(`first:${label}`);
+        if (label !== 'A' || changedMembership) return;
+
+        changedMembership = true;
+        removeSecond();
+        removeThird = store.subscribe(third);
+        expect(store.accept(makeBoard('B', [makeCard('b-card')]))).toEqual({
+          accepted: true,
+          changed: true,
+          action: 'replaced',
+        });
+        removeThird();
+        store.subscribe(fourth);
+      });
+
+      store.subscribe(first);
+      removeSecond = store.subscribe(second);
+
+      expect(store.accept(makeBoard('A', [makeCard('a-card')]))).toEqual({
+        accepted: true,
+        changed: true,
+        action: 'replaced',
+      });
+      expect(events).toEqual(['first:A', 'second:A', 'first:B', 'third:B']);
+      expect(second).toHaveBeenCalledOnce();
+      expect(third).toHaveBeenCalledOnce();
+      expect(fourth).not.toHaveBeenCalled();
+    });
+
     it('makes unsubscribe idempotent and leaves committed state after subscriber errors', () => {
       const store = createProducerBoardStore();
       const listener = vi.fn();
@@ -1332,6 +1380,28 @@ describe('producer board source contract', () => {
           changed: true,
         });
       }
+      expect(
+        cards.accept(
+          makeBoard('p-0', cardsOf(cardsPerBoard), {
+            producer: { key: 'p-0', label: 'same-size replacement' },
+          }),
+        ),
+      ).toEqual({
+        accepted: true,
+        changed: true,
+        action: 'replaced',
+      });
+      expect(cards.accept(makeBoard('p-0', cardsOf(cardsPerBoard - 1)))).toEqual({
+        accepted: true,
+        changed: true,
+        action: 'replaced',
+      });
+      expect(cards.accept(makeBoard('p-0', cardsOf(cardsPerBoard)))).toEqual({
+        accepted: true,
+        changed: true,
+        action: 'replaced',
+      });
+
       const cardBefore = cards.snapshot();
       expect(cards.accept(makeBoard('p-0', cardsOf(cardsPerBoard + 1)))).toEqual({
         accepted: false,
@@ -1355,6 +1425,28 @@ describe('producer board source contract', () => {
             0,
           ),
       ).toBe(MAX_LOCAL_ROWS);
+      expect(
+        rows.accept(
+          boardWithRowCount('p-0', rowsPerBoard, {
+            producer: { key: 'p-0', label: 'same-size replacement' },
+          }),
+        ),
+      ).toEqual({
+        accepted: true,
+        changed: true,
+        action: 'replaced',
+      });
+      expect(rows.accept(boardWithRowCount('p-0', rowsPerBoard - 1))).toEqual({
+        accepted: true,
+        changed: true,
+        action: 'replaced',
+      });
+      expect(rows.accept(boardWithRowCount('p-0', rowsPerBoard))).toEqual({
+        accepted: true,
+        changed: true,
+        action: 'replaced',
+      });
+
       const rowBefore = rows.snapshot();
       expect(rows.accept(boardWithRowCount('p-0', rowsPerBoard + 1))).toEqual({
         accepted: false,
