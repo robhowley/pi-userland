@@ -151,6 +151,20 @@ function cardsOfRows(count: number): RawFields[] {
   return Array.from({ length: count }, () => makeRow('v'));
 }
 
+function aggregateCounts(snapshot: readonly NormalizedProducerBoard[]): {
+  producers: number;
+  cards: number;
+  rows: number;
+} {
+  let cards = 0;
+  let rows = 0;
+  for (const board of snapshot) {
+    cards += board.cards.length;
+    for (const card of board.cards) rows += card.rows.length;
+  }
+  return { producers: snapshot.length, cards, rows };
+}
+
 function boardAtByteSize(target: number): RawFields {
   const fullRow = () =>
     makeRow('v'.repeat(MAX_ROW_TEXT_BYTES), {
@@ -1064,9 +1078,9 @@ describe('producer board source contract', () => {
       const first = createProducerBoardStore();
       const second = createProducerBoardStore();
 
-      expect(first.accept(makeBoard('p', [makeCard('c')]))).toMatchObject({
+      expect(first.accept(makeBoard('p', [makeCard('c')]))).toEqual({
         accepted: true,
-        changed: true,
+        action: 'replaced',
       });
       expect(second.snapshot()).toEqual([]);
     });
@@ -1076,34 +1090,21 @@ describe('producer board source contract', () => {
       const listener = vi.fn();
       store.subscribe(listener);
 
-      expect(store.accept(makeBoard('missing'))).toEqual({
-        accepted: true,
-        changed: false,
-        action: 'none',
-      });
+      expect(store.accept(makeBoard('missing'))).toEqual({ accepted: true, action: 'none' });
       expect(listener).not.toHaveBeenCalled();
 
       const first = makeBoard('p', [makeCard('old', { summary: 'old' })]);
-      expect(store.accept(first)).toEqual({ accepted: true, changed: true, action: 'replaced' });
+      expect(store.accept(first)).toEqual({ accepted: true, action: 'replaced' });
       expect(store.accept(makeBoard('p', [makeCard('old', { summary: 'old' })]))).toEqual({
         accepted: true,
-        changed: false,
         action: 'none',
       });
 
       const replacement = makeBoard('p', [makeCard('new', { rows: [makeRow('new')] })]);
-      expect(store.accept(replacement)).toEqual({
-        accepted: true,
-        changed: true,
-        action: 'replaced',
-      });
+      expect(store.accept(replacement)).toEqual({ accepted: true, action: 'replaced' });
       expect(store.snapshot()).toEqual([valid(replacement)]);
 
-      expect(store.accept(makeBoard('p'))).toEqual({
-        accepted: true,
-        changed: true,
-        action: 'withdrawn',
-      });
+      expect(store.accept(makeBoard('p'))).toEqual({ accepted: true, action: 'withdrawn' });
       expect(store.snapshot()).toEqual([]);
       expect(listener).toHaveBeenCalledTimes(3);
     });
@@ -1127,7 +1128,7 @@ describe('producer board source contract', () => {
               ),
             ),
           ),
-        ).toMatchObject({ accepted: true, changed: true, action: 'replaced' });
+        ).toEqual({ accepted: true, action: 'replaced' });
       }
 
       expect(store.snapshot().map((entry) => entry.producer.key)).toEqual([
@@ -1146,7 +1147,7 @@ describe('producer board source contract', () => {
       const listener = vi.fn();
       store.subscribe(listener);
       const original = makeBoard('p', [makeCard('c', { summary: 'original' })]);
-      expect(store.accept(original)).toMatchObject({ accepted: true, changed: true });
+      expect(store.accept(original)).toEqual({ accepted: true, action: 'replaced' });
       const before = store.snapshot();
 
       expect(store.accept(makeBoard('p', [makeCard('c', { summary: '\u0000secret' })]))).toEqual({
@@ -1165,16 +1166,17 @@ describe('producer board source contract', () => {
       expect(listener).toHaveBeenCalledTimes(1);
     });
 
-    it('gives every snapshot and subscriber an independent deep-frozen graph', () => {
+    it('returns fresh frozen snapshot arrays while reusing stored frozen board graphs', () => {
       const store = createProducerBoardStore();
       const input = fullBoard();
-      expect(store.accept(input)).toMatchObject({ accepted: true, changed: true });
+      expect(store.accept(input)).toEqual({ accepted: true, action: 'replaced' });
       const first = store.snapshot();
       const second = store.snapshot();
       expect(first).not.toBe(second);
-      expect(first[0]).not.toBe(second[0]);
-      expect(first[0]?.producer).not.toBe(second[0]?.producer);
-      expect(first[0]?.cards[0]?.rows[0]).not.toBe(second[0]?.cards[0]?.rows[0]);
+      expect(first[0]).toBe(second[0]);
+      expect(first[0]?.producer).toBe(second[0]?.producer);
+      expect(first[0]?.cards).toBe(second[0]?.cards);
+      expect(first[0]?.cards[0]?.rows).toBe(second[0]?.cards[0]?.rows);
       expectDeepFrozen(first);
       expectDeepFrozen(second);
 
@@ -1187,14 +1189,33 @@ describe('producer board source contract', () => {
       const views: Array<readonly NormalizedProducerBoard[]> = [];
       store.subscribe((snapshot) => views.push(snapshot));
       store.subscribe((snapshot) => views.push(snapshot));
-      store.accept(makeBoard('q', [makeCard('q-card')]));
+      expect(store.accept(makeBoard('q', [makeCard('q-card')]))).toEqual({
+        accepted: true,
+        action: 'replaced',
+      });
       expect(views).toHaveLength(2);
-      expect(views[0]).not.toBe(views[1]);
-      expect(views[0]?.[0]).not.toBe(views[1]?.[0]);
+      expect(views[0]).toBe(views[1]);
+      expect(views[0]).not.toBe(first);
+      expect(views[0]?.[0]).toBe(first[0]);
+      expect(views[0]?.[1]).toBeDefined();
       expectDeepFrozen(views[0]);
-      expectDeepFrozen(views[1]);
-      expect(views[0]).toEqual(store.snapshot());
-      expect(views[1]).toEqual(store.snapshot());
+
+      const afterCommit = store.snapshot();
+      expect(afterCommit).not.toBe(views[0]);
+      expect(afterCommit[0]).toBe(views[0]?.[0]);
+      expect(afterCommit[1]).toBe(views[0]?.[1]);
+
+      expect(store.accept(makeBoard('r', [makeCard('r-card')]))).toEqual({
+        accepted: true,
+        action: 'replaced',
+      });
+      expect(views).toHaveLength(4);
+      expect(views[2]).toBe(views[3]);
+      expect(views[2]).not.toBe(views[0]);
+      expect(views[2]?.[0]).toBe(views[0]?.[0]);
+      expect(views[2]?.[1]).toBe(views[0]?.[1]);
+      expect(views[2]?.[2]).toBeDefined();
+      expectDeepFrozen(views[2]);
     });
 
     it('does not replay on subscribe and captures subscriber membership per commit', () => {
@@ -1229,14 +1250,16 @@ describe('producer board source contract', () => {
       expect(third).toHaveBeenCalledOnce();
     });
 
-    it('captures subscriber membership when a reentrant commit is queued', () => {
+    it('captures subscriber timing and drains reentrant commits in FIFO order', () => {
       const store = createProducerBoardStore();
       const events: string[] = [];
       let removeSecond: () => void = () => undefined;
       let removeThird: () => void = () => undefined;
-      let changedMembership = false;
-      const snapshotLabel = (snapshot: readonly NormalizedProducerBoard[]): 'A' | 'B' =>
-        snapshot.some((entry) => entry.producer.key === 'B') ? 'B' : 'A';
+      const snapshotLabel = (snapshot: readonly NormalizedProducerBoard[]): 'A' | 'B' | 'C' => {
+        if (snapshot.some((entry) => entry.producer.key === 'C')) return 'C';
+        if (snapshot.some((entry) => entry.producer.key === 'B')) return 'B';
+        return 'A';
+      };
       const second = vi.fn((snapshot: readonly NormalizedProducerBoard[]) => {
         events.push(`second:${snapshotLabel(snapshot)}`);
       });
@@ -1249,18 +1272,23 @@ describe('producer board source contract', () => {
       const first = vi.fn((snapshot: readonly NormalizedProducerBoard[]) => {
         const label = snapshotLabel(snapshot);
         events.push(`first:${label}`);
-        if (label !== 'A' || changedMembership) return;
+        if (label !== 'A') return;
 
-        changedMembership = true;
         removeSecond();
         removeThird = store.subscribe(third);
         expect(store.accept(makeBoard('B', [makeCard('b-card')]))).toEqual({
           accepted: true,
-          changed: true,
           action: 'replaced',
         });
+        events.push('reentrant accept(B) returns');
         removeThird();
         store.subscribe(fourth);
+        expect(store.accept(makeBoard('C', [makeCard('c-card')]))).toEqual({
+          accepted: true,
+          action: 'replaced',
+        });
+        events.push('reentrant accept(C) returns');
+        events.push('first:A returns');
       });
 
       store.subscribe(first);
@@ -1268,13 +1296,25 @@ describe('producer board source contract', () => {
 
       expect(store.accept(makeBoard('A', [makeCard('a-card')]))).toEqual({
         accepted: true,
-        changed: true,
         action: 'replaced',
       });
-      expect(events).toEqual(['first:A', 'second:A', 'first:B', 'third:B']);
+      events.push('outer accept(A) returns');
+      expect(events).toEqual([
+        'first:A',
+        'reentrant accept(B) returns',
+        'reentrant accept(C) returns',
+        'first:A returns',
+        'second:A',
+        'first:B',
+        'third:B',
+        'first:C',
+        'fourth:C',
+        'outer accept(A) returns',
+      ]);
+      expect(first).toHaveBeenCalledTimes(3);
       expect(second).toHaveBeenCalledOnce();
       expect(third).toHaveBeenCalledOnce();
-      expect(fourth).not.toHaveBeenCalled();
+      expect(fourth).toHaveBeenCalledOnce();
     });
 
     it('makes unsubscribe idempotent and leaves committed state after subscriber errors', () => {
@@ -1283,9 +1323,9 @@ describe('producer board source contract', () => {
       const unsubscribe = store.subscribe(listener);
       unsubscribe();
       unsubscribe();
-      expect(store.accept(makeBoard('p', [makeCard('c')]))).toMatchObject({
+      expect(store.accept(makeBoard('p', [makeCard('c')]))).toEqual({
         accepted: true,
-        changed: true,
+        action: 'replaced',
       });
       expect(listener).not.toHaveBeenCalled();
 
@@ -1293,7 +1333,9 @@ describe('producer board source contract', () => {
       const thrown = new Error(secret);
       thrown.stack = `Error: ${secret}\n    at secret-stack-frame`;
       const diagnostic = 'pi-cmux-junction: producer-board subscriber failed';
-      const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {
+        throw new Error('diagnostic-failure');
+      });
       const failing = vi.fn(() => {
         throw thrown;
       });
@@ -1313,146 +1355,71 @@ describe('producer board source contract', () => {
       }
     });
 
-    it('drains reentrant changed commits in the exact FIFO order', () => {
-      const store = createProducerBoardStore();
-      const order: string[] = [];
-      const first = vi.fn((snapshot: readonly NormalizedProducerBoard[]) => {
-        const isB = snapshot.some((entry) => entry.producer.key === 'B');
-        if (isB) {
-          order.push('B/subscriber-1');
-          return;
+    it.each([
+      {
+        name: 'producer capacity',
+        boards: Array.from({ length: MAX_LOCAL_PRODUCERS }, (_, index) =>
+          makeBoard(`p-${index}`, [makeCard('c')]),
+        ),
+        candidateKey: `p-${MAX_LOCAL_PRODUCERS}`,
+        candidate: makeBoard(`p-${MAX_LOCAL_PRODUCERS}`, [makeCard('c')]),
+        withdrawKey: 'p-0',
+        expected: { producers: MAX_LOCAL_PRODUCERS, cards: MAX_LOCAL_PRODUCERS, rows: 0 },
+      },
+      {
+        name: 'card capacity',
+        boards: Array.from({ length: MAX_LOCAL_CARDS / MAX_CARDS_PER_BOARD }, (_, index) =>
+          makeBoard(`p-${index}`, cardsOf(MAX_CARDS_PER_BOARD)),
+        ),
+        candidateKey: `p-${MAX_LOCAL_CARDS / MAX_CARDS_PER_BOARD}`,
+        candidate: makeBoard(`p-${MAX_LOCAL_CARDS / MAX_CARDS_PER_BOARD}`, [makeCard('c')]),
+        withdrawKey: 'p-0',
+        expected: {
+          producers: MAX_LOCAL_CARDS / MAX_CARDS_PER_BOARD,
+          cards: MAX_LOCAL_CARDS,
+          rows: 0,
+        },
+      },
+      {
+        name: 'row capacity',
+        boards: Array.from({ length: MAX_LOCAL_ROWS / MAX_ROWS_PER_BOARD }, (_, index) =>
+          boardWithRowCount(`p-${index}`, MAX_ROWS_PER_BOARD),
+        ),
+        candidateKey: `p-${MAX_LOCAL_ROWS / MAX_ROWS_PER_BOARD}`,
+        candidate: boardWithRowCount(`p-${MAX_LOCAL_ROWS / MAX_ROWS_PER_BOARD}`, 1),
+        withdrawKey: 'p-0',
+        expected: {
+          producers: MAX_LOCAL_ROWS / MAX_ROWS_PER_BOARD,
+          cards: MAX_LOCAL_ROWS / MAX_ROWS_PER_CARD,
+          rows: MAX_LOCAL_ROWS,
+        },
+      },
+    ])(
+      '$name saturates, rejects over-capacity, and recovers after withdrawal',
+      ({ boards, candidate, candidateKey, withdrawKey, expected }) => {
+        const store = createProducerBoardStore();
+        const listener = vi.fn();
+        store.subscribe(listener);
+
+        for (const board of boards) {
+          expect(jsonBytes(board)).toBeLessThanOrEqual(MAX_BOARD_BYTES);
+          expect(store.accept(board)).toEqual({ accepted: true, action: 'replaced' });
         }
-        order.push('A/subscriber-1');
-        expect(store.accept(makeBoard('B', [makeCard('b-card')]))).toEqual({
+        expect(aggregateCounts(store.snapshot())).toEqual(expected);
+        expect(listener).toHaveBeenCalledTimes(boards.length);
+
+        const before = store.snapshot();
+        expect(store.accept(candidate)).toEqual({ accepted: false, code: 'capacity' });
+        expect(store.snapshot()).toEqual(before);
+        expect(listener).toHaveBeenCalledTimes(boards.length);
+
+        expect(store.accept(makeBoard(withdrawKey))).toEqual({
           accepted: true,
-          changed: true,
-          action: 'replaced',
+          action: 'withdrawn',
         });
-        order.push('reentrant accept(B) returns');
-        order.push('A/subscriber-1 returns');
-      });
-      const second = vi.fn((snapshot: readonly NormalizedProducerBoard[]) => {
-        const isB = snapshot.some((entry) => entry.producer.key === 'B');
-        order.push(`${isB ? 'B' : 'A'}/subscriber-2`);
-      });
-      store.subscribe(first);
-      store.subscribe(second);
-
-      expect(store.accept(makeBoard('A', [makeCard('a-card')]))).toEqual({
-        accepted: true,
-        changed: true,
-        action: 'replaced',
-      });
-      order.push('outer accept(A) returns');
-      expect(order).toEqual([
-        'A/subscriber-1',
-        'reentrant accept(B) returns',
-        'A/subscriber-1 returns',
-        'A/subscriber-2',
-        'B/subscriber-1',
-        'B/subscriber-2',
-        'outer accept(A) returns',
-      ]);
-    });
-
-    it('accepts exact aggregate producer/card/row capacities and rejects each one-over atomically', () => {
-      const producers = createProducerBoardStore();
-      for (let index = 0; index < MAX_LOCAL_PRODUCERS; index += 1) {
-        expect(producers.accept(makeBoard(`p-${index}`, [makeCard('c')]))).toMatchObject({
-          accepted: true,
-          changed: true,
-          action: 'replaced',
-        });
-      }
-      expect(producers.snapshot()).toHaveLength(MAX_LOCAL_PRODUCERS);
-      const producerBefore = producers.snapshot();
-      expect(producers.accept(makeBoard(`p-${MAX_LOCAL_PRODUCERS}`, [makeCard('c')]))).toEqual({
-        accepted: false,
-        code: 'capacity',
-      });
-      expect(producers.snapshot()).toEqual(producerBefore);
-
-      const cards = createProducerBoardStore();
-      const cardsPerBoard = MAX_LOCAL_CARDS / MAX_LOCAL_PRODUCERS;
-      for (let index = 0; index < MAX_LOCAL_PRODUCERS; index += 1) {
-        expect(cards.accept(makeBoard(`p-${index}`, cardsOf(cardsPerBoard)))).toMatchObject({
-          accepted: true,
-          changed: true,
-        });
-      }
-      expect(
-        cards.accept(
-          makeBoard('p-0', cardsOf(cardsPerBoard), {
-            producer: { key: 'p-0', label: 'same-size replacement' },
-          }),
-        ),
-      ).toEqual({
-        accepted: true,
-        changed: true,
-        action: 'replaced',
-      });
-      expect(cards.accept(makeBoard('p-0', cardsOf(cardsPerBoard - 1)))).toEqual({
-        accepted: true,
-        changed: true,
-        action: 'replaced',
-      });
-      expect(cards.accept(makeBoard('p-0', cardsOf(cardsPerBoard)))).toEqual({
-        accepted: true,
-        changed: true,
-        action: 'replaced',
-      });
-
-      const cardBefore = cards.snapshot();
-      expect(cards.accept(makeBoard('p-0', cardsOf(cardsPerBoard + 1)))).toEqual({
-        accepted: false,
-        code: 'capacity',
-      });
-      expect(cards.snapshot()).toEqual(cardBefore);
-
-      const rows = createProducerBoardStore();
-      const rowsPerBoard = MAX_LOCAL_ROWS / MAX_LOCAL_PRODUCERS;
-      for (let index = 0; index < MAX_LOCAL_PRODUCERS; index += 1) {
-        const entry = boardWithRowCount(`p-${index}`, rowsPerBoard);
-        expect(jsonBytes(entry)).toBeLessThanOrEqual(MAX_BOARD_BYTES);
-        expect(rows.accept(entry)).toMatchObject({ accepted: true, changed: true });
-      }
-      expect(
-        rows
-          .snapshot()
-          .reduce(
-            (total, entry) =>
-              total + entry.cards.reduce((cardsTotal, card) => cardsTotal + card.rows.length, 0),
-            0,
-          ),
-      ).toBe(MAX_LOCAL_ROWS);
-      expect(
-        rows.accept(
-          boardWithRowCount('p-0', rowsPerBoard, {
-            producer: { key: 'p-0', label: 'same-size replacement' },
-          }),
-        ),
-      ).toEqual({
-        accepted: true,
-        changed: true,
-        action: 'replaced',
-      });
-      expect(rows.accept(boardWithRowCount('p-0', rowsPerBoard - 1))).toEqual({
-        accepted: true,
-        changed: true,
-        action: 'replaced',
-      });
-      expect(rows.accept(boardWithRowCount('p-0', rowsPerBoard))).toEqual({
-        accepted: true,
-        changed: true,
-        action: 'replaced',
-      });
-
-      const rowBefore = rows.snapshot();
-      expect(rows.accept(boardWithRowCount('p-0', rowsPerBoard + 1))).toEqual({
-        accepted: false,
-        code: 'capacity',
-      });
-      expect(rows.snapshot()).toEqual(rowBefore);
-    });
+        expect(store.accept(candidate)).toEqual({ accepted: true, action: 'replaced' });
+        expect(store.snapshot().map((entry) => entry.producer.key)).toContain(candidateKey);
+      },
+    );
   });
 });
