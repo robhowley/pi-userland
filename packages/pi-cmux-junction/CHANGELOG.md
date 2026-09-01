@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/robhowley/pi-userland/compare/pi-cmux-junction-v0.3.0...pi-cmux-junction-v0.3.1) (2026-09-01)
+
+
+### Bug Fixes
+
+* **pi-cmux-junction:** show help for bare junction command ([#188](https://github.com/robhowley/pi-userland/issues/188)) ([0c2ac3f](https://github.com/robhowley/pi-userland/commit/0c2ac3f4b3835c5c012bf7f10dc155b26dd44b02))
+
 ## [0.3.0](https://github.com/robhowley/pi-userland/compare/pi-cmux-junction-v0.2.1...pi-cmux-junction-v0.3.0) (2026-08-24)
 
 
