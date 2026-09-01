@@ -27,6 +27,14 @@ const FROM_FLAG = '--from';
 const FRESH_USAGE = `Usage: /junction ${BRANCH_FLAG} <name> [${FROM_FLAG} <commit-ish>]`;
 const FORK_USAGE = `Usage: /junction ${FORK_SUBCOMMAND} ${BRANCH_FLAG} <name> [${FROM_FLAG} <commit-ish>]`;
 const CHECKOUT_USAGE = `Usage: /junction ${CHECKOUT_SUBCOMMAND} ${BRANCH_FLAG} <local-branch>`;
+const JUNCTION_HELP = [
+  'Junction commands:',
+  `  /junction ${BRANCH_FLAG} <name> — create a new worktree from the default base or reuse a matching worktree; launch a fresh Pi session`,
+  `  /junction ${BRANCH_FLAG} <name> ${FROM_FLAG} <commit-ish> — create a new worktree from the specified commit-ish (never reuse); launch a fresh Pi session`,
+  `  /junction ${FORK_SUBCOMMAND} ${BRANCH_FLAG} <name> — wait for the current persisted session to idle, then create a new worktree from the default base or reuse a matching worktree; fork the conversation`,
+  `  /junction ${FORK_SUBCOMMAND} ${BRANCH_FLAG} <name> ${FROM_FLAG} <commit-ish> — wait for the current persisted session to idle, then create a new worktree from the specified commit-ish (never reuse); fork the conversation`,
+  `  /junction ${CHECKOUT_SUBCOMMAND} ${BRANCH_FLAG} <local-branch> — open an existing local branch in its worktree; launch a fresh Pi session`,
+].join('\n');
 
 export interface JunctionSessionContext {
   waitForIdle: () => Promise<void>;
@@ -113,6 +121,11 @@ export function registerJunctionCommand(
       'Create a branch worktree or check out an existing local branch, then launch Pi in a new cmux workspace',
     getArgumentCompletions: getJunctionArgumentCompletions,
     handler: async (args, ctx) => {
+      if (args.trim().length === 0) {
+        ctx.ui.notify(JUNCTION_HELP, 'info');
+        return;
+      }
+
       const result = await runJunctionCommand(args, ctx.cwd, options, ctx);
       notifyResult(ctx, result);
     },

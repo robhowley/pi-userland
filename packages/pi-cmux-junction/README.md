@@ -13,21 +13,24 @@ pi install npm:@robhowley/pi-cmux-junction
 From Pi running inside cmux in a Git repository:
 
 ```text
-/junction --branch feature/example
-/junction fork --branch feature/example
-/junction --branch feature/example --from HEAD
-/junction checkout --branch feature/existing
+/junction --branch <name>
+/junction --branch <name> --from <commit-ish>
+/junction fork --branch <name>
+/junction fork --branch <name> --from <commit-ish>
+/junction checkout --branch <local-branch>
 ```
 
-Junction creates or reuses a Git worktree, opens it in a new cmux workspace, and starts Pi there. Your current workspace stays focused.
+Run `/junction` without arguments to show this help. Each form opens a worktree in a new cmux workspace and starts Pi there. Your current workspace stays focused.
 
-- `/junction --branch B` creates `B` and starts a fresh Pi session.
-- `/junction fork --branch B` waits until the current session is idle, then creates `B` and forks the conversation.
-- `/junction checkout --branch B` uses an existing local `B` and starts a fresh Pi session.
+- `/junction --branch <name>` — create a new worktree from the default base or reuse a matching worktree; start a fresh Pi session.
+- `/junction --branch <name> --from <commit-ish>` — create a new worktree from the specified commit-ish (never reuse); start a fresh Pi session.
+- `/junction fork --branch <name>` — wait for the current persisted session to idle, then create a new worktree from the default base or reuse a matching worktree; fork the conversation.
+- `/junction fork --branch <name> --from <commit-ish>` — wait for the current persisted session to idle, then create a new worktree from the specified commit-ish (never reuse); fork the conversation.
+- `/junction checkout --branch <local-branch>` — open an existing local branch in its worktree; start a fresh Pi session.
 
 New sessions open in the same directory in the new worktree. If that directory is unavailable, Junction opens the worktree root and warns you. It uses the same Pi config directory and does not create missing directories or copy uncommitted files.
 
-New branches start from the repository's default branch. Use `--from <commit-ish>` to choose another commit; `--from HEAD` uses your current committed work and requires a new target branch.
+No-`--from` forms use the repository's default base when creating a worktree and may reuse a matching worktree. Forms with `--from <commit-ish>` always create a new branch worktree from that committed ref and reject existing branch or path collisions.
 
 `checkout` requires the exact name of an existing local branch, uses its current tip, and does not accept `--from`.
 
