@@ -1101,7 +1101,7 @@ describe('/junction command', () => {
     expect(launch).toHaveBeenCalledWith('feature/test', expectedLaunchCwd, expect.any(Object));
   });
 
-  it.each(['', ' \t\n'])('shows help for blank input without orchestration (%j)', async (args) => {
+  it.each(['', ' \t\n', 'help'])('shows help without orchestration (%j)', async (args) => {
     let handler: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
     const pi = {
       registerCommand: vi.fn((_name, options) => {
@@ -1131,6 +1131,7 @@ describe('/junction command', () => {
     expect(help).toBe(
       [
         'Junction commands:',
+        '  /junction [help] — show this command reference',
         '  /junction --branch <name> — create a new worktree from the default base or reuse a matching worktree; launch a fresh Pi session',
         '  /junction --branch <name> --from <commit-ish> — create a new worktree from the specified commit-ish (never reuse); launch a fresh Pi session',
         '  /junction fork --branch <name> — wait for the current persisted session to idle, then create a new worktree from the default base or reuse a matching worktree; fork the conversation',

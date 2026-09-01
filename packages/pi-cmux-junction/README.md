@@ -20,7 +20,7 @@ From Pi running inside cmux in a Git repository:
 /junction checkout --branch <local-branch>
 ```
 
-Run `/junction` without arguments to show this help. Each form opens a worktree in a new cmux workspace and starts Pi there. Your current workspace stays focused.
+Run `/junction` without arguments or `/junction help` to show this help. Each worktree form opens a new cmux workspace and starts Pi there. Your current workspace stays focused.
 
 - `/junction --branch <name>` — create a new worktree from the default base or reuse a matching worktree; start a fresh Pi session.
 - `/junction --branch <name> --from <commit-ish>` — create a new worktree from the specified commit-ish (never reuse); start a fresh Pi session.

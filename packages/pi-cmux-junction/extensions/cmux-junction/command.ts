@@ -29,6 +29,7 @@ const FORK_USAGE = `Usage: /junction ${FORK_SUBCOMMAND} ${BRANCH_FLAG} <name> [$
 const CHECKOUT_USAGE = `Usage: /junction ${CHECKOUT_SUBCOMMAND} ${BRANCH_FLAG} <local-branch>`;
 const JUNCTION_HELP = [
   'Junction commands:',
+  '  /junction [help] — show this command reference',
   `  /junction ${BRANCH_FLAG} <name> — create a new worktree from the default base or reuse a matching worktree; launch a fresh Pi session`,
   `  /junction ${BRANCH_FLAG} <name> ${FROM_FLAG} <commit-ish> — create a new worktree from the specified commit-ish (never reuse); launch a fresh Pi session`,
   `  /junction ${FORK_SUBCOMMAND} ${BRANCH_FLAG} <name> — wait for the current persisted session to idle, then create a new worktree from the default base or reuse a matching worktree; fork the conversation`,
@@ -121,7 +122,8 @@ export function registerJunctionCommand(
       'Create a branch worktree or check out an existing local branch, then launch Pi in a new cmux workspace',
     getArgumentCompletions: getJunctionArgumentCompletions,
     handler: async (args, ctx) => {
-      if (args.trim().length === 0) {
+      const trimmedArgs = args.trim();
+      if (trimmedArgs.length === 0 || trimmedArgs === 'help') {
         ctx.ui.notify(JUNCTION_HELP, 'info');
         return;
       }
