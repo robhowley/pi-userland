@@ -1101,6 +1101,53 @@ describe('/junction command', () => {
     expect(launch).toHaveBeenCalledWith('feature/test', expectedLaunchCwd, expect.any(Object));
   });
 
+  it.each(['', ' \t\n', 'help'])('shows help without orchestration (%j)', async (args) => {
+    let handler: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
+    const pi = {
+      registerCommand: vi.fn((_name, options) => {
+        handler = options.handler;
+      }),
+    };
+    const notify = vi.fn();
+    const waitForIdle = vi.fn(async () => undefined);
+    const getSessionFile = vi.fn(() => undefined);
+    const plan = vi.fn(async () => PLAN);
+    const planCheckout = vi.fn(async () => CHECKOUT_PLAN);
+    const preflight = vi.fn(async () => ({ ok: true as const }));
+    const apply = vi.fn(async () => WORKTREE);
+    const launch = vi.fn(async () => ({ ok: true as const }));
+
+    registerJunctionCommand(pi, { plan, planCheckout, preflight, apply, launch });
+    await handler?.(args, {
+      cwd,
+      ui: { notify },
+      waitForIdle,
+      sessionManager: { getSessionFile },
+    } as unknown as ExtensionCommandContext);
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith(expect.any(String), 'info');
+    const help = notify.mock.calls[0]?.[0];
+    expect(help).toBe(
+      [
+        'Junction commands:',
+        '  /junction [help] — show this command reference',
+        '  /junction --branch <name> — create a new worktree from the default base or reuse a matching worktree; launch a fresh Pi session',
+        '  /junction --branch <name> --from <commit-ish> — create a new worktree from the specified commit-ish (never reuse); launch a fresh Pi session',
+        '  /junction fork --branch <name> — wait for the current persisted session to idle, then create a new worktree from the default base or reuse a matching worktree; fork the conversation',
+        '  /junction fork --branch <name> --from <commit-ish> — wait for the current persisted session to idle, then create a new worktree from the specified commit-ish (never reuse); fork the conversation',
+        '  /junction checkout --branch <local-branch> — open an existing local branch in its worktree; launch a fresh Pi session',
+      ].join('\n'),
+    );
+    expect(waitForIdle).not.toHaveBeenCalled();
+    expect(getSessionFile).not.toHaveBeenCalled();
+    expect(plan).not.toHaveBeenCalled();
+    expect(planCheckout).not.toHaveBeenCalled();
+    expect(preflight).not.toHaveBeenCalled();
+    expect(apply).not.toHaveBeenCalled();
+    expect(launch).not.toHaveBeenCalled();
+  });
+
   it.each(['created', 'reused'] as const)(
     'notifies checkout %s without a create source',
     async (status) => {
