@@ -92,7 +92,7 @@ export async function registerModelsWithProvider(
 ): Promise<void> {
   ctx.modelRegistry.registerProvider('openrouter', {
     baseUrl: 'https://openrouter.ai/api/v1',
-    apiKey: 'OPENROUTER_API_KEY',
+    apiKey: '$OPENROUTER_API_KEY',
     api: 'openai-completions',
     models: configs,
     authHeader: true,
