@@ -1,9 +1,15 @@
 import { discoverMergeReadyGitContext, type MergeReadyExec } from './git.js';
+import type { MergeReadyProviderV1 } from './provider-api.js';
+import {
+  createMergeReadyProviderCatalog,
+  type MergeReadyProviderCatalog,
+} from './provider-catalog.js';
 import type { ProviderReadResult, ProviderSupportingEvidence } from './provider.js';
 import {
   resolveMergeReadyProviderForRemote,
   resolveMergeReadyProviderForUrl,
   type ProviderRemoteSelection,
+  type ProviderUrlSelection,
 } from './provider-registry.js';
 import { createMergeReadyStatus } from './status.js';
 import { assertValidGitHubPullRequestUrl, formatMergeReadyUrlTarget } from './target.js';
@@ -25,24 +31,47 @@ export type GetMergeReadyStatusOptions = {
   timeout?: number;
   generatedAt?: string | Date;
   now?: GetMergeReadyStatusClock;
+  providers?: readonly MergeReadyProviderV1[];
 };
+
+export type MergeReadyStatusReader = (
+  options: Omit<GetMergeReadyStatusOptions, 'providers'>,
+) => Promise<MergeReadyStatus>;
 
 export async function getMergeReadyStatus(
   options: GetMergeReadyStatusOptions,
 ): Promise<MergeReadyStatus> {
+  return getMergeReadyStatusWithCatalog(
+    options,
+    createMergeReadyProviderCatalog(options.providers),
+  );
+}
+
+export function createCatalogBoundMergeReadyStatusReader(
+  catalog: MergeReadyProviderCatalog,
+): MergeReadyStatusReader {
+  return (options) => getMergeReadyStatusWithCatalog(options, catalog);
+}
+
+async function getMergeReadyStatusWithCatalog(
+  options: Omit<GetMergeReadyStatusOptions, 'providers'>,
+  catalog: MergeReadyProviderCatalog,
+): Promise<MergeReadyStatus> {
   const generatedAt = resolveGeneratedAt(options);
 
   if (options.url !== undefined) {
-    const target = assertValidGitHubPullRequestUrl(options.url);
-    return getMergeReadyUrlStatus(options, generatedAt, target);
+    const selection = resolveMergeReadyProviderForUrl(options.url, catalog);
+    const target = selection?.target ?? assertValidGitHubPullRequestUrl(options.url);
+    return getMergeReadyUrlStatus(options, generatedAt, target, selection);
   }
 
-  return getCurrentBranchMergeReadyStatus(options, generatedAt);
+  return getCurrentBranchMergeReadyStatus(options, generatedAt, catalog);
 }
 
 async function getCurrentBranchMergeReadyStatus(
-  options: GetMergeReadyStatusOptions,
+  options: Omit<GetMergeReadyStatusOptions, 'providers'>,
   generatedAt: string | Date,
+  catalog: MergeReadyProviderCatalog,
 ): Promise<MergeReadyStatus> {
   const { facts: gitFacts, selectedRemote } = await discoverMergeReadyGitContext({
     exec: options.exec,
@@ -51,16 +80,17 @@ async function getCurrentBranchMergeReadyStatus(
   });
   const selection =
     gitFacts.repository.kind === 'git' && selectedRemote.kind === 'known'
-      ? resolveMergeReadyProviderForRemote(selectedRemote)
+      ? resolveMergeReadyProviderForRemote(selectedRemote, catalog)
       : null;
   const target = toCurrentBranchTarget(gitFacts, selection);
 
-  if (!selection || gitFacts.repository.kind !== 'git') {
+  if (!selection || gitFacts.repository.kind !== 'git' || selectedRemote.kind !== 'known') {
     return createMergeReadyStatus({ generatedAt, target });
   }
 
   const result = await selection.provider.read({
     mode: 'ambient',
+    remote: selectedRemote,
     repository: selection.repository,
     exec: options.exec,
     cwd: gitFacts.repository.root,
@@ -71,11 +101,11 @@ async function getCurrentBranchMergeReadyStatus(
 }
 
 async function getMergeReadyUrlStatus(
-  options: GetMergeReadyStatusOptions,
+  options: Omit<GetMergeReadyStatusOptions, 'providers'>,
   generatedAt: string | Date,
   target: MergeReadyUrlTarget,
+  selection: ProviderUrlSelection | null,
 ): Promise<MergeReadyStatus> {
-  const selection = resolveMergeReadyProviderForUrl(target.url);
   if (!selection) {
     return createMergeReadyStatus({ generatedAt, target });
   }

@@ -170,6 +170,103 @@ Example response:
 
 The included `merge-ready-loop` skill handles requests such as "make this PR ready to merge." It works one returned blocker at a time, verifies local changes, and distinguishes local fixes from blockers GitHub has confirmed as cleared.
 
+## Custom source-control providers
+
+A separate Pi extension can register a read-only V1 provider through `@robhowley/pi-merge-ready/provider-api`. Call registration while the provider extension loads. pi-merge-ready collects providers for the next `session_start`, freezes that session's catalog, and owns `state`, `summary`, and `openItems`.
+
+```ts
+import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import {
+  defineMergeReadyProvider,
+  registerMergeReadyProvider,
+} from '@robhowley/pi-merge-ready/provider-api';
+
+type Change = {
+  lifecycle: 'open' | 'merged' | 'closed';
+  number: number;
+  title: string;
+  url: string;
+  headRefName: string;
+  baseRefName: string;
+  draft: boolean;
+  mergeability: 'mergeable' | 'conflicting' | 'behind' | 'blocked';
+  checks: 'passing' | 'failing' | 'running';
+  review: 'approved' | 'changes_requested' | 'pending';
+  unresolvedCount: number;
+  requiresConversationResolution: boolean;
+};
+
+const provider = defineMergeReadyProvider({
+  apiVersion: 1,
+  id: 'example-scm',
+  matchUrl(url: URL) {
+    const match = url.pathname.match(/^\/([^/]+)\/([^/]+)\/changes\/([1-9]\d*)$/u);
+    return url.origin === 'https://code.example' && !url.search && !url.hash && match
+      ? { url: url.href, owner: match[1]!, repo: match[2]!, prNumber: Number(match[3]) }
+      : null;
+  },
+  matchRemote({ url }) {
+    const match = url.match(
+      /^(?:https:\/\/code\.example\/|git@code\.example:)([^/]+)\/([^/]+?)(?:\.git)?$/u,
+    );
+    return match ? { owner: match[1]!, repo: match[2]! } : null;
+  },
+  async read(input) {
+    const repository = input.mode === 'url' ? input.target : input.repository;
+    const path =
+      input.mode === 'url'
+        ? `/changes/${String(input.target.prNumber)}`
+        : `/changes/current?cwd=${encodeURIComponent(input.cwd ?? '')}`;
+    const response = await fetch(
+      `https://code.example/api/v1/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}${path}`,
+      { signal: AbortSignal.timeout(input.timeoutMs) },
+    );
+    if (response.status === 404) return { kind: 'absent' } as const;
+    if (!response.ok) {
+      return {
+        kind: 'unavailable',
+        presence: response.status === 403 ? 'unknown' : 'known',
+        message: `Example SCM returned HTTP ${String(response.status)}`,
+      } as const;
+    }
+
+    const change = (await response.json()) as Change;
+    return {
+      kind: 'found',
+      pullRequest: {
+        lifecycle: change.lifecycle,
+        number: change.number,
+        title: change.title,
+        url: change.url,
+        headRefName: change.headRefName,
+        baseRefName: change.baseRefName,
+      },
+      facts: {
+        draft: { kind: 'known', value: change.draft },
+        mergeability: { kind: 'known', value: change.mergeability },
+        checks: { kind: 'known', value: { state: change.checks } },
+        review: { kind: 'known', value: change.review },
+        conversations: {
+          kind: 'known',
+          value: {
+            unresolvedCount: change.unresolvedCount,
+            requirement: change.requiresConversationResolution ? 'required' : 'optional',
+          },
+        },
+      },
+    } as const;
+  },
+});
+
+export default function (pi: ExtensionAPI) {
+  registerMergeReadyProvider(pi, provider);
+}
+```
+
+The provider package should keep loading its extension through `pi.extensions`; the API subpath supplies only the provider contract. Provider extensions must depend on and bundle the same major API version (`V1`) as the running pi-merge-ready extension. Do not import private provider, built-in, registry, or catalog paths.
+
+The public contract is read-only: matchers return a normalized identity or `null`; `read()` returns `found`, `absent`, or `unavailable`; and `found` results provide explicit known or unknown facts. Unknown facts produce `status_ambiguous`, while pi-merge-ready owns readiness state, summaries, and blocker lists. Provider reads are capped at 20 seconds. Duplicate IDs, the reserved `github` ID, overlapping matches, malformed results, matcher failures, read failures, and timeouts fail explicitly.
+
 ## Configuration
 
 Configure the package in Pi's `settings.json`:

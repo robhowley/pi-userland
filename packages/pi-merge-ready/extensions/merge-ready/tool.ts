@@ -1,6 +1,6 @@
 import type { MergeReadyCommandAPI } from './commands.js';
 import type { MergeReadyExec, MergeReadyExecOptions, MergeReadyExecResult } from './git.js';
-import { getMergeReadyStatus } from './merge-ready.js';
+import { getMergeReadyStatus, type MergeReadyStatusReader } from './merge-ready.js';
 import { MERGE_READY_PULL_REQUEST_URL_EXAMPLE, validateGitHubPullRequestUrl } from './target.js';
 import type { MergeReadyStatus } from './types.js';
 
@@ -45,7 +45,15 @@ const MERGE_READY_STATUS_TOOL_PARAMETERS = {
   additionalProperties: false,
 };
 
-export function registerMergeReadyStatusTool(pi: MergeReadyStatusToolAPI): void {
+export type MergeReadyStatusToolDependencies = {
+  getStatus?: () => MergeReadyStatusReader;
+  normalizeUrl?: (url: string) => string;
+};
+
+export function registerMergeReadyStatusTool(
+  pi: MergeReadyStatusToolAPI,
+  dependencies: MergeReadyStatusToolDependencies = {},
+): void {
   pi.registerTool({
     name: MERGE_READY_STATUS_TOOL_NAME,
     label: 'Merge Ready Status',
@@ -63,15 +71,23 @@ export function registerMergeReadyStatusTool(pi: MergeReadyStatusToolAPI): void 
       let url: string | undefined;
 
       if (params.url !== undefined) {
-        const validation = validateGitHubPullRequestUrl(params.url);
-        if (!validation.ok) {
-          throw new Error(`Invalid url: ${validation.message}`);
+        if (dependencies.normalizeUrl) {
+          try {
+            url = dependencies.normalizeUrl(params.url);
+          } catch (error) {
+            throw new Error(`Invalid url: ${getErrorMessage(error)}`, { cause: error });
+          }
+        } else {
+          const validation = validateGitHubPullRequestUrl(params.url);
+          if (!validation.ok) {
+            throw new Error(`Invalid url: ${validation.message}`);
+          }
+          url = validation.target.url;
         }
-
-        url = validation.target.url;
       }
 
-      const status = await getMergeReadyStatus({
+      const getStatus = dependencies.getStatus?.() ?? getMergeReadyStatus;
+      const status = await getStatus({
         exec: createToolExec(pi, ctx),
         ...withOptionalCwd(ctx.cwd),
         ...(url === undefined ? {} : { url }),
@@ -84,6 +100,10 @@ export function registerMergeReadyStatusTool(pi: MergeReadyStatusToolAPI): void 
       };
     },
   });
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function createToolExec(

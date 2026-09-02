@@ -5,7 +5,7 @@ import type {
   WatchUiThinkingLevel,
 } from './watch-ui/runtime-snapshot.js';
 import { BADGE_ICON_BY_ID } from './badge-icon.js';
-import { getMergeReadyStatus } from './merge-ready.js';
+import { getMergeReadyStatus, type MergeReadyStatusReader } from './merge-ready.js';
 import { claimMergeReadyStatusBarOwnership, syncMergeReadyStatusBar } from './status-bar.js';
 import { selectMergeReadyBadgeId } from './status.js';
 import { MERGE_READY_PULL_REQUEST_URL_EXAMPLE, validateGitHubPullRequestUrl } from './target.js';
@@ -143,7 +143,15 @@ type MergeReadyCommandWatchRuntimeAPI = MergeReadyCommandAPI & {
   ) => void;
 };
 
-export function registerMergeReadyCommand(pi: MergeReadyCommandAPI): void {
+export type MergeReadyCommandDependencies = {
+  getStatus?: () => MergeReadyStatusReader;
+  normalizeUrl?: (url: string) => string;
+};
+
+export function registerMergeReadyCommand(
+  pi: MergeReadyCommandAPI,
+  dependencies: MergeReadyCommandDependencies = {},
+): void {
   const watchPi = pi as MergeReadyCommandWatchRuntimeAPI;
   registerMergeReadyWatchLifecycle(watchPi);
   registerMergeReadyWatchShortcut(watchPi);
@@ -181,16 +189,25 @@ export function registerMergeReadyCommand(pi: MergeReadyCommandAPI): void {
 
       let url: string | undefined;
       if ('url' in parsedArgs && parsedArgs.url !== undefined) {
-        const validation = validateGitHubPullRequestUrl(parsedArgs.url);
-        if (!validation.ok) {
-          ctx.ui.notify(`Invalid ${URL_FLAG}: ${validation.message}`, 'error');
-          return;
+        if (dependencies.normalizeUrl) {
+          try {
+            url = dependencies.normalizeUrl(parsedArgs.url);
+          } catch (error) {
+            ctx.ui.notify(`Invalid ${URL_FLAG}: ${getErrorMessage(error)}`, 'error');
+            return;
+          }
+        } else {
+          const validation = validateGitHubPullRequestUrl(parsedArgs.url);
+          if (!validation.ok) {
+            ctx.ui.notify(`Invalid ${URL_FLAG}: ${validation.message}`, 'error');
+            return;
+          }
+          url = validation.target.url;
         }
-
-        url = validation.target.url;
       }
 
       const exec = createCommandExec(pi, ctx);
+      const getStatus = dependencies.getStatus?.() ?? getMergeReadyStatus;
 
       if (parsedArgs.mode === 'watch') {
         const started = startMergeReadyWatch({
@@ -201,6 +218,7 @@ export function registerMergeReadyCommand(pi: MergeReadyCommandAPI): void {
           ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
           timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
           ...(url === undefined ? {} : { url }),
+          dependencies: { getStatus },
         });
         ctx.onMergeReadyWatchStart?.({
           ok: started.ok,
@@ -224,7 +242,7 @@ export function registerMergeReadyCommand(pi: MergeReadyCommandAPI): void {
               },
             })
           : undefined;
-      const status = await getMergeReadyStatus({
+      const status = await getStatus({
         exec,
         cwd: ctx.cwd,
         ...(url === undefined ? {} : { url }),
@@ -511,6 +529,10 @@ function createMergeReadyWatchContext(ctx: MergeReadyCommandContext): MergeReady
             }),
         }),
   };
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function createCommandExec(

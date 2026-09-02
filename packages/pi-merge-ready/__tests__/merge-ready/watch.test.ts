@@ -1918,7 +1918,7 @@ describe('merge-ready watch loop', () => {
       async (_content: string, _options?: { deliverAs?: 'steer' | 'followUp' }) => undefined,
     );
     const status = createCiFailingStatus();
-    const getStatus = createStatusSequence([status, status]);
+    const getStatus = createStatusSequence([status, status, createReadyStatus()]);
     const { api, getHandler } = createWatchLifecycleAPI(sendUserMessage);
     registerMergeReadyWatchLifecycle(api);
 
@@ -1960,7 +1960,8 @@ describe('merge-ready watch loop', () => {
       kind: 'stopped',
       reason: 'repeated_actionable_signature',
     });
-    expect(getStatus).toHaveBeenCalledTimes(2);
+    expect(getStatus).toHaveBeenCalledTimes(3);
+    expect(getStatus).toHaveBeenLastCalledWith(expect.objectContaining({ cwd: ctx.cwd }));
     expect(sendUserMessage).toHaveBeenCalledTimes(1);
     expect(vi.mocked(ctx.ui.notify).mock.calls).toContainEqual([
       'Stopping merge-ready watch for https://github.com/robhowley/pi-userland/pull/42: the same actionable blocker is still present after one attempt.',
@@ -2045,7 +2046,7 @@ describe('merge-ready watch loop', () => {
     );
     const checkDirtyWorkingTree = vi.fn(async () => ({ ok: true as const, dirty: false }));
     const status = createUrlCiFailingStatus();
-    const getStatus = createStatusSequence([status, status]);
+    const getStatus = createStatusSequence([status, status, createReadyStatus()]);
     const { api, getHandler } = createWatchLifecycleAPI(sendUserMessage);
     registerMergeReadyWatchLifecycle(api);
 
@@ -2080,7 +2081,8 @@ describe('merge-ready watch loop', () => {
       kind: 'stopped',
       reason: 'repeated_actionable_signature',
     });
-    expect(getStatus).toHaveBeenCalledTimes(2);
+    expect(getStatus).toHaveBeenCalledTimes(3);
+    expect(getStatus).toHaveBeenLastCalledWith(expect.objectContaining({ cwd: ctx.cwd }));
     expect(sendUserMessage).toHaveBeenCalledTimes(1);
     expect(checkDirtyWorkingTree).not.toHaveBeenCalled();
     expect(vi.mocked(ctx.ui.notify).mock.calls).toContainEqual([
@@ -2389,12 +2391,7 @@ describe('merge-ready watch loop', () => {
         timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
       }),
     ]);
-    const watchExec = createFakeExec([
-      createCurrentBranchProbeCall({
-        branch: 'feat/merge-ready',
-        timeout: MERGE_READY_STATUS_BAR_TIMEOUT_MS,
-      }),
-    ]);
+    const watchExec = createFakeExec([]);
 
     const abortController = new AbortController();
     const start = startMergeReadyWatch({
@@ -2405,7 +2402,11 @@ describe('merge-ready watch loop', () => {
       signal: abortController.signal,
       url: RUNTIME_URL_TARGET.url,
       dependencies: {
-        getStatus: createStatusSequence([createUrlCiFailingStatus(), createUrlCiRunningStatus()]),
+        getStatus: createStatusSequence([
+          createUrlCiFailingStatus(),
+          createUrlCiRunningStatus(),
+          createNoPullRequestStatus(),
+        ]),
         sleep,
         syncStatusBar,
         checkDirtyWorkingTree: vi.fn(async () => ({ ok: true as const, dirty: false })),

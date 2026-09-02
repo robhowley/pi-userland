@@ -10,7 +10,7 @@ import {
   type MergeReadyExecResult,
 } from './git.js';
 import { BADGE_ICON_BY_ID } from './badge-icon.js';
-import { getMergeReadyStatus } from './merge-ready.js';
+import { getMergeReadyStatus, type MergeReadyStatusReader } from './merge-ready.js';
 import { selectMergeReadyBadgeId } from './status.js';
 import type { MergeReadyBadgeId, MergeReadyOpenItemId, MergeReadyStatus } from './types.js';
 
@@ -41,6 +41,7 @@ export type MergeReadyStatusBarAPI = Pick<MergeReadyCommandAPI, 'exec'> & {
 
 export type MergeReadyStatusBarRefreshOptions = {
   exec: MergeReadyExec;
+  getStatus?: MergeReadyStatusReader;
   ctx: MergeReadyStatusBarContext;
   force?: boolean;
   now?: number | Date;
@@ -102,6 +103,7 @@ type MergeReadyStatusBarRuntime = {
   generation: number;
   ownerSeq: number;
   diagnosticsEnabled: boolean;
+  getStatus: MergeReadyStatusReader;
 };
 
 type MergeReadyStatusBarAttentionObservation =
@@ -147,7 +149,15 @@ let statusBarCache: MergeReadyStatusBarCacheEntry | null = null;
 let statusBarSuspensionCount = 0;
 let statusBarRuntime: MergeReadyStatusBarRuntime = createMergeReadyStatusBarRuntime();
 
-export function registerMergeReadyStatusBar(pi: MergeReadyStatusBarAPI): void {
+export type MergeReadyStatusBarDependencies = {
+  getStatus?: MergeReadyStatusReader;
+  beforeInitialRefresh?: () => void;
+};
+
+export function registerMergeReadyStatusBar(
+  pi: MergeReadyStatusBarAPI,
+  dependencies: MergeReadyStatusBarDependencies = {},
+): void {
   pi.on('session_shutdown', async () => {
     const publisher = invalidateMergeReadyStatusBarRuntime();
     await publisher?.shutdown();
@@ -164,8 +174,10 @@ export function registerMergeReadyStatusBar(pi: MergeReadyStatusBarAPI): void {
       projectTrusted,
     });
 
+    dependencies.beforeInitialRefresh?.();
     await refreshMergeReadyStatusBar({
       exec: createStatusBarExec(pi, ctx),
+      ...(dependencies.getStatus === undefined ? {} : { getStatus: dependencies.getStatus }),
       ctx,
       force: true,
       projectTrusted,
@@ -175,6 +187,7 @@ export function registerMergeReadyStatusBar(pi: MergeReadyStatusBarAPI): void {
   pi.on('turn_end', async (_event, ctx) => {
     await refreshMergeReadyStatusBar({
       exec: createStatusBarExec(pi, ctx),
+      ...(dependencies.getStatus === undefined ? {} : { getStatus: dependencies.getStatus }),
       ctx,
       projectTrusted: ctx.isProjectTrusted?.() ?? false,
     });
@@ -191,6 +204,7 @@ export async function refreshMergeReadyStatusBar(
   const ownership = claimMergeReadyStatusBarOwnership({
     exec: options.exec,
     ctx: options.ctx,
+    ...(options.getStatus === undefined ? {} : { getStatus: options.getStatus }),
   });
   return refreshMergeReadyStatusBarInternal({
     ...options,
@@ -201,10 +215,14 @@ export async function refreshMergeReadyStatusBar(
 export function claimMergeReadyStatusBarOwnership(options: {
   ctx: MergeReadyStatusBarContext | MergeReadyStatusBarSyncContext;
   exec?: MergeReadyExec;
+  getStatus?: MergeReadyStatusReader;
 }): MergeReadyStatusBarAmbientOwnership {
   statusBarRuntime.ownerSeq += 1;
   if (options.exec !== undefined) {
     statusBarRuntime.exec = options.exec;
+  }
+  if (options.getStatus !== undefined) {
+    statusBarRuntime.getStatus = options.getStatus;
   }
   statusBarRuntime.ctx = createMergeReadyStatusBarAmbientSnapshot(options.ctx);
 
@@ -431,6 +449,7 @@ async function refreshMergeReadyStatusBarInternal(
   const diagnosticsEnabled = options.diagnosticsEnabled ?? runtimeSettings!.diagnosticsEnabled;
   const entry = await loadMergeReadyStatusBarEntry({
     exec: options.exec,
+    getStatus: options.getStatus ?? statusBarRuntime.getStatus,
     cwd: options.ctx.cwd,
     timeout,
     diagnosticsEnabled,
@@ -469,6 +488,7 @@ function observeMergeReadyStatusBarAttention(
 
 async function loadMergeReadyStatusBarEntry(options: {
   exec: MergeReadyExec;
+  getStatus: MergeReadyStatusReader;
   cwd: string;
   timeout: number;
   diagnosticsEnabled: boolean;
@@ -479,7 +499,7 @@ async function loadMergeReadyStatusBarEntry(options: {
   observation: MergeReadyStatusBarAttentionObservation;
 }> {
   try {
-    const status = await getMergeReadyStatus({
+    const status = await options.getStatus({
       exec: options.exec,
       cwd: options.cwd,
       timeout: options.timeout,
@@ -713,6 +733,7 @@ function createMergeReadyStatusBarRuntime(): MergeReadyStatusBarRuntime {
     generation: 0,
     ownerSeq: 0,
     diagnosticsEnabled: false,
+    getStatus: getMergeReadyStatus,
   };
 }
 
@@ -724,6 +745,7 @@ function invalidateMergeReadyStatusBarRuntime(): ReturnType<typeof createMergeRe
   statusBarRuntime.cmuxPublisher = null;
   statusBarRuntime.dueAtMs = null;
   statusBarRuntime.diagnosticsEnabled = false;
+  statusBarRuntime.getStatus = getMergeReadyStatus;
   statusBarRuntime.generation += 1;
   return publisher;
 }

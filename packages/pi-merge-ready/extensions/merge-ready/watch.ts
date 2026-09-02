@@ -842,6 +842,9 @@ export function startMergeReadyWatch(
         await restoreAmbientMergeReadyStatusBar({
           exec: options.exec,
           ctx: options.ctx,
+          ...(options.dependencies?.getStatus === undefined
+            ? {}
+            : { getStatus: options.dependencies.getStatus }),
         });
       }
     });
@@ -1757,6 +1760,7 @@ function describeMergeReadyWatchRepairTarget(
 async function restoreAmbientMergeReadyStatusBar(options: {
   exec: MergeReadyExec;
   ctx: Pick<MergeReadyWatchContext, 'cwd' | 'projectTrusted' | 'ui'>;
+  getStatus?: typeof getMergeReadyStatus;
 }): Promise<void> {
   if (isMergeReadyStatusBarSuspended()) {
     return;
@@ -1772,6 +1776,7 @@ async function restoreAmbientMergeReadyStatusBar(options: {
   try {
     await refreshMergeReadyStatusBar({
       exec: options.exec,
+      ...(options.getStatus === undefined ? {} : { getStatus: options.getStatus }),
       ctx: {
         cwd: options.ctx.cwd,
         ui: {

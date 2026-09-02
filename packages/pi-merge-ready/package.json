@@ -4,6 +4,12 @@
   "description": "See if your pull request is ready, what’s blocking it, and let Pi fix what it can.",
   "license": "MIT",
   "type": "module",
+  "exports": {
+    "./provider-api": {
+      "types": "./dist/extensions/merge-ready/provider-api.d.ts",
+      "import": "./dist/extensions/merge-ready/provider-api.js"
+    }
+  },
   "files": [
     "dist",
     "extensions",
@@ -41,6 +47,7 @@
     "format:check": "prettier --check extensions/",
     "format:write": "prettier --write extensions/",
     "prepack": "npm run build",
+    "provider-api:pack-smoke": "node scripts/provider-api-pack-smoke.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run __tests__"
   },

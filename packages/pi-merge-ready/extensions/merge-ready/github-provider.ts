@@ -23,7 +23,7 @@ import type { MergeReadyPullRequest, MergeReadyReviewSignal, MergeReadySignals }
 export const githubProvider: MergeReadyProvider = {
   id: 'github',
   parseUrl: (url) => parseGitHubPullRequestUrl(url.href),
-  parseRemote: parseGitHubRemoteUrl,
+  parseRemote: (remote) => parseGitHubRemoteUrl(remote.url),
   read: readGitHubProvider,
 };
 

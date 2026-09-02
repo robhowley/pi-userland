@@ -39,6 +39,11 @@ export type ProviderReadResult =
       issues: [ProviderIssue, ...ProviderIssue[]];
     };
 
+export type ProviderRemote = {
+  name: string;
+  url: string;
+};
+
 export type ProviderReadInput = {
   exec: MergeReadyExec;
   cwd?: string;
@@ -46,6 +51,7 @@ export type ProviderReadInput = {
 } & (
   | {
       mode: 'ambient';
+      remote?: ProviderRemote;
       repository: ProviderRepository;
     }
   | {
@@ -55,8 +61,8 @@ export type ProviderReadInput = {
 );
 
 export interface MergeReadyProvider {
-  readonly id: 'github';
+  readonly id: string;
   parseUrl(url: URL): ProviderUrlTarget | null;
-  parseRemote(remote: string): ProviderRepository | null;
+  parseRemote(remote: ProviderRemote): ProviderRepository | null;
   read(input: ProviderReadInput): Promise<ProviderReadResult>;
 }

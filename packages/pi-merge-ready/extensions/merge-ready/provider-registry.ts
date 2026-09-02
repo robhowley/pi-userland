@@ -1,5 +1,10 @@
 import { githubProvider } from './github-provider.js';
-import type { MergeReadyProvider, ProviderRepository, ProviderUrlTarget } from './provider.js';
+import type {
+  MergeReadyProvider,
+  ProviderRemote as ProviderRemoteInput,
+  ProviderRepository,
+  ProviderUrlTarget,
+} from './provider.js';
 
 export const BUILT_IN_MERGE_READY_PROVIDERS = [
   githubProvider,
@@ -10,17 +15,17 @@ export type ProviderUrlSelection = {
   target: ProviderUrlTarget;
 };
 
-export type ProviderRemote = {
-  name: string;
-  url: string;
-};
+export type ProviderRemote = ProviderRemoteInput;
 
 export type ProviderRemoteSelection = {
   provider: MergeReadyProvider;
   repository: ProviderRepository;
 };
 
-export function resolveMergeReadyProviderForUrl(url: string): ProviderUrlSelection | null {
+export function resolveMergeReadyProviderForUrl(
+  url: string,
+  providers: readonly MergeReadyProvider[] = BUILT_IN_MERGE_READY_PROVIDERS,
+): ProviderUrlSelection | null {
   let parsedUrl: URL;
   try {
     parsedUrl = new URL(url);
@@ -28,25 +33,53 @@ export function resolveMergeReadyProviderForUrl(url: string): ProviderUrlSelecti
     return null;
   }
 
-  for (const provider of BUILT_IN_MERGE_READY_PROVIDERS) {
-    const target = provider.parseUrl(parsedUrl);
-    if (target) {
-      return { provider, target };
+  const matches = providers.flatMap((provider) => {
+    let target: ProviderUrlTarget | null;
+    try {
+      target = provider.parseUrl(parsedUrl);
+    } catch (error) {
+      throw matcherError(provider.id, 'URL', error);
     }
-  }
+    return target ? [{ provider, target }] : [];
+  });
 
-  return null;
+  return selectOnlyMatch(matches, url);
 }
 
 export function resolveMergeReadyProviderForRemote(
   remote: ProviderRemote,
+  providers: readonly MergeReadyProvider[] = BUILT_IN_MERGE_READY_PROVIDERS,
 ): ProviderRemoteSelection | null {
-  for (const provider of BUILT_IN_MERGE_READY_PROVIDERS) {
-    const repository = provider.parseRemote(remote.url);
-    if (repository) {
-      return { provider, repository };
+  const matches = providers.flatMap((provider) => {
+    let repository: ProviderRepository | null;
+    try {
+      repository = provider.parseRemote(remote);
+    } catch (error) {
+      throw matcherError(provider.id, 'remote', error);
     }
-  }
+    return repository ? [{ provider, repository }] : [];
+  });
 
-  return null;
+  return selectOnlyMatch(matches, remote.url);
+}
+
+function selectOnlyMatch<T extends { provider: MergeReadyProvider }>(
+  matches: T[],
+  concreteTarget: string,
+): T | null {
+  if (matches.length > 1) {
+    throw new Error(
+      `Multiple merge-ready providers matched ${JSON.stringify(concreteTarget)}: ${matches
+        .map((match) => match.provider.id)
+        .join(', ')}.`,
+    );
+  }
+  return matches[0] ?? null;
+}
+
+function matcherError(id: string, kind: string, error: unknown): Error {
+  return new Error(
+    `Merge-ready provider ${JSON.stringify(id)} ${kind} matcher failed: ${error instanceof Error ? error.message : String(error)}`,
+    { cause: error },
+  );
 }
