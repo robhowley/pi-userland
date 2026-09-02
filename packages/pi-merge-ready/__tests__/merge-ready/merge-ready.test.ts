@@ -236,15 +236,15 @@ const blockerFixtures: BlockerFixture[] = [
     },
   },
   {
-    name: 'future mergeability values stay blocked',
+    name: 'future mergeability values stay ambiguous',
     prOverrides: {
       mergeable: 'MERGEABLE',
       mergeStateStatus: 'REBASEABLE',
     },
-    expectedBadge: 'merge_blocked',
-    expectedState: 'blocked',
-    expectedSummary: 'GitHub reports merge is blocked',
-    expectedOpenItemIds: ['merge_blocked'],
+    expectedBadge: 'unknown',
+    expectedState: 'unknown',
+    expectedSummary: 'Merge readiness is ambiguous',
+    expectedOpenItemIds: ['status_ambiguous', 'merge_blocked'],
     expectedSignals: {
       draft: false,
       mergeability: 'blocked',
@@ -429,6 +429,36 @@ describe('getMergeReadyStatus', () => {
       generatedAt: GENERATED_AT,
     });
     expect(selectMergeReadyBadgeId(status)).toBe('ready');
+  });
+
+  it('forces ambiguity when a readiness-bearing GitHub fact is malformed', async () => {
+    const { exec, assertDone } = createFakeExec([
+      ...createGitDiscoveryCalls(),
+      createPullRequestViewSuccessCall(buildPullRequestPayload({ isDraft: 'not-a-boolean' })),
+      createConversationsSuccessCall(buildConversationsPayload()),
+    ]);
+
+    const status = await getMergeReadyStatus({
+      exec,
+      cwd: '/repo',
+      now: () => new Date(GENERATED_AT),
+    });
+
+    assertDone();
+
+    expect(status.state).toBe('unknown');
+    expect(status.pr?.number).toBe(42);
+    expect(status.summary).toBe('Merge readiness is ambiguous');
+    expect(openItemIds(status)).toEqual(['status_ambiguous']);
+    expect(status.signals).toEqual({
+      draft: false,
+      mergeability: 'mergeable',
+      checks: 'passing',
+      review: 'approved',
+      unresolvedConversations: false,
+      unresolvedConversationRequirement: 'required',
+    });
+    expect(selectMergeReadyBadgeId(status)).toBe('unknown');
   });
 
   it('supports URL mode without git discovery and carries fork head-repository identity through status', async () => {

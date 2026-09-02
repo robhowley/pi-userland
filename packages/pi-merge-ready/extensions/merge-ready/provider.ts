@@ -2,7 +2,7 @@ import type { MergeReadyExec } from './git.js';
 import type {
   MergeReadyOpenItemDetail,
   MergeReadyPullRequest,
-  MergeReadySignalsInput,
+  MergeReadySignals,
   MergeReadyUrlTarget,
 } from './types.js';
 
@@ -25,8 +25,7 @@ export type ProviderSupportingEvidence = {
 
 export type ProviderSnapshot = {
   pullRequest: MergeReadyPullRequest;
-  signals: MergeReadySignalsInput;
-  forceStatusAmbiguous: boolean;
+  signals: MergeReadySignals;
   supportingEvidence: ProviderSupportingEvidence;
   integrityIssues: ProviderIssue[];
 };

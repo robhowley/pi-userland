@@ -18,11 +18,7 @@ import type {
   ProviderSupportingEvidence,
 } from './provider.js';
 import { parseGitHubPullRequestUrl } from './target.js';
-import type {
-  MergeReadyPullRequest,
-  MergeReadyReviewSignal,
-  MergeReadySignalsInput,
-} from './types.js';
+import type { MergeReadyPullRequest, MergeReadyReviewSignal, MergeReadySignals } from './types.js';
 
 export const githubProvider: MergeReadyProvider = {
   id: 'github',
@@ -74,7 +70,6 @@ async function readGitHubProvider(input: ProviderReadInput): Promise<ProviderRea
           unresolvedConversations: false,
           unresolvedConversationRequirement: 'unknown',
         },
-        forceStatusAmbiguous: false,
         supportingEvidence,
         integrityIssues,
       },
@@ -99,7 +94,6 @@ async function readGitHubProvider(input: ProviderReadInput): Promise<ProviderRea
         ...signals,
         ...normalizeConversationSignals(conversations),
       },
-      forceStatusAmbiguous: conversations.kind !== 'known',
       supportingEvidence: {
         ...supportingEvidence,
         ...createConversationSupportingEvidence(conversations),
@@ -129,7 +123,7 @@ function toProviderPullRequest(
 function createBaseSignals(
   pullRequest: MergeReadyGitHubPullRequest,
 ): Omit<
-  MergeReadySignalsInput,
+  MergeReadySignals,
   'unresolvedConversations' | 'unresolvedConversationCount' | 'unresolvedConversationRequirement'
 > {
   return {
@@ -165,7 +159,7 @@ function normalizeReviewDecisionSignal(
 function normalizeConversationSignals(
   conversations: MergeReadyPullRequestConversations,
 ): Pick<
-  MergeReadySignalsInput,
+  MergeReadySignals,
   'unresolvedConversations' | 'unresolvedConversationCount' | 'unresolvedConversationRequirement'
 > {
   if (conversations.kind === 'known' || conversations.kind === 'partial') {

@@ -92,7 +92,6 @@ describe('merge-ready GitHub provider', () => {
           unresolvedConversationCount: 1,
           unresolvedConversationRequirement: 'required',
         },
-        forceStatusAmbiguous: false,
         supportingEvidence: {
           reviewPending: [{ label: '@alice' }, { label: 'team/core-reviewers' }],
           changesRequested: [
@@ -112,6 +111,44 @@ describe('merge-ready GitHub provider', () => {
       },
     });
     expect(JSON.stringify(result)).not.toContain('"openItems"');
+  });
+
+  it('keeps complete signals while retaining malformed readiness facts as integrity issues', async () => {
+    const { exec, assertDone } = createFakeExec([
+      createPullRequestViewSuccessCall(buildPullRequestPayload({ isDraft: 'not-a-boolean' })),
+      createConversationsSuccessCall(buildConversationsPayload()),
+    ]);
+
+    const result = await githubProvider.read({
+      mode: 'ambient',
+      repository: { owner: 'robhowley', repo: 'pi-userland' },
+      exec,
+      cwd: '/repo',
+    });
+
+    assertDone();
+
+    expect(result).toMatchObject({
+      kind: 'found',
+      snapshot: {
+        signals: {
+          draft: false,
+          mergeability: 'mergeable',
+          checks: 'passing',
+          review: 'approved',
+          unresolvedConversations: false,
+          unresolvedConversationRequirement: 'optional',
+        },
+        integrityIssues: [
+          {
+            message: 'gh pr view JSON payload had an invalid draft flag',
+          },
+        ],
+      },
+    });
+    if (result.kind === 'found') {
+      expect(result.snapshot).not.toHaveProperty('forceStatusAmbiguous');
+    }
   });
 
   it('distinguishes an absent targeted pull request from provider unavailability', async () => {

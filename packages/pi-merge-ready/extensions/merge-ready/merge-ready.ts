@@ -135,7 +135,7 @@ function createStatusFromProviderResult(
     target,
     pr: result.snapshot.pullRequest,
     signals: result.snapshot.signals,
-    forceStatusAmbiguous: result.snapshot.forceStatusAmbiguous,
+    forceStatusAmbiguous: result.snapshot.integrityIssues.length > 0,
   });
 
   return attachSupportingEvidence(status, result.snapshot.supportingEvidence);
