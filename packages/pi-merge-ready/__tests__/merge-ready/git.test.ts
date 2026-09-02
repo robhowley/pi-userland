@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  discoverMergeReadyGitContext,
   discoverMergeReadyGitFacts,
   parseGitHubRemoteUrl,
   type MergeReadyExec,
@@ -181,7 +182,7 @@ describe('merge-ready git discovery primitives', () => {
     });
   });
 
-  it('returns a typed non-github remote while keeping other local facts', async () => {
+  it('preserves the legacy non-GitHub fact while exposing the raw selected remote', async () => {
     const { exec, assertDone } = createFakeExec([
       {
         command: 'git',
@@ -233,10 +234,15 @@ describe('merge-ready git discovery primitives', () => {
       },
     ]);
 
-    const facts = await discoverMergeReadyGitFacts({ exec, cwd: '/repo' });
+    const { facts, selectedRemote } = await discoverMergeReadyGitContext({ exec, cwd: '/repo' });
 
     assertDone();
 
+    expect(selectedRemote).toEqual({
+      kind: 'known',
+      name: 'origin',
+      url: 'git@gitlab.com:team/repo.git',
+    });
     expect(facts.remote).toEqual({
       kind: 'non_github',
       name: 'origin',

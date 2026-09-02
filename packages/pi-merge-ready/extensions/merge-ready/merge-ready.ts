@@ -1,25 +1,16 @@
+import { discoverMergeReadyGitContext, type MergeReadyExec } from './git.js';
+import type { ProviderReadResult, ProviderSupportingEvidence } from './provider.js';
 import {
-  fetchMergeReadyPullRequestConversations,
-  type MergeReadyPullRequestConversations,
-} from './conversations.js';
-import { discoverMergeReadyGitFacts, type MergeReadyExec } from './git.js';
-import {
-  fetchMergeReadyGitHubPullRequestFacts,
-  type MergeReadyGitHubFailureReason,
-  type MergeReadyGitHubPullRequest,
-  type MergeReadyGitHubPullRequestFacts,
-  type MergeReadyGitHubReviewDecisionSignal,
-} from './github.js';
+  resolveMergeReadyProviderForRemote,
+  resolveMergeReadyProviderForUrl,
+  type ProviderRemoteSelection,
+} from './provider-registry.js';
 import { createMergeReadyStatus } from './status.js';
 import { assertValidGitHubPullRequestUrl, formatMergeReadyUrlTarget } from './target.js';
 import type {
-  MergeReadyBooleanSignal,
   MergeReadyCurrentBranchTarget,
   MergeReadyOpenItem,
   MergeReadyOpenItemDetail,
-  MergeReadyPullRequest,
-  MergeReadyReviewSignal,
-  MergeReadySignalsInput,
   MergeReadyStatus,
   MergeReadyTarget,
   MergeReadyUrlTarget,
@@ -42,11 +33,8 @@ export async function getMergeReadyStatus(
   const generatedAt = resolveGeneratedAt(options);
 
   if (options.url !== undefined) {
-    return getMergeReadyUrlStatus(
-      options,
-      generatedAt,
-      assertValidGitHubPullRequestUrl(options.url),
-    );
+    const target = assertValidGitHubPullRequestUrl(options.url);
+    return getMergeReadyUrlStatus(options, generatedAt, target);
   }
 
   return getCurrentBranchMergeReadyStatus(options, generatedAt);
@@ -56,29 +44,84 @@ async function getCurrentBranchMergeReadyStatus(
   options: GetMergeReadyStatusOptions,
   generatedAt: string | Date,
 ): Promise<MergeReadyStatus> {
-  const gitFacts = await discoverMergeReadyGitFacts({
+  const { facts: gitFacts, selectedRemote } = await discoverMergeReadyGitContext({
     exec: options.exec,
     ...withOptionalCwd(options.cwd),
     ...withOptionalTimeout(options.timeout),
   });
-  const target = toCurrentBranchTarget(gitFacts);
+  const selection =
+    gitFacts.repository.kind === 'git' && selectedRemote.kind === 'known'
+      ? resolveMergeReadyProviderForRemote(selectedRemote)
+      : null;
+  const target = toCurrentBranchTarget(gitFacts, selection);
 
-  if (gitFacts.repository.kind !== 'git' || gitFacts.remote.kind !== 'github') {
+  if (!selection || gitFacts.repository.kind !== 'git') {
     return createMergeReadyStatus({ generatedAt, target });
   }
 
-  const commandCwd = gitFacts.repository.root;
-  const pullRequestFacts = await fetchMergeReadyGitHubPullRequestFacts({
+  const result = await selection.provider.read({
+    mode: 'ambient',
+    repository: selection.repository,
     exec: options.exec,
-    cwd: commandCwd,
+    cwd: gitFacts.repository.root,
     ...withOptionalTimeout(options.timeout),
   });
 
-  if (pullRequestFacts.kind === 'no_pr') {
+  return createStatusFromProviderResult(result, target, generatedAt);
+}
+
+async function getMergeReadyUrlStatus(
+  options: GetMergeReadyStatusOptions,
+  generatedAt: string | Date,
+  target: MergeReadyUrlTarget,
+): Promise<MergeReadyStatus> {
+  const selection = resolveMergeReadyProviderForUrl(target.url);
+  if (!selection) {
     return createMergeReadyStatus({ generatedAt, target });
   }
 
-  if (pullRequestFacts.kind !== 'found') {
+  const result = await selection.provider.read({
+    mode: 'url',
+    target: selection.target,
+    exec: options.exec,
+    ...withOptionalCwd(options.cwd),
+    ...withOptionalTimeout(options.timeout),
+  });
+
+  return createStatusFromProviderResult(result, target, generatedAt);
+}
+
+function createStatusFromProviderResult(
+  result: ProviderReadResult,
+  target: MergeReadyTarget,
+  generatedAt: string | Date,
+): MergeReadyStatus {
+  if (result.kind === 'absent') {
+    if (target.mode === 'url') {
+      const summary = `Pull request not found: ${formatMergeReadyUrlTarget(target)}`;
+      return createMergeReadyStatus({
+        generatedAt,
+        target,
+        openItems: [createOpenItem('no_pull_request', summary)],
+        summary,
+      });
+    }
+
+    return createMergeReadyStatus({ generatedAt, target });
+  }
+
+  if (result.kind === 'unavailable') {
+    if (target.mode === 'url') {
+      const summary = `Unable to determine readiness for ${formatMergeReadyUrlTarget(target)}: ${result.issues[0].message}`;
+      return createMergeReadyStatus({
+        generatedAt,
+        target,
+        hasPr: true,
+        openItems: [createOpenItem('status_ambiguous', summary)],
+        summary,
+      });
+    }
+
     return createMergeReadyStatus({
       generatedAt,
       target,
@@ -87,251 +130,29 @@ async function getCurrentBranchMergeReadyStatus(
     });
   }
 
-  return createMergeReadyStatusFromPullRequest({
-    exec: options.exec,
-    generatedAt,
-    target,
-    pullRequest: pullRequestFacts.pullRequest,
-    repositoryOwner: gitFacts.remote.owner,
-    repositoryName: gitFacts.remote.repo,
-    cwd: commandCwd,
-    ...withOptionalTimeout(options.timeout),
-  });
-}
-
-async function getMergeReadyUrlStatus(
-  options: GetMergeReadyStatusOptions,
-  generatedAt: string | Date,
-  target: MergeReadyUrlTarget,
-): Promise<MergeReadyStatus> {
-  const pullRequestFacts = await fetchMergeReadyGitHubPullRequestFacts({
-    exec: options.exec,
-    ...withOptionalCwd(options.cwd),
-    ...withOptionalTimeout(options.timeout),
-    target,
-  });
-
-  if (pullRequestFacts.kind === 'not_found' || pullRequestFacts.kind === 'no_pr') {
-    const summary = `Pull request not found: ${formatMergeReadyUrlTarget(target)}`;
-    return createMergeReadyStatus({
-      generatedAt,
-      target,
-      openItems: [createOpenItem('no_pull_request', summary)],
-      summary,
-    });
-  }
-
-  if (pullRequestFacts.kind !== 'found') {
-    const summary = createUrlTargetAmbiguousSummary(target, pullRequestFacts);
-    return createMergeReadyStatus({
-      generatedAt,
-      target,
-      hasPr: true,
-      openItems: [createOpenItem('status_ambiguous', summary)],
-      summary,
-    });
-  }
-
-  if (!pullRequestFacts.pullRequest.headRepository) {
-    const summary = createUrlTargetMissingHeadRepositorySummary(target);
-    return createMergeReadyStatus({
-      generatedAt,
-      target,
-      hasPr: true,
-      openItems: [createOpenItem('status_ambiguous', summary)],
-      summary,
-    });
-  }
-
-  return createMergeReadyStatusFromPullRequest({
-    exec: options.exec,
-    generatedAt,
-    target,
-    pullRequest: pullRequestFacts.pullRequest,
-    repositoryOwner: target.owner,
-    repositoryName: target.repo,
-    ...withOptionalCwd(options.cwd),
-    ...withOptionalTimeout(options.timeout),
-  });
-}
-
-type CreateMergeReadyStatusFromPullRequestOptions = {
-  exec: MergeReadyExec;
-  generatedAt: string | Date;
-  target: MergeReadyTarget;
-  pullRequest: MergeReadyGitHubPullRequest;
-  repositoryOwner: string;
-  repositoryName: string;
-  cwd?: string;
-  timeout?: number;
-};
-
-async function createMergeReadyStatusFromPullRequest(
-  options: CreateMergeReadyStatusFromPullRequestOptions,
-): Promise<MergeReadyStatus> {
-  const pr = toMergeReadyPullRequest(options.pullRequest, options.target);
-  const baseSignals = createBaseSignals(options.pullRequest);
-
-  if (options.pullRequest.lifecycle !== 'open') {
-    return createMergeReadyStatus({
-      generatedAt: options.generatedAt,
-      target: options.target,
-      pr,
-      signals: {
-        ...baseSignals,
-        unresolvedConversations: false,
-        unresolvedConversationRequirement: 'unknown',
-      },
-    });
-  }
-
-  const conversations = await fetchMergeReadyPullRequestConversations({
-    exec: options.exec,
-    repositoryOwner: options.repositoryOwner,
-    repositoryName: options.repositoryName,
-    pullRequestNumber: options.pullRequest.number,
-    ...withOptionalCwd(options.cwd),
-    ...withOptionalTimeout(options.timeout),
-  });
-
   const status = createMergeReadyStatus({
-    generatedAt: options.generatedAt,
-    target: options.target,
-    pr,
-    signals: {
-      ...baseSignals,
-      ...normalizeConversationSignals(conversations),
-    },
-    forceStatusAmbiguous: conversations.kind !== 'known',
+    generatedAt,
+    target,
+    pr: result.snapshot.pullRequest,
+    signals: result.snapshot.signals,
+    forceStatusAmbiguous: result.snapshot.integrityIssues.length > 0,
   });
 
-  return attachConversationOpenItemDetails(
-    attachReviewPendingOpenItemDetails(status, options.pullRequest),
-    conversations,
-  );
+  return attachSupportingEvidence(status, result.snapshot.supportingEvidence);
 }
 
-function resolveGeneratedAt(options: GetMergeReadyStatusOptions): string | Date {
-  if (options.generatedAt !== undefined) {
-    return options.generatedAt;
-  }
-
-  return options.now?.() ?? new Date();
-}
-
-function toMergeReadyPullRequest(
-  pullRequest: MergeReadyGitHubPullRequest,
-  target: MergeReadyTarget,
-): MergeReadyPullRequest {
-  return {
-    lifecycle: pullRequest.lifecycle,
-    number: pullRequest.number,
-    title: pullRequest.title,
-    url: pullRequest.url,
-    headRefName: pullRequest.headRefName,
-    baseRefName: pullRequest.baseRefName,
-    ...(target.mode === 'url' && pullRequest.headRepository
-      ? { headRepository: pullRequest.headRepository }
-      : {}),
-  };
-}
-
-function createBaseSignals(
-  pullRequest: MergeReadyGitHubPullRequest,
-): Omit<
-  MergeReadySignalsInput,
-  'unresolvedConversations' | 'unresolvedConversationCount' | 'unresolvedConversationRequirement'
-> {
-  return {
-    draft: toBoolean(pullRequest.draft),
-    mergeability: pullRequest.mergeability,
-    checks: pullRequest.checks.state,
-    checkDetails: pullRequest.checks.details,
-    review: normalizeReviewSignal(pullRequest),
-  };
-}
-
-function normalizeConversationSignals(
-  conversations: MergeReadyPullRequestConversations,
-): Pick<
-  MergeReadySignalsInput,
-  'unresolvedConversations' | 'unresolvedConversationCount' | 'unresolvedConversationRequirement'
-> {
-  if (conversations.kind === 'known' || conversations.kind === 'partial') {
-    return {
-      unresolvedConversations: conversations.unresolvedCount > 0,
-      unresolvedConversationRequirement: conversations.requirement,
-      ...(conversations.unresolvedCount > 0
-        ? { unresolvedConversationCount: conversations.unresolvedCount }
-        : {}),
-    };
-  }
-
-  return {
-    unresolvedConversations: false,
-    unresolvedConversationRequirement: 'unknown',
-  };
-}
-
-function attachReviewPendingOpenItemDetails(
+function attachSupportingEvidence(
   status: MergeReadyStatus,
-  pullRequest: MergeReadyGitHubPullRequest,
+  evidence: ProviderSupportingEvidence,
 ): MergeReadyStatus {
-  return appendOpenItemDetails(
-    status,
-    'review_pending',
-    createReviewPendingOpenItemDetails(pullRequest),
-  );
-}
-
-function createReviewPendingOpenItemDetails(
-  pullRequest: MergeReadyGitHubPullRequest,
-): MergeReadyOpenItemDetail[] {
-  if (
-    pullRequest.reviewRequests.kind !== 'known' ||
-    pullRequest.reviewRequests.requests.length === 0
-  ) {
-    return [];
-  }
-
-  return pullRequest.reviewRequests.requests.map((request) => ({
-    label: formatReviewRequestLabel(request),
-  }));
-}
-
-function formatReviewRequestLabel(
-  request: MergeReadyGitHubPullRequest['reviewRequests']['requests'][number],
-): string {
-  if (request.type === 'user') {
-    return `@${request.name}`;
-  }
-
-  if (request.type === 'team') {
-    return `team/${request.name}`;
-  }
-
-  return request.name;
-}
-
-function attachConversationOpenItemDetails(
-  status: MergeReadyStatus,
-  conversations: MergeReadyPullRequestConversations,
-): MergeReadyStatus {
-  if (
-    (conversations.kind !== 'known' && conversations.kind !== 'partial') ||
-    !conversations.openItemDetails
-  ) {
-    return status;
-  }
-
   return appendOpenItemDetails(
     appendOpenItemDetails(
-      status,
+      appendOpenItemDetails(status, 'review_pending', evidence.reviewPending),
       'changes_requested',
-      conversations.openItemDetails.changes_requested,
+      evidence.changesRequested,
     ),
     'unresolved_conversations',
-    conversations.openItemDetails.unresolved_conversations,
+    evidence.unresolvedConversations,
   );
 }
 
@@ -363,91 +184,28 @@ function appendOpenItemDetails(
   return didChange ? { ...status, openItems } : status;
 }
 
-function normalizeReviewSignal(pullRequest: MergeReadyGitHubPullRequest): MergeReadyReviewSignal {
-  return normalizeReviewDecisionSignal(pullRequest.reviewDecision, pullRequest.reviews.state);
-}
-
-function normalizeReviewDecisionSignal(
-  reviewDecision: MergeReadyGitHubReviewDecisionSignal,
-  fallbackReviewState: MergeReadyReviewSignal,
-): MergeReadyReviewSignal {
-  if (reviewDecision === 'approved' || reviewDecision === 'not_required') {
-    return 'approved';
-  }
-  if (reviewDecision === 'changes_requested') {
-    return 'changes_requested';
-  }
-  if (reviewDecision === 'review_required') {
-    return 'pending';
-  }
-
-  return fallbackReviewState;
-}
-
-function toBoolean(signal: MergeReadyBooleanSignal): boolean {
-  return signal === 'yes';
-}
-
 function toCurrentBranchTarget(
-  gitFacts: Awaited<ReturnType<typeof discoverMergeReadyGitFacts>>,
+  gitFacts: Awaited<ReturnType<typeof discoverMergeReadyGitContext>>['facts'],
+  selection: ProviderRemoteSelection | null,
 ): MergeReadyCurrentBranchTarget {
   return {
     mode: 'current_branch',
-    ...(gitFacts.remote.kind === 'github'
+    ...(selection
       ? {
-          owner: gitFacts.remote.owner,
-          repo: gitFacts.remote.repo,
+          owner: selection.repository.owner,
+          repo: selection.repository.repo,
         }
       : {}),
     ...(gitFacts.branch.kind === 'known' ? { branch: gitFacts.branch.name } : {}),
   };
 }
 
-function createUrlTargetMissingHeadRepositorySummary(target: MergeReadyUrlTarget): string {
-  return `Unable to determine readiness for ${formatMergeReadyUrlTarget(target)}: GitHub CLI did not report head repository identity`;
-}
-
-function createUrlTargetAmbiguousSummary(
-  target: MergeReadyUrlTarget,
-  pullRequestFacts: Exclude<
-    MergeReadyGitHubPullRequestFacts,
-    { kind: 'found' | 'not_found' | 'no_pr' }
-  >,
-): string {
-  return `Unable to determine readiness for ${formatMergeReadyUrlTarget(target)}: ${describePullRequestLookupFailure(pullRequestFacts)}`;
-}
-
-function describePullRequestLookupFailure(
-  pullRequestFacts: Exclude<
-    MergeReadyGitHubPullRequestFacts,
-    { kind: 'found' | 'not_found' | 'no_pr' }
-  >,
-): string {
-  if (pullRequestFacts.kind === 'failure') {
-    return describeGitHubFailureReason(pullRequestFacts.reason);
+function resolveGeneratedAt(options: GetMergeReadyStatusOptions): string | Date {
+  if (options.generatedAt !== undefined) {
+    return options.generatedAt;
   }
 
-  if (pullRequestFacts.kind === 'invalid_json') {
-    return 'GitHub CLI returned invalid JSON';
-  }
-
-  return 'GitHub CLI returned an unexpected pull request payload';
-}
-
-function describeGitHubFailureReason(reason: MergeReadyGitHubFailureReason): string {
-  if (reason === 'auth') {
-    return 'GitHub CLI authentication failed';
-  }
-
-  if (reason === 'access') {
-    return 'the repository or pull request is not accessible';
-  }
-
-  if (reason === 'api') {
-    return 'the GitHub API request failed';
-  }
-
-  return 'the gh pr view command failed';
+  return options.now?.() ?? new Date();
 }
 
 function createOpenItem(id: MergeReadyOpenItem['id'], summary: string): MergeReadyOpenItem {
