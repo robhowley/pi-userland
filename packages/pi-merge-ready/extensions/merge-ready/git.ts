@@ -49,6 +49,11 @@ export type MergeReadyGitRemoteFact =
   | { kind: 'missing' }
   | { kind: 'unknown'; reason: 'not_git_repo' | 'command_failed' };
 
+export type MergeReadySelectedRemoteFact =
+  | { kind: 'known'; name: string; url: string }
+  | { kind: 'missing' }
+  | { kind: 'unknown'; reason: 'not_git_repo' | 'command_failed' };
+
 export type MergeReadyGitBaseBranchFact =
   | { kind: 'known'; name: string; remoteName: string }
   | {
@@ -102,6 +107,13 @@ const GITHUB_REMOTE_PATTERNS = [
 export async function discoverMergeReadyGitFacts(
   options: GetMergeReadyGitFactsOptions,
 ): Promise<MergeReadyGitLocalFacts> {
+  const discovery = await discoverMergeReadyGitContext(options);
+  return discovery.facts;
+}
+
+export async function discoverMergeReadyGitContext(
+  options: GetMergeReadyGitFactsOptions,
+): Promise<{ facts: MergeReadyGitLocalFacts; selectedRemote: MergeReadySelectedRemoteFact }> {
   const issues: MergeReadyGitCommandIssue[] = [];
   const cwd = await resolveCwd(options, issues);
   const commandCwd = cwd.kind === 'known' ? cwd.path : options.cwd;
@@ -115,20 +127,20 @@ export async function discoverMergeReadyGitFacts(
   );
 
   if (!repositoryResult.ok) {
-    if (looksLikeNotGitRepository(repositoryResult.stderr)) {
-      return {
-        cwd,
-        repository: { kind: 'not_git_repo' },
-        ...createUnavailableGitFacts('not_git_repo'),
-        issues,
-      };
-    }
-
+    const reason = looksLikeNotGitRepository(repositoryResult.stderr)
+      ? 'not_git_repo'
+      : 'command_failed';
     return {
-      cwd,
-      repository: { kind: 'unknown', reason: 'command_failed' },
-      ...createUnavailableGitFacts('command_failed'),
-      issues,
+      facts: {
+        cwd,
+        repository:
+          reason === 'not_git_repo'
+            ? { kind: 'not_git_repo' }
+            : { kind: 'unknown', reason: 'command_failed' },
+        ...createUnavailableGitFacts(reason),
+        issues,
+      },
+      selectedRemote: { kind: 'unknown', reason },
     };
   }
 
@@ -148,16 +160,24 @@ export async function discoverMergeReadyGitFacts(
     );
 
     return {
-      cwd,
-      repository: { kind: 'unknown', reason: 'command_failed' },
-      ...createUnavailableGitFacts('command_failed'),
-      issues,
+      facts: {
+        cwd,
+        repository: { kind: 'unknown', reason: 'command_failed' },
+        ...createUnavailableGitFacts('command_failed'),
+        issues,
+      },
+      selectedRemote: { kind: 'unknown', reason: 'command_failed' },
     };
   }
 
   const gitCwd = repositoryRoot;
   const branch = await resolveCurrentBranch(options.exec, gitCwd, options.timeout, issues);
-  const { remote, remoteName } = await resolveRemote(options.exec, gitCwd, options.timeout, issues);
+  const { selectedRemote, remoteName } = await resolveSelectedRemote(
+    options.exec,
+    gitCwd,
+    options.timeout,
+    issues,
+  );
   const baseBranch = await resolveBaseBranch(
     options.exec,
     gitCwd,
@@ -176,15 +196,18 @@ export async function discoverMergeReadyGitFacts(
   const dirty = await resolveDirtyWorkingTree(options.exec, gitCwd, options.timeout, issues);
 
   return {
-    cwd,
-    repository: { kind: 'git', root: repositoryRoot },
-    branch,
-    remote,
-    baseBranch,
-    upstream,
-    aheadBehind,
-    dirty,
-    issues,
+    facts: {
+      cwd,
+      repository: { kind: 'git', root: repositoryRoot },
+      branch,
+      remote: toLegacyRemoteFact(selectedRemote),
+      baseBranch,
+      upstream,
+      aheadBehind,
+      dirty,
+      issues,
+    },
+    selectedRemote,
   };
 }
 
@@ -254,20 +277,20 @@ async function resolveCurrentBranch(
   return name ? { kind: 'known', name } : { kind: 'detached' };
 }
 
-async function resolveRemote(
+async function resolveSelectedRemote(
   exec: MergeReadyExec,
   cwd: string,
   timeout: number | undefined,
   issues: MergeReadyGitCommandIssue[],
-): Promise<{ remote: MergeReadyGitRemoteFact; remoteName?: string }> {
+): Promise<{ selectedRemote: MergeReadySelectedRemoteFact; remoteName?: string }> {
   const remotesResult = await runCommand(exec, 'git', ['remote'], cwd, timeout, issues);
   if (!remotesResult.ok) {
-    return { remote: { kind: 'unknown', reason: 'command_failed' } };
+    return { selectedRemote: { kind: 'unknown', reason: 'command_failed' } };
   }
 
   const remoteNames = splitOutputLines(remotesResult.stdout);
   if (remoteNames.length === 0) {
-    return { remote: { kind: 'missing' } };
+    return { selectedRemote: { kind: 'missing' } };
   }
 
   const remoteName = selectRemoteName(remoteNames);
@@ -280,7 +303,7 @@ async function resolveRemote(
     issues,
   );
   if (!urlResult.ok) {
-    return { remote: { kind: 'unknown', reason: 'command_failed' } };
+    return { selectedRemote: { kind: 'unknown', reason: 'command_failed' } };
   }
 
   const url = urlResult.stdout.trim();
@@ -297,27 +320,30 @@ async function resolveRemote(
         message: `git remote get-url ${remoteName} returned empty stdout`,
       }),
     );
-    return { remote: { kind: 'unknown', reason: 'command_failed' } };
-  }
-
-  const githubRemote = parseGitHubRemoteUrl(url);
-  if (githubRemote) {
-    return {
-      remote: {
-        kind: 'github',
-        name: remoteName,
-        url,
-        owner: githubRemote.owner,
-        repo: githubRemote.repo,
-      },
-      remoteName,
-    };
+    return { selectedRemote: { kind: 'unknown', reason: 'command_failed' } };
   }
 
   return {
-    remote: { kind: 'non_github', name: remoteName, url },
+    selectedRemote: { kind: 'known', name: remoteName, url },
     remoteName,
   };
+}
+
+function toLegacyRemoteFact(remote: MergeReadySelectedRemoteFact): MergeReadyGitRemoteFact {
+  if (remote.kind !== 'known') {
+    return remote;
+  }
+
+  const repository = parseGitHubRemoteUrl(remote.url);
+  return repository
+    ? {
+        kind: 'github',
+        name: remote.name,
+        url: remote.url,
+        owner: repository.owner,
+        repo: repository.repo,
+      }
+    : { kind: 'non_github', name: remote.name, url: remote.url };
 }
 
 async function resolveBaseBranch(
