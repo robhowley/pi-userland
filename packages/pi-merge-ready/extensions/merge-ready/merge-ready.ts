@@ -4,19 +4,18 @@ import {
   createMergeReadyProviderCatalog,
   type MergeReadyProviderCatalog,
 } from './provider-catalog.js';
-import type { ProviderReadResult, ProviderSupportingEvidence } from './provider.js';
+import type { ProviderReadResult } from './provider.js';
 import {
   resolveMergeReadyProviderForRemote,
   resolveMergeReadyProviderForUrl,
   type ProviderRemoteSelection,
   type ProviderUrlSelection,
 } from './provider-registry.js';
-import { createMergeReadyStatus } from './status.js';
+import { createMergeReadyStatus, createMergeReadyStatusFromFacts } from './status.js';
 import { assertValidGitHubPullRequestUrl, formatMergeReadyUrlTarget } from './target.js';
 import type {
   MergeReadyCurrentBranchTarget,
   MergeReadyOpenItem,
-  MergeReadyOpenItemDetail,
   MergeReadyStatus,
   MergeReadyTarget,
   MergeReadyUrlTarget,
@@ -160,58 +159,29 @@ function createStatusFromProviderResult(
     });
   }
 
-  const status = createMergeReadyStatus({
+  if (result.snapshot.pullRequest.lifecycle !== 'open') {
+    return createMergeReadyStatus({
+      generatedAt,
+      target,
+      pr: result.snapshot.pullRequest,
+    });
+  }
+
+  if (!result.snapshot.facts) {
+    return createMergeReadyStatus({
+      generatedAt,
+      target,
+      pr: result.snapshot.pullRequest,
+      forceStatusAmbiguous: true,
+    });
+  }
+
+  return createMergeReadyStatusFromFacts({
     generatedAt,
     target,
     pr: result.snapshot.pullRequest,
-    signals: result.snapshot.signals,
-    forceStatusAmbiguous: result.snapshot.integrityIssues.length > 0,
+    facts: result.snapshot.facts,
   });
-
-  return attachSupportingEvidence(status, result.snapshot.supportingEvidence);
-}
-
-function attachSupportingEvidence(
-  status: MergeReadyStatus,
-  evidence: ProviderSupportingEvidence,
-): MergeReadyStatus {
-  return appendOpenItemDetails(
-    appendOpenItemDetails(
-      appendOpenItemDetails(status, 'review_pending', evidence.reviewPending),
-      'changes_requested',
-      evidence.changesRequested,
-    ),
-    'unresolved_conversations',
-    evidence.unresolvedConversations,
-  );
-}
-
-function appendOpenItemDetails(
-  status: MergeReadyStatus,
-  openItemId: MergeReadyOpenItem['id'],
-  additionalDetails: MergeReadyOpenItemDetail[] | undefined,
-): MergeReadyStatus {
-  if (!additionalDetails || additionalDetails.length === 0) {
-    return status;
-  }
-
-  let didChange = false;
-  const openItems = status.openItems.map((openItem) => {
-    if (openItem.id !== openItemId) {
-      return openItem;
-    }
-
-    didChange = true;
-    return {
-      ...openItem,
-      details:
-        openItem.details && openItem.details.length > 0
-          ? [...openItem.details, ...additionalDetails]
-          : additionalDetails,
-    };
-  });
-
-  return didChange ? { ...status, openItems } : status;
 }
 
 function toCurrentBranchTarget(

@@ -27,12 +27,11 @@ export {
   type MergeReadyStatusReader,
 } from './merge-ready.js';
 export type {
-  MergeReadyProviderCheckDetailV1,
-  MergeReadyProviderChecksV1,
-  MergeReadyProviderEvidenceDetailV1,
-  MergeReadyProviderEvidenceV1,
+  MergeReadyProviderDetailV1,
   MergeReadyProviderFactsV1,
   MergeReadyProviderFactV1,
+  MergeReadyProviderRequiredCheckV1,
+  MergeReadyProviderSourceReviewGateV1,
   MergeReadyProviderPullRequestV1,
   MergeReadyProviderReadInputV1,
   MergeReadyProviderReadResultV1,

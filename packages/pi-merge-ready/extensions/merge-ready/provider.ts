@@ -1,10 +1,11 @@
 import type { MergeReadyExec } from './git.js';
 import type {
-  MergeReadyOpenItemDetail,
-  MergeReadyPullRequest,
-  MergeReadySignals,
-  MergeReadyUrlTarget,
-} from './types.js';
+  MergeReadyProviderDetailV1,
+  MergeReadyProviderFactV1,
+  MergeReadyProviderRequiredCheckV1,
+  MergeReadyProviderSourceReviewGateV1,
+} from './provider-api.js';
+import type { MergeReadyPullRequest, MergeReadyUrlTarget } from './types.js';
 
 export type ProviderRepository = {
   owner: string;
@@ -17,18 +18,31 @@ export type ProviderIssue = {
   message: string;
 };
 
-export type ProviderSupportingEvidence = {
-  reviewPending?: MergeReadyOpenItemDetail[];
-  changesRequested?: MergeReadyOpenItemDetail[];
-  unresolvedConversations?: MergeReadyOpenItemDetail[];
+export type ProviderFact<T> = MergeReadyProviderFactV1<T>;
+export type ProviderDetail = MergeReadyProviderDetailV1;
+export type ProviderRequiredCheck = MergeReadyProviderRequiredCheckV1;
+export type ProviderSourceReviewGate = MergeReadyProviderSourceReviewGateV1;
+
+export type ProviderOpenPullRequestFacts = {
+  draft: ProviderFact<boolean>;
+  hasConflicts: ProviderFact<boolean>;
+  behindBase: ProviderFact<boolean>;
+  sourceMergeGate: ProviderFact<'clear' | 'blocked'>;
+  requiredChecks: ProviderFact<readonly ProviderRequiredCheck[]>;
+  sourceReviewGate: ProviderFact<ProviderSourceReviewGate>;
+  unresolvedConversations: ProviderFact<readonly ProviderDetail[]>;
+  conversationResolutionRequired: ProviderFact<boolean>;
 };
 
-export type ProviderSnapshot = {
-  pullRequest: MergeReadyPullRequest;
-  signals: MergeReadySignals;
-  supportingEvidence: ProviderSupportingEvidence;
-  integrityIssues: ProviderIssue[];
-};
+export type ProviderSnapshot =
+  | {
+      pullRequest: MergeReadyPullRequest & { lifecycle: 'open' };
+      facts: ProviderOpenPullRequestFacts;
+    }
+  | {
+      pullRequest: MergeReadyPullRequest & { lifecycle: 'merged' | 'closed' };
+      facts?: never;
+    };
 
 export type ProviderReadResult =
   | { kind: 'found'; snapshot: ProviderSnapshot }

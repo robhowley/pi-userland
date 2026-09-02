@@ -25,13 +25,16 @@ function found(title: string) {
     },
     facts: {
       draft: { kind: 'known' as const, value: false },
-      mergeability: { kind: 'known' as const, value: 'mergeable' as const },
-      checks: { kind: 'known' as const, value: { state: 'passing' as const } },
-      review: { kind: 'known' as const, value: 'approved' as const },
-      conversations: {
+      hasConflicts: { kind: 'known' as const, value: false },
+      behindBase: { kind: 'known' as const, value: false },
+      sourceMergeGate: { kind: 'known' as const, value: 'clear' as const },
+      requiredChecks: { kind: 'known' as const, value: [] },
+      sourceReviewGate: {
         kind: 'known' as const,
-        value: { unresolvedCount: 0, requirement: 'required' as const },
+        value: { state: 'satisfied' as const },
       },
+      unresolvedConversations: { kind: 'known' as const, value: [] },
+      conversationResolutionRequired: { kind: 'known' as const, value: true },
     },
   };
 }

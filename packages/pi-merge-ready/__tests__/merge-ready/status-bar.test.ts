@@ -27,6 +27,7 @@ import {
   createCurrentBranchProbeCall,
   createFakeExec,
   createGitDiscoveryCalls,
+  createImplicitRequiredChecksResult,
   createPullRequestViewFailureCall,
   createPullRequestViewSuccessCall,
   type ExpectedExecCall,
@@ -52,6 +53,14 @@ function createMockAPI(expectedCalls: ExpectedExecCall[] = []): {
     exec: vi.fn(
       async (command: string, args: string[], options?: { cwd?: string; timeout?: number }) => {
         const expectedCall = expectedCalls[index];
+        const implicitRequiredChecks = createImplicitRequiredChecksResult(
+          command,
+          args,
+          options,
+          expectedCalls[index - 1],
+          expectedCall,
+        );
+        if (implicitRequiredChecks) return implicitRequiredChecks;
         expect(expectedCall, `Unexpected exec call ${command} ${args.join(' ')}`).toBeDefined();
 
         index += 1;

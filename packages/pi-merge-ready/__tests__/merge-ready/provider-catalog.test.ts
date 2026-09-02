@@ -30,20 +30,23 @@ const NOOP_EXEC = vi.fn(async () => ({})) as MergeReadyExec;
 function knownFacts(overrides: Partial<MergeReadyProviderFactsV1> = {}): MergeReadyProviderFactsV1 {
   return {
     draft: { kind: 'known', value: false },
-    mergeability: { kind: 'known', value: 'mergeable' },
-    checks: { kind: 'known', value: { state: 'passing' } },
-    review: { kind: 'known', value: 'approved' },
-    conversations: {
-      kind: 'known',
-      value: { unresolvedCount: 0, requirement: 'required' },
-    },
+    hasConflicts: { kind: 'known', value: false },
+    behindBase: { kind: 'known', value: false },
+    sourceMergeGate: { kind: 'known', value: 'clear' },
+    requiredChecks: { kind: 'known', value: [] },
+    sourceReviewGate: { kind: 'known', value: { state: 'satisfied' } },
+    unresolvedConversations: { kind: 'known', value: [] },
+    conversationResolutionRequired: { kind: 'known', value: true },
     ...overrides,
   };
 }
 
-function foundResult(
-  overrides: Partial<Extract<MergeReadyProviderReadResultV1, { kind: 'found' }>> = {},
-): Extract<MergeReadyProviderReadResultV1, { kind: 'found' }> {
+type OpenFoundResult = Extract<
+  MergeReadyProviderReadResultV1,
+  { facts: MergeReadyProviderFactsV1 }
+>;
+
+function foundResult(overrides: Partial<OpenFoundResult> = {}): OpenFoundResult {
   return {
     kind: 'found',
     pullRequest: {
@@ -56,7 +59,7 @@ function foundResult(
     },
     facts: knownFacts(),
     ...overrides,
-  };
+  } as OpenFoundResult;
 }
 
 function createProvider(
@@ -114,6 +117,7 @@ describe('merge-ready provider catalog', () => {
     { ...createProvider({ id: 'bad' }), state: 'ready' },
     { ...createProvider({ id: 'bad' }), summary: 'provider-owned' },
     { ...createProvider({ id: 'bad' }), openItems: [] },
+    { ...createProvider({ id: 'bad' }), signals: {} },
   ])('rejects malformed provider contracts %#', (candidate) => {
     expect(() =>
       createMergeReadyProviderCatalog([candidate as unknown as MergeReadyProviderV1]),
@@ -290,41 +294,36 @@ describe('merge-ready provider catalog', () => {
       }),
     },
     {
-      name: 'mergeability coercible object',
+      name: 'merge gate coercible object',
       result: foundResult({
         facts: knownFacts({
-          mergeability: {
+          sourceMergeGate: {
             kind: 'known',
-            value: { toString: () => 'mergeable' } as never,
+            value: { toString: () => 'clear' } as never,
           },
         }),
       }),
     },
     {
-      name: 'check state boxed string',
+      name: 'check status boxed string',
       result: foundResult({
         facts: knownFacts({
-          checks: { kind: 'known', value: { state: new String('passing') as never } },
-        }),
-      }),
-    },
-    {
-      name: 'review coercible object',
-      result: foundResult({
-        facts: knownFacts({
-          review: {
+          requiredChecks: {
             kind: 'known',
-            value: { valueOf: () => 'approved' } as never,
+            value: [{ label: 'unit', status: new String('passed') as never }],
           },
         }),
       }),
     },
     {
-      name: 'evidence status boxed string',
+      name: 'review gate coercible object',
       result: foundResult({
-        evidence: {
-          reviewPending: [{ label: 'reviewer', status: new String('unknown') as never }],
-        },
+        facts: knownFacts({
+          sourceReviewGate: {
+            kind: 'known',
+            value: { state: { valueOf: () => 'satisfied' } as never },
+          },
+        }),
       }),
     },
   ])('rejects $name instead of producing ready', async ({ result }) => {
@@ -344,14 +343,50 @@ describe('merge-ready provider catalog', () => {
     { ...foundResult(), state: 'ready' },
     { ...foundResult(), summary: 'provider-owned summary' },
     { ...foundResult(), openItems: [] },
+    { ...foundResult(), signals: {} },
     { ...foundResult(), pullRequest: { ...foundResult().pullRequest, number: 8 } },
     {
       ...foundResult(),
-      facts: knownFacts({ checks: { kind: 'known', value: { state: 'unknown' as never } } }),
+      facts: knownFacts({
+        requiredChecks: { kind: 'known', value: [{ label: '', status: 'failed' }] },
+      }),
     },
     {
       ...foundResult(),
-      evidence: { reviewPending: [{ label: '', url: 'not-a-url' }] },
+      facts: knownFacts({
+        unresolvedConversations: {
+          kind: 'known',
+          value: [{ label: 'thread', url: 'not-a-url' }],
+        },
+      }),
+    },
+    {
+      ...foundResult(),
+      facts: { ...knownFacts(), mergeability: { kind: 'known', value: 'mergeable' } },
+    },
+    {
+      ...foundResult(),
+      facts: { ...knownFacts(), checks: { kind: 'known', value: { state: 'passing' } } },
+    },
+    {
+      ...foundResult(),
+      facts: { ...knownFacts(), review: { kind: 'known', value: 'approved' } },
+    },
+    {
+      ...foundResult(),
+      facts: {
+        ...knownFacts(),
+        conversations: {
+          kind: 'known',
+          value: { unresolvedCount: 0, requirement: 'optional' },
+        },
+      },
+    },
+    { ...foundResult(), evidence: { reviewPending: [] } },
+    {
+      kind: 'found',
+      pullRequest: { ...foundResult().pullRequest, lifecycle: 'merged' },
+      facts: knownFacts(),
     },
   ])('rejects malformed or forbidden read result %#', async (result) => {
     await expect(
@@ -363,34 +398,31 @@ describe('merge-ready provider catalog', () => {
     ).rejects.toThrow(/malformed read result|forbidden field/u);
   });
 
-  it('adapts known facts and evidence while status owns readiness fields', async () => {
+  it('derives readiness and details from known facts', async () => {
     const status = await readUrl(
       createProvider({
         read: async () =>
           foundResult({
             facts: knownFacts({
-              checks: {
+              sourceMergeGate: { kind: 'known', value: 'blocked' },
+              requiredChecks: {
+                kind: 'known',
+                value: [
+                  {
+                    label: 'unit',
+                    status: 'failed',
+                    url: 'https://ci.example/jobs/7',
+                  },
+                ],
+              },
+              sourceReviewGate: {
                 kind: 'known',
                 value: {
-                  state: 'failing',
-                  details: {
-                    failing: [
-                      {
-                        label: 'unit',
-                        status: 'failing',
-                        url: 'https://ci.example/jobs/7',
-                      },
-                    ],
-                    running: [],
-                    unknown: [],
-                  },
+                  state: 'changes_requested',
+                  details: [{ label: '@reviewer', url: 'https://gitlab.example/reviews/9' }],
                 },
               },
-              review: { kind: 'known', value: 'changes_requested' },
             }),
-            evidence: {
-              changesRequested: [{ label: '@reviewer', url: 'https://gitlab.example/reviews/9' }],
-            },
           }),
       }),
     );
@@ -414,6 +446,61 @@ describe('merge-ready provider catalog', () => {
     });
   });
 
+  it('never reports contradictory known facts as ready', async () => {
+    const status = await readUrl(
+      createProvider({
+        read: async () =>
+          foundResult({
+            facts: knownFacts({
+              hasConflicts: { kind: 'known', value: true },
+              sourceMergeGate: { kind: 'known', value: 'clear' },
+            }),
+          }),
+      }),
+    );
+
+    expect(status.state).toBe('blocked');
+    expect(status.openItems.map((item) => item.id)).toEqual(['merge_conflicts']);
+  });
+
+  it('uses a generic blocker only when source facts do not explain the blocked gate', async () => {
+    const status = await readUrl(
+      createProvider({
+        read: async () =>
+          foundResult({
+            facts: knownFacts({ sourceMergeGate: { kind: 'known', value: 'blocked' } }),
+          }),
+      }),
+    );
+
+    expect(status.openItems.map((item) => item.id)).toEqual(['merge_blocked']);
+  });
+
+  it.each([
+    { status: 'failed' as const, openItem: 'ci_failing' },
+    { status: 'running' as const, openItem: 'ci_running' },
+    { status: 'unknown' as const, openItem: 'status_ambiguous' },
+  ])(
+    'derives $openItem from a required check with $status status',
+    async ({ status, openItem }) => {
+      const result = await readUrl(
+        createProvider({
+          read: async () =>
+            foundResult({
+              facts: knownFacts({
+                requiredChecks: {
+                  kind: 'known',
+                  value: [{ label: 'required check', status }],
+                },
+              }),
+            }),
+        }),
+      );
+
+      expect(result.openItems.map((item) => item.id)).toEqual([openItem]);
+    },
+  );
+
   it('turns explicit unknown facts into private unknown signals and integrity ambiguity', async () => {
     const status = await readUrl(
       createProvider({
@@ -421,7 +508,7 @@ describe('merge-ready provider catalog', () => {
           foundResult({
             facts: knownFacts({
               draft: { kind: 'unknown', message: 'draft unavailable' },
-              review: { kind: 'unknown', message: 'review unavailable' },
+              sourceReviewGate: { kind: 'unknown', message: 'review unavailable' },
             }),
           }),
       }),
@@ -431,6 +518,22 @@ describe('merge-ready provider catalog', () => {
     expect(status.summary).toBe('Merge readiness is ambiguous');
     expect(status.openItems.map((item) => item.id)).toEqual(['status_ambiguous']);
     expect(status.signals).toMatchObject({ draft: false, review: 'unknown' });
+  });
+
+  it('uses partial values for blockers while forcing ambiguity', async () => {
+    const status = await readUrl(
+      createProvider({
+        read: async () =>
+          foundResult({
+            facts: knownFacts({
+              draft: { kind: 'partial', value: true, message: 'draft response incomplete' },
+            }),
+          }),
+      }),
+    );
+
+    expect(status.state).toBe('unknown');
+    expect(status.openItems.map((item) => item.id)).toEqual(['status_ambiguous', 'draft']);
   });
 
   it.each([

@@ -1,35 +1,30 @@
 import type {
-  MergeReadyProviderChecksV1,
-  MergeReadyProviderEvidenceDetailV1,
-  MergeReadyProviderEvidenceV1,
+  MergeReadyProviderDetailV1,
   MergeReadyProviderFactV1,
   MergeReadyProviderFactsV1,
   MergeReadyProviderPullRequestV1,
   MergeReadyProviderReadInputV1,
   MergeReadyProviderReadResultV1,
   MergeReadyProviderRemoteMatchV1,
+  MergeReadyProviderRequiredCheckV1,
+  MergeReadyProviderSourceReviewGateV1,
   MergeReadyProviderUrlMatchV1,
   MergeReadyProviderV1,
 } from './provider-api.js';
 import { BUILT_IN_MERGE_READY_PROVIDERS } from './provider-registry.js';
 import type {
   MergeReadyProvider,
-  ProviderIssue,
   ProviderReadInput,
   ProviderReadResult,
   ProviderSnapshot,
-  ProviderSupportingEvidence,
 } from './provider.js';
-import type { MergeReadySignals } from './types.js';
 
 export const CUSTOM_MERGE_READY_PROVIDER_MAX_TIMEOUT_MS = 20_000;
 
 const PROVIDER_PULL_REQUEST_LIFECYCLES = ['open', 'merged', 'closed'] as const;
-const PROVIDER_MERGEABILITY_VALUES = ['mergeable', 'conflicting', 'behind', 'blocked'] as const;
-const PROVIDER_CHECK_STATE_VALUES = ['passing', 'failing', 'running'] as const;
-const PROVIDER_REVIEW_VALUES = ['approved', 'changes_requested', 'pending'] as const;
-const PROVIDER_EVIDENCE_STATUS_VALUES = ['failing', 'running', 'unknown'] as const;
-const PROVIDER_CONVERSATION_REQUIREMENT_VALUES = ['required', 'optional'] as const;
+const PROVIDER_SOURCE_MERGE_GATE_VALUES = ['clear', 'blocked'] as const;
+const PROVIDER_REQUIRED_CHECK_STATUS_VALUES = ['passed', 'failed', 'running', 'unknown'] as const;
+const PROVIDER_SOURCE_REVIEW_GATE_VALUES = ['satisfied', 'changes_requested', 'pending'] as const;
 const PROVIDER_PRESENCE_VALUES = ['known', 'unknown'] as const;
 
 export type MergeReadyProviderCatalog = readonly MergeReadyProvider[];
@@ -64,7 +59,7 @@ function validateProviderContract(provider: unknown): asserts provider is MergeR
   if (!isRecord(provider)) {
     throw new Error('Invalid merge-ready provider contract: expected an object.');
   }
-  rejectForbiddenTopLevelFields(provider, 'merge-ready provider contract');
+  rejectForbiddenReadinessFields(provider, 'merge-ready provider contract');
 
   if (provider['apiVersion'] !== 1) {
     throw new Error('Invalid merge-ready provider contract: apiVersion must be 1.');
@@ -87,33 +82,27 @@ function adaptProvider(provider: MergeReadyProviderV1): MergeReadyProvider {
   const matchRemote = provider.matchRemote.bind(provider);
   const read = provider.read.bind(provider);
 
-  const adapter: MergeReadyProvider = {
+  return Object.freeze({
     id,
-    parseUrl(url) {
+    parseUrl(url: URL) {
       const match = matchUrl(url);
-      if (match === null) {
-        return null;
-      }
+      if (match === null) return null;
       validateUrlMatch(match, id);
-      return { mode: 'url', ...match };
+      return { mode: 'url' as const, ...match };
     },
     parseRemote(remote) {
       const match = matchRemote({ name: remote.name, url: remote.url });
-      if (match === null) {
-        return null;
-      }
+      if (match === null) return null;
       validateRemoteMatch(match, id);
       return match;
     },
-    async read(input) {
+    async read(input: ProviderReadInput) {
       const publicInput = toPublicReadInput(input);
       let result: MergeReadyProviderReadResultV1;
       try {
         result = await withTimeout(Promise.resolve(read(publicInput)), publicInput.timeoutMs, id);
       } catch (error) {
-        if (isProviderTimeout(error)) {
-          throw error;
-        }
+        if (isProviderTimeout(error)) throw error;
         throw new Error(
           `Merge-ready provider ${JSON.stringify(id)} read failed: ${getErrorMessage(error)}`,
           { cause: error },
@@ -123,8 +112,7 @@ function adaptProvider(provider: MergeReadyProviderV1): MergeReadyProvider {
       validateReadResult(result, id, publicInput);
       return adaptReadResult(result);
     },
-  };
-  return Object.freeze(adapter);
+  } satisfies MergeReadyProvider);
 }
 
 function toPublicReadInput(input: ProviderReadInput): MergeReadyProviderReadInputV1 {
@@ -135,18 +123,12 @@ function toPublicReadInput(input: ProviderReadInput): MergeReadyProviderReadInpu
         Math.min(Math.floor(requestedTimeout), CUSTOM_MERGE_READY_PROVIDER_MAX_TIMEOUT_MS),
       )
     : CUSTOM_MERGE_READY_PROVIDER_MAX_TIMEOUT_MS;
-  const base = {
-    ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
-    timeoutMs,
-  };
+  const base = { ...(input.cwd === undefined ? {} : { cwd: input.cwd }), timeoutMs };
 
-  if (input.mode === 'url') {
-    return { ...base, mode: 'url', target: input.target };
-  }
+  if (input.mode === 'url') return { ...base, mode: 'url', target: input.target };
   if (input.remote === undefined) {
     throw new Error('Custom merge-ready providers require remote identity.');
   }
-
   return {
     ...base,
     mode: 'ambient',
@@ -156,9 +138,7 @@ function toPublicReadInput(input: ProviderReadInput): MergeReadyProviderReadInpu
 }
 
 function adaptReadResult(result: MergeReadyProviderReadResultV1): ProviderReadResult {
-  if (result.kind === 'absent') {
-    return result;
-  }
+  if (result.kind === 'absent') return result;
   if (result.kind === 'unavailable') {
     return {
       kind: 'unavailable',
@@ -167,62 +147,11 @@ function adaptReadResult(result: MergeReadyProviderReadResultV1): ProviderReadRe
     };
   }
 
-  const { signals, issues } = adaptFacts(result.facts);
-  const snapshot: ProviderSnapshot = {
-    pullRequest: result.pullRequest,
-    signals,
-    supportingEvidence: adaptEvidence(result.evidence),
-    integrityIssues: issues,
-  };
+  const snapshot: ProviderSnapshot =
+    result.pullRequest.lifecycle === 'open'
+      ? { pullRequest: result.pullRequest, facts: result.facts! }
+      : { pullRequest: result.pullRequest };
   return { kind: 'found', snapshot };
-}
-
-function adaptFacts(facts: MergeReadyProviderFactsV1): {
-  signals: MergeReadySignals;
-  issues: ProviderIssue[];
-} {
-  const issues: ProviderIssue[] = [];
-  const readFact = <T>(fact: MergeReadyProviderFactV1<T>, fallback: T): T => {
-    if (fact.kind === 'known') {
-      return fact.value;
-    }
-    issues.push({ message: fact.message });
-    return fallback;
-  };
-
-  const checks =
-    facts.checks.kind === 'known'
-      ? facts.checks.value
-      : (issues.push({ message: facts.checks.message }), { state: 'unknown' as const });
-  const conversations =
-    facts.conversations.kind === 'known'
-      ? facts.conversations.value
-      : (issues.push({ message: facts.conversations.message }),
-        { unresolvedCount: 0, requirement: 'unknown' as const });
-
-  return {
-    signals: {
-      draft: readFact(facts.draft, false),
-      mergeability: readFact(facts.mergeability, 'unknown'),
-      checks: checks.state,
-      ...('details' in checks && checks.details !== undefined
-        ? { checkDetails: checks.details }
-        : {}),
-      review: readFact(facts.review, 'unknown'),
-      unresolvedConversations: conversations.unresolvedCount > 0,
-      ...(conversations.unresolvedCount > 0
-        ? { unresolvedConversationCount: conversations.unresolvedCount }
-        : {}),
-      unresolvedConversationRequirement: conversations.requirement,
-    },
-    issues,
-  };
-}
-
-function adaptEvidence(
-  evidence: MergeReadyProviderEvidenceV1 | undefined,
-): ProviderSupportingEvidence {
-  return evidence ?? {};
 }
 
 function validateUrlMatch(
@@ -263,10 +192,8 @@ function validateReadResult(
   const malformed = (): never => {
     throw new Error(`Merge-ready provider ${JSON.stringify(id)} returned a malformed read result.`);
   };
-  if (!isRecord(value)) {
-    return malformed();
-  }
-  rejectForbiddenTopLevelFields(value, `merge-ready provider ${JSON.stringify(id)} read result`);
+  if (!isRecord(value)) return malformed();
+  rejectForbiddenReadinessFields(value, `merge-ready provider ${JSON.stringify(id)} read result`);
 
   if (value['kind'] === 'absent') {
     if (!hasOnlyKeys(value, ['kind'])) return malformed();
@@ -282,16 +209,18 @@ function validateReadResult(
     }
     return;
   }
+
   const pullRequest = value['pullRequest'];
   if (
     value['kind'] !== 'found' ||
-    !hasOnlyKeys(value, ['kind', 'pullRequest', 'facts', 'evidence']) ||
+    !hasOnlyKeys(value, ['kind', 'pullRequest', 'facts']) ||
     !isPullRequest(pullRequest)
   ) {
     return malformed();
   }
-  validateFacts(value['facts'], malformed);
-  if (value['evidence'] !== undefined && !isEvidence(value['evidence'])) {
+  if (pullRequest.lifecycle === 'open') {
+    validateFacts(value['facts'], malformed);
+  } else if ('facts' in value) {
     return malformed();
   }
   if (
@@ -308,12 +237,26 @@ function validateFacts(
   malformed: () => never,
 ): asserts value is MergeReadyProviderFactsV1 {
   if (
-    !hasOnlyKeys(value, ['draft', 'mergeability', 'checks', 'review', 'conversations']) ||
-    !isFact(value['draft'], (item) => typeof item === 'boolean') ||
-    !isFact(value['mergeability'], (item) => isAllowedString(item, PROVIDER_MERGEABILITY_VALUES)) ||
-    !isFact(value['checks'], isChecks) ||
-    !isFact(value['review'], (item) => isAllowedString(item, PROVIDER_REVIEW_VALUES)) ||
-    !isFact(value['conversations'], isConversations)
+    !hasOnlyKeys(value, [
+      'draft',
+      'hasConflicts',
+      'behindBase',
+      'sourceMergeGate',
+      'requiredChecks',
+      'sourceReviewGate',
+      'unresolvedConversations',
+      'conversationResolutionRequired',
+    ]) ||
+    !isFact(value['draft'], isBoolean) ||
+    !isFact(value['hasConflicts'], isBoolean) ||
+    !isFact(value['behindBase'], isBoolean) ||
+    !isFact(value['sourceMergeGate'], (item) =>
+      isAllowedString(item, PROVIDER_SOURCE_MERGE_GATE_VALUES),
+    ) ||
+    !isFact(value['requiredChecks'], isRequiredChecks) ||
+    !isFact(value['sourceReviewGate'], isSourceReviewGate) ||
+    !isFact(value['unresolvedConversations'], isDetails) ||
+    !isFact(value['conversationResolutionRequired'], isBoolean)
   ) {
     return malformed();
   }
@@ -327,37 +270,44 @@ function isFact<T>(
     (hasOnlyKeys(value, ['kind', 'value']) &&
       value['kind'] === 'known' &&
       isValue(value['value'])) ||
+    (hasOnlyKeys(value, ['kind', 'value', 'message']) &&
+      value['kind'] === 'partial' &&
+      isValue(value['value']) &&
+      isNonEmptyString(value['message'])) ||
     (hasOnlyKeys(value, ['kind', 'message']) &&
       value['kind'] === 'unknown' &&
       isNonEmptyString(value['message']))
   );
 }
 
-function isChecks(value: unknown): value is MergeReadyProviderChecksV1 {
-  if (
-    !hasOnlyKeys(value, ['state', 'details']) ||
-    !isAllowedString(value['state'], PROVIDER_CHECK_STATE_VALUES)
-  ) {
-    return false;
-  }
-  const details = value['details'];
-  if (details === undefined) return true;
-  if (!hasOnlyKeys(details, ['failing', 'running', 'unknown'])) return false;
-  return (['failing', 'running', 'unknown'] as const).every(
-    (bucket) =>
-      Array.isArray(details[bucket]) &&
-      details[bucket].every((detail: unknown) => isCheckDetail(detail, bucket)),
+function isRequiredChecks(value: unknown): value is readonly MergeReadyProviderRequiredCheckV1[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (check) =>
+        isDetail(check, ['label', 'url', 'status']) &&
+        isAllowedString(check['status'], PROVIDER_REQUIRED_CHECK_STATUS_VALUES),
+    )
   );
 }
 
-function isConversations(
-  value: unknown,
-): value is { unresolvedCount: number; requirement: 'required' | 'optional' } {
+function isSourceReviewGate(value: unknown): value is MergeReadyProviderSourceReviewGateV1 {
   return (
-    hasOnlyKeys(value, ['unresolvedCount', 'requirement']) &&
-    Number.isSafeInteger(value['unresolvedCount']) &&
-    (value['unresolvedCount'] as number) >= 0 &&
-    isAllowedString(value['requirement'], PROVIDER_CONVERSATION_REQUIREMENT_VALUES)
+    hasOnlyKeys(value, ['state', 'details']) &&
+    isAllowedString(value['state'], PROVIDER_SOURCE_REVIEW_GATE_VALUES) &&
+    (value['details'] === undefined || isDetails(value['details']))
+  );
+}
+
+function isDetails(value: unknown): value is readonly MergeReadyProviderDetailV1[] {
+  return Array.isArray(value) && value.every((detail) => isDetail(detail, ['label', 'url']));
+}
+
+function isDetail(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
+  return (
+    hasOnlyKeys(value, keys) &&
+    isNonEmptyString(value['label']) &&
+    (value['url'] === undefined || isAbsoluteHttpUrl(value['url']))
   );
 }
 
@@ -390,33 +340,8 @@ function isRemoteMatch(value: unknown): value is MergeReadyProviderRemoteMatchV1
   );
 }
 
-function isEvidence(value: unknown): value is MergeReadyProviderEvidenceV1 {
-  return (
-    hasOnlyKeys(value, ['reviewPending', 'changesRequested', 'unresolvedConversations']) &&
-    ['reviewPending', 'changesRequested', 'unresolvedConversations'].every(
-      (key) =>
-        value[key] === undefined ||
-        (Array.isArray(value[key]) && value[key].every((detail) => isEvidenceDetail(detail))),
-    )
-  );
-}
-
-function isCheckDetail(value: unknown, expectedStatus: string): boolean {
-  return isEvidenceDetail(value) && value.status === expectedStatus;
-}
-
-function isEvidenceDetail(value: unknown): value is MergeReadyProviderEvidenceDetailV1 {
-  return (
-    hasOnlyKeys(value, ['label', 'status', 'url']) &&
-    isNonEmptyString(value['label']) &&
-    (value['status'] === undefined ||
-      isAllowedString(value['status'], PROVIDER_EVIDENCE_STATUS_VALUES)) &&
-    (value['url'] === undefined || isAbsoluteHttpUrl(value['url']))
-  );
-}
-
-function rejectForbiddenTopLevelFields(value: Record<string, unknown>, subject: string): void {
-  for (const key of ['state', 'summary', 'openItems']) {
+function rejectForbiddenReadinessFields(value: Record<string, unknown>, subject: string): void {
+  for (const key of ['state', 'summary', 'openItems', 'signals']) {
     if (key in value) {
       throw new Error(`${subject} must not supply forbidden field ${JSON.stringify(key)}.`);
     }
@@ -436,18 +361,14 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, id: string
     timer.unref?.();
 
     const cleanup = () => {
-      if (timer === undefined) {
-        return;
-      }
-
+      if (timer === undefined) return;
       clearTimeout(timer);
       timer = undefined;
     };
-
     void promise.then(
-      (value) => {
+      (result) => {
         cleanup();
-        resolve(value);
+        resolve(result);
       },
       (error: unknown) => {
         cleanup();
@@ -477,6 +398,10 @@ function isAllowedString<T extends string>(
   allowedValues: readonly T[],
 ): value is T {
   return typeof value === 'string' && allowedValues.includes(value as T);
+}
+
+function isBoolean(value: unknown): value is boolean {
+  return typeof value === 'boolean';
 }
 
 function isNonEmptyString(value: unknown): value is string {

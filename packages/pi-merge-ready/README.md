@@ -189,10 +189,17 @@ type Change = {
   headRefName: string;
   baseRefName: string;
   draft: boolean;
-  mergeability: 'mergeable' | 'conflicting' | 'behind' | 'blocked';
-  checks: 'passing' | 'failing' | 'running';
-  review: 'approved' | 'changes_requested' | 'pending';
-  unresolvedCount: number;
+  hasConflicts: boolean;
+  behindBase: boolean;
+  mergeBlocked: boolean;
+  requiredChecks: Array<{
+    label: string;
+    status: 'passed' | 'failed' | 'running' | 'unknown';
+    url?: string;
+  }>;
+  reviewGate: 'satisfied' | 'changes_requested' | 'pending';
+  reviewDetails: Array<{ label: string; url?: string }>;
+  unresolvedConversations: Array<{ label: string; url?: string }>;
   requiresConversationResolution: boolean;
 };
 
@@ -231,27 +238,39 @@ const provider = defineMergeReadyProvider({
     }
 
     const change = (await response.json()) as Change;
+    const pullRequest = {
+      lifecycle: change.lifecycle,
+      number: change.number,
+      title: change.title,
+      url: change.url,
+      headRefName: change.headRefName,
+      baseRefName: change.baseRefName,
+    } as const;
+    if (change.lifecycle !== 'open') return { kind: 'found', pullRequest } as const;
+
     return {
       kind: 'found',
-      pullRequest: {
-        lifecycle: change.lifecycle,
-        number: change.number,
-        title: change.title,
-        url: change.url,
-        headRefName: change.headRefName,
-        baseRefName: change.baseRefName,
-      },
+      pullRequest: { ...pullRequest, lifecycle: 'open' },
       facts: {
         draft: { kind: 'known', value: change.draft },
-        mergeability: { kind: 'known', value: change.mergeability },
-        checks: { kind: 'known', value: { state: change.checks } },
-        review: { kind: 'known', value: change.review },
-        conversations: {
+        hasConflicts: { kind: 'known', value: change.hasConflicts },
+        behindBase: { kind: 'known', value: change.behindBase },
+        sourceMergeGate: {
           kind: 'known',
-          value: {
-            unresolvedCount: change.unresolvedCount,
-            requirement: change.requiresConversationResolution ? 'required' : 'optional',
-          },
+          value: change.mergeBlocked ? 'blocked' : 'clear',
+        },
+        requiredChecks: { kind: 'known', value: change.requiredChecks },
+        sourceReviewGate: {
+          kind: 'known',
+          value: { state: change.reviewGate, details: change.reviewDetails },
+        },
+        unresolvedConversations: {
+          kind: 'known',
+          value: change.unresolvedConversations,
+        },
+        conversationResolutionRequired: {
+          kind: 'known',
+          value: change.requiresConversationResolution,
         },
       },
     } as const;
@@ -265,7 +284,7 @@ export default function (pi: ExtensionAPI) {
 
 The provider package should keep loading its extension through `pi.extensions`; the API subpath supplies only the provider contract. Provider extensions must depend on and bundle the same major API version (`V1`) as the running pi-merge-ready extension. Do not import private provider, built-in, registry, or catalog paths.
 
-The public contract is read-only: matchers return a normalized identity or `null`; `read()` returns `found`, `absent`, or `unavailable`; and `found` results provide explicit known or unknown facts. Unknown facts produce `status_ambiguous`, while pi-merge-ready owns readiness state, summaries, and blocker lists. Provider reads are capped at 20 seconds. Duplicate IDs, the reserved `github` ID, overlapping matches, malformed results, matcher failures, read failures, and timeouts fail explicitly.
+The public contract is read-only: matchers return a normalized identity or `null`; `read()` returns `found`, `absent`, or `unavailable`; and open `found` results provide `known`, `partial`, or `unknown` source-control facts. Terminal results carry no open-PR facts. `requiredChecks` must contain only checks the source confirms are merge requirements; return an unknown fact when requiredness cannot be established. Unknown facts produce `status_ambiguous`; partial facts retain their usable value and also produce ambiguity. pi-merge-ready alone derives signals, supporting details, readiness state, summaries, and blocker lists. Provider reads are capped at 20 seconds. Duplicate IDs, the reserved `github` ID, overlapping matches, malformed results, matcher failures, read failures, and timeouts fail explicitly.
 
 ## Configuration
 

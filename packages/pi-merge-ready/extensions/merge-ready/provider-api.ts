@@ -5,6 +5,7 @@ export const MERGE_READY_PROVIDER_COLLECTION_EVENT_V1 =
 
 export type MergeReadyProviderFactV1<T> =
   | { kind: 'known'; value: T }
+  | { kind: 'partial'; value: T; message: string }
   | { kind: 'unknown'; message: string };
 
 export type MergeReadyProviderUrlMatchV1 = {
@@ -24,16 +25,18 @@ export type MergeReadyProviderRemoteMatchV1 = {
   repo: string;
 };
 
-export type MergeReadyProviderEvidenceDetailV1 = {
+export type MergeReadyProviderDetailV1 = {
   label: string;
-  status?: 'failing' | 'running' | 'unknown';
   url?: string;
 };
 
-export type MergeReadyProviderEvidenceV1 = {
-  reviewPending?: MergeReadyProviderEvidenceDetailV1[];
-  changesRequested?: MergeReadyProviderEvidenceDetailV1[];
-  unresolvedConversations?: MergeReadyProviderEvidenceDetailV1[];
+export type MergeReadyProviderRequiredCheckV1 = MergeReadyProviderDetailV1 & {
+  status: 'passed' | 'failed' | 'running' | 'unknown';
+};
+
+export type MergeReadyProviderSourceReviewGateV1 = {
+  state: 'satisfied' | 'changes_requested' | 'pending';
+  details?: readonly MergeReadyProviderDetailV1[];
 };
 
 export type MergeReadyProviderPullRequestV1 = {
@@ -46,28 +49,15 @@ export type MergeReadyProviderPullRequestV1 = {
   headRepository?: MergeReadyProviderRemoteMatchV1;
 };
 
-export type MergeReadyProviderCheckDetailV1 = MergeReadyProviderEvidenceDetailV1 & {
-  status: 'failing' | 'running' | 'unknown';
-};
-
-export type MergeReadyProviderChecksV1 = {
-  state: 'passing' | 'failing' | 'running';
-  details?: {
-    failing: MergeReadyProviderCheckDetailV1[];
-    running: MergeReadyProviderCheckDetailV1[];
-    unknown: MergeReadyProviderCheckDetailV1[];
-  };
-};
-
 export type MergeReadyProviderFactsV1 = {
   draft: MergeReadyProviderFactV1<boolean>;
-  mergeability: MergeReadyProviderFactV1<'mergeable' | 'conflicting' | 'behind' | 'blocked'>;
-  checks: MergeReadyProviderFactV1<MergeReadyProviderChecksV1>;
-  review: MergeReadyProviderFactV1<'approved' | 'changes_requested' | 'pending'>;
-  conversations: MergeReadyProviderFactV1<{
-    unresolvedCount: number;
-    requirement: 'required' | 'optional';
-  }>;
+  hasConflicts: MergeReadyProviderFactV1<boolean>;
+  behindBase: MergeReadyProviderFactV1<boolean>;
+  sourceMergeGate: MergeReadyProviderFactV1<'clear' | 'blocked'>;
+  requiredChecks: MergeReadyProviderFactV1<readonly MergeReadyProviderRequiredCheckV1[]>;
+  sourceReviewGate: MergeReadyProviderFactV1<MergeReadyProviderSourceReviewGateV1>;
+  unresolvedConversations: MergeReadyProviderFactV1<readonly MergeReadyProviderDetailV1[]>;
+  conversationResolutionRequired: MergeReadyProviderFactV1<boolean>;
 };
 
 export type MergeReadyProviderReadInputV1 = {
@@ -85,25 +75,30 @@ export type MergeReadyProviderReadInputV1 = {
     }
 );
 
+type ForbiddenReadinessFields = {
+  state?: never;
+  summary?: never;
+  openItems?: never;
+  signals?: never;
+};
+
 export type MergeReadyProviderReadResultV1 =
-  | {
+  | ({
       kind: 'found';
-      pullRequest: MergeReadyProviderPullRequestV1;
+      pullRequest: MergeReadyProviderPullRequestV1 & { lifecycle: 'open' };
       facts: MergeReadyProviderFactsV1;
-      evidence?: MergeReadyProviderEvidenceV1;
-      state?: never;
-      summary?: never;
-      openItems?: never;
-    }
-  | { kind: 'absent'; state?: never; summary?: never; openItems?: never }
-  | {
+    } & ForbiddenReadinessFields)
+  | ({
+      kind: 'found';
+      pullRequest: MergeReadyProviderPullRequestV1 & { lifecycle: 'merged' | 'closed' };
+      facts?: never;
+    } & ForbiddenReadinessFields)
+  | ({ kind: 'absent' } & ForbiddenReadinessFields)
+  | ({
       kind: 'unavailable';
       presence: 'known' | 'unknown';
       message: string;
-      state?: never;
-      summary?: never;
-      openItems?: never;
-    };
+    } & ForbiddenReadinessFields);
 
 export interface MergeReadyProviderV1 {
   readonly apiVersion: 1;
@@ -114,6 +109,7 @@ export interface MergeReadyProviderV1 {
   readonly state?: never;
   readonly summary?: never;
   readonly openItems?: never;
+  readonly signals?: never;
 }
 
 export function defineMergeReadyProvider<T extends MergeReadyProviderV1>(provider: T): T {

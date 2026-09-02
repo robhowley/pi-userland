@@ -991,6 +991,38 @@ describe('getMergeReadyStatus', () => {
     },
   );
 
+  it('does not treat optional rollup checks as required', async () => {
+    const { exec, assertDone } = createFakeExec([
+      ...createGitDiscoveryCalls(),
+      createPullRequestViewSuccessCall(
+        buildPullRequestPayload({
+          statusCheckRollup: [
+            {
+              __typename: 'CheckRun',
+              workflowName: 'optional',
+              name: 'preview',
+              status: 'COMPLETED',
+              conclusion: 'FAILURE',
+            },
+          ],
+        }),
+        { requiredChecks: [] },
+      ),
+      createConversationsSuccessCall(buildConversationsPayload()),
+    ]);
+
+    const status = await getMergeReadyStatus({
+      exec,
+      cwd: '/repo',
+      now: () => new Date(GENERATED_AT),
+    });
+
+    assertDone();
+    expect(status.state).toBe('ready');
+    expect(status.signals.checks).toBe('passing');
+    expect(openItemIds(status)).toEqual([]);
+  });
+
   it('attaches blocking review deep links to the changes_requested open item', async () => {
     const { exec, assertDone } = createFakeExec([
       ...createGitDiscoveryCalls(),

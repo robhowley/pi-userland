@@ -19,8 +19,8 @@ const TARGET = {
 } as const;
 
 describe('merge-ready GitHub provider', () => {
-  it('composes normalized PR signals and supporting evidence without returning openItems', async () => {
-    const { exec, assertDone } = createFakeExec([
+  it('emits source-control facts without returning readiness fields', async () => {
+    const { exec, assertDone, getCalls } = createFakeExec([
       createPullRequestViewSuccessCall(
         buildPullRequestPayload(REQUESTED_REVIEWER_SCENARIO.pullRequestOverrides),
       ),
@@ -71,6 +71,12 @@ describe('merge-ready GitHub provider', () => {
     });
 
     assertDone();
+    expect(getCalls()).toContainEqual({
+      command: 'gh',
+      args: ['pr', 'checks', '--required', '--json', 'name,state,bucket,link'],
+      cwd: '/repo',
+      timeout: undefined,
+    });
 
     expect(result).toMatchObject({
       kind: 'found',
@@ -83,37 +89,43 @@ describe('merge-ready GitHub provider', () => {
           headRefName: 'feat/merge-ready',
           baseRefName: 'main',
         },
-        signals: {
-          draft: false,
-          mergeability: 'mergeable',
-          checks: 'passing',
-          review: 'pending',
-          unresolvedConversations: true,
-          unresolvedConversationCount: 1,
-          unresolvedConversationRequirement: 'required',
-        },
-        supportingEvidence: {
-          reviewPending: [{ label: '@alice' }, { label: 'team/core-reviewers' }],
-          changesRequested: [
-            {
-              label: 'reviewer1 requested changes',
-              url: 'https://github.com/robhowley/pi-userland/pull/42#pullrequestreview-7',
+        facts: {
+          draft: { kind: 'known', value: false },
+          hasConflicts: { kind: 'known', value: false },
+          behindBase: { kind: 'known', value: false },
+          sourceMergeGate: { kind: 'known', value: 'clear' },
+          requiredChecks: {
+            kind: 'known',
+            value: [{ label: 'ci / unit', status: 'passed' }],
+          },
+          sourceReviewGate: {
+            kind: 'known',
+            value: {
+              state: 'pending',
+              details: [{ label: '@alice' }, { label: 'team/core-reviewers' }],
             },
-          ],
-          unresolvedConversations: [
-            {
-              label: 'src/provider.ts:24 unresolved conversation',
-              url: 'https://github.com/robhowley/pi-userland/pull/42#discussion_r9',
-            },
-          ],
+          },
+          unresolvedConversations: {
+            kind: 'known',
+            value: [
+              {
+                label: 'src/provider.ts:24 unresolved conversation',
+                url: 'https://github.com/robhowley/pi-userland/pull/42#discussion_r9',
+              },
+            ],
+          },
+          conversationResolutionRequired: { kind: 'known', value: true },
         },
-        integrityIssues: [],
       },
     });
-    expect(JSON.stringify(result)).not.toContain('"openItems"');
+    if (result.kind === 'found') {
+      expect(result.snapshot).not.toHaveProperty('signals');
+      expect(result.snapshot).not.toHaveProperty('summary');
+      expect(result.snapshot).not.toHaveProperty('openItems');
+    }
   });
 
-  it('keeps complete signals while retaining malformed readiness facts as integrity issues', async () => {
+  it('marks malformed readiness facts unknown without sidecar integrity issues', async () => {
     const { exec, assertDone } = createFakeExec([
       createPullRequestViewSuccessCall(buildPullRequestPayload({ isDraft: 'not-a-boolean' })),
       createConversationsSuccessCall(buildConversationsPayload()),
@@ -131,23 +143,21 @@ describe('merge-ready GitHub provider', () => {
     expect(result).toMatchObject({
       kind: 'found',
       snapshot: {
-        signals: {
-          draft: false,
-          mergeability: 'mergeable',
-          checks: 'passing',
-          review: 'approved',
-          unresolvedConversations: false,
-          unresolvedConversationRequirement: 'optional',
-        },
-        integrityIssues: [
-          {
+        facts: {
+          draft: {
+            kind: 'unknown',
             message: 'gh pr view JSON payload had an invalid draft flag',
           },
-        ],
+          requiredChecks: { kind: 'known' },
+          sourceReviewGate: { kind: 'known', value: { state: 'satisfied' } },
+          unresolvedConversations: { kind: 'known', value: [] },
+          conversationResolutionRequired: { kind: 'known', value: false },
+        },
       },
     });
     if (result.kind === 'found') {
-      expect(result.snapshot).not.toHaveProperty('forceStatusAmbiguous');
+      expect(result.snapshot).not.toHaveProperty('integrityIssues');
+      expect(result.snapshot).not.toHaveProperty('supportingEvidence');
     }
   });
 

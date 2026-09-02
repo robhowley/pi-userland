@@ -12,6 +12,7 @@ export type ExpectedExecCall = {
   timeout?: number | undefined;
   result?: (MergeReadyExecResult & { killed?: boolean }) | undefined;
   error?: unknown;
+  requiredChecks?: unknown[];
 };
 
 export const GH_PR_VIEW_JSON_FIELDS =
@@ -58,6 +59,7 @@ export function createFakeExec(expectedCalls: ExpectedExecCall[]): {
   getCalls: () => ObservedExecCall[];
 } {
   let index = 0;
+  let requiredChecks: unknown[] | null = null;
   const calls: ObservedExecCall[] = [];
 
   const exec: MergeReadyExec = async (command, args, options) => {
@@ -68,8 +70,20 @@ export function createFakeExec(expectedCalls: ExpectedExecCall[]): {
       timeout: options?.timeout,
     };
     const expectedCall = expectedCalls[index];
-    expect(expectedCall, `Unexpected exec call ${command} ${args.join(' ')}`).toBeDefined();
+    const isRequiredChecksCall =
+      command === 'gh' && args[0] === 'pr' && args[1] === 'checks' && args.includes('--required');
+    const expectedIsRequiredChecksCall =
+      expectedCall?.command === 'gh' &&
+      expectedCall.args[0] === 'pr' &&
+      expectedCall.args[1] === 'checks';
+    if (isRequiredChecksCall && !expectedIsRequiredChecksCall && requiredChecks !== null) {
+      calls.push(observedCall);
+      const result = { stdout: `${JSON.stringify(requiredChecks)}\n` };
+      requiredChecks = null;
+      return result;
+    }
 
+    expect(expectedCall, `Unexpected exec call ${command} ${args.join(' ')}`).toBeDefined();
     calls.push(observedCall);
     index += 1;
 
@@ -82,6 +96,10 @@ export function createFakeExec(expectedCalls: ExpectedExecCall[]): {
 
     if (expectedCall?.error !== undefined) {
       throw expectedCall.error;
+    }
+    if (command === 'gh' && args[0] === 'pr' && args[1] === 'view') {
+      requiredChecks =
+        expectedCall?.requiredChecks ?? checksFromPullRequestResult(expectedCall?.result);
     }
 
     return expectedCall?.result ?? {};
@@ -188,6 +206,80 @@ export function createCurrentBranchProbeCall(
   };
 }
 
+export function createImplicitRequiredChecksResult(
+  command: string,
+  args: string[],
+  options: { cwd?: string; timeout?: number } | undefined,
+  previousCall: ExpectedExecCall | undefined,
+  expectedCall: ExpectedExecCall | undefined,
+): { stdout: string; stderr: string; code: number; killed: boolean } | null {
+  const isRequiredChecksCall =
+    command === 'gh' && args[0] === 'pr' && args[1] === 'checks' && args.includes('--required');
+  const expectedIsRequiredChecksCall =
+    expectedCall?.command === 'gh' &&
+    expectedCall.args[0] === 'pr' &&
+    expectedCall.args[1] === 'checks';
+  const previousWasPullRequestView =
+    previousCall?.command === 'gh' &&
+    previousCall.args[0] === 'pr' &&
+    previousCall.args[1] === 'view';
+  if (!isRequiredChecksCall || expectedIsRequiredChecksCall || !previousWasPullRequestView) {
+    return null;
+  }
+
+  expect(options?.cwd).toBe(previousCall.cwd);
+  expect(options?.timeout).toBe(previousCall.timeout);
+  const checks = previousCall.requiredChecks ?? checksFromPullRequestResult(previousCall.result);
+  return { stdout: `${JSON.stringify(checks)}\n`, stderr: '', code: 0, killed: false };
+}
+
+function checksFromPullRequestResult(result: ExpectedExecCall['result']): unknown[] {
+  if (!result?.stdout) return [];
+  try {
+    const payload = JSON.parse(result.stdout) as { statusCheckRollup?: unknown };
+    if (!Array.isArray(payload.statusCheckRollup)) return [];
+    return payload.statusCheckRollup.flatMap((row) => {
+      if (!row || typeof row !== 'object') return [];
+      const check = row as Record<string, unknown>;
+      const name =
+        typeof check['workflowName'] === 'string' && typeof check['name'] === 'string'
+          ? `${check['workflowName']} / ${check['name']}`
+          : typeof check['name'] === 'string'
+            ? check['name']
+            : typeof check['context'] === 'string'
+              ? check['context']
+              : 'unknown';
+      const state = String(check['conclusion'] ?? check['status'] ?? check['state'] ?? 'UNKNOWN');
+      const upperState = state.toUpperCase();
+      const bucket = ['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(upperState)
+        ? 'pass'
+        : ['IN_PROGRESS', 'QUEUED', 'PENDING', 'REQUESTED', 'WAITING'].includes(upperState)
+          ? 'pending'
+          : [
+                'FAILURE',
+                'ERROR',
+                'ACTION_REQUIRED',
+                'CANCELLED',
+                'STALE',
+                'STARTUP_FAILURE',
+                'TIMED_OUT',
+              ].includes(upperState)
+            ? 'fail'
+            : 'unknown';
+      return [
+        {
+          name,
+          state,
+          bucket,
+          link: check['detailsUrl'] ?? check['targetUrl'] ?? check['url'] ?? '',
+        },
+      ];
+    });
+  } catch {
+    return [];
+  }
+}
+
 type ObservedExecCall = {
   command: string;
   args: string[];
@@ -199,6 +291,7 @@ type PullRequestViewCallOptions = {
   cwd?: string;
   timeout?: number;
   target?: MergeReadyUrlTarget;
+  requiredChecks?: unknown[];
 };
 
 export function createPullRequestViewArgs(target?: MergeReadyUrlTarget): string[] {
@@ -224,6 +317,7 @@ export function createPullRequestViewSuccessCall(
     result: {
       stdout: `${JSON.stringify(payload)}\n`,
     },
+    ...(options.requiredChecks === undefined ? {} : { requiredChecks: options.requiredChecks }),
   };
 }
 

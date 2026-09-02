@@ -54,7 +54,27 @@ const provider: MergeReadyProviderV1 = {
   id: 'smoke',
   matchUrl: () => null,
   matchRemote: () => null,
-  read: async () => ({ kind: 'absent' }),
+  read: async () => ({
+    kind: 'found',
+    pullRequest: {
+      lifecycle: 'open',
+      number: 1,
+      title: 'Smoke',
+      url: 'https://code.example/shop/repo/changes/1',
+      headRefName: 'feature',
+      baseRefName: 'main',
+    },
+    facts: {
+      draft: { kind: 'known', value: false },
+      hasConflicts: { kind: 'known', value: false },
+      behindBase: { kind: 'known', value: false },
+      sourceMergeGate: { kind: 'known', value: 'clear' },
+      requiredChecks: { kind: 'known', value: [] },
+      sourceReviewGate: { kind: 'known', value: { state: 'satisfied' } },
+      unresolvedConversations: { kind: 'partial', value: [], message: 'first page only' },
+      conversationResolutionRequired: { kind: 'known', value: false },
+    },
+  }),
 };
 defineMergeReadyProvider(provider);
 `,
