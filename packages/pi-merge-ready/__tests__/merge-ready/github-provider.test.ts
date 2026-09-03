@@ -23,6 +23,16 @@ describe('merge-ready GitHub provider', () => {
     const { exec, assertDone, getCalls } = createFakeExec([
       createPullRequestViewSuccessCall(
         buildPullRequestPayload(REQUESTED_REVIEWER_SCENARIO.pullRequestOverrides),
+        {
+          requiredChecks: [
+            {
+              name: 'ci / unit',
+              state: 'SUCCESS',
+              bucket: 'pass',
+              link: 'https://github.example/checks/unit',
+            },
+          ],
+        },
       ),
       createConversationsSuccessCall(
         buildConversationsPayload({
@@ -96,7 +106,13 @@ describe('merge-ready GitHub provider', () => {
           sourceMergeGate: { kind: 'known', value: 'clear' },
           requiredChecks: {
             kind: 'known',
-            value: [{ label: 'ci / unit', status: 'passed' }],
+            value: [
+              {
+                label: 'ci / unit',
+                status: 'passed',
+                url: 'https://github.example/checks/unit',
+              },
+            ],
           },
           sourceReviewGate: {
             kind: 'known',
@@ -123,6 +139,89 @@ describe('merge-ready GitHub provider', () => {
       expect(result.snapshot).not.toHaveProperty('summary');
       expect(result.snapshot).not.toHaveProperty('openItems');
     }
+  });
+
+  it('maps partial GitHub required checks into neutral provider facts', async () => {
+    const { exec, assertDone } = createFakeExec([
+      createPullRequestViewSuccessCall(buildPullRequestPayload(), {
+        requiredChecks: [
+          {
+            name: 'ci / unit',
+            state: 'SUCCESS',
+            bucket: 'pass',
+            link: 'https://github.example/checks/unit',
+          },
+          {
+            name: 'lint',
+            state: 'UNKNOWN_STATE',
+            bucket: 'unknown',
+            link: 'not-a-url',
+          },
+        ],
+      }),
+      createConversationsSuccessCall(buildConversationsPayload()),
+    ]);
+
+    const result = await githubProvider.read({
+      mode: 'ambient',
+      repository: { owner: 'robhowley', repo: 'pi-userland' },
+      exec,
+      cwd: '/repo',
+    });
+
+    assertDone();
+    expect(result).toMatchObject({
+      kind: 'found',
+      snapshot: {
+        facts: {
+          requiredChecks: {
+            kind: 'partial',
+            value: [
+              {
+                label: 'ci / unit',
+                status: 'passed',
+                url: 'https://github.example/checks/unit',
+              },
+              { label: 'lint', status: 'unknown' },
+            ],
+            message: 'GitHub returned incomplete required check facts',
+          },
+        },
+      },
+    });
+  });
+
+  it('maps unknown GitHub required checks into a neutral provider fact', async () => {
+    const { exec, assertDone } = createFakeExec([
+      createPullRequestViewSuccessCall(buildPullRequestPayload()),
+      {
+        command: 'gh',
+        args: ['pr', 'checks', '--required', '--json', 'name,state,bucket,link'],
+        cwd: '/repo',
+        result: { stdout: '{ definitely not json' },
+      },
+      createConversationsSuccessCall(buildConversationsPayload()),
+    ]);
+
+    const result = await githubProvider.read({
+      mode: 'ambient',
+      repository: { owner: 'robhowley', repo: 'pi-userland' },
+      exec,
+      cwd: '/repo',
+    });
+
+    assertDone();
+    expect(result).toMatchObject({
+      kind: 'found',
+      snapshot: {
+        facts: {
+          requiredChecks: {
+            kind: 'unknown',
+            message: 'GitHub CLI returned invalid JSON for required checks',
+          },
+        },
+      },
+    });
   });
 
   it('marks malformed readiness facts unknown without sidecar integrity issues', async () => {

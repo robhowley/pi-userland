@@ -9,6 +9,7 @@ import {
   type MergeReadyGitHubFailureReason,
   type MergeReadyGitHubPullRequest,
   type MergeReadyGitHubPullRequestFacts,
+  type MergeReadyGitHubRequiredChecks,
 } from './github.js';
 import type {
   MergeReadyProvider,
@@ -98,7 +99,7 @@ async function readGitHubProvider(input: ProviderReadInput): Promise<ProviderRea
 function createOpenFacts(
   pullRequest: MergeReadyGitHubPullRequest,
   pullRequestFacts: Extract<MergeReadyGitHubPullRequestFacts, { kind: 'found' }>,
-  requiredChecks: ProviderOpenPullRequestFacts['requiredChecks'],
+  requiredChecks: MergeReadyGitHubRequiredChecks,
   conversations: MergeReadyPullRequestConversations,
 ): ProviderOpenPullRequestFacts {
   const mergeFacts = createMergeFacts(pullRequest, pullRequestFacts);
@@ -111,11 +112,29 @@ function createOpenFacts(
           }
         : { kind: 'known', value: pullRequest.draft === 'yes' },
     ...mergeFacts,
-    requiredChecks,
+    requiredChecks: mapRequiredChecks(requiredChecks),
     sourceReviewGate: createReviewGateFact(pullRequest, pullRequestFacts, conversations),
     unresolvedConversations: createUnresolvedConversationsFact(conversations),
     conversationResolutionRequired: createConversationRequirementFact(conversations),
   };
+}
+
+function mapRequiredChecks(
+  checks: MergeReadyGitHubRequiredChecks,
+): ProviderOpenPullRequestFacts['requiredChecks'] {
+  if (checks.kind === 'unknown') {
+    return { kind: 'unknown', message: checks.message };
+  }
+
+  const value = checks.checks.map((check) => ({
+    label: check.name,
+    status: check.status,
+    ...(check.link === undefined ? {} : { url: check.link }),
+  }));
+
+  return checks.kind === 'partial'
+    ? { kind: 'partial', value, message: checks.message }
+    : { kind: 'known', value };
 }
 
 function createMergeFacts(

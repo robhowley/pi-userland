@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   fetchMergeReadyGitHubPullRequestFacts,
+  fetchMergeReadyGitHubRequiredChecks,
   type MergeReadyExec,
   type MergeReadyExecResult,
 } from '../../extensions/merge-ready/index.js';
@@ -187,6 +188,108 @@ describe('merge-ready GitHub primitives', () => {
         },
       },
       issues: [],
+    });
+  });
+
+  it('normalizes required checks into GitHub-native names and links', async () => {
+    const { exec, assertDone } = createFakeExec([
+      {
+        command: 'gh',
+        args: ['pr', 'checks', '--required', '--json', 'name,state,bucket,link'],
+        cwd: '/repo',
+        timeout: 5_000,
+        result: {
+          stdout: JSON.stringify([
+            {
+              name: 'ci / unit',
+              state: 'SUCCESS',
+              bucket: 'pass',
+              link: 'https://github.example/checks/unit',
+            },
+          ]),
+        },
+      },
+    ]);
+
+    const requiredChecks = await fetchMergeReadyGitHubRequiredChecks({
+      exec,
+      cwd: '/repo',
+      timeout: 5_000,
+    });
+
+    assertDone();
+    expect(requiredChecks).toEqual({
+      kind: 'known',
+      checks: [
+        {
+          name: 'ci / unit',
+          status: 'passed',
+          link: 'https://github.example/checks/unit',
+        },
+      ],
+    });
+  });
+
+  it('returns partial required checks without provider field names', async () => {
+    const { exec, assertDone } = createFakeExec([
+      {
+        command: 'gh',
+        args: ['pr', 'checks', '--required', '--json', 'name,state,bucket,link'],
+        cwd: '/repo',
+        result: {
+          stdout: JSON.stringify([
+            {
+              name: 'ci / unit',
+              state: 'SUCCESS',
+              bucket: 'pass',
+              link: 'https://github.example/checks/unit',
+            },
+            {
+              name: 'lint',
+              state: 'UNKNOWN_STATE',
+              bucket: 'unknown',
+              link: 'not-a-url',
+            },
+          ]),
+        },
+      },
+    ]);
+
+    const requiredChecks = await fetchMergeReadyGitHubRequiredChecks({ exec, cwd: '/repo' });
+
+    assertDone();
+    expect(requiredChecks).toEqual({
+      kind: 'partial',
+      checks: [
+        {
+          name: 'ci / unit',
+          status: 'passed',
+          link: 'https://github.example/checks/unit',
+        },
+        {
+          name: 'lint',
+          status: 'unknown',
+        },
+      ],
+      message: 'GitHub returned incomplete required check facts',
+    });
+  });
+
+  it('returns unknown required checks when GitHub returns invalid JSON', async () => {
+    const { exec, assertDone } = createFakeExec([
+      {
+        command: 'gh',
+        args: ['pr', 'checks', '--required', '--json', 'name,state,bucket,link'],
+        result: { stdout: '{ definitely not json' },
+      },
+    ]);
+
+    const requiredChecks = await fetchMergeReadyGitHubRequiredChecks({ exec });
+
+    assertDone();
+    expect(requiredChecks).toEqual({
+      kind: 'unknown',
+      message: 'GitHub CLI returned invalid JSON for required checks',
     });
   });
 

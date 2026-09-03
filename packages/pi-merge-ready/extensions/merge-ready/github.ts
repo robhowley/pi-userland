@@ -9,10 +9,6 @@ import type {
   PullRequestLifecycle,
 } from './types.js';
 import type { MergeReadyExec } from './git.js';
-import type {
-  MergeReadyProviderFactV1,
-  MergeReadyProviderRequiredCheckV1,
-} from './provider-api.js';
 import {
   classifyGitHubCliFailureReason,
   getErrorMessage,
@@ -166,6 +162,27 @@ export type GetMergeReadyGitHubRequiredChecksOptions = {
   timeout?: number;
   target?: MergeReadyUrlTarget;
 };
+
+export type MergeReadyGitHubRequiredCheck = {
+  name: string;
+  status: 'passed' | 'failed' | 'running' | 'unknown';
+  link?: string;
+};
+
+export type MergeReadyGitHubRequiredChecks =
+  | {
+      kind: 'known';
+      checks: MergeReadyGitHubRequiredCheck[];
+    }
+  | {
+      kind: 'partial';
+      checks: MergeReadyGitHubRequiredCheck[];
+      message: string;
+    }
+  | {
+      kind: 'unknown';
+      message: string;
+    };
 
 type IssueContext = {
   command: string;
@@ -323,7 +340,7 @@ export async function fetchMergeReadyGitHubPullRequestFacts(
 
 export async function fetchMergeReadyGitHubRequiredChecks(
   options: GetMergeReadyGitHubRequiredChecksOptions,
-): Promise<MergeReadyProviderFactV1<readonly MergeReadyProviderRequiredCheckV1[]>> {
+): Promise<MergeReadyGitHubRequiredChecks> {
   const args = ['pr', 'checks'];
   if (options.target) {
     args.push(
@@ -350,32 +367,32 @@ export async function fetchMergeReadyGitHubRequiredChecks(
     };
   }
 
-  const checks: MergeReadyProviderRequiredCheckV1[] = [];
+  const checks: MergeReadyGitHubRequiredCheck[] = [];
   let partial = false;
   for (const row of parsed) {
     if (!isRecord(row)) {
       partial = true;
       continue;
     }
-    const label = readOptionalString(row['name']);
-    if (!label) {
+    const name = readOptionalString(row['name']);
+    if (!name) {
       partial = true;
       continue;
     }
     const status = normalizeRequiredCheckStatus(row['bucket'], row['state']);
     if (status === 'unknown') partial = true;
     const link = readOptionalString(row['link']);
-    const url = link && isAbsoluteHttpUrl(link) ? link : undefined;
-    if (link && !url) partial = true;
-    checks.push({ label, status, ...(url ? { url } : {}) });
+    const validLink = link && isAbsoluteHttpUrl(link) ? link : undefined;
+    if (link && !validLink) partial = true;
+    checks.push({ name, status, ...(validLink ? { link: validLink } : {}) });
   }
 
   if (!result.ok && checks.length === 0) {
     return { kind: 'unknown', message: 'GitHub CLI could not determine required checks' };
   }
   return partial
-    ? { kind: 'partial', value: checks, message: 'GitHub returned incomplete required check facts' }
-    : { kind: 'known', value: checks };
+    ? { kind: 'partial', checks, message: 'GitHub returned incomplete required check facts' }
+    : { kind: 'known', checks };
 }
 
 function parseRequiredChecksJson(stdout: string): unknown[] | null {
@@ -390,7 +407,7 @@ function parseRequiredChecksJson(stdout: string): unknown[] | null {
 function normalizeRequiredCheckStatus(
   bucketValue: unknown,
   stateValue: unknown,
-): MergeReadyProviderRequiredCheckV1['status'] {
+): MergeReadyGitHubRequiredCheck['status'] {
   const bucket = readOptionalString(bucketValue)?.toLowerCase();
   if (bucket === 'pass' || bucket === 'skipping') return 'passed';
   if (bucket === 'fail' || bucket === 'cancel') return 'failed';
