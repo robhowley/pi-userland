@@ -210,7 +210,11 @@ function validateReadResult(
       (!Array.isArray(value['issues']) || !value['issues'].every(isNonEmptyString))
     )
       return malformed();
-  } else if ('signals' in value || 'evidence' in value || 'issues' in value) {
+  } else if (
+    ('signals' in value && !isSignals(value['signals'])) ||
+    'evidence' in value ||
+    'issues' in value
+  ) {
     return malformed();
   }
   if (

@@ -610,6 +610,27 @@ describe('getMergeReadyStatus', () => {
             title: 'Support explicit PR URL targets',
             url: TARGETED_URL,
             state,
+            isDraft: true,
+            mergeable: 'CONFLICTING',
+            mergeStateStatus: 'DIRTY',
+            statusCheckRollup: [
+              {
+                __typename: 'CheckRun',
+                workflowName: 'ci',
+                name: 'unit',
+                status: 'COMPLETED',
+                conclusion: 'FAILURE',
+                detailsUrl: 'https://github.com/shopify/pi/actions/runs/64',
+              },
+            ],
+            reviews: [
+              {
+                author: { login: 'reviewer1' },
+                state: 'CHANGES_REQUESTED',
+                submittedAt: '2026-05-26T20:00:00Z',
+              },
+            ],
+            reviewDecision: 'CHANGES_REQUESTED',
             headRefName: 'feat/explicit-pr-url',
             baseRefName: 'main',
           }),
@@ -642,9 +663,35 @@ describe('getMergeReadyStatus', () => {
       expect(status.state).toBe('unknown');
       expect(status.summary).toBe(summary);
       expect(status.openItems).toEqual([]);
+      expect(selectMergeReadyBadgeId(status)).toBe(lifecycle);
+      expect(status.signals).toEqual({
+        draft: true,
+        mergeability: 'conflicting',
+        checks: 'failing',
+        checkDetails: {
+          failing: [
+            {
+              label: 'ci / unit',
+              status: 'failing',
+              url: 'https://github.com/shopify/pi/actions/runs/64',
+            },
+          ],
+          running: [],
+          unknown: [],
+        },
+        review: 'changes_requested',
+        unresolvedConversations: false,
+        unresolvedConversationRequirement: 'unknown',
+      });
+      expect(getCalls()).toHaveLength(1);
+      expect(getCalls()[0]?.command).toBe('gh');
+      expect(getCalls()[0]?.args.slice(0, 2)).toEqual(['pr', 'view']);
       expect(
         getCalls().some(
-          (call) => call.command === 'gh' && call.args[0] === 'api' && call.args[1] === 'graphql',
+          (call) =>
+            call.command === 'gh' &&
+            call.args[0] === 'pr' &&
+            (call.args[1] === 'checks' || call.args[1] === 'api'),
         ),
       ).toBe(false);
     },

@@ -152,7 +152,12 @@ function createStatusFromProviderResult(
     });
   }
   if (result.pullRequest.lifecycle !== 'open') {
-    return createMergeReadyStatus({ generatedAt, target, pr: result.pullRequest });
+    return createMergeReadyStatus({
+      generatedAt,
+      target,
+      pr: result.pullRequest,
+      ...(result.signals ? { signals: result.signals } : {}),
+    });
   }
 
   const signals = result.signals;

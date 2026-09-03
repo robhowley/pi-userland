@@ -47,7 +47,7 @@ if (typeof defineMergeReadyProvider !== 'function' || typeof registerMergeReadyP
   writeFileSync(
     typeSmoke,
     `import { defineMergeReadyProvider } from '@robhowley/pi-merge-ready/provider-api';
-import type { MergeReadyProviderV1 } from '@robhowley/pi-merge-ready/provider-api';
+import type { MergeReadyProviderReadResultV1, MergeReadyProviderV1 } from '@robhowley/pi-merge-ready/provider-api';
 
 const provider: MergeReadyProviderV1 = {
   apiVersion: 1,
@@ -75,6 +75,32 @@ const provider: MergeReadyProviderV1 = {
   }),
 };
 defineMergeReadyProvider(provider);
+
+const terminalWithSignals: MergeReadyProviderReadResultV1 = {
+  kind: 'found',
+  pullRequest: {
+    lifecycle: 'merged',
+    number: 1,
+    title: 'Smoke',
+    url: 'https://code.example/shop/repo/changes/1',
+    headRefName: 'feature',
+    baseRefName: 'main',
+  },
+  signals: {
+    draft: false,
+    mergeability: 'mergeable',
+    checks: 'passing',
+    review: 'approved',
+    unresolvedConversations: false,
+    unresolvedConversationRequirement: 'unknown',
+  },
+};
+const terminalWithoutSignals: MergeReadyProviderReadResultV1 = {
+  kind: 'found',
+  pullRequest: terminalWithSignals.pullRequest,
+};
+void terminalWithSignals;
+void terminalWithoutSignals;
 `,
   );
   writeFileSync(

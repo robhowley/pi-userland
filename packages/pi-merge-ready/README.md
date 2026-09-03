@@ -232,7 +232,7 @@ export default function (pi: ExtensionAPI) {
 
 Load the provider through `pi.extensions`; the API subpath supplies only the contract. Providers are recollected at each session start. Each URL or remote matcher runs once across all providers, and overlapping matches fail explicitly. Reads receive only the documented target fields and are capped at 20 seconds.
 
-Open results return normalized `signals` plus optional supporting `evidence` and ordered `issues` strings. Issues add `status_ambiguous` details without hiding a concrete blocker. Terminal results return only the pull request; providers can also return `absent` or `unavailable`. Harmless extra fields are ignored, while consumed identity, lifecycle, signal, evidence, and issue fields are validated. Duplicate IDs, the reserved `github` ID, matcher failures, malformed results, read failures, and timeouts fail explicitly.
+Open results return normalized `signals` plus optional supporting `evidence` and ordered `issues` strings. Issues add `status_ambiguous` details without hiding a concrete blocker. Terminal results return the pull request and may include its source `signals`, but cannot include `evidence` or `issues`; providers can also return `absent` or `unavailable`. Harmless extra fields are ignored, while consumed identity, lifecycle, signal, evidence, and issue fields are validated. Duplicate IDs, the reserved `github` ID, matcher failures, malformed results, read failures, and timeouts fail explicitly.
 
 ## Configuration
 

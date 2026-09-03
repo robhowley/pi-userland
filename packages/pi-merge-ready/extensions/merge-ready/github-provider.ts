@@ -81,7 +81,11 @@ async function readGitHubProvider(
 
   const pullRequest = toProviderPullRequest(pullRequestFacts.pullRequest, input.mode);
   if (pullRequest.lifecycle === 'merged' || pullRequest.lifecycle === 'closed') {
-    return { kind: 'found', pullRequest: { ...pullRequest, lifecycle: pullRequest.lifecycle } };
+    return {
+      kind: 'found',
+      pullRequest: { ...pullRequest, lifecycle: pullRequest.lifecycle },
+      signals: createTerminalSignals(pullRequestFacts.pullRequest),
+    };
   }
 
   const requiredChecks = await fetchMergeReadyGitHubRequiredChecks({
@@ -109,7 +113,10 @@ async function readGitHubProvider(
     kind: 'found',
     pullRequest: { ...pullRequest, lifecycle: 'open' },
     signals: {
-      ...createBaseSignals(pullRequestFacts.pullRequest, requiredChecks),
+      ...createBaseSignals(
+        pullRequestFacts.pullRequest,
+        normalizeRequiredCheckSignals(requiredChecks),
+      ),
       ...normalizeConversationSignals(conversations),
     },
     evidence: {
@@ -139,7 +146,7 @@ function toProviderPullRequest(
 
 function createBaseSignals(
   pullRequest: MergeReadyGitHubPullRequest,
-  requiredChecks: MergeReadyGitHubRequiredChecks,
+  checkSignals: Pick<MergeReadySignals, 'checks' | 'checkDetails'>,
 ): Omit<
   MergeReadySignals,
   'unresolvedConversations' | 'unresolvedConversationCount' | 'unresolvedConversationRequirement'
@@ -147,8 +154,19 @@ function createBaseSignals(
   return {
     draft: pullRequest.draft === 'yes',
     mergeability: pullRequest.mergeability,
-    ...normalizeRequiredCheckSignals(requiredChecks),
+    ...checkSignals,
     review: normalizeReviewDecisionSignal(pullRequest.reviewDecision, pullRequest.reviews.state),
+  };
+}
+
+function createTerminalSignals(pullRequest: MergeReadyGitHubPullRequest): MergeReadySignals {
+  return {
+    ...createBaseSignals(pullRequest, {
+      checks: pullRequest.checks.state,
+      checkDetails: pullRequest.checks.details,
+    }),
+    unresolvedConversations: false,
+    unresolvedConversationRequirement: 'unknown',
   };
 }
 

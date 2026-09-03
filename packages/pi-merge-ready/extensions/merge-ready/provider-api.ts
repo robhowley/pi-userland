@@ -67,7 +67,7 @@ export type MergeReadyProviderReadResultV1 =
   | ({
       kind: 'found';
       pullRequest: MergeReadyProviderPullRequestV1 & { lifecycle: 'merged' | 'closed' };
-      signals?: never;
+      signals?: MergeReadySignals;
       evidence?: never;
       issues?: never;
     } & ForbiddenReadinessFields)

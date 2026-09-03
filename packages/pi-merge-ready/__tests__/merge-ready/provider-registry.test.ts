@@ -228,6 +228,16 @@ describe('merge-ready provider registry', () => {
     { kind: 'found', pullRequest: PULL_REQUEST, signals: SIGNALS },
     { kind: 'found', pullRequest: { ...PULL_REQUEST, lifecycle: 'merged' as const } },
     { kind: 'found', pullRequest: { ...PULL_REQUEST, lifecycle: 'closed' as const } },
+    {
+      kind: 'found',
+      pullRequest: { ...PULL_REQUEST, lifecycle: 'merged' as const },
+      signals: SIGNALS,
+    },
+    {
+      kind: 'found',
+      pullRequest: { ...PULL_REQUEST, lifecycle: 'closed' as const },
+      signals: SIGNALS,
+    },
   ] as const)('accepts result kind $kind', async (result) => {
     const value = provider();
     value.read = async () => result;
@@ -284,6 +294,41 @@ describe('merge-ready provider registry', () => {
     expect(status.state).toBe(fixture.state);
     expect(status.summary).toBe(fixture.summary);
     expect(status.openItems.map(({ id }) => id)).toEqual(fixture.openItemIds);
+  });
+
+  it('passes supplied terminal signals through status construction without deriving blockers', async () => {
+    const value = provider();
+    const signals = {
+      draft: true,
+      mergeability: 'conflicting' as const,
+      checks: 'failing' as const,
+      checkDetails: {
+        failing: [{ label: 'unit', status: 'failing' as const }],
+        running: [],
+        unknown: [],
+      },
+      review: 'changes_requested' as const,
+      unresolvedConversations: true,
+      unresolvedConversationCount: 2,
+      unresolvedConversationRequirement: 'required' as const,
+    };
+    setReadResult(value, {
+      kind: 'found',
+      pullRequest: { ...PULL_REQUEST, lifecycle: 'merged' as const },
+      signals,
+    });
+
+    const status = await getMergeReadyStatus({
+      exec,
+      url: URL,
+      providers: [value],
+      generatedAt: '2026-05-26T22:00:00.000Z',
+    });
+
+    expect(status.state).toBe('unknown');
+    expect(status.summary).toBe('PR is already merged');
+    expect(status.openItems).toEqual([]);
+    expect(status.signals).toEqual(signals);
   });
 
   it.each(['known', 'unknown'] as const)(
@@ -357,11 +402,29 @@ describe('merge-ready provider registry', () => {
       },
     },
     {
-      name: 'terminal fields',
+      name: 'terminal signals',
       result: {
         kind: 'found',
         pullRequest: { ...PULL_REQUEST, lifecycle: 'merged' as const },
-        signals: undefined,
+        signals: { ...SIGNALS, checks: 'not-a-signal' },
+      },
+    },
+    {
+      name: 'terminal evidence',
+      result: {
+        kind: 'found',
+        pullRequest: { ...PULL_REQUEST, lifecycle: 'merged' as const },
+        signals: SIGNALS,
+        evidence: {},
+      },
+    },
+    {
+      name: 'terminal issues',
+      result: {
+        kind: 'found',
+        pullRequest: { ...PULL_REQUEST, lifecycle: 'merged' as const },
+        signals: SIGNALS,
+        issues: ['not allowed'],
       },
     },
   ] as const)('rejects malformed consumed $name fields', async ({ result }) => {
