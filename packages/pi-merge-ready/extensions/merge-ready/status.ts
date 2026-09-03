@@ -1,11 +1,4 @@
 import type {
-  ProviderDetail,
-  ProviderFact,
-  ProviderOpenPullRequestFacts,
-  ProviderRequiredCheck,
-  ProviderSourceReviewGate,
-} from './provider.js';
-import type {
   CreateMergeReadyStatusOptions,
   MergeReadyBadgeContext,
   MergeReadyBadgeId,
@@ -14,7 +7,6 @@ import type {
   MergeReadyOpenItem,
   MergeReadyOpenItemDetail,
   MergeReadyOpenItemId,
-  MergeReadyPullRequest,
   MergeReadySignals,
   MergeReadySignalsInput,
   MergeReadyState,
@@ -24,14 +16,14 @@ import type {
 
 const OPEN_ITEM_PRIORITY = {
   no_pull_request: 0,
-  status_ambiguous: 1,
-  merge_conflicts: 2,
-  branch_out_of_date: 3,
-  merge_blocked: 4,
-  draft: 5,
-  ci_failing: 6,
-  changes_requested: 7,
-  unresolved_conversations: 8,
+  merge_conflicts: 1,
+  branch_out_of_date: 2,
+  merge_blocked: 3,
+  draft: 4,
+  ci_failing: 5,
+  changes_requested: 6,
+  unresolved_conversations: 7,
+  status_ambiguous: 8,
   ci_running: 9,
   review_pending: 10,
 } as const satisfies Record<MergeReadyOpenItemId, number>;
@@ -71,7 +63,7 @@ const OPEN_ITEM_SUMMARY = {
   branch_out_of_date: 'Branch is out of date with base',
   merge_blocked: 'GitHub reports merge is blocked',
   draft: 'Pull request is still a draft',
-  ci_failing: 'Required checks are failing',
+  ci_failing: 'Checks are failing',
   changes_requested: 'Changes requested by reviewers',
   unresolved_conversations: 'Unresolved review conversations remain',
   ci_running: 'Checks are still running',
@@ -177,7 +169,10 @@ export function deriveMergeReadyOpenItems(
     openItems.push(createOpenItem('ci_running', signals));
   }
 
-  if (signals.checks === 'unknown' && !openItems.some((item) => item.id === 'status_ambiguous')) {
+  if (
+    (signals.checks === 'unknown' || signals.review === 'unknown') &&
+    !openItems.some((item) => item.id === 'status_ambiguous')
+  ) {
     openItems.push(createOpenItem('status_ambiguous', signals));
   }
 
@@ -250,22 +245,6 @@ export function selectMergeReadyBadgeId(context: MergeReadyBadgeContext): MergeR
   return 'unknown';
 }
 
-export function createMergeReadyStatusFromFacts(
-  options: Omit<CreateMergeReadyStatusOptions, 'signals' | 'openItems' | 'forceStatusAmbiguous'> & {
-    pr: MergeReadyPullRequest & { lifecycle: 'open' };
-    facts: ProviderOpenPullRequestFacts;
-  },
-): MergeReadyStatus {
-  const derived = deriveSignalsFromFacts(options.facts);
-  const status = createMergeReadyStatus({
-    ...options,
-    signals: derived.signals,
-    forceStatusAmbiguous: derived.ambiguous,
-  });
-
-  return attachFactDetails(status, derived.details);
-}
-
 export function createMergeReadyStatus(options: CreateMergeReadyStatusOptions): MergeReadyStatus {
   const target = options.target ?? DEFAULT_TARGET;
   const pr = options.pr ?? null;
@@ -295,167 +274,6 @@ export function createMergeReadyStatus(options: CreateMergeReadyStatusOptions): 
     signals,
     generatedAt: normalizeGeneratedAt(options.generatedAt),
   };
-}
-
-function deriveSignalsFromFacts(facts: ProviderOpenPullRequestFacts): {
-  signals: MergeReadySignalsInput;
-  ambiguous: boolean;
-  details: Partial<
-    Record<
-      'review_pending' | 'changes_requested' | 'unresolved_conversations',
-      MergeReadyOpenItemDetail[]
-    >
-  >;
-} {
-  let ambiguous = false;
-  const readFact = <T>(fact: ProviderFact<T>, fallback: T): T => {
-    if (fact.kind === 'unknown') {
-      ambiguous = true;
-      return fallback;
-    }
-    if (fact.kind === 'partial') ambiguous = true;
-    return fact.value;
-  };
-
-  const draft = readFact(facts.draft, false);
-  const hasConflicts = readFact(facts.hasConflicts, false);
-  const behindBase = readFact(facts.behindBase, false);
-  const sourceMergeGate = readFact(facts.sourceMergeGate, 'clear' as const);
-  const requiredChecks = readFact(facts.requiredChecks, [] as readonly ProviderRequiredCheck[]);
-  const requiredChecksUnknown = facts.requiredChecks.kind === 'unknown';
-  let sourceReviewGate: ProviderSourceReviewGate | null = null;
-  if (facts.sourceReviewGate.kind === 'unknown') {
-    ambiguous = true;
-  } else {
-    if (facts.sourceReviewGate.kind === 'partial') ambiguous = true;
-    sourceReviewGate = facts.sourceReviewGate.value;
-  }
-  const unresolvedConversations = readFact(
-    facts.unresolvedConversations,
-    [] as readonly ProviderDetail[],
-  );
-  const conversationResolutionRequired = readFact(facts.conversationResolutionRequired, false);
-
-  const failedChecks = requiredChecks.filter((check) => check.status === 'failed');
-  const runningChecks = requiredChecks.filter((check) => check.status === 'running');
-  const unknownChecks = requiredChecks.filter((check) => check.status === 'unknown');
-  if (unknownChecks.length > 0) ambiguous = true;
-  const checks =
-    failedChecks.length > 0
-      ? ('failing' as const)
-      : runningChecks.length > 0
-        ? ('running' as const)
-        : requiredChecksUnknown || unknownChecks.length > 0
-          ? ('unknown' as const)
-          : ('passing' as const);
-  const activeCheckRows =
-    checks === 'failing'
-      ? failedChecks
-      : checks === 'running'
-        ? runningChecks
-        : checks === 'unknown'
-          ? unknownChecks
-          : [];
-  const checkDetails =
-    activeCheckRows.length === 0
-      ? undefined
-      : {
-          failing:
-            checks === 'failing'
-              ? activeCheckRows.map((check) => ({ ...check, status: 'failing' as const }))
-              : [],
-          running:
-            checks === 'running'
-              ? activeCheckRows.map((check) => ({ ...check, status: 'running' as const }))
-              : [],
-          unknown:
-            checks === 'unknown'
-              ? activeCheckRows.map((check) => ({ ...check, status: 'unknown' as const }))
-              : [],
-        };
-
-  const review =
-    sourceReviewGate === null
-      ? ('unknown' as const)
-      : sourceReviewGate.state === 'satisfied'
-        ? ('approved' as const)
-        : sourceReviewGate.state;
-  const mergeability = hasConflicts
-    ? ('conflicting' as const)
-    : behindBase
-      ? ('behind' as const)
-      : facts.hasConflicts.kind === 'unknown' ||
-          facts.behindBase.kind === 'unknown' ||
-          facts.sourceMergeGate.kind === 'unknown'
-        ? ('unknown' as const)
-        : sourceMergeGate === 'blocked'
-          ? ('blocked' as const)
-          : ('mergeable' as const);
-
-  const details: Partial<
-    Record<
-      'review_pending' | 'changes_requested' | 'unresolved_conversations',
-      MergeReadyOpenItemDetail[]
-    >
-  > = {};
-  if (
-    sourceReviewGate?.details &&
-    sourceReviewGate.details.length > 0 &&
-    sourceReviewGate.state !== 'satisfied'
-  ) {
-    details[sourceReviewGate.state === 'pending' ? 'review_pending' : 'changes_requested'] = [
-      ...sourceReviewGate.details,
-    ];
-  }
-  if (conversationResolutionRequired && unresolvedConversations.length > 0) {
-    details.unresolved_conversations = [...unresolvedConversations];
-  }
-
-  return {
-    signals: {
-      draft,
-      mergeability,
-      checks,
-      ...(checkDetails ? { checkDetails } : {}),
-      review,
-      unresolvedConversations: unresolvedConversations.length > 0,
-      ...(unresolvedConversations.length > 0
-        ? { unresolvedConversationCount: unresolvedConversations.length }
-        : {}),
-      unresolvedConversationRequirement:
-        facts.conversationResolutionRequired.kind === 'unknown'
-          ? 'unknown'
-          : conversationResolutionRequired
-            ? 'required'
-            : 'optional',
-    },
-    ambiguous,
-    details,
-  };
-}
-
-function attachFactDetails(
-  status: MergeReadyStatus,
-  details: Partial<
-    Record<
-      'review_pending' | 'changes_requested' | 'unresolved_conversations',
-      MergeReadyOpenItemDetail[]
-    >
-  >,
-): MergeReadyStatus {
-  let changed = false;
-  const openItems = status.openItems.map((item) => {
-    const itemDetails =
-      item.id === 'review_pending' ||
-      item.id === 'changes_requested' ||
-      item.id === 'unresolved_conversations'
-        ? details[item.id]
-        : undefined;
-    if (!itemDetails || itemDetails.length === 0) return item;
-    changed = true;
-    return { ...item, details: itemDetails };
-  });
-  return changed ? { ...status, openItems } : status;
 }
 
 function normalizeGeneratedAt(value: string | Date): string {

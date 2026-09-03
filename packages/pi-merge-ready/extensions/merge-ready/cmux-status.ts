@@ -144,16 +144,13 @@ export function classifyMergeReadyAttention(status: MergeReadyStatus): MergeRead
 
   const ids = new Set(status.openItems.map((item) => item.id));
   let bucket: Exclude<MergeReadyAttentionBucket, 'unknown'>;
-  let reason: MergeReadyActionReason | null = null;
-  if (ids.has('no_pull_request') || ids.has('status_ambiguous')) {
-    return { bucket: 'unknown' };
-  }
-
-  reason = ACTION_REASON_PRECEDENCE.find((candidate) => ids.has(candidate)) ?? null;
+  const reason = ACTION_REASON_PRECEDENCE.find((candidate) => ids.has(candidate)) ?? null;
   if (reason !== null) {
     bucket = 'action_required';
   } else if (ids.has('draft') || ids.has('unresolved_conversations')) {
     bucket = 'quiet_blocked';
+  } else if (ids.has('no_pull_request') || ids.has('status_ambiguous')) {
+    return { bucket: 'unknown' };
   } else if (ids.has('ci_running') || ids.has('review_pending')) {
     bucket = 'waiting';
   } else {
@@ -424,7 +421,7 @@ function notificationBody(attention: Exclude<MergeReadyAttention, { bucket: 'unk
     case 'merge_blocked':
       return '❌ GitHub reports merge is blocked';
     case 'ci_failing':
-      return '❌ Required checks are failing';
+      return '❌ Checks are failing';
     case 'changes_requested':
       return '❌ Changes requested by reviewers';
     default:

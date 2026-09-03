@@ -13,7 +13,6 @@ import {
   buildPullRequestPayload,
   createConversationsSuccessCall,
   createGitDiscoveryCalls,
-  createImplicitRequiredChecksResult,
   createPullRequestViewSuccessCall,
   type ExpectedExecCall,
 } from './test-fixtures.js';
@@ -32,14 +31,6 @@ function createMockAPI(expectedCalls: ExpectedExecCall[] = []) {
     exec: vi.fn(
       async (command: string, args: string[], options?: { cwd?: string; timeout?: number }) => {
         const expectedCall = expectedCalls[index];
-        const implicitRequiredChecks = createImplicitRequiredChecksResult(
-          command,
-          args,
-          options,
-          expectedCalls[index - 1],
-          expectedCall,
-        );
-        if (implicitRequiredChecks) return implicitRequiredChecks;
         expect(expectedCall, `Unexpected exec call ${command} ${args.join(' ')}`).toBeDefined();
 
         index += 1;
@@ -106,7 +97,7 @@ describe('merge_ready_status tool', () => {
 
     mergeReadyExtension(api as Parameters<typeof mergeReadyExtension>[0]);
 
-    expect(api.on).toHaveBeenCalledTimes(5);
+    expect(api.on).toHaveBeenCalledTimes(7);
     expect(api.registerCommand).toHaveBeenCalledTimes(1);
     expect(api.registerCommand).toHaveBeenCalledWith(
       MERGE_READY_COMMAND_NAME,
@@ -129,8 +120,8 @@ describe('merge_ready_status tool', () => {
       promptGuidelines: expect.arrayContaining([
         expect.stringContaining('openItems'),
         expect.stringContaining('provenance'),
-        expect.stringContaining('Do not infer work from raw GitHub states'),
-        expect.stringContaining('full GitHub pull request URL'),
+        expect.stringContaining('Do not infer work from raw provider states'),
+        expect.stringContaining('full pull request URL supported by an active provider'),
       ]),
     });
     expect(parameters.type).toBe('object');
@@ -191,7 +182,7 @@ describe('merge_ready_status tool', () => {
     expect(JSON.parse(result.content[0]?.text ?? '')).toEqual(result.details);
   });
 
-  it('targets an explicit GitHub PR URL without public cwd input', async () => {
+  it('targets an explicit pull request URL without public cwd input', async () => {
     const url = 'https://github.com/shopify/pi/pull/64';
     const { api, assertDone, getTool } = createMockAPI([
       {
@@ -326,11 +317,11 @@ describe('merge_ready_status tool', () => {
 
     assertDone();
     expect(result.details.state).toBe('blocked');
-    expect(result.details.summary).toBe('Required checks are failing');
+    expect(result.details.summary).toBe('Checks are failing');
     expect(result.details.openItems).toEqual([
       {
         id: 'ci_failing',
-        summary: 'Required checks are failing',
+        summary: 'Checks are failing',
         details: [
           {
             label: 'ci / unit',
@@ -396,9 +387,7 @@ describe('merge_ready_status tool', () => {
 
     await expect(
       tool.execute('tool-call-bad-url', { url: '64' }, undefined, undefined, createToolContext()),
-    ).rejects.toThrow(
-      'Invalid url: Pass a full HTTPS GitHub pull request URL like https://github.com/OWNER/REPO/pull/NUMBER with no query string, fragment, or extra path.',
-    );
+    ).rejects.toThrow('Pass a full HTTPS GitHub pull request URL');
   });
 
   it('degrades thrown exec failures to an unknown MergeReadyStatus instead of throwing', async () => {

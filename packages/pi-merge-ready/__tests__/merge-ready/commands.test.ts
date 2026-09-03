@@ -31,7 +31,6 @@ import {
   createConversationsSuccessCall,
   createCurrentBranchProbeCall,
   createGitDiscoveryCalls,
-  createImplicitRequiredChecksResult,
   createPullRequestViewSuccessCall,
   type ExpectedExecCall,
 } from './test-fixtures.js';
@@ -98,14 +97,6 @@ function createMockAPI(expectedCalls: ExpectedExecCall[] = []): {
     exec: vi.fn(
       async (command: string, args: string[], options?: { cwd?: string; timeout?: number }) => {
         const expectedCall = expectedCalls[index];
-        const implicitRequiredChecks = createImplicitRequiredChecksResult(
-          command,
-          args,
-          options,
-          expectedCalls[index - 1],
-          expectedCall,
-        );
-        if (implicitRequiredChecks) return implicitRequiredChecks;
         expect(expectedCall, `Unexpected exec call ${command} ${args.join(' ')}`).toBeDefined();
 
         index += 1;
@@ -369,12 +360,12 @@ describe('merge-ready command', () => {
     expect(renderMergeReadyStatus(status)).toEqual({
       level: 'error',
       message: [
-        '❌ Required checks are failing',
+        '❌ Checks are failing',
         'Target: current branch feat/merge-ready (robhowley/pi-userland)',
         'PR: #42 — Compose merge-ready status boundary',
         'State: blocked',
         'Open items:',
-        '- Required checks are failing',
+        '- Checks are failing',
         '  - linting ❌ — https://github.com/robhowley/pi-userland/actions/runs/123/jobs/456',
         '  - PR Title Check ❌',
       ].join('\n'),
@@ -419,7 +410,7 @@ describe('merge-ready command', () => {
 
     mergeReadyExtension(api as Parameters<typeof mergeReadyExtension>[0]);
 
-    expect(api.on).toHaveBeenCalledTimes(5);
+    expect(api.on).toHaveBeenCalledTimes(7);
     expect(api.on).toHaveBeenCalledWith('session_start', expect.any(Function));
     expect(api.on).toHaveBeenCalledWith('turn_end', expect.any(Function));
     expect(api.on).toHaveBeenCalledWith('session_shutdown', expect.any(Function));
@@ -429,7 +420,7 @@ describe('merge-ready command', () => {
       MERGE_READY_COMMAND_NAME,
       expect.objectContaining({
         description:
-          'Show merge readiness for the current pull request or an explicit GitHub PR URL',
+          'Show merge readiness for the current pull request or an explicit pull request URL',
         handler: expect.any(Function),
       }),
     );
@@ -928,12 +919,12 @@ describe('merge-ready command', () => {
     assertDone();
     expect(ctx.ui.notify).toHaveBeenCalledWith(
       [
-        '❌ Required checks are failing',
+        '❌ Checks are failing',
         'Target: current branch feat/merge-ready (robhowley/pi-userland)',
         'PR: #42 — Compose merge-ready status boundary',
         'State: blocked',
         'Open items:',
-        '- Required checks are failing',
+        '- Checks are failing',
         '  - ci / unit ❌ — https://github.com/robhowley/pi-userland/actions/runs/123/jobs/456',
       ].join('\n'),
       'error',
@@ -1693,22 +1684,17 @@ describe('merge-ready command', () => {
     ]);
   });
 
-  it('rejects invalid explicit targets instead of guessing', async () => {
+  it('lets the status reader reject unsupported explicit targets', async () => {
     const { api, getCommand } = createMockAPI();
     mergeReadyExtension(api);
-    const handler = getCommand(MERGE_READY_COMMAND_NAME);
+    const handler = getCommand(MERGE_READY_COMMAND_NAME)!;
     const ctx = createCommandContext();
+    const message = 'Pass a full HTTPS GitHub pull request URL';
 
-    await handler?.('--url 64', ctx);
-    await handler?.('--url branch-name', ctx);
-    await handler?.('--url https://github.com/owner/repo/issues/64', ctx);
-
-    const invalidMessage =
-      'Invalid --url: Pass a full HTTPS GitHub pull request URL like https://github.com/OWNER/REPO/pull/NUMBER with no query string, fragment, or extra path.';
-    expect(vi.mocked(ctx.ui.notify).mock.calls).toEqual([
-      [invalidMessage, 'error'],
-      [invalidMessage, 'error'],
-      [invalidMessage, 'error'],
-    ]);
+    await expect(handler('--url 64', ctx)).rejects.toThrow(message);
+    await expect(handler('--url branch-name', ctx)).rejects.toThrow(message);
+    await expect(handler('--url https://github.com/owner/repo/issues/64', ctx)).rejects.toThrow(
+      message,
+    );
   });
 });

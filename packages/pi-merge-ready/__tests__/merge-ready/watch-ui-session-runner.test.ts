@@ -233,7 +233,9 @@ describe('merge-ready watch UI session runner', () => {
         cwd: expectedCwd,
       },
     });
-    expect(createResourceLoader).toHaveBeenCalledWith(expect.objectContaining({ cwd: expectedCwd }));
+    expect(createResourceLoader).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: expectedCwd }),
+    );
     expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ cwd: expectedCwd }));
 
     const persistedWatches = await readFile(paths.watchesFile, 'utf8');
@@ -451,7 +453,9 @@ describe('merge-ready watch UI session runner', () => {
 
   it('injects explicit runtime objects into child sessions and preserves the captured agentDir', async () => {
     const agentDir = await mkdtemp(path.join(os.tmpdir(), 'merge-ready-watch-ui-agent-'));
-    const snapshotDefaultCwd = await mkdtemp(path.join(os.tmpdir(), 'merge-ready-watch-ui-default-'));
+    const snapshotDefaultCwd = await mkdtemp(
+      path.join(os.tmpdir(), 'merge-ready-watch-ui-default-'),
+    );
     const expectedSnapshotDefaultCwd = await realpath(snapshotDefaultCwd);
     const paths = getMergeReadyWatchUiPaths(agentDir);
     const promptDeferred = createDeferred<void>();
@@ -646,7 +650,9 @@ function createMockConcurrentWatchSession(options: {
   const handler = vi.fn(
     async (
       _args: string,
-      commandContext?: { onMergeReadyWatchStart?: (result: MergeReadyWatchStartHookPayload) => void },
+      commandContext?: {
+        onMergeReadyWatchStart?: (result: MergeReadyWatchStartHookPayload) => void;
+      },
     ) => {
       const start = startMergeReadyWatch({
         api,

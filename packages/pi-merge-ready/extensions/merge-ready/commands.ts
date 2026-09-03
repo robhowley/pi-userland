@@ -8,7 +8,7 @@ import { BADGE_ICON_BY_ID } from './badge-icon.js';
 import { getMergeReadyStatus, type MergeReadyStatusReader } from './merge-ready.js';
 import { claimMergeReadyStatusBarOwnership, syncMergeReadyStatusBar } from './status-bar.js';
 import { selectMergeReadyBadgeId } from './status.js';
-import { MERGE_READY_PULL_REQUEST_URL_EXAMPLE, validateGitHubPullRequestUrl } from './target.js';
+import { MERGE_READY_PULL_REQUEST_URL_EXAMPLE } from './target.js';
 import {
   MERGE_READY_WATCH_DEFAULT_INTERVAL_SECONDS,
   MERGE_READY_WATCH_MAX_INTERVAL_SECONDS,
@@ -144,8 +144,7 @@ type MergeReadyCommandWatchRuntimeAPI = MergeReadyCommandAPI & {
 };
 
 export type MergeReadyCommandDependencies = {
-  getStatus?: () => MergeReadyStatusReader;
-  normalizeUrl?: (url: string) => string;
+  getStatus?: MergeReadyStatusReader;
 };
 
 export function registerMergeReadyCommand(
@@ -157,7 +156,8 @@ export function registerMergeReadyCommand(
   registerMergeReadyWatchShortcut(watchPi);
 
   pi.registerCommand(MERGE_READY_COMMAND_NAME, {
-    description: 'Show merge readiness for the current pull request or an explicit GitHub PR URL',
+    description:
+      'Show merge readiness for the current pull request or an explicit pull request URL',
     getArgumentCompletions: getMergeReadyCommandArgumentCompletions,
     handler: async (args, ctx) => {
       const parsedArgs = parseMergeReadyCommandArgs(args);
@@ -187,27 +187,9 @@ export function registerMergeReadyCommand(
         return;
       }
 
-      let url: string | undefined;
-      if ('url' in parsedArgs && parsedArgs.url !== undefined) {
-        if (dependencies.normalizeUrl) {
-          try {
-            url = dependencies.normalizeUrl(parsedArgs.url);
-          } catch (error) {
-            ctx.ui.notify(`Invalid ${URL_FLAG}: ${getErrorMessage(error)}`, 'error');
-            return;
-          }
-        } else {
-          const validation = validateGitHubPullRequestUrl(parsedArgs.url);
-          if (!validation.ok) {
-            ctx.ui.notify(`Invalid ${URL_FLAG}: ${validation.message}`, 'error');
-            return;
-          }
-          url = validation.target.url;
-        }
-      }
-
+      const url = 'url' in parsedArgs ? parsedArgs.url : undefined;
       const exec = createCommandExec(pi, ctx);
-      const getStatus = dependencies.getStatus?.() ?? getMergeReadyStatus;
+      const getStatus = dependencies.getStatus ?? getMergeReadyStatus;
 
       if (parsedArgs.mode === 'watch') {
         const started = startMergeReadyWatch({
@@ -529,10 +511,6 @@ function createMergeReadyWatchContext(ctx: MergeReadyCommandContext): MergeReady
             }),
         }),
   };
-}
-
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function createCommandExec(

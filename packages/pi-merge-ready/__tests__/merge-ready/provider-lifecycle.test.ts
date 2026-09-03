@@ -23,18 +23,13 @@ function found(title: string) {
       headRefName: 'feat/providers',
       baseRefName: 'main',
     },
-    facts: {
-      draft: { kind: 'known' as const, value: false },
-      hasConflicts: { kind: 'known' as const, value: false },
-      behindBase: { kind: 'known' as const, value: false },
-      sourceMergeGate: { kind: 'known' as const, value: 'clear' as const },
-      requiredChecks: { kind: 'known' as const, value: [] },
-      sourceReviewGate: {
-        kind: 'known' as const,
-        value: { state: 'satisfied' as const },
-      },
-      unresolvedConversations: { kind: 'known' as const, value: [] },
-      conversationResolutionRequired: { kind: 'known' as const, value: true },
+    signals: {
+      draft: false,
+      mergeability: 'mergeable' as const,
+      checks: 'passing' as const,
+      review: 'approved' as const,
+      unresolvedConversations: false,
+      unresolvedConversationRequirement: 'required' as const,
     },
   };
 }
@@ -159,9 +154,9 @@ describe('merge-ready custom provider lifecycle', () => {
     },
   );
 
-  it('uses the session catalog for status bar, command, and tool', async () => {
+  it('uses one session provider for status bar, command, and tool', async () => {
     const runtime = createRuntime();
-    const provider = createProvider('shared catalog');
+    const provider = createProvider('shared provider');
     registerMergeReadyProvider(
       runtime.api as Parameters<typeof registerMergeReadyProvider>[0],
       provider,
@@ -177,58 +172,33 @@ describe('merge-ready custom provider lifecycle', () => {
     runtime.assertDone();
     expect(provider.read).toHaveBeenCalledTimes(3);
     expect(runtime.notify).toHaveBeenCalledWith(expect.stringContaining('Ready to merge'), 'info');
-    expect(toolResult.details).toMatchObject({ state: 'ready', pr: { title: 'shared catalog' } });
+    expect(toolResult.details).toMatchObject({ state: 'ready', pr: { title: 'shared provider' } });
   });
 
-  it('pins an active watch to catalog A while a replacement session and watch use catalog B', async () => {
+  it('stops an active watch before clearing providers', async () => {
     vi.useFakeTimers();
-    const runtime = createRuntime(2);
-    const first = createProvider('catalog A');
-    const second = createProvider('catalog B');
-    const unsubscribe = registerMergeReadyProvider(
+    const runtime = createRuntime();
+    const provider = createProvider('watch provider');
+    registerMergeReadyProvider(
       runtime.api as Parameters<typeof registerMergeReadyProvider>[0],
-      first,
+      provider,
     );
     mergeReadyExtension(runtime.api as unknown as Parameters<typeof mergeReadyExtension>[0]);
 
     await runtime.startSession();
-    const watchContextA = {
+    const watchContext = {
       ...runtime.ctx,
       sessionManager: { getSessionId: () => 'session-a' },
     };
-    const watchA = runtime.command()?.handler(`watch --url ${URL} --interval 15`, watchContextA);
+    const watch = runtime.command()?.handler(`watch --url ${URL} --interval 15`, watchContext);
     await flushMicrotasks();
-    expect(first.read).toHaveBeenCalledTimes(2);
+    expect(provider.read).toHaveBeenCalledTimes(2);
 
-    unsubscribe();
-    registerMergeReadyProvider(
-      runtime.api as Parameters<typeof registerMergeReadyProvider>[0],
-      second,
-    );
-    await runtime.startSession('reload');
-    expect(second.read).toHaveBeenCalledTimes(1);
-
+    await runtime.shutdown(watchContext);
+    await watch;
     await vi.advanceTimersByTimeAsync(15_000);
-    await flushMicrotasks();
-    expect(first.read).toHaveBeenCalledTimes(3);
-    expect(second.read).toHaveBeenCalledTimes(1);
-
-    await runtime.command()?.handler(`--url ${URL}`, runtime.ctx);
-    expect(second.read).toHaveBeenCalledTimes(2);
-
-    const watchContextB = {
-      ...runtime.ctx,
-      sessionManager: { getSessionId: () => 'session-b' },
-    };
-    const watchB = runtime.command()?.handler(`watch --url ${URL} --interval 15`, watchContextB);
-    await flushMicrotasks();
-    expect(second.read).toHaveBeenCalledTimes(3);
+    expect(provider.read).toHaveBeenCalledTimes(2);
     runtime.assertDone();
-
-    await runtime.shutdown(watchContextA);
-    await runtime.shutdown(watchContextB);
-    await watchA;
-    await watchB;
   });
 
   it('recollects providers for a later session', async () => {

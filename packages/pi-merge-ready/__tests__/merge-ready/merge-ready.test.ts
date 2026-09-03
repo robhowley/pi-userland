@@ -241,10 +241,10 @@ const blockerFixtures: BlockerFixture[] = [
       mergeable: 'MERGEABLE',
       mergeStateStatus: 'REBASEABLE',
     },
-    expectedBadge: 'unknown',
-    expectedState: 'unknown',
-    expectedSummary: 'Merge readiness is ambiguous',
-    expectedOpenItemIds: ['status_ambiguous', 'merge_blocked'],
+    expectedBadge: 'merge_blocked',
+    expectedState: 'blocked',
+    expectedSummary: 'GitHub reports merge is blocked',
+    expectedOpenItemIds: ['merge_blocked', 'status_ambiguous'],
     expectedSignals: {
       draft: false,
       mergeability: 'blocked',
@@ -288,7 +288,7 @@ const blockerFixtures: BlockerFixture[] = [
     },
     expectedBadge: 'ci_failing',
     expectedState: 'blocked',
-    expectedSummary: 'Required checks are failing',
+    expectedSummary: 'Checks are failing',
     expectedOpenItemIds: ['ci_failing'],
     expectedSignals: {
       draft: false,
@@ -789,20 +789,23 @@ describe('getMergeReadyStatus', () => {
         exitCode: 1,
         stderr: 'GraphQL: Something went wrong\n',
       } satisfies MergeReadyExecResult,
+      message: 'the GitHub API request failed',
     },
     {
       name: 'returns invalid JSON',
       result: {
         stdout: '{ definitely not json',
       } satisfies MergeReadyExecResult,
+      message: 'GitHub CLI returned invalid JSON',
     },
     {
       name: 'returns an invalid shape',
       result: {
         stdout: JSON.stringify({ state: 'OPEN' }),
       } satisfies MergeReadyExecResult,
+      message: 'GitHub CLI returned an unexpected pull request payload',
     },
-  ])('surfaces status_ambiguous when GitHub PR discovery $name', async ({ result }) => {
+  ])('surfaces status_ambiguous when GitHub PR discovery $name', async ({ result, message }) => {
     const { exec, assertDone } = createFakeExec([
       ...createGitDiscoveryCalls(),
       {
@@ -823,8 +826,9 @@ describe('getMergeReadyStatus', () => {
 
     expect(status.state).toBe('unknown');
     expect(status.pr).toBeNull();
-    expect(status.summary).toBe('Merge readiness is ambiguous');
+    expect(status.summary).toBe(`Unable to determine readiness: ${message}`);
     expect(openItemIds(status)).toEqual(['status_ambiguous']);
+    expect(status.openItems[0]?.details).toEqual([{ label: message }]);
     expect(status.signals).toEqual({
       draft: false,
       mergeability: 'unknown',
@@ -990,38 +994,6 @@ describe('getMergeReadyStatus', () => {
       expect(selectMergeReadyBadgeId(status)).toBe(fixture.expectedBadge);
     },
   );
-
-  it('does not treat optional rollup checks as required', async () => {
-    const { exec, assertDone } = createFakeExec([
-      ...createGitDiscoveryCalls(),
-      createPullRequestViewSuccessCall(
-        buildPullRequestPayload({
-          statusCheckRollup: [
-            {
-              __typename: 'CheckRun',
-              workflowName: 'optional',
-              name: 'preview',
-              status: 'COMPLETED',
-              conclusion: 'FAILURE',
-            },
-          ],
-        }),
-        { requiredChecks: [] },
-      ),
-      createConversationsSuccessCall(buildConversationsPayload()),
-    ]);
-
-    const status = await getMergeReadyStatus({
-      exec,
-      cwd: '/repo',
-      now: () => new Date(GENERATED_AT),
-    });
-
-    assertDone();
-    expect(status.state).toBe('ready');
-    expect(status.signals.checks).toBe('passing');
-    expect(openItemIds(status)).toEqual([]);
-  });
 
   it('attaches blocking review deep links to the changes_requested open item', async () => {
     const { exec, assertDone } = createFakeExec([

@@ -1,7 +1,7 @@
 import type { MergeReadyCommandAPI } from './commands.js';
 import type { MergeReadyExec, MergeReadyExecOptions, MergeReadyExecResult } from './git.js';
 import { getMergeReadyStatus, type MergeReadyStatusReader } from './merge-ready.js';
-import { MERGE_READY_PULL_REQUEST_URL_EXAMPLE, validateGitHubPullRequestUrl } from './target.js';
+import { MERGE_READY_PULL_REQUEST_URL_EXAMPLE } from './target.js';
 import type { MergeReadyStatus } from './types.js';
 
 export const MERGE_READY_STATUS_TOOL_NAME = 'merge_ready_status';
@@ -46,8 +46,7 @@ const MERGE_READY_STATUS_TOOL_PARAMETERS = {
 };
 
 export type MergeReadyStatusToolDependencies = {
-  getStatus?: () => MergeReadyStatusReader;
-  normalizeUrl?: (url: string) => string;
+  getStatus?: MergeReadyStatusReader;
 };
 
 export function registerMergeReadyStatusTool(
@@ -58,39 +57,21 @@ export function registerMergeReadyStatusTool(
     name: MERGE_READY_STATUS_TOOL_NAME,
     label: 'Merge Ready Status',
     description:
-      'Returns the merge-readiness status for the current branch pull request by default, or for an exact GitHub pull request URL when `url` is provided. Use this before deciding whether a PR is ready to merge or before attempting to resolve merge blockers. The returned `openItems` array is the only authoritative list of merge-readiness items to work from, and any `openItems[].details[].url` values are provenance-only supporting links.',
+      'Returns the merge-readiness status for the current branch pull request by default, or for an exact pull request URL when `url` is provided. Use this before deciding whether a PR is ready to merge or before attempting to resolve merge blockers. The returned `openItems` array is the only authoritative list of merge-readiness items to work from, and any `openItems[].details[].url` values are provenance-only supporting links.',
     promptGuidelines: [
       'Use openItems as the actionable list and do not invent additional blockers beyond what is returned.',
       'Treat openItems[].details[] as supporting provenance only; detail URLs help explain an open item but do not add new blockers, and pr.url is not a source link.',
-      'Do not infer work from raw GitHub states or assume hidden blockers beyond the returned MergeReadyStatus.',
-      `When targeting a PR explicitly, pass only a full GitHub pull request URL like ${MERGE_READY_PULL_REQUEST_URL_EXAMPLE}.`,
+      'Do not infer work from raw provider states or assume hidden blockers beyond the returned MergeReadyStatus.',
+      `When targeting a PR explicitly, pass only a full pull request URL supported by an active provider, such as ${MERGE_READY_PULL_REQUEST_URL_EXAMPLE}.`,
       'Do not pass branch names, PR numbers, repo names, or other inferred targets.',
     ],
     parameters: MERGE_READY_STATUS_TOOL_PARAMETERS,
     async execute(_toolCallId, params = {}, _signal, _onUpdate, ctx) {
-      let url: string | undefined;
-
-      if (params.url !== undefined) {
-        if (dependencies.normalizeUrl) {
-          try {
-            url = dependencies.normalizeUrl(params.url);
-          } catch (error) {
-            throw new Error(`Invalid url: ${getErrorMessage(error)}`, { cause: error });
-          }
-        } else {
-          const validation = validateGitHubPullRequestUrl(params.url);
-          if (!validation.ok) {
-            throw new Error(`Invalid url: ${validation.message}`);
-          }
-          url = validation.target.url;
-        }
-      }
-
-      const getStatus = dependencies.getStatus?.() ?? getMergeReadyStatus;
+      const getStatus = dependencies.getStatus ?? getMergeReadyStatus;
       const status = await getStatus({
         exec: createToolExec(pi, ctx),
         ...withOptionalCwd(ctx.cwd),
-        ...(url === undefined ? {} : { url }),
+        ...(params.url === undefined ? {} : { url: params.url }),
         timeout: MERGE_READY_STATUS_TOOL_TIMEOUT_MS,
       });
 
@@ -100,10 +81,6 @@ export function registerMergeReadyStatusTool(
       };
     },
   });
-}
-
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function createToolExec(

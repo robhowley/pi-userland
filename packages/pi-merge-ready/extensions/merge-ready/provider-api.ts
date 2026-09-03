@@ -1,12 +1,8 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import type { MergeReadyPullRequest, MergeReadySignals } from './types.js';
 
 export const MERGE_READY_PROVIDER_COLLECTION_EVENT_V1 =
   'pi-merge-ready:collect-providers:v1' as const;
-
-export type MergeReadyProviderFactV1<T> =
-  | { kind: 'known'; value: T }
-  | { kind: 'partial'; value: T; message: string }
-  | { kind: 'unknown'; message: string };
 
 export type MergeReadyProviderUrlMatchV1 = {
   url: string;
@@ -30,35 +26,14 @@ export type MergeReadyProviderDetailV1 = {
   url?: string;
 };
 
-export type MergeReadyProviderRequiredCheckV1 = MergeReadyProviderDetailV1 & {
-  status: 'passed' | 'failed' | 'running' | 'unknown';
+export type MergeReadyProviderEvidenceV1 = {
+  reviewPending?: readonly MergeReadyProviderDetailV1[];
+  changesRequested?: readonly MergeReadyProviderDetailV1[];
+  unresolvedConversations?: readonly MergeReadyProviderDetailV1[];
 };
 
-export type MergeReadyProviderSourceReviewGateV1 = {
-  state: 'satisfied' | 'changes_requested' | 'pending';
-  details?: readonly MergeReadyProviderDetailV1[];
-};
-
-export type MergeReadyProviderPullRequestV1 = {
-  lifecycle: 'open' | 'merged' | 'closed';
-  number: number;
-  title: string;
-  url: string;
-  headRefName: string;
-  baseRefName: string;
-  headRepository?: MergeReadyProviderRemoteMatchV1;
-};
-
-export type MergeReadyProviderFactsV1 = {
-  draft: MergeReadyProviderFactV1<boolean>;
-  hasConflicts: MergeReadyProviderFactV1<boolean>;
-  behindBase: MergeReadyProviderFactV1<boolean>;
-  sourceMergeGate: MergeReadyProviderFactV1<'clear' | 'blocked'>;
-  requiredChecks: MergeReadyProviderFactV1<readonly MergeReadyProviderRequiredCheckV1[]>;
-  sourceReviewGate: MergeReadyProviderFactV1<MergeReadyProviderSourceReviewGateV1>;
-  unresolvedConversations: MergeReadyProviderFactV1<readonly MergeReadyProviderDetailV1[]>;
-  conversationResolutionRequired: MergeReadyProviderFactV1<boolean>;
-};
+export type MergeReadyProviderPullRequestV1 = MergeReadyPullRequest;
+export type MergeReadyProviderSignalsV1 = MergeReadySignals;
 
 export type MergeReadyProviderReadInputV1 = {
   cwd?: string;
@@ -79,19 +54,22 @@ type ForbiddenReadinessFields = {
   state?: never;
   summary?: never;
   openItems?: never;
-  signals?: never;
 };
 
 export type MergeReadyProviderReadResultV1 =
   | ({
       kind: 'found';
       pullRequest: MergeReadyProviderPullRequestV1 & { lifecycle: 'open' };
-      facts: MergeReadyProviderFactsV1;
+      signals: MergeReadySignals;
+      evidence?: MergeReadyProviderEvidenceV1;
+      issues?: readonly string[];
     } & ForbiddenReadinessFields)
   | ({
       kind: 'found';
       pullRequest: MergeReadyProviderPullRequestV1 & { lifecycle: 'merged' | 'closed' };
-      facts?: never;
+      signals?: never;
+      evidence?: never;
+      issues?: never;
     } & ForbiddenReadinessFields)
   | ({ kind: 'absent' } & ForbiddenReadinessFields)
   | ({
@@ -109,27 +87,20 @@ export interface MergeReadyProviderV1 {
   readonly state?: never;
   readonly summary?: never;
   readonly openItems?: never;
-  readonly signals?: never;
 }
 
 export function defineMergeReadyProvider<T extends MergeReadyProviderV1>(provider: T): T {
   return provider;
 }
 
-type ProviderCollectionV1 = {
-  providers: MergeReadyProviderV1[];
-};
+type ProviderCollectionV1 = { providers: MergeReadyProviderV1[] };
 
 export function registerMergeReadyProvider(
   pi: Pick<ExtensionAPI, 'events'>,
   provider: MergeReadyProviderV1,
 ): () => void {
   return pi.events.on(MERGE_READY_PROVIDER_COLLECTION_EVENT_V1, (payload) => {
-    if (!isProviderCollectionV1(payload)) {
-      return;
-    }
-
-    payload.providers.push(provider);
+    if (isProviderCollectionV1(payload)) payload.providers.push(provider);
   });
 }
 

@@ -64,15 +64,13 @@ const provider: MergeReadyProviderV1 = {
       headRefName: 'feature',
       baseRefName: 'main',
     },
-    facts: {
-      draft: { kind: 'known', value: false },
-      hasConflicts: { kind: 'known', value: false },
-      behindBase: { kind: 'known', value: false },
-      sourceMergeGate: { kind: 'known', value: 'clear' },
-      requiredChecks: { kind: 'known', value: [] },
-      sourceReviewGate: { kind: 'known', value: { state: 'satisfied' } },
-      unresolvedConversations: { kind: 'partial', value: [], message: 'first page only' },
-      conversationResolutionRequired: { kind: 'known', value: false },
+    signals: {
+      draft: false,
+      mergeability: 'mergeable',
+      checks: 'passing',
+      review: 'approved',
+      unresolvedConversations: false,
+      unresolvedConversationRequirement: 'optional',
     },
   }),
 };

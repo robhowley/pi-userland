@@ -19,7 +19,6 @@ describe('pi-merge-ready', () => {
     expect(typeof module.registerMergeReadyProvider).toBe('function');
     expect(module).not.toHaveProperty('MERGE_READY_PROVIDER_COLLECTION_EVENT_V1');
     expect(module).not.toHaveProperty('createMergeReadyProviderCatalog');
-    expect(module).not.toHaveProperty('createCatalogBoundMergeReadyStatusReader');
     expect(module).not.toHaveProperty('githubProvider');
     expect(module).not.toHaveProperty('BUILT_IN_MERGE_READY_PROVIDERS');
   });

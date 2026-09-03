@@ -151,7 +151,6 @@ let statusBarRuntime: MergeReadyStatusBarRuntime = createMergeReadyStatusBarRunt
 
 export type MergeReadyStatusBarDependencies = {
   getStatus?: MergeReadyStatusReader;
-  beforeInitialRefresh?: () => void;
 };
 
 export function registerMergeReadyStatusBar(
@@ -174,7 +173,6 @@ export function registerMergeReadyStatusBar(
       projectTrusted,
     });
 
-    dependencies.beforeInitialRefresh?.();
     await refreshMergeReadyStatusBar({
       exec: createStatusBarExec(pi, ctx),
       ...(dependencies.getStatus === undefined ? {} : { getStatus: dependencies.getStatus }),

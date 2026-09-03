@@ -2,40 +2,56 @@ import {
   fetchMergeReadyPullRequestConversations,
   type MergeReadyPullRequestConversations,
 } from './conversations.js';
-import { parseGitHubRemoteUrl } from './git.js';
+import { parseGitHubRemoteUrl, type MergeReadyExec } from './git.js';
 import {
   fetchMergeReadyGitHubPullRequestFacts,
-  fetchMergeReadyGitHubRequiredChecks,
   type MergeReadyGitHubFailureReason,
   type MergeReadyGitHubPullRequest,
   type MergeReadyGitHubPullRequestFacts,
-  type MergeReadyGitHubRequiredChecks,
+  type MergeReadyGitHubReviewDecisionSignal,
 } from './github.js';
 import type {
-  MergeReadyProvider,
-  ProviderDetail,
-  ProviderFact,
-  ProviderOpenPullRequestFacts,
-  ProviderReadInput,
-  ProviderReadResult,
-  ProviderSourceReviewGate,
-} from './provider.js';
+  MergeReadyProviderEvidenceV1,
+  MergeReadyProviderReadInputV1,
+  MergeReadyProviderReadResultV1,
+  MergeReadyProviderV1,
+} from './provider-api.js';
 import { parseGitHubPullRequestUrl } from './target.js';
-import type { MergeReadyPullRequest } from './types.js';
+import type { MergeReadyPullRequest, MergeReadyReviewSignal, MergeReadySignals } from './types.js';
 
-export const githubProvider: MergeReadyProvider = {
-  id: 'github',
-  parseUrl: (url) => parseGitHubPullRequestUrl(url.href),
-  parseRemote: (remote) => parseGitHubRemoteUrl(remote.url),
-  read: readGitHubProvider,
-};
+export function createGitHubProvider(exec: MergeReadyExec): MergeReadyProviderV1 {
+  return {
+    apiVersion: 1,
+    id: 'github',
+    matchUrl(url) {
+      const target = parseGitHubPullRequestUrl(url.href);
+      return (
+        target && {
+          url: target.url,
+          owner: target.owner,
+          repo: target.repo,
+          prNumber: target.prNumber,
+        }
+      );
+    },
+    matchRemote(remote) {
+      return parseGitHubRemoteUrl(remote.url);
+    },
+    read(input) {
+      return readGitHubProvider(exec, input);
+    },
+  };
+}
 
-async function readGitHubProvider(input: ProviderReadInput): Promise<ProviderReadResult> {
+async function readGitHubProvider(
+  exec: MergeReadyExec,
+  input: MergeReadyProviderReadInputV1,
+): Promise<MergeReadyProviderReadResultV1> {
   const pullRequestFacts = await fetchMergeReadyGitHubPullRequestFacts({
-    exec: input.exec,
+    exec,
     ...withOptionalCwd(input.cwd),
-    ...withOptionalTimeout(input.timeout),
-    ...(input.mode === 'url' ? { target: input.target } : {}),
+    timeout: input.timeoutMs,
+    ...(input.mode === 'url' ? { target: { mode: 'url', ...input.target } } : {}),
   });
 
   if (pullRequestFacts.kind === 'no_pr' || pullRequestFacts.kind === 'not_found') {
@@ -45,249 +61,54 @@ async function readGitHubProvider(input: ProviderReadInput): Promise<ProviderRea
     return {
       kind: 'unavailable',
       presence: 'unknown',
-      issues: [{ message: describePullRequestLookupFailure(pullRequestFacts) }],
+      message: describePullRequestLookupFailure(pullRequestFacts),
     };
   }
   if (input.mode === 'url' && !pullRequestFacts.pullRequest.headRepository) {
     return {
       kind: 'unavailable',
       presence: 'known',
-      issues: [{ message: 'GitHub CLI did not report head repository identity' }],
+      message: 'GitHub CLI did not report head repository identity',
     };
   }
 
   const pullRequest = toProviderPullRequest(pullRequestFacts.pullRequest, input.mode);
-  if (pullRequestFacts.pullRequest.lifecycle !== 'open') {
-    return {
-      kind: 'found',
-      snapshot: {
-        pullRequest: { ...pullRequest, lifecycle: pullRequestFacts.pullRequest.lifecycle },
-      },
-    };
+  if (pullRequest.lifecycle === 'merged' || pullRequest.lifecycle === 'closed') {
+    return { kind: 'found', pullRequest: { ...pullRequest, lifecycle: pullRequest.lifecycle } };
   }
 
-  const requiredChecks = await fetchMergeReadyGitHubRequiredChecks({
-    exec: input.exec,
-    ...withOptionalCwd(input.cwd),
-    ...withOptionalTimeout(input.timeout),
-    ...(input.mode === 'url' ? { target: input.target } : {}),
-  });
   const repository = input.mode === 'url' ? input.target : input.repository;
   const conversations = await fetchMergeReadyPullRequestConversations({
-    exec: input.exec,
+    exec,
     repositoryOwner: repository.owner,
     repositoryName: repository.repo,
-    pullRequestNumber: pullRequestFacts.pullRequest.number,
+    pullRequestNumber: pullRequest.number,
     ...withOptionalCwd(input.cwd),
-    ...withOptionalTimeout(input.timeout),
+    timeout: input.timeoutMs,
   });
+  const issues = [
+    ...pullRequestFacts.issues.map((issue) => issue.message),
+    ...conversationIssueMessages(conversations),
+  ];
 
   return {
     kind: 'found',
-    snapshot: {
-      pullRequest: { ...pullRequest, lifecycle: 'open' },
-      facts: createOpenFacts(
-        pullRequestFacts.pullRequest,
-        pullRequestFacts,
-        requiredChecks,
-        conversations,
-      ),
+    pullRequest: { ...pullRequest, lifecycle: 'open' },
+    signals: {
+      ...createBaseSignals(pullRequestFacts.pullRequest),
+      ...normalizeConversationSignals(conversations),
     },
+    evidence: {
+      ...createReviewEvidence(pullRequestFacts.pullRequest),
+      ...createConversationEvidence(conversations),
+    },
+    ...(issues.length > 0 ? { issues } : {}),
   };
-}
-
-function createOpenFacts(
-  pullRequest: MergeReadyGitHubPullRequest,
-  pullRequestFacts: Extract<MergeReadyGitHubPullRequestFacts, { kind: 'found' }>,
-  requiredChecks: MergeReadyGitHubRequiredChecks,
-  conversations: MergeReadyPullRequestConversations,
-): ProviderOpenPullRequestFacts {
-  const mergeFacts = createMergeFacts(pullRequest, pullRequestFacts);
-  return {
-    draft:
-      pullRequest.draft === 'unknown'
-        ? {
-            kind: 'unknown',
-            message: issueMessage(pullRequestFacts, 'isDraft', 'GitHub draft status is unknown'),
-          }
-        : { kind: 'known', value: pullRequest.draft === 'yes' },
-    ...mergeFacts,
-    requiredChecks: mapRequiredChecks(requiredChecks),
-    sourceReviewGate: createReviewGateFact(pullRequest, pullRequestFacts, conversations),
-    unresolvedConversations: createUnresolvedConversationsFact(conversations),
-    conversationResolutionRequired: createConversationRequirementFact(conversations),
-  };
-}
-
-function mapRequiredChecks(
-  checks: MergeReadyGitHubRequiredChecks,
-): ProviderOpenPullRequestFacts['requiredChecks'] {
-  if (checks.kind === 'unknown') {
-    return { kind: 'unknown', message: checks.message };
-  }
-
-  const value = checks.checks.map((check) => ({
-    label: check.name,
-    status: check.status,
-    ...(check.link === undefined ? {} : { url: check.link }),
-  }));
-
-  return checks.kind === 'partial'
-    ? { kind: 'partial', value, message: checks.message }
-    : { kind: 'known', value };
-}
-
-function createMergeFacts(
-  pullRequest: MergeReadyGitHubPullRequest,
-  pullRequestFacts: Extract<MergeReadyGitHubPullRequestFacts, { kind: 'found' }>,
-): Pick<ProviderOpenPullRequestFacts, 'hasConflicts' | 'behindBase' | 'sourceMergeGate'> {
-  if (pullRequest.mergeability === 'unknown') {
-    const message = issueMessage(pullRequestFacts, 'mergeable', 'GitHub merge status is unknown');
-    return {
-      hasConflicts: { kind: 'unknown', message },
-      behindBase: { kind: 'unknown', message },
-      sourceMergeGate: { kind: 'unknown', message },
-    };
-  }
-
-  const values = {
-    hasConflicts: pullRequest.mergeability === 'conflicting',
-    behindBase: pullRequest.mergeability === 'behind',
-    sourceMergeGate:
-      pullRequest.mergeability === 'mergeable' ? ('clear' as const) : ('blocked' as const),
-  };
-  const mergeIssue = pullRequestFacts.issues.find(
-    (issue) => issue.field === 'mergeable' || issue.field === 'mergeStateStatus',
-  );
-  if (mergeIssue) {
-    return {
-      hasConflicts: { kind: 'partial', value: values.hasConflicts, message: mergeIssue.message },
-      behindBase: { kind: 'partial', value: values.behindBase, message: mergeIssue.message },
-      sourceMergeGate: {
-        kind: 'partial',
-        value: values.sourceMergeGate,
-        message: mergeIssue.message,
-      },
-    };
-  }
-  return {
-    hasConflicts: { kind: 'known', value: values.hasConflicts },
-    behindBase: { kind: 'known', value: values.behindBase },
-    sourceMergeGate: { kind: 'known', value: values.sourceMergeGate },
-  };
-}
-
-function createReviewGateFact(
-  pullRequest: MergeReadyGitHubPullRequest,
-  pullRequestFacts: Extract<MergeReadyGitHubPullRequestFacts, { kind: 'found' }>,
-  conversations: MergeReadyPullRequestConversations,
-): ProviderFact<ProviderSourceReviewGate> {
-  const state = normalizeReviewGateState(pullRequest);
-  if (!state) {
-    return {
-      kind: 'unknown',
-      message: issueMessage(
-        pullRequestFacts,
-        'reviewDecision',
-        'GitHub review requirement is unknown',
-      ),
-    };
-  }
-
-  const details =
-    state === 'pending'
-      ? createReviewRequestDetails(pullRequest)
-      : state === 'changes_requested'
-        ? readConversationDetails(conversations, 'changes_requested')
-        : [];
-  const value = { state, ...(details.length > 0 ? { details } : {}) };
-  const reviewIssue = pullRequestFacts.issues.find((issue) =>
-    ['reviews', 'reviewDecision', 'reviewRequests'].some((field) => issue.field?.startsWith(field)),
-  );
-  return reviewIssue
-    ? { kind: 'partial', value, message: reviewIssue.message }
-    : { kind: 'known', value };
-}
-
-function normalizeReviewGateState(
-  pullRequest: MergeReadyGitHubPullRequest,
-): ProviderSourceReviewGate['state'] | null {
-  if (pullRequest.reviewDecision === 'approved' || pullRequest.reviewDecision === 'not_required') {
-    return 'satisfied';
-  }
-  if (pullRequest.reviewDecision === 'changes_requested') return 'changes_requested';
-  if (pullRequest.reviewDecision === 'review_required') return 'pending';
-  return null;
-}
-
-function createReviewRequestDetails(pullRequest: MergeReadyGitHubPullRequest): ProviderDetail[] {
-  return pullRequest.reviewRequests.requests.map((request) => ({
-    label:
-      request.type === 'user'
-        ? `@${request.name}`
-        : request.type === 'team'
-          ? `team/${request.name}`
-          : request.name,
-  }));
-}
-
-function createUnresolvedConversationsFact(
-  conversations: MergeReadyPullRequestConversations,
-): ProviderOpenPullRequestFacts['unresolvedConversations'] {
-  if (conversations.kind !== 'known' && conversations.kind !== 'partial') {
-    return { kind: 'unknown', message: describeConversationLookupFailure(conversations) };
-  }
-  const details = readConversationDetails(conversations, 'unresolved_conversations');
-  while (details.length < conversations.unresolvedCount) {
-    details.push({ label: 'Unresolved conversation' });
-  }
-  return conversations.kind === 'partial'
-    ? {
-        kind: 'partial',
-        value: details,
-        message: conversations.issues[0]?.message ?? 'GitHub conversation facts are partial',
-      }
-    : { kind: 'known', value: details };
-}
-
-function createConversationRequirementFact(
-  conversations: MergeReadyPullRequestConversations,
-): ProviderOpenPullRequestFacts['conversationResolutionRequired'] {
-  if (
-    (conversations.kind !== 'known' && conversations.kind !== 'partial') ||
-    conversations.requirement === 'unknown'
-  ) {
-    return { kind: 'unknown', message: describeConversationLookupFailure(conversations) };
-  }
-  const value = conversations.requirement === 'required';
-  return conversations.kind === 'partial'
-    ? {
-        kind: 'partial',
-        value,
-        message: conversations.issues[0]?.message ?? 'GitHub conversation policy is partial',
-      }
-    : { kind: 'known', value };
-}
-
-function readConversationDetails(
-  conversations: MergeReadyPullRequestConversations,
-  key: 'changes_requested' | 'unresolved_conversations',
-): ProviderDetail[] {
-  if (conversations.kind !== 'known' && conversations.kind !== 'partial') return [];
-  return [...(conversations.openItemDetails?.[key] ?? [])];
-}
-
-function issueMessage(
-  facts: Extract<MergeReadyGitHubPullRequestFacts, { kind: 'found' }>,
-  field: string,
-  fallback: string,
-): string {
-  return facts.issues.find((issue) => issue.field?.startsWith(field))?.message ?? fallback;
 }
 
 function toProviderPullRequest(
   pullRequest: MergeReadyGitHubPullRequest,
-  mode: ProviderReadInput['mode'],
+  mode: MergeReadyProviderReadInputV1['mode'],
 ): MergeReadyPullRequest {
   return {
     lifecycle: pullRequest.lifecycle,
@@ -302,21 +123,104 @@ function toProviderPullRequest(
   };
 }
 
-function describePullRequestLookupFailure(
-  pullRequestFacts: Exclude<
-    MergeReadyGitHubPullRequestFacts,
-    { kind: 'found' | 'not_found' | 'no_pr' }
-  >,
-): string {
-  if (pullRequestFacts.kind === 'failure') {
-    return describeGitHubFailureReason(pullRequestFacts.reason, 'pr');
+function createBaseSignals(
+  pullRequest: MergeReadyGitHubPullRequest,
+): Omit<
+  MergeReadySignals,
+  'unresolvedConversations' | 'unresolvedConversationCount' | 'unresolvedConversationRequirement'
+> {
+  return {
+    draft: pullRequest.draft === 'yes',
+    mergeability: pullRequest.mergeability,
+    checks: pullRequest.checks.state,
+    checkDetails: pullRequest.checks.details,
+    review: normalizeReviewDecisionSignal(pullRequest.reviewDecision, pullRequest.reviews.state),
+  };
+}
+
+function normalizeReviewDecisionSignal(
+  decision: MergeReadyGitHubReviewDecisionSignal,
+  fallback: MergeReadyReviewSignal,
+): MergeReadyReviewSignal {
+  if (decision === 'approved' || decision === 'not_required') return 'approved';
+  if (decision === 'changes_requested') return 'changes_requested';
+  if (decision === 'review_required') return 'pending';
+  return fallback;
+}
+
+function normalizeConversationSignals(
+  conversations: MergeReadyPullRequestConversations,
+): Pick<
+  MergeReadySignals,
+  'unresolvedConversations' | 'unresolvedConversationCount' | 'unresolvedConversationRequirement'
+> {
+  if (conversations.kind === 'known' || conversations.kind === 'partial') {
+    return {
+      unresolvedConversations: conversations.unresolvedCount > 0,
+      unresolvedConversationRequirement: conversations.requirement,
+      ...(conversations.unresolvedCount > 0
+        ? { unresolvedConversationCount: conversations.unresolvedCount }
+        : {}),
+    };
   }
-  if (pullRequestFacts.kind === 'invalid_json') return 'GitHub CLI returned invalid JSON';
+  return {
+    unresolvedConversations: false,
+    unresolvedConversationRequirement: 'unknown',
+  };
+}
+
+function createReviewEvidence(
+  pullRequest: MergeReadyGitHubPullRequest,
+): MergeReadyProviderEvidenceV1 {
+  if (
+    pullRequest.reviewRequests.kind !== 'known' ||
+    pullRequest.reviewRequests.requests.length === 0
+  )
+    return {};
+  return {
+    reviewPending: pullRequest.reviewRequests.requests.map((request) => ({
+      label:
+        request.type === 'user'
+          ? `@${request.name}`
+          : request.type === 'team'
+            ? `team/${request.name}`
+            : request.name,
+    })),
+  };
+}
+
+function createConversationEvidence(
+  conversations: MergeReadyPullRequestConversations,
+): MergeReadyProviderEvidenceV1 {
+  if (
+    (conversations.kind !== 'known' && conversations.kind !== 'partial') ||
+    !conversations.openItemDetails
+  )
+    return {};
+  const evidence: MergeReadyProviderEvidenceV1 = {};
+  const changesRequested = conversations.openItemDetails.changes_requested;
+  const unresolvedConversations = conversations.openItemDetails.unresolved_conversations;
+  if (changesRequested?.length) evidence.changesRequested = changesRequested;
+  if (unresolvedConversations?.length) evidence.unresolvedConversations = unresolvedConversations;
+  return evidence;
+}
+
+function conversationIssueMessages(conversations: MergeReadyPullRequestConversations): string[] {
+  if (conversations.kind === 'known') return [];
+  if (conversations.kind === 'partial') return conversations.issues.map((issue) => issue.message);
+  return [describeConversationLookupFailure(conversations)];
+}
+
+function describePullRequestLookupFailure(
+  facts: Exclude<MergeReadyGitHubPullRequestFacts, { kind: 'found' | 'not_found' | 'no_pr' }>,
+): string {
+  if (facts.kind === 'failure') return describeGitHubFailureReason(facts.reason, 'pr');
+  if (facts.kind === 'invalid_json') return 'GitHub CLI returned invalid JSON';
   return 'GitHub CLI returned an unexpected pull request payload';
 }
 
 function describeConversationLookupFailure(
-  conversations: MergeReadyPullRequestConversations,
+  conversations: Exclude<MergeReadyPullRequestConversations, { kind: 'known' | 'partial' }>,
 ): string {
   if (conversations.kind === 'failure') {
     return describeGitHubFailureReason(conversations.reason, 'graphql');
@@ -324,10 +228,7 @@ function describeConversationLookupFailure(
   if (conversations.kind === 'invalid_json') {
     return 'GitHub CLI returned invalid JSON for pull request conversations';
   }
-  if (conversations.kind === 'invalid_shape') {
-    return 'GitHub CLI returned an unexpected pull request conversation payload';
-  }
-  return conversations.issues[0]?.message ?? 'GitHub conversation policy is unknown';
+  return 'GitHub CLI returned an unexpected pull request conversation payload';
 }
 
 function describeGitHubFailureReason(
@@ -342,8 +243,4 @@ function describeGitHubFailureReason(
 
 function withOptionalCwd(cwd: string | undefined): { cwd?: string } {
   return cwd === undefined ? {} : { cwd };
-}
-
-function withOptionalTimeout(timeout: number | undefined): { timeout?: number } {
-  return timeout === undefined ? {} : { timeout };
 }

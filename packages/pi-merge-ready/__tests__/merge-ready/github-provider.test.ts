@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { githubProvider } from '../../extensions/merge-ready/github-provider.js';
+import { createGitHubProvider } from '../../extensions/merge-ready/github-provider.js';
 import {
   REQUESTED_REVIEWER_SCENARIO,
   buildConversationsPayload,
@@ -11,28 +11,26 @@ import {
 } from './test-fixtures.js';
 
 const TARGET = {
-  mode: 'url',
   url: 'https://github.com/shopify/pi/pull/64',
   owner: 'shopify',
   repo: 'pi',
   prNumber: 64,
 } as const;
 
+const AMBIENT = {
+  mode: 'ambient' as const,
+  remote: { name: 'origin', url: 'git@github.com:robhowley/pi-userland.git' },
+  repository: { owner: 'robhowley', repo: 'pi-userland' },
+  cwd: '/repo',
+  timeoutMs: 20_000,
+};
+
 describe('merge-ready GitHub provider', () => {
-  it('emits source-control facts without returning readiness fields', async () => {
-    const { exec, assertDone, getCalls } = createFakeExec([
+  it('returns normalized signals and real supporting evidence', async () => {
+    const { exec, assertDone } = createFakeExec([
       createPullRequestViewSuccessCall(
         buildPullRequestPayload(REQUESTED_REVIEWER_SCENARIO.pullRequestOverrides),
-        {
-          requiredChecks: [
-            {
-              name: 'ci / unit',
-              state: 'SUCCESS',
-              bucket: 'pass',
-              link: 'https://github.example/checks/unit',
-            },
-          ],
-        },
+        { timeout: 20_000 },
       ),
       createConversationsSuccessCall(
         buildConversationsPayload({
@@ -70,250 +68,84 @@ describe('merge-ready GitHub provider', () => {
             rules: { nodes: [], pageInfo: { hasNextPage: false } },
           },
         }),
+        { timeout: 20_000 },
       ),
     ]);
 
-    const result = await githubProvider.read({
-      mode: 'ambient',
-      repository: { owner: 'robhowley', repo: 'pi-userland' },
-      exec,
-      cwd: '/repo',
-    });
-
+    const result = await createGitHubProvider(exec).read(AMBIENT);
     assertDone();
-    expect(getCalls()).toContainEqual({
-      command: 'gh',
-      args: ['pr', 'checks', '--required', '--json', 'name,state,bucket,link'],
-      cwd: '/repo',
-      timeout: undefined,
-    });
-
     expect(result).toMatchObject({
       kind: 'found',
-      snapshot: {
-        pullRequest: {
-          lifecycle: 'open',
-          number: 42,
-          title: 'Compose merge-ready status boundary',
-          url: 'https://github.com/robhowley/pi-userland/pull/42',
-          headRefName: 'feat/merge-ready',
-          baseRefName: 'main',
-        },
-        facts: {
-          draft: { kind: 'known', value: false },
-          hasConflicts: { kind: 'known', value: false },
-          behindBase: { kind: 'known', value: false },
-          sourceMergeGate: { kind: 'known', value: 'clear' },
-          requiredChecks: {
-            kind: 'known',
-            value: [
-              {
-                label: 'ci / unit',
-                status: 'passed',
-                url: 'https://github.example/checks/unit',
-              },
-            ],
-          },
-          sourceReviewGate: {
-            kind: 'known',
-            value: {
-              state: 'pending',
-              details: [{ label: '@alice' }, { label: 'team/core-reviewers' }],
-            },
-          },
-          unresolvedConversations: {
-            kind: 'known',
-            value: [
-              {
-                label: 'src/provider.ts:24 unresolved conversation',
-                url: 'https://github.com/robhowley/pi-userland/pull/42#discussion_r9',
-              },
-            ],
-          },
-          conversationResolutionRequired: { kind: 'known', value: true },
-        },
+      pullRequest: { lifecycle: 'open', number: 42 },
+      signals: {
+        draft: false,
+        mergeability: 'mergeable',
+        checks: 'passing',
+        review: 'pending',
+        unresolvedConversations: true,
+        unresolvedConversationCount: 1,
+        unresolvedConversationRequirement: 'required',
+      },
+      evidence: {
+        reviewPending: [{ label: '@alice' }, { label: 'team/core-reviewers' }],
+        changesRequested: [{ label: 'reviewer1 requested changes' }],
+        unresolvedConversations: [{ label: 'src/provider.ts:24 unresolved conversation' }],
       },
     });
-    if (result.kind === 'found') {
-      expect(result.snapshot).not.toHaveProperty('signals');
-      expect(result.snapshot).not.toHaveProperty('summary');
-      expect(result.snapshot).not.toHaveProperty('openItems');
-    }
+    expect(JSON.stringify(result)).not.toContain('Unresolved conversation"');
+    expect(JSON.stringify(result)).not.toContain('openItems');
   });
 
-  it('maps partial GitHub required checks into neutral provider facts', async () => {
+  it('retains malformed normalized fields as issue strings', async () => {
     const { exec, assertDone } = createFakeExec([
-      createPullRequestViewSuccessCall(buildPullRequestPayload(), {
-        requiredChecks: [
-          {
-            name: 'ci / unit',
-            state: 'SUCCESS',
-            bucket: 'pass',
-            link: 'https://github.example/checks/unit',
-          },
-          {
-            name: 'lint',
-            state: 'UNKNOWN_STATE',
-            bucket: 'unknown',
-            link: 'not-a-url',
-          },
-        ],
+      createPullRequestViewSuccessCall(buildPullRequestPayload({ isDraft: 'bad' }), {
+        timeout: 20_000,
       }),
-      createConversationsSuccessCall(buildConversationsPayload()),
+      createConversationsSuccessCall(buildConversationsPayload(), { timeout: 20_000 }),
     ]);
-
-    const result = await githubProvider.read({
-      mode: 'ambient',
-      repository: { owner: 'robhowley', repo: 'pi-userland' },
-      exec,
-      cwd: '/repo',
-    });
-
+    const result = await createGitHubProvider(exec).read(AMBIENT);
     assertDone();
     expect(result).toMatchObject({
       kind: 'found',
-      snapshot: {
-        facts: {
-          requiredChecks: {
-            kind: 'partial',
-            value: [
-              {
-                label: 'ci / unit',
-                status: 'passed',
-                url: 'https://github.example/checks/unit',
-              },
-              { label: 'lint', status: 'unknown' },
-            ],
-            message: 'GitHub returned incomplete required check facts',
-          },
-        },
-      },
+      signals: { draft: false, checks: 'passing' },
+      issues: ['gh pr view JSON payload had an invalid draft flag'],
     });
   });
 
-  it('maps unknown GitHub required checks into a neutral provider fact', async () => {
-    const { exec, assertDone } = createFakeExec([
-      createPullRequestViewSuccessCall(buildPullRequestPayload()),
-      {
-        command: 'gh',
-        args: ['pr', 'checks', '--required', '--json', 'name,state,bucket,link'],
-        cwd: '/repo',
-        result: { stdout: '{ definitely not json' },
-      },
-      createConversationsSuccessCall(buildConversationsPayload()),
-    ]);
-
-    const result = await githubProvider.read({
-      mode: 'ambient',
-      repository: { owner: 'robhowley', repo: 'pi-userland' },
-      exec,
-      cwd: '/repo',
-    });
-
-    assertDone();
-    expect(result).toMatchObject({
-      kind: 'found',
-      snapshot: {
-        facts: {
-          requiredChecks: {
-            kind: 'unknown',
-            message: 'GitHub CLI returned invalid JSON for required checks',
-          },
-        },
-      },
-    });
-  });
-
-  it('marks malformed readiness facts unknown without sidecar integrity issues', async () => {
-    const { exec, assertDone } = createFakeExec([
-      createPullRequestViewSuccessCall(buildPullRequestPayload({ isDraft: 'not-a-boolean' })),
-      createConversationsSuccessCall(buildConversationsPayload()),
-    ]);
-
-    const result = await githubProvider.read({
-      mode: 'ambient',
-      repository: { owner: 'robhowley', repo: 'pi-userland' },
-      exec,
-      cwd: '/repo',
-    });
-
-    assertDone();
-
-    expect(result).toMatchObject({
-      kind: 'found',
-      snapshot: {
-        facts: {
-          draft: {
-            kind: 'unknown',
-            message: 'gh pr view JSON payload had an invalid draft flag',
-          },
-          requiredChecks: { kind: 'known' },
-          sourceReviewGate: { kind: 'known', value: { state: 'satisfied' } },
-          unresolvedConversations: { kind: 'known', value: [] },
-          conversationResolutionRequired: { kind: 'known', value: false },
-        },
-      },
-    });
-    if (result.kind === 'found') {
-      expect(result.snapshot).not.toHaveProperty('integrityIssues');
-      expect(result.snapshot).not.toHaveProperty('supportingEvidence');
-    }
-  });
-
-  it('distinguishes an absent targeted pull request from provider unavailability', async () => {
-    const absentExec = createFakeExec([
+  it('distinguishes absent and unavailable URL reads', async () => {
+    const absent = createFakeExec([
       createPullRequestViewFailureCall(
         { exitCode: 1, stderr: 'pull request not found\n' },
-        { target: TARGET },
+        { target: { mode: 'url', ...TARGET }, timeout: 20_000 },
       ),
     ]);
-    const unavailableExec = createFakeExec([
+    const unavailable = createFakeExec([
       createPullRequestViewFailureCall(
         { exitCode: 1, stderr: 'authentication required; run gh auth login\n' },
-        { target: TARGET },
+        { target: { mode: 'url', ...TARGET }, timeout: 20_000 },
       ),
     ]);
-
     await expect(
-      githubProvider.read({ mode: 'url', target: TARGET, exec: absentExec.exec, cwd: '/repo' }),
-    ).resolves.toEqual({ kind: 'absent' });
-    await expect(
-      githubProvider.read({
+      createGitHubProvider(absent.exec).read({
         mode: 'url',
         target: TARGET,
-        exec: unavailableExec.exec,
         cwd: '/repo',
+        timeoutMs: 20_000,
+      }),
+    ).resolves.toEqual({ kind: 'absent' });
+    await expect(
+      createGitHubProvider(unavailable.exec).read({
+        mode: 'url',
+        target: TARGET,
+        cwd: '/repo',
+        timeoutMs: 20_000,
       }),
     ).resolves.toEqual({
       kind: 'unavailable',
       presence: 'unknown',
-      issues: [{ message: 'GitHub CLI authentication failed' }],
+      message: 'GitHub CLI authentication failed',
     });
-
-    absentExec.assertDone();
-    unavailableExec.assertDone();
-  });
-
-  it('reports known unavailability and skips GraphQL when targeted head identity is missing', async () => {
-    const { exec, assertDone } = createFakeExec([
-      createPullRequestViewSuccessCall(
-        buildPullRequestPayload({
-          number: 64,
-          url: TARGET.url,
-          headRepository: null,
-          headRepositoryOwner: null,
-        }),
-        { target: TARGET },
-      ),
-    ]);
-
-    const result = await githubProvider.read({ mode: 'url', target: TARGET, exec, cwd: '/repo' });
-
-    assertDone();
-    expect(result).toEqual({
-      kind: 'unavailable',
-      presence: 'known',
-      issues: [{ message: 'GitHub CLI did not report head repository identity' }],
-    });
+    absent.assertDone();
+    unavailable.assertDone();
   });
 });
