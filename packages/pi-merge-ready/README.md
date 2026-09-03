@@ -22,7 +22,7 @@ The built-in GitHub provider requires `git` and an authenticated GitHub CLI (`gh
 | Wait and repair when possible  | `/merge-ready watch`                                              |
 | Watch another PR               | `/merge-ready watch --url https://github.com/OWNER/REPO/pull/64`  |
 
-`openItems` is the authoritative list of merge-readiness work. When readiness-critical provider data is ambiguous, the package reports `status_ambiguous` instead of `ready`.
+Use `openItems` to see what must be fixed, waited on, or checked. If the package cannot tell whether a PR is blocked, it includes `status_ambiguous` instead of reporting the PR as ready.
 
 ## See PR status
 
