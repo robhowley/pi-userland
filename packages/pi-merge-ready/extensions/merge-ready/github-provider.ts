@@ -5,9 +5,11 @@ import {
 import { parseGitHubRemoteUrl, type MergeReadyExec } from './git.js';
 import {
   fetchMergeReadyGitHubPullRequestFacts,
+  fetchMergeReadyGitHubRequiredChecks,
   type MergeReadyGitHubFailureReason,
   type MergeReadyGitHubPullRequest,
   type MergeReadyGitHubPullRequestFacts,
+  type MergeReadyGitHubRequiredChecks,
   type MergeReadyGitHubReviewDecisionSignal,
 } from './github.js';
 import type {
@@ -17,7 +19,12 @@ import type {
   MergeReadyProviderV1,
 } from './provider-api.js';
 import { parseGitHubPullRequestUrl } from './target.js';
-import type { MergeReadyPullRequest, MergeReadyReviewSignal, MergeReadySignals } from './types.js';
+import type {
+  MergeReadyCheckDetails,
+  MergeReadyPullRequest,
+  MergeReadyReviewSignal,
+  MergeReadySignals,
+} from './types.js';
 
 export function createGitHubProvider(exec: MergeReadyExec): MergeReadyProviderV1 {
   return {
@@ -77,6 +84,12 @@ async function readGitHubProvider(
     return { kind: 'found', pullRequest: { ...pullRequest, lifecycle: pullRequest.lifecycle } };
   }
 
+  const requiredChecks = await fetchMergeReadyGitHubRequiredChecks({
+    exec,
+    ...withOptionalCwd(input.cwd),
+    timeout: input.timeoutMs,
+    ...(input.mode === 'url' ? { target: { mode: 'url', ...input.target } } : {}),
+  });
   const repository = input.mode === 'url' ? input.target : input.repository;
   const conversations = await fetchMergeReadyPullRequestConversations({
     exec,
@@ -88,6 +101,7 @@ async function readGitHubProvider(
   });
   const issues = [
     ...pullRequestFacts.issues.map((issue) => issue.message),
+    ...(requiredChecks.kind === 'known' ? [] : [requiredChecks.message]),
     ...conversationIssueMessages(conversations),
   ];
 
@@ -95,7 +109,7 @@ async function readGitHubProvider(
     kind: 'found',
     pullRequest: { ...pullRequest, lifecycle: 'open' },
     signals: {
-      ...createBaseSignals(pullRequestFacts.pullRequest),
+      ...createBaseSignals(pullRequestFacts.pullRequest, requiredChecks),
       ...normalizeConversationSignals(conversations),
     },
     evidence: {
@@ -125,6 +139,7 @@ function toProviderPullRequest(
 
 function createBaseSignals(
   pullRequest: MergeReadyGitHubPullRequest,
+  requiredChecks: MergeReadyGitHubRequiredChecks,
 ): Omit<
   MergeReadySignals,
   'unresolvedConversations' | 'unresolvedConversationCount' | 'unresolvedConversationRequirement'
@@ -132,10 +147,34 @@ function createBaseSignals(
   return {
     draft: pullRequest.draft === 'yes',
     mergeability: pullRequest.mergeability,
-    checks: pullRequest.checks.state,
-    checkDetails: pullRequest.checks.details,
+    ...normalizeRequiredCheckSignals(requiredChecks),
     review: normalizeReviewDecisionSignal(pullRequest.reviewDecision, pullRequest.reviews.state),
   };
+}
+
+function normalizeRequiredCheckSignals(
+  requiredChecks: MergeReadyGitHubRequiredChecks,
+): Pick<MergeReadySignals, 'checks' | 'checkDetails'> {
+  if (requiredChecks.kind === 'unknown') return { checks: 'unknown' };
+
+  const checkDetails: MergeReadyCheckDetails = { failing: [], running: [], unknown: [] };
+  for (const check of requiredChecks.checks) {
+    if (check.status === 'passed') continue;
+
+    const status = check.status === 'failed' ? 'failing' : check.status;
+    checkDetails[status].push({
+      label: check.name,
+      status,
+      ...(check.link ? { url: check.link } : {}),
+    });
+  }
+
+  if (checkDetails.failing.length > 0) return { checks: 'failing', checkDetails };
+  if (checkDetails.running.length > 0) return { checks: 'running', checkDetails };
+  if (requiredChecks.kind === 'partial' || checkDetails.unknown.length > 0) {
+    return { checks: 'unknown', checkDetails };
+  }
+  return { checks: 'passing' };
 }
 
 function normalizeReviewDecisionSignal(

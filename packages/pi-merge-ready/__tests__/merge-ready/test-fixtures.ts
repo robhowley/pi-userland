@@ -11,7 +11,8 @@ export type ExpectedExecCall = {
   cwd?: string | undefined;
   timeout?: number | undefined;
   result?: (MergeReadyExecResult & { killed?: boolean }) | undefined;
-  error?: unknown;
+  error?: unknown | undefined;
+  requiredChecks?: unknown[] | undefined;
 };
 
 export const GH_PR_VIEW_JSON_FIELDS =
@@ -68,8 +69,19 @@ export function createFakeExec(expectedCalls: ExpectedExecCall[]): {
       timeout: options?.timeout,
     };
     const expectedCall = expectedCalls[index];
-    expect(expectedCall, `Unexpected exec call ${command} ${args.join(' ')}`).toBeDefined();
+    const implicitRequiredChecks = createImplicitRequiredChecksResult(
+      command,
+      args,
+      options,
+      expectedCalls[index - 1],
+      expectedCall,
+    );
+    if (implicitRequiredChecks) {
+      calls.push(observedCall);
+      return implicitRequiredChecks;
+    }
 
+    expect(expectedCall, `Unexpected exec call ${command} ${args.join(' ')}`).toBeDefined();
     calls.push(observedCall);
     index += 1;
 
@@ -195,10 +207,117 @@ type ObservedExecCall = {
   timeout?: number | undefined;
 };
 
+export function createImplicitRequiredChecksResult(
+  command: string,
+  args: string[],
+  options: { cwd?: string; timeout?: number } | undefined,
+  previousCall: ExpectedExecCall | undefined,
+  expectedCall: ExpectedExecCall | undefined,
+): { stdout: string; stderr: string; code: number; killed: boolean } | null {
+  const isRequiredChecksCall =
+    command === 'gh' && args[0] === 'pr' && args[1] === 'checks' && args.includes('--required');
+  const expectedIsRequiredChecksCall =
+    expectedCall?.command === 'gh' &&
+    expectedCall.args[0] === 'pr' &&
+    expectedCall.args[1] === 'checks';
+  const previousWasOpenPullRequestView =
+    previousCall?.command === 'gh' &&
+    previousCall.args[0] === 'pr' &&
+    previousCall.args[1] === 'view' &&
+    isOpenPullRequestViewResult(previousCall.result);
+  if (!isRequiredChecksCall || expectedIsRequiredChecksCall || !previousWasOpenPullRequestView) {
+    return null;
+  }
+
+  expect(options?.cwd).toBe(previousCall.cwd);
+  if (previousCall.timeout !== undefined) expect(options?.timeout).toBe(previousCall.timeout);
+  const checks = previousCall.requiredChecks ?? checksFromPullRequestResult(previousCall.result);
+  return {
+    stdout: `${JSON.stringify(checks)}\n`,
+    stderr: '',
+    code: requiredChecksExitCode(checks),
+    killed: false,
+  };
+}
+
+function isOpenPullRequestViewResult(result: ExpectedExecCall['result']): boolean {
+  if (!result?.stdout) return false;
+
+  try {
+    const payload = JSON.parse(result.stdout) as { state?: unknown };
+    return payload.state === 'OPEN';
+  } catch {
+    return false;
+  }
+}
+
+function checksFromPullRequestResult(result: ExpectedExecCall['result']): unknown[] {
+  if (!result?.stdout) return [];
+
+  try {
+    const payload = JSON.parse(result.stdout) as { statusCheckRollup?: unknown };
+    if (!Array.isArray(payload.statusCheckRollup)) return [];
+
+    return payload.statusCheckRollup.flatMap((row) => {
+      if (!row || typeof row !== 'object') return [];
+      const check = row as Record<string, unknown>;
+      const name =
+        typeof check['workflowName'] === 'string' && typeof check['name'] === 'string'
+          ? `${check['workflowName']} / ${check['name']}`
+          : typeof check['name'] === 'string'
+            ? check['name']
+            : typeof check['context'] === 'string'
+              ? check['context']
+              : 'unknown';
+      const state = String(check['conclusion'] ?? check['status'] ?? check['state'] ?? 'UNKNOWN');
+      const upperState = state.toUpperCase();
+      const bucket = ['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(upperState)
+        ? 'pass'
+        : ['IN_PROGRESS', 'QUEUED', 'PENDING', 'REQUESTED', 'WAITING'].includes(upperState)
+          ? 'pending'
+          : [
+                'FAILURE',
+                'ERROR',
+                'ACTION_REQUIRED',
+                'CANCELLED',
+                'STALE',
+                'STARTUP_FAILURE',
+                'TIMED_OUT',
+              ].includes(upperState)
+            ? 'fail'
+            : 'unknown';
+      return [
+        {
+          name,
+          state,
+          bucket,
+          link: check['detailsUrl'] ?? check['targetUrl'] ?? check['url'] ?? '',
+        },
+      ];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function requiredChecksExitCode(checks: unknown[]): number {
+  const buckets = checks.flatMap((check) =>
+    check &&
+    typeof check === 'object' &&
+    typeof (check as Record<string, unknown>)['bucket'] === 'string'
+      ? [String((check as Record<string, unknown>)['bucket']).toLowerCase()]
+      : [],
+  );
+  if (buckets.some((bucket) => bucket === 'fail' || bucket === 'cancel')) return 1;
+  if (buckets.includes('pending')) return 8;
+  return 0;
+}
+
 type PullRequestViewCallOptions = {
   cwd?: string;
   timeout?: number;
   target?: MergeReadyUrlTarget;
+  requiredChecks?: unknown[] | undefined;
 };
 
 export function createPullRequestViewArgs(target?: MergeReadyUrlTarget): string[] {
@@ -210,6 +329,26 @@ export function createPullRequestViewArgs(target?: MergeReadyUrlTarget): string[
 
   args.push('--json', GH_PR_VIEW_JSON_FIELDS);
   return args;
+}
+
+export function createRequiredChecksArgs(target?: MergeReadyUrlTarget): string[] {
+  const args = ['pr', 'checks'];
+  if (target) args.push(String(target.prNumber), '--repo', `${target.owner}/${target.repo}`);
+  args.push('--required', '--json', 'name,state,bucket,link');
+  return args;
+}
+
+export function createRequiredChecksCall(
+  result: ExpectedExecCall['result'],
+  options: PullRequestViewCallOptions = {},
+): ExpectedExecCall {
+  return {
+    command: 'gh',
+    args: createRequiredChecksArgs(options.target),
+    cwd: options.cwd ?? '/repo',
+    timeout: options.timeout,
+    result,
+  };
 }
 
 export function createPullRequestViewSuccessCall(
@@ -224,6 +363,7 @@ export function createPullRequestViewSuccessCall(
     result: {
       stdout: `${JSON.stringify(payload)}\n`,
     },
+    ...(options.requiredChecks === undefined ? {} : { requiredChecks: options.requiredChecks }),
   };
 }
 

@@ -386,7 +386,7 @@ describe('merge-ready provider registry', () => {
     });
     const status = await getMergeReadyStatus({ exec, url: URL, providers: [value] });
     expect(status.state).toBe('blocked');
-    expect(status.summary).toBe('Checks are failing');
+    expect(status.summary).toBe('Required checks are failing');
     expect(status.openItems.find(({ id }) => id === 'status_ambiguous')?.details).toEqual([
       { label: 'mergeability payload was incomplete' },
     ]);

@@ -150,7 +150,7 @@ const badgeFixtures: BadgeFixture[] = [
     status: buildStatus({ signals: { checks: 'failing' } }),
     badge: 'ci_failing',
     state: 'blocked',
-    summary: 'Checks are failing',
+    summary: 'Required checks are failing',
     openItemIds: ['ci_failing'],
     signals: {
       draft: false,
@@ -333,7 +333,7 @@ describe('merge-ready status', () => {
 
     const blocked = buildStatus({ signals: { review: 'unknown', checks: 'failing' } });
     expect(blocked.state).toBe('blocked');
-    expect(blocked.summary).toBe('Checks are failing');
+    expect(blocked.summary).toBe('Required checks are failing');
     expect(openItemIds(blocked)).toEqual(['ci_failing', 'status_ambiguous']);
   });
 
@@ -472,11 +472,11 @@ describe('merge-ready status', () => {
 
     expect(openItemIds(status)).toEqual(['ci_failing']);
     expect(status.state).toBe('blocked');
-    expect(status.summary).toBe('Checks are failing');
+    expect(status.summary).toBe('Required checks are failing');
     expect(status.openItems).toEqual([
       {
         id: 'ci_failing',
-        summary: 'Checks are failing',
+        summary: 'Required checks are failing',
         details: [{ label: 'linting', status: 'failing' }],
       },
     ]);

@@ -421,7 +421,7 @@ function notificationBody(attention: Exclude<MergeReadyAttention, { bucket: 'unk
     case 'merge_blocked':
       return '❌ GitHub reports merge is blocked';
     case 'ci_failing':
-      return '❌ Checks are failing';
+      return '❌ Required checks are failing';
     case 'changes_requested':
       return '❌ Changes requested by reviewers';
     default:

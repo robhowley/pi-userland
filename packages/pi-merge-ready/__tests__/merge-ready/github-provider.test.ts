@@ -8,6 +8,7 @@ import {
   createFakeExec,
   createPullRequestViewFailureCall,
   createPullRequestViewSuccessCall,
+  createRequiredChecksCall,
 } from './test-fixtures.js';
 
 const TARGET = {
@@ -94,6 +95,120 @@ describe('merge-ready GitHub provider', () => {
     });
     expect(JSON.stringify(result)).not.toContain('Unresolved conversation"');
     expect(JSON.stringify(result)).not.toContain('openItems');
+  });
+
+  it('ignores failed optional rollup checks when no required checks exist', async () => {
+    const { exec, assertDone } = createFakeExec([
+      createPullRequestViewSuccessCall(
+        buildPullRequestPayload({
+          mergeStateStatus: 'UNSTABLE',
+          statusCheckRollup: [
+            {
+              workflowName: 'optional',
+              name: 'preview',
+              status: 'COMPLETED',
+              conclusion: 'FAILURE',
+            },
+          ],
+        }),
+        { timeout: 20_000, requiredChecks: [] },
+      ),
+      createConversationsSuccessCall(buildConversationsPayload(), { timeout: 20_000 }),
+    ]);
+
+    const result = await createGitHubProvider(exec).read(AMBIENT);
+    assertDone();
+    expect(result).toMatchObject({
+      kind: 'found',
+      signals: { mergeability: 'mergeable', checks: 'passing' },
+    });
+    expect(JSON.stringify(result)).not.toContain('optional / preview');
+    expect(result).not.toHaveProperty('openItems');
+  });
+
+  it.each([
+    {
+      name: 'failed',
+      exitCode: 1,
+      bucket: 'fail',
+      state: 'FAILURE',
+      expectedSignal: 'failing',
+      expectedStatus: 'failing',
+    },
+    {
+      name: 'running',
+      exitCode: 8,
+      bucket: 'pending',
+      state: 'IN_PROGRESS',
+      expectedSignal: 'running',
+      expectedStatus: 'running',
+    },
+  ])('uses only $name required-check rows for check signals and details', async (fixture) => {
+    const { exec, assertDone } = createFakeExec([
+      createPullRequestViewSuccessCall(
+        buildPullRequestPayload({
+          statusCheckRollup: [
+            {
+              workflowName: 'optional',
+              name: 'preview',
+              status: 'COMPLETED',
+              conclusion: 'FAILURE',
+            },
+          ],
+        }),
+        { timeout: 20_000 },
+      ),
+      createRequiredChecksCall(
+        {
+          stdout: JSON.stringify([
+            {
+              name: 'required / unit',
+              bucket: fixture.bucket,
+              state: fixture.state,
+              link: 'https://github.example/checks/required',
+            },
+          ]),
+          exitCode: fixture.exitCode,
+        },
+        { timeout: 20_000 },
+      ),
+      createConversationsSuccessCall(buildConversationsPayload(), { timeout: 20_000 }),
+    ]);
+
+    const result = await createGitHubProvider(exec).read(AMBIENT);
+    assertDone();
+    expect(result).toMatchObject({
+      kind: 'found',
+      signals: {
+        checks: fixture.expectedSignal,
+        checkDetails: {
+          [fixture.expectedStatus]: [
+            {
+              label: 'required / unit',
+              status: fixture.expectedStatus,
+              url: 'https://github.example/checks/required',
+            },
+          ],
+        },
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain('optional / preview');
+  });
+
+  it('returns unknown checks and an issue when the required query is malformed', async () => {
+    const { exec, assertDone } = createFakeExec([
+      createPullRequestViewSuccessCall(buildPullRequestPayload(), { timeout: 20_000 }),
+      createRequiredChecksCall({ stdout: '{bad json' }, { timeout: 20_000 }),
+      createConversationsSuccessCall(buildConversationsPayload(), { timeout: 20_000 }),
+    ]);
+
+    const result = await createGitHubProvider(exec).read(AMBIENT);
+    assertDone();
+    expect(result).toMatchObject({
+      kind: 'found',
+      signals: { checks: 'unknown' },
+      issues: ['GitHub CLI returned invalid JSON for required checks'],
+    });
   });
 
   it('retains malformed normalized fields as issue strings', async () => {

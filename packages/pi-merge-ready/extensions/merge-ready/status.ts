@@ -63,7 +63,7 @@ const OPEN_ITEM_SUMMARY = {
   branch_out_of_date: 'Branch is out of date with base',
   merge_blocked: 'GitHub reports merge is blocked',
   draft: 'Pull request is still a draft',
-  ci_failing: 'Checks are failing',
+  ci_failing: 'Required checks are failing',
   changes_requested: 'Changes requested by reviewers',
   unresolved_conversations: 'Unresolved review conversations remain',
   ci_running: 'Checks are still running',

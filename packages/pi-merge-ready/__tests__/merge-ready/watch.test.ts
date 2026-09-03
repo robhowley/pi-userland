@@ -206,7 +206,7 @@ function createMultipleRepairableStatus(): MergeReadyStatus {
     openItems: [
       { id: 'branch_out_of_date', summary: 'Branch is out of date with base' },
       { id: 'merge_conflicts', summary: 'Merge conflicts detected' },
-      { id: 'ci_failing', summary: 'Checks are failing' },
+      { id: 'ci_failing', summary: 'Required checks are failing' },
     ],
     signals: BASE_SIGNALS,
   });
@@ -576,7 +576,7 @@ describe('merge-ready watch helpers', () => {
         name: 'repairs actionable blockers before wait-only items',
         status: buildStatus({
           state: 'blocked',
-          summary: 'Checks are failing',
+          summary: 'Required checks are failing',
           openItems: [buildOpenItem('ci_failing'), buildOpenItem('ci_running')],
         }),
         expected: {
@@ -606,7 +606,7 @@ describe('merge-ready watch helpers', () => {
         name: 'stop beats repair when a non-actionable blocker is present',
         status: buildStatus({
           state: 'blocked',
-          summary: 'Checks are failing',
+          summary: 'Required checks are failing',
           openItems: [buildOpenItem('changes_requested'), buildOpenItem('ci_failing')],
         }),
         expected: {
@@ -708,7 +708,7 @@ describe('merge-ready watch helpers', () => {
 
       const firstItems = [
         buildOpenItem('ci_failing', {
-          summary: 'Checks are failing',
+          summary: 'Required checks are failing',
           details: [
             { label: 'unit', status: 'failing', url: 'https://ci.example/unit' },
             { label: 'lint', status: 'failing', url: 'https://ci.example/lint' },
@@ -723,7 +723,7 @@ describe('merge-ready watch helpers', () => {
           summary: 'Branch is out of date with base',
         }),
         buildOpenItem('ci_failing', {
-          summary: 'Checks are failing',
+          summary: 'Required checks are failing',
           details: [
             { label: 'lint', status: 'failing', url: 'https://ci.example/lint' },
             { label: 'unit', status: 'failing', url: 'https://ci.example/unit' },
@@ -740,13 +740,13 @@ describe('merge-ready watch helpers', () => {
       const status = buildStatus({ target: HELPER_URL_TARGET, state: 'blocked' });
       const firstItems = [
         buildOpenItem('ci_failing', {
-          summary: 'Checks are failing',
+          summary: 'Required checks are failing',
           details: [{ label: 'lint', status: 'failing', url: 'https://ci.example/lint' }],
         }),
       ];
       const secondItems = [
         buildOpenItem('ci_failing', {
-          summary: 'Checks are failing',
+          summary: 'Required checks are failing',
           details: [{ label: 'test', status: 'failing', url: 'https://ci.example/lint' }],
         }),
       ];
@@ -785,10 +785,10 @@ describe('merge-ready watch helpers', () => {
     it('builds a bounded merge-ready-loop prompt from the current snapshot when no guidance matches', () => {
       const status = buildStatus({
         state: 'blocked',
-        summary: 'Checks are failing',
+        summary: 'Required checks are failing',
         openItems: [
           buildOpenItem('ci_failing', {
-            summary: 'Checks are failing',
+            summary: 'Required checks are failing',
             details: [{ label: 'lint', status: 'failing', url: 'https://ci.example/lint' }],
           }),
           buildOpenItem('ci_running', {
@@ -832,7 +832,7 @@ describe('merge-ready watch helpers', () => {
             summary: 'Checks are still running',
           }),
           buildOpenItem('ci_failing', {
-            summary: 'Checks are failing',
+            summary: 'Required checks are failing',
           }),
         ],
       });
@@ -867,10 +867,10 @@ describe('merge-ready watch helpers', () => {
           },
         },
         state: 'blocked',
-        summary: 'Checks are failing',
+        summary: 'Required checks are failing',
         openItems: [
           buildOpenItem('ci_failing', {
-            summary: 'Checks are failing',
+            summary: 'Required checks are failing',
             details: [{ label: 'lint', status: 'failing', url: 'https://ci.example/lint' }],
           }),
         ],
@@ -1665,7 +1665,7 @@ describe('merge-ready watch loop', () => {
           summary: 'Checks are still running',
         }),
         buildOpenItem('ci_failing', {
-          summary: 'Checks are failing',
+          summary: 'Required checks are failing',
         }),
         buildOpenItem('review_pending', {
           summary: 'Waiting for review',
@@ -2725,28 +2725,28 @@ describe('merge-ready watch loop', () => {
       openItems: [
         {
           id: 'ci_failing',
-          summary: 'Checks are failing',
+          summary: 'Required checks are failing',
           details: [
             { label: 'ci / unit', status: 'failing' },
             { label: 'ci / lint', status: 'failing' },
           ],
         },
       ],
-      summary: 'Checks are failing',
+      summary: 'Required checks are failing',
     });
     const second = createReadyStatus({
       generatedAt: '2026-06-05T01:00:00.000Z',
       openItems: [
         {
           id: 'ci_failing',
-          summary: 'Checks are failing',
+          summary: 'Required checks are failing',
           details: [
             { label: 'ci / lint', status: 'failing' },
             { label: 'ci / unit', status: 'failing' },
           ],
         },
       ],
-      summary: 'Checks are failing',
+      summary: 'Required checks are failing',
     });
 
     expect(createMergeReadyWatchBlockerSignature(first, first.openItems)).toBe(

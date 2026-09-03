@@ -156,6 +156,24 @@ export type GetMergeReadyGitHubPullRequestFactsOptions = {
   repositoryName?: string;
 };
 
+export type GetMergeReadyGitHubRequiredChecksOptions = {
+  exec: MergeReadyExec;
+  cwd?: string;
+  timeout?: number;
+  target?: MergeReadyUrlTarget;
+};
+
+export type MergeReadyGitHubRequiredCheck = {
+  name: string;
+  status: 'passed' | 'failed' | 'running' | 'unknown';
+  link?: string;
+};
+
+export type MergeReadyGitHubRequiredChecks =
+  | { kind: 'known'; checks: MergeReadyGitHubRequiredCheck[] }
+  | { kind: 'partial'; checks: MergeReadyGitHubRequiredCheck[]; message: string }
+  | { kind: 'unknown'; message: string };
+
 type IssueContext = {
   command: string;
   args: string[];
@@ -222,7 +240,7 @@ const FAILING_CHECK_CONCLUSIONS = new Set([
   'STARTUP_FAILURE',
   'TIMED_OUT',
 ]);
-const KNOWN_BLOCKED_MERGE_STATE_STATUSES = new Set(['BLOCKED', 'DRAFT', 'HAS_HOOKS', 'UNSTABLE']);
+const KNOWN_BLOCKED_MERGE_STATE_STATUSES = new Set(['BLOCKED', 'DRAFT', 'HAS_HOOKS']);
 const KNOWN_MERGEABLE_STATES = new Set(['MERGEABLE', 'CONFLICTING', 'UNKNOWN']);
 const KNOWN_MERGE_STATE_STATUSES = new Set([
   'CLEAN',
@@ -308,6 +326,122 @@ export async function fetchMergeReadyGitHubPullRequestFacts(
     pullRequest,
     issues,
   };
+}
+
+export async function fetchMergeReadyGitHubRequiredChecks(
+  options: GetMergeReadyGitHubRequiredChecksOptions,
+): Promise<MergeReadyGitHubRequiredChecks> {
+  const args = ['pr', 'checks'];
+  if (options.target) {
+    args.push(
+      String(options.target.prNumber),
+      '--repo',
+      `${options.target.owner}/${options.target.repo}`,
+    );
+  }
+  args.push('--required', '--json', 'name,state,bucket,link');
+
+  const result = await runNormalizedExecCommand(
+    options.exec,
+    'gh',
+    args,
+    options.cwd,
+    options.timeout,
+  );
+  const rows = parseRequiredChecksJson(result.stdout);
+  if (!rows) {
+    return {
+      kind: 'unknown',
+      message: result.ok
+        ? 'GitHub CLI returned invalid JSON for required checks'
+        : 'GitHub CLI could not determine required checks',
+    };
+  }
+
+  const checks: MergeReadyGitHubRequiredCheck[] = [];
+  let hasIncompleteRow = false;
+  for (const row of rows) {
+    if (!isRecord(row)) {
+      hasIncompleteRow = true;
+      continue;
+    }
+
+    const name = readOptionalString(row['name']);
+    if (!name) {
+      hasIncompleteRow = true;
+      continue;
+    }
+
+    const status = normalizeRequiredCheckStatus(row['bucket'], row['state']);
+    if (status === 'unknown') hasIncompleteRow = true;
+
+    const rawLink = row['link'];
+    const link = readOptionalString(rawLink);
+    const validLink = link && isAbsoluteHttpUrl(link) ? link : undefined;
+    const hasNonBlankLink =
+      typeof rawLink === 'string'
+        ? rawLink.trim().length > 0
+        : rawLink !== undefined && rawLink !== null;
+    if (hasNonBlankLink && !validLink) hasIncompleteRow = true;
+
+    checks.push({ name, status, ...(validLink ? { link: validLink } : {}) });
+  }
+
+  if (!result.ok) {
+    const hasFailed = checks.some((check) => check.status === 'failed');
+    const hasRunning = checks.some((check) => check.status === 'running');
+    const explainsExit =
+      result.reason === 'non_zero_exit' &&
+      ((result.exitCode === 1 && hasFailed) || (result.exitCode === 8 && !hasFailed && hasRunning));
+
+    if (!explainsExit) {
+      return hasFailed || hasRunning
+        ? {
+            kind: 'partial',
+            checks,
+            message: 'GitHub CLI could not determine required checks',
+          }
+        : { kind: 'unknown', message: 'GitHub CLI could not determine required checks' };
+    }
+  }
+
+  return hasIncompleteRow
+    ? { kind: 'partial', checks, message: 'GitHub returned incomplete required check facts' }
+    : { kind: 'known', checks };
+}
+
+function parseRequiredChecksJson(stdout: string): unknown[] | null {
+  try {
+    const value: unknown = JSON.parse(stdout);
+    return Array.isArray(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeRequiredCheckStatus(
+  bucketValue: unknown,
+  stateValue: unknown,
+): MergeReadyGitHubRequiredCheck['status'] {
+  const bucket = readOptionalString(bucketValue)?.toLowerCase();
+  if (bucket === 'pass' || bucket === 'skipping') return 'passed';
+  if (bucket === 'fail' || bucket === 'cancel') return 'failed';
+  if (bucket === 'pending') return 'running';
+
+  const state = readOptionalString(stateValue)?.toUpperCase();
+  if (state && PASSING_CHECK_CONCLUSIONS.has(state)) return 'passed';
+  if (state && FAILING_CHECK_CONCLUSIONS.has(state)) return 'failed';
+  if (state && RUNNING_CHECK_STATUSES.has(state)) return 'running';
+  return 'unknown';
+}
+
+function isAbsoluteHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 async function runCommand(
@@ -546,6 +680,10 @@ function normalizeMergeability(
 
   if (mergeable === 'MERGEABLE' && mergeStateStatus === 'BEHIND') {
     return 'behind';
+  }
+
+  if (mergeable === 'MERGEABLE' && mergeStateStatus === 'UNSTABLE') {
+    return 'mergeable';
   }
 
   if (mergeable === 'MERGEABLE' && KNOWN_BLOCKED_MERGE_STATE_STATUSES.has(mergeStateStatus)) {

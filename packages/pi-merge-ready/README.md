@@ -150,11 +150,11 @@ Example response:
     "headRefName": "feat/my-branch",
     "baseRefName": "main"
   },
-  "summary": "Checks are failing",
+  "summary": "Required checks are failing",
   "openItems": [
     {
       "id": "ci_failing",
-      "summary": "Checks are failing",
+      "summary": "Required checks are failing",
       "details": [
         {
           "label": "lint",
@@ -313,7 +313,7 @@ After a successful launch, it opens a browser when possible and reports a token-
 | `branch_out_of_date`       | The branch is behind the base branch.               |
 | `merge_blocked`            | Source control reports a mergeability blocker.      |
 | `draft`                    | The pull request is still a draft.                  |
-| `ci_failing`               | Checks are failing.                                 |
+| `ci_failing`               | Required checks are failing.                        |
 | `changes_requested`        | A reviewer requested changes.                       |
 | `unresolved_conversations` | Required review conversations remain open.          |
 | `ci_running`               | Checks are still running.                           |

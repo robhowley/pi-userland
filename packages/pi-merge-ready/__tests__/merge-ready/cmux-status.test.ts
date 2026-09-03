@@ -714,7 +714,7 @@ describe('merge-ready cmux status', () => {
         { item: 'merge_conflicts', body: '❌ Merge conflicts need attention' },
         { item: 'branch_out_of_date', body: '🔄 Branch is out of date' },
         { item: 'merge_blocked', body: '❌ GitHub reports merge is blocked' },
-        { item: 'ci_failing', body: '❌ Checks are failing' },
+        { item: 'ci_failing', body: '❌ Required checks are failing' },
         { item: 'changes_requested', body: '❌ Changes requested by reviewers' },
       ];
 
@@ -773,7 +773,7 @@ describe('merge-ready cmux status', () => {
 
       expect(notificationCalls(run)).toHaveLength(2);
       expect(notificationCalls(run).map(([, args]) => args[8])).toEqual([
-        'robhowley/pi-userland PR #171 · ❌ Checks are failing',
+        'robhowley/pi-userland PR #171 · ❌ Required checks are failing',
         'robhowley/pi-userland PR #171 · ✅ Ready to merge',
       ]);
     });
@@ -858,7 +858,7 @@ describe('merge-ready cmux status', () => {
 
       expect(bodies).toEqual([
         'robhowley/pi-userland PR #170 · ✅ Ready to merge',
-        'robhowley/pi-userland PR #170 · ❌ Checks are failing',
+        'robhowley/pi-userland PR #170 · ❌ Required checks are failing',
         'robhowley/pi-userland PR #170 · ✅ Ready to merge',
       ]);
     });

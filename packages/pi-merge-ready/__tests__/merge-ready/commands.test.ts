@@ -31,6 +31,7 @@ import {
   createConversationsSuccessCall,
   createCurrentBranchProbeCall,
   createGitDiscoveryCalls,
+  createImplicitRequiredChecksResult,
   createPullRequestViewSuccessCall,
   type ExpectedExecCall,
 } from './test-fixtures.js';
@@ -97,8 +98,16 @@ function createMockAPI(expectedCalls: ExpectedExecCall[] = []): {
     exec: vi.fn(
       async (command: string, args: string[], options?: { cwd?: string; timeout?: number }) => {
         const expectedCall = expectedCalls[index];
-        expect(expectedCall, `Unexpected exec call ${command} ${args.join(' ')}`).toBeDefined();
+        const implicitRequiredChecks = createImplicitRequiredChecksResult(
+          command,
+          args,
+          options,
+          expectedCalls[index - 1],
+          expectedCall,
+        );
+        if (implicitRequiredChecks) return implicitRequiredChecks;
 
+        expect(expectedCall, `Unexpected exec call ${command} ${args.join(' ')}`).toBeDefined();
         index += 1;
 
         expect({
@@ -360,12 +369,12 @@ describe('merge-ready command', () => {
     expect(renderMergeReadyStatus(status)).toEqual({
       level: 'error',
       message: [
-        '❌ Checks are failing',
+        '❌ Required checks are failing',
         'Target: current branch feat/merge-ready (robhowley/pi-userland)',
         'PR: #42 — Compose merge-ready status boundary',
         'State: blocked',
         'Open items:',
-        '- Checks are failing',
+        '- Required checks are failing',
         '  - linting ❌ — https://github.com/robhowley/pi-userland/actions/runs/123/jobs/456',
         '  - PR Title Check ❌',
       ].join('\n'),
@@ -919,12 +928,12 @@ describe('merge-ready command', () => {
     assertDone();
     expect(ctx.ui.notify).toHaveBeenCalledWith(
       [
-        '❌ Checks are failing',
+        '❌ Required checks are failing',
         'Target: current branch feat/merge-ready (robhowley/pi-userland)',
         'PR: #42 — Compose merge-ready status boundary',
         'State: blocked',
         'Open items:',
-        '- Checks are failing',
+        '- Required checks are failing',
         '  - ci / unit ❌ — https://github.com/robhowley/pi-userland/actions/runs/123/jobs/456',
       ].join('\n'),
       'error',
