@@ -2,7 +2,7 @@
 
 Know if your pull request is ready to merge, what’s blocking it, and let Pi fix what it can.
 
-`pi-merge-ready` keeps current-branch status visible, inspects exact pull request URLs supported by active providers, waits on checks and review, and queues one bounded agent repair attempt for failing CI, merge conflicts, or an out-of-date branch.
+`pi-merge-ready` keeps current-branch status visible, inspects exact pull request URLs, waits on checks and review, and queues one bounded agent repair attempt for failing CI, merge conflicts, or an out-of-date branch.
 
 ## Install
 
@@ -72,7 +72,7 @@ Inspect the current branch PR:
 /merge-ready
 ```
 
-Or target one exact pull request URL supported by an active provider:
+Or target one exact pull request URL:
 
 ```bash
 /merge-ready --url https://github.com/OWNER/REPO/pull/64
@@ -90,7 +90,7 @@ Open items:
 - Checks are still running
 ```
 
-Full pull request URLs supported by the active providers are accepted. GitHub URLs remain supported by default. Detail URLs support a returned blocker; they are not separate action items.
+Full pull request URLs are accepted. GitHub URLs remain supported by default. Detail URLs support a returned blocker; they are not separate action items.
 
 ## Keep a PR moving
 
@@ -128,7 +128,7 @@ The contract is small:
 - `state` and `pr.lifecycle` describe the overall result
 - `openItems` is the only authoritative blocker list
 - `openItems[].details[]` and their URLs are supporting context
-- targets are either the current branch or one full pull request URL supported by an active provider
+- targets are either the current branch or one full pull request URL
 - branch names, PR numbers, repo names, and inferred targets are not accepted
 
 Example response:

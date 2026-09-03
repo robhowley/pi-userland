@@ -130,7 +130,7 @@ describe('merge_ready_status tool', () => {
         expect.stringContaining('openItems'),
         expect.stringContaining('provenance'),
         expect.stringContaining('Do not infer work from raw provider states'),
-        expect.stringContaining('full pull request URL supported by an active provider'),
+        expect.stringContaining('pass only a full pull request URL'),
       ]),
     });
     expect(parameters.type).toBe('object');

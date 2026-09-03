@@ -62,7 +62,7 @@ export function registerMergeReadyStatusTool(
       'Use openItems as the actionable list and do not invent additional blockers beyond what is returned.',
       'Treat openItems[].details[] as supporting provenance only; detail URLs help explain an open item but do not add new blockers, and pr.url is not a source link.',
       'Do not infer work from raw provider states or assume hidden blockers beyond the returned MergeReadyStatus.',
-      `When targeting a PR explicitly, pass only a full pull request URL supported by an active provider, such as ${MERGE_READY_PULL_REQUEST_URL_EXAMPLE}.`,
+      `When targeting a PR explicitly, pass only a full pull request URL, such as ${MERGE_READY_PULL_REQUEST_URL_EXAMPLE}.`,
       'Do not pass branch names, PR numbers, repo names, or other inferred targets.',
     ],
     parameters: MERGE_READY_STATUS_TOOL_PARAMETERS,
