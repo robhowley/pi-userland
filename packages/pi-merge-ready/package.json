@@ -47,7 +47,7 @@
     "format:check": "prettier --check extensions/",
     "format:write": "prettier --write extensions/",
     "prepack": "npm run build",
-    "provider-api:pack-smoke": "node scripts/provider-api-pack-smoke.mjs",
+    "pack:smoke": "node scripts/provider-api-pack-smoke.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run __tests__"
   },
