@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.1](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.14.0...pi-openrouter-v0.14.1) (2026-09-04)
+
+
+### Bug Fixes
+
+* **pi-openrouter:** reference OPENROUTER_API_KEY as env var ($ prefix) ([#189](https://github.com/robhowley/pi-userland/issues/189)) ([6a0d899](https://github.com/robhowley/pi-userland/commit/6a0d899cae3597d15c39c1d1bde54754455978cb))
+
 ## [0.14.0](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.13.0...pi-openrouter-v0.14.0) (2026-08-21)
 
 

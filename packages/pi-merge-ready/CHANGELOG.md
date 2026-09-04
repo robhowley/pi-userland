@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.16.0](https://github.com/robhowley/pi-userland/compare/pi-merge-ready-v0.15.0...pi-merge-ready-v0.16.0) (2026-09-04)
+
+
+### Features
+
+* **pi-merge-ready:** add custom provider registration ([#193](https://github.com/robhowley/pi-userland/issues/193)) ([391a38f](https://github.com/robhowley/pi-userland/commit/391a38fda27cd5aafc49752493e287d0b4bd3b9f))
+
+
+### Bug Fixes
+
+* **pi-merge-ready:** preserve uncertainty across provider boundary ([#191](https://github.com/robhowley/pi-userland/issues/191)) ([f39e34d](https://github.com/robhowley/pi-userland/commit/f39e34d45a7401e5ef30179ec6bc73c788a16dc9))
+
 ## [0.15.0](https://github.com/robhowley/pi-userland/compare/pi-merge-ready-v0.14.0...pi-merge-ready-v0.15.0) (2026-08-21)
 
 
