@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import mergeReadyExtension, {
+  getActiveMergeReadyWatch,
   MERGE_READY_COMMAND_NAME,
   MERGE_READY_STATUS_TOOL_NAME,
   registerMergeReadyProvider,
@@ -34,12 +35,13 @@ function found(title: string) {
   };
 }
 
-function createProvider(title: string): MergeReadyProviderV1 {
+function createProvider(title: string, id = 'gitlab'): MergeReadyProviderV1 {
   return {
     apiVersion: 1,
-    id: 'gitlab',
-    matchUrl: (url) =>
+    id,
+    matchUrl: vi.fn((url) =>
       url.href === URL ? { url: URL, owner: 'shop', repo: 'pi', prNumber: 7 } : null,
+    ),
     matchRemote: (remote) => (remote.url === REMOTE_URL ? { owner: 'shop', repo: 'pi' } : null),
     read: vi.fn(async () => found(title)),
   };
@@ -154,7 +156,7 @@ describe('merge-ready custom provider lifecycle', () => {
     },
   );
 
-  it('uses one session provider for status bar, command, and tool', async () => {
+  it('uses one session provider for status bar, command, JSON, and tool', async () => {
     const runtime = createRuntime();
     const provider = createProvider('shared provider');
     registerMergeReadyProvider(
@@ -165,14 +167,82 @@ describe('merge-ready custom provider lifecycle', () => {
 
     await runtime.startSession();
     await runtime.command()?.handler(`--url ${URL}`, runtime.ctx);
+    await runtime.command()?.handler(`--json --url ${URL}`, runtime.ctx);
     const toolResult = await runtime
       .tool()
       ?.execute('call-1', { url: URL }, undefined, undefined, runtime.ctx);
 
     runtime.assertDone();
-    expect(provider.read).toHaveBeenCalledTimes(3);
+    expect(provider.read).toHaveBeenCalledTimes(4);
+    expect(provider.matchUrl).toHaveBeenCalledTimes(3);
     expect(runtime.notify).toHaveBeenCalledWith(expect.stringContaining('Ready to merge'), 'info');
+    expect(runtime.notify).toHaveBeenCalledWith(expect.stringContaining(`"url": "${URL}"`), 'info');
     expect(toolResult.details).toMatchObject({ state: 'ready', pr: { title: 'shared provider' } });
+  });
+
+  it('reports URL matcher failures without starting a watch', async () => {
+    const runtime = createRuntime();
+    const provider = createProvider('broken matcher');
+    provider.matchUrl = vi.fn(() => {
+      throw new Error('matcher boom');
+    });
+    registerMergeReadyProvider(
+      runtime.api as Parameters<typeof registerMergeReadyProvider>[0],
+      provider,
+    );
+    mergeReadyExtension(runtime.api as unknown as Parameters<typeof mergeReadyExtension>[0]);
+
+    await runtime.startSession();
+    runtime.setStatus.mockClear();
+    runtime.notify.mockClear();
+    await expect(
+      runtime.command()?.handler(`watch --url ${URL} --interval 15`, runtime.ctx),
+    ).resolves.toBeUndefined();
+
+    runtime.assertDone();
+    expect(provider.read).toHaveBeenCalledTimes(1);
+    expect(getActiveMergeReadyWatch(runtime.api)).toBeNull();
+    expect(runtime.setStatus).not.toHaveBeenCalled();
+    expect(runtime.notify.mock.calls).toEqual([
+      ['Merge-ready provider "gitlab" URL matcher failed: matcher boom', 'error'],
+    ]);
+  });
+
+  it('reports overlapping URL matches without starting a watch', async () => {
+    const runtime = createRuntime();
+    const first = createProvider('first matcher');
+    const second = createProvider('second matcher', 'gitlab-secondary');
+    second.matchRemote = vi.fn(() => null);
+    registerMergeReadyProvider(
+      runtime.api as Parameters<typeof registerMergeReadyProvider>[0],
+      first,
+    );
+    registerMergeReadyProvider(
+      runtime.api as Parameters<typeof registerMergeReadyProvider>[0],
+      second,
+    );
+    mergeReadyExtension(runtime.api as unknown as Parameters<typeof mergeReadyExtension>[0]);
+
+    await runtime.startSession();
+    runtime.setStatus.mockClear();
+    runtime.notify.mockClear();
+    await expect(
+      runtime.command()?.handler(`watch --url ${URL} --interval 15`, runtime.ctx),
+    ).resolves.toBeUndefined();
+
+    runtime.assertDone();
+    expect(first.read).toHaveBeenCalledTimes(1);
+    expect(second.read).not.toHaveBeenCalled();
+    expect(first.matchUrl).toHaveBeenCalledTimes(1);
+    expect(second.matchUrl).toHaveBeenCalledTimes(1);
+    expect(getActiveMergeReadyWatch(runtime.api)).toBeNull();
+    expect(runtime.setStatus).not.toHaveBeenCalled();
+    expect(runtime.notify.mock.calls).toEqual([
+      [
+        'Multiple merge-ready providers matched "https://gitlab.example/shop/pi/-/merge_requests/7": gitlab, gitlab-secondary.',
+        'error',
+      ],
+    ]);
   });
 
   it('stops an active watch before clearing providers', async () => {
@@ -192,6 +262,7 @@ describe('merge-ready custom provider lifecycle', () => {
     };
     const watch = runtime.command()?.handler(`watch --url ${URL} --interval 15`, watchContext);
     await flushMicrotasks();
+    expect(provider.matchUrl).toHaveBeenCalledTimes(1);
     expect(provider.read).toHaveBeenCalledTimes(2);
 
     await runtime.shutdown(watchContext);

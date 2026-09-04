@@ -5,7 +5,12 @@ import type {
   WatchUiThinkingLevel,
 } from './watch-ui/runtime-snapshot.js';
 import { BADGE_ICON_BY_ID } from './badge-icon.js';
-import { getMergeReadyStatus, type MergeReadyStatusReader } from './merge-ready.js';
+import {
+  createMergeReadyUrlStatusReader,
+  getMergeReadyStatus,
+  type MergeReadyStatusReader,
+  type MergeReadyUrlStatusReaderFactory,
+} from './merge-ready.js';
 import { claimMergeReadyStatusBarOwnership, syncMergeReadyStatusBar } from './status-bar.js';
 import { selectMergeReadyBadgeId } from './status.js';
 import { MERGE_READY_PULL_REQUEST_URL_EXAMPLE } from './target.js';
@@ -21,6 +26,7 @@ import {
   type StartMergeReadyWatchResult,
 } from './watch.js';
 import type { MergeReadyExec, MergeReadyExecOptions, MergeReadyExecResult } from './git.js';
+import { getErrorMessage } from './internal.js';
 import type {
   MergeReadyBadgeId,
   MergeReadyOpenItemDetail,
@@ -145,6 +151,7 @@ type MergeReadyCommandWatchRuntimeAPI = MergeReadyCommandAPI & {
 
 export type MergeReadyCommandDependencies = {
   getStatus?: MergeReadyStatusReader;
+  createUrlStatusReader?: MergeReadyUrlStatusReaderFactory;
 };
 
 export function registerMergeReadyCommand(
@@ -189,7 +196,21 @@ export function registerMergeReadyCommand(
 
       const url = 'url' in parsedArgs ? parsedArgs.url : undefined;
       const exec = createCommandExec(pi, ctx);
-      const getStatus = dependencies.getStatus ?? getMergeReadyStatus;
+      const ambientGetStatus = dependencies.getStatus ?? getMergeReadyStatus;
+      let getStatus = ambientGetStatus;
+
+      if (url !== undefined) {
+        try {
+          const getUrlStatus = (
+            dependencies.createUrlStatusReader ?? createMergeReadyUrlStatusReader
+          )({ exec, url });
+          getStatus = (options) =>
+            options.url === undefined ? ambientGetStatus(options) : getUrlStatus(options);
+        } catch (error) {
+          ctx.ui.notify(getErrorMessage(error), 'error');
+          return;
+        }
+      }
 
       if (parsedArgs.mode === 'watch') {
         const started = startMergeReadyWatch({

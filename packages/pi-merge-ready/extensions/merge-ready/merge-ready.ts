@@ -37,6 +37,29 @@ export type MergeReadyStatusReader = (
   options: Omit<GetMergeReadyStatusOptions, 'providers'>,
 ) => Promise<MergeReadyStatus>;
 
+export type MergeReadyUrlStatusReaderFactory = (options: {
+  exec: MergeReadyExec;
+  url: string;
+}) => MergeReadyStatusReader;
+
+export function createMergeReadyUrlStatusReader(
+  options: GetMergeReadyStatusOptions & { url: string },
+): MergeReadyStatusReader {
+  const providers = createMergeReadyProviders(options.exec, options.providers);
+  const selection = resolveMergeReadyProviderForUrl(options.url, providers);
+  if (!selection) {
+    throw new Error(
+      `No merge-ready provider recognizes ${JSON.stringify(options.url)}. Pass a full pull request URL supported by a registered provider.`,
+    );
+  }
+  const target: MergeReadyUrlTarget = { mode: 'url', ...selection.target };
+
+  return async (readOptions) => {
+    const generatedAt = readOptions.generatedAt ?? readOptions.now?.() ?? new Date();
+    return getUrlStatus(readOptions, generatedAt, target, selection);
+  };
+}
+
 export async function getMergeReadyStatus(
   options: GetMergeReadyStatusOptions,
 ): Promise<MergeReadyStatus> {

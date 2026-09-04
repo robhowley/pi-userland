@@ -3,7 +3,12 @@ import {
   MERGE_READY_PROVIDER_COLLECTION_EVENT_V1,
   type MergeReadyProviderV1,
 } from './provider-api.js';
-import { getMergeReadyStatus, type MergeReadyStatusReader } from './merge-ready.js';
+import {
+  createMergeReadyUrlStatusReader,
+  getMergeReadyStatus,
+  type MergeReadyStatusReader,
+  type MergeReadyUrlStatusReaderFactory,
+} from './merge-ready.js';
 import { registerMergeReadyStatusBar, type MergeReadyStatusBarAPI } from './status-bar.js';
 import { registerMergeReadyStatusTool, type MergeReadyStatusToolAPI } from './tool.js';
 
@@ -54,6 +59,8 @@ export default function (pi: MergeReadyExtensionAPI): void {
   let sessionProviders: readonly MergeReadyProviderV1[] = [];
   const getStatus: MergeReadyStatusReader = (options) =>
     getMergeReadyStatus({ ...options, providers: sessionProviders });
+  const createUrlStatusReader: MergeReadyUrlStatusReaderFactory = (options) =>
+    createMergeReadyUrlStatusReader({ ...options, providers: sessionProviders });
 
   pi.on('session_start', () => {
     const providers: MergeReadyProviderV1[] = [];
@@ -62,7 +69,7 @@ export default function (pi: MergeReadyExtensionAPI): void {
   });
 
   registerMergeReadyStatusBar(pi, { getStatus });
-  registerMergeReadyCommand(pi, { getStatus });
+  registerMergeReadyCommand(pi, { getStatus, createUrlStatusReader });
   registerMergeReadyStatusTool(pi, { getStatus });
 
   pi.on('session_shutdown', () => {

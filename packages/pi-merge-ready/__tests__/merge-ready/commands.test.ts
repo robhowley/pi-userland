@@ -727,20 +727,13 @@ describe('merge-ready command', () => {
         claimMergeReadyStatusBarOwnership,
         syncMergeReadyStatusBar,
       }));
-      vi.doMock('../../extensions/merge-ready/merge-ready.js', async () => {
-        const actual = await vi.importActual<
-          typeof import('../../extensions/merge-ready/merge-ready.js')
-        >('../../extensions/merge-ready/merge-ready.js');
-        return {
-          ...actual,
-          getMergeReadyStatus,
-        };
-      });
 
       const { registerMergeReadyCommand } =
         await import('../../extensions/merge-ready/commands.js');
       const { api, assertDone, getCommand } = createMockAPI();
-      registerMergeReadyCommand(api);
+      registerMergeReadyCommand(api, {
+        createUrlStatusReader: () => getMergeReadyStatus,
+      });
       const handler = getCommand(MERGE_READY_COMMAND_NAME);
       const ctx = createCommandContext();
 
@@ -758,7 +751,6 @@ describe('merge-ready command', () => {
       expect(syncMergeReadyStatusBar.mock.calls[0]?.[0]).not.toHaveProperty('ownership');
     } finally {
       vi.doUnmock('../../extensions/merge-ready/status-bar.js');
-      vi.doUnmock('../../extensions/merge-ready/merge-ready.js');
       vi.resetModules();
     }
   });
@@ -1693,17 +1685,44 @@ describe('merge-ready command', () => {
     ]);
   });
 
-  it('lets the status reader reject unsupported explicit targets', async () => {
+  it.each([
+    '--url 64',
+    '--json --url branch-name',
+    '--url https://gitlab.example/shop/pi/-/merge_requests/7',
+  ])('rejects unsupported one-shot target %s before status work starts', async (args) => {
     const { api, getCommand } = createMockAPI();
     mergeReadyExtension(api);
     const handler = getCommand(MERGE_READY_COMMAND_NAME)!;
     const ctx = createCommandContext();
-    const message = 'Pass a full HTTPS GitHub pull request URL';
 
-    await expect(handler('--url 64', ctx)).rejects.toThrow(message);
-    await expect(handler('--url branch-name', ctx)).rejects.toThrow(message);
-    await expect(handler('--url https://github.com/owner/repo/issues/64', ctx)).rejects.toThrow(
-      message,
+    await expect(handler(args, ctx)).resolves.toBeUndefined();
+
+    expect(api.exec).not.toHaveBeenCalled();
+    expect(ctx.ui.setStatus).not.toHaveBeenCalled();
+    expect(ctx.ui.notify).toHaveBeenCalledOnce();
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining('No merge-ready provider recognizes'),
+      'error',
+    );
+  });
+
+  it('rejects an unsupported watch URL before watcher startup', async () => {
+    const { api, getCommand } = createMockAPI();
+    mergeReadyExtension(api);
+    const handler = getCommand(MERGE_READY_COMMAND_NAME)!;
+    const ctx = createCommandContext();
+    ctx.onMergeReadyWatchStart = vi.fn();
+
+    await expect(handler('watch --url 64', ctx)).resolves.toBeUndefined();
+
+    expect(api.exec).not.toHaveBeenCalled();
+    expect(getActiveMergeReadyWatch(api)).toBeNull();
+    expect(ctx.onMergeReadyWatchStart).not.toHaveBeenCalled();
+    expect(ctx.ui.setStatus).not.toHaveBeenCalled();
+    expect(ctx.ui.notify).toHaveBeenCalledOnce();
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining('No merge-ready provider recognizes'),
+      'error',
     );
   });
 });
