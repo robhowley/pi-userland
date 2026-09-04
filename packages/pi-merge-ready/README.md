@@ -51,7 +51,7 @@ When Pi runs in a cmux TUI workspace outside CI, the same current-branch status 
 
 <img src="https://raw.githubusercontent.com/robhowley/pi-userland/main/packages/pi-merge-ready/img/cmux-pr-status.png" alt="cmux workspace sidebar showing Pi thinking and PR #173 mergeable with one comment" width="422">
 
-For GitHub PRs, `PR #N` links to the pull request URL returned by its provider. cmux publishing is enabled by default when available. Set `pi-merge-ready.cmux.enabled` to `false`, then reload Pi to hide it.
+`PR #N` links to the pull request URL returned by its provider. cmux publishing is enabled by default when available. Set `pi-merge-ready.cmux.enabled` to `false`, then reload Pi to hide it.
 
 ### cmux notifications
 

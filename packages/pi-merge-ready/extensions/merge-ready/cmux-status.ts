@@ -90,32 +90,21 @@ function createLinkedCmuxStatus(status: MergeReadyStatus, renderedStatus: string
     return null;
   }
 
-  const target = parseGitHubPullRequestUrl(pr.url);
-  if (!target || target.prNumber !== pr.number) {
-    return null;
-  }
-
-  const owner = encodeGitHubPathSegment(target.owner);
-  const repo = encodeGitHubPathSegment(target.repo);
-  if (owner === null || repo === null) {
+  let destination: string;
+  try {
+    const url = new URL(pr.url);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return null;
+    }
+    destination = url.href.replace(/[\\()]/gu, (character) => `\\${character}`);
+  } catch {
     return null;
   }
 
   const token = ` #${String(pr.number)} `;
-  const replacement = ` [PR #${String(pr.number)}](https://github.com/${owner}/${repo}/pull/${String(pr.number)}) `;
-  const linkedStatus = renderedStatus.replace(token, replacement);
+  const replacement = ` [PR #${String(pr.number)}](${destination}) `;
+  const linkedStatus = renderedStatus.replace(token, () => replacement);
   return linkedStatus === renderedStatus ? null : linkedStatus;
-}
-
-function encodeGitHubPathSegment(segment: string): string | null {
-  try {
-    return encodeURIComponent(segment).replace(
-      /[!'()*]/gu,
-      (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
-    );
-  } catch {
-    return null;
-  }
 }
 
 const ACTION_REASON_PRECEDENCE: readonly MergeReadyActionReason[] = [
