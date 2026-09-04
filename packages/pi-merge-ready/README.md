@@ -218,7 +218,7 @@ Use the provider API only to add a source-control host that the built-in GitHub 
 
 Import the public API from `@robhowley/pi-merge-ready/provider-api`. Use `defineMergeReadyProvider` to apply the public TypeScript contract to the provider object. Then call `registerMergeReadyProvider` to make it available to `pi-merge-ready`.
 
-This example shows the contract, not a real service integration. In particular, replace the named current-branch placeholder with a lookup against your source-control host.
+This skeleton shows each required key. Replace the placeholder returns with your host's matching and pull request lookup logic.
 
 ```ts
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
@@ -227,49 +227,26 @@ import {
   registerMergeReadyProvider,
 } from '@robhowley/pi-merge-ready/provider-api';
 
-const EXAMPLE_CURRENT_BRANCH_CHANGE_NUMBER = 7; // Replace with a real host lookup.
-
 const provider = defineMergeReadyProvider({
-  id: 'example-scm',
+  id: 'example-scm', // Use a unique provider ID.
+
   matchUrl(url: URL) {
-    const match = url.pathname.match(/^\/([^/]+)\/([^/]+)\/changes\/([1-9]\d*)$/u);
-    if (url.origin !== 'https://code.example' || !match) return null;
-    const [, owner, repo, number] = match;
-    return {
-      url: `https://code.example/${owner}/${repo}/changes/${number}`,
-      owner: owner!,
-      repo: repo!,
-      prNumber: Number(number),
-    };
+    // Return { url, owner, repo, prNumber } for a supported PR URL, or null.
+    return null;
   },
-  matchRemote({ url }) {
-    const match = url.match(/code\.example[/:]([^/]+)\/([^/.]+)(?:\.git)?$/u);
-    return match ? { owner: match[1]!, repo: match[2]! } : null;
+
+  matchRemote(remote) {
+    // Return { owner, repo } for a supported Git remote, or null.
+    return null;
   },
+
   async read(input) {
-    const repository = input.mode === 'url' ? input.target : input.repository;
-    const number =
-      input.mode === 'url' ? input.target.prNumber : EXAMPLE_CURRENT_BRANCH_CHANGE_NUMBER;
-    const url = `https://code.example/${repository.owner}/${repository.repo}/changes/${number}`;
+    // Return a normalized `found`, `absent`, or `unavailable` result.
     return {
-      kind: 'found',
-      pullRequest: {
-        lifecycle: 'open',
-        number,
-        title: 'Example change',
-        url,
-        headRefName: 'feature',
-        baseRefName: 'main',
-      },
-      signals: {
-        draft: false,
-        mergeability: 'mergeable',
-        checks: 'passing',
-        review: 'approved',
-        unresolvedConversations: false,
-        unresolvedConversationRequirement: 'optional',
-      },
-    } as const;
+      kind: 'unavailable',
+      presence: 'unknown',
+      message: `Not implemented for ${input.mode}`,
+    };
   },
 });
 
