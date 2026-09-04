@@ -6,7 +6,7 @@ import mergeReadyExtension, {
   registerMergeReadyProvider,
   resetMergeReadyStatusBarCache,
   resetMergeReadyWatchState,
-  type MergeReadyProviderV1,
+  type MergeReadyProvider,
 } from '../../extensions/merge-ready/index.js';
 import { createFakeExec, createGitDiscoveryCalls } from './test-fixtures.js';
 
@@ -35,9 +35,8 @@ function found(title: string) {
   };
 }
 
-function createProvider(title: string, id = 'gitlab'): MergeReadyProviderV1 {
+function createProvider(title: string, id = 'gitlab'): MergeReadyProvider {
   return {
-    apiVersion: 1,
     id,
     matchUrl: vi.fn((url) =>
       url.href === URL ? { url: URL, owner: 'shop', repo: 'pi', prNumber: 7 } : null,

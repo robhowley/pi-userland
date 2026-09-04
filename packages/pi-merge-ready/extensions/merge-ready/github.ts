@@ -220,6 +220,7 @@ const GH_PR_VIEW_JSON_FIELDS = [
 
 const NO_PULL_REQUEST_RE =
   /no pull requests? found|no open pull requests? found|no pull requests? match/i;
+const NO_REQUIRED_CHECKS_RE = /\bno required checks reported\b/i;
 const TARGETED_PULL_REQUEST_NOT_FOUND_RE =
   /pull request not found|could not resolve to a pullrequest with the number of|no pull requests? found|no pull requests? match/i;
 const TARGETED_PULL_REQUEST_ACCESS_RE =
@@ -348,6 +349,10 @@ export async function fetchMergeReadyGitHubRequiredChecks(
     options.cwd,
     options.timeout,
   );
+  if (isKnownEmptyRequiredChecksResult(result)) {
+    return { kind: 'known', checks: [] };
+  }
+
   const rows = parseRequiredChecksJson(result.stdout);
   if (!rows) {
     return {
@@ -408,6 +413,19 @@ export async function fetchMergeReadyGitHubRequiredChecks(
   return hasIncompleteRow
     ? { kind: 'partial', checks, message: 'GitHub returned incomplete required check facts' }
     : { kind: 'known', checks };
+}
+
+function isKnownEmptyRequiredChecksResult(
+  result: Awaited<ReturnType<typeof runNormalizedExecCommand>>,
+): boolean {
+  return (
+    !result.ok &&
+    result.reason === 'non_zero_exit' &&
+    result.exitCode === 1 &&
+    result.stdout.trim().length === 0 &&
+    NO_REQUIRED_CHECKS_RE.test(result.stderr) &&
+    classifyGitHubCliFailureReason(result.stderr, result.stdout) === 'command'
+  );
 }
 
 function parseRequiredChecksJson(stdout: string): unknown[] | null {

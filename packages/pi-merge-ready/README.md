@@ -172,7 +172,7 @@ The included `merge-ready-loop` skill handles requests such as "make this PR rea
 
 ## Custom source-control providers
 
-A separate Pi extension can register a read-only V1 provider through `@robhowley/pi-merge-ready/provider-api`. The registered object is matched and read directly; pi-merge-ready alone derives `state`, `summary`, and `openItems` from normalized signals.
+A separate Pi extension can register a read-only provider through `@robhowley/pi-merge-ready/provider-api`. The registered object is matched and read directly; pi-merge-ready alone derives `state`, `summary`, and `openItems` from normalized signals.
 
 ```ts
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
@@ -182,7 +182,6 @@ import {
 } from '@robhowley/pi-merge-ready/provider-api';
 
 const provider = defineMergeReadyProvider({
-  apiVersion: 1,
   id: 'example-scm',
   matchUrl(url: URL) {
     const match = url.pathname.match(/^\/([^/]+)\/([^/]+)\/changes\/([1-9]\d*)$/u);

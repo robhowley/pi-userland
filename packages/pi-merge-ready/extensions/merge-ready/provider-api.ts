@@ -1,52 +1,51 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import type { MergeReadyPullRequest, MergeReadySignals } from './types.js';
 
-export const MERGE_READY_PROVIDER_COLLECTION_EVENT_V1 =
-  'pi-merge-ready:collect-providers:v1' as const;
+export const MERGE_READY_PROVIDER_COLLECTION_EVENT = 'pi-merge-ready:collect-providers' as const;
 
-export type MergeReadyProviderUrlMatchV1 = {
+export type MergeReadyProviderUrlMatch = {
   url: string;
   owner: string;
   repo: string;
   prNumber: number;
 };
 
-export type MergeReadyProviderRemoteV1 = {
+export type MergeReadyProviderRemote = {
   name: string;
   url: string;
 };
 
-export type MergeReadyProviderRemoteMatchV1 = {
+export type MergeReadyProviderRemoteMatch = {
   owner: string;
   repo: string;
 };
 
-export type MergeReadyProviderDetailV1 = {
+export type MergeReadyProviderDetail = {
   label: string;
   url?: string;
 };
 
-export type MergeReadyProviderEvidenceV1 = {
-  reviewPending?: readonly MergeReadyProviderDetailV1[];
-  changesRequested?: readonly MergeReadyProviderDetailV1[];
-  unresolvedConversations?: readonly MergeReadyProviderDetailV1[];
+export type MergeReadyProviderEvidence = {
+  reviewPending?: readonly MergeReadyProviderDetail[];
+  changesRequested?: readonly MergeReadyProviderDetail[];
+  unresolvedConversations?: readonly MergeReadyProviderDetail[];
 };
 
-export type MergeReadyProviderPullRequestV1 = MergeReadyPullRequest;
-export type MergeReadyProviderSignalsV1 = MergeReadySignals;
+export type MergeReadyProviderPullRequest = MergeReadyPullRequest;
+export type MergeReadyProviderSignals = MergeReadySignals;
 
-export type MergeReadyProviderReadInputV1 = {
+export type MergeReadyProviderReadInput = {
   cwd?: string;
   timeoutMs: number;
 } & (
   | {
       mode: 'ambient';
-      remote: MergeReadyProviderRemoteV1;
-      repository: MergeReadyProviderRemoteMatchV1;
+      remote: MergeReadyProviderRemote;
+      repository: MergeReadyProviderRemoteMatch;
     }
   | {
       mode: 'url';
-      target: MergeReadyProviderUrlMatchV1;
+      target: MergeReadyProviderUrlMatch;
     }
 );
 
@@ -56,17 +55,17 @@ type ForbiddenReadinessFields = {
   openItems?: never;
 };
 
-export type MergeReadyProviderReadResultV1 =
+export type MergeReadyProviderReadResult =
   | ({
       kind: 'found';
-      pullRequest: MergeReadyProviderPullRequestV1 & { lifecycle: 'open' };
+      pullRequest: MergeReadyProviderPullRequest & { lifecycle: 'open' };
       signals: MergeReadySignals;
-      evidence?: MergeReadyProviderEvidenceV1;
+      evidence?: MergeReadyProviderEvidence;
       issues?: readonly string[];
     } & ForbiddenReadinessFields)
   | ({
       kind: 'found';
-      pullRequest: MergeReadyProviderPullRequestV1 & { lifecycle: 'merged' | 'closed' };
+      pullRequest: MergeReadyProviderPullRequest & { lifecycle: 'merged' | 'closed' };
       signals?: MergeReadySignals;
       evidence?: never;
       issues?: never;
@@ -78,33 +77,32 @@ export type MergeReadyProviderReadResultV1 =
       message: string;
     } & ForbiddenReadinessFields);
 
-export interface MergeReadyProviderV1 {
-  readonly apiVersion: 1;
+export interface MergeReadyProvider {
   readonly id: string;
-  matchUrl(url: URL): MergeReadyProviderUrlMatchV1 | null;
-  matchRemote(remote: MergeReadyProviderRemoteV1): MergeReadyProviderRemoteMatchV1 | null;
-  read(input: MergeReadyProviderReadInputV1): Promise<MergeReadyProviderReadResultV1>;
+  matchUrl(url: URL): MergeReadyProviderUrlMatch | null;
+  matchRemote(remote: MergeReadyProviderRemote): MergeReadyProviderRemoteMatch | null;
+  read(input: MergeReadyProviderReadInput): Promise<MergeReadyProviderReadResult>;
   readonly state?: never;
   readonly summary?: never;
   readonly openItems?: never;
 }
 
-export function defineMergeReadyProvider<T extends MergeReadyProviderV1>(provider: T): T {
+export function defineMergeReadyProvider<T extends MergeReadyProvider>(provider: T): T {
   return provider;
 }
 
-type ProviderCollectionV1 = { providers: MergeReadyProviderV1[] };
+type ProviderCollection = { providers: MergeReadyProvider[] };
 
 export function registerMergeReadyProvider(
   pi: Pick<ExtensionAPI, 'events'>,
-  provider: MergeReadyProviderV1,
+  provider: MergeReadyProvider,
 ): () => void {
-  return pi.events.on(MERGE_READY_PROVIDER_COLLECTION_EVENT_V1, (payload) => {
-    if (isProviderCollectionV1(payload)) payload.providers.push(provider);
+  return pi.events.on(MERGE_READY_PROVIDER_COLLECTION_EVENT, (payload) => {
+    if (isProviderCollection(payload)) payload.providers.push(provider);
   });
 }
 
-function isProviderCollectionV1(value: unknown): value is ProviderCollectionV1 {
+function isProviderCollection(value: unknown): value is ProviderCollection {
   return (
     typeof value === 'object' &&
     value !== null &&

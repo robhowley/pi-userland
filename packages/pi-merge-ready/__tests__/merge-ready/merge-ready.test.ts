@@ -21,6 +21,8 @@ import {
   createPullRequestViewFailureCall,
   createPullRequestViewSuccessCall,
   createRequiredChecksCall,
+  PR_62_NO_REQUIRED_CHECKS_RESULT,
+  PR_62_RUNNING_ROLLUP,
 } from './test-fixtures.js';
 
 type BlockerFixture = {
@@ -1078,7 +1080,7 @@ describe('getMergeReadyStatus', () => {
             },
           ],
         }),
-        { requiredChecks: [] },
+        { requiredChecksResult: PR_62_NO_REQUIRED_CHECKS_RESULT },
       ),
       createConversationsSuccessCall(buildConversationsPayload()),
     ]);
@@ -1094,6 +1096,61 @@ describe('getMergeReadyStatus', () => {
     expect(status.signals.checks).toBe('passing');
     expect(openItemIds(status)).toEqual([]);
     expect(JSON.stringify(status)).not.toContain('optional / preview');
+  });
+
+  it('reports PR 62 as pending while its optional checks are still running', async () => {
+    const branch = 'fix/okf-search-native-integer-stale-epoch';
+    const { exec, assertDone } = createFakeExec([
+      ...createGitDiscoveryCalls({ branch }),
+      createPullRequestViewSuccessCall(
+        buildPullRequestPayload({
+          number: 62,
+          title: 'Fix stale integer epoch handling',
+          url: 'https://github.com/robhowley/pi-userland/pull/62',
+          headRefName: branch,
+          statusCheckRollup: PR_62_RUNNING_ROLLUP,
+        }),
+        { requiredChecksResult: PR_62_NO_REQUIRED_CHECKS_RESULT },
+      ),
+      createConversationsSuccessCall(buildConversationsPayload(), {
+        pullRequestNumber: 62,
+      }),
+    ]);
+
+    const status = await getMergeReadyStatus({
+      exec,
+      cwd: '/repo',
+      now: () => new Date(GENERATED_AT),
+    });
+
+    assertDone();
+    expect(status.state).toBe('pending');
+    expect(status.signals.checks).toBe('running');
+    expect(openItemIds(status)).toEqual(['ci_running']);
+    expect(status.openItems).toEqual([
+      {
+        id: 'ci_running',
+        summary: 'Checks are still running',
+        details: [
+          {
+            label: 'ci / unit',
+            status: 'running',
+            url: 'https://github.example/checks/unit',
+          },
+          {
+            label: 'ci / lint',
+            status: 'running',
+            url: 'https://github.example/checks/lint',
+          },
+          {
+            label: 'ci / integration',
+            status: 'running',
+            url: 'https://github.example/checks/integration',
+          },
+        ],
+      },
+    ]);
+    expect(JSON.stringify(status)).not.toContain('GitHub CLI could not determine required checks');
   });
 
   it('keeps a required-query failure ambiguous without fabricating a CI blocker', async () => {

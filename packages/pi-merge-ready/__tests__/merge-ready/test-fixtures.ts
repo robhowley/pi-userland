@@ -13,10 +13,45 @@ export type ExpectedExecCall = {
   result?: (MergeReadyExecResult & { killed?: boolean }) | undefined;
   error?: unknown | undefined;
   requiredChecks?: unknown[] | undefined;
+  requiredChecksResult?: MergeReadyExecResult | undefined;
 };
 
 export const GH_PR_VIEW_JSON_FIELDS =
   'number,title,url,state,isDraft,mergeable,mergeStateStatus,headRefName,headRepository,headRepositoryOwner,baseRefName,statusCheckRollup,reviews,reviewDecision,reviewRequests,author';
+
+export const PR_62_NO_REQUIRED_CHECKS_RESULT = {
+  stdout: '',
+  stderr:
+    "no required checks reported on the 'fix/okf-search-native-integer-stale-epoch' branch\n",
+  exitCode: 1,
+} satisfies MergeReadyExecResult;
+
+export const PR_62_RUNNING_ROLLUP = [
+  {
+    __typename: 'CheckRun',
+    workflowName: 'ci',
+    name: 'unit',
+    status: 'IN_PROGRESS',
+    conclusion: null,
+    detailsUrl: 'https://github.example/checks/unit',
+  },
+  {
+    __typename: 'CheckRun',
+    workflowName: 'ci',
+    name: 'lint',
+    status: 'QUEUED',
+    conclusion: null,
+    detailsUrl: 'https://github.example/checks/lint',
+  },
+  {
+    __typename: 'CheckRun',
+    workflowName: 'ci',
+    name: 'integration',
+    status: 'PENDING',
+    conclusion: null,
+    detailsUrl: 'https://github.example/checks/integration',
+  },
+] as const;
 
 export const GH_GRAPHQL_REVIEW_THREADS_QUERY = [
   'query MergeReadyReviewThreads($owner: String!, $name: String!, $number: Int!) {',
@@ -231,6 +266,16 @@ export function createImplicitRequiredChecksResult(
 
   expect(options?.cwd).toBe(previousCall.cwd);
   if (previousCall.timeout !== undefined) expect(options?.timeout).toBe(previousCall.timeout);
+  if (previousCall.requiredChecksResult !== undefined) {
+    return {
+      stdout: previousCall.requiredChecksResult.stdout ?? '',
+      stderr: previousCall.requiredChecksResult.stderr ?? '',
+      code:
+        previousCall.requiredChecksResult.exitCode ?? previousCall.requiredChecksResult.code ?? 0,
+      killed: false,
+    };
+  }
+
   const checks = previousCall.requiredChecks ?? checksFromPullRequestResult(previousCall.result);
   return {
     stdout: `${JSON.stringify(checks)}\n`,
@@ -318,6 +363,7 @@ type PullRequestViewCallOptions = {
   timeout?: number;
   target?: MergeReadyUrlTarget;
   requiredChecks?: unknown[] | undefined;
+  requiredChecksResult?: MergeReadyExecResult | undefined;
 };
 
 export function createPullRequestViewArgs(target?: MergeReadyUrlTarget): string[] {
@@ -364,6 +410,9 @@ export function createPullRequestViewSuccessCall(
       stdout: `${JSON.stringify(payload)}\n`,
     },
     ...(options.requiredChecks === undefined ? {} : { requiredChecks: options.requiredChecks }),
+    ...(options.requiredChecksResult === undefined
+      ? {}
+      : { requiredChecksResult: options.requiredChecksResult }),
   };
 }
 

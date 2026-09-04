@@ -2,33 +2,33 @@ import { createGitHubProvider } from './github-provider.js';
 import type { MergeReadyExec } from './git.js';
 import { getErrorMessage } from './internal.js';
 import type {
-  MergeReadyProviderDetailV1,
-  MergeReadyProviderEvidenceV1,
-  MergeReadyProviderReadInputV1,
-  MergeReadyProviderReadResultV1,
-  MergeReadyProviderRemoteMatchV1,
-  MergeReadyProviderRemoteV1,
-  MergeReadyProviderUrlMatchV1,
-  MergeReadyProviderV1,
+  MergeReadyProviderDetail,
+  MergeReadyProviderEvidence,
+  MergeReadyProviderReadInput,
+  MergeReadyProviderReadResult,
+  MergeReadyProviderRemoteMatch,
+  MergeReadyProviderRemote,
+  MergeReadyProviderUrlMatch,
+  MergeReadyProvider,
 } from './provider-api.js';
 import type { MergeReadyCheckDetails, MergeReadyPullRequest, MergeReadySignals } from './types.js';
 
 export const MERGE_READY_PROVIDER_MAX_TIMEOUT_MS = 20_000;
 
 export type ProviderUrlSelection = {
-  provider: MergeReadyProviderV1;
-  target: MergeReadyProviderUrlMatchV1;
+  provider: MergeReadyProvider;
+  target: MergeReadyProviderUrlMatch;
 };
 
 export type ProviderRemoteSelection = {
-  provider: MergeReadyProviderV1;
-  repository: MergeReadyProviderRemoteMatchV1;
+  provider: MergeReadyProvider;
+  repository: MergeReadyProviderRemoteMatch;
 };
 
 export function createMergeReadyProviders(
   exec: MergeReadyExec,
-  customProviders: readonly MergeReadyProviderV1[] = [],
-): readonly MergeReadyProviderV1[] {
+  customProviders: readonly MergeReadyProvider[] = [],
+): readonly MergeReadyProvider[] {
   const builtIn = createGitHubProvider(exec);
   const ids = new Set([builtIn.id]);
   for (const provider of customProviders) {
@@ -47,7 +47,7 @@ export function createMergeReadyProviders(
 
 export function resolveMergeReadyProviderForUrl(
   url: string,
-  providers: readonly MergeReadyProviderV1[],
+  providers: readonly MergeReadyProvider[],
 ): ProviderUrlSelection | null {
   let parsedUrl: URL;
   try {
@@ -80,8 +80,8 @@ export function resolveMergeReadyProviderForUrl(
 }
 
 export function resolveMergeReadyProviderForRemote(
-  remote: MergeReadyProviderRemoteV1,
-  providers: readonly MergeReadyProviderV1[],
+  remote: MergeReadyProviderRemote,
+  providers: readonly MergeReadyProvider[],
 ): ProviderRemoteSelection | null {
   const matches: ProviderRemoteSelection[] = [];
   for (const provider of providers) {
@@ -105,24 +105,24 @@ type MergeReadyProviderReadInputWithoutTimeout =
   | {
       mode: 'ambient';
       cwd?: string;
-      remote: MergeReadyProviderRemoteV1;
-      repository: MergeReadyProviderRemoteMatchV1;
+      remote: MergeReadyProviderRemote;
+      repository: MergeReadyProviderRemoteMatch;
     }
   | {
       mode: 'url';
       cwd?: string;
-      target: MergeReadyProviderUrlMatchV1;
+      target: MergeReadyProviderUrlMatch;
     };
 
 export async function readMergeReadyProvider(
-  provider: MergeReadyProviderV1,
+  provider: MergeReadyProvider,
   input: MergeReadyProviderReadInputWithoutTimeout,
   requestedTimeout?: number,
-): Promise<MergeReadyProviderReadResultV1> {
+): Promise<MergeReadyProviderReadResult> {
   const timeoutMs = normalizeTimeout(requestedTimeout);
-  const publicInput = { ...input, timeoutMs } as MergeReadyProviderReadInputV1;
+  const publicInput = { ...input, timeoutMs } as MergeReadyProviderReadInput;
   const promise = Promise.resolve().then(() => provider.read(publicInput));
-  let result: MergeReadyProviderReadResultV1;
+  let result: MergeReadyProviderReadResult;
   try {
     result = await withTimeout(promise, timeoutMs, provider.id);
   } catch (error) {
@@ -136,13 +136,10 @@ export async function readMergeReadyProvider(
   return result;
 }
 
-function validateProvider(value: unknown): asserts value is MergeReadyProviderV1 {
+function validateProvider(value: unknown): asserts value is MergeReadyProvider {
   if (!isRecord(value))
     throw new Error('Invalid merge-ready provider contract: expected an object.');
   rejectReadinessFields(value, 'merge-ready provider contract');
-  if (value['apiVersion'] !== 1) {
-    throw new Error('Invalid merge-ready provider contract: apiVersion must be 1.');
-  }
   if (!isNonEmptyString(value['id'])) {
     throw new Error('Invalid merge-ready provider contract: id must be a non-empty string.');
   }
@@ -155,10 +152,7 @@ function validateProvider(value: unknown): asserts value is MergeReadyProviderV1
   }
 }
 
-function validateUrlMatch(
-  value: unknown,
-  id: string,
-): asserts value is MergeReadyProviderUrlMatchV1 {
+function validateUrlMatch(value: unknown, id: string): asserts value is MergeReadyProviderUrlMatch {
   if (
     !isRecord(value) ||
     !isAbsoluteHttpUrl(value['url']) ||
@@ -173,7 +167,7 @@ function validateUrlMatch(
 function validateRemoteMatch(
   value: unknown,
   id: string,
-): asserts value is MergeReadyProviderRemoteMatchV1 {
+): asserts value is MergeReadyProviderRemoteMatch {
   if (!isRecord(value) || !isNonEmptyString(value['owner']) || !isNonEmptyString(value['repo'])) {
     throw new Error(
       `Merge-ready provider ${JSON.stringify(id)} returned a malformed remote match.`,
@@ -184,8 +178,8 @@ function validateRemoteMatch(
 function validateReadResult(
   value: unknown,
   id: string,
-  input: MergeReadyProviderReadInputV1,
-): asserts value is MergeReadyProviderReadResultV1 {
+  input: MergeReadyProviderReadInput,
+): asserts value is MergeReadyProviderReadResult {
   const malformed = (): never => {
     throw new Error(`Merge-ready provider ${JSON.stringify(id)} returned a malformed read result.`);
   };
@@ -273,7 +267,7 @@ function isDetailBucket(value: unknown, status: string): boolean {
   return Array.isArray(value) && value.every((item) => isDetail(item) && item.status === status);
 }
 
-function isEvidence(value: unknown): value is MergeReadyProviderEvidenceV1 {
+function isEvidence(value: unknown): value is MergeReadyProviderEvidence {
   return (
     isRecord(value) &&
     ['reviewPending', 'changesRequested', 'unresolvedConversations'].every(
@@ -283,7 +277,7 @@ function isEvidence(value: unknown): value is MergeReadyProviderEvidenceV1 {
   );
 }
 
-function isDetail(value: unknown): value is MergeReadyProviderDetailV1 & { status?: string } {
+function isDetail(value: unknown): value is MergeReadyProviderDetail & { status?: string } {
   return (
     isRecord(value) &&
     isNonEmptyString(value['label']) &&
@@ -337,7 +331,7 @@ function isProviderTimeout(value: unknown): boolean {
   return isRecord(value) && value['providerTimeout'] === true;
 }
 
-function selectOnlyMatch<T extends { provider: MergeReadyProviderV1 }>(
+function selectOnlyMatch<T extends { provider: MergeReadyProvider }>(
   matches: T[],
   target: string,
 ): T | null {

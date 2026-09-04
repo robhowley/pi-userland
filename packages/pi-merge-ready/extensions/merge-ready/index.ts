@@ -1,8 +1,5 @@
 import { registerMergeReadyCommand, type MergeReadyCommandAPI } from './commands.js';
-import {
-  MERGE_READY_PROVIDER_COLLECTION_EVENT_V1,
-  type MergeReadyProviderV1,
-} from './provider-api.js';
+import { MERGE_READY_PROVIDER_COLLECTION_EVENT, type MergeReadyProvider } from './provider-api.js';
 import {
   createMergeReadyUrlStatusReader,
   getMergeReadyStatus,
@@ -25,16 +22,16 @@ export {
   type MergeReadyStatusReader,
 } from './merge-ready.js';
 export type {
-  MergeReadyProviderDetailV1,
-  MergeReadyProviderEvidenceV1,
-  MergeReadyProviderPullRequestV1,
-  MergeReadyProviderReadInputV1,
-  MergeReadyProviderReadResultV1,
-  MergeReadyProviderRemoteMatchV1,
-  MergeReadyProviderRemoteV1,
-  MergeReadyProviderSignalsV1,
-  MergeReadyProviderUrlMatchV1,
-  MergeReadyProviderV1,
+  MergeReadyProviderDetail,
+  MergeReadyProviderEvidence,
+  MergeReadyProviderPullRequest,
+  MergeReadyProviderReadInput,
+  MergeReadyProviderReadResult,
+  MergeReadyProviderRemoteMatch,
+  MergeReadyProviderRemote,
+  MergeReadyProviderSignals,
+  MergeReadyProviderUrlMatch,
+  MergeReadyProvider,
 } from './provider-api.js';
 export { defineMergeReadyProvider, registerMergeReadyProvider } from './provider-api.js';
 export * from './commands.js';
@@ -56,15 +53,15 @@ export type MergeReadyExtensionAPI = MergeReadyCommandAPI &
   };
 
 export default function (pi: MergeReadyExtensionAPI): void {
-  let sessionProviders: readonly MergeReadyProviderV1[] = [];
+  let sessionProviders: readonly MergeReadyProvider[] = [];
   const getStatus: MergeReadyStatusReader = (options) =>
     getMergeReadyStatus({ ...options, providers: sessionProviders });
   const createUrlStatusReader: MergeReadyUrlStatusReaderFactory = (options) =>
     createMergeReadyUrlStatusReader({ ...options, providers: sessionProviders });
 
   pi.on('session_start', () => {
-    const providers: MergeReadyProviderV1[] = [];
-    pi.events?.emit(MERGE_READY_PROVIDER_COLLECTION_EVENT_V1, { providers });
+    const providers: MergeReadyProvider[] = [];
+    pi.events?.emit(MERGE_READY_PROVIDER_COLLECTION_EVENT, { providers });
     sessionProviders = [...providers];
   });
 

@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { MergeReadyExec } from '../../extensions/merge-ready/git.js';
 import { getMergeReadyStatus } from '../../extensions/merge-ready/merge-ready.js';
 import type {
-  MergeReadyProviderReadResultV1,
-  MergeReadyProviderV1,
+  MergeReadyProviderReadResult,
+  MergeReadyProvider,
 } from '../../extensions/merge-ready/provider-api.js';
 import {
   createMergeReadyProviders,
@@ -33,14 +33,13 @@ const PULL_REQUEST = {
 };
 const exec = vi.fn() as unknown as MergeReadyExec;
 
-function provider(id = 'custom'): MergeReadyProviderV1 {
-  const read: MergeReadyProviderV1['read'] = async () => ({
+function provider(id = 'custom'): MergeReadyProvider {
+  const read: MergeReadyProvider['read'] = async () => ({
     kind: 'found',
     pullRequest: PULL_REQUEST,
     signals: SIGNALS,
   });
   return {
-    apiVersion: 1,
     id,
     matchUrl: vi.fn((url) =>
       url.href === URL ? { url: URL, owner: 'shop', repo: 'pi', prNumber: 7, extra: true } : null,
@@ -54,8 +53,8 @@ function provider(id = 'custom'): MergeReadyProviderV1 {
   };
 }
 
-function setReadResult(value: MergeReadyProviderV1, result: unknown): void {
-  value.read = vi.fn(async () => result as MergeReadyProviderReadResultV1);
+function setReadResult(value: MergeReadyProvider, result: unknown): void {
+  value.read = vi.fn(async () => result as MergeReadyProviderReadResult);
 }
 
 describe('merge-ready provider registry', () => {
@@ -76,7 +75,7 @@ describe('merge-ready provider registry', () => {
     );
     const second = provider('second');
     second.matchUrl = vi.fn(() => null);
-    first.read = vi.fn(async (input: Parameters<MergeReadyProviderV1['read']>[0]) => {
+    first.read = vi.fn(async (input: Parameters<MergeReadyProvider['read']>[0]) => {
       expect(Object.keys(input).sort()).toEqual(['mode', 'target', 'timeoutMs']);
       if (input.mode !== 'url') throw new Error('expected URL input');
       expect(Object.keys(input.target).sort()).toEqual(['owner', 'prNumber', 'repo', 'url']);

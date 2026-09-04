@@ -2,13 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   defineMergeReadyProvider,
   registerMergeReadyProvider,
-  type MergeReadyProviderV1,
+  type MergeReadyProvider,
 } from '../../extensions/merge-ready/index.js';
-import { MERGE_READY_PROVIDER_COLLECTION_EVENT_V1 } from '../../extensions/merge-ready/provider-api.js';
+import { MERGE_READY_PROVIDER_COLLECTION_EVENT } from '../../extensions/merge-ready/provider-api.js';
 
-function createProvider(id = 'gitlab'): MergeReadyProviderV1 {
+function createProvider(id = 'gitlab'): MergeReadyProvider {
   return {
-    apiVersion: 1,
     id,
     matchUrl: () => null,
     matchRemote: () => null,
@@ -44,16 +43,16 @@ describe('merge-ready public provider API', () => {
       { events } as Parameters<typeof registerMergeReadyProvider>[0],
       provider,
     );
-    const firstCollection: MergeReadyProviderV1[] = [];
+    const firstCollection: MergeReadyProvider[] = [];
 
-    events.emit(MERGE_READY_PROVIDER_COLLECTION_EVENT_V1, { providers: firstCollection });
+    events.emit(MERGE_READY_PROVIDER_COLLECTION_EVENT, { providers: firstCollection });
 
     expect(firstCollection).toEqual([provider]);
     expect(unsubscribe()).toBe(true);
     expect(unsubscribe()).toBe(false);
 
-    const afterCleanup: MergeReadyProviderV1[] = [];
-    events.emit(MERGE_READY_PROVIDER_COLLECTION_EVENT_V1, { providers: afterCleanup });
+    const afterCleanup: MergeReadyProvider[] = [];
+    events.emit(MERGE_READY_PROVIDER_COLLECTION_EVENT, { providers: afterCleanup });
     expect(afterCleanup).toEqual([]);
   });
 
@@ -64,9 +63,9 @@ describe('merge-ready public provider API', () => {
       createProvider(),
     );
 
-    expect(() => events.emit(MERGE_READY_PROVIDER_COLLECTION_EVENT_V1, null)).not.toThrow();
+    expect(() => events.emit(MERGE_READY_PROVIDER_COLLECTION_EVENT, null)).not.toThrow();
     expect(() =>
-      events.emit(MERGE_READY_PROVIDER_COLLECTION_EVENT_V1, { providers: 'not-an-array' }),
+      events.emit(MERGE_READY_PROVIDER_COLLECTION_EVENT, { providers: 'not-an-array' }),
     ).not.toThrow();
   });
 });

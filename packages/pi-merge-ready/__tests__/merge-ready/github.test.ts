@@ -264,6 +264,27 @@ describe('merge-ready GitHub primitives', () => {
       assertDone();
     });
 
+    it('recognizes the standard no-required-checks response as a known empty set', async () => {
+      const { exec, assertDone } = createFakeExec([
+        {
+          command: 'gh',
+          args: ['pr', 'checks', '--required', '--json', 'name,state,bucket,link'],
+          result: {
+            stdout: '',
+            stderr:
+              "no required checks reported on the 'fix/okf-search-native-integer-stale-epoch' branch\n",
+            exitCode: 1,
+          },
+        },
+      ]);
+
+      await expect(fetchMergeReadyGitHubRequiredChecks({ exec })).resolves.toEqual({
+        kind: 'known',
+        checks: [],
+      });
+      assertDone();
+    });
+
     it.each([
       {
         name: 'failed payload at exit 1',
@@ -313,6 +334,42 @@ describe('merge-ready GitHub primitives', () => {
     it.each([
       { name: 'a thrown command', error: new Error('boom') },
       { name: 'non-zero []', result: { stdout: '[]', exitCode: 1 } },
+      {
+        name: 'empty unrelated failure',
+        result: { stdout: '', stderr: 'request failed\n', exitCode: 1 },
+      },
+      {
+        name: 'empty authentication failure',
+        result: { stdout: '', stderr: 'authentication required\n', exitCode: 1 },
+      },
+      {
+        name: 'no-required text in an authentication failure',
+        result: {
+          stdout: '',
+          stderr: 'authentication required\nno required checks reported on the branch\n',
+          exitCode: 1,
+        },
+      },
+      {
+        name: 'empty transport failure',
+        result: { stdout: '', stderr: 'failed to connect to github.com\n', exitCode: 1 },
+      },
+      {
+        name: 'no-required diagnostic at another exit',
+        result: {
+          stdout: '',
+          stderr: 'no required checks reported on the branch\n',
+          exitCode: 2,
+        },
+      },
+      {
+        name: 'no-required diagnostic with output',
+        result: {
+          stdout: 'not json',
+          stderr: 'no required checks reported on the branch\n',
+          exitCode: 1,
+        },
+      },
       {
         name: 'non-zero passing rows',
         result: {

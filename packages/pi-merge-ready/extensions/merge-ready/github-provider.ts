@@ -13,10 +13,10 @@ import {
   type MergeReadyGitHubReviewDecisionSignal,
 } from './github.js';
 import type {
-  MergeReadyProviderEvidenceV1,
-  MergeReadyProviderReadInputV1,
-  MergeReadyProviderReadResultV1,
-  MergeReadyProviderV1,
+  MergeReadyProviderEvidence,
+  MergeReadyProviderReadInput,
+  MergeReadyProviderReadResult,
+  MergeReadyProvider,
 } from './provider-api.js';
 import { parseGitHubPullRequestUrl } from './target.js';
 import type {
@@ -26,9 +26,8 @@ import type {
   MergeReadySignals,
 } from './types.js';
 
-export function createGitHubProvider(exec: MergeReadyExec): MergeReadyProviderV1 {
+export function createGitHubProvider(exec: MergeReadyExec): MergeReadyProvider {
   return {
-    apiVersion: 1,
     id: 'github',
     matchUrl(url) {
       const target = parseGitHubPullRequestUrl(url.href);
@@ -52,8 +51,8 @@ export function createGitHubProvider(exec: MergeReadyExec): MergeReadyProviderV1
 
 async function readGitHubProvider(
   exec: MergeReadyExec,
-  input: MergeReadyProviderReadInputV1,
-): Promise<MergeReadyProviderReadResultV1> {
+  input: MergeReadyProviderReadInput,
+): Promise<MergeReadyProviderReadResult> {
   const pullRequestFacts = await fetchMergeReadyGitHubPullRequestFacts({
     exec,
     ...withOptionalCwd(input.cwd),
@@ -94,6 +93,14 @@ async function readGitHubProvider(
     timeout: input.timeoutMs,
     ...(input.mode === 'url' ? { target: { mode: 'url', ...input.target } } : {}),
   });
+  const checkSignals = normalizeRequiredCheckSignals(
+    requiredChecks,
+    pullRequestFacts.pullRequest.checks,
+  );
+  const pullRequestIssues =
+    requiredChecks.kind === 'known' && checkSignals.checks !== 'unknown'
+      ? pullRequestFacts.issues.filter((issue) => !issue.field?.startsWith('statusCheckRollup'))
+      : pullRequestFacts.issues;
   const repository = input.mode === 'url' ? input.target : input.repository;
   const conversations = await fetchMergeReadyPullRequestConversations({
     exec,
@@ -104,7 +111,7 @@ async function readGitHubProvider(
     timeout: input.timeoutMs,
   });
   const issues = [
-    ...pullRequestFacts.issues.map((issue) => issue.message),
+    ...pullRequestIssues.map((issue) => issue.message),
     ...(requiredChecks.kind === 'known' ? [] : [requiredChecks.message]),
     ...conversationIssueMessages(conversations),
   ];
@@ -113,10 +120,7 @@ async function readGitHubProvider(
     kind: 'found',
     pullRequest: { ...pullRequest, lifecycle: 'open' },
     signals: {
-      ...createBaseSignals(
-        pullRequestFacts.pullRequest,
-        normalizeRequiredCheckSignals(requiredChecks),
-      ),
+      ...createBaseSignals(pullRequestFacts.pullRequest, checkSignals),
       ...normalizeConversationSignals(conversations),
     },
     evidence: {
@@ -129,7 +133,7 @@ async function readGitHubProvider(
 
 function toProviderPullRequest(
   pullRequest: MergeReadyGitHubPullRequest,
-  mode: MergeReadyProviderReadInputV1['mode'],
+  mode: MergeReadyProviderReadInput['mode'],
 ): MergeReadyPullRequest {
   return {
     lifecycle: pullRequest.lifecycle,
@@ -172,6 +176,7 @@ function createTerminalSignals(pullRequest: MergeReadyGitHubPullRequest): MergeR
 
 function normalizeRequiredCheckSignals(
   requiredChecks: MergeReadyGitHubRequiredChecks,
+  rollupChecks: MergeReadyGitHubPullRequest['checks'],
 ): Pick<MergeReadySignals, 'checks' | 'checkDetails'> {
   if (requiredChecks.kind === 'unknown') return { checks: 'unknown' };
 
@@ -191,6 +196,16 @@ function normalizeRequiredCheckSignals(
   if (checkDetails.running.length > 0) return { checks: 'running', checkDetails };
   if (requiredChecks.kind === 'partial' || checkDetails.unknown.length > 0) {
     return { checks: 'unknown', checkDetails };
+  }
+  if (rollupChecks.runningCount > 0) {
+    return {
+      checks: 'running',
+      checkDetails: {
+        failing: [],
+        running: rollupChecks.details.running,
+        unknown: [],
+      },
+    };
   }
   return { checks: 'passing' };
 }
@@ -228,7 +243,7 @@ function normalizeConversationSignals(
 
 function createReviewEvidence(
   pullRequest: MergeReadyGitHubPullRequest,
-): MergeReadyProviderEvidenceV1 {
+): MergeReadyProviderEvidence {
   if (
     pullRequest.reviewRequests.kind !== 'known' ||
     pullRequest.reviewRequests.requests.length === 0
@@ -248,13 +263,13 @@ function createReviewEvidence(
 
 function createConversationEvidence(
   conversations: MergeReadyPullRequestConversations,
-): MergeReadyProviderEvidenceV1 {
+): MergeReadyProviderEvidence {
   if (
     (conversations.kind !== 'known' && conversations.kind !== 'partial') ||
     !conversations.openItemDetails
   )
     return {};
-  const evidence: MergeReadyProviderEvidenceV1 = {};
+  const evidence: MergeReadyProviderEvidence = {};
   const changesRequested = conversations.openItemDetails.changes_requested;
   const unresolvedConversations = conversations.openItemDetails.unresolved_conversations;
   if (changesRequested?.length) evidence.changesRequested = changesRequested;

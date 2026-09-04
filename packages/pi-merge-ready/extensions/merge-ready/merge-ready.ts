@@ -1,8 +1,8 @@
 import { discoverMergeReadyGitContext, type MergeReadyExec } from './git.js';
 import type {
-  MergeReadyProviderEvidenceV1,
-  MergeReadyProviderReadResultV1,
-  MergeReadyProviderV1,
+  MergeReadyProviderEvidence,
+  MergeReadyProviderReadResult,
+  MergeReadyProvider,
 } from './provider-api.js';
 import {
   createMergeReadyProviders,
@@ -30,7 +30,7 @@ export type GetMergeReadyStatusOptions = {
   timeout?: number;
   generatedAt?: string | Date;
   now?: GetMergeReadyStatusClock;
-  providers?: readonly MergeReadyProviderV1[];
+  providers?: readonly MergeReadyProvider[];
 };
 
 export type MergeReadyStatusReader = (
@@ -80,7 +80,7 @@ export async function getMergeReadyStatus(
 async function getCurrentBranchStatus(
   options: GetMergeReadyStatusOptions,
   generatedAt: string | Date,
-  providers: readonly MergeReadyProviderV1[],
+  providers: readonly MergeReadyProvider[],
 ): Promise<MergeReadyStatus> {
   const { facts: gitFacts, selectedRemote } = await discoverMergeReadyGitContext({
     exec: options.exec,
@@ -134,7 +134,7 @@ async function getUrlStatus(
 }
 
 function createStatusFromProviderResult(
-  result: MergeReadyProviderReadResultV1,
+  result: MergeReadyProviderReadResult,
   target: MergeReadyTarget,
   generatedAt: string | Date,
 ): MergeReadyStatus {
@@ -201,7 +201,7 @@ function createStatusFromProviderResult(
 
 function attachEvidence(
   status: MergeReadyStatus,
-  evidence: MergeReadyProviderEvidenceV1 | undefined,
+  evidence: MergeReadyProviderEvidence | undefined,
 ): MergeReadyStatus {
   if (!evidence) return status;
   const detailsById = {

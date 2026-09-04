@@ -9,6 +9,8 @@ import {
   createPullRequestViewFailureCall,
   createPullRequestViewSuccessCall,
   createRequiredChecksCall,
+  PR_62_NO_REQUIRED_CHECKS_RESULT,
+  PR_62_RUNNING_ROLLUP,
 } from './test-fixtures.js';
 
 const TARGET = {
@@ -97,7 +99,7 @@ describe('merge-ready GitHub provider', () => {
     expect(JSON.stringify(result)).not.toContain('openItems');
   });
 
-  it('ignores failed optional rollup checks when no required checks exist', async () => {
+  it('ignores failed and unknown optional rollup checks when no required checks exist', async () => {
     const { exec, assertDone } = createFakeExec([
       createPullRequestViewSuccessCall(
         buildPullRequestPayload({
@@ -109,9 +111,15 @@ describe('merge-ready GitHub provider', () => {
               status: 'COMPLETED',
               conclusion: 'FAILURE',
             },
+            {
+              workflowName: 'optional',
+              name: 'experimental',
+              status: 'COMPLETED',
+              conclusion: 'FUTURE_CONCLUSION',
+            },
           ],
         }),
-        { timeout: 20_000, requiredChecks: [] },
+        { timeout: 20_000, requiredChecksResult: PR_62_NO_REQUIRED_CHECKS_RESULT },
       ),
       createConversationsSuccessCall(buildConversationsPayload(), { timeout: 20_000 }),
     ]);
@@ -123,7 +131,63 @@ describe('merge-ready GitHub provider', () => {
       signals: { mergeability: 'mergeable', checks: 'passing' },
     });
     expect(JSON.stringify(result)).not.toContain('optional / preview');
+    expect(JSON.stringify(result)).not.toContain('optional / experimental');
+    expect(result).not.toHaveProperty('issues');
     expect(result).not.toHaveProperty('openItems');
+  });
+
+  it('uses running rollup rows when PR 62 has no required checks', async () => {
+    const { exec, assertDone } = createFakeExec([
+      createPullRequestViewSuccessCall(
+        buildPullRequestPayload({
+          number: 62,
+          title: 'Fix stale integer epoch handling',
+          url: 'https://github.com/robhowley/pi-userland/pull/62',
+          headRefName: 'fix/okf-search-native-integer-stale-epoch',
+          statusCheckRollup: PR_62_RUNNING_ROLLUP,
+        }),
+        {
+          timeout: 20_000,
+          requiredChecksResult: PR_62_NO_REQUIRED_CHECKS_RESULT,
+        },
+      ),
+      createConversationsSuccessCall(buildConversationsPayload(), {
+        timeout: 20_000,
+        pullRequestNumber: 62,
+      }),
+    ]);
+
+    const result = await createGitHubProvider(exec).read(AMBIENT);
+    assertDone();
+    expect(result).toMatchObject({
+      kind: 'found',
+      pullRequest: { number: 62 },
+      signals: {
+        checks: 'running',
+        checkDetails: {
+          failing: [],
+          running: [
+            {
+              label: 'ci / unit',
+              status: 'running',
+              url: 'https://github.example/checks/unit',
+            },
+            {
+              label: 'ci / lint',
+              status: 'running',
+              url: 'https://github.example/checks/lint',
+            },
+            {
+              label: 'ci / integration',
+              status: 'running',
+              url: 'https://github.example/checks/integration',
+            },
+          ],
+          unknown: [],
+        },
+      },
+    });
+    expect(result).not.toHaveProperty('issues');
   });
 
   it.each([
