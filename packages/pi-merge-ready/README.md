@@ -259,23 +259,23 @@ Importing the API exports the types and helpers; it does not register the provid
 
 #### Load and test
 
-A separate local extension needs its own dependency installation so the API import resolves. Put a `package.json` beside the extension or in a parent directory, add `@robhowley/pi-merge-ready` to `dependencies`, and run `npm install` there.
+Add `@robhowley/pi-merge-ready` to a `package.json` beside the extension or in a parent directory, then run `npm install` there.
 
-Test the extension for one Pi run:
+Try the extension for one Pi run:
 
 ```bash
 pi -e ./path/to/example-scm.ts
 ```
 
-For persistent loading:
+To load it automatically:
 
 - put the extension in `~/.pi/agent/extensions/` for all projects
 - put it in `.pi/extensions/` for a trusted project
 - or add its file or directory path to the `extensions` array in the appropriate `settings.json`
 
-A distributed Pi package must include `@robhowley/pi-merge-ready` in both `dependencies` and `bundledDependencies`. Separately installed Pi packages do not share module roots.
+After changing a persistently loaded provider, run `/reload`.
 
-Providers are collected when a session starts. After changing a persistently loaded extension, `/reload` creates a refreshed extension runtime and starts the session again, which registers and collects the updated provider.
+If you publish the provider as a Pi package, include `@robhowley/pi-merge-ready` in both `dependencies` and `bundledDependencies`.
 
 #### Provider methods
 
