@@ -4,13 +4,35 @@ import cmuxJunction from '../extensions/cmux-junction/index.js';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 
 describe('pi-cmux-junction', () => {
-  it('registers /junction and lifecycle hooks without a startup notification', () => {
-    const registerCommand = vi.fn();
-    const on = vi.fn();
-    const pi = { registerCommand, on } as unknown as ExtensionAPI;
+  it('registers the producer board listener before existing wiring', () => {
+    const registrationOrder: string[] = [];
+    const registerCommand = vi.fn(() => {
+      registrationOrder.push('command');
+    });
+    const on = vi.fn((event: string) => {
+      registrationOrder.push(`lifecycle:${event}`);
+    });
+    let producerBoardHandler: ((value: unknown) => void) | undefined;
+    const eventsOn = vi.fn((channel: string, handler: (value: unknown) => void): (() => void) => {
+      registrationOrder.push(`event:${channel}`);
+      producerBoardHandler = handler;
+      return vi.fn();
+    });
+    const pi = {
+      registerCommand,
+      on,
+      events: { on: eventsOn },
+    } as unknown as ExtensionAPI;
 
     cmuxJunction(pi);
 
+    expect(eventsOn).toHaveBeenCalledTimes(1);
+    expect(eventsOn).toHaveBeenCalledWith('pi-cmux-junction:update', expect.any(Function));
+    expect(registrationOrder.slice(0, 3)).toEqual([
+      'event:pi-cmux-junction:update',
+      'command',
+      'lifecycle:session_start',
+    ]);
     expect(registerCommand).toHaveBeenCalledWith(
       'junction',
       expect.objectContaining({
@@ -19,8 +41,8 @@ describe('pi-cmux-junction', () => {
         handler: expect.any(Function),
       }),
     );
-    const events = on.mock.calls.map(([event]) => event);
-    expect(events).toEqual(
+    const lifecycleEvents = on.mock.calls.map(([event]) => event as string);
+    expect(lifecycleEvents).toEqual(
       expect.arrayContaining([
         'session_start',
         'input',
@@ -36,6 +58,29 @@ describe('pi-cmux-junction', () => {
         'session_shutdown',
       ]),
     );
-    expect(events).not.toContain('agent_end');
+    expect(lifecycleEvents).not.toContain('agent_end');
+
+    const handleProducerBoard = producerBoardHandler;
+    if (!handleProducerBoard) throw new Error('producer board handler was not registered');
+    const registrations = registrationOrder.length;
+    const validBoard = {
+      producer: { key: 'worker', label: 'Worker' },
+      cards: [{ key: 'status', title: 'Status', rows: [{ value: 'ready' }] }],
+    };
+    const hostileValue = new Proxy(
+      { producer: { key: 'hostile', label: 'Hostile' }, cards: [] },
+      {
+        ownKeys() {
+          throw new Error('hostile producer board');
+        },
+      },
+    );
+
+    expect(() => handleProducerBoard(validBoard)).not.toThrow();
+    expect(() => handleProducerBoard(null)).not.toThrow();
+    expect(() => handleProducerBoard(hostileValue)).not.toThrow();
+
+    expect(registrationOrder).toHaveLength(registrations);
+    expect(registerCommand).toHaveBeenCalledTimes(1);
   });
 });
