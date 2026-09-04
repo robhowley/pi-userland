@@ -2,9 +2,9 @@
 
 Know if your GitHub pull request is ready to merge, what’s blocking it, and let Pi fix what it can.
 
-GitHub works out of the box. Other source-control hosts require a provider registered by another Pi extension.
-
 `pi-merge-ready` keeps current-branch status visible and inspects full pull request URLs. It can wait on checks and review, then queue one bounded agent repair attempt for failing CI, merge conflicts, or an out-of-date branch.
+
+GitHub works out of the box, and custom providers let you add support for any other source-control host through another Pi extension.
 
 ## Install
 
