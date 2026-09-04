@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   fetchMergeReadyGitHubPullRequestFacts,
+  fetchMergeReadyGitHubRequiredChecks,
   type MergeReadyExec,
   type MergeReadyExecResult,
 } from '../../extensions/merge-ready/index.js';
@@ -187,6 +188,236 @@ describe('merge-ready GitHub primitives', () => {
         },
       },
       issues: [],
+    });
+  });
+
+  describe('required checks', () => {
+    it('queries ambient required checks with exact argv and preserves cwd, timeout, and link', async () => {
+      const { exec, assertDone } = createFakeExec([
+        {
+          command: 'gh',
+          args: ['pr', 'checks', '--required', '--json', 'name,state,bucket,link'],
+          cwd: '/repo',
+          timeout: 5_000,
+          result: {
+            stdout: JSON.stringify([
+              {
+                name: 'ci / unit',
+                state: 'SUCCESS',
+                bucket: 'pass',
+                link: 'https://github.example/checks/unit',
+              },
+            ]),
+          },
+        },
+      ]);
+
+      await expect(
+        fetchMergeReadyGitHubRequiredChecks({ exec, cwd: '/repo', timeout: 5_000 }),
+      ).resolves.toEqual({
+        kind: 'known',
+        checks: [
+          {
+            name: 'ci / unit',
+            status: 'passed',
+            link: 'https://github.example/checks/unit',
+          },
+        ],
+      });
+      assertDone();
+    });
+
+    it('pins a URL query to the requested pull request and treats successful [] as known', async () => {
+      const { exec, assertDone } = createFakeExec([
+        {
+          command: 'gh',
+          args: [
+            'pr',
+            'checks',
+            '64',
+            '--repo',
+            'shopify/pi',
+            '--required',
+            '--json',
+            'name,state,bucket,link',
+          ],
+          cwd: '/repo',
+          timeout: 7_000,
+          result: { stdout: '[]', exitCode: 0 },
+        },
+      ]);
+
+      await expect(
+        fetchMergeReadyGitHubRequiredChecks({
+          exec,
+          cwd: '/repo',
+          timeout: 7_000,
+          target: {
+            mode: 'url',
+            url: 'https://github.com/shopify/pi/pull/64',
+            owner: 'shopify',
+            repo: 'pi',
+            prNumber: 64,
+          },
+        }),
+      ).resolves.toEqual({ kind: 'known', checks: [] });
+      assertDone();
+    });
+
+    it('recognizes the standard no-required-checks response as a known empty set', async () => {
+      const { exec, assertDone } = createFakeExec([
+        {
+          command: 'gh',
+          args: ['pr', 'checks', '--required', '--json', 'name,state,bucket,link'],
+          result: {
+            stdout: '',
+            stderr:
+              "no required checks reported on the 'fix/okf-search-native-integer-stale-epoch' branch\n",
+            exitCode: 1,
+          },
+        },
+      ]);
+
+      await expect(fetchMergeReadyGitHubRequiredChecks({ exec })).resolves.toEqual({
+        kind: 'known',
+        checks: [],
+      });
+      assertDone();
+    });
+
+    it.each([
+      {
+        name: 'failed payload at exit 1',
+        exitCode: 1,
+        row: { name: 'unit', state: 'FAILURE', bucket: 'fail' },
+        status: 'failed',
+      },
+      {
+        name: 'pending payload at exit 8',
+        exitCode: 8,
+        row: { name: 'unit', state: 'IN_PROGRESS', bucket: 'pending' },
+        status: 'running',
+      },
+    ])('preserves a $name', async ({ exitCode, row, status }) => {
+      const { exec, assertDone } = createFakeExec([
+        {
+          command: 'gh',
+          args: ['pr', 'checks', '--required', '--json', 'name,state,bucket,link'],
+          result: { stdout: JSON.stringify([row]), exitCode },
+        },
+      ]);
+
+      const result = await fetchMergeReadyGitHubRequiredChecks({ exec });
+      expect(result).toEqual({ kind: 'known', checks: [{ name: 'unit', status }] });
+      assertDone();
+    });
+
+    it.each(['', '{bad json', '{}'])(
+      'treats successful invalid output %j as unknown',
+      async (stdout) => {
+        const { exec, assertDone } = createFakeExec([
+          {
+            command: 'gh',
+            args: ['pr', 'checks', '--required', '--json', 'name,state,bucket,link'],
+            result: { stdout },
+          },
+        ]);
+
+        await expect(fetchMergeReadyGitHubRequiredChecks({ exec })).resolves.toEqual({
+          kind: 'unknown',
+          message: 'GitHub CLI returned invalid JSON for required checks',
+        });
+        assertDone();
+      },
+    );
+
+    it.each([
+      { name: 'a thrown command', error: new Error('boom') },
+      { name: 'non-zero []', result: { stdout: '[]', exitCode: 1 } },
+      {
+        name: 'empty unrelated failure',
+        result: { stdout: '', stderr: 'request failed\n', exitCode: 1 },
+      },
+      {
+        name: 'empty authentication failure',
+        result: { stdout: '', stderr: 'authentication required\n', exitCode: 1 },
+      },
+      {
+        name: 'no-required text in an authentication failure',
+        result: {
+          stdout: '',
+          stderr: 'authentication required\nno required checks reported on the branch\n',
+          exitCode: 1,
+        },
+      },
+      {
+        name: 'empty transport failure',
+        result: { stdout: '', stderr: 'failed to connect to github.com\n', exitCode: 1 },
+      },
+      {
+        name: 'no-required diagnostic at another exit',
+        result: {
+          stdout: '',
+          stderr: 'no required checks reported on the branch\n',
+          exitCode: 2,
+        },
+      },
+      {
+        name: 'no-required diagnostic with output',
+        result: {
+          stdout: 'not json',
+          stderr: 'no required checks reported on the branch\n',
+          exitCode: 1,
+        },
+      },
+      {
+        name: 'non-zero passing rows',
+        result: {
+          stdout: JSON.stringify([{ name: 'unit', state: 'SUCCESS', bucket: 'pass' }]),
+          exitCode: 2,
+        },
+      },
+    ])('treats $name as unknown', async ({ result, error }) => {
+      const { exec, assertDone } = createFakeExec([
+        {
+          command: 'gh',
+          args: ['pr', 'checks', '--required', '--json', 'name,state,bucket,link'],
+          ...(result === undefined ? {} : { result }),
+          ...(error === undefined ? {} : { error }),
+        },
+      ]);
+
+      await expect(fetchMergeReadyGitHubRequiredChecks({ exec })).resolves.toEqual({
+        kind: 'unknown',
+        message: 'GitHub CLI could not determine required checks',
+      });
+      assertDone();
+    });
+
+    it('preserves a concrete blocker but marks incomplete or inconsistent data partial', async () => {
+      const { exec, assertDone } = createFakeExec([
+        {
+          command: 'gh',
+          args: ['pr', 'checks', '--required', '--json', 'name,state,bucket,link'],
+          result: {
+            stdout: JSON.stringify([
+              { name: 'unit', state: 'FAILURE', bucket: 'fail' },
+              { name: 'future', state: 'FUTURE', bucket: 'future', link: 'relative' },
+            ]),
+            exitCode: 2,
+          },
+        },
+      ]);
+
+      await expect(fetchMergeReadyGitHubRequiredChecks({ exec })).resolves.toEqual({
+        kind: 'partial',
+        checks: [
+          { name: 'unit', status: 'failed' },
+          { name: 'future', status: 'unknown' },
+        ],
+        message: 'GitHub CLI could not determine required checks',
+      });
+      assertDone();
     });
   });
 
@@ -400,7 +631,7 @@ describe('merge-ready GitHub primitives', () => {
     {
       name: 'MERGEABLE + UNSTABLE',
       overrides: { mergeable: 'MERGEABLE', mergeStateStatus: 'UNSTABLE' },
-      expected: 'blocked',
+      expected: 'mergeable',
     },
     {
       name: 'MERGEABLE + HAS_HOOKS',

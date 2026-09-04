@@ -9,7 +9,7 @@
     "format:check": "pnpm -r --filter './packages/*' format:check",
     "format:write": "pnpm -r --filter './packages/*' format:write",
     "typecheck": "pnpm -r --filter './packages/*' typecheck",
-    "test": "pnpm -r --filter './packages/*' test",
+    "test": "node scripts/test-packages.mjs",
     "check": "pnpm lint && pnpm format:check && pnpm typecheck"
   },
   "pi": {

@@ -90,32 +90,21 @@ function createLinkedCmuxStatus(status: MergeReadyStatus, renderedStatus: string
     return null;
   }
 
-  const target = parseGitHubPullRequestUrl(pr.url);
-  if (!target || target.prNumber !== pr.number) {
-    return null;
-  }
-
-  const owner = encodeGitHubPathSegment(target.owner);
-  const repo = encodeGitHubPathSegment(target.repo);
-  if (owner === null || repo === null) {
+  let destination: string;
+  try {
+    const url = new URL(pr.url);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return null;
+    }
+    destination = url.href.replace(/[\\()]/gu, (character) => `\\${character}`);
+  } catch {
     return null;
   }
 
   const token = ` #${String(pr.number)} `;
-  const replacement = ` [PR #${String(pr.number)}](https://github.com/${owner}/${repo}/pull/${String(pr.number)}) `;
-  const linkedStatus = renderedStatus.replace(token, replacement);
+  const replacement = ` [PR #${String(pr.number)}](${destination}) `;
+  const linkedStatus = renderedStatus.replace(token, () => replacement);
   return linkedStatus === renderedStatus ? null : linkedStatus;
-}
-
-function encodeGitHubPathSegment(segment: string): string | null {
-  try {
-    return encodeURIComponent(segment).replace(
-      /[!'()*]/gu,
-      (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
-    );
-  } catch {
-    return null;
-  }
 }
 
 const ACTION_REASON_PRECEDENCE: readonly MergeReadyActionReason[] = [
@@ -144,16 +133,13 @@ export function classifyMergeReadyAttention(status: MergeReadyStatus): MergeRead
 
   const ids = new Set(status.openItems.map((item) => item.id));
   let bucket: Exclude<MergeReadyAttentionBucket, 'unknown'>;
-  let reason: MergeReadyActionReason | null = null;
-  if (ids.has('no_pull_request') || ids.has('status_ambiguous')) {
-    return { bucket: 'unknown' };
-  }
-
-  reason = ACTION_REASON_PRECEDENCE.find((candidate) => ids.has(candidate)) ?? null;
+  const reason = ACTION_REASON_PRECEDENCE.find((candidate) => ids.has(candidate)) ?? null;
   if (reason !== null) {
     bucket = 'action_required';
   } else if (ids.has('draft') || ids.has('unresolved_conversations')) {
     bucket = 'quiet_blocked';
+  } else if (ids.has('no_pull_request') || ids.has('status_ambiguous')) {
+    return { bucket: 'unknown' };
   } else if (ids.has('ci_running') || ids.has('review_pending')) {
     bucket = 'waiting';
   } else {

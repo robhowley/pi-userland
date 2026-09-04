@@ -20,11 +20,15 @@ import {
   createGitDiscoveryCalls,
   createPullRequestViewFailureCall,
   createPullRequestViewSuccessCall,
+  createRequiredChecksCall,
+  PR_62_NO_REQUIRED_CHECKS_RESULT,
+  PR_62_RUNNING_ROLLUP,
 } from './test-fixtures.js';
 
 type BlockerFixture = {
   name: string;
   prOverrides: Record<string, unknown>;
+  requiredChecks?: unknown[];
   expectedBadge: MergeReadyBadgeId;
   expectedState: MergeReadyState;
   expectedSummary: string;
@@ -144,17 +148,17 @@ const blockerFixtures: BlockerFixture[] = [
     },
   },
   {
-    name: 'generic merge blocked from UNSTABLE',
+    name: 'UNSTABLE with passing required checks',
     prOverrides: {
       mergeStateStatus: 'UNSTABLE',
     },
-    expectedBadge: 'merge_blocked',
-    expectedState: 'blocked',
-    expectedSummary: 'GitHub reports merge is blocked',
-    expectedOpenItemIds: ['merge_blocked'],
+    expectedBadge: 'ready',
+    expectedState: 'ready',
+    expectedSummary: 'Ready to merge',
+    expectedOpenItemIds: [],
     expectedSignals: {
       draft: false,
-      mergeability: 'blocked',
+      mergeability: 'mergeable',
       checks: 'passing',
       review: 'approved',
       unresolvedConversations: false,
@@ -241,10 +245,10 @@ const blockerFixtures: BlockerFixture[] = [
       mergeable: 'MERGEABLE',
       mergeStateStatus: 'REBASEABLE',
     },
-    expectedBadge: 'unknown',
-    expectedState: 'unknown',
-    expectedSummary: 'Merge readiness is ambiguous',
-    expectedOpenItemIds: ['status_ambiguous', 'merge_blocked'],
+    expectedBadge: 'merge_blocked',
+    expectedState: 'blocked',
+    expectedSummary: 'GitHub reports merge is blocked',
+    expectedOpenItemIds: ['merge_blocked', 'status_ambiguous'],
     expectedSignals: {
       draft: false,
       mergeability: 'blocked',
@@ -274,18 +278,19 @@ const blockerFixtures: BlockerFixture[] = [
     },
   },
   {
-    name: 'failing checks',
+    name: 'failing required checks',
     prOverrides: {
       statusCheckRollup: [
         {
           __typename: 'CheckRun',
-          workflowName: 'ci',
-          name: 'unit',
+          workflowName: 'optional',
+          name: 'preview',
           status: 'COMPLETED',
           conclusion: 'FAILURE',
         },
       ],
     },
+    requiredChecks: [{ name: 'required / unit', state: 'FAILURE', bucket: 'fail' }],
     expectedBadge: 'ci_failing',
     expectedState: 'blocked',
     expectedSummary: 'Required checks are failing',
@@ -295,7 +300,7 @@ const blockerFixtures: BlockerFixture[] = [
       mergeability: 'mergeable',
       checks: 'failing',
       checkDetails: {
-        failing: [{ label: 'ci / unit', status: 'failing' }],
+        failing: [{ label: 'required / unit', status: 'failing' }],
         running: [],
         unknown: [],
       },
@@ -305,17 +310,19 @@ const blockerFixtures: BlockerFixture[] = [
     },
   },
   {
-    name: 'running checks',
+    name: 'running required checks',
     prOverrides: {
       statusCheckRollup: [
         {
           __typename: 'CheckRun',
-          workflowName: 'ci',
-          name: 'unit',
-          status: 'IN_PROGRESS',
+          workflowName: 'optional',
+          name: 'preview',
+          status: 'COMPLETED',
+          conclusion: 'FAILURE',
         },
       ],
     },
+    requiredChecks: [{ name: 'required / unit', state: 'IN_PROGRESS', bucket: 'pending' }],
     expectedBadge: 'ci_running',
     expectedState: 'pending',
     expectedSummary: 'Checks are still running',
@@ -326,7 +333,7 @@ const blockerFixtures: BlockerFixture[] = [
       checks: 'running',
       checkDetails: {
         failing: [],
-        running: [{ label: 'ci / unit', status: 'running' }],
+        running: [{ label: 'required / unit', status: 'running' }],
         unknown: [],
       },
       review: 'approved',
@@ -490,6 +497,20 @@ describe('getMergeReadyStatus', () => {
           },
         },
       ),
+      createRequiredChecksCall(
+        { stdout: '[]', exitCode: 0 },
+        {
+          cwd: '/repo',
+          timeout: 5_000,
+          target: {
+            mode: 'url',
+            url,
+            owner: 'shopify',
+            repo: 'pi',
+            prNumber: 64,
+          },
+        },
+      ),
       createConversationsSuccessCall(buildConversationsPayload(), {
         cwd: '/repo',
         timeout: 5_000,
@@ -591,6 +612,27 @@ describe('getMergeReadyStatus', () => {
             title: 'Support explicit PR URL targets',
             url: TARGETED_URL,
             state,
+            isDraft: true,
+            mergeable: 'CONFLICTING',
+            mergeStateStatus: 'DIRTY',
+            statusCheckRollup: [
+              {
+                __typename: 'CheckRun',
+                workflowName: 'ci',
+                name: 'unit',
+                status: 'COMPLETED',
+                conclusion: 'FAILURE',
+                detailsUrl: 'https://github.com/shopify/pi/actions/runs/64',
+              },
+            ],
+            reviews: [
+              {
+                author: { login: 'reviewer1' },
+                state: 'CHANGES_REQUESTED',
+                submittedAt: '2026-05-26T20:00:00Z',
+              },
+            ],
+            reviewDecision: 'CHANGES_REQUESTED',
             headRefName: 'feat/explicit-pr-url',
             baseRefName: 'main',
           }),
@@ -623,9 +665,35 @@ describe('getMergeReadyStatus', () => {
       expect(status.state).toBe('unknown');
       expect(status.summary).toBe(summary);
       expect(status.openItems).toEqual([]);
+      expect(selectMergeReadyBadgeId(status)).toBe(lifecycle);
+      expect(status.signals).toEqual({
+        draft: true,
+        mergeability: 'conflicting',
+        checks: 'failing',
+        checkDetails: {
+          failing: [
+            {
+              label: 'ci / unit',
+              status: 'failing',
+              url: 'https://github.com/shopify/pi/actions/runs/64',
+            },
+          ],
+          running: [],
+          unknown: [],
+        },
+        review: 'changes_requested',
+        unresolvedConversations: false,
+        unresolvedConversationRequirement: 'unknown',
+      });
+      expect(getCalls()).toHaveLength(1);
+      expect(getCalls()[0]?.command).toBe('gh');
+      expect(getCalls()[0]?.args.slice(0, 2)).toEqual(['pr', 'view']);
       expect(
         getCalls().some(
-          (call) => call.command === 'gh' && call.args[0] === 'api' && call.args[1] === 'graphql',
+          (call) =>
+            call.command === 'gh' &&
+            call.args[0] === 'pr' &&
+            (call.args[1] === 'checks' || call.args[1] === 'api'),
         ),
       ).toBe(false);
     },
@@ -789,20 +857,23 @@ describe('getMergeReadyStatus', () => {
         exitCode: 1,
         stderr: 'GraphQL: Something went wrong\n',
       } satisfies MergeReadyExecResult,
+      message: 'the GitHub API request failed',
     },
     {
       name: 'returns invalid JSON',
       result: {
         stdout: '{ definitely not json',
       } satisfies MergeReadyExecResult,
+      message: 'GitHub CLI returned invalid JSON',
     },
     {
       name: 'returns an invalid shape',
       result: {
         stdout: JSON.stringify({ state: 'OPEN' }),
       } satisfies MergeReadyExecResult,
+      message: 'GitHub CLI returned an unexpected pull request payload',
     },
-  ])('surfaces status_ambiguous when GitHub PR discovery $name', async ({ result }) => {
+  ])('surfaces status_ambiguous when GitHub PR discovery $name', async ({ result, message }) => {
     const { exec, assertDone } = createFakeExec([
       ...createGitDiscoveryCalls(),
       {
@@ -823,8 +894,9 @@ describe('getMergeReadyStatus', () => {
 
     expect(status.state).toBe('unknown');
     expect(status.pr).toBeNull();
-    expect(status.summary).toBe('Merge readiness is ambiguous');
+    expect(status.summary).toBe(`Unable to determine readiness: ${message}`);
     expect(openItemIds(status)).toEqual(['status_ambiguous']);
+    expect(status.openItems[0]?.details).toEqual([{ label: message }]);
     expect(status.signals).toEqual({
       draft: false,
       mergeability: 'unknown',
@@ -971,7 +1043,9 @@ describe('getMergeReadyStatus', () => {
     async (fixture) => {
       const { exec, assertDone } = createFakeExec([
         ...createGitDiscoveryCalls(),
-        createPullRequestViewSuccessCall(buildPullRequestPayload(fixture.prOverrides)),
+        createPullRequestViewSuccessCall(buildPullRequestPayload(fixture.prOverrides), {
+          requiredChecks: fixture.requiredChecks,
+        }),
         createConversationsSuccessCall(buildConversationsPayload()),
       ]);
 
@@ -990,6 +1064,172 @@ describe('getMergeReadyStatus', () => {
       expect(selectMergeReadyBadgeId(status)).toBe(fixture.expectedBadge);
     },
   );
+
+  it('is ready when only optional rollup checks fail and GitHub reports no required checks', async () => {
+    const { exec, assertDone } = createFakeExec([
+      ...createGitDiscoveryCalls(),
+      createPullRequestViewSuccessCall(
+        buildPullRequestPayload({
+          mergeStateStatus: 'UNSTABLE',
+          statusCheckRollup: [
+            {
+              workflowName: 'optional',
+              name: 'preview',
+              status: 'COMPLETED',
+              conclusion: 'FAILURE',
+            },
+          ],
+        }),
+        { requiredChecksResult: PR_62_NO_REQUIRED_CHECKS_RESULT },
+      ),
+      createConversationsSuccessCall(buildConversationsPayload()),
+    ]);
+
+    const status = await getMergeReadyStatus({
+      exec,
+      cwd: '/repo',
+      now: () => new Date(GENERATED_AT),
+    });
+
+    assertDone();
+    expect(status.state).toBe('ready');
+    expect(status.signals.checks).toBe('passing');
+    expect(openItemIds(status)).toEqual([]);
+    expect(JSON.stringify(status)).not.toContain('optional / preview');
+  });
+
+  it('reports PR 62 as pending while its optional checks are still running', async () => {
+    const branch = 'fix/okf-search-native-integer-stale-epoch';
+    const { exec, assertDone } = createFakeExec([
+      ...createGitDiscoveryCalls({ branch }),
+      createPullRequestViewSuccessCall(
+        buildPullRequestPayload({
+          number: 62,
+          title: 'Fix stale integer epoch handling',
+          url: 'https://github.com/robhowley/pi-userland/pull/62',
+          headRefName: branch,
+          statusCheckRollup: PR_62_RUNNING_ROLLUP,
+        }),
+        { requiredChecksResult: PR_62_NO_REQUIRED_CHECKS_RESULT },
+      ),
+      createConversationsSuccessCall(buildConversationsPayload(), {
+        pullRequestNumber: 62,
+      }),
+    ]);
+
+    const status = await getMergeReadyStatus({
+      exec,
+      cwd: '/repo',
+      now: () => new Date(GENERATED_AT),
+    });
+
+    assertDone();
+    expect(status.state).toBe('pending');
+    expect(status.signals.checks).toBe('running');
+    expect(openItemIds(status)).toEqual(['ci_running']);
+    expect(status.openItems).toEqual([
+      {
+        id: 'ci_running',
+        summary: 'Checks are still running',
+        details: [
+          {
+            label: 'ci / unit',
+            status: 'running',
+            url: 'https://github.example/checks/unit',
+          },
+          {
+            label: 'ci / lint',
+            status: 'running',
+            url: 'https://github.example/checks/lint',
+          },
+          {
+            label: 'ci / integration',
+            status: 'running',
+            url: 'https://github.example/checks/integration',
+          },
+        ],
+      },
+    ]);
+    expect(JSON.stringify(status)).not.toContain('GitHub CLI could not determine required checks');
+  });
+
+  it('keeps a required-query failure ambiguous without fabricating a CI blocker', async () => {
+    const { exec, assertDone } = createFakeExec([
+      ...createGitDiscoveryCalls(),
+      createPullRequestViewSuccessCall(buildPullRequestPayload()),
+      createRequiredChecksCall({ stdout: '[]', exitCode: 2 }),
+      createConversationsSuccessCall(buildConversationsPayload()),
+    ]);
+
+    const status = await getMergeReadyStatus({
+      exec,
+      cwd: '/repo',
+      now: () => new Date(GENERATED_AT),
+    });
+
+    assertDone();
+    expect(status.state).toBe('unknown');
+    expect(status.signals.checks).toBe('unknown');
+    expect(openItemIds(status)).toEqual(['status_ambiguous']);
+    expect(status.openItems[0]?.details).toEqual([
+      { label: 'GitHub CLI could not determine required checks' },
+    ]);
+  });
+
+  it('keeps a concrete required-check failure authoritative when other required-check facts are incomplete', async () => {
+    const { exec, assertDone } = createFakeExec([
+      ...createGitDiscoveryCalls(),
+      createPullRequestViewSuccessCall(buildPullRequestPayload()),
+      createRequiredChecksCall({
+        stdout: JSON.stringify([
+          {
+            name: 'required / unit',
+            state: 'FAILURE',
+            bucket: 'fail',
+            link: 'https://github.example/checks/required',
+          },
+          {
+            name: 'required / unknown',
+            state: 'UNKNOWN',
+            bucket: 'mystery',
+          },
+          null,
+        ]),
+        exitCode: 0,
+      }),
+      createConversationsSuccessCall(buildConversationsPayload()),
+    ]);
+
+    const status = await getMergeReadyStatus({
+      exec,
+      cwd: '/repo',
+      now: () => new Date(GENERATED_AT),
+    });
+
+    assertDone();
+
+    expect(status.state).toBe('blocked');
+    expect(selectMergeReadyBadgeId(status)).toBe('ci_failing');
+    expect(openItemIds(status)).toEqual(['ci_failing', 'status_ambiguous']);
+    expect(status.openItems).toEqual([
+      {
+        id: 'ci_failing',
+        summary: 'Required checks are failing',
+        details: [
+          {
+            label: 'required / unit',
+            status: 'failing',
+            url: 'https://github.example/checks/required',
+          },
+        ],
+      },
+      {
+        id: 'status_ambiguous',
+        summary: 'Merge readiness is ambiguous',
+        details: [{ label: 'GitHub returned incomplete required check facts' }],
+      },
+    ]);
+  });
 
   it('attaches blocking review deep links to the changes_requested open item', async () => {
     const { exec, assertDone } = createFakeExec([

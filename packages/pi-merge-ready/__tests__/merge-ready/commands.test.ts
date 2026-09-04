@@ -31,6 +31,7 @@ import {
   createConversationsSuccessCall,
   createCurrentBranchProbeCall,
   createGitDiscoveryCalls,
+  createImplicitRequiredChecksResult,
   createPullRequestViewSuccessCall,
   type ExpectedExecCall,
 } from './test-fixtures.js';
@@ -97,8 +98,16 @@ function createMockAPI(expectedCalls: ExpectedExecCall[] = []): {
     exec: vi.fn(
       async (command: string, args: string[], options?: { cwd?: string; timeout?: number }) => {
         const expectedCall = expectedCalls[index];
-        expect(expectedCall, `Unexpected exec call ${command} ${args.join(' ')}`).toBeDefined();
+        const implicitRequiredChecks = createImplicitRequiredChecksResult(
+          command,
+          args,
+          options,
+          expectedCalls[index - 1],
+          expectedCall,
+        );
+        if (implicitRequiredChecks) return implicitRequiredChecks;
 
+        expect(expectedCall, `Unexpected exec call ${command} ${args.join(' ')}`).toBeDefined();
         index += 1;
 
         expect({
@@ -410,7 +419,7 @@ describe('merge-ready command', () => {
 
     mergeReadyExtension(api as Parameters<typeof mergeReadyExtension>[0]);
 
-    expect(api.on).toHaveBeenCalledTimes(5);
+    expect(api.on).toHaveBeenCalledTimes(7);
     expect(api.on).toHaveBeenCalledWith('session_start', expect.any(Function));
     expect(api.on).toHaveBeenCalledWith('turn_end', expect.any(Function));
     expect(api.on).toHaveBeenCalledWith('session_shutdown', expect.any(Function));
@@ -420,7 +429,7 @@ describe('merge-ready command', () => {
       MERGE_READY_COMMAND_NAME,
       expect.objectContaining({
         description:
-          'Show merge readiness for the current pull request or an explicit GitHub PR URL',
+          'Show merge readiness for the current pull request or an explicit pull request URL',
         handler: expect.any(Function),
       }),
     );
@@ -718,20 +727,13 @@ describe('merge-ready command', () => {
         claimMergeReadyStatusBarOwnership,
         syncMergeReadyStatusBar,
       }));
-      vi.doMock('../../extensions/merge-ready/merge-ready.js', async () => {
-        const actual = await vi.importActual<
-          typeof import('../../extensions/merge-ready/merge-ready.js')
-        >('../../extensions/merge-ready/merge-ready.js');
-        return {
-          ...actual,
-          getMergeReadyStatus,
-        };
-      });
 
       const { registerMergeReadyCommand } =
         await import('../../extensions/merge-ready/commands.js');
       const { api, assertDone, getCommand } = createMockAPI();
-      registerMergeReadyCommand(api);
+      registerMergeReadyCommand(api, {
+        createUrlStatusReader: () => getMergeReadyStatus,
+      });
       const handler = getCommand(MERGE_READY_COMMAND_NAME);
       const ctx = createCommandContext();
 
@@ -749,7 +751,6 @@ describe('merge-ready command', () => {
       expect(syncMergeReadyStatusBar.mock.calls[0]?.[0]).not.toHaveProperty('ownership');
     } finally {
       vi.doUnmock('../../extensions/merge-ready/status-bar.js');
-      vi.doUnmock('../../extensions/merge-ready/merge-ready.js');
       vi.resetModules();
     }
   });
@@ -1684,22 +1685,44 @@ describe('merge-ready command', () => {
     ]);
   });
 
-  it('rejects invalid explicit targets instead of guessing', async () => {
+  it.each([
+    '--url 64',
+    '--json --url branch-name',
+    '--url https://gitlab.example/shop/pi/-/merge_requests/7',
+  ])('rejects unsupported one-shot target %s before status work starts', async (args) => {
     const { api, getCommand } = createMockAPI();
     mergeReadyExtension(api);
-    const handler = getCommand(MERGE_READY_COMMAND_NAME);
+    const handler = getCommand(MERGE_READY_COMMAND_NAME)!;
     const ctx = createCommandContext();
 
-    await handler?.('--url 64', ctx);
-    await handler?.('--url branch-name', ctx);
-    await handler?.('--url https://github.com/owner/repo/issues/64', ctx);
+    await expect(handler(args, ctx)).resolves.toBeUndefined();
 
-    const invalidMessage =
-      'Invalid --url: Pass a full HTTPS GitHub pull request URL like https://github.com/OWNER/REPO/pull/NUMBER with no query string, fragment, or extra path.';
-    expect(vi.mocked(ctx.ui.notify).mock.calls).toEqual([
-      [invalidMessage, 'error'],
-      [invalidMessage, 'error'],
-      [invalidMessage, 'error'],
-    ]);
+    expect(api.exec).not.toHaveBeenCalled();
+    expect(ctx.ui.setStatus).not.toHaveBeenCalled();
+    expect(ctx.ui.notify).toHaveBeenCalledOnce();
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining('No merge-ready provider recognizes'),
+      'error',
+    );
+  });
+
+  it('rejects an unsupported watch URL before watcher startup', async () => {
+    const { api, getCommand } = createMockAPI();
+    mergeReadyExtension(api);
+    const handler = getCommand(MERGE_READY_COMMAND_NAME)!;
+    const ctx = createCommandContext();
+    ctx.onMergeReadyWatchStart = vi.fn();
+
+    await expect(handler('watch --url 64', ctx)).resolves.toBeUndefined();
+
+    expect(api.exec).not.toHaveBeenCalled();
+    expect(getActiveMergeReadyWatch(api)).toBeNull();
+    expect(ctx.onMergeReadyWatchStart).not.toHaveBeenCalled();
+    expect(ctx.ui.setStatus).not.toHaveBeenCalled();
+    expect(ctx.ui.notify).toHaveBeenCalledOnce();
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining('No merge-ready provider recognizes'),
+      'error',
+    );
   });
 });

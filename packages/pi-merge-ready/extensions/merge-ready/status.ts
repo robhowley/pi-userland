@@ -16,14 +16,14 @@ import type {
 
 const OPEN_ITEM_PRIORITY = {
   no_pull_request: 0,
-  status_ambiguous: 1,
-  merge_conflicts: 2,
-  branch_out_of_date: 3,
-  merge_blocked: 4,
-  draft: 5,
-  ci_failing: 6,
-  changes_requested: 7,
-  unresolved_conversations: 8,
+  merge_conflicts: 1,
+  branch_out_of_date: 2,
+  merge_blocked: 3,
+  draft: 4,
+  ci_failing: 5,
+  changes_requested: 6,
+  unresolved_conversations: 7,
+  status_ambiguous: 8,
   ci_running: 9,
   review_pending: 10,
 } as const satisfies Record<MergeReadyOpenItemId, number>;
@@ -169,7 +169,10 @@ export function deriveMergeReadyOpenItems(
     openItems.push(createOpenItem('ci_running', signals));
   }
 
-  if (signals.checks === 'unknown' && !openItems.some((item) => item.id === 'status_ambiguous')) {
+  if (
+    (signals.checks === 'unknown' || signals.review === 'unknown') &&
+    !openItems.some((item) => item.id === 'status_ambiguous')
+  ) {
     openItems.push(createOpenItem('status_ambiguous', signals));
   }
 

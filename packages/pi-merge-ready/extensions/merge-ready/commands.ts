@@ -5,10 +5,15 @@ import type {
   WatchUiThinkingLevel,
 } from './watch-ui/runtime-snapshot.js';
 import { BADGE_ICON_BY_ID } from './badge-icon.js';
-import { getMergeReadyStatus } from './merge-ready.js';
+import {
+  createMergeReadyUrlStatusReader,
+  getMergeReadyStatus,
+  type MergeReadyStatusReader,
+  type MergeReadyUrlStatusReaderFactory,
+} from './merge-ready.js';
 import { claimMergeReadyStatusBarOwnership, syncMergeReadyStatusBar } from './status-bar.js';
 import { selectMergeReadyBadgeId } from './status.js';
-import { MERGE_READY_PULL_REQUEST_URL_EXAMPLE, validateGitHubPullRequestUrl } from './target.js';
+import { MERGE_READY_PULL_REQUEST_URL_EXAMPLE } from './target.js';
 import {
   MERGE_READY_WATCH_DEFAULT_INTERVAL_SECONDS,
   MERGE_READY_WATCH_MAX_INTERVAL_SECONDS,
@@ -21,6 +26,7 @@ import {
   type StartMergeReadyWatchResult,
 } from './watch.js';
 import type { MergeReadyExec, MergeReadyExecOptions, MergeReadyExecResult } from './git.js';
+import { getErrorMessage } from './internal.js';
 import type {
   MergeReadyBadgeId,
   MergeReadyOpenItemDetail,
@@ -143,13 +149,22 @@ type MergeReadyCommandWatchRuntimeAPI = MergeReadyCommandAPI & {
   ) => void;
 };
 
-export function registerMergeReadyCommand(pi: MergeReadyCommandAPI): void {
+export type MergeReadyCommandDependencies = {
+  getStatus?: MergeReadyStatusReader;
+  createUrlStatusReader?: MergeReadyUrlStatusReaderFactory;
+};
+
+export function registerMergeReadyCommand(
+  pi: MergeReadyCommandAPI,
+  dependencies: MergeReadyCommandDependencies = {},
+): void {
   const watchPi = pi as MergeReadyCommandWatchRuntimeAPI;
   registerMergeReadyWatchLifecycle(watchPi);
   registerMergeReadyWatchShortcut(watchPi);
 
   pi.registerCommand(MERGE_READY_COMMAND_NAME, {
-    description: 'Show merge readiness for the current pull request or an explicit GitHub PR URL',
+    description:
+      'Show merge readiness for the current pull request or an explicit pull request URL',
     getArgumentCompletions: getMergeReadyCommandArgumentCompletions,
     handler: async (args, ctx) => {
       const parsedArgs = parseMergeReadyCommandArgs(args);
@@ -179,18 +194,23 @@ export function registerMergeReadyCommand(pi: MergeReadyCommandAPI): void {
         return;
       }
 
-      let url: string | undefined;
-      if ('url' in parsedArgs && parsedArgs.url !== undefined) {
-        const validation = validateGitHubPullRequestUrl(parsedArgs.url);
-        if (!validation.ok) {
-          ctx.ui.notify(`Invalid ${URL_FLAG}: ${validation.message}`, 'error');
+      const url = 'url' in parsedArgs ? parsedArgs.url : undefined;
+      const exec = createCommandExec(pi, ctx);
+      const ambientGetStatus = dependencies.getStatus ?? getMergeReadyStatus;
+      let getStatus = ambientGetStatus;
+
+      if (url !== undefined) {
+        try {
+          const getUrlStatus = (
+            dependencies.createUrlStatusReader ?? createMergeReadyUrlStatusReader
+          )({ exec, url });
+          getStatus = (options) =>
+            options.url === undefined ? ambientGetStatus(options) : getUrlStatus(options);
+        } catch (error) {
+          ctx.ui.notify(getErrorMessage(error), 'error');
           return;
         }
-
-        url = validation.target.url;
       }
-
-      const exec = createCommandExec(pi, ctx);
 
       if (parsedArgs.mode === 'watch') {
         const started = startMergeReadyWatch({
@@ -201,6 +221,7 @@ export function registerMergeReadyCommand(pi: MergeReadyCommandAPI): void {
           ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
           timeout: MERGE_READY_COMMAND_TIMEOUT_MS,
           ...(url === undefined ? {} : { url }),
+          dependencies: { getStatus },
         });
         ctx.onMergeReadyWatchStart?.({
           ok: started.ok,
@@ -224,7 +245,7 @@ export function registerMergeReadyCommand(pi: MergeReadyCommandAPI): void {
               },
             })
           : undefined;
-      const status = await getMergeReadyStatus({
+      const status = await getStatus({
         exec,
         cwd: ctx.cwd,
         ...(url === undefined ? {} : { url }),

@@ -325,6 +325,18 @@ describe('merge-ready status', () => {
     ]);
   });
 
+  it('treats unknown review as ambiguous without hiding a concrete blocker', () => {
+    const ambiguous = buildStatus({ signals: { review: 'unknown' } });
+    expect(ambiguous.state).toBe('unknown');
+    expect(ambiguous.summary).toBe('Merge readiness is ambiguous');
+    expect(openItemIds(ambiguous)).toEqual(['status_ambiguous']);
+
+    const blocked = buildStatus({ signals: { review: 'unknown', checks: 'failing' } });
+    expect(blocked.state).toBe('blocked');
+    expect(blocked.summary).toBe('Required checks are failing');
+    expect(openItemIds(blocked)).toEqual(['ci_failing', 'status_ambiguous']);
+  });
+
   it('includes unresolved conversation count when it is known and required', () => {
     const status = buildStatus({
       signals: {

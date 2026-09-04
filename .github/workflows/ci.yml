@@ -69,5 +69,8 @@ jobs:
       - name: Build publishable packages
         run: pnpm -r --filter './packages/*' --if-present build
 
+      - name: Run package pack smokes
+        run: pnpm -r --filter './packages/*' --if-present pack:smoke
+
       - name: Run package tests
         run: pnpm test

@@ -339,53 +339,77 @@ describe('merge-ready cmux status', () => {
 
   it.each([
     {
-      name: 'malformed URL',
-      url: 'https://github.com/robhowley/pi-userland/pull/not-a-number',
-      renderedStatus: '✅ #170 Ready',
+      name: 'Meteorite provider URL',
+      number: 2033794,
+      url: 'https://meteorite.shopify.io/repos/shop/world/pulls/2033794',
     },
     {
-      name: 'mismatched URL number',
-      url: 'https://github.com/robhowley/pi-userland/pull/171',
-      renderedStatus: '✅ #170 Ready',
+      name: 'generic provider URL',
+      number: 7,
+      url: 'https://code.example/shop/pi/changes/7',
     },
     {
-      name: 'unencodable URL',
-      url: 'https://github.com/robhowley/repo\uD800/pull/170',
-      renderedStatus: '✅ #170 Ready',
+      name: 'HTTP provider URL',
+      number: 8,
+      url: 'http://code.example/shop/pi/changes/8',
     },
+  ])('links the $name without rebuilding its destination', ({ number, url }) => {
+    expect(
+      createMergeReadyCmuxAction(
+        createPullRequestStatus({ number, url }),
+        `✅ #${String(number)} Ready`,
+      ),
+    ).toEqual({
+      kind: 'set',
+      value: `✅ [PR #${String(number)}](${url}) Ready`,
+      format: 'markdown',
+    });
+  });
+
+  it('canonicalizes provider URLs before linking', () => {
+    const status = createPullRequestStatus({
+      url: 'HTTPS://Code.Example:443/shop/pi/changes/170?title=hello world',
+    });
+
+    expect(createMergeReadyCmuxAction(status, '✅ #170 Ready')).toEqual({
+      kind: 'set',
+      value: '✅ [PR #170](https://code.example/shop/pi/changes/170?title=hello%20world) Ready',
+      format: 'markdown',
+    });
+  });
+
+  it('escapes Markdown-sensitive URL delimiters without changing the URL', () => {
+    const status = createPullRequestStatus({
+      url: 'https://code.example/shop/repo(with)/changes/170?note=(a)\\b#part=(c)\\d',
+    });
+
+    expect(createMergeReadyCmuxAction(status, '✅ #170 Ready')).toEqual({
+      kind: 'set',
+      value:
+        '✅ [PR #170](https://code.example/shop/repo\\(with\\)/changes/170?note=\\(a\\)\\\\b#part=\\(c\\)\\\\d) Ready',
+      format: 'markdown',
+    });
+  });
+
+  it.each([
+    { name: 'non-HTTP URL', url: 'ftp://code.example/shop/pi/changes/170' },
+    { name: 'javascript URL', url: 'javascript:alert(1)' },
+    { name: 'malformed URL', url: 'https://[invalid' },
+    { name: 'invalid URL', url: 'not a URL' },
     {
       name: 'missing PR token',
       url: 'https://github.com/robhowley/pi-userland/pull/170',
       renderedStatus: '✅ 170 Ready',
     },
-  ])('$name keeps the plain action', ({ url, renderedStatus }) => {
+    {
+      name: 'different PR token',
+      url: 'https://github.com/robhowley/pi-userland/pull/170',
+      renderedStatus: '✅ #1700 Ready',
+    },
+  ])('$name keeps the plain action', ({ url, renderedStatus = '✅ #170 Ready' }) => {
     expect(createMergeReadyCmuxAction(createPullRequestStatus({ url }), renderedStatus)).toEqual({
       kind: 'set',
       value: renderedStatus,
-    });
-  });
-
-  it('percent-encodes owner and repository segments before linking', () => {
-    const status = createPullRequestStatus({
-      url: 'https://github.com/owner&team/repo+name/pull/170',
-    });
-
-    expect(createMergeReadyCmuxAction(status, '✅ #170 Ready')).toEqual({
-      kind: 'set',
-      value: '✅ [PR #170](https://github.com/owner%26team/repo%2Bname/pull/170) Ready',
-      format: 'markdown',
-    });
-  });
-
-  it('links repository names containing underscores', () => {
-    const status = createPullRequestStatus({
-      url: 'https://github.com/owner/repo_name/pull/170',
-    });
-
-    expect(createMergeReadyCmuxAction(status, '✅ #170 Ready')).toEqual({
-      kind: 'set',
-      value: '✅ [PR #170](https://github.com/owner/repo_name/pull/170) Ready',
-      format: 'markdown',
     });
   });
 
@@ -613,6 +637,12 @@ describe('merge-ready cmux status', () => {
         'mismatched PR number',
         createStatusWithItems([], { url: 'https://github.com/owner/repo/pull/171' }),
       ],
+      [
+        'non-GitHub provider URL',
+        createStatusWithItems([], {
+          url: 'https://meteorite.shopify.io/repos/shop/world/pulls/2033794',
+        }),
+      ],
       ['closed PR', createStatusWithItems([], { lifecycle: 'closed' })],
       ['merged PR', createStatusWithItems([], { lifecycle: 'merged' })],
     ])('maps %s to unknown', (_name, status) => {
@@ -622,8 +652,8 @@ describe('merge-ready cmux status', () => {
     it.each([
       {
         items: ['status_ambiguous', 'merge_conflicts', 'draft', 'ci_running'],
-        bucket: 'unknown',
-        reason: undefined,
+        bucket: 'action_required',
+        reason: 'merge_conflicts',
       },
       {
         items: ['changes_requested', 'ci_failing', 'merge_blocked', 'branch_out_of_date'],
