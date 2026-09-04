@@ -269,7 +269,7 @@ describe('openrouter hooks', () => {
     expect(mocks.includeBuiltinRouterModels).toHaveBeenCalledWith([{ id: 'model-a' }], 'full');
     expect(pi.registerProvider).toHaveBeenCalledWith('openrouter', {
       baseUrl: 'https://openrouter.ai/api/v1',
-      apiKey: 'OPENROUTER_API_KEY',
+      apiKey: '$OPENROUTER_API_KEY',
       api: 'openai-completions',
       models: [{ id: 'model-a' }, { id: 'router' }],
       authHeader: true,

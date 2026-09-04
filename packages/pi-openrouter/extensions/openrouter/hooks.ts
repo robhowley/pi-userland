@@ -108,7 +108,7 @@ export async function loadStartupCacheState(
 
     pi.registerProvider('openrouter', {
       baseUrl: 'https://openrouter.ai/api/v1',
-      apiKey: 'OPENROUTER_API_KEY',
+      apiKey: '$OPENROUTER_API_KEY',
       api: 'openai-completions',
       models: configsWithRouters,
       authHeader: true,
