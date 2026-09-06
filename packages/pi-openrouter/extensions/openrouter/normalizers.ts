@@ -62,6 +62,16 @@ export function sdkModelToOpenRouterModel(model: SDKModel): OpenRouterModel {
     supported_parameters: model.supportedParameters,
   };
 
+  if (model.reasoning !== undefined) {
+    const reasoning: NonNullable<OpenRouterModel['reasoning']> = {
+      mandatory: model.reasoning.mandatory,
+    };
+    if (model.reasoning.supportedEfforts !== undefined) {
+      reasoning.supported_efforts = model.reasoning.supportedEfforts;
+    }
+    result.reasoning = reasoning;
+  }
+
   if (architecture) {
     result.architecture = architecture;
   }

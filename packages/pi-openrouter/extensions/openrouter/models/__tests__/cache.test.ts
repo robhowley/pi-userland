@@ -45,15 +45,26 @@ describe('loadCache', () => {
   });
 
   it('should return parsed cache when file exists and is valid', async () => {
-    const mockCache = createMockCache({ catalogMode: 'free-only', timestamp: 1234567890 });
+    const mockCache = createMockCache({
+      catalogMode: 'free-only',
+      timestamp: 1234567890,
+      models: [
+        {
+          ...createMockCache().models[0]!,
+          reasoning: {
+            mandatory: false,
+            supported_efforts: ['low', null, 'future-effort'],
+          },
+        },
+      ],
+    });
     await saveCache(mockCache);
 
     const result = await loadCache();
     expect(result).not.toBeNull();
     expect(result!.catalogMode).toBe('free-only');
     expect(result!.timestamp).toBe(1234567890);
-    expect(result!.models).toHaveLength(1);
-    expect(result!.models[0]!.id).toBe('test/model');
+    expect(result!.models).toEqual(mockCache.models);
   });
 
   it('should return null when cache file contains invalid JSON', async () => {

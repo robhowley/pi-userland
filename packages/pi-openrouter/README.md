@@ -200,10 +200,10 @@ Some OpenRouter models don't have complete metadata in Pi's built-in registry or
 
 ```bash
 # Override thinking levels for DeepSeek V4 Pro
-/openrouter model-override-set deepseek/deepseek-v4-pro thinking.high=high thinking.xhigh=max
+/openrouter model-override-set deepseek/deepseek-v4-pro thinking.high=high thinking.max=max
 
 # Same thing with exact field names
-/openrouter model-override-set deepseek/deepseek-v4-pro thinkingLevelMap.high=high thinkingLevelMap.xhigh=max
+/openrouter model-override-set deepseek/deepseek-v4-pro thinkingLevelMap.high=high thinkingLevelMap.max=max
 
 # Override context window or max tokens
 /openrouter model-override-set custom/model contextWindow=128000 maxTokens=8192
@@ -211,7 +211,8 @@ Some OpenRouter models don't have complete metadata in Pi's built-in registry or
 
 **Scoped field names:**
 
-- `thinking.off`, `thinking.minimal`, `thinking.low`, `thinking.medium`, `thinking.high`, `thinking.xhigh` → map to `thinkingLevelMap.*`
+- `thinking.off`, `thinking.minimal`, `thinking.low`, `thinking.medium`, `thinking.high`, `thinking.xhigh`, `thinking.max` → map to `thinkingLevelMap.*`
+- `thinkingLevelMap.off`, `thinkingLevelMap.minimal`, `thinkingLevelMap.low`, `thinkingLevelMap.medium`, `thinkingLevelMap.high`, `thinkingLevelMap.xhigh`, `thinkingLevelMap.max` → map to `thinkingLevelMap.*`
 - `contextWindow` → `contextWindow` (number)
 - `maxTokens` → `maxTokens` (number)
 - `reasoning` → `reasoning` (boolean)

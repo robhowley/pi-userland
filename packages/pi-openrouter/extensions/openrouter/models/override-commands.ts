@@ -50,6 +50,7 @@ export const SCOPED_FIELD_MAP: Record<string, ScopedField> = {
   'thinking.medium': { targetField: 'thinkingLevelMap.medium', targetType: 'string' },
   'thinking.high': { targetField: 'thinkingLevelMap.high', targetType: 'string' },
   'thinking.xhigh': { targetField: 'thinkingLevelMap.xhigh', targetType: 'string' },
+  'thinking.max': { targetField: 'thinkingLevelMap.max', targetType: 'string' },
 
   // exact field names (passthrough)
   'thinkingLevelMap.off': { targetField: 'thinkingLevelMap.off', targetType: 'string' },
@@ -58,6 +59,7 @@ export const SCOPED_FIELD_MAP: Record<string, ScopedField> = {
   'thinkingLevelMap.medium': { targetField: 'thinkingLevelMap.medium', targetType: 'string' },
   'thinkingLevelMap.high': { targetField: 'thinkingLevelMap.high', targetType: 'string' },
   'thinkingLevelMap.xhigh': { targetField: 'thinkingLevelMap.xhigh', targetType: 'string' },
+  'thinkingLevelMap.max': { targetField: 'thinkingLevelMap.max', targetType: 'string' },
 
   // top-level fields (future extensibility)
   contextWindow: { targetField: 'contextWindow', targetType: 'number' },

@@ -111,6 +111,11 @@ describe('parseScopedAssignment', () => {
         fullPath: 'thinkingLevelMap.xhigh',
         value: 'max',
       });
+      expect(parseScopedAssignment('thinkingLevelMap.max=max')).toEqual({
+        ok: true,
+        fullPath: 'thinkingLevelMap.max',
+        value: 'max',
+      });
     });
 
     it('parses null string values for thinking levels', () => {
@@ -247,6 +252,7 @@ describe('parseScopedAssignment', () => {
         ['thinking.high=high', 'high'],
         ['thinking.xhigh=max', 'max'],
         ['thinking.xhigh=xhigh', 'xhigh'],
+        ['thinking.max=max', 'max'],
       ];
 
       for (const [input, expectedValue] of validPairs) {
@@ -402,7 +408,7 @@ describe('handleModelOverrideSet', () => {
     const userOverrides = emptyOverrides();
 
     const result = await handleModelOverrideSet(
-      'test/model thinking.high=high thinking.xhigh=max thinking.off=null contextWindow=64000 maxTokens=8192 reasoning=true',
+      'test/model thinking.high=high thinking.xhigh=max thinking.max=max thinking.off=null contextWindow=64000 maxTokens=8192 reasoning=true',
       userOverrides,
     );
 
@@ -415,6 +421,7 @@ describe('handleModelOverrideSet', () => {
           thinkingLevelMap: {
             high: 'high',
             xhigh: 'max',
+            max: 'max',
             off: null,
           },
           contextWindow: 64000,
@@ -553,6 +560,8 @@ describe('handleModelOverrideList', () => {
 
     expect(result).toContain('Available override fields');
     expect(result).toContain('thinking.high');
+    expect(result).toContain('thinking.max');
+    expect(result).toContain('thinkingLevelMap.max');
     expect(result).toContain('contextWindow');
   });
 
@@ -578,7 +587,7 @@ describe('handleModelOverrideList', () => {
       version: 1,
       overrides: {
         'test/model': {
-          thinkingLevelMap: { high: 'high', xhigh: 'max', off: null },
+          thinkingLevelMap: { high: 'high', xhigh: 'max', max: 'max', off: null },
           contextWindow: 64000,
         },
       },
@@ -590,6 +599,7 @@ describe('handleModelOverrideList', () => {
     expect(result).toContain('thinkingLevelMap:');
     expect(result).toContain('high: high');
     expect(result).toContain('xhigh: max');
+    expect(result).toContain('max: max');
     expect(result).toContain('off: null');
     expect(result).toContain('contextWindow: 64000');
   });
@@ -625,6 +635,7 @@ describe('SCOPED_FIELD_MAP', () => {
       'thinking.medium',
       'thinking.high',
       'thinking.xhigh',
+      'thinking.max',
     ];
 
     for (const shorthand of expectedShorthands) {
@@ -642,6 +653,7 @@ describe('SCOPED_FIELD_MAP', () => {
       'thinkingLevelMap.medium',
       'thinkingLevelMap.high',
       'thinkingLevelMap.xhigh',
+      'thinkingLevelMap.max',
     ];
 
     for (const exact of expectedExact) {
