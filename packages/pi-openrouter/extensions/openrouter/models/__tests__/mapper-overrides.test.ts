@@ -150,10 +150,31 @@ describe('mapOpenRouterModels overrides', () => {
     });
   });
 
-  it('does not derive an API map from unusable effort metadata', async () => {
-    const cases: Array<Array<string | null> | null | undefined> = [
+  it.each([
+    [true, null],
+    [false, 'none'],
+  ] as const)('maps explicit null supported_efforts with mandatory=%s', async (mandatory, off) => {
+    const result = await mapOpenRouterModels([
+      createValidModel({
+        id: `api/unrestricted-${mandatory}`,
+        reasoning: { mandatory, supported_efforts: null },
+      }),
+    ]);
+
+    expect(result.configs[0]?.thinkingLevelMap).toEqual({
+      off,
+      minimal: 'minimal',
+      low: 'low',
+      medium: 'medium',
+      high: 'high',
+      xhigh: 'xhigh',
+      max: 'max',
+    });
+  });
+
+  it('does not derive an API map from absent or unusable effort metadata', async () => {
+    const cases: Array<Array<string | null> | undefined> = [
       undefined,
-      null,
       [],
       [null],
       ['none'],

@@ -61,15 +61,18 @@ type ApiThinkingLevel = (typeof API_THINKING_LEVELS)[number];
 function buildApiThinkingLevelMap(
   reasoning: OpenRouterModel['reasoning'],
 ): PiModelConfig['thinkingLevelMap'] {
-  if (!Array.isArray(reasoning?.supported_efforts)) {
+  if (reasoning === undefined) {
     return undefined;
   }
 
   const supportedEfforts = new Set(
-    reasoning.supported_efforts.filter(
-      (effort): effort is ApiThinkingLevel =>
-        typeof effort === 'string' && (API_THINKING_LEVELS as readonly string[]).includes(effort),
-    ),
+    reasoning?.supported_efforts === null
+      ? API_THINKING_LEVELS
+      : (reasoning?.supported_efforts?.filter(
+          (effort): effort is ApiThinkingLevel =>
+            typeof effort === 'string' &&
+            (API_THINKING_LEVELS as readonly string[]).includes(effort),
+        ) ?? []),
   );
 
   if (supportedEfforts.size === 0) {
