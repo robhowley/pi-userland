@@ -67,7 +67,7 @@ importers:
         specifier: '*'
         version: 0.68.1
       '@openrouter/sdk':
-        specifier: 0.13.13
+        specifier: ^0.13.13
         version: 0.13.13
     devDependencies:
       '@earendil-works/pi-ai':
@@ -3958,7 +3958,7 @@ packages:
       zod: ^3.25.28 || ^4
 
   zod@4.3.6:
-    resolution: {integrity: sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==}
+    resolution: {integrity: sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==, tarball: https://registry.npmjs.org/zod/-/zod-4.3.6.tgz}
 
 snapshots:
 
