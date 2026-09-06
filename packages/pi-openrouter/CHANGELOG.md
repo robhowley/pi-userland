@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.2](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.14.1...pi-openrouter-v0.14.2) (2026-09-06)
+
+
+### Bug Fixes
+
+* **pi-openrouter:** map model reasoning efforts ([#194](https://github.com/robhowley/pi-userland/issues/194)) ([b7311ab](https://github.com/robhowley/pi-userland/commit/b7311ab0edf7461832cec8fcdcf42f078c36ee32))
+
 ## [0.14.1](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.14.0...pi-openrouter-v0.14.1) (2026-09-04)
 
 
