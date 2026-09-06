@@ -38,15 +38,15 @@
   },
   "dependencies": {
     "@mariozechner/pi-tui": "*",
-    "@openrouter/sdk": "^0.12.21"
+    "@openrouter/sdk": "0.13.13"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-ai": "0.84.4",
+    "@earendil-works/pi-coding-agent": "0.84.4",
     "@mariozechner/pi-coding-agent": "*",
     "@types/node": "^22.15.17"
   }

@@ -23,11 +23,9 @@ async function loadBuiltInOpenRouterModels(): Promise<Map<string, PiModelConfig>
 
   try {
     // Import from pi-ai to get built-in model registry
-    const { getModels } = (await import('@earendil-works/pi-ai')) as {
-      getModels: (provider: string) => unknown[];
-    };
+    const { getBuiltinModels } = await import('@earendil-works/pi-ai/providers/all');
 
-    const openrouterModels = getModels('openrouter');
+    const openrouterModels = getBuiltinModels('openrouter');
     if (Array.isArray(openrouterModels)) {
       for (const model of openrouterModels) {
         // Extract thinkingLevelMap from built-in model if present
@@ -57,6 +55,37 @@ async function getBuiltInThinkingLevelMap(
 
 const COST_PER_MILLION = 1_000_000;
 const DEFAULT_MAX_TOKENS = 4096;
+const API_THINKING_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+type ApiThinkingLevel = (typeof API_THINKING_LEVELS)[number];
+
+function buildApiThinkingLevelMap(
+  reasoning: OpenRouterModel['reasoning'],
+): PiModelConfig['thinkingLevelMap'] {
+  if (!Array.isArray(reasoning?.supported_efforts)) {
+    return undefined;
+  }
+
+  const supportedEfforts = new Set(
+    reasoning.supported_efforts.filter(
+      (effort): effort is ApiThinkingLevel =>
+        typeof effort === 'string' && (API_THINKING_LEVELS as readonly string[]).includes(effort),
+    ),
+  );
+
+  if (supportedEfforts.size === 0) {
+    return undefined;
+  }
+
+  return {
+    off: reasoning.mandatory ? null : 'none',
+    minimal: supportedEfforts.has('minimal') ? 'minimal' : null,
+    low: supportedEfforts.has('low') ? 'low' : null,
+    medium: supportedEfforts.has('medium') ? 'medium' : null,
+    high: supportedEfforts.has('high') ? 'high' : null,
+    xhigh: supportedEfforts.has('xhigh') ? 'xhigh' : null,
+    max: supportedEfforts.has('max') ? 'max' : null,
+  };
+}
 
 /**
  * Validation result for a model check.
@@ -123,7 +152,9 @@ async function buildPiConfig(
 ): Promise<PiModelConfig> {
   const supportedParams = model.supported_parameters ?? [];
   const hasReasoning =
-    supportedParams.includes('reasoning') || supportedParams.includes('include_reasoning');
+    model.reasoning !== undefined
+      ? true
+      : supportedParams.includes('reasoning') || supportedParams.includes('include_reasoning');
   const inputModalities = model.architecture?.input_modalities;
   const supportsImages = inputModalities?.includes('image') ?? false;
 
@@ -134,6 +165,7 @@ async function buildPiConfig(
 
   // Fetch user override for this model
   const userOverride = userOverrides ? getModelOverride(userOverrides, model.id) : undefined;
+  const apiThinkingLevelMap = buildApiThinkingLevelMap(model.reasoning);
 
   const thinkingLevelMap =
     builtInThinkingLevelMap !== undefined || userOverride?.thinkingLevelMap !== undefined
@@ -141,7 +173,7 @@ async function buildPiConfig(
           ...builtInThinkingLevelMap,
           ...userOverride?.thinkingLevelMap,
         }
-      : undefined;
+      : apiThinkingLevelMap;
 
   const config: PiModelConfig = {
     id: model.id,

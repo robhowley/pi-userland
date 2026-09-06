@@ -16,6 +16,10 @@ export interface OpenRouterModel {
     input_cache_write?: string;
   };
   supported_parameters?: string[];
+  reasoning?: {
+    mandatory: boolean;
+    supported_efforts?: Array<string | null> | null;
+  };
   top_provider?: {
     context_length?: number;
     max_completion_tokens?: number;
@@ -44,6 +48,7 @@ export interface ThinkingLevelMap {
   medium?: string | null;
   high?: string | null;
   xhigh?: string | null;
+  max?: string | null;
 }
 
 /**

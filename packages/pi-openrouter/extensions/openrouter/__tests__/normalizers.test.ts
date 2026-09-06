@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Model as SDKModel } from '@openrouter/sdk/models/index.js';
+import { modelFromJSON } from '@openrouter/sdk/models/model.js';
 import type {
   CreateKeysData,
   GetCurrentKeyData,
@@ -33,6 +34,7 @@ function createSdkModel(overrides: Partial<SDKModel> = {}): SDKModel {
       completion: '0.0000015',
     },
     supportedParameters: [],
+    supportedVoices: null,
     topProvider: {
       isModerated: false,
     },
@@ -146,6 +148,37 @@ function createUpdateKeysData(overrides: Partial<UpdateKeysData> = {}): UpdateKe
   };
 }
 
+function createSdkModelJson(supportedEfforts?: ReadonlyArray<string | null> | null): string {
+  return JSON.stringify({
+    architecture: {
+      input_modalities: ['text'],
+      modality: 'text',
+      output_modalities: ['text'],
+    },
+    canonical_slug: 'test/model',
+    context_length: 128000,
+    created: 0,
+    default_parameters: null,
+    id: 'test/model',
+    links: { details: 'https://openrouter.ai/test/model' },
+    name: 'Test Model',
+    per_request_limits: null,
+    pricing: {
+      prompt: '0.0000005',
+      completion: '0.0000015',
+    },
+    reasoning: {
+      mandatory: false,
+      ...(supportedEfforts === undefined ? {} : { supported_efforts: supportedEfforts }),
+    },
+    supported_parameters: ['reasoning'],
+    supported_voices: null,
+    top_provider: {
+      is_moderated: false,
+    },
+  });
+}
+
 describe('sdkModelToOpenRouterModel', () => {
   it('normalizes SDK camelCase fields into canonical snake_case model shape', () => {
     const normalized = sdkModelToOpenRouterModel(
@@ -195,6 +228,43 @@ describe('sdkModelToOpenRouterModel', () => {
         completion_tokens: 0,
       },
     });
+  });
+
+  it('parses snake_case reasoning metadata through the SDK before normalizing it', () => {
+    const parsed = modelFromJSON(createSdkModelJson(['low', null, 'future-effort']));
+
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+
+    const normalized = sdkModelToOpenRouterModel(parsed.value);
+    expect(normalized.reasoning).toEqual({
+      mandatory: false,
+      supported_efforts: ['low', null, 'future-effort'],
+    });
+  });
+
+  it.each([
+    ['omitted', undefined],
+    ['null', null],
+    ['empty', []],
+    ['nullable element', [null]],
+    ['unknown string', ['future-effort']],
+    ['mixed values', ['low', null, 'future-effort']],
+  ] as const)('preserves %s supported_efforts during SDK normalization', (_name, efforts) => {
+    const parsed = modelFromJSON(createSdkModelJson(efforts));
+
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+
+    const normalized = sdkModelToOpenRouterModel(parsed.value);
+    if (efforts === undefined) {
+      expect(normalized.reasoning).toEqual({ mandatory: false });
+    } else {
+      expect(normalized.reasoning).toEqual({
+        mandatory: false,
+        supported_efforts: efforts,
+      });
+    }
   });
 
   it('omits optional provider/request blocks when the SDK omits them', () => {
