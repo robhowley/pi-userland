@@ -76,7 +76,7 @@ function buildApiThinkingLevelMap(
   );
 
   if (supportedEfforts.size === 0) {
-    return undefined;
+    return reasoning.mandatory ? { off: null } : undefined;
   }
 
   return {
@@ -170,13 +170,14 @@ async function buildPiConfig(
   const userOverride = userOverrides ? getModelOverride(userOverrides, model.id) : undefined;
   const apiThinkingLevelMap = buildApiThinkingLevelMap(model.reasoning);
 
+  const baseThinkingLevelMap = builtInThinkingLevelMap ?? apiThinkingLevelMap;
   const thinkingLevelMap =
-    builtInThinkingLevelMap !== undefined || userOverride?.thinkingLevelMap !== undefined
+    baseThinkingLevelMap !== undefined || userOverride?.thinkingLevelMap !== undefined
       ? {
-          ...builtInThinkingLevelMap,
+          ...baseThinkingLevelMap,
           ...userOverride?.thinkingLevelMap,
         }
-      : apiThinkingLevelMap;
+      : undefined;
 
   const config: PiModelConfig = {
     id: model.id,

@@ -194,6 +194,17 @@ describe('mapOpenRouterModels overrides', () => {
     }
   });
 
+  it('hides off for mandatory reasoning metadata with no usable effort', async () => {
+    const result = await mapOpenRouterModels([
+      createValidModel({
+        id: 'api/mandatory-unknown-effort',
+        reasoning: { mandatory: true, supported_efforts: [null, 'none', 'future-effort'] },
+      }),
+    ]);
+
+    expect(result.configs[0]?.thinkingLevelMap).toEqual({ off: null });
+  });
+
   it('does not derive an API map from supported_parameters alone', async () => {
     const result = await mapOpenRouterModels([
       createValidModel({
@@ -206,13 +217,13 @@ describe('mapOpenRouterModels overrides', () => {
     expect(result.configs[0]?.thinkingLevelMap).toBeUndefined();
   });
 
-  it('applies user thinkingLevelMap when the built-in registry has no map for the model', async () => {
+  it('merges sparse user thinkingLevelMap over the API map', async () => {
     loadModelOverrides.mockResolvedValue({
       version: 1,
       overrides: {
         'new/model': {
           thinkingLevelMap: {
-            high: 'high',
+            high: 'override-high',
             xhigh: 'max',
           },
         },
@@ -233,8 +244,13 @@ describe('mapOpenRouterModels overrides', () => {
       reasoning: true,
     });
     expect(result.configs[0]?.thinkingLevelMap).toEqual({
-      high: 'high',
+      off: null,
+      minimal: null,
+      low: 'low',
+      medium: null,
+      high: 'override-high',
       xhigh: 'max',
+      max: 'max',
     });
   });
 });
