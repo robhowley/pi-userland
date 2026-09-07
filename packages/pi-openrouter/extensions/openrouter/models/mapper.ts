@@ -53,6 +53,44 @@ async function getBuiltInThinkingLevelMap(
   return builtIn.get(modelId)?.thinkingLevelMap;
 }
 
+/**
+ * Transport metadata owned by Pi's built-in registry that the OpenRouter API does not
+ * describe: the `api`, its matching `baseUrl`, and the `compat` flags authored for it.
+ */
+interface BuiltInTransport {
+  api?: PiModelConfig['api'];
+  baseUrl?: PiModelConfig['baseUrl'];
+  compat?: PiModelConfig['compat'];
+}
+
+/**
+ * Get transport metadata from the built-in registry for a model, if available.
+ *
+ * These fields travel together on purpose. `compat` is transport-specific in Pi's model
+ * type (`AnthropicMessagesCompat` vs `OpenAICompletionsCompat`), and built-in Anthropic
+ * entries use a different base URL than the OpenAI-compatible ones. Applying one field
+ * without the others yields an incoherent model config, so a half-described transport is
+ * dropped rather than partially applied.
+ */
+async function getBuiltInTransport(modelId: string): Promise<BuiltInTransport | undefined> {
+  const builtIn = await loadBuiltInOpenRouterModels();
+  const model = builtIn.get(modelId);
+  if (model === undefined) {
+    return undefined;
+  }
+
+  const { api, baseUrl, compat } = model;
+  const hasTransport = api !== undefined && baseUrl !== undefined;
+
+  // compat is only meaningful next to the transport it was authored for. Keep it when the
+  // transport resolved, or when the entry declares no api and inherits the provider default.
+  if (!hasTransport) {
+    return api === undefined && compat !== undefined ? { compat } : undefined;
+  }
+
+  return compat !== undefined ? { api, baseUrl, compat } : { api, baseUrl };
+}
+
 const COST_PER_MILLION = 1_000_000;
 const DEFAULT_MAX_TOKENS = 4096;
 const API_THINKING_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -145,7 +183,8 @@ function validateModel(model: OpenRouterModel): ValidationResult {
 
 /**
  * Build PiModelConfig from a validated OpenRouterModel.
- * Merges thinkingLevelMap from Pi's built-in registry and user overrides.
+ * Merges thinkingLevelMap and transport metadata from Pi's built-in registry and
+ * thinkingLevelMap from user overrides.
  * Priority: user overrides > built-in registry > API data
  */
 async function buildPiConfig(
@@ -165,6 +204,9 @@ async function buildPiConfig(
   const builtInThinkingLevelMap = hasReasoning
     ? await getBuiltInThinkingLevelMap(model.id)
     : undefined;
+
+  // Transport metadata is not reasoning-specific, so it is looked up for every model.
+  const builtInTransport = await getBuiltInTransport(model.id);
 
   // Fetch user override for this model
   const userOverride = userOverrides ? getModelOverride(userOverrides, model.id) : undefined;
@@ -201,6 +243,18 @@ async function buildPiConfig(
   // Only add thinkingLevelMap if it's defined for exactOptionalPropertyTypes compatibility
   if (thinkingLevelMap !== undefined) {
     config.thinkingLevelMap = thinkingLevelMap;
+  }
+
+  if (builtInTransport?.api !== undefined) {
+    config.api = builtInTransport.api;
+  }
+
+  if (builtInTransport?.baseUrl !== undefined) {
+    config.baseUrl = builtInTransport.baseUrl;
+  }
+
+  if (builtInTransport?.compat !== undefined) {
+    config.compat = builtInTransport.compat;
   }
 
   return config;
