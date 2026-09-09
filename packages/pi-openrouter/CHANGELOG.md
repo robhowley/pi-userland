@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.3](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.14.2...pi-openrouter-v0.14.3) (2026-09-09)
+
+
+### Bug Fixes
+
+* link package homepages to READMEs ([#201](https://github.com/robhowley/pi-userland/issues/201)) ([4ebd5a8](https://github.com/robhowley/pi-userland/commit/4ebd5a89ea3ec2bb61aca8d5bc57b8c982453e42))
+
 ## [0.14.2](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.14.1...pi-openrouter-v0.14.2) (2026-09-06)
 
 
