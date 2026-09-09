@@ -258,6 +258,14 @@ describe('Junction lifecycle reducer', () => {
 
     state = reduce(state, { type: 'maintenance' }, stuckBoundary + 1).state;
     expect(snapshotAt(state, stuckBoundary + 1).state).toBe('unknown');
+
+    state = reduce(
+      state,
+      { type: 'tool_execution_update', toolCallId: 'tool-1', meaningful: true },
+      stuckBoundary + 2,
+    ).state;
+    expect(state.lastEventAt).toBe(stuckBoundary + 2);
+    expect(snapshotAt(state, stuckBoundary + 2).state).toBe('tool-running');
   });
 
   it('marks active evidence stale after two minutes and accepts the exact boundary', () => {

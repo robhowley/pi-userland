@@ -272,6 +272,7 @@ export function classifyOwner(owner, now, probePid) {
 function displayState(owner, now) {
   if (owner.liveness !== 'live') return 'unknown';
   const snapshot = owner.snapshot;
+  if (!validSnapshot(snapshot)) return 'unknown';
   const compactionPresent = snapshot.compactionAt !== null;
   if (
     snapshot.transitionAt > now + 5_000 ||
@@ -293,7 +294,7 @@ function displayState(owner, now) {
   }
   if (snapshot.state === 'unknown') return 'unknown';
   if (snapshot.state === 'idle') return 'idle';
-  if (snapshot.lastEventAt === null || now - snapshot.lastEventAt > 120_000) return 'unknown';
+  if (snapshot.lastEventAt === null) return 'unknown';
   if (
     snapshot.state === 'compacting' &&
     (!compactionPresent || now - snapshot.compactionAt > 120_000)

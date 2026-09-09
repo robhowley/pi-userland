@@ -270,6 +270,63 @@ describe('workspace aggregation', () => {
       aggregateOwners([owner('tool-running'), owner('unknown', { surfaceId: 'surface-b' })], now),
     ).toEqual({ state: 'tool-running', label: 'Tool running' });
   });
+
+  it('keeps lease-valid states past the generic event-age cutoff', () => {
+    const old = now - 120_001;
+    for (const [state, expected] of [
+      ['thinking', { state: 'thinking', label: 'Thinking' }],
+      ['awaiting-input', { state: 'awaiting-input', label: 'Needs input' }],
+      ['error', { state: 'error', label: 'Error' }],
+      ['idle', { state: 'idle', label: 'Idle' }],
+      ['tool-running', { state: 'tool-running', label: 'Tool running: bash' }],
+    ] as const) {
+      expect(
+        aggregateOwners(
+          [
+            owner(state, {
+              snapshot: { ...owner(state).snapshot, lastEventAt: old },
+            }),
+          ],
+          now,
+        ),
+      ).toEqual(expected);
+    }
+
+    for (const lastEventAt of [null, Number.NaN, 'invalid', now + 5_001]) {
+      expect(
+        aggregateOwners(
+          [
+            owner('thinking', {
+              snapshot: { ...owner('thinking').snapshot, lastEventAt },
+            }),
+          ],
+          now,
+        ),
+      ).toEqual({ state: 'unknown', label: 'Unknown' });
+    }
+
+    expect(
+      aggregateOwners(
+        [
+          owner('thinking', {
+            liveness: 'stale',
+            snapshot: { ...owner('thinking').snapshot, lastEventAt: now },
+          }),
+        ],
+        now,
+      ),
+    ).toEqual({ state: 'unknown', label: 'Unknown' });
+    expect(
+      aggregateOwners(
+        [
+          owner('unknown', {
+            snapshot: { ...owner('unknown').snapshot, lastEventAt: old },
+          }),
+        ],
+        now,
+      ),
+    ).toEqual({ state: 'unknown', label: 'Unknown' });
+  });
 });
 
 describe('owner liveness', () => {
@@ -788,6 +845,60 @@ describe('coordinator ownership and publication', () => {
     expect(core.ledger().owners[0]).toMatchObject({ heartbeatAt: now, liveness: 'live' });
   });
 
+  it('expires a lease and recovers the exact owner on a fresh full snapshot', async () => {
+    let now = 1_700_000_001_000;
+    const lastEventAt = now - 120_001;
+    const published: unknown[] = [];
+    const core = createCoordinatorCore({
+      target,
+      now: () => now,
+      probePid: () => 'match',
+      publish: async (status: unknown) => {
+        published.push(status);
+        return { ok: true };
+      },
+    });
+    const initial = await accept(
+      core,
+      snapshot({ state: 'thinking', transitionAt: lastEventAt, lastEventAt }),
+      'socket-a',
+    );
+    await core.drain();
+    expect(published).toEqual([{ state: 'thinking', label: 'Thinking' }]);
+
+    now += 30_001;
+    await core.maintain();
+    await core.drain();
+    expect(core.ledger().owners[0]).toMatchObject({ liveness: 'stale' });
+    expect(core.ledger()).toMatchObject({ desired: { state: 'unknown', label: 'Unknown' } });
+    expect(published).toEqual([
+      { state: 'thinking', label: 'Thinking' },
+      { state: 'unknown', label: 'Unknown' },
+    ]);
+
+    await expect(
+      accept(
+        core,
+        snapshot({
+          ownerGeneration: generation(initial),
+          revision: 1,
+          state: 'thinking',
+          transitionAt: lastEventAt,
+          lastEventAt,
+        }),
+        'socket-a',
+      ),
+    ).resolves.toMatchObject({ ok: true });
+    await core.drain();
+    expect(core.ledger().owners[0]).toMatchObject({ heartbeatAt: now, liveness: 'live' });
+    expect(core.ledger()).toMatchObject({ desired: { state: 'thinking', label: 'Thinking' } });
+    expect(published).toEqual([
+      { state: 'thinking', label: 'Thinking' },
+      { state: 'unknown', label: 'Unknown' },
+      { state: 'thinking', label: 'Thinking' },
+    ]);
+  });
+
   it('does not retain an owner whose PID identity is already dead', async () => {
     const core = createCoordinatorCore({
       target,
@@ -1238,22 +1349,46 @@ describe('coordinator ownership and publication', () => {
     });
   });
 
-  it('dedupes only a successfully applied identical aggregate', async () => {
+  it('dedupes an identical heartbeat while renewing the lease without changing event time', async () => {
+    let now = 1_700_000_001_000;
+    const lastEventAt = now - 120_001;
     const published: unknown[] = [];
     const core = createCoordinatorCore({
       target,
-      now: () => 1_700_000_001_000,
+      now: () => now,
       probePid: () => 'match',
       publish: async (status: unknown) => {
         published.push(status);
         return { ok: true };
       },
     });
-    await accept(core, snapshot());
+    await accept(
+      core,
+      snapshot({ state: 'thinking', transitionAt: lastEventAt, lastEventAt }),
+      'socket-a',
+    );
     await core.drain();
-    await accept(core, snapshot({ ownerGeneration: 1, revision: 1, sentAt: 1_700_000_001_001 }));
+
+    now += 10_000;
+    await accept(
+      core,
+      snapshot({
+        ownerGeneration: 1,
+        revision: 1,
+        state: 'thinking',
+        transitionAt: lastEventAt,
+        lastEventAt,
+        sentAt: now,
+      }),
+      'socket-a',
+    );
     await core.drain();
-    expect(published).toEqual([{ state: 'idle', label: 'Idle' }]);
+
+    expect(published).toEqual([{ state: 'thinking', label: 'Thinking' }]);
+    expect(core.ledger().owners[0]).toMatchObject({
+      heartbeatAt: now,
+      snapshot: { transitionAt: lastEventAt, lastEventAt },
+    });
   });
 
   it('reaps restored owners without replay and clears instead of reviving them', async () => {
