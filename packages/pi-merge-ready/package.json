@@ -40,7 +40,7 @@
     "url": "https://github.com/robhowley/pi-userland.git",
     "directory": "packages/pi-merge-ready"
   },
-  "homepage": "https://pi-userland.dev",
+  "homepage": "https://github.com/robhowley/pi-userland/blob/main/packages/pi-merge-ready/README.md",
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json && mkdir -p dist/extensions/merge-ready/watch-ui/public && cp extensions/merge-ready/watch-ui/public/* dist/extensions/merge-ready/watch-ui/public/",
     "lint": "eslint extensions/",
