@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.1](https://github.com/robhowley/pi-userland/compare/pi-merge-ready-v0.16.0...pi-merge-ready-v0.16.1) (2026-09-09)
+
+
+### Bug Fixes
+
+* link package homepages to READMEs ([#201](https://github.com/robhowley/pi-userland/issues/201)) ([4ebd5a8](https://github.com/robhowley/pi-userland/commit/4ebd5a89ea3ec2bb61aca8d5bc57b8c982453e42))
+
 ## [0.16.0](https://github.com/robhowley/pi-userland/compare/pi-merge-ready-v0.15.0...pi-merge-ready-v0.16.0) (2026-09-04)
 
 
