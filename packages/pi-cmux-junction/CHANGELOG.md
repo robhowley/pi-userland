@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/robhowley/pi-userland/compare/pi-cmux-junction-v0.3.1...pi-cmux-junction-v0.4.0) (2026-09-09)
+
+
+### Features
+
+* **pi-cmux-junction:** add cmux session restore ([#199](https://github.com/robhowley/pi-userland/issues/199)) ([b822679](https://github.com/robhowley/pi-userland/commit/b822679016d9e25977c8429be6e9f87954912540))
+
 ## [0.3.1](https://github.com/robhowley/pi-userland/compare/pi-cmux-junction-v0.3.0...pi-cmux-junction-v0.3.1) (2026-09-01)
 
 
