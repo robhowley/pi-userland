@@ -19,6 +19,7 @@ export type ProcessResult =
 export interface ProcessOptions {
   cwd: string;
   env?: NodeJS.ProcessEnv;
+  input?: string;
   timeoutMs?: number;
   maxBufferBytes?: number;
   shell?: false;
@@ -74,7 +75,7 @@ export const defaultProcessRunner: ProcessRunner = async (file, args, options) =
         }
       },
     );
-    child.stdin?.end();
+    child.stdin?.end(options.input);
   });
 
 export function processSucceeded(result: ProcessResult): boolean {
