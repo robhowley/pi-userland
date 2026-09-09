@@ -5,6 +5,7 @@ import {
   defaultProcessRunner,
   processError,
   processSucceeded,
+  type ProcessResult,
   type ProcessRunner,
 } from './process.js';
 
@@ -82,6 +83,17 @@ export async function preflightCmux(
 
 const CMUX_TARGET_RESOLUTION_TIMEOUT_MS = 2_000;
 const CMUX_TARGET_RESOLUTION_MAX_BUFFER_BYTES = 64 * 1024;
+
+export async function runCmuxCommand(
+  cwd: string,
+  args: readonly string[],
+  options: CmuxOptions = {},
+  input?: string,
+): Promise<ProcessResult> {
+  const env = options.env ?? process.env;
+  const cmuxFile = await resolveCmuxExecutable(env);
+  return await run(cmuxFile, args, cwd, env, options, undefined, input);
+}
 
 export async function resolveCmuxTarget(
   cwd: string,
@@ -213,11 +225,13 @@ async function run(
   env: NodeJS.ProcessEnv,
   options: CmuxOptions,
   maxBufferBytes?: number,
+  input?: string,
 ) {
   return await (options.runner ?? defaultProcessRunner)(file, args, {
     cwd,
     env,
     shell: false,
+    ...(input === undefined ? {} : { input }),
     ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
     ...(maxBufferBytes === undefined ? {} : { maxBufferBytes }),
   });

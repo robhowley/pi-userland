@@ -60,7 +60,15 @@ Status pills are enabled by default, but can be disabled in either the global or
 { "pi-cmux-junction": { "disableStatus": true } }
 ```
 
-A project setting overrides the global setting. After editing a settings file directly, run `/reload`; settings from untrusted projects do not apply. Disabling status only hides the pill; `/junction` commands remain available.
+A project setting overrides the global setting. After editing a settings file directly, run `/reload`; settings from untrusted projects do not apply. Disabling status only hides the pill; `/junction` commands and session restore remain available.
+
+## Session restore
+
+For persisted interactive Pi sessions, Junction registers a verified cmux resume binding on the resolved live surface. The resume command is `pi --session <id>` plus replay-safe original Pi options. cmux remains responsible for workspace persistence, approval and trust policy, relaunch settings, and optional hibernation. There is no Junction restore setting; it remains active when the status pill is hidden.
+
+Junction skips restore for ephemeral or `--no-session` sessions, non-TUI sessions, missing cmux identity, unsupported cmux versions, and bindings that cannot be verified. cmux failures and timeouts do not interrupt Pi. On quit, reload, new session, resume, or fork, Junction sends the final Pi hook and clears only the old session's checkpoint-scoped binding, preserving sibling and unrelated bindings.
+
+Restore reopens the saved conversation after cmux recreates the terminal. It does not recover an interrupted model turn, unsaved transient state, or override cmux settings that disable automatic relaunch.
 
 ## Worktrees
 
