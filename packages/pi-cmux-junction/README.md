@@ -64,11 +64,28 @@ A project setting overrides the global setting. After editing a settings file di
 
 ## Session restore
 
-For persisted interactive Pi sessions, Junction registers a verified cmux resume binding on the resolved live surface. The resume command is `pi --session <id>` plus replay-safe original Pi options. cmux remains responsible for workspace persistence, approval and trust policy, relaunch settings, and optional hibernation. There is no Junction restore setting; it remains active when the status pill is hidden.
+When cmux recreates a terminal after an app relaunch or agent hibernation, Junction can reopen the same persisted Pi conversation in that surface. No Junction setting is required, and restore remains active when the status pill is hidden.
 
-Junction skips restore for ephemeral or `--no-session` sessions, non-TUI sessions, missing cmux identity, unsupported cmux versions, and bindings that cannot be verified. cmux failures and timeouts do not interrupt Pi. On quit, reload, new session, resume, or fork, Junction sends the final Pi hook and clears only the old session's checkpoint-scoped binding, preserving sibling and unrelated bindings.
+Junction resumes with `pi --session <current-id>` and preserves these startup options:
 
-Restore reopens the saved conversation after cmux recreates the terminal. It does not recover an interrupted model turn, unsaved transient state, or override cmux settings that disable automatic relaunch.
+| Setting              | Options                                                                                      |
+| -------------------- | -------------------------------------------------------------------------------------------- |
+| Model                | `--model`, `-m`, `--thinking`, `--provider`                                                  |
+| Extensions           | `--extension`, `-e`, `--skill`, `--mcp-config`                                               |
+| Available tools      | `--tools`, `-t`, `--exclude-tools`, `-xt`, `--no-tools`, `-nt`, `--no-builtin-tools`, `-nbt` |
+| Permissions          | `--permission-mode`, `--trust`, `--sandbox`, `--dangerously-skip-permissions`, `--yolo`      |
+| Configuration        | `--session-dir`, `--config`, `--profile`                                                     |
+| Prompt configuration | `--system-prompt`, `--append-system-prompt`                                                  |
+| Working directory    | `--cwd`, `--dir`                                                                             |
+| Output               | `--no-color`                                                                                 |
+
+Options that take values are kept only when their values are complete. Tool-selection options require separate values, such as `--tools read,bash`; `--tools=read,bash` is not replayed. Junction replaces old session, resume, and fork selectors with the current session ID. It does not replay API keys, user prompts passed through `--prompt` or `--print`, positional input, unknown options, or anything after `--`.
+
+Restore is available only for persisted interactive sessions running inside cmux. Junction does not register it for ephemeral or `--no-session` sessions, non-TUI sessions, missing cmux identity, unsupported cmux versions, or bindings that cmux cannot verify. Registration failures do not interrupt Pi.
+
+cmux still decides whether and when to relaunch the session through its restore, trust, and hibernation settings. Junction clears its old registration when the Pi session quits or changes so cmux does not reopen the wrong conversation.
+
+Restore reopens saved conversation history. It cannot recover an interrupted model turn, unsaved process state, or a terminal that cmux did not persist.
 
 ## Worktrees
 
