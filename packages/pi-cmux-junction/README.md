@@ -72,12 +72,14 @@ Junction resumes with `pi --session <current-id>` and preserves these startup op
 | -------------------- | -------------------------------------------------------------------------------------------- |
 | Model                | `--model`, `-m`, `--thinking`, `--provider`                                                  |
 | Extensions           | `--extension`, `-e`, `--skill`, `--mcp-config`                                               |
-| Available tools      | `--tools`, `-t`, `--exclude-tools`, `-xt`, `--no-tools`, `-nt`, `--no-builtin-tools`, `-nbt` |
+| Available tools†     | `--tools`, `-t`, `--exclude-tools`, `-xt`, `--no-tools`, `-nt`, `--no-builtin-tools`, `-nbt` |
 | Permissions          | `--permission-mode`, `--trust`, `--sandbox`, `--dangerously-skip-permissions`, `--yolo`      |
 | Configuration        | `--session-dir`, `--config`, `--profile`                                                     |
 | Prompt configuration | `--system-prompt`, `--append-system-prompt`                                                  |
 | Working directory    | `--cwd`, `--dir`                                                                             |
 | Output               | `--no-color`                                                                                 |
+
+† Tool-selection options are preserved by Junction but not by cmux's official Pi extension.
 
 Options that take values are kept only when their values are complete. Tool-selection options require separate values, such as `--tools read,bash`; `--tools=read,bash` is not replayed. Junction replaces old session, resume, and fork selectors with the current session ID. It does not replay API keys, user prompts passed through `--prompt` or `--print`, positional input, unknown options, or anything after `--`.
 
