@@ -21,9 +21,23 @@ const OPTIONS_WITH_VALUE = new Set([
   '--dir',
   '--trust',
   '--sandbox',
+  '--tools',
+  '-t',
+  '--exclude-tools',
+  '-xt',
 ]);
 
-const OPTIONS_WITHOUT_VALUE = new Set(['--no-color', '--dangerously-skip-permissions', '--yolo']);
+const OPTIONS_REQUIRING_SEPARATE_VALUE = new Set(['--tools', '-t', '--exclude-tools', '-xt']);
+
+const OPTIONS_WITHOUT_VALUE = new Set([
+  '--no-color',
+  '--dangerously-skip-permissions',
+  '--yolo',
+  '--no-tools',
+  '-nt',
+  '--no-builtin-tools',
+  '-nbt',
+]);
 
 const SELECTORS_TO_DROP = new Set([
   '--session',
@@ -65,13 +79,17 @@ export function buildResumeArgv(sessionId: string, argv: readonly string[]): str
       resumeArgv.push(arg);
       continue;
     }
-    if ([...OPTIONS_WITH_VALUE].some((option) => arg.startsWith(`${option}=`))) {
+    if (
+      [...OPTIONS_WITH_VALUE].some(
+        (option) => !OPTIONS_REQUIRING_SEPARATE_VALUE.has(option) && arg.startsWith(`${option}=`),
+      )
+    ) {
       resumeArgv.push(arg);
       continue;
     }
     if (OPTIONS_WITH_VALUE.has(arg)) {
       const value = argv[index + 1];
-      if (value && !value.startsWith('-')) {
+      if (value !== undefined && !value.startsWith('-')) {
         resumeArgv.push(arg, value);
         index += 1;
       }

@@ -87,6 +87,107 @@ describe('resume argv boundary', () => {
     ]);
   });
 
+  it.each([
+    ['--tools', 'read,write'],
+    ['-t', 'read,write'],
+    ['--exclude-tools', 'bash,subagent'],
+    ['-xt', 'bash,subagent'],
+  ])('preserves %s with its complete following value', (option, value) => {
+    expect(buildResumeArgv('session-tools', ['pi', option, value])).toEqual([
+      'pi',
+      '--session',
+      'session-tools',
+      option,
+      value,
+    ]);
+  });
+
+  it.each(['--no-tools', '-nt', '--no-builtin-tools', '-nbt'])(
+    'preserves restrictive option %s',
+    (option) => {
+      expect(buildResumeArgv('session-tools', ['pi', option])).toEqual([
+        'pi',
+        '--session',
+        'session-tools',
+        option,
+      ]);
+    },
+  );
+
+  it('preserves tool options in original order and rejects unsupported equals forms', () => {
+    expect(
+      buildResumeArgv('session-tools', [
+        'pi',
+        '--no-tools',
+        '--tools',
+        'read,write',
+        '-nbt',
+        '--exclude-tools',
+        'bash',
+        '-nt',
+        '-t',
+        'edit',
+        '-xt',
+        'subagent',
+        '--tools=read',
+        '-t=read',
+        '--exclude-tools=bash',
+        '-xt=bash',
+        '--unknown',
+        'unknown-value',
+      ]),
+    ).toEqual([
+      'pi',
+      '--session',
+      'session-tools',
+      '--no-tools',
+      '--tools',
+      'read,write',
+      '-nbt',
+      '--exclude-tools',
+      'bash',
+      '-nt',
+      '-t',
+      'edit',
+      '-xt',
+      'subagent',
+    ]);
+  });
+
+  it('drops incomplete tool values while preserving following restrictive options', () => {
+    expect(
+      buildResumeArgv('session-tools', [
+        'pi',
+        '--tools',
+        '--no-tools',
+        '-t',
+        '--no-builtin-tools',
+        '--exclude-tools',
+        '-nt',
+        '-xt',
+        '-nbt',
+      ]),
+    ).toEqual([
+      'pi',
+      '--session',
+      'session-tools',
+      '--no-tools',
+      '--no-builtin-tools',
+      '-nt',
+      '-nbt',
+    ]);
+  });
+
+  it('preserves an empty tool list value', () => {
+    expect(buildResumeArgv('session-tools', ['pi', '--tools', ''])).toEqual([
+      'pi',
+      '--session',
+      'session-tools',
+      '--tools',
+      '',
+    ]);
+  });
+
   it('drops incomplete value options and detects no-session forms', () => {
     expect(buildResumeArgv('session-a', ['pi', '--model', '--yolo', '--cwd'])).toEqual([
       'pi',
