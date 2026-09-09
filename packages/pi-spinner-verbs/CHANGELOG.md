@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.6.0](https://github.com/robhowley/pi-userland/compare/pi-spinner-verbs-v3.5.0...pi-spinner-verbs-v3.6.0) (2026-09-09)
+
+
+### Features
+
+* **pi-spinner-verbs:** add fast-furious spinner verbs ([#197](https://github.com/robhowley/pi-userland/issues/197)) ([b138886](https://github.com/robhowley/pi-userland/commit/b13888600605b59c6d85f7ff29649a7d888f223d))
+
 ## [3.5.0](https://github.com/robhowley/pi-userland/compare/pi-spinner-verbs-v3.4.0...pi-spinner-verbs-v3.5.0) (2026-07-31)
 
 
