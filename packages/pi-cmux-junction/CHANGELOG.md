@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/robhowley/pi-userland/compare/pi-cmux-junction-v0.4.0...pi-cmux-junction-v0.4.1) (2026-09-10)
+
+
+### Bug Fixes
+
+* **pi-cmux-junction:** keep live state assertions current ([#203](https://github.com/robhowley/pi-userland/issues/203)) ([981e3f9](https://github.com/robhowley/pi-userland/commit/981e3f9578c62d3f9ab30422a1e2b5beb6e5f3af))
+
 ## [0.4.0](https://github.com/robhowley/pi-userland/compare/pi-cmux-junction-v0.3.1...pi-cmux-junction-v0.4.0) (2026-09-09)
 
 
