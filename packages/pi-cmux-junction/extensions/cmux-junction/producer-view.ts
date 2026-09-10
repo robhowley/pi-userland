@@ -1,22 +1,22 @@
-export const PRODUCER_BOARD_EVENT = 'pi-cmux-junction:update' as const;
+export const PRODUCER_VIEW_EVENT = 'pi-cmux-junction:update' as const;
 
 export const MAX_PRODUCER_KEY_BYTES = 64;
-export const MAX_CARD_KEY_BYTES = 64;
+export const MAX_ITEM_KEY_BYTES = 64;
 export const MAX_LABEL_BYTES = 128;
 export const MAX_SUMMARY_BYTES = 512;
 export const MAX_ROW_TEXT_BYTES = 256;
 export const MAX_HREF_BYTES = 2_048;
-export const MAX_CARDS_PER_BOARD = 32;
-export const MAX_ROWS_PER_CARD = 16;
-export const MAX_ROWS_PER_BOARD = 256;
-export const MAX_BOARD_BYTES = 8_192;
+export const MAX_ITEMS_PER_VIEW = 32;
+export const MAX_ROWS_PER_ITEM = 16;
+export const MAX_ROWS_PER_VIEW = 256;
+export const MAX_VIEW_BYTES = 8_192;
 export const MAX_LOCAL_PRODUCERS = 64;
-export const MAX_LOCAL_CARDS = 512;
+export const MAX_LOCAL_ITEMS = 512;
 export const MAX_LOCAL_ROWS = 4_096;
 
-export interface ProducerBoard {
+export interface ProducerView {
   producer: ProducerIdentity;
-  cards: ProducerCard[];
+  items: ProducerItem[];
 }
 
 export interface ProducerIdentity {
@@ -24,7 +24,7 @@ export interface ProducerIdentity {
   label: string;
 }
 
-export interface ProducerCard {
+export interface ProducerItem {
   key: string;
   title: string;
   status?: string;
@@ -47,12 +47,12 @@ export interface ProducerRow {
   href?: string;
 }
 
-export interface NormalizedProducerBoard {
+export interface NormalizedProducerView {
   readonly producer: Readonly<ProducerIdentity>;
-  readonly cards: readonly NormalizedProducerCard[];
+  readonly items: readonly NormalizedProducerItem[];
 }
 
-export interface NormalizedProducerCard {
+export interface NormalizedProducerItem {
   readonly key: string;
   readonly title: string;
   readonly status?: string;
@@ -75,7 +75,7 @@ export interface NormalizedRow {
   readonly href?: string;
 }
 
-export type ProducerBoardErrorCode =
+export type ProducerViewErrorCode =
   | 'invalid-record'
   | 'unknown-field'
   | 'required-field'
@@ -85,31 +85,31 @@ export type ProducerBoardErrorCode =
   | 'invalid-url'
   | 'invalid-number'
   | 'duplicate-key'
-  | 'board-limit'
+  | 'view-limit'
   | 'capacity';
 
-export type ProducerBoardValidationResult =
-  | { readonly ok: true; readonly value: NormalizedProducerBoard }
+export type ProducerViewValidationResult =
+  | { readonly ok: true; readonly value: NormalizedProducerView }
   | {
       readonly ok: false;
-      readonly code: Exclude<ProducerBoardErrorCode, 'capacity'>;
+      readonly code: Exclude<ProducerViewErrorCode, 'capacity'>;
       readonly path?: string;
     };
 
-export type ProducerBoardUpdateResult =
+export type ProducerViewUpdateResult =
   | {
       readonly accepted: true;
       readonly action: 'replaced' | 'withdrawn' | 'none';
     }
-  | { readonly accepted: false; readonly code: ProducerBoardErrorCode; readonly path?: string };
+  | { readonly accepted: false; readonly code: ProducerViewErrorCode; readonly path?: string };
 
-export interface ProducerBoardStore {
-  accept(value: unknown): ProducerBoardUpdateResult;
-  snapshot(): readonly NormalizedProducerBoard[];
-  subscribe(listener: (snapshot: readonly NormalizedProducerBoard[]) => void): () => void;
+export interface ProducerViewStore {
+  accept(value: unknown): ProducerViewUpdateResult;
+  snapshot(): readonly NormalizedProducerView[];
+  subscribe(listener: (snapshot: readonly NormalizedProducerView[]) => void): () => void;
 }
 
-type ValidationErrorCode = Exclude<ProducerBoardErrorCode, 'capacity'>;
+type ValidationErrorCode = Exclude<ProducerViewErrorCode, 'capacity'>;
 type ValidationFailure = {
   readonly ok: false;
   readonly code: ValidationErrorCode;
@@ -117,17 +117,17 @@ type ValidationFailure = {
 };
 type Parsed<T> = { readonly ok: true; readonly value: T } | ValidationFailure;
 
-type Listener = (snapshot: readonly NormalizedProducerBoard[]) => void;
+type Listener = (snapshot: readonly NormalizedProducerView[]) => void;
 
-interface BoardEntry {
-  readonly board: NormalizedProducerBoard;
+interface ViewEntry {
+  readonly view: NormalizedProducerView;
   readonly json: string;
-  readonly cardCount: number;
+  readonly itemCount: number;
   readonly rowCount: number;
 }
 
 interface Notification {
-  readonly snapshot: readonly NormalizedProducerBoard[];
+  readonly snapshot: readonly NormalizedProducerView[];
   readonly listeners: readonly Listener[];
 }
 
@@ -137,46 +137,46 @@ const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:+/@-]{0,63}$/;
 const CONTROL_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
 const URL_WHITESPACE_PATTERN = /\s/u;
 
-const BOARD_FIELDS = ['producer', 'cards'] as const;
+const VIEW_FIELDS = ['producer', 'items'] as const;
 const PRODUCER_FIELDS = ['key', 'label'] as const;
-const CARD_FIELDS = ['key', 'title', 'status', 'summary', 'progress', 'rows', 'href'] as const;
+const ITEM_FIELDS = ['key', 'title', 'status', 'summary', 'progress', 'rows', 'href'] as const;
 const PROGRESS_FIELDS = ['label', 'value', 'max'] as const;
 const ROW_FIELDS = ['label', 'value', 'detail', 'href'] as const;
 
-export function normalizeProducerBoard(value: unknown): ProducerBoardValidationResult {
+export function normalizeProducerView(value: unknown): ProducerViewValidationResult {
   try {
-    const boardRecord = inspectRecord(value, '$', BOARD_FIELDS, BOARD_FIELDS);
-    if (!boardRecord.ok) return boardRecord;
+    const viewRecord = inspectRecord(value, '$', VIEW_FIELDS, VIEW_FIELDS);
+    if (!viewRecord.ok) return viewRecord;
 
-    const producer = parseProducer(boardRecord.value.get('producer'));
+    const producer = parseProducer(viewRecord.value.get('producer'));
     if (!producer.ok) return producer;
 
-    const cardsArray = inspectArray(boardRecord.value.get('cards'), 'cards', MAX_CARDS_PER_BOARD);
-    if (!cardsArray.ok) return cardsArray;
+    const itemsArray = inspectArray(viewRecord.value.get('items'), 'items', MAX_ITEMS_PER_VIEW);
+    if (!itemsArray.ok) return itemsArray;
 
-    const cards: NormalizedProducerCard[] = [];
-    for (let index = 0; index < cardsArray.value.length; index += 1) {
-      const card = parseCard(cardsArray.value[index], index);
-      if (!card.ok) return card;
-      cards.push(card.value);
+    const items: NormalizedProducerItem[] = [];
+    for (let index = 0; index < itemsArray.value.length; index += 1) {
+      const item = parseItem(itemsArray.value[index], index);
+      if (!item.ok) return item;
+      items.push(item.value);
     }
 
-    const seenCardKeys = new Set<string>();
-    for (let index = 0; index < cards.length; index += 1) {
-      const card = cards[index];
-      if (card === undefined) return failure('invalid-record', `cards[${index}]`);
-      if (seenCardKeys.has(card.key)) return failure('duplicate-key', `cards[${index}].key`);
-      seenCardKeys.add(card.key);
+    const seenItemKeys = new Set<string>();
+    for (let index = 0; index < items.length; index += 1) {
+      const item = items[index];
+      if (item === undefined) return failure('invalid-record', `items[${index}]`);
+      if (seenItemKeys.has(item.key)) return failure('duplicate-key', `items[${index}].key`);
+      seenItemKeys.add(item.key);
     }
 
     let totalRows = 0;
-    for (const card of cards) totalRows += card.rows.length;
-    if (totalRows > MAX_ROWS_PER_BOARD) return failure('board-limit', 'cards');
+    for (const item of items) totalRows += item.rows.length;
+    if (totalRows > MAX_ROWS_PER_VIEW) return failure('view-limit', 'items');
 
-    const normalized = freezeBoard({ producer: producer.value, cards });
+    const normalized = freezeView({ producer: producer.value, items });
     const json = JSON.stringify(normalized);
-    if (Buffer.byteLength(json, 'utf8') > MAX_BOARD_BYTES) {
-      return failure('board-limit', '$');
+    if (Buffer.byteLength(json, 'utf8') > MAX_VIEW_BYTES) {
+      return failure('view-limit', '$');
     }
 
     return { ok: true, value: normalized };
@@ -185,19 +185,19 @@ export function normalizeProducerBoard(value: unknown): ProducerBoardValidationR
   }
 }
 
-export function createProducerBoardStore(): ProducerBoardStore {
-  const entries = new Map<string, BoardEntry>();
+export function createProducerViewStore(): ProducerViewStore {
+  const entries = new Map<string, ViewEntry>();
   const subscribers = new Set<Listener>();
   const notifications: Notification[] = [];
-  let totalCards = 0;
+  let totalItems = 0;
   let totalRows = 0;
   let notifying = false;
 
-  function captureSnapshot(): readonly NormalizedProducerBoard[] {
+  function captureSnapshot(): readonly NormalizedProducerView[] {
     const ordered = [...entries.entries()].sort(([left], [right]) =>
       left < right ? -1 : left > right ? 1 : 0,
     );
-    return freezeSnapshot(ordered.map(([, entry]) => entry.board));
+    return freezeSnapshot(ordered.map(([, entry]) => entry.view));
   }
 
   function enqueueNotification(): void {
@@ -228,8 +228,8 @@ export function createProducerBoardStore(): ProducerBoardStore {
   }
 
   return {
-    accept(value: unknown): ProducerBoardUpdateResult {
-      const normalized = normalizeProducerBoard(value);
+    accept(value: unknown): ProducerViewUpdateResult {
+      const normalized = normalizeProducerView(value);
       if (!normalized.ok) {
         return {
           accepted: false,
@@ -238,52 +238,52 @@ export function createProducerBoardStore(): ProducerBoardStore {
         };
       }
 
-      const board = normalized.value;
-      const key = board.producer.key;
+      const view = normalized.value;
+      const key = view.producer.key;
       const previous = entries.get(key);
 
-      if (board.cards.length === 0) {
+      if (view.items.length === 0) {
         if (previous === undefined) {
           return { accepted: true, action: 'none' };
         }
 
         entries.delete(key);
-        totalCards -= previous.cardCount;
+        totalItems -= previous.itemCount;
         totalRows -= previous.rowCount;
         enqueueNotification();
         drainNotifications();
         return { accepted: true, action: 'withdrawn' };
       }
 
-      const json = JSON.stringify(board);
+      const json = JSON.stringify(view);
       if (previous?.json === json) {
         return { accepted: true, action: 'none' };
       }
 
-      const cardCount = board.cards.length;
+      const itemCount = view.items.length;
       let rowCount = 0;
-      for (const card of board.cards) rowCount += card.rows.length;
+      for (const item of view.items) rowCount += item.rows.length;
 
       const nextProducerCount = entries.size + (previous === undefined ? 1 : 0);
-      const nextCardCount = totalCards - (previous?.cardCount ?? 0) + cardCount;
+      const nextItemCount = totalItems - (previous?.itemCount ?? 0) + itemCount;
       const nextRowCount = totalRows - (previous?.rowCount ?? 0) + rowCount;
       if (
         nextProducerCount > MAX_LOCAL_PRODUCERS ||
-        nextCardCount > MAX_LOCAL_CARDS ||
+        nextItemCount > MAX_LOCAL_ITEMS ||
         nextRowCount > MAX_LOCAL_ROWS
       ) {
         return { accepted: false, code: 'capacity' };
       }
 
-      entries.set(key, { board, json, cardCount, rowCount });
-      totalCards = nextCardCount;
+      entries.set(key, { view, json, itemCount, rowCount });
+      totalItems = nextItemCount;
       totalRows = nextRowCount;
       enqueueNotification();
       drainNotifications();
       return { accepted: true, action: 'replaced' };
     },
 
-    snapshot(): readonly NormalizedProducerBoard[] {
+    snapshot(): readonly NormalizedProducerView[] {
       return captureSnapshot();
     },
 
@@ -365,7 +365,7 @@ function inspectArray(value: unknown, path: string, maximumLength: number): Pars
     }
 
     const length = lengthDescriptor.value;
-    if (length > maximumLength) return failure('board-limit', path);
+    if (length > maximumLength) return failure('view-limit', path);
 
     const keys = Reflect.ownKeys(value);
     if (keys.length !== length + 1) return failure('invalid-record', path);
@@ -409,12 +409,12 @@ function parseProducer(value: unknown): Parsed<Readonly<ProducerIdentity>> {
   return { ok: true, value: { key: key.value, label: label.value } };
 }
 
-function parseCard(value: unknown, index: number): Parsed<NormalizedProducerCard> {
-  const path = `cards[${index}]`;
-  const record = inspectRecord(value, path, CARD_FIELDS, ['key', 'title']);
+function parseItem(value: unknown, index: number): Parsed<NormalizedProducerItem> {
+  const path = `items[${index}]`;
+  const record = inspectRecord(value, path, ITEM_FIELDS, ['key', 'title']);
   if (!record.ok) return record;
 
-  const key = parseIdentifier(record.value.get('key'), `${path}.key`, MAX_CARD_KEY_BYTES);
+  const key = parseIdentifier(record.value.get('key'), `${path}.key`, MAX_ITEM_KEY_BYTES);
   if (!key.ok) return key;
   const title = parseText(record.value.get('title'), `${path}.title`, MAX_LABEL_BYTES);
   if (!title.ok) return title;
@@ -434,7 +434,7 @@ function parseCard(value: unknown, index: number): Parsed<NormalizedProducerCard
 
   let rows: NormalizedRow[] = [];
   if (record.value.has('rows')) {
-    const rowsArray = inspectArray(record.value.get('rows'), `${path}.rows`, MAX_ROWS_PER_CARD);
+    const rowsArray = inspectArray(record.value.get('rows'), `${path}.rows`, MAX_ROWS_PER_ITEM);
     if (!rowsArray.ok) return rowsArray;
     rows = [];
     for (let rowIndex = 0; rowIndex < rowsArray.value.length; rowIndex += 1) {
@@ -599,25 +599,25 @@ function failure(code: ValidationErrorCode, path: string): ValidationFailure {
   return { ok: false, code, path };
 }
 
-function freezeBoard(board: NormalizedProducerBoard): NormalizedProducerBoard {
-  Object.freeze(board.producer);
-  for (const card of board.cards) {
-    if (card.progress !== undefined) Object.freeze(card.progress);
-    for (const row of card.rows) Object.freeze(row);
-    Object.freeze(card.rows);
-    Object.freeze(card);
+function freezeView(view: NormalizedProducerView): NormalizedProducerView {
+  Object.freeze(view.producer);
+  for (const item of view.items) {
+    if (item.progress !== undefined) Object.freeze(item.progress);
+    for (const row of item.rows) Object.freeze(row);
+    Object.freeze(item.rows);
+    Object.freeze(item);
   }
-  Object.freeze(board.cards);
-  return Object.freeze(board);
+  Object.freeze(view.items);
+  return Object.freeze(view);
 }
 
-function freezeSnapshot(snapshot: NormalizedProducerBoard[]): readonly NormalizedProducerBoard[] {
+function freezeSnapshot(snapshot: NormalizedProducerView[]): readonly NormalizedProducerView[] {
   return Object.freeze(snapshot);
 }
 
 function reportSubscriberError(): void {
   try {
-    console.error('pi-cmux-junction: producer-board subscriber failed');
+    console.error('pi-cmux-junction: producer-view subscriber failed');
   } catch {
     // Diagnostics must not interrupt delivery of committed snapshots.
   }

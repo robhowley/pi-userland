@@ -4,7 +4,7 @@ import cmuxJunction from '../extensions/cmux-junction/index.js';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 
 describe('pi-cmux-junction', () => {
-  it('registers the producer board listener before existing wiring', () => {
+  it('registers the producer view listener before existing wiring', () => {
     const registrationOrder: string[] = [];
     const registerCommand = vi.fn(() => {
       registrationOrder.push('command');
@@ -12,10 +12,10 @@ describe('pi-cmux-junction', () => {
     const on = vi.fn((event: string) => {
       registrationOrder.push(`lifecycle:${event}`);
     });
-    let producerBoardHandler: ((value: unknown) => void) | undefined;
+    let producerViewHandler: ((value: unknown) => void) | undefined;
     const eventsOn = vi.fn((channel: string, handler: (value: unknown) => void): (() => void) => {
       registrationOrder.push(`event:${channel}`);
-      producerBoardHandler = handler;
+      producerViewHandler = handler;
       return vi.fn();
     });
     const pi = {
@@ -60,25 +60,25 @@ describe('pi-cmux-junction', () => {
     );
     expect(lifecycleEvents).not.toContain('agent_end');
 
-    const handleProducerBoard = producerBoardHandler;
-    if (!handleProducerBoard) throw new Error('producer board handler was not registered');
+    const handleProducerView = producerViewHandler;
+    if (!handleProducerView) throw new Error('producer view handler was not registered');
     const registrations = registrationOrder.length;
-    const validBoard = {
+    const validView = {
       producer: { key: 'worker', label: 'Worker' },
-      cards: [{ key: 'status', title: 'Status', rows: [{ value: 'ready' }] }],
+      items: [{ key: 'status', title: 'Status', rows: [{ value: 'ready' }] }],
     };
     const hostileValue = new Proxy(
-      { producer: { key: 'hostile', label: 'Hostile' }, cards: [] },
+      { producer: { key: 'hostile', label: 'Hostile' }, items: [] },
       {
         ownKeys() {
-          throw new Error('hostile producer board');
+          throw new Error('hostile producer view');
         },
       },
     );
 
-    expect(() => handleProducerBoard(validBoard)).not.toThrow();
-    expect(() => handleProducerBoard(null)).not.toThrow();
-    expect(() => handleProducerBoard(hostileValue)).not.toThrow();
+    expect(() => handleProducerView(validView)).not.toThrow();
+    expect(() => handleProducerView(null)).not.toThrow();
+    expect(() => handleProducerView(hostileValue)).not.toThrow();
 
     expect(registrationOrder).toHaveLength(registrations);
     expect(registerCommand).toHaveBeenCalledTimes(1);
