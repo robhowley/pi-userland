@@ -8,6 +8,7 @@ import {
   registerJunctionCommand,
   runJunctionCommand,
 } from '../extensions/cmux-junction/command.js';
+import type { CmuxTabCaller } from '../extensions/cmux-junction/cmux.js';
 import type { ProcessRunner } from '../extensions/cmux-junction/process.js';
 import type {
   WorktreeOptions,
@@ -28,6 +29,19 @@ type DefaultWorktreePlan = Extract<WorktreePlan, { kind: 'create-default' }>;
 type DefaultWorktreeSuccess = Extract<WorktreeSuccess, { kind: 'create-default' }>;
 type CheckoutWorktreePlan = Extract<WorktreePlan, { kind: 'checkout' }>;
 type CheckoutWorktreeSuccess = Extract<WorktreeSuccess, { kind: 'checkout' }>;
+
+const TAB_CALLER: CmuxTabCaller = {
+  socketPath: '/tmp/cmux.sock',
+  windowId: '11111111-1111-1111-1111-111111111111',
+  workspaceId: '22222222-2222-2222-2222-222222222222',
+  paneId: '33333333-3333-3333-3333-333333333333',
+  surfaceId: '44444444-4444-4444-4444-444444444444',
+};
+const MOVED_TAB_CALLER: CmuxTabCaller = {
+  ...TAB_CALLER,
+  workspaceId: '55555555-5555-5555-5555-555555555555',
+  paneId: '66666666-6666-6666-6666-666666666666',
+};
 
 let cwd: string;
 let sourceRoot: string;
@@ -139,11 +153,10 @@ describe('/junction command', () => {
     for (const input of [
       'checkout --branch ',
       'checkout --branch feature/test',
-      'checkout --branch feature/test ',
       'checkout --branch feature/test --f',
       'checkout --branch feature/test --from ',
+      'checkout --branch feature/test --tab extra',
       'checkout --branch refs/foo',
-      'checkout --branch refs/foo ',
       'checkout unknown',
       'checkout fork --branch feature/test',
     ]) {
@@ -151,11 +164,16 @@ describe('/junction command', () => {
     }
   });
 
-  it('offers --from only after a complete branch and HEAD only as a static commit hint', () => {
+  it('offers --from and --tab only after complete values', () => {
     const from = {
       value: '--from',
       label: '--from',
       description: 'Create from a committed Git ref; working-tree changes are not copied',
+    };
+    const tab = {
+      value: '--tab',
+      label: '--tab',
+      description: 'Launch Pi in a new unfocused tab in this workspace',
     };
     const head = {
       value: 'HEAD',
@@ -164,16 +182,22 @@ describe('/junction command', () => {
         'Current committed commit; staged, unstaged, untracked, and ignored changes are not copied',
     };
 
-    expect(getJunctionArgumentCompletions('--branch feature/test ')).toEqual([from]);
-    expect(getJunctionArgumentCompletions('fork --branch feature/test ')).toEqual([from]);
+    expect(getJunctionArgumentCompletions('--branch feature/test ')).toEqual([from, tab]);
+    expect(getJunctionArgumentCompletions('fork --branch feature/test ')).toEqual([from, tab]);
+    expect(getJunctionArgumentCompletions('checkout --branch feature/test ')).toEqual([tab]);
     expect(getJunctionArgumentCompletions('--branch feature/test --f')).toEqual([from]);
+    expect(getJunctionArgumentCompletions('--branch feature/test --t')).toEqual([tab]);
+    expect(getJunctionArgumentCompletions('--branch feature/test --tab')).toEqual([tab]);
     expect(getJunctionArgumentCompletions('--branch feature/test --from ')).toEqual([head]);
     expect(getJunctionArgumentCompletions('--branch feature/test --from H')).toEqual([head]);
-    expect(getJunctionArgumentCompletions('--branch feature/test --from HEAD ')).toBeNull();
-    expect(
-      getJunctionArgumentCompletions('--branch feature/test --from refs/heads/main'),
-    ).toBeNull();
+    expect(getJunctionArgumentCompletions('--branch feature/test --from HEAD ')).toEqual([tab]);
+    expect(getJunctionArgumentCompletions('--branch feature/test --from refs/heads/main ')).toEqual(
+      [tab],
+    );
+    expect(getJunctionArgumentCompletions('--branch feature/test --from HEAD --t')).toEqual([tab]);
     expect(getJunctionArgumentCompletions('--branch --from ')).toBeNull();
+    expect(getJunctionArgumentCompletions('--branch feature/test --tab ')).toBeNull();
+    expect(getJunctionArgumentCompletions('--branch feature/test --tab extra')).toBeNull();
   });
 
   it.each([
@@ -199,6 +223,25 @@ describe('/junction command', () => {
       mode: 'fresh',
       branch: 'feature/Keep-Case',
     });
+  });
+
+  it.each([
+    ['--branch feature/fresh --tab', { mode: 'fresh', branch: 'feature/fresh', tab: true }],
+    [
+      '--branch feature/fresh --from refs/tags/source --tab',
+      { mode: 'fresh', branch: 'feature/fresh', from: 'refs/tags/source', tab: true },
+    ],
+    ['fork --branch feature/forked --tab', { mode: 'fork', branch: 'feature/forked', tab: true }],
+    [
+      'fork --branch feature/forked --from HEAD --tab',
+      { mode: 'fork', branch: 'feature/forked', from: 'HEAD', tab: true },
+    ],
+    [
+      'checkout --branch Feature/Keep-Case --tab',
+      { mode: 'checkout', branch: 'Feature/Keep-Case', tab: true },
+    ],
+  ] as const)('parses the strict trailing --tab form: %s', (args, expected) => {
+    expect(parseJunctionArgs(args)).toEqual({ ok: true, ...expected });
   });
 
   it('parses the strict fork grammar', () => {
@@ -251,6 +294,10 @@ describe('/junction command', () => {
     'checkout feature/test --branch other',
     'checkout --branch feature/test --from HEAD',
     'checkout --branch feature/test --from=HEAD',
+    'checkout --branch feature/test --tab extra',
+    'checkout --branch feature/test --tab --tab',
+    'checkout --branch feature/test --tab=now',
+    'checkout --branch feature/test --tab --from HEAD',
     'checkout --from HEAD --branch feature/test',
     'checkout --branch -option',
     'fork checkout --branch feature/test',
@@ -273,7 +320,23 @@ describe('/junction command', () => {
     '--branch=feature/test',
     '--branch feature/test --from=HEAD',
     '--branch feature/test positional',
+    '--branch --tab feature/test',
+    '--tab --branch feature/test',
+    '--branch feature/test --tab extra',
+    '--branch feature/test --tab --tab',
+    '--branch feature/test --tab=now',
+    '--branch feature/test --tab --from HEAD',
+    '--branch feature/test --from HEAD --tab extra',
+    '--branch feature/test --from HEAD --tab --tab',
+    '--branch feature/test --from HEAD --tab=now',
     'fork --from HEAD --branch feature/test',
+    'fork --branch feature/test --tab extra',
+    'fork --branch feature/test --tab --tab',
+    'fork --branch feature/test --tab=now',
+    'fork --branch feature/test --tab --from HEAD',
+    'fork --branch feature/test --from HEAD --tab extra',
+    'fork --branch feature/test --from HEAD --tab --tab',
+    'fork --branch feature/test --from HEAD --tab=now',
     'fork --branch feature/test --from HEAD extra',
   ])('rejects malformed explicit grammar: %j', (args) => {
     expect(parseJunctionArgs(args)).toMatchObject({ ok: false });
@@ -762,6 +825,178 @@ describe('/junction command', () => {
     expect(process.env).toEqual(environmentBefore);
   });
 
+  it.each([
+    ['fresh workspace', '--branch feature/test', false, false, false],
+    ['fresh tab', '--branch feature/test --tab', true, false, false],
+    ['fork workspace', 'fork --branch feature/test', false, false, true],
+    ['fork tab', 'fork --branch feature/test --tab', true, false, true],
+    ['checkout workspace', 'checkout --branch feature/Keep-Case', false, true, false],
+    ['checkout tab', 'checkout --branch feature/Keep-Case --tab', true, true, false],
+  ] as const)(
+    'selects only the %s preflight and launcher',
+    async (_case, args, tab, checkout, fork) => {
+      const directory = await mkdtemp(join(tmpdir(), 'pi-cmux-junction-session-'));
+      tempDirectories.push(directory);
+      const sourceSessionFile = join(directory, 'source.jsonl');
+      await writeFile(sourceSessionFile, '{"type":"session"}\n');
+
+      const preflight = vi.fn(async () => ({ ok: true as const }));
+      const preflightTab = vi.fn(async () => ({ ok: true as const, caller: TAB_CALLER }));
+      const launch = vi.fn(async () => ({ ok: true as const }));
+      const launchTab = vi.fn(async () => ({
+        ok: true as const,
+        mutation: 'exists' as const,
+        surfaceRef: 'surface:115',
+        target: MOVED_TAB_CALLER,
+      }));
+      const worktree = checkout ? CHECKOUT_WORKTREE : WORKTREE;
+      const result = await runJunctionCommand(
+        args,
+        cwd,
+        {
+          plan: async () => PLAN,
+          planCheckout: async () => CHECKOUT_PLAN,
+          preflight,
+          preflightTab,
+          apply: async () => worktree,
+          launch,
+          launchTab,
+        },
+        fork
+          ? {
+              waitForIdle: async () => undefined,
+              sessionManager: { getSessionFile: () => sourceSessionFile },
+            }
+          : undefined,
+      );
+
+      expect(result).toEqual({
+        ok: true,
+        status: 'created-and-launched',
+        worktree,
+        launchCwd: worktreeRoot,
+        ...(tab ? { tab: { surfaceRef: 'surface:115' } } : {}),
+      });
+      expect(preflight).toHaveBeenCalledTimes(tab ? 0 : 1);
+      expect(preflightTab).toHaveBeenCalledTimes(tab ? 1 : 0);
+      expect(launch).toHaveBeenCalledTimes(tab ? 0 : 1);
+      expect(launchTab).toHaveBeenCalledTimes(tab ? 1 : 0);
+
+      const recipe = fork
+        ? { mode: 'fork' as const, sourceSessionFile }
+        : { mode: 'fresh' as const };
+      if (tab) {
+        expect(launchTab).toHaveBeenCalledWith(
+          worktreeRoot,
+          TAB_CALLER,
+          expect.any(Object),
+          recipe,
+        );
+      } else if (fork) {
+        expect(launch).toHaveBeenCalledWith(
+          worktree.branch,
+          worktreeRoot,
+          expect.any(Object),
+          recipe,
+        );
+      } else {
+        expect(launch).toHaveBeenCalledWith(worktree.branch, worktreeRoot, expect.any(Object));
+      }
+    },
+  );
+
+  it('orders fork capture, planning, tab preflight, apply, and tab launch', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pi-cmux-junction-session-'));
+    tempDirectories.push(directory);
+    const sourceSessionFile = join(directory, 'source.jsonl');
+    await writeFile(sourceSessionFile, '{"type":"session"}\n');
+    const order: string[] = [];
+    const launchTab = vi.fn(async () => {
+      order.push('tab-launch');
+      return {
+        ok: true as const,
+        mutation: 'exists' as const,
+        surfaceRef: 'surface:115',
+        target: MOVED_TAB_CALLER,
+      };
+    });
+
+    await expect(
+      runJunctionCommand(
+        'fork --branch feature/test --from HEAD --tab',
+        cwd,
+        {
+          plan: async () => {
+            order.push('plan');
+            return PLAN;
+          },
+          preflight: async () => {
+            throw new Error('workspace preflight must not run');
+          },
+          preflightTab: async () => {
+            order.push('tab-preflight');
+            return { ok: true, caller: TAB_CALLER };
+          },
+          apply: async () => {
+            order.push('apply');
+            return WORKTREE;
+          },
+          launch: async () => {
+            throw new Error('workspace launch must not run');
+          },
+          launchTab,
+        },
+        {
+          waitForIdle: async () => {
+            order.push('idle');
+          },
+          sessionManager: {
+            getSessionFile: () => {
+              order.push('session');
+              return sourceSessionFile;
+            },
+          },
+        },
+      ),
+    ).resolves.toMatchObject({ ok: true, tab: { surfaceRef: 'surface:115' } });
+
+    expect(order).toEqual(['idle', 'session', 'plan', 'tab-preflight', 'apply', 'tab-launch']);
+    expect(launchTab).toHaveBeenCalledWith(worktreeRoot, TAB_CALLER, expect.any(Object), {
+      mode: 'fork',
+      sourceSessionFile,
+    });
+  });
+
+  it('does not apply Git when tab preflight fails', async () => {
+    const preflight = vi.fn();
+    const apply = vi.fn();
+    const launch = vi.fn();
+    const launchTab = vi.fn();
+
+    await expect(
+      runJunctionCommand('--branch feature/test --tab', cwd, {
+        plan: async () => PLAN,
+        preflight,
+        preflightTab: async () => ({
+          ok: false,
+          reason: 'caller-unavailable',
+          message: 'The invoking cmux terminal could not be identified; no worktree was created.',
+        }),
+        apply,
+        launch,
+        launchTab,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      status: 'preflight-failed',
+      message: 'The invoking cmux terminal could not be identified; no worktree was created.',
+    });
+    expect(preflight).not.toHaveBeenCalled();
+    expect(apply).not.toHaveBeenCalled();
+    expect(launch).not.toHaveBeenCalled();
+    expect(launchTab).not.toHaveBeenCalled();
+  });
+
   it('does not apply Git when cmux preflight fails', async () => {
     const apply = vi.fn();
     const launch = vi.fn();
@@ -801,6 +1036,231 @@ describe('/junction command', () => {
       message: 'Prunable worktree metadata requires manual inspection.',
     });
     expect(launch).not.toHaveBeenCalled();
+  });
+
+  it('retains the worktree and preserves --tab in a safe retry when creation did not start', async () => {
+    const result = await runJunctionCommand('--branch feature/test --tab', cwd, {
+      plan: async () => PLAN,
+      preflightTab: async () => ({ ok: true, caller: TAB_CALLER }),
+      apply: async () => WORKTREE,
+      launchTab: async () => ({
+        ok: false,
+        mutation: 'none',
+        reason: 'create-not-started',
+        message: 'cmux tab creation could not start.',
+      }),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 'partial-launch-failed',
+      branch: PLAN.branch,
+      path: worktreeRoot,
+      launchCwd: worktreeRoot,
+      worktreeRetained: true,
+      tab: { mutation: 'none' },
+      message: `Worktree retained after cmux tab launch failed before creation: cmux tab creation could not start.\nBranch: feature/test\nPath: ${worktreeRoot}\nLaunch cwd: ${worktreeRoot}\nNo tab was created or launch command submitted.\nRetry: /junction --branch feature/test --tab`,
+    });
+  });
+
+  it('preserves checkout mode and final --tab in a safe retry', async () => {
+    const result = await runJunctionCommand('checkout --branch feature/Keep-Case --tab', cwd, {
+      planCheckout: async () => CHECKOUT_PLAN,
+      preflightTab: async () => ({ ok: true, caller: TAB_CALLER }),
+      apply: async () => CHECKOUT_WORKTREE,
+      launchTab: async () => ({
+        ok: false,
+        mutation: 'none',
+        reason: 'caller-unavailable',
+        message: 'The caller moved.',
+      }),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 'partial-launch-failed',
+      worktreeRetained: true,
+      tab: { mutation: 'none' },
+    });
+    if (result.ok) throw new Error('Expected tab launch to fail.');
+    expect(result.message).toContain('Retry: /junction checkout --branch feature/Keep-Case --tab');
+  });
+
+  it('drops --from but preserves fork mode and final --tab in a proof-gated retry', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pi-cmux-junction-session-'));
+    tempDirectories.push(directory);
+    const sourceSessionFile = join(directory, 'source.jsonl');
+    await writeFile(sourceSessionFile, '{"type":"session"}\n');
+    const sha = '0123456789abcdef0123456789abcdef01234567';
+    const explicitPlan = {
+      ...PLAN,
+      kind: 'create-explicit' as const,
+      baseRef: 'HEAD',
+      baseSha: sha,
+    };
+    const proof = vi.fn(async () => true);
+
+    const result = await runJunctionCommand(
+      'fork --branch feature/test --from HEAD --tab',
+      cwd,
+      {
+        plan: async () => explicitPlan,
+        preflightTab: async () => ({ ok: true, caller: TAB_CALLER }),
+        apply: async () => ({
+          ...WORKTREE,
+          kind: 'create-explicit' as const,
+          status: 'created' as const,
+          baseRef: 'HEAD',
+          baseSha: sha,
+        }),
+        launchTab: async () => ({
+          ok: false,
+          mutation: 'none',
+          reason: 'caller-unavailable',
+          message: 'The caller moved.',
+        }),
+        proveRetained: proof,
+      },
+      {
+        waitForIdle: async () => undefined,
+        sessionManager: { getSessionFile: () => sourceSessionFile },
+      },
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 'partial-launch-failed',
+      worktreeRetained: true,
+      tab: { mutation: 'none' },
+    });
+    if (result.ok) throw new Error('Expected tab launch to fail.');
+    expect(result.message).toContain(`From: HEAD -> ${sha}`);
+    expect(result.message).toContain('Retry: /junction fork --branch feature/test --tab');
+    expect(result.message).not.toContain('Retry: /junction fork --branch feature/test --from');
+    expect(proof).toHaveBeenCalledWith(explicitPlan, expect.any(Object));
+  });
+
+  it('withholds a tab retry when explicit retained-state proof fails', async () => {
+    const sha = '0123456789abcdef0123456789abcdef01234567';
+    const proof = vi.fn(async () => false);
+    const result = await runJunctionCommand('--branch feature/test --from HEAD --tab', cwd, {
+      plan: async () => ({
+        ...PLAN,
+        kind: 'create-explicit' as const,
+        baseRef: 'HEAD',
+        baseSha: sha,
+      }),
+      preflightTab: async () => ({ ok: true, caller: TAB_CALLER }),
+      apply: async () => ({
+        ...WORKTREE,
+        kind: 'create-explicit' as const,
+        status: 'created' as const,
+        baseRef: 'HEAD',
+        baseSha: sha,
+      }),
+      launchTab: async () => ({
+        ok: false,
+        mutation: 'none',
+        reason: 'staging-failed',
+        message: 'The private tab launch script could not be staged.',
+      }),
+      proveRetained: proof,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 'partial-launch-failed',
+      worktreeRetained: true,
+      tab: { mutation: 'none' },
+    });
+    if (result.ok) throw new Error('Expected tab launch to fail.');
+    expect(result.message).toContain('No tab was created or launch command submitted.');
+    expect(result.message).toContain('inspect Git state');
+    expect(result.message).not.toContain('Retry:');
+    expect(proof).toHaveBeenCalledOnce();
+  });
+
+  it('reports unknown tab creation ancestry without retry, cleanup, or retained proof', async () => {
+    const proof = vi.fn(async () => true);
+    const result = await runJunctionCommand('--branch feature/test --from HEAD --tab', cwd, {
+      plan: async () => ({
+        ...PLAN,
+        kind: 'create-explicit' as const,
+        baseRef: 'HEAD',
+        baseSha: '0123456789abcdef0123456789abcdef01234567',
+      }),
+      preflightTab: async () => ({ ok: true, caller: TAB_CALLER }),
+      apply: async () => ({
+        ...WORKTREE,
+        kind: 'create-explicit' as const,
+        status: 'created' as const,
+        baseRef: 'HEAD',
+        baseSha: '0123456789abcdef0123456789abcdef01234567',
+      }),
+      launchTab: async () => ({
+        ok: false,
+        mutation: 'may-exist',
+        reason: 'create-unknown',
+        target: MOVED_TAB_CALLER,
+        message: 'cmux tab creation may have completed.',
+      }),
+      proveRetained: proof,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 'partial-launch-unknown',
+      branch: PLAN.branch,
+      path: worktreeRoot,
+      launchCwd: worktreeRoot,
+      worktreeRetained: true,
+      retrySafe: false,
+      tab: { mutation: 'may-exist' },
+      message: `Worktree retained, but cmux tab creation is unknown: cmux tab creation may have completed.\nBranch: feature/test\nPath: ${worktreeRoot}\nLaunch cwd: ${worktreeRoot}\nTarget: window ${MOVED_TAB_CALLER.windowId}, workspace ${MOVED_TAB_CALLER.workspaceId}, pane ${MOVED_TAB_CALLER.paneId}.\nNo automatic retry or cleanup was attempted.`,
+    });
+    expect(proof).not.toHaveBeenCalled();
+  });
+
+  it('reports the exact created tab and possible blank launch without retry or cleanup', async () => {
+    const proof = vi.fn(async () => true);
+    const result = await runJunctionCommand('--branch feature/test --from HEAD --tab', cwd, {
+      plan: async () => ({
+        ...PLAN,
+        kind: 'create-explicit' as const,
+        baseRef: 'HEAD',
+        baseSha: '0123456789abcdef0123456789abcdef01234567',
+      }),
+      preflightTab: async () => ({ ok: true, caller: TAB_CALLER }),
+      apply: async () => ({
+        ...WORKTREE,
+        kind: 'create-explicit' as const,
+        status: 'created' as const,
+        baseRef: 'HEAD',
+        baseSha: '0123456789abcdef0123456789abcdef01234567',
+      }),
+      launchTab: async () => ({
+        ok: false,
+        mutation: 'exists',
+        reason: 'send-failed',
+        surfaceRef: 'surface:115',
+        target: MOVED_TAB_CALLER,
+        message: 'cmux created surface:115, but Pi launch submission failed.',
+      }),
+      proveRetained: proof,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 'partial-launch-failed',
+      branch: PLAN.branch,
+      path: worktreeRoot,
+      launchCwd: worktreeRoot,
+      worktreeRetained: true,
+      retrySafe: false,
+      tab: { mutation: 'exists', surfaceRef: 'surface:115' },
+      message: `Worktree retained after Pi launch submission failed for cmux tab surface:115: cmux created surface:115, but Pi launch submission failed.\nBranch: feature/test\nPath: ${worktreeRoot}\nLaunch cwd: ${worktreeRoot}\nThe tab may be blank or partially launched. No automatic retry or cleanup was attempted.`,
+    });
+    expect(proof).not.toHaveBeenCalled();
   });
 
   it('reports the attempted root when destination lookup and cmux launch fail', async () => {
@@ -1103,9 +1563,11 @@ describe('/junction command', () => {
 
   it.each(['', ' \t\n', 'help'])('shows help without orchestration (%j)', async (args) => {
     let handler: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
+    let description = '';
     const pi = {
       registerCommand: vi.fn((_name, options) => {
         handler = options.handler;
+        description = options.description;
       }),
     };
     const notify = vi.fn();
@@ -1127,16 +1589,18 @@ describe('/junction command', () => {
 
     expect(notify).toHaveBeenCalledTimes(1);
     expect(notify).toHaveBeenCalledWith(expect.any(String), 'info');
+    expect(description).toContain('--tab');
     const help = notify.mock.calls[0]?.[0];
     expect(help).toBe(
       [
         'Junction commands:',
         '  /junction [help] — show this command reference',
-        '  /junction --branch <name> — create a new worktree from the default base or reuse a matching worktree; launch a fresh Pi session',
-        '  /junction --branch <name> --from <commit-ish> — create a new worktree from the specified commit-ish (never reuse); launch a fresh Pi session',
-        '  /junction fork --branch <name> — wait for the current persisted session to idle, then create a new worktree from the default base or reuse a matching worktree; fork the conversation',
-        '  /junction fork --branch <name> --from <commit-ish> — wait for the current persisted session to idle, then create a new worktree from the specified commit-ish (never reuse); fork the conversation',
-        '  /junction checkout --branch <local-branch> — open an existing local branch in its worktree; launch a fresh Pi session',
+        '  /junction --branch <name> [--tab] — create a new worktree from the default base or reuse a matching worktree; launch a fresh Pi session',
+        '  /junction --branch <name> --from <commit-ish> [--tab] — create a new worktree from the specified commit-ish (never reuse); launch a fresh Pi session',
+        '  /junction fork --branch <name> [--tab] — wait for the current persisted session to idle, then create a new worktree from the default base or reuse a matching worktree; fork the conversation',
+        '  /junction fork --branch <name> --from <commit-ish> [--tab] — wait for the current persisted session to idle, then create a new worktree from the specified commit-ish (never reuse); fork the conversation',
+        '  /junction checkout --branch <local-branch> [--tab] — open an existing local branch in its worktree; launch a fresh Pi session',
+        '  Append `--tab` to launch Pi in a new unfocused tab in this workspace instead of a new cmux workspace.',
       ].join('\n'),
     );
     expect(waitForIdle).not.toHaveBeenCalled();
@@ -1146,6 +1610,40 @@ describe('/junction command', () => {
     expect(preflight).not.toHaveBeenCalled();
     expect(apply).not.toHaveBeenCalled();
     expect(launch).not.toHaveBeenCalled();
+  });
+
+  it('reports tab command acceptance without claiming Pi startup or parent lifecycle registration', async () => {
+    let handler: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
+    const pi = {
+      registerCommand: vi.fn((_name, options) => {
+        handler = options.handler;
+      }),
+    };
+    const notify = vi.fn();
+    const registerLifecycle = vi.fn();
+
+    registerJunctionCommand(pi, {
+      plan: async () => PLAN,
+      preflightTab: async () => ({ ok: true, caller: TAB_CALLER }),
+      apply: async () => WORKTREE,
+      launchTab: async () => ({
+        ok: true,
+        mutation: 'exists',
+        surfaceRef: 'surface:115',
+        target: MOVED_TAB_CALLER,
+      }),
+    });
+    await handler?.('--branch feature/test --tab', {
+      cwd,
+      ui: { notify },
+      registerLifecycle,
+    } as unknown as ExtensionCommandContext);
+
+    expect(notify).toHaveBeenCalledWith(
+      `Created worktree and cmux accepted one Pi launch command for tab surface:115; Pi startup is not confirmed.\nBranch: feature/test\nPath: ${worktreeRoot}\nLaunch cwd: ${worktreeRoot}`,
+      'info',
+    );
+    expect(registerLifecycle).not.toHaveBeenCalled();
   });
 
   it.each(['created', 'reused'] as const)(

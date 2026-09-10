@@ -13,26 +13,38 @@ pi install npm:@robhowley/pi-cmux-junction
 From Pi running inside cmux in a Git repository:
 
 ```text
-/junction --branch <name>
-/junction --branch <name> --from <commit-ish>
-/junction fork --branch <name>
-/junction fork --branch <name> --from <commit-ish>
-/junction checkout --branch <local-branch>
+/junction --branch <name> [--tab]
+/junction --branch <name> --from <commit-ish> [--tab]
+/junction fork --branch <name> [--tab]
+/junction fork --branch <name> --from <commit-ish> [--tab]
+/junction checkout --branch <local-branch> [--tab]
 ```
 
-Run `/junction` without arguments or `/junction help` to show this help. Each worktree form opens a new cmux workspace and starts Pi there. Your current workspace stays focused.
+Run `/junction` without arguments or `/junction help` to show this help. `--tab` is optional; omitting it creates a new cmux workspace exactly as before. The current workspace stays focused.
 
-- `/junction --branch <name>` — create a new worktree from the default base or reuse a matching worktree; start a fresh Pi session.
-- `/junction --branch <name> --from <commit-ish>` — create a new worktree from the specified commit-ish (never reuse); start a fresh Pi session.
-- `/junction fork --branch <name>` — wait for the current persisted session to idle, then create a new worktree from the default base or reuse a matching worktree; fork the conversation.
-- `/junction fork --branch <name> --from <commit-ish>` — wait for the current persisted session to idle, then create a new worktree from the specified commit-ish (never reuse); fork the conversation.
-- `/junction checkout --branch <local-branch>` — open an existing local branch in its worktree; start a fresh Pi session.
+- `/junction --branch <name> [--tab]` — create a new worktree from the default base or reuse a matching worktree; start a fresh Pi session.
+- `/junction --branch <name> --from <commit-ish> [--tab]` — create a new worktree from the specified commit-ish (never reuse); start a fresh Pi session.
+- `/junction fork --branch <name> [--tab]` — wait for the current persisted session to idle, then create a new worktree from the default base or reuse a matching worktree; fork the conversation.
+- `/junction fork --branch <name> --from <commit-ish> [--tab]` — wait for the current persisted session to idle, then create a new worktree from the specified commit-ish (never reuse); fork the conversation.
+- `/junction checkout --branch <local-branch> [--tab]` — open an existing local branch in its worktree; start a fresh Pi session.
 
 New sessions open in the same directory in the new worktree. If that directory is unavailable, Junction opens the worktree root and warns you. It uses the same Pi config directory and does not create missing directories or copy uncommitted files.
 
 No-`--from` forms use the repository's default base when creating a worktree and may reuse a matching worktree. Forms with `--from <commit-ish>` always create a new branch worktree from that committed ref and reject existing branch or path collisions.
 
 `checkout` requires the exact name of an existing local branch, uses its current tip, and does not accept `--from`.
+
+### Tab placement
+
+With `--tab`, Junction targets the invoking Pi surface's live cmux workspace and the pane containing that surface. It creates one terminal surface there with focus false and does not issue a later focus command, so it does not steal focus.
+
+A tab launch has two steps: Junction creates the terminal surface, then submits exactly one command containing a self-cleaning launch script. A successful result means cmux accepted that submitted command; it does not mean Pi finished startup.
+
+For `fork`, Junction captures the source session after waiting for it to go idle. The new tab starts a new Pi child session from that capture. The child self-registers from its own CMUX identity; the parent does not register it.
+
+If tab creation or `send` is ambiguous, or `send` fails after creation, the tab may be blank or partially launched. v1 leaves it for inspection and does not auto-close it.
+
+Only failures proven to have made no cmux tab mutation may offer a proof-gated retry. Retained-worktree retries keep `--tab` and follow the existing `--from` rule: an explicit `--from` is dropped on retry, while checkout keeps its existing form. Unknown creation and existing-tab states never retry automatically.
 
 ## Detailed agent status
 

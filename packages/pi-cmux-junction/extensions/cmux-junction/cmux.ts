@@ -1,4 +1,5 @@
-import { resolve } from 'node:path';
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import { getAgentDir } from '@earendil-works/pi-coding-agent';
 import { resolveCmuxExecutable } from './cmux-runtime.mjs';
 import {
@@ -27,6 +28,43 @@ export type CmuxTargetResolution =
   | { ok: false; reason: 'process-failed' | 'invalid-response'; message: string };
 
 export type CmuxLaunchRecipe = { mode: 'fresh' } | { mode: 'fork'; sourceSessionFile: string };
+
+export interface CmuxTabCaller extends CmuxTarget {
+  windowId: string;
+  paneId: string;
+}
+
+export type CmuxTabPreflightResult =
+  | { ok: true; caller: CmuxTabCaller }
+  | {
+      ok: false;
+      reason: 'missing-caller' | 'cmux-unavailable' | 'pi-unavailable' | 'caller-unavailable';
+      message: string;
+    };
+
+export type CmuxTabLaunchResult =
+  | { ok: true; mutation: 'exists'; surfaceRef: string; target: CmuxTabCaller }
+  | {
+      ok: false;
+      mutation: 'none';
+      reason: 'caller-unavailable' | 'staging-failed' | 'create-not-started';
+      message: string;
+    }
+  | {
+      ok: false;
+      mutation: 'may-exist';
+      reason: 'create-unknown';
+      target: CmuxTabCaller;
+      message: string;
+    }
+  | {
+      ok: false;
+      mutation: 'exists';
+      reason: 'send-failed';
+      surfaceRef: string;
+      target: CmuxTabCaller;
+      message: string;
+    };
 
 const PI_CODING_AGENT_DIR_ENV = 'PI_CODING_AGENT_DIR';
 const SOURCE_SESSION_ENV = 'PI_CMUX_JUNCTION_SOURCE_SESSION';
@@ -185,6 +223,146 @@ export function buildWorkspaceCreateArgs(
   ];
 }
 
+export async function preflightCmuxTab(
+  cwd: string,
+  options: CmuxOptions = {},
+): Promise<CmuxTabPreflightResult> {
+  const env = options.env ?? process.env;
+  const socketPath = normalizeTargetIdentity(env['CMUX_SOCKET_PATH']);
+  const workspaceId = normalizeTargetIdentity(env['CMUX_WORKSPACE_ID']);
+  const surfaceId = normalizeTargetIdentity(env['CMUX_SURFACE_ID']);
+  if (socketPath === null || workspaceId === null || surfaceId === null) {
+    return {
+      ok: false,
+      reason: 'missing-caller',
+      message:
+        'Tab launch requires nonblank CMUX_SOCKET_PATH, CMUX_WORKSPACE_ID, and CMUX_SURFACE_ID; no worktree was created.',
+    };
+  }
+
+  const preflight = await preflightCmux(cwd, options);
+  if (!preflight.ok) return preflight;
+
+  const caller = await resolveAndIdentifyCmuxCaller(
+    cwd,
+    { socketPath, workspaceId, surfaceId },
+    options,
+  );
+  if (caller === null) {
+    return {
+      ok: false,
+      reason: 'caller-unavailable',
+      message: 'The invoking cmux terminal could not be identified; no worktree was created.',
+    };
+  }
+  return { ok: true, caller };
+}
+
+export async function launchCmuxTab(
+  worktreePath: string,
+  caller: CmuxTabCaller,
+  options: CmuxOptions = {},
+  recipe: CmuxLaunchRecipe = { mode: 'fresh' },
+): Promise<CmuxTabLaunchResult> {
+  const env = options.env ?? process.env;
+
+  let script: StagedTabLaunchScript;
+  try {
+    const activeAgentDir = options.activeAgentDir ?? resolve(process.cwd(), getAgentDir());
+    script = await stageTabLaunchScript(activeAgentDir, recipe);
+  } catch {
+    return {
+      ok: false,
+      mutation: 'none',
+      reason: 'staging-failed',
+      message: 'The private tab launch script could not be staged.',
+    };
+  }
+
+  let cmuxFile: string;
+  try {
+    cmuxFile = await resolveCmuxExecutable(env);
+  } catch {
+    await removeStagedTabLaunchScript(script);
+    return {
+      ok: false,
+      mutation: 'none',
+      reason: 'create-not-started',
+      message: 'cmux tab creation could not start.',
+    };
+  }
+
+  const target = await resolveAndIdentifyCmuxCaller(worktreePath, caller, options);
+  if (target === null) {
+    await removeStagedTabLaunchScript(script);
+    return {
+      ok: false,
+      mutation: 'none',
+      reason: 'caller-unavailable',
+      message: 'The invoking cmux terminal could not be re-identified before tab creation.',
+    };
+  }
+
+  const createArgs = [
+    '--socket',
+    target.socketPath,
+    'new-surface',
+    '--type',
+    'terminal',
+    '--placement',
+    'workspace',
+    '--window',
+    target.windowId,
+    '--workspace',
+    target.workspaceId,
+    '--pane',
+    target.paneId,
+    '--working-directory',
+    worktreePath,
+    '--focus',
+    'false',
+  ];
+
+  let create: ProcessResult;
+  try {
+    create = await run(cmuxFile, createArgs, worktreePath, env, options);
+  } catch {
+    return createMayExistResult(target);
+  }
+  if (create.outcome === 'spawn-failed') {
+    await removeStagedTabLaunchScript(script);
+    return {
+      ok: false,
+      mutation: 'none',
+      reason: 'create-not-started',
+      message: 'cmux tab creation could not start.',
+    };
+  }
+
+  const created = parseCmuxTabCreateResult(create);
+  if (created === null) return createMayExistResult(target);
+
+  const sendArgs = [
+    '--socket',
+    target.socketPath,
+    'send',
+    '--workspace',
+    target.workspaceId,
+    '--surface',
+    created.surfaceRef,
+    `${script.path}\\r`,
+  ];
+  let send: ProcessResult;
+  try {
+    send = await run(cmuxFile, sendArgs, worktreePath, env, options);
+  } catch {
+    return sendFailedResult(created.surfaceRef, target);
+  }
+  if (!processSucceeded(send)) return sendFailedResult(created.surfaceRef, target);
+
+  return { ok: true, mutation: 'exists', surfaceRef: created.surfaceRef, target };
+}
+
 export async function launchCmuxWorkspace(
   branch: string,
   worktreePath: string,
@@ -216,6 +394,179 @@ export async function launchCmuxWorkspace(
     };
   }
   return { ok: true };
+}
+
+interface StagedTabLaunchScript {
+  directory: string;
+  path: string;
+}
+
+const TAB_SCRIPT_DIRECTORY_PREFIX = '/tmp/pi-cmux-junction-tab-';
+const TAB_SCRIPT_DIRECTORY_PATTERN = /^\/tmp\/pi-cmux-junction-tab-[A-Za-z0-9]+$/;
+const TAB_SCRIPT_NAME = 'launch.sh';
+const CMUX_TAB_CREATE_RESPONSE =
+  /^OK (surface:[1-9][0-9]*) (pane:[1-9][0-9]*) (workspace:[1-9][0-9]*)\n$/;
+
+async function resolveAndIdentifyCmuxCaller(
+  cwd: string,
+  target: CmuxTarget,
+  options: CmuxOptions,
+): Promise<CmuxTabCaller | null> {
+  let resolved: CmuxTargetResolution;
+  try {
+    resolved = await resolveCmuxTarget(cwd, target, options);
+  } catch {
+    return null;
+  }
+  if (!resolved.ok) return null;
+
+  const env = options.env ?? process.env;
+  let result: ProcessResult;
+  try {
+    const cmuxFile = await resolveCmuxExecutable(env);
+    result = await run(
+      cmuxFile,
+      [
+        '--socket',
+        resolved.socketPath,
+        'identify',
+        '--id-format',
+        'both',
+        '--json',
+        '--workspace',
+        resolved.workspaceId,
+        '--surface',
+        resolved.surfaceId,
+      ],
+      cwd,
+      env,
+      options,
+    );
+  } catch {
+    return null;
+  }
+  if (!processSucceeded(result)) return null;
+  return parseCmuxCaller(result.stdout, resolved);
+}
+
+function parseCmuxCaller(stdout: string, target: CmuxTarget): CmuxTabCaller | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(stdout.trim());
+  } catch {
+    return null;
+  }
+  if (!isRecord(value) || !isRecord(value['caller'])) return null;
+
+  const caller = value['caller'];
+  const windowId = parseUuid(caller['window_id']);
+  const workspaceId = parseUuid(caller['workspace_id']);
+  const paneId = parseUuid(caller['pane_id']);
+  const surfaceId = parseUuid(caller['surface_id']);
+  if (
+    windowId === null ||
+    workspaceId === null ||
+    paneId === null ||
+    surfaceId === null ||
+    workspaceId !== target.workspaceId ||
+    surfaceId !== target.surfaceId ||
+    caller['surface_type'] !== 'terminal' ||
+    caller['is_browser_surface'] !== false
+  ) {
+    return null;
+  }
+  return { socketPath: target.socketPath, windowId, workspaceId, paneId, surfaceId };
+}
+
+async function stageTabLaunchScript(
+  activeAgentDir: string,
+  recipe: CmuxLaunchRecipe,
+): Promise<StagedTabLaunchScript> {
+  const values = [activeAgentDir, ...(recipe.mode === 'fork' ? [recipe.sourceSessionFile] : [])];
+  if (values.some((value) => value.includes('\0'))) throw new Error('invalid script value');
+
+  const directory = await mkdtemp(TAB_SCRIPT_DIRECTORY_PREFIX);
+  if (!isPrivateTabScriptDirectory(directory)) throw new Error('invalid script directory');
+
+  const path = join(directory, TAB_SCRIPT_NAME);
+  try {
+    await chmod(directory, 0o700);
+    await writeFile(path, buildTabLaunchScript(activeAgentDir, recipe), {
+      encoding: 'utf8',
+      flag: 'wx',
+      mode: 0o700,
+    });
+    await chmod(path, 0o700);
+    return { directory, path };
+  } catch (error) {
+    await rm(directory, { force: true, recursive: true });
+    throw error;
+  }
+}
+
+function buildTabLaunchScript(activeAgentDir: string, recipe: CmuxLaunchRecipe): string {
+  return [
+    '#!/bin/sh',
+    'set -eu',
+    'script_path=$0',
+    'script_dir=${script_path%/*}',
+    'rm -f "$script_path"',
+    'rmdir "$script_dir"',
+    `export ${PI_CODING_AGENT_DIR_ENV}=${quoteShellValue(activeAgentDir)}`,
+    ...(recipe.mode === 'fork'
+      ? [
+          `export ${SOURCE_SESSION_ENV}=${quoteShellValue(recipe.sourceSessionFile)}`,
+          FORK_PI_COMMAND,
+        ]
+      : [FRESH_PI_COMMAND]),
+    '',
+  ].join('\n');
+}
+
+function quoteShellValue(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+function isPrivateTabScriptDirectory(path: string): boolean {
+  return TAB_SCRIPT_DIRECTORY_PATTERN.test(path);
+}
+
+async function removeStagedTabLaunchScript(script: StagedTabLaunchScript): Promise<void> {
+  if (!isPrivateTabScriptDirectory(script.directory)) return;
+  await rm(script.directory, { force: true, recursive: true }).catch(() => undefined);
+}
+
+function parseCmuxTabCreateResult(result: ProcessResult): { surfaceRef: string } | null {
+  if (!processSucceeded(result) || result.stderr !== '') return null;
+  const match = CMUX_TAB_CREATE_RESPONSE.exec(result.stdout);
+  const surfaceRef = match?.[1];
+  return surfaceRef === undefined || match?.[0] !== result.stdout ? null : { surfaceRef };
+}
+
+function createMayExistResult(target: CmuxTabCaller): CmuxTabLaunchResult {
+  return {
+    ok: false,
+    mutation: 'may-exist',
+    reason: 'create-unknown',
+    target,
+    message: `cmux tab creation may have completed in window ${target.windowId}, workspace ${target.workspaceId}, pane ${target.paneId}.`,
+  };
+}
+
+function sendFailedResult(surfaceRef: string, target: CmuxTabCaller): CmuxTabLaunchResult {
+  return {
+    ok: false,
+    mutation: 'exists',
+    reason: 'send-failed',
+    surfaceRef,
+    target,
+    message: `cmux created ${surfaceRef}, but Pi launch submission failed; the tab may be blank or partially launched.`,
+  };
+}
+
+function parseUuid(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  return /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value) ? value : null;
 }
 
 async function run(
