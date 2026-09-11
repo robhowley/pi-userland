@@ -19,7 +19,10 @@ import {
   runCmux,
   runCoordinatorRuntime,
 } from '../extensions/cmux-junction/coordinator.mjs';
-import { MAX_LIFECYCLE_FRAME_BYTES } from '../extensions/cmux-junction/lifecycle-protocol.mjs';
+import {
+  LIFECYCLE_PROTOCOL,
+  MAX_LIFECYCLE_FRAME_BYTES,
+} from '../extensions/cmux-junction/lifecycle-protocol.mjs';
 import { PRESENTATION_PROTOCOL } from '../extensions/cmux-junction/presentation-protocol.mjs';
 
 const fixturePath = new URL('../extensions/cmux-junction/wire-fixtures/v1.json', import.meta.url);
@@ -890,6 +893,29 @@ describe('coordinator runtime boundary', () => {
     locked.write(`${JSON.stringify(snapshot())}\n`.repeat(3));
     await lockedClosed;
     expect(runtime.core.ledger().owners).toEqual([]);
+
+    const presentationCount = runtime.presentation.diagnostics().sourceCount;
+    const malformedRecognized = createConnection(listen);
+    await once(malformedRecognized, 'connect');
+    malformedRecognized.setEncoding('utf8');
+    const malformedAck = nextJsonLine(malformedRecognized);
+    malformedRecognized.write(
+      `${JSON.stringify({ protocol: LIFECYCLE_PROTOCOL, kind: 'snapshot' })}\n${JSON.stringify(
+        presentationSnapshot({ connectionId: 'connection-after-malformed' }),
+      )}\n`,
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    malformedRecognized.write(
+      `${JSON.stringify(snapshot({ connectionId: 'lifecycle-after-malformed' }))}\n`,
+    );
+    await expect(malformedAck).resolves.toMatchObject({
+      protocol: LIFECYCLE_PROTOCOL,
+      kind: 'ack',
+    });
+    expect(runtime.presentation.diagnostics().sourceCount).toBe(presentationCount);
+    const malformedRecognizedClosed = once(malformedRecognized, 'close');
+    malformedRecognized.destroy();
+    await malformedRecognizedClosed;
 
     const busy = createConnection(listen);
     await once(busy, 'connect');

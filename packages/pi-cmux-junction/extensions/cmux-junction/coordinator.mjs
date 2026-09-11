@@ -1113,6 +1113,7 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
           malformedLine();
           continue;
         }
+        protocol ??= lineProtocol;
         if (!decoded.ok || (protocol !== null && lineProtocol !== protocol)) {
           malformedLine();
           continue;

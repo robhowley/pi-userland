@@ -164,9 +164,6 @@ export function createPresentationCore(options) {
     if (!capacityAccepted(options.capacity, draftBlocks)) return reject('capacity');
 
     const draftBindings = new Map(bindings);
-    if (existing?.socketToken && existing.socketToken !== socketToken) {
-      draftBindings.delete(existing.socketToken);
-    }
     draftBindings.set(socketToken, {
       sourceId: identity.sourceId,
       connectionId: message.connectionId,

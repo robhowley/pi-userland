@@ -295,6 +295,18 @@ describe('presentation fencing and liveness', () => {
     expect(
       core.acceptSnapshot(snapshot({ sourceGeneration: generation, revision: 1 }), 'socket-new'),
     ).toMatchObject({ ok: true, acceptedGeneration: generation });
+    const blocks = core.blocks();
+    expect(
+      core.acceptSnapshot(
+        snapshot({
+          sourceGeneration: generation,
+          revision: 2,
+          views: [view('late-old-socket')],
+        }),
+        'socket-old',
+      ),
+    ).toEqual({ ok: false, reason: 'fenced' });
+    expect(core.blocks()).toBe(blocks);
     expect(core.connectionClosed('socket-old')).toEqual({ ok: true, changed: false });
     expect(core.diagnostics()).toMatchObject({ sourceCount: 1, connectedCount: 1 });
   });
