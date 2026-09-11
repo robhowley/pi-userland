@@ -1,0 +1,122 @@
+{
+  "window_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+  "window_ref": "window:1",
+  "workspaces": [
+    {
+      "current_directory": "/tmp",
+      "custom_color": null,
+      "custom_title": "junction-test-a",
+      "description": null,
+      "has_custom_title": true,
+      "id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "index": 0,
+      "latest_conversation_message": null,
+      "latest_submitted_at": null,
+      "latest_submitted_message": null,
+      "listening_ports": [],
+      "pinned": false,
+      "ref": "workspace:1",
+      "remote": {
+        "active_terminal_sessions": 0,
+        "conflicted_ports": [],
+        "connected": false,
+        "daemon": {
+          "capabilities": [],
+          "detail": null,
+          "name": null,
+          "remote_path": null,
+          "state": "unavailable",
+          "version": null
+        },
+        "destination": null,
+        "detail": null,
+        "detected_ports": [],
+        "enabled": false,
+        "forwarded_ports": [],
+        "has_identity_file": false,
+        "has_ssh_options": false,
+        "heartbeat": {
+          "age_seconds": null,
+          "count": 0,
+          "last_seen_at": null
+        },
+        "local_proxy_port": null,
+        "persistent_daemon_slot": null,
+        "port": null,
+        "proxy": {
+          "error_code": null,
+          "host": null,
+          "port": null,
+          "schemes": ["socks5", "http_connect"],
+          "state": "unavailable",
+          "url": null
+        },
+        "state": "disconnected",
+        "terminal_profile": null,
+        "terminal_tmux_session": null,
+        "terminal_transport": null,
+        "transport": null
+      },
+      "selected": false,
+      "title": "junction-test-a"
+    },
+    {
+      "current_directory": "/tmp",
+      "custom_color": null,
+      "custom_title": "junction-test-b",
+      "description": null,
+      "has_custom_title": true,
+      "id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+      "index": 1,
+      "latest_conversation_message": null,
+      "latest_submitted_at": null,
+      "latest_submitted_message": null,
+      "listening_ports": [],
+      "pinned": false,
+      "ref": "workspace:2",
+      "remote": {
+        "active_terminal_sessions": 0,
+        "conflicted_ports": [],
+        "connected": false,
+        "daemon": {
+          "capabilities": [],
+          "detail": null,
+          "name": null,
+          "remote_path": null,
+          "state": "unavailable",
+          "version": null
+        },
+        "destination": null,
+        "detail": null,
+        "detected_ports": [],
+        "enabled": false,
+        "forwarded_ports": [],
+        "has_identity_file": false,
+        "has_ssh_options": false,
+        "heartbeat": {
+          "age_seconds": null,
+          "count": 0,
+          "last_seen_at": null
+        },
+        "local_proxy_port": null,
+        "persistent_daemon_slot": null,
+        "port": null,
+        "proxy": {
+          "error_code": null,
+          "host": null,
+          "port": null,
+          "schemes": ["socks5", "http_connect"],
+          "state": "unavailable",
+          "url": null
+        },
+        "state": "disconnected",
+        "terminal_profile": null,
+        "terminal_tmux_session": null,
+        "terminal_transport": null,
+        "transport": null
+      },
+      "selected": false,
+      "title": "junction-test-b"
+    }
+  ]
+}

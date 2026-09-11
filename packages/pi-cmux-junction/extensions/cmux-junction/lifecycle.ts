@@ -25,7 +25,9 @@ import {
   type LifecycleTarget,
 } from './lifecycle-client.js';
 import type { ProcessRunner } from './process.js';
-import { loadJunctionConfig } from './config.js';
+import { loadJunctionConfig, matchDescriptionReservation } from './config.js';
+import { attachPresentationClient, type PresentationClient } from './presentation-client.js';
+import type { ProducerViewStore } from './producer-view.js';
 
 export const LIFECYCLE_HEARTBEAT_MS = 10_000;
 
@@ -50,6 +52,8 @@ export interface LifecycleDeliveryClient {
 }
 
 export interface LifecycleDependencies {
+  producerViews?: ProducerViewStore;
+  attachPresentation?: typeof attachPresentationClient;
   env?: NodeJS.ProcessEnv;
   now?: () => number;
   runtimeId?: () => string;
@@ -122,7 +126,7 @@ export function processRuntimeId(create = randomUUID): string {
 export function registerJunctionLifecycle(
   pi: ExtensionAPI,
   dependencies: LifecycleDependencies = {},
-): void {
+): () => void {
   const env = dependencies.env ?? process.env;
   const now = dependencies.now ?? Date.now;
   const runtimeId = dependencies.runtimeId ?? processRuntimeId;
@@ -159,12 +163,20 @@ export function registerJunctionLifecycle(
     try {
       await shutdownRuntime();
       const config = loadConfig(ctx.cwd, ctx.isProjectTrusted());
-      const eligibility = lifecycleEligibility(ctx, env, config.disableStatus);
+      if (config.disableStatus && !config.enablePresentation) return;
+      const eligibility = lifecycleEligibility(ctx, env);
       if (!eligibility.eligible || !eligibility.target || !eligibility.sessionId) return;
       const resolved = await resolveTarget(ctx.cwd, eligibility.target, cmuxOptions);
       if (!resolved.ok) return;
       const { socketPath, workspaceId, surfaceId } = resolved;
       const target: LifecycleTarget = { socketPath, workspaceId, surfaceId };
+      const descriptionReservation = matchDescriptionReservation(
+        config.descriptionReservations,
+        target,
+      );
+      const presentationEnabled =
+        config.enablePresentation && descriptionReservation && dependencies.producerViews;
+      if (config.disableStatus && !presentationEnabled) return;
       const processStartedAt = await observeStart(pid);
       if (processStartedAt === null) return;
       const owner: LifecycleOwnerIdentity = {
@@ -173,17 +185,34 @@ export function registerJunctionLifecycle(
         pid,
         processStartedAt,
       };
-      const client = createClient({
-        target,
-        owner,
-        coordinatorPath,
-        env,
-        now,
-      });
+      const client = config.disableStatus
+        ? null
+        : createClient({
+            target,
+            owner,
+            coordinatorPath,
+            env,
+            now,
+            ...(descriptionReservation ? { descriptionReservation } : {}),
+          });
+      const presentation = presentationEnabled
+        ? (dependencies.attachPresentation ?? attachPresentationClient)(
+            dependencies.producerViews!,
+            {
+              target,
+              source: owner,
+              coordinatorPath,
+              env,
+              descriptionReservation,
+            },
+          )
+        : null;
       runtime = new LifecycleRuntime({
         ctx,
         owner,
         client,
+        presentation,
+        producerViews: dependencies.producerViews,
         now,
         scheduleInterval,
         cancelInterval,
@@ -267,13 +296,19 @@ export function registerJunctionLifecycle(
     runtime?.deliver({ type: 'agent_settled', isIdle: ctx.isIdle() }),
   );
   pi.on('session_shutdown', shutdownRuntime);
+  // Observe before accepting a producer event, not after a producer has announced
+  // fresh data. Pi 0.85 replaces extension instances for normal session switches.
+  return () => runtime?.observePresentationSession();
 }
 
 class LifecycleRuntime {
   private state: LifecycleReducerState;
   private readonly owner: LifecycleOwnerIdentity;
   private readonly ctx: LifecycleContext;
-  private readonly client: LifecycleDeliveryClient;
+  private readonly client: LifecycleDeliveryClient | null;
+  private readonly presentation: PresentationClient | null;
+  private readonly producerViews: ProducerViewStore | undefined;
+  private presentationSessionId: string;
   private readonly now: () => number;
   private readonly scheduleInterval: LifecycleDependencies['setInterval'];
   private readonly cancelInterval: LifecycleDependencies['clearInterval'];
@@ -286,7 +321,9 @@ class LifecycleRuntime {
   constructor(options: {
     ctx: LifecycleContext;
     owner: LifecycleOwnerIdentity;
-    client: LifecycleDeliveryClient;
+    client: LifecycleDeliveryClient | null;
+    presentation: PresentationClient | null;
+    producerViews: ProducerViewStore | undefined;
     now: () => number;
     scheduleInterval: NonNullable<LifecycleDependencies['setInterval']>;
     cancelInterval: NonNullable<LifecycleDependencies['clearInterval']>;
@@ -294,6 +331,9 @@ class LifecycleRuntime {
     this.ctx = options.ctx;
     this.owner = options.owner;
     this.client = options.client;
+    this.presentation = options.presentation;
+    this.producerViews = options.producerViews;
+    this.presentationSessionId = options.owner.sessionId;
     this.now = options.now;
     this.scheduleInterval = options.scheduleInterval;
     this.cancelInterval = options.cancelInterval;
@@ -301,7 +341,8 @@ class LifecycleRuntime {
   }
 
   async start(): Promise<void> {
-    this.uiInstallation = installUiWrappers(this.ctx.ui, (event) => this.deliver(event));
+    if (this.client)
+      this.uiInstallation = installUiWrappers(this.ctx.ui, (event) => this.deliver(event));
     await this.enqueue(
       {
         type: 'session_start',
@@ -319,10 +360,26 @@ class LifecycleRuntime {
           void this.maintain(sessionId);
         }
       }, LIFECYCLE_TIMINGS.maintenanceIntervalMs) ?? null;
-    this.heartbeat =
-      this.scheduleInterval?.(() => {
-        void this.heartbeatNow();
-      }, LIFECYCLE_HEARTBEAT_MS) ?? null;
+    if (this.client)
+      this.heartbeat =
+        this.scheduleInterval?.(() => {
+          void this.heartbeatNow();
+        }, LIFECYCLE_HEARTBEAT_MS) ?? null;
+  }
+
+  observePresentationSession(): void {
+    if (!this.intakeOpen) return;
+    const sessionId = inheritedIdentity(this.ctx.sessionManager.getSessionId());
+    if (sessionId === null) {
+      void this.shutdown();
+      return;
+    }
+    if (sessionId === this.presentationSessionId) return;
+    this.presentationSessionId = sessionId;
+    // changeSession pauses delivery synchronously; clear before accepting the
+    // first event for the new identity so it cannot replay the previous views.
+    void this.presentation?.changeSession(sessionId).catch(() => undefined);
+    this.producerViews?.clear();
   }
 
   deliver(event: LifecycleEvent): Promise<void> {
@@ -351,9 +408,11 @@ class LifecycleRuntime {
     this.heartbeat = null;
     restoreUiWrappers(this.ctx.ui, this.uiInstallation);
     this.uiInstallation = null;
+    const presentationGoodbye = this.presentation?.goodbye();
+    this.producerViews?.clear();
     await this.tail;
     try {
-      await this.client.goodbye();
+      await Promise.all([this.client?.goodbye(), presentationGoodbye]);
     } catch {
       // Shutdown remains bounded and fail-open at the client boundary.
     }
@@ -361,6 +420,7 @@ class LifecycleRuntime {
 
   private maintain(sessionId: string | null): Promise<void> {
     if (!this.intakeOpen) return Promise.resolve();
+    this.observePresentationSession();
     return this.append(async () => {
       const changedSession = sessionId !== null && sessionId !== this.state.sessionId;
       const transition = reduceLifecycle(
@@ -369,7 +429,7 @@ class LifecycleRuntime {
         this.now(),
       );
       this.state = transition.state;
-      if (changedSession && sessionId !== null) void this.client.changeSession(sessionId);
+      if (changedSession && sessionId !== null) void this.client?.changeSession(sessionId);
       if (transition.shouldPublish) this.safelySnapshot(transition.snapshot);
     });
   }
@@ -387,7 +447,7 @@ class LifecycleRuntime {
       const transition = reduceLifecycle(this.state, event, this.now());
       this.state = transition.state;
       if (initial) {
-        void this.client.start(transition.snapshot).catch(() => undefined);
+        void this.client?.start(transition.snapshot).catch(() => undefined);
       } else if (transition.shouldPublish) {
         this.safelySnapshot(transition.snapshot);
       }
@@ -401,7 +461,7 @@ class LifecycleRuntime {
   }
 
   private safelySnapshot(snapshot: LifecycleSnapshot): void {
-    void this.client.snapshot(snapshot).catch(() => undefined);
+    void this.client?.snapshot(snapshot).catch(() => undefined);
   }
 }
 
