@@ -131,6 +131,12 @@ export function computeHealth(
 
 // ─── Status Indicator ───
 
+type EventEmitter = {
+  emit(channel: string, data: unknown): void;
+};
+
+const JUNCTION_UPDATE_EVENT = 'pi-cmux-junction:update';
+
 export function formatCacheRate(inputTokens: number, cacheReadTokens: number): string | null {
   const total = inputTokens + cacheReadTokens;
   if (total === 0) return null;
@@ -143,11 +149,23 @@ export function updateStatusIndicator(
   health: HealthLevel,
   ctx: Pick<ExtensionContext, 'ui'>,
   cacheStats: Pick<SessionState, 'inputTokens' | 'cacheReadTokens'>,
+  events?: EventEmitter,
 ) {
   const emoji = health === 'green' ? '🟢' : health === 'yellow' ? '🟡' : '🔴';
   const label = health === 'green' ? 'ctx ok' : health === 'yellow' ? 'ctx watch' : 'ctx compact';
+  const healthStatus = `${emoji} ${label}`;
   const cacheStatus = formatCacheRate(cacheStats.inputTokens, cacheStats.cacheReadTokens);
 
-  ctx.ui.setStatus('session-hygiene', `${emoji} ${label}`);
+  ctx.ui.setStatus('session-hygiene', healthStatus);
   ctx.ui.setStatus('session-hygiene-cache', cacheStatus ?? undefined);
+
+  events?.emit(JUNCTION_UPDATE_EVENT, {
+    producer: { key: 'pi-session-hygiene', label: 'Session Hygiene' },
+    items: [
+      { key: 'session-hygiene', title: 'Session health', status: healthStatus },
+      ...(cacheStatus === null
+        ? []
+        : [{ key: 'session-hygiene-cache', title: 'Cache', status: cacheStatus }]),
+    ],
+  });
 }

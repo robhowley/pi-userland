@@ -94,6 +94,7 @@ function createMockAPI(): ExtensionAPI {
       if (!eventHandlers.has(event)) eventHandlers.set(event, []);
       eventHandlers.get(event)!.push(handler);
     }),
+    events: { emit: vi.fn() },
     _eventHandlers: eventHandlers,
   } as any;
 }
@@ -307,7 +308,7 @@ describe('session-hygiene', () => {
 
   describe('turn_end', () => {
     it('updates status from cost and cache stats without prompting for compact', async () => {
-      const { turnEnd, ctx } = await setupWithSession({ contextTokens: 10_000 });
+      const { turnEnd, ctx, api } = await setupWithSession({ contextTokens: 10_000 });
 
       await turnEnd(turnEndEvent(6.0, { input: 200, cacheRead: 800 }), ctx);
 
@@ -316,6 +317,18 @@ describe('session-hygiene', () => {
         'session-hygiene-cache',
         'cache 80%',
       ]);
+      expect(api.events.emit).toHaveBeenCalledTimes(2);
+      expect(api.events.emit).toHaveBeenNthCalledWith(1, 'pi-cmux-junction:update', {
+        producer: { key: 'pi-session-hygiene', label: 'Session Hygiene' },
+        items: [{ key: 'session-hygiene', title: 'Session health', status: '🟢 ctx ok' }],
+      });
+      expect(api.events.emit).toHaveBeenNthCalledWith(2, 'pi-cmux-junction:update', {
+        producer: { key: 'pi-session-hygiene', label: 'Session Hygiene' },
+        items: [
+          { key: 'session-hygiene', title: 'Session health', status: '🟡 ctx watch' },
+          { key: 'session-hygiene-cache', title: 'Cache', status: 'cache 80%' },
+        ],
+      });
       expect(ctx.ui.confirm).not.toHaveBeenCalled();
       expect(ctx.compact).not.toHaveBeenCalled();
     });
@@ -509,6 +522,10 @@ describe('session-hygiene', () => {
         'session-hygiene-cache',
         undefined,
       ]);
+      expect(ext.api.events.emit).toHaveBeenLastCalledWith('pi-cmux-junction:update', {
+        producer: { key: 'pi-session-hygiene', label: 'Session Hygiene' },
+        items: [{ key: 'session-hygiene', title: 'Session health', status: '🟢 ctx ok' }],
+      });
       expect(ctx.ui.confirm).not.toHaveBeenCalled();
     });
 

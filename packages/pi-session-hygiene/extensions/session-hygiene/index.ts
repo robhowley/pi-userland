@@ -82,7 +82,7 @@ export default function (pi: ExtensionAPI) {
   const refreshStatus = (ctx: StatusContext) => {
     const contextTokens = getContextTokens(ctx);
     const health = computeHealth(state.totalCost, contextTokens, thresholds);
-    updateStatusIndicator(health, ctx, state);
+    updateStatusIndicator(health, ctx, state, pi.events);
   };
 
   // ─── session_start: Initialize tracking ───
