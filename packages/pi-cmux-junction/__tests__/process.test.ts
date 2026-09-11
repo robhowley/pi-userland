@@ -10,21 +10,6 @@ describe('default process runner', () => {
     ).resolves.toEqual({ outcome: 'exit', exitCode: 0, stdout: 'ok', stderr: '' });
   });
 
-  it('writes provided input without invoking a shell', async () => {
-    await expect(
-      defaultProcessRunner(process.execPath, ['-e', 'process.stdin.pipe(process.stdout)'], {
-        cwd,
-        input: '{"session":"a"}',
-        shell: false,
-      }),
-    ).resolves.toEqual({
-      outcome: 'exit',
-      exitCode: 0,
-      stdout: '{"session":"a"}',
-      stderr: '',
-    });
-  });
-
   it('preserves an ordinary nonzero exit', async () => {
     await expect(
       defaultProcessRunner(

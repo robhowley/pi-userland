@@ -14,6 +14,7 @@ import {
   type LifecycleEvent,
   type LifecycleSnapshot,
 } from '../extensions/cmux-junction/activity.js';
+import { resolveCmuxTarget } from '../extensions/cmux-junction/cmux.js';
 import type { ProcessRunner } from '../extensions/cmux-junction/process.js';
 
 function context(overrides: Record<string, unknown> = {}) {
@@ -57,7 +58,6 @@ function harness(
     loadConfig?: (cwd: string, projectTrusted: boolean) => { disableStatus: boolean };
     contextOverrides?: Record<string, unknown>;
     runner?: ProcessRunner;
-    argv?: readonly string[];
     resolveTarget?: (cwd: string, target: any, options: any) => Promise<any>;
   } = {},
 ) {
@@ -120,7 +120,6 @@ function harness(
     }) as typeof setInterval,
     clearInterval,
     ...(options.runner === undefined ? {} : { runner: options.runner }),
-    ...(options.argv === undefined ? {} : { argv: options.argv }),
   });
   const emit = async (name: string, event: Record<string, unknown> = {}, custom = ctx.value) => {
     await handlers.get(name)?.({ type: name, ...event }, custom);
@@ -406,168 +405,32 @@ describe('Pi lifecycle adapter', () => {
     expect(createClient).not.toHaveBeenCalled();
   });
 
-  it('registers restore for persisted sessions even when the status pill is disabled', async () => {
-    const runner = vi.fn<ProcessRunner>(async (_file, args) =>
-      args.includes('get')
-        ? {
-            outcome: 'exit',
-            exitCode: 0,
-            stdout: JSON.stringify({
-              resume_binding: { kind: 'pi', checkpoint_id: 'session-a' },
-            }),
-            stderr: '',
-          }
-        : { outcome: 'exit', exitCode: 0, stdout: '', stderr: '' },
-    );
-    const h = harness({
-      loadConfig: () => ({ disableStatus: true }),
-      contextOverrides: {
-        sessionManager: {
-          getSessionId: () => 'session-a',
-          getSessionFile: () => '/sessions/session-a.jsonl',
-        },
-      },
-      runner,
-      argv: ['pi', '--model', 'safe-model'],
-    });
-
-    await h.emit('session_start');
-
-    expect(h.resolveTarget).toHaveBeenCalledOnce();
-    expect(runner.mock.calls.map((call) => call[1].slice(0, 4))).toEqual([
-      ['hooks', 'pi', 'session-start', '--workspace'],
-      ['--json', 'surface', 'resume', 'set'],
-      ['--json', 'surface', 'resume', 'get'],
-    ]);
-    expect(h.observeProcessStart).not.toHaveBeenCalled();
-    expect(h.createClient).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ['an in-memory session', undefined, ['pi']],
-    ['--no-session', '/sessions/unexpected.jsonl', ['pi', '--no-session']],
-  ])('skips restore for %s when status is disabled', async (_name, sessionFile, argv) => {
-    const runner = vi.fn<ProcessRunner>();
-    const h = harness({
-      loadConfig: () => ({ disableStatus: true }),
-      contextOverrides: {
-        sessionManager: {
-          getSessionId: () => 'session-a',
-          getSessionFile: () => sessionFile,
-        },
-      },
-      runner,
-      argv,
-    });
-
-    await h.emit('session_start');
-
-    expect(h.resolveTarget).not.toHaveBeenCalled();
-    expect(runner).not.toHaveBeenCalled();
-  });
-
-  it('does not issue restore commands when the live target cannot be resolved', async () => {
-    const runner = vi.fn<ProcessRunner>();
-    const h = harness({
-      loadConfig: () => ({ disableStatus: true }),
-      contextOverrides: {
-        sessionManager: {
-          getSessionId: () => 'session-a',
-          getSessionFile: () => '/sessions/session-a.jsonl',
-        },
-      },
-      resolveTarget: async () => ({
-        ok: false,
-        reason: 'process-failed',
-        message: 'surface unavailable',
-      }),
-      runner,
-    });
-
-    await h.emit('session_start');
-
-    expect(h.resolveTarget).toHaveBeenCalledOnce();
-    expect(runner).not.toHaveBeenCalled();
-  });
-
-  it('keeps status startup independent when resume registration fails', async () => {
+  it('starts status lifecycle without issuing restore commands', async () => {
     const runner = vi.fn<ProcessRunner>(async () => ({
-      outcome: 'timeout',
-      timeoutMs: 100,
-      signal: 'SIGTERM',
-      stdout: '',
+      outcome: 'exit',
+      exitCode: 0,
+      stdout: JSON.stringify({
+        source: 'surface',
+        workspace_id: 'workspace-live',
+        surface_id: 'surface-a',
+      }),
       stderr: '',
     }));
-    const h = harness({
-      contextOverrides: {
-        sessionManager: {
-          getSessionId: () => 'session-a',
-          getSessionFile: () => '/sessions/session-a.jsonl',
-        },
-      },
-      runner,
-    });
-
-    await expect(h.emit('session_start')).resolves.toBeUndefined();
-
-    expect(runner).toHaveBeenCalledOnce();
-    expect(h.resolveTarget).toHaveBeenCalledOnce();
-    expect(h.createClient).toHaveBeenCalledOnce();
-    expect(h.client.start).toHaveBeenCalledOnce();
-  });
-
-  it('finalizes and checkpoint-clears the old session before registering its replacement', async () => {
-    let sessionId = 'session-a';
-    let lastSet = '';
-    const runner = vi.fn<ProcessRunner>(async (_file, args) => {
-      if (args.includes('set')) {
-        lastSet = args[args.indexOf('--checkpoint-id') + 1] ?? '';
-      }
-      return args.includes('get')
-        ? {
-            outcome: 'exit',
-            exitCode: 0,
-            stdout: JSON.stringify({
-              resume_binding: { kind: 'pi', checkpoint_id: lastSet },
-            }),
-            stderr: '',
-          }
-        : { outcome: 'exit', exitCode: 0, stdout: '', stderr: '' };
-    });
-    const h = harness({
-      loadConfig: () => ({ disableStatus: true }),
-      contextOverrides: {
-        sessionManager: {
-          getSessionId: () => sessionId,
-          getSessionFile: () => `/sessions/${sessionId}.jsonl`,
-        },
-      },
-      runner,
-    });
+    const h = harness({ runner, resolveTarget: resolveCmuxTarget });
 
     await h.emit('session_start');
-    sessionId = 'session-b';
-    await h.emit('session_start', { reason: 'fork' });
-    await h.emit('session_shutdown', { reason: 'quit' });
 
-    const commands = runner.mock.calls.map((call) => call[1]);
-    expect(commands.map((args) => args.slice(0, 4))).toEqual([
-      ['hooks', 'pi', 'session-start', '--workspace'],
-      ['--json', 'surface', 'resume', 'set'],
-      ['--json', 'surface', 'resume', 'get'],
-      ['hooks', 'pi', 'stop', '--workspace'],
-      ['--json', 'surface', 'resume', 'clear'],
-      ['hooks', 'pi', 'session-start', '--workspace'],
-      ['--json', 'surface', 'resume', 'set'],
-      ['--json', 'surface', 'resume', 'get'],
-      ['hooks', 'pi', 'stop', '--workspace'],
-      ['--json', 'surface', 'resume', 'clear'],
+    expect(runner).toHaveBeenCalledOnce();
+    expect(runner.mock.calls[0]?.[1]).toEqual([
+      '--socket',
+      '/tmp/cmux.sock',
+      'rpc',
+      'agent.resolve_delivery_target',
+      '{"surface_id":"surface-a","workspace_id":"workspace-a"}',
     ]);
-    const clearedCheckpoints = commands
-      .filter((args) => args.includes('clear'))
-      .map((args) => args[args.indexOf('--checkpoint-id') + 1]);
-    expect(clearedCheckpoints).toEqual(['session-a', 'session-b']);
-    expect(h.resolveTarget).toHaveBeenCalledTimes(2);
+    expect(h.observeProcessStart).toHaveBeenCalledOnce();
+    expect(h.createClient).toHaveBeenCalledOnce();
+    expect(h.client.start).toHaveBeenCalledOnce();
   });
 
   it('maps public events in serialized order and settles only on the real idle event', async () => {
