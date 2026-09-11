@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { normalize } from 'node:path';
+import { projectPresentationJ1 } from './presentation-j1.mjs';
 import { decodePresentationRequest } from './presentation-protocol.mjs';
 
 export const MAX_PRESENTATION_SOURCES = 16;
@@ -69,6 +70,11 @@ function capacityAccepted(capacity, blocks) {
   }
 }
 
+function projected(blocks) {
+  const result = projectPresentationJ1(blocks);
+  return result.kind === 'reject' ? null : result;
+}
+
 export function createPresentationCore(options) {
   const now = options.now ?? Date.now;
   const probePid = options.probePid ?? (() => 'unverifiable');
@@ -77,6 +83,7 @@ export function createPresentationCore(options) {
   let bindings = new Map();
   let nextGeneration = 0;
   let blocks = Object.freeze([]);
+  let projection = projectPresentationJ1(blocks);
 
   const notifyIfEmptied = (previousSize) => {
     if (previousSize > 0 && sources.size === 0) options.onEmpty?.();
@@ -161,7 +168,10 @@ export function createPresentationCore(options) {
     draftSources.set(identity.sourceId, candidate);
     if (draftSources.size > MAX_PRESENTATION_SOURCES) return reject('source-limit');
     const draftBlocks = orderedBlocks(draftSources);
-    if (!capacityAccepted(options.capacity, draftBlocks)) return reject('capacity');
+    const draftProjection = projected(draftBlocks);
+    if (!draftProjection || !capacityAccepted(options.capacity, draftBlocks)) {
+      return reject('capacity');
+    }
 
     const draftBindings = new Map(bindings);
     draftBindings.set(socketToken, {
@@ -173,6 +183,7 @@ export function createPresentationCore(options) {
     bindings = draftBindings;
     nextGeneration = draftNextGeneration;
     blocks = draftBlocks;
+    projection = draftProjection;
     return {
       ok: true,
       acceptedGeneration: generation,
@@ -204,8 +215,12 @@ export function createPresentationCore(options) {
     const previousSize = sources.size;
     const draftSources = new Map(sources);
     draftSources.delete(identity.sourceId);
+    const draftBlocks = orderedBlocks(draftSources);
+    const draftProjection = projected(draftBlocks);
+    if (!draftProjection) return reject('capacity');
     sources = draftSources;
-    blocks = orderedBlocks(sources);
+    blocks = draftBlocks;
+    projection = draftProjection;
     // Retain the physical binding until EOF so traffic after goodbye remains fenced.
     notifyIfEmptied(previousSize);
     return {
@@ -250,9 +265,13 @@ export function createPresentationCore(options) {
         draftBindings.delete(source.socketToken);
       }
     }
+    const draftBlocks = orderedBlocks(draftSources);
+    const draftProjection = projected(draftBlocks);
+    if (!draftProjection) return { ok: true, changed: false };
     sources = draftSources;
     bindings = draftBindings;
-    blocks = orderedBlocks(sources);
+    blocks = draftBlocks;
+    projection = draftProjection;
     notifyIfEmptied(previousSize);
     return { ok: true, changed: previousSize !== sources.size };
   };
@@ -263,6 +282,7 @@ export function createPresentationCore(options) {
     connectionClosed,
     maintain,
     blocks: () => blocks,
+    projection: () => projection,
     isQuiescent: () => sources.size === 0,
     diagnostics: () => ({
       sourceCount: sources.size,

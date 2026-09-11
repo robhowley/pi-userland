@@ -25,6 +25,18 @@ function view(producerKey: string, itemKeys = ['item-a']) {
   };
 }
 
+function heavyViews(count: number) {
+  return Array.from({ length: count }, (_, blockIndex) => ({
+    producer: { key: `heavy-${String(blockIndex).padStart(2, '0')}`, label: 'Heavy' },
+    items: Array.from({ length: 8 }, (_, itemIndex) => ({
+      key: `item-${itemIndex}`,
+      title: 'Item',
+      summary: '%'.repeat(512),
+      rows: [],
+    })),
+  }));
+}
+
 function snapshot(overrides: Record<string, unknown> = {}) {
   return {
     protocol: PRESENTATION_PROTOCOL,
@@ -159,6 +171,7 @@ describe('presentation source identity and blocks', () => {
       'socket-a',
     );
     expect(core.blocks()).toEqual([]);
+    expect(core.projection()).toMatchObject({ kind: 'clear', metrics: { byteCount: 0 } });
     expect(core.isQuiescent()).toBe(false);
     expect(core.diagnostics()).toMatchObject({ sourceCount: 1, blockCount: 0 });
   });
@@ -192,7 +205,65 @@ describe('presentation source identity and blocks', () => {
 });
 
 describe('presentation candidate transaction', () => {
-  it('preserves state, generation, revision, and receipt lease on every rejection', () => {
+  it('starts clear, rejects an oversized first source, and accepts a smaller same-revision retry', () => {
+    const core = createPresentationCore({ target, probePid: () => 'match' });
+    const clear = core.projection();
+    expect(clear).toMatchObject({ kind: 'clear', metrics: { byteCount: 0 } });
+
+    expect(core.acceptSnapshot(snapshot({ views: heavyViews(24) }), 'socket-a')).toEqual({
+      ok: false,
+      reason: 'capacity',
+    });
+    expect(core.projection()).toBe(clear);
+    expect(core.diagnostics()).toMatchObject({ sourceCount: 0, nextGeneration: 0 });
+
+    expect(core.acceptSnapshot(snapshot({ views: [view('small')] }), 'socket-a')).toMatchObject({
+      ok: true,
+      acceptedGeneration: 1,
+      acceptedRevision: 0,
+    });
+    expect(core.projection()).toMatchObject({ kind: 'set', digest: expect.any(String) });
+  });
+
+  it('accepts a replacement that frees aggregate capacity', () => {
+    const core = createPresentationCore({ target, probePid: () => 'match' });
+    const firstGeneration = acceptedGeneration(
+      core.acceptSnapshot(snapshot({ views: heavyViews(16) }), 'socket-a'),
+    );
+    const second = snapshot({
+      surfaceId: 'surface-b',
+      sessionId: 'session-b',
+      runtimeId: 'runtime-b',
+      pid: 4322,
+      connectionId: 'connection-b',
+      views: heavyViews(4),
+    });
+    expect(core.acceptSnapshot(second, 'socket-b')).toMatchObject({ ok: true });
+    const before = core.projection();
+
+    expect(
+      core.acceptSnapshot(
+        snapshot({
+          sourceGeneration: firstGeneration,
+          revision: 1,
+          views: heavyViews(20),
+        }),
+        'socket-a',
+      ),
+    ).toEqual({ ok: false, reason: 'capacity' });
+    expect(core.projection()).toBe(before);
+
+    expect(
+      core.acceptSnapshot(
+        snapshot({ sourceGeneration: firstGeneration, revision: 1, views: [view('small')] }),
+        'socket-a',
+      ),
+    ).toMatchObject({ ok: true });
+    expect(core.projection()).toMatchObject({ kind: 'set' });
+    expect(core.projection()).not.toBe(before);
+  });
+
+  it('preserves state, generation, revision, receipt lease, blocks, and projection on rejection', () => {
     let now = 10_000;
     let capacity = true;
     const core = createPresentationCore({
@@ -203,6 +274,7 @@ describe('presentation candidate transaction', () => {
     });
     const generation = acceptedGeneration(core.acceptSnapshot(snapshot(), 'socket-a'));
     const beforeBlocks = core.blocks();
+    const beforeProjection = core.projection();
     const beforeDiagnostics = core.diagnostics();
 
     capacity = false;
@@ -214,6 +286,7 @@ describe('presentation candidate transaction', () => {
       ),
     ).toEqual({ ok: false, reason: 'capacity' });
     expect(core.blocks()).toBe(beforeBlocks);
+    expect(core.projection()).toBe(beforeProjection);
     expect(core.diagnostics()).toEqual(beforeDiagnostics);
 
     now += 1;
@@ -393,6 +466,7 @@ describe('presentation fencing and liveness', () => {
       ok: true,
       removed: true,
     });
+    expect(core.projection()).toMatchObject({ kind: 'clear' });
     expect(
       core.acceptSnapshot(snapshot({ sourceGeneration: generation, revision: 2 }), 'socket-a'),
     ).toEqual({ ok: false, reason: 'fenced' });
