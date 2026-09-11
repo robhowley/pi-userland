@@ -84,6 +84,100 @@ function acceptedGeneration(result: any) {
   return result.acceptedGeneration as number;
 }
 
+describe('committed projection callback', () => {
+  it('notifies after accepted heartbeats, empty snapshots, goodbye and actual expiry only', () => {
+    let time = 0;
+    const onProjection = vi.fn();
+    const core = createPresentationCore({ target, now: () => time, onProjection });
+    expect(onProjection).not.toHaveBeenCalled();
+    core.maintain();
+    expect(onProjection).not.toHaveBeenCalled();
+    const generation = acceptedGeneration(core.acceptSnapshot(snapshot(), 'socket-a'));
+    const first = core.projection();
+    core.acceptSnapshot(snapshot({ revision: 1, sourceGeneration: generation }), 'socket-a');
+    expect(core.projection()).toEqual(first);
+    expect(onProjection).toHaveBeenCalledTimes(2);
+    core.acceptSnapshot(
+      snapshot({ revision: 2, views: [], sourceGeneration: generation }),
+      'socket-a',
+    );
+    expect(core.isQuiescent()).toBe(false);
+    expect(onProjection.mock.lastCall?.[0].kind).toBe('clear');
+    expect(core.goodbye(goodbye(generation, { revision: 3 }), 'socket-a').ok).toBe(true);
+    expect(onProjection).toHaveBeenCalledTimes(4);
+    core.acceptSnapshot(snapshot({ connectionId: 'other' }), 'socket-b');
+    time = PRESENTATION_RECEIPT_EXPIRY_MS;
+    expect(core.maintain().changed).toBe(true);
+    expect(onProjection).toHaveBeenCalledTimes(6);
+    core.maintain();
+    expect(onProjection).toHaveBeenCalledTimes(6);
+  });
+
+  it.each([
+    'malformed',
+    'wrong-target',
+    'stale',
+    'fenced',
+    'dead',
+    'capacity',
+    'collision',
+    'source-limit',
+  ])('does not notify or move projection on %s rejection', (reason) => {
+    const onProjection = vi.fn();
+    let dead = false;
+    let capacity = true;
+    const core = createPresentationCore({
+      target,
+      onProjection,
+      probePid: () => (dead ? 'missing' : 'match'),
+      capacity: () => capacity,
+      ...(reason === 'collision' ? { sourceId: () => 'a'.repeat(64) } : {}),
+    });
+    core.acceptSnapshot(snapshot(), 'socket-a');
+    if (reason === 'source-limit') {
+      for (let index = 1; index < MAX_PRESENTATION_SOURCES; index += 1)
+        core.acceptSnapshot(snapshot({ runtimeId: `runtime-${index}` }), `socket-${index}`);
+    }
+    const before = core.projection();
+    onProjection.mockClear();
+    dead = reason === 'dead';
+    capacity = reason !== 'capacity';
+    const input =
+      reason === 'malformed'
+        ? {}
+        : snapshot({
+            revision: reason === 'stale' ? 0 : 1,
+            ...(reason === 'wrong-target' ? { workspaceId: 'other' } : {}),
+            ...(['collision', 'source-limit'].includes(reason) ? { runtimeId: 'new-runtime' } : {}),
+            ...(reason === 'fenced' ? { sourceGeneration: 999 } : {}),
+          });
+    expect(
+      core.acceptSnapshot(
+        input,
+        ['collision', 'source-limit'].includes(reason) ? 'new-socket' : 'socket-a',
+      ).ok,
+    ).toBe(false);
+    expect(core.projection()).toBe(before);
+    expect(onProjection).not.toHaveBeenCalled();
+  });
+
+  it('isolates thrown and asynchronous callback failures from acceptance', async () => {
+    for (const onProjection of [
+      () => {
+        throw new Error('publication');
+      },
+      async () => {
+        throw new Error('publication');
+      },
+    ]) {
+      const core = createPresentationCore({ target, onProjection });
+      expect(core.acceptSnapshot(snapshot(), 'socket-a').ok).toBe(true);
+      await Promise.resolve();
+      expect(core.isQuiescent()).toBe(false);
+    }
+  });
+});
+
 describe('presentation source identity and blocks', () => {
   it('uses the full stable tuple and full lowercase SHA-256', () => {
     const message = snapshot();
@@ -210,7 +304,7 @@ describe('presentation candidate transaction', () => {
     const clear = core.projection();
     expect(clear).toMatchObject({ kind: 'clear', metrics: { byteCount: 0 } });
 
-    expect(core.acceptSnapshot(snapshot({ views: heavyViews(24) }), 'socket-a')).toEqual({
+    expect(core.acceptSnapshot(snapshot({ views: heavyViews(64) }), 'socket-a')).toEqual({
       ok: false,
       reason: 'capacity',
     });
@@ -228,7 +322,7 @@ describe('presentation candidate transaction', () => {
   it('accepts a replacement that frees aggregate capacity', () => {
     const core = createPresentationCore({ target, probePid: () => 'match' });
     const firstGeneration = acceptedGeneration(
-      core.acceptSnapshot(snapshot({ views: heavyViews(16) }), 'socket-a'),
+      core.acceptSnapshot(snapshot({ views: heavyViews(48) }), 'socket-a'),
     );
     const second = snapshot({
       surfaceId: 'surface-b',
@@ -236,7 +330,7 @@ describe('presentation candidate transaction', () => {
       runtimeId: 'runtime-b',
       pid: 4322,
       connectionId: 'connection-b',
-      views: heavyViews(4),
+      views: heavyViews(8),
     });
     expect(core.acceptSnapshot(second, 'socket-b')).toMatchObject({ ok: true });
     const before = core.projection();
@@ -246,7 +340,7 @@ describe('presentation candidate transaction', () => {
         snapshot({
           sourceGeneration: firstGeneration,
           revision: 1,
-          views: heavyViews(20),
+          views: heavyViews(56),
         }),
         'socket-a',
       ),

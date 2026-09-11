@@ -10,6 +10,7 @@ import process from 'node:process';
 import { clearInterval, setInterval, setTimeout } from 'node:timers';
 import { fileURLToPath } from 'node:url';
 import { classifyExecFileFailure, resolveCmuxExecutable } from './cmux-runtime.mjs';
+import { createDescriptionPublisher, runDescriptionCommand } from './description-publisher.mjs';
 import {
   createPresentationCore,
   PRESENTATION_DISCONNECT_GRACE_MS,
@@ -1040,10 +1041,33 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
   const initialLedger = await store.read();
   const env = runtime.env ?? process.env;
   const cmuxFile = await resolveCmuxExecutable(env, runtime.access);
-  let stopRuntime = () => {};
+  let stopping = false;
+  let commandTail = Promise.resolve();
+  const serialize = (operation) => {
+    const result = commandTail.then(() => (stopping ? { ok: false } : operation()));
+    commandTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  };
+  let stopRuntime = () => Promise.resolve();
   let presentation;
+  let pendingPresentationAcks = 0;
+  const description = createDescriptionPublisher({
+    reservation: runtime.descriptionReservation,
+    workspaceId: target.workspaceId,
+    runCommand: (command) =>
+      serialize(() => runDescriptionCommand(cmuxFile, command, env, runtime.execFile ?? execFile)),
+  });
   const stopIfQuiescent = () => {
-    if (core.isQuiescent() && presentation.isQuiescent()) stopRuntime();
+    if (
+      core.isQuiescent() &&
+      presentation.isQuiescent() &&
+      description.isIdle() &&
+      pendingPresentationAcks === 0
+    )
+      void stopRuntime();
   };
   const core = createCoordinatorCore({
     target,
@@ -1053,10 +1077,17 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
     probePid: runtime.probePid ?? probePidStart,
     schedule: runtime.schedule ?? ((callback, delay) => setTimeout(callback, delay).unref()),
     onFinalClear: stopIfQuiescent,
-    publish:
-      runtime.publish ??
-      ((status) =>
-        runCmux(cmuxFile, buildCmuxStatusArgs(target, status), env, runtime.execFile ?? execFile)),
+    publish: (status) =>
+      serialize(() =>
+        runtime.publish
+          ? runtime.publish(status)
+          : runCmux(
+              cmuxFile,
+              buildCmuxStatusArgs(target, status),
+              env,
+              runtime.execFile ?? execFile,
+            ),
+      ),
   });
   presentation = createPresentationCore({
     target,
@@ -1064,6 +1095,9 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
     probePid: runtime.probePid ?? probePidStart,
     capacity: runtime.presentationCapacity,
     sourceId: runtime.presentationSourceId,
+    onProjection: (projection) => {
+      if (description.setDesired(projection)) void description.reconcile().finally(stopIfQuiescent);
+    },
   });
 
   const runtimeMkdir = runtime.mkdir ?? mkdir;
@@ -1145,23 +1179,30 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
           break;
         }
         presentationInFlight = true;
+        pendingPresentationAcks += 1;
         const operation =
           message.kind === 'snapshot'
             ? presentation.acceptSnapshot(message, socketToken)
             : presentation.goodbye(message, socketToken);
         void Promise.resolve(operation)
           .then((result) => {
-            if (socket.destroyed) return;
+            if (socket.destroyed) {
+              pendingPresentationAcks -= 1;
+              stopIfQuiescent();
+              return;
+            }
             const response = result.ok
               ? createPresentationAck(message, result.acceptedGeneration)
               : createPresentationRejection(message, result.reason);
             socket.write(`${JSON.stringify(response)}\n`, () => {
               presentationInFlight = false;
+              pendingPresentationAcks -= 1;
               if (result.ok) stopIfQuiescent();
             });
           })
           .catch(() => {
             presentationInFlight = false;
+            pendingPresentationAcks -= 1;
           });
       }
       const maximum =
@@ -1218,21 +1259,30 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
       .catch(() => undefined);
   }, PRESENTATION_MAINTENANCE_MS);
   maintenance.unref();
-  let stopping = false;
+  let closing;
   stopRuntime = () => {
-    if (stopping) return;
+    if (closing) return closing;
     stopping = true;
     clearInterval(maintenance);
+    const publicationStopped = description.shutdown();
     for (const socket of sockets) socket.destroy();
-    server.close(() => void runtimeRm(args.listen, { force: true }));
+    closing = (async () => {
+      await new Promise((resolve) => server.close(resolve));
+      await publicationStopped;
+      await commandTail;
+      await runtimeRm(args.listen, { force: true });
+    })();
+    return closing;
   };
   return {
     server,
     core,
     presentation,
+    description,
     diagnostics: () => ({
       lifecycle: core.diagnostics(),
       presentation: presentation.diagnostics(),
+      description: description.diagnostics(),
     }),
     close: stopRuntime,
   };

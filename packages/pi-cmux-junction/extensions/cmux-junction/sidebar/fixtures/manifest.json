@@ -1,0 +1,5117 @@
+{
+  "cmuxCommit": "ddd4a01bc5d8ebac19643930f5fd7d40e85f1534",
+  "cases": [
+    {
+      "filename": "minimal.j2",
+      "classification": "valid",
+      "sha256": "96682f319384db20e51e81044a5124923553b6738b227eabfa8b5d0f2898d986",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 201
+      },
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "build",
+            "label": "Producer build"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "Minimal card",
+              "rows": []
+            }
+          ]
+        }
+      ],
+      "visible": ["Producer build", "Minimal card"]
+    },
+    {
+      "filename": "every-optional.j2",
+      "classification": "valid",
+      "sha256": "799faba79afcb2f3e48018449cbaa0cca4acef16cd6e01fd1d91afed9feb14d4",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 2,
+        "rowCount": 2,
+        "recordCount": 7,
+        "fieldCount": 52,
+        "byteCount": 376
+      },
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "build",
+            "label": "Producer build"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "Every optional",
+              "status": "Running",
+              "summary": "Summary",
+              "progress": {
+                "value": 2,
+                "max": 3,
+                "label": "Progress"
+              },
+              "rows": [
+                {
+                  "label": "Row label",
+                  "value": "Row value",
+                  "detail": "Row detail",
+                  "href": "https://example.com/row"
+                },
+                {
+                  "value": "Unlabelled row"
+                }
+              ],
+              "href": "https://example.com/card"
+            },
+            {
+              "key": "next",
+              "title": "Next card",
+              "rows": []
+            }
+          ]
+        }
+      ],
+      "visible": [
+        "Producer build",
+        "Every optional",
+        "Running",
+        "Summary",
+        "Progress",
+        "Row label",
+        "Row value",
+        "Row detail",
+        "Unlabelled row",
+        "Next card"
+      ]
+    },
+    {
+      "filename": "two-sources.j2",
+      "classification": "valid",
+      "sha256": "83049b0ae93e9b69c64844677eae426858cfb0ba394b2c42b8687cc8364fa56a",
+      "metrics": {
+        "sourceCount": 2,
+        "blockCount": 3,
+        "itemCount": 3,
+        "rowCount": 0,
+        "recordCount": 9,
+        "fieldCount": 59,
+        "byteCount": 398
+      },
+      "blocks": [
+        {
+          "sourceId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "producer": {
+            "key": "build",
+            "label": "Producer build"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "Minimal card",
+              "rows": []
+            }
+          ]
+        },
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "build",
+            "label": "Producer build"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "Minimal card",
+              "rows": []
+            }
+          ]
+        },
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "zebra",
+            "label": "Producer zebra"
+          },
+          "items": [
+            {
+              "key": "other",
+              "title": "Last card",
+              "rows": []
+            }
+          ]
+        }
+      ],
+      "visible": [
+        "Producer build",
+        "Minimal card",
+        "Producer build",
+        "Minimal card",
+        "Producer zebra",
+        "Last card"
+      ]
+    },
+    {
+      "filename": "unicode-escaping.j2",
+      "classification": "valid",
+      "sha256": "a1f2fb67f836e7065cc302b0973fe2a2bbeabcb2871e844a7c77ea1fa44b485d",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 261
+      },
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "unicode",
+            "label": "Producer unicode"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "雪 😀 café % ␞ ␟ ∅",
+              "summary": "Literal %1E %25 %00",
+              "rows": [
+                {
+                  "value": "∅",
+                  "detail": "é"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "visible": ["Producer unicode", "雪 😀 café % ␞ ␟ ∅", "Literal %1E %25 %00", "∅", "é"]
+    },
+    {
+      "filename": "combining-escape.j2",
+      "classification": "valid",
+      "sha256": "9d4a47c1f7550c505a3fc1002f45270c95bc68980cd3736f278dd19c293519d9",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 204
+      },
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "unicode",
+            "label": "Producer unicode"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "Percent %́",
+              "rows": []
+            }
+          ]
+        }
+      ],
+      "visible": ["Producer unicode", "Percent %́"]
+    },
+    {
+      "filename": "combining-mark.j2",
+      "classification": "valid",
+      "sha256": "656211d2b20a3f4582f4d99f7626a6c35b4e242254e9f3c1485d9198fe85ad84",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 247
+      },
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "unicode",
+            "label": "Producer unicode"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "́Leading accent",
+              "rows": [
+                {
+                  "value": "️Variation selector"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "visible": ["Producer unicode", "́Leading accent", "️Variation selector"]
+    },
+    {
+      "filename": "representative.j2",
+      "classification": "valid",
+      "sha256": "0f2b3d6a7e9d21c77185ac656b0832b5b77335807fcf0e786d79f7b233fc6411",
+      "metrics": {
+        "sourceCount": 2,
+        "blockCount": 4,
+        "itemCount": 8,
+        "rowCount": 16,
+        "recordCount": 31,
+        "fieldCount": 268,
+        "byteCount": 1649
+      },
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "build",
+            "label": "Producer build"
+          },
+          "items": [
+            {
+              "key": "task-0",
+              "title": "a build 0",
+              "status": "Running",
+              "summary": "Representative task",
+              "progress": {
+                "value": 0,
+                "max": 2,
+                "label": "Steps"
+              },
+              "rows": [
+                {
+                  "label": "Duration",
+                  "value": "12 s"
+                },
+                {
+                  "value": "Details",
+                  "href": "https://example.com/details"
+                }
+              ],
+              "href": "https://example.com/task"
+            },
+            {
+              "key": "task-1",
+              "title": "a build 1",
+              "status": "Running",
+              "summary": "Representative task",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "Steps"
+              },
+              "rows": [
+                {
+                  "label": "Duration",
+                  "value": "12 s"
+                },
+                {
+                  "value": "Details",
+                  "href": "https://example.com/details"
+                }
+              ],
+              "href": "https://example.com/task"
+            }
+          ]
+        },
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "checks",
+            "label": "Producer checks"
+          },
+          "items": [
+            {
+              "key": "task-0",
+              "title": "a checks 0",
+              "status": "Running",
+              "summary": "Representative task",
+              "progress": {
+                "value": 0,
+                "max": 2,
+                "label": "Steps"
+              },
+              "rows": [
+                {
+                  "label": "Duration",
+                  "value": "12 s"
+                },
+                {
+                  "value": "Details",
+                  "href": "https://example.com/details"
+                }
+              ],
+              "href": "https://example.com/task"
+            },
+            {
+              "key": "task-1",
+              "title": "a checks 1",
+              "status": "Running",
+              "summary": "Representative task",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "Steps"
+              },
+              "rows": [
+                {
+                  "label": "Duration",
+                  "value": "12 s"
+                },
+                {
+                  "value": "Details",
+                  "href": "https://example.com/details"
+                }
+              ],
+              "href": "https://example.com/task"
+            }
+          ]
+        },
+        {
+          "sourceId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "producer": {
+            "key": "build",
+            "label": "Producer build"
+          },
+          "items": [
+            {
+              "key": "task-0",
+              "title": "b build 0",
+              "status": "Running",
+              "summary": "Representative task",
+              "progress": {
+                "value": 0,
+                "max": 2,
+                "label": "Steps"
+              },
+              "rows": [
+                {
+                  "label": "Duration",
+                  "value": "12 s"
+                },
+                {
+                  "value": "Details",
+                  "href": "https://example.com/details"
+                }
+              ],
+              "href": "https://example.com/task"
+            },
+            {
+              "key": "task-1",
+              "title": "b build 1",
+              "status": "Running",
+              "summary": "Representative task",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "Steps"
+              },
+              "rows": [
+                {
+                  "label": "Duration",
+                  "value": "12 s"
+                },
+                {
+                  "value": "Details",
+                  "href": "https://example.com/details"
+                }
+              ],
+              "href": "https://example.com/task"
+            }
+          ]
+        },
+        {
+          "sourceId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "producer": {
+            "key": "checks",
+            "label": "Producer checks"
+          },
+          "items": [
+            {
+              "key": "task-0",
+              "title": "b checks 0",
+              "status": "Running",
+              "summary": "Representative task",
+              "progress": {
+                "value": 0,
+                "max": 2,
+                "label": "Steps"
+              },
+              "rows": [
+                {
+                  "label": "Duration",
+                  "value": "12 s"
+                },
+                {
+                  "value": "Details",
+                  "href": "https://example.com/details"
+                }
+              ],
+              "href": "https://example.com/task"
+            },
+            {
+              "key": "task-1",
+              "title": "b checks 1",
+              "status": "Running",
+              "summary": "Representative task",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "Steps"
+              },
+              "rows": [
+                {
+                  "label": "Duration",
+                  "value": "12 s"
+                },
+                {
+                  "value": "Details",
+                  "href": "https://example.com/details"
+                }
+              ],
+              "href": "https://example.com/task"
+            }
+          ]
+        }
+      ],
+      "visible": [
+        "Producer build",
+        "a build 0",
+        "a build 1",
+        "Producer build",
+        "b build 0",
+        "b build 1",
+        "Producer checks",
+        "a checks 0",
+        "a checks 1",
+        "Producer checks",
+        "b checks 0",
+        "b checks 1"
+      ]
+    },
+    {
+      "filename": "marker-only.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 0,
+        "blockCount": 0,
+        "itemCount": 0,
+        "rowCount": 0,
+        "recordCount": 1,
+        "fieldCount": 1,
+        "byteCount": 2
+      }
+    },
+    {
+      "filename": "ordinary-marker.j2",
+      "classification": "ignored",
+      "visible": [],
+      "metrics": {
+        "sourceCount": 0,
+        "blockCount": 0,
+        "itemCount": 0,
+        "rowCount": 0,
+        "recordCount": 1,
+        "fieldCount": 1,
+        "byteCount": 3
+      }
+    },
+    {
+      "filename": "ordinary-fields.j2",
+      "classification": "ignored",
+      "visible": [],
+      "metrics": {
+        "sourceCount": 0,
+        "blockCount": 0,
+        "itemCount": 0,
+        "rowCount": 0,
+        "recordCount": 1,
+        "fieldCount": 2,
+        "byteCount": 4
+      }
+    },
+    {
+      "filename": "empty.j2",
+      "classification": "ignored",
+      "visible": [],
+      "metrics": {
+        "sourceCount": 0,
+        "blockCount": 0,
+        "itemCount": 0,
+        "rowCount": 0,
+        "recordCount": 1,
+        "fieldCount": 1,
+        "byteCount": 0
+      }
+    },
+    {
+      "filename": "leading-separator.j2",
+      "classification": "ignored",
+      "visible": [],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 5,
+        "fieldCount": 22,
+        "byteCount": 137
+      }
+    },
+    {
+      "filename": "trailing-separator.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 5,
+        "fieldCount": 23,
+        "byteCount": 202
+      }
+    },
+    {
+      "filename": "empty-record.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 5,
+        "fieldCount": 23,
+        "byteCount": 202
+      }
+    },
+    {
+      "filename": "wrong-arity.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 23,
+        "byteCount": 207
+      }
+    },
+    {
+      "filename": "empty-field.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 189
+      }
+    },
+    {
+      "filename": "unknown-escape.j2",
+      "classification": "valid",
+      "visible": ["Producer build", "bad %20"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 196
+      },
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "build",
+            "label": "Producer build"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "bad %20",
+              "rows": []
+            }
+          ]
+        }
+      ],
+      "sha256": "35885c7e27aeb82fe5a5e9c49377e09edae5091504af31999625a8760338627e"
+    },
+    {
+      "filename": "lowercase-escape.j2",
+      "classification": "valid",
+      "visible": ["Producer build", "bad %1e"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 196
+      },
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "build",
+            "label": "Producer build"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "bad %1e",
+              "rows": []
+            }
+          ]
+        }
+      ],
+      "sha256": "5c72f7b9d203d2275636986bb07862b32d881c510cb1fe93d0278d4229e53890"
+    },
+    {
+      "filename": "raw-null.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 190
+      }
+    },
+    {
+      "filename": "raw-percent.j2",
+      "classification": "valid",
+      "visible": ["Producer build", "bad %"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 194
+      },
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "build",
+            "label": "Producer build"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "bad %",
+              "rows": []
+            }
+          ]
+        }
+      ],
+      "sha256": "1d006a9b5876b26b74d1d485d70994e6e893570e16900f69c35eecee57273dd0"
+    },
+    {
+      "filename": "control-lf.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 197
+      }
+    },
+    {
+      "filename": "control-cr.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 197
+      }
+    },
+    {
+      "filename": "control-nul.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 197
+      }
+    },
+    {
+      "filename": "control-c1.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 198
+      }
+    },
+    {
+      "filename": "blank.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 192
+      }
+    },
+    {
+      "filename": "source-ref.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 201
+      }
+    },
+    {
+      "filename": "source-id.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 201
+      }
+    },
+    {
+      "filename": "producer-ref.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 201
+      }
+    },
+    {
+      "filename": "producer-source.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 201
+      }
+    },
+    {
+      "filename": "item-ref.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 201
+      }
+    },
+    {
+      "filename": "item-owner.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 201
+      }
+    },
+    {
+      "filename": "item-source.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 201
+      }
+    },
+    {
+      "filename": "item-key.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 201
+      }
+    },
+    {
+      "filename": "ref-leading-zero.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 202
+      }
+    },
+    {
+      "filename": "ref-negative.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 202
+      }
+    },
+    {
+      "filename": "ref-decimal.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 203
+      }
+    },
+    {
+      "filename": "ref-exponent.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 203
+      }
+    },
+    {
+      "filename": "unsafe-number.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 216
+      }
+    },
+    {
+      "filename": "missing-progress.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 201
+      }
+    },
+    {
+      "filename": "http-url.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 218
+      }
+    },
+    {
+      "filename": "url-no-host.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 208
+      }
+    },
+    {
+      "filename": "url-userinfo.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 224
+      }
+    },
+    {
+      "filename": "url-space.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 223
+      }
+    },
+    {
+      "filename": "url-control.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 221
+      }
+    },
+    {
+      "filename": "url-backslash.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 224
+      }
+    },
+    {
+      "filename": "progress-max-zero.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 2,
+        "rowCount": 2,
+        "recordCount": 7,
+        "fieldCount": 52,
+        "byteCount": 376
+      }
+    },
+    {
+      "filename": "progress-over-max.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 2,
+        "rowCount": 2,
+        "recordCount": 7,
+        "fieldCount": 52,
+        "byteCount": 376
+      }
+    },
+    {
+      "filename": "progress-fraction.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 2,
+        "rowCount": 2,
+        "recordCount": 7,
+        "fieldCount": 52,
+        "byteCount": 378
+      }
+    },
+    {
+      "filename": "progress-label-null.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 2,
+        "rowCount": 2,
+        "recordCount": 7,
+        "fieldCount": 52,
+        "byteCount": 369
+      }
+    },
+    {
+      "filename": "row-ref.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 2,
+        "rowCount": 2,
+        "recordCount": 7,
+        "fieldCount": 52,
+        "byteCount": 376
+      }
+    },
+    {
+      "filename": "row-owner.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 2,
+        "rowCount": 2,
+        "recordCount": 7,
+        "fieldCount": 52,
+        "byteCount": 376
+      }
+    },
+    {
+      "filename": "row-null-value.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 2,
+        "rowCount": 2,
+        "recordCount": 7,
+        "fieldCount": 52,
+        "byteCount": 368
+      }
+    },
+    {
+      "filename": "missing-source.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 0,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 3,
+        "fieldCount": 19,
+        "byteCount": 132
+      }
+    },
+    {
+      "filename": "missing-producer.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 0,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 3,
+        "fieldCount": 17,
+        "byteCount": 174
+      }
+    },
+    {
+      "filename": "missing-card.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 0,
+        "rowCount": 0,
+        "recordCount": 3,
+        "fieldCount": 10,
+        "byteCount": 163
+      }
+    },
+    {
+      "filename": "late-source.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 2,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 5,
+        "fieldCount": 25,
+        "byteCount": 270
+      }
+    },
+    {
+      "filename": "duplicate-item-key.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 2,
+        "rowCount": 0,
+        "recordCount": 5,
+        "fieldCount": 34,
+        "byteCount": 239
+      }
+    },
+    {
+      "filename": "repeated-card.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 2,
+        "rowCount": 0,
+        "recordCount": 5,
+        "fieldCount": 34,
+        "byteCount": 239
+      }
+    },
+    {
+      "filename": "source-order.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 2,
+        "blockCount": 3,
+        "itemCount": 3,
+        "rowCount": 0,
+        "recordCount": 9,
+        "fieldCount": 59,
+        "byteCount": 398
+      }
+    },
+    {
+      "filename": "producer-order.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 2,
+        "blockCount": 3,
+        "itemCount": 3,
+        "rowCount": 0,
+        "recordCount": 9,
+        "fieldCount": 59,
+        "byteCount": 398
+      }
+    },
+    {
+      "filename": "duplicate-source.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 2,
+        "blockCount": 3,
+        "itemCount": 3,
+        "rowCount": 0,
+        "recordCount": 9,
+        "fieldCount": 59,
+        "byteCount": 398
+      }
+    },
+    {
+      "filename": "unused-source.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 2,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 5,
+        "fieldCount": 25,
+        "byteCount": 270
+      }
+    },
+    {
+      "filename": "orphan-row.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 266
+      }
+    },
+    {
+      "filename": "interleaved-row.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 2,
+        "rowCount": 3,
+        "recordCount": 8,
+        "fieldCount": 61,
+        "byteCount": 441
+      }
+    },
+    {
+      "filename": "duplicate-producer-key.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 2,
+        "blockCount": 3,
+        "itemCount": 3,
+        "rowCount": 0,
+        "recordCount": 9,
+        "fieldCount": 59,
+        "byteCount": 398
+      }
+    },
+    {
+      "filename": "empty-producer-block.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 2,
+        "blockCount": 3,
+        "itemCount": 2,
+        "rowCount": 0,
+        "recordCount": 8,
+        "fieldCount": 47,
+        "byteCount": 360
+      }
+    },
+    {
+      "filename": "progress-negative.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 2,
+        "rowCount": 2,
+        "recordCount": 7,
+        "fieldCount": 52,
+        "byteCount": 377
+      }
+    },
+    {
+      "filename": "producer-null-label.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 188
+      }
+    },
+    {
+      "filename": "producer-key-punctuation.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 200
+      }
+    },
+    {
+      "filename": "url-bad-port.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"],
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 0,
+        "recordCount": 4,
+        "fieldCount": 22,
+        "byteCount": 223
+      }
+    },
+    {
+      "filename": "unicode-00.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "́Leading accent"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "́Leading accent",
+              "status": "́Leading accent",
+              "summary": "́Leading accent",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "́Leading accent"
+              },
+              "rows": [
+                {
+                  "label": "́Leading accent",
+                  "value": "́Leading accent",
+                  "detail": "́Leading accent"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "6b3f26cfcb637afe1e207835e0ec1eb68776b6a63d061e5c08612f8b2e5d8f93",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 351
+      },
+      "visible": [
+        "́Leading accent",
+        "́Leading accent",
+        "́Leading accent",
+        "́Leading accent",
+        "́Leading accent",
+        "́Leading accent",
+        "́Leading accent",
+        "́Leading accent"
+      ]
+    },
+    {
+      "filename": "unicode-01.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "%́"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "%́",
+              "status": "%́",
+              "summary": "%́",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "%́"
+              },
+              "rows": [
+                {
+                  "label": "%́",
+                  "value": "%́",
+                  "detail": "%́"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "c8e5b876b75d8d23303c4b0fce782be4239082245c419e74e04ad72f7fe744e0",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 247
+      },
+      "visible": ["%́", "%́", "%́", "%́", "%́", "%́", "%́", "%́"]
+    },
+    {
+      "filename": "unicode-02.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "%25́"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "%25́",
+              "status": "%25́",
+              "summary": "%25́",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "%25́"
+              },
+              "rows": [
+                {
+                  "label": "%25́",
+                  "value": "%25́",
+                  "detail": "%25́"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "d8af628861cfc783bc0b5d224396b1b5df6ec9bcd449e2d952912133e7bbedb4",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 263
+      },
+      "visible": ["%25́", "%25́", "%25́", "%25́", "%25́", "%25́", "%25́", "%25́"]
+    },
+    {
+      "filename": "unicode-03.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "␞́"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "␞́",
+              "status": "␞́",
+              "summary": "␞́",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "␞́"
+              },
+              "rows": [
+                {
+                  "label": "␞́",
+                  "value": "␞́",
+                  "detail": "␞́"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "5d2a386a079ed5b8d4be0db1108cd713483c6a305d25f2298006248c77a50254",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 263
+      },
+      "visible": ["␞́", "␞́", "␞́", "␞́", "␞́", "␞́", "␞́", "␞́"]
+    },
+    {
+      "filename": "unicode-04.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "␟́"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "␟́",
+              "status": "␟́",
+              "summary": "␟́",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "␟́"
+              },
+              "rows": [
+                {
+                  "label": "␟́",
+                  "value": "␟́",
+                  "detail": "␟́"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "93233e2c3609008b2b83f565a021dcaa48fa855901da45494e763f77f01b9c17",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 263
+      },
+      "visible": ["␟́", "␟́", "␟́", "␟́", "␟́", "␟́", "␟́", "␟́"]
+    },
+    {
+      "filename": "unicode-05.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "∅́"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "∅́",
+              "status": "∅́",
+              "summary": "∅́",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "∅́"
+              },
+              "rows": [
+                {
+                  "label": "∅́",
+                  "value": "∅́",
+                  "detail": "∅́"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "060986a14ee5b02b8e7fee4710a4d37b05b9ef86b2e74992383d054aa6f384e0",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 263
+      },
+      "visible": ["∅́", "∅́", "∅́", "∅́", "∅́", "∅́", "∅́", "∅́"]
+    },
+    {
+      "filename": "unicode-06.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "%1E %1F %00 %25"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "%1E %1F %00 %25",
+              "status": "%1E %1F %00 %25",
+              "summary": "%1E %1F %00 %25",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "%1E %1F %00 %25"
+              },
+              "rows": [
+                {
+                  "label": "%1E %1F %00 %25",
+                  "value": "%1E %1F %00 %25",
+                  "detail": "%1E %1F %00 %25"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "cf433f733035e7a215fd18283c640acdc84fd1811050d5f45a4d8bd03df42511",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 343
+      },
+      "visible": [
+        "%1E %1F %00 %25",
+        "%1E %1F %00 %25",
+        "%1E %1F %00 %25",
+        "%1E %1F %00 %25",
+        "%1E %1F %00 %25",
+        "%1E %1F %00 %25",
+        "%1E %1F %00 %25",
+        "%1E %1F %00 %25"
+      ]
+    },
+    {
+      "filename": "unicode-07.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "∅"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "∅",
+              "status": "∅",
+              "summary": "∅",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "∅"
+              },
+              "rows": [
+                {
+                  "label": "∅",
+                  "value": "∅",
+                  "detail": "∅"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "796651a9efb268d071994cbd8660526c7e345315f5aa8529d8339afb7bc0f0ed",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 247
+      },
+      "visible": ["∅", "∅", "∅", "∅", "∅", "∅", "∅", "∅"]
+    },
+    {
+      "filename": "unicode-08.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "␞␟"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "␞␟",
+              "status": "␞␟",
+              "summary": "␞␟",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "␞␟"
+              },
+              "rows": [
+                {
+                  "label": "␞␟",
+                  "value": "␞␟",
+                  "detail": "␞␟"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "013fdcc0725643114cdbe19b4cba6b60158bba732bbaa04e9d4bad1ae1579cd8",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 271
+      },
+      "visible": ["␞␟", "␞␟", "␞␟", "␞␟", "␞␟", "␞␟", "␞␟", "␞␟"]
+    },
+    {
+      "filename": "unicode-09.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "👩🏽‍💻"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "👩🏽‍💻",
+              "status": "👩🏽‍💻",
+              "summary": "👩🏽‍💻",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "👩🏽‍💻"
+              },
+              "rows": [
+                {
+                  "label": "👩🏽‍💻",
+                  "value": "👩🏽‍💻",
+                  "detail": "👩🏽‍💻"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "847e7eeeb3859607158ddc74a0a99ce95081e7a6c5e5284903c11a43b49e7b45",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 343
+      },
+      "visible": ["👩🏽‍💻", "👩🏽‍💻", "👩🏽‍💻", "👩🏽‍💻", "👩🏽‍💻", "👩🏽‍💻", "👩🏽‍💻", "👩🏽‍💻"]
+    },
+    {
+      "filename": "unicode-10.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "👨‍👩‍👧‍👦"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "👨‍👩‍👧‍👦",
+              "status": "👨‍👩‍👧‍👦",
+              "summary": "👨‍👩‍👧‍👦",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "👨‍👩‍👧‍👦"
+              },
+              "rows": [
+                {
+                  "label": "👨‍👩‍👧‍👦",
+                  "value": "👨‍👩‍👧‍👦",
+                  "detail": "👨‍👩‍👧‍👦"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "ffc70e9e8aa5699a3a3ee3137eb5aa452e5893f60fda227fe86f45979fefaaf6",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 423
+      },
+      "visible": ["👨‍👩‍👧‍👦", "👨‍👩‍👧‍👦", "👨‍👩‍👧‍👦", "👨‍👩‍👧‍👦", "👨‍👩‍👧‍👦", "👨‍👩‍👧‍👦", "👨‍👩‍👧‍👦", "👨‍👩‍👧‍👦"]
+    },
+    {
+      "filename": "unicode-11.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "🇨🇦🇯🇵🇺"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "🇨🇦🇯🇵🇺",
+              "status": "🇨🇦🇯🇵🇺",
+              "summary": "🇨🇦🇯🇵🇺",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "🇨🇦🇯🇵🇺"
+              },
+              "rows": [
+                {
+                  "label": "🇨🇦🇯🇵🇺",
+                  "value": "🇨🇦🇯🇵🇺",
+                  "detail": "🇨🇦🇯🇵🇺"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "2d5c70f31f380591ba275ce7f4bc44669a65ac4a42b77a794ddb451c175d58e0",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 383
+      },
+      "visible": ["🇨🇦🇯🇵🇺", "🇨🇦🇯🇵🇺", "🇨🇦🇯🇵🇺", "🇨🇦🇯🇵🇺", "🇨🇦🇯🇵🇺", "🇨🇦🇯🇵🇺", "🇨🇦🇯🇵🇺", "🇨🇦🇯🇵🇺"]
+    },
+    {
+      "filename": "unicode-12.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "é"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "é",
+              "status": "é",
+              "summary": "é",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "é"
+              },
+              "rows": [
+                {
+                  "label": "é",
+                  "value": "é",
+                  "detail": "é"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "317d921d485573dc4fceb450af46881c36d09724abf575d2236025d01456df21",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 247
+      },
+      "visible": ["é", "é", "é", "é", "é", "é", "é", "é"]
+    },
+    {
+      "filename": "unicode-13.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "é"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "é",
+              "status": "é",
+              "summary": "é",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "é"
+              },
+              "rows": [
+                {
+                  "label": "é",
+                  "value": "é",
+                  "detail": "é"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "23381962c0415f834fb9ae5a70dfb7f70319f317d4ffaa3d966928017ba57121",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 239
+      },
+      "visible": ["é", "é", "é", "é", "é", "é", "é", "é"]
+    },
+    {
+      "filename": "unicode-14.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "‍X"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "‍X",
+              "status": "‍X",
+              "summary": "‍X",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "‍X"
+              },
+              "rows": [
+                {
+                  "label": "‍X",
+                  "value": "‍X",
+                  "detail": "‍X"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "d52b90f7f8754603323cb60614659a46761295b7103e6da9c9c8ab36b5a7b5a3",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 255
+      },
+      "visible": ["‍X", "‍X", "‍X", "‍X", "‍X", "‍X", "‍X", "‍X"]
+    },
+    {
+      "filename": "unicode-15.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "؀X"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "؀X",
+              "status": "؀X",
+              "summary": "؀X",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "؀X"
+              },
+              "rows": [
+                {
+                  "label": "؀X",
+                  "value": "؀X",
+                  "detail": "؀X"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "e4ba1d4101ed05f975e1a83e656a1805714dac7dda80e886196ccdfe2a5132d9",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 247
+      },
+      "visible": ["؀X", "؀X", "؀X", "؀X", "؀X", "؀X", "؀X", "؀X"]
+    },
+    {
+      "filename": "unicode-16.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "雪 😀 café"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "雪 😀 café",
+              "status": "雪 😀 café",
+              "summary": "雪 😀 café",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "雪 😀 café"
+              },
+              "rows": [
+                {
+                  "label": "雪 😀 café",
+                  "value": "雪 😀 café",
+                  "detail": "雪 😀 café"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "aa8f0b04cf069f8fa5ce19e404a21c873fa78526fc19c76957997172164f6693",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 335
+      },
+      "visible": [
+        "雪 😀 café",
+        "雪 😀 café",
+        "雪 😀 café",
+        "雪 😀 café",
+        "雪 😀 café",
+        "雪 😀 café",
+        "雪 😀 café",
+        "雪 😀 café"
+      ]
+    },
+    {
+      "filename": "unicode-17.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "  x  "
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "  x  ",
+              "status": "  x  ",
+              "summary": "  x  ",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "  x  "
+              },
+              "rows": [
+                {
+                  "label": "  x  ",
+                  "value": "  x  ",
+                  "detail": "  x  "
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "4da40c3e035172536351591d39ab8e0531ace4a77251eb4faa9cdf8608a39af2",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 263
+      },
+      "visible": ["  x  ", "  x  ", "  x  ", "  x  ", "  x  ", "  x  ", "  x  ", "  x  "]
+    },
+    {
+      "filename": "unicode-18.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": " x "
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": " x ",
+              "status": " x ",
+              "summary": " x ",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": " x "
+              },
+              "rows": [
+                {
+                  "label": " x ",
+                  "value": " x ",
+                  "detail": " x "
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "bfa756f78738635acc5cf638f8273be08298998780e030f679cdddf907aa774e",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 279
+      },
+      "visible": [" x ", " x ", " x ", " x ", " x ", " x ", " x ", " x "]
+    },
+    {
+      "filename": "unicode-19.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "﻿x﻿"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "﻿x﻿",
+              "status": "﻿x﻿",
+              "summary": "﻿x﻿",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "﻿x﻿"
+              },
+              "rows": [
+                {
+                  "label": "﻿x﻿",
+                  "value": "﻿x﻿",
+                  "detail": "﻿x﻿"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "b31010fe91e9d924e722aefe7166132ae436639e16746f44369ffa1cd10305f4",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 279
+      },
+      "visible": ["﻿x﻿", "﻿x﻿", "﻿x﻿", "﻿x﻿", "﻿x﻿", "﻿x﻿", "﻿x﻿", "﻿x﻿"]
+    },
+    {
+      "filename": "unicode-20.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "́x"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "́x",
+              "status": "́x",
+              "summary": "́x",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "́x"
+              },
+              "rows": [
+                {
+                  "label": "́x",
+                  "value": "́x",
+                  "detail": "́x"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "c314f40608ca0dd57808843c09773890e530a5af1da5fa65937e554cd4017738",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 247
+      },
+      "visible": ["́x", "́x", "́x", "́x", "́x", "́x", "́x", "́x"]
+    },
+    {
+      "filename": "unicode-21.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "%́"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "%́",
+              "status": "%́",
+              "summary": "%́",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "%́"
+              },
+              "rows": [
+                {
+                  "label": "%́",
+                  "value": "%́",
+                  "detail": "%́"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "c8e5b876b75d8d23303c4b0fce782be4239082245c419e74e04ad72f7fe744e0",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 247
+      },
+      "visible": ["%́", "%́", "%́", "%́", "%́", "%́", "%́", "%́"]
+    },
+    {
+      "filename": "unicode-22.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "␞́"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "␞́",
+              "status": "␞́",
+              "summary": "␞́",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "␞́"
+              },
+              "rows": [
+                {
+                  "label": "␞́",
+                  "value": "␞́",
+                  "detail": "␞́"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "5d2a386a079ed5b8d4be0db1108cd713483c6a305d25f2298006248c77a50254",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 263
+      },
+      "visible": ["␞́", "␞́", "␞́", "␞́", "␞́", "␞́", "␞́", "␞́"]
+    },
+    {
+      "filename": "unicode-23.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "␟́"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "␟́",
+              "status": "␟́",
+              "summary": "␟́",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "␟́"
+              },
+              "rows": [
+                {
+                  "label": "␟́",
+                  "value": "␟́",
+                  "detail": "␟́"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "93233e2c3609008b2b83f565a021dcaa48fa855901da45494e763f77f01b9c17",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 263
+      },
+      "visible": ["␟́", "␟́", "␟́", "␟́", "␟́", "␟́", "␟́", "␟́"]
+    },
+    {
+      "filename": "unicode-24.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "∅́"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "∅́",
+              "status": "∅́",
+              "summary": "∅́",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "∅́"
+              },
+              "rows": [
+                {
+                  "label": "∅́",
+                  "value": "∅́",
+                  "detail": "∅́"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "060986a14ee5b02b8e7fee4710a4d37b05b9ef86b2e74992383d054aa6f384e0",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 263
+      },
+      "visible": ["∅́", "∅́", "∅́", "∅́", "∅́", "∅́", "∅́", "∅́"]
+    },
+    {
+      "filename": "unicode-25.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "x́"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "x́",
+              "status": "x́",
+              "summary": "x́",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "x́"
+              },
+              "rows": [
+                {
+                  "label": "x́",
+                  "value": "x́",
+                  "detail": "x́"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "d8ee9a5a71ced195e4c35fd9448267548362c8ea12bad79ae1ba484b6cbce435",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 247
+      },
+      "visible": ["x́", "x́", "x́", "x́", "x́", "x́", "x́", "x́"]
+    },
+    {
+      "filename": "unicode-26.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "̧́x"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "̧́x",
+              "status": "̧́x",
+              "summary": "̧́x",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "̧́x"
+              },
+              "rows": [
+                {
+                  "label": "̧́x",
+                  "value": "̧́x",
+                  "detail": "̧́x"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "45ce3a80b7a2ade50239236032f9a0ecc8846c1b146e05853c82b4e29d20eecb",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 263
+      },
+      "visible": ["̧́x", "̧́x", "̧́x", "̧́x", "̧́x", "̧́x", "̧́x", "̧́x"]
+    },
+    {
+      "filename": "unicode-27.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "%̧́"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "%̧́",
+              "status": "%̧́",
+              "summary": "%̧́",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "%̧́"
+              },
+              "rows": [
+                {
+                  "label": "%̧́",
+                  "value": "%̧́",
+                  "detail": "%̧́"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "0fbf5babfe9d7bf2fbd965f7d9da12f806232fbb68ea3e88b23ddac2576f80a9",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 263
+      },
+      "visible": ["%̧́", "%̧́", "%̧́", "%̧́", "%̧́", "%̧́", "%̧́", "%̧́"]
+    },
+    {
+      "filename": "unicode-28.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "␞̧́"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "␞̧́",
+              "status": "␞̧́",
+              "summary": "␞̧́",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "␞̧́"
+              },
+              "rows": [
+                {
+                  "label": "␞̧́",
+                  "value": "␞̧́",
+                  "detail": "␞̧́"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "7524aad2a887dcc448b2f527ef22c610744addaf7087ea4e0da19a0b69df906d",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 279
+      },
+      "visible": ["␞̧́", "␞̧́", "␞̧́", "␞̧́", "␞̧́", "␞̧́", "␞̧́", "␞̧́"]
+    },
+    {
+      "filename": "unicode-29.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "␟̧́"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "␟̧́",
+              "status": "␟̧́",
+              "summary": "␟̧́",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "␟̧́"
+              },
+              "rows": [
+                {
+                  "label": "␟̧́",
+                  "value": "␟̧́",
+                  "detail": "␟̧́"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "2ed6e7149bba5e43cb48ac01a477fd3ff7b28632cbb3261d017b9e73eb20a3d4",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 279
+      },
+      "visible": ["␟̧́", "␟̧́", "␟̧́", "␟̧́", "␟̧́", "␟̧́", "␟̧́", "␟̧́"]
+    },
+    {
+      "filename": "unicode-30.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "∅̧́"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "∅̧́",
+              "status": "∅̧́",
+              "summary": "∅̧́",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "∅̧́"
+              },
+              "rows": [
+                {
+                  "label": "∅̧́",
+                  "value": "∅̧́",
+                  "detail": "∅̧́"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "527605b234e65d852b75569b3b4da00f9664ad8dc4fb944e83146ac65e0139fd",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 279
+      },
+      "visible": ["∅̧́", "∅̧́", "∅̧́", "∅̧́", "∅̧́", "∅̧́", "∅̧́", "∅̧́"]
+    },
+    {
+      "filename": "unicode-31.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "x̧́"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "x̧́",
+              "status": "x̧́",
+              "summary": "x̧́",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "x̧́"
+              },
+              "rows": [
+                {
+                  "label": "x̧́",
+                  "value": "x̧́",
+                  "detail": "x̧́"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "4d79a7d68c02519a4f798706cc53c65e155bbb27aff861689e1a16678eb89d61",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 263
+      },
+      "visible": ["x̧́", "x̧́", "x̧́", "x̧́", "x̧́", "x̧́", "x̧́", "x̧́"]
+    },
+    {
+      "filename": "unicode-32.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "͏x"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "͏x",
+              "status": "͏x",
+              "summary": "͏x",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "͏x"
+              },
+              "rows": [
+                {
+                  "label": "͏x",
+                  "value": "͏x",
+                  "detail": "͏x"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "c885a394f6137e01aaa2ee1d7bc5c833521684f4a921d7be516c60da71095348",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 247
+      },
+      "visible": ["͏x", "͏x", "͏x", "͏x", "͏x", "͏x", "͏x", "͏x"]
+    },
+    {
+      "filename": "unicode-33.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "%͏"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "%͏",
+              "status": "%͏",
+              "summary": "%͏",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "%͏"
+              },
+              "rows": [
+                {
+                  "label": "%͏",
+                  "value": "%͏",
+                  "detail": "%͏"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "59350062458794d2c4cb69272679a8115e678f81e4ff2e559974899f3a87b352",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 247
+      },
+      "visible": ["%͏", "%͏", "%͏", "%͏", "%͏", "%͏", "%͏", "%͏"]
+    },
+    {
+      "filename": "unicode-34.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "␞͏"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "␞͏",
+              "status": "␞͏",
+              "summary": "␞͏",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "␞͏"
+              },
+              "rows": [
+                {
+                  "label": "␞͏",
+                  "value": "␞͏",
+                  "detail": "␞͏"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "70f212559da3ff65713b0eb6083bc4064bb3f4395633f77721cc2488a8422e61",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 263
+      },
+      "visible": ["␞͏", "␞͏", "␞͏", "␞͏", "␞͏", "␞͏", "␞͏", "␞͏"]
+    },
+    {
+      "filename": "unicode-35.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "␟͏"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "␟͏",
+              "status": "␟͏",
+              "summary": "␟͏",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "␟͏"
+              },
+              "rows": [
+                {
+                  "label": "␟͏",
+                  "value": "␟͏",
+                  "detail": "␟͏"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "3d314b497cca12fefd12907acc4aca12877c04d7cf599e92f6a2a7364f11d07a",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 263
+      },
+      "visible": ["␟͏", "␟͏", "␟͏", "␟͏", "␟͏", "␟͏", "␟͏", "␟͏"]
+    },
+    {
+      "filename": "unicode-36.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "∅͏"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "∅͏",
+              "status": "∅͏",
+              "summary": "∅͏",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "∅͏"
+              },
+              "rows": [
+                {
+                  "label": "∅͏",
+                  "value": "∅͏",
+                  "detail": "∅͏"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "a4995b6fc688e57aaee64dcd817f6de4bd8e4e33dd3fa08b2960358fd992c493",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 263
+      },
+      "visible": ["∅͏", "∅͏", "∅͏", "∅͏", "∅͏", "∅͏", "∅͏", "∅͏"]
+    },
+    {
+      "filename": "unicode-37.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "x͏"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "x͏",
+              "status": "x͏",
+              "summary": "x͏",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "x͏"
+              },
+              "rows": [
+                {
+                  "label": "x͏",
+                  "value": "x͏",
+                  "detail": "x͏"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "309e6bce8e677650cb821cf00e2df4f054ba6d596f8fd1f5646b2596f91580a7",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 247
+      },
+      "visible": ["x͏", "x͏", "x͏", "x͏", "x͏", "x͏", "x͏", "x͏"]
+    },
+    {
+      "filename": "unicode-38.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "️x"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "️x",
+              "status": "️x",
+              "summary": "️x",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "️x"
+              },
+              "rows": [
+                {
+                  "label": "️x",
+                  "value": "️x",
+                  "detail": "️x"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "d1b72735a21415074811f95021a4d4902fd2458016b726d68905374829444345",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 255
+      },
+      "visible": ["️x", "️x", "️x", "️x", "️x", "️x", "️x", "️x"]
+    },
+    {
+      "filename": "unicode-39.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "%️"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "%️",
+              "status": "%️",
+              "summary": "%️",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "%️"
+              },
+              "rows": [
+                {
+                  "label": "%️",
+                  "value": "%️",
+                  "detail": "%️"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "2f06fa943829450f78e85d7f729681ba19aa93b1d4fbf995d68399952f55b0bf",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 255
+      },
+      "visible": ["%️", "%️", "%️", "%️", "%️", "%️", "%️", "%️"]
+    },
+    {
+      "filename": "unicode-40.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "␞️"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "␞️",
+              "status": "␞️",
+              "summary": "␞️",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "␞️"
+              },
+              "rows": [
+                {
+                  "label": "␞️",
+                  "value": "␞️",
+                  "detail": "␞️"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "346717b247edd1aac488310f0da78af87f48b668465585a186e12b2a42312298",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 271
+      },
+      "visible": ["␞️", "␞️", "␞️", "␞️", "␞️", "␞️", "␞️", "␞️"]
+    },
+    {
+      "filename": "unicode-41.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "␟️"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "␟️",
+              "status": "␟️",
+              "summary": "␟️",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "␟️"
+              },
+              "rows": [
+                {
+                  "label": "␟️",
+                  "value": "␟️",
+                  "detail": "␟️"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "6a966e482ab277f5fe8df3f16c2632b77841771fa1a7fdadc4ba318043430448",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 271
+      },
+      "visible": ["␟️", "␟️", "␟️", "␟️", "␟️", "␟️", "␟️", "␟️"]
+    },
+    {
+      "filename": "unicode-42.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "∅️"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "∅️",
+              "status": "∅️",
+              "summary": "∅️",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "∅️"
+              },
+              "rows": [
+                {
+                  "label": "∅️",
+                  "value": "∅️",
+                  "detail": "∅️"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "13d5674301bc166524c610f22fb0cd4e674f709e0b1676a5483a085426eb9714",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 271
+      },
+      "visible": ["∅️", "∅️", "∅️", "∅️", "∅️", "∅️", "∅️", "∅️"]
+    },
+    {
+      "filename": "unicode-43.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "x️"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "x️",
+              "status": "x️",
+              "summary": "x️",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "x️"
+              },
+              "rows": [
+                {
+                  "label": "x️",
+                  "value": "x️",
+                  "detail": "x️"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "ec569c77924842123bb39db5ca788d6eafd7b1294200c3efcf59af8928113606",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 255
+      },
+      "visible": ["x️", "x️", "x️", "x️", "x️", "x️", "x️", "x️"]
+    },
+    {
+      "filename": "unicode-44.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "‍x"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "‍x",
+              "status": "‍x",
+              "summary": "‍x",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "‍x"
+              },
+              "rows": [
+                {
+                  "label": "‍x",
+                  "value": "‍x",
+                  "detail": "‍x"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "f19d207cb2f318b21f78e76c56e6cf1a7214f2045b95b61d4834bf4ea18aceb0",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 255
+      },
+      "visible": ["‍x", "‍x", "‍x", "‍x", "‍x", "‍x", "‍x", "‍x"]
+    },
+    {
+      "filename": "unicode-45.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "%‍"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "%‍",
+              "status": "%‍",
+              "summary": "%‍",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "%‍"
+              },
+              "rows": [
+                {
+                  "label": "%‍",
+                  "value": "%‍",
+                  "detail": "%‍"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "e7fa0cd5bef3b817e9b9dfc69d5a44b66764a21feaaad418e0bb02045307682b",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 255
+      },
+      "visible": ["%‍", "%‍", "%‍", "%‍", "%‍", "%‍", "%‍", "%‍"]
+    },
+    {
+      "filename": "unicode-46.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "␞‍"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "␞‍",
+              "status": "␞‍",
+              "summary": "␞‍",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "␞‍"
+              },
+              "rows": [
+                {
+                  "label": "␞‍",
+                  "value": "␞‍",
+                  "detail": "␞‍"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "8b8d8f0d1cf2459803027e5f307480f04c6dacf5a33c1028a9e5d3a1bda9cf4e",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 271
+      },
+      "visible": ["␞‍", "␞‍", "␞‍", "␞‍", "␞‍", "␞‍", "␞‍", "␞‍"]
+    },
+    {
+      "filename": "unicode-47.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "␟‍"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "␟‍",
+              "status": "␟‍",
+              "summary": "␟‍",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "␟‍"
+              },
+              "rows": [
+                {
+                  "label": "␟‍",
+                  "value": "␟‍",
+                  "detail": "␟‍"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "c7adc64c79d8f3c6f4720aa1a324977311da5445f4ab7d3d834d2cc34ab1e9f4",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 271
+      },
+      "visible": ["␟‍", "␟‍", "␟‍", "␟‍", "␟‍", "␟‍", "␟‍", "␟‍"]
+    },
+    {
+      "filename": "unicode-48.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "∅‍"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "∅‍",
+              "status": "∅‍",
+              "summary": "∅‍",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "∅‍"
+              },
+              "rows": [
+                {
+                  "label": "∅‍",
+                  "value": "∅‍",
+                  "detail": "∅‍"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "fabfa9ffc7ea9eccd6b72b6f22fe61dfcf25a6dec3462e0855a14b7f3ef17ee2",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 271
+      },
+      "visible": ["∅‍", "∅‍", "∅‍", "∅‍", "∅‍", "∅‍", "∅‍", "∅‍"]
+    },
+    {
+      "filename": "unicode-49.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "x‍"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "x‍",
+              "status": "x‍",
+              "summary": "x‍",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "x‍"
+              },
+              "rows": [
+                {
+                  "label": "x‍",
+                  "value": "x‍",
+                  "detail": "x‍"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "b26ade858d5393656f8171f9f32f64d52a24b801dae1fb5c72a16bb84bf21e93",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 255
+      },
+      "visible": ["x‍", "x‍", "x‍", "x‍", "x‍", "x‍", "x‍", "x‍"]
+    },
+    {
+      "filename": "unicode-50.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "ाx"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "ाx",
+              "status": "ाx",
+              "summary": "ाx",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "ाx"
+              },
+              "rows": [
+                {
+                  "label": "ाx",
+                  "value": "ाx",
+                  "detail": "ाx"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "f274f5a0afa170ee5ea28be3b51bce2fdcc6e43b6d4ebfa12f09241f4c31ea63",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 255
+      },
+      "visible": ["ाx", "ाx", "ाx", "ाx", "ाx", "ाx", "ाx", "ाx"]
+    },
+    {
+      "filename": "unicode-51.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "%ा"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "%ा",
+              "status": "%ा",
+              "summary": "%ा",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "%ा"
+              },
+              "rows": [
+                {
+                  "label": "%ा",
+                  "value": "%ा",
+                  "detail": "%ा"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "17de804177b09381616e3aabbe66814f1e0a0b6b09aad526f0b6986397bf356c",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 255
+      },
+      "visible": ["%ा", "%ा", "%ा", "%ा", "%ा", "%ा", "%ा", "%ा"]
+    },
+    {
+      "filename": "unicode-52.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "␞ा"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "␞ा",
+              "status": "␞ा",
+              "summary": "␞ा",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "␞ा"
+              },
+              "rows": [
+                {
+                  "label": "␞ा",
+                  "value": "␞ा",
+                  "detail": "␞ा"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "0b48ed2b581c2c14d13a42d6846d12d89da9d5fceaed179be084d2a72b4ba01c",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 271
+      },
+      "visible": ["␞ा", "␞ा", "␞ा", "␞ा", "␞ा", "␞ा", "␞ा", "␞ा"]
+    },
+    {
+      "filename": "unicode-53.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "␟ा"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "␟ा",
+              "status": "␟ा",
+              "summary": "␟ा",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "␟ा"
+              },
+              "rows": [
+                {
+                  "label": "␟ा",
+                  "value": "␟ा",
+                  "detail": "␟ा"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "92518b9b0c313dd6d617637fac603fb1f9371a39e69648e66d644857776a26c1",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 271
+      },
+      "visible": ["␟ा", "␟ा", "␟ा", "␟ा", "␟ा", "␟ा", "␟ा", "␟ा"]
+    },
+    {
+      "filename": "unicode-54.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "∅ा"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "∅ा",
+              "status": "∅ा",
+              "summary": "∅ा",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "∅ा"
+              },
+              "rows": [
+                {
+                  "label": "∅ा",
+                  "value": "∅ा",
+                  "detail": "∅ा"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "10646cc1e9bbb682a186a7dd63be5254524f05334ae2210e4067053f10a0c361",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 271
+      },
+      "visible": ["∅ा", "∅ा", "∅ा", "∅ा", "∅ा", "∅ा", "∅ा", "∅ा"]
+    },
+    {
+      "filename": "unicode-55.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "xा"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "xा",
+              "status": "xा",
+              "summary": "xा",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "xा"
+              },
+              "rows": [
+                {
+                  "label": "xा",
+                  "value": "xा",
+                  "detail": "xा"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "b2ece6125c2e35a2f528e4de4e7da840759dcecba5fe42c0171df8f029c70fb8",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 255
+      },
+      "visible": ["xा", "xा", "xा", "xा", "xा", "xा", "xा", "xा"]
+    },
+    {
+      "filename": "unicode-56.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "؀x"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "؀x",
+              "status": "؀x",
+              "summary": "؀x",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "؀x"
+              },
+              "rows": [
+                {
+                  "label": "؀x",
+                  "value": "؀x",
+                  "detail": "؀x"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "d2df3f78b617f0c55d4823def66099e96efdf396732b5d7e64bd039d7b6fb40e",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 247
+      },
+      "visible": ["؀x", "؀x", "؀x", "؀x", "؀x", "؀x", "؀x", "؀x"]
+    },
+    {
+      "filename": "unicode-57.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "%؀"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "%؀",
+              "status": "%؀",
+              "summary": "%؀",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "%؀"
+              },
+              "rows": [
+                {
+                  "label": "%؀",
+                  "value": "%؀",
+                  "detail": "%؀"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "28f162a4ee9cce8ad22f9994d9207f91a9ed8b177205e47897a2daf50058ea4b",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 247
+      },
+      "visible": ["%؀", "%؀", "%؀", "%؀", "%؀", "%؀", "%؀", "%؀"]
+    },
+    {
+      "filename": "unicode-58.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "␞؀"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "␞؀",
+              "status": "␞؀",
+              "summary": "␞؀",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "␞؀"
+              },
+              "rows": [
+                {
+                  "label": "␞؀",
+                  "value": "␞؀",
+                  "detail": "␞؀"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "606b66f4b6a62e6becbee231feb5753b43f3a5e5611b72f2d0c20eb54dabb5aa",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 263
+      },
+      "visible": ["␞؀", "␞؀", "␞؀", "␞؀", "␞؀", "␞؀", "␞؀", "␞؀"]
+    },
+    {
+      "filename": "unicode-59.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "␟؀"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "␟؀",
+              "status": "␟؀",
+              "summary": "␟؀",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "␟؀"
+              },
+              "rows": [
+                {
+                  "label": "␟؀",
+                  "value": "␟؀",
+                  "detail": "␟؀"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "21a6c3db4fc21db1b2c408cdce19507e36a32bbd26d197d461800aefd5338171",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 263
+      },
+      "visible": ["␟؀", "␟؀", "␟؀", "␟؀", "␟؀", "␟؀", "␟؀", "␟؀"]
+    },
+    {
+      "filename": "unicode-60.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "∅؀"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "∅؀",
+              "status": "∅؀",
+              "summary": "∅؀",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "∅؀"
+              },
+              "rows": [
+                {
+                  "label": "∅؀",
+                  "value": "∅؀",
+                  "detail": "∅؀"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "c8f36fd52241c1d202136702095cf617498e92fad0f2ab25d8745714df61bac3",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 263
+      },
+      "visible": ["∅؀", "∅؀", "∅؀", "∅؀", "∅؀", "∅؀", "∅؀", "∅؀"]
+    },
+    {
+      "filename": "unicode-61.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "x؀"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "x؀",
+              "status": "x؀",
+              "summary": "x؀",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "x؀"
+              },
+              "rows": [
+                {
+                  "label": "x؀",
+                  "value": "x؀",
+                  "detail": "x؀"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "f75e97fd74f64b6962f59fd75ed38861cf954a4558acce8d30b8749c83b39dd5",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 247
+      },
+      "visible": ["x؀", "x؀", "x؀", "x؀", "x؀", "x؀", "x؀", "x؀"]
+    },
+    {
+      "filename": "unicode-62.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "🏽x"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "🏽x",
+              "status": "🏽x",
+              "summary": "🏽x",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "🏽x"
+              },
+              "rows": [
+                {
+                  "label": "🏽x",
+                  "value": "🏽x",
+                  "detail": "🏽x"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "9bd3a40e7aa131b400dcc60fee4bb6c329792747e4de47b5fd987ed4a3c463e4",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 263
+      },
+      "visible": ["🏽x", "🏽x", "🏽x", "🏽x", "🏽x", "🏽x", "🏽x", "🏽x"]
+    },
+    {
+      "filename": "unicode-63.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "%🏽"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "%🏽",
+              "status": "%🏽",
+              "summary": "%🏽",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "%🏽"
+              },
+              "rows": [
+                {
+                  "label": "%🏽",
+                  "value": "%🏽",
+                  "detail": "%🏽"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "0cc3ee9a8c722480f435c8716f5c382aa40116295427e27f489f443c948c52ca",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 263
+      },
+      "visible": ["%🏽", "%🏽", "%🏽", "%🏽", "%🏽", "%🏽", "%🏽", "%🏽"]
+    },
+    {
+      "filename": "unicode-64.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "␞🏽"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "␞🏽",
+              "status": "␞🏽",
+              "summary": "␞🏽",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "␞🏽"
+              },
+              "rows": [
+                {
+                  "label": "␞🏽",
+                  "value": "␞🏽",
+                  "detail": "␞🏽"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "8acc6f3a3f4a94b27876ebefa92a12d0845e6177b6fd446de83483c302868d5b",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 279
+      },
+      "visible": ["␞🏽", "␞🏽", "␞🏽", "␞🏽", "␞🏽", "␞🏽", "␞🏽", "␞🏽"]
+    },
+    {
+      "filename": "unicode-65.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "␟🏽"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "␟🏽",
+              "status": "␟🏽",
+              "summary": "␟🏽",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "␟🏽"
+              },
+              "rows": [
+                {
+                  "label": "␟🏽",
+                  "value": "␟🏽",
+                  "detail": "␟🏽"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "051b79b3f472f964e44805c76c62a95c7338cd6fdd87ab76749b3dbcf3488201",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 279
+      },
+      "visible": ["␟🏽", "␟🏽", "␟🏽", "␟🏽", "␟🏽", "␟🏽", "␟🏽", "␟🏽"]
+    },
+    {
+      "filename": "unicode-66.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "∅🏽"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "∅🏽",
+              "status": "∅🏽",
+              "summary": "∅🏽",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "∅🏽"
+              },
+              "rows": [
+                {
+                  "label": "∅🏽",
+                  "value": "∅🏽",
+                  "detail": "∅🏽"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "958a520e686214a7f47efada5fc10e67de081ef7cb2615c3419a2765ed798c09",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 279
+      },
+      "visible": ["∅🏽", "∅🏽", "∅🏽", "∅🏽", "∅🏽", "∅🏽", "∅🏽", "∅🏽"]
+    },
+    {
+      "filename": "unicode-67.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "x🏽"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "x🏽",
+              "status": "x🏽",
+              "summary": "x🏽",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "x🏽"
+              },
+              "rows": [
+                {
+                  "label": "x🏽",
+                  "value": "x🏽",
+                  "detail": "x🏽"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "38a57a68da031a94383f664d3b6d5b172462fd01bdfc111c4b05f0b1dc0c5c95",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 263
+      },
+      "visible": ["x🏽", "x🏽", "x🏽", "x🏽", "x🏽", "x🏽", "x🏽", "x🏽"]
+    },
+    {
+      "filename": "unicode-68.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "󠄀x"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "󠄀x",
+              "status": "󠄀x",
+              "summary": "󠄀x",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "󠄀x"
+              },
+              "rows": [
+                {
+                  "label": "󠄀x",
+                  "value": "󠄀x",
+                  "detail": "󠄀x"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "3a6e2f5a625caa6a8814fc0ae01faedae91e5a22b68a121ca290b6421c60be68",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 263
+      },
+      "visible": ["󠄀x", "󠄀x", "󠄀x", "󠄀x", "󠄀x", "󠄀x", "󠄀x", "󠄀x"]
+    },
+    {
+      "filename": "unicode-69.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "%󠄀"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "%󠄀",
+              "status": "%󠄀",
+              "summary": "%󠄀",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "%󠄀"
+              },
+              "rows": [
+                {
+                  "label": "%󠄀",
+                  "value": "%󠄀",
+                  "detail": "%󠄀"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "9a02518294d4446919e6665a31273cfb7a672943b323ad9b99736fe570a2c368",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 263
+      },
+      "visible": ["%󠄀", "%󠄀", "%󠄀", "%󠄀", "%󠄀", "%󠄀", "%󠄀", "%󠄀"]
+    },
+    {
+      "filename": "unicode-70.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "␞󠄀"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "␞󠄀",
+              "status": "␞󠄀",
+              "summary": "␞󠄀",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "␞󠄀"
+              },
+              "rows": [
+                {
+                  "label": "␞󠄀",
+                  "value": "␞󠄀",
+                  "detail": "␞󠄀"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "097415940fe126c49ae77d549a0cd8faa7113a9b496124ed42d3e43ef5d949fd",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 279
+      },
+      "visible": ["␞󠄀", "␞󠄀", "␞󠄀", "␞󠄀", "␞󠄀", "␞󠄀", "␞󠄀", "␞󠄀"]
+    },
+    {
+      "filename": "unicode-71.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "␟󠄀"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "␟󠄀",
+              "status": "␟󠄀",
+              "summary": "␟󠄀",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "␟󠄀"
+              },
+              "rows": [
+                {
+                  "label": "␟󠄀",
+                  "value": "␟󠄀",
+                  "detail": "␟󠄀"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "3fcfed1bb8708acacf8ec98a8d5a1b057d3e2192212173e8af72b87961e20c61",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 279
+      },
+      "visible": ["␟󠄀", "␟󠄀", "␟󠄀", "␟󠄀", "␟󠄀", "␟󠄀", "␟󠄀", "␟󠄀"]
+    },
+    {
+      "filename": "unicode-72.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "∅󠄀"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "∅󠄀",
+              "status": "∅󠄀",
+              "summary": "∅󠄀",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "∅󠄀"
+              },
+              "rows": [
+                {
+                  "label": "∅󠄀",
+                  "value": "∅󠄀",
+                  "detail": "∅󠄀"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "9a342358f26f0d07065b5fd0a50baf5fc9148ba7d6ce4324efb7dbf105765183",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 279
+      },
+      "visible": ["∅󠄀", "∅󠄀", "∅󠄀", "∅󠄀", "∅󠄀", "∅󠄀", "∅󠄀", "∅󠄀"]
+    },
+    {
+      "filename": "unicode-73.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "x󠄀"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "x󠄀",
+              "status": "x󠄀",
+              "summary": "x󠄀",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "x󠄀"
+              },
+              "rows": [
+                {
+                  "label": "x󠄀",
+                  "value": "x󠄀",
+                  "detail": "x󠄀"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "96668fa0a98662264588d4e3f2e5658b47836953bd0875c7ddd914ca4b290d2f",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 263
+      },
+      "visible": ["x󠄀", "x󠄀", "x󠄀", "x󠄀", "x󠄀", "x󠄀", "x󠄀", "x󠄀"]
+    },
+    {
+      "filename": "unicode-74.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "󠀠x"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "󠀠x",
+              "status": "󠀠x",
+              "summary": "󠀠x",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "󠀠x"
+              },
+              "rows": [
+                {
+                  "label": "󠀠x",
+                  "value": "󠀠x",
+                  "detail": "󠀠x"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "5464085ea15108fa09738baea34163ecd02ee51c0ec0757e7aa2fbf561dd6bc5",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 263
+      },
+      "visible": ["󠀠x", "󠀠x", "󠀠x", "󠀠x", "󠀠x", "󠀠x", "󠀠x", "󠀠x"]
+    },
+    {
+      "filename": "unicode-75.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "%󠀠"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "%󠀠",
+              "status": "%󠀠",
+              "summary": "%󠀠",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "%󠀠"
+              },
+              "rows": [
+                {
+                  "label": "%󠀠",
+                  "value": "%󠀠",
+                  "detail": "%󠀠"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "e0ee16cb9893077a21e263d5fccaaf439486f7db4840b76283b0ae8055f7e5c4",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 263
+      },
+      "visible": ["%󠀠", "%󠀠", "%󠀠", "%󠀠", "%󠀠", "%󠀠", "%󠀠", "%󠀠"]
+    },
+    {
+      "filename": "unicode-76.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "␞󠀠"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "␞󠀠",
+              "status": "␞󠀠",
+              "summary": "␞󠀠",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "␞󠀠"
+              },
+              "rows": [
+                {
+                  "label": "␞󠀠",
+                  "value": "␞󠀠",
+                  "detail": "␞󠀠"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "e90136d06c61c775fb613d0f6257de3f6443d32fd9b0f043b2a21d092d5d67f9",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 279
+      },
+      "visible": ["␞󠀠", "␞󠀠", "␞󠀠", "␞󠀠", "␞󠀠", "␞󠀠", "␞󠀠", "␞󠀠"]
+    },
+    {
+      "filename": "unicode-77.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "␟󠀠"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "␟󠀠",
+              "status": "␟󠀠",
+              "summary": "␟󠀠",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "␟󠀠"
+              },
+              "rows": [
+                {
+                  "label": "␟󠀠",
+                  "value": "␟󠀠",
+                  "detail": "␟󠀠"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "aa9f69015bf7dff65af5066153e46ec0e62ebbfe13ce4828e1539d43b2101550",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 279
+      },
+      "visible": ["␟󠀠", "␟󠀠", "␟󠀠", "␟󠀠", "␟󠀠", "␟󠀠", "␟󠀠", "␟󠀠"]
+    },
+    {
+      "filename": "unicode-78.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "∅󠀠"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "∅󠀠",
+              "status": "∅󠀠",
+              "summary": "∅󠀠",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "∅󠀠"
+              },
+              "rows": [
+                {
+                  "label": "∅󠀠",
+                  "value": "∅󠀠",
+                  "detail": "∅󠀠"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "9457c1472bb9ef5558b02868a138d73e793b9160d7307f699bab027e979bbece",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 279
+      },
+      "visible": ["∅󠀠", "∅󠀠", "∅󠀠", "∅󠀠", "∅󠀠", "∅󠀠", "∅󠀠", "∅󠀠"]
+    },
+    {
+      "filename": "unicode-79.j2",
+      "classification": "valid",
+      "blocks": [
+        {
+          "sourceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "producer": {
+            "key": "probe",
+            "label": "x󠀠"
+          },
+          "items": [
+            {
+              "key": "task",
+              "title": "x󠀠",
+              "status": "x󠀠",
+              "summary": "x󠀠",
+              "progress": {
+                "value": 1,
+                "max": 2,
+                "label": "x󠀠"
+              },
+              "rows": [
+                {
+                  "label": "x󠀠",
+                  "value": "x󠀠",
+                  "detail": "x󠀠"
+                }
+              ],
+              "href": "https://example.com/é👩🏽‍💻"
+            }
+          ]
+        }
+      ],
+      "sha256": "fe80471bdb1eccf9f94420f120f895fe9f9693d314176fed9c26f67de135b0db",
+      "metrics": {
+        "sourceCount": 1,
+        "blockCount": 1,
+        "itemCount": 1,
+        "rowCount": 1,
+        "recordCount": 5,
+        "fieldCount": 31,
+        "byteCount": 263
+      },
+      "visible": ["x󠀠", "x󠀠", "x󠀠", "x󠀠", "x󠀠", "x󠀠", "x󠀠", "x󠀠"]
+    },
+    {
+      "filename": "missing-tag.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"]
+    },
+    {
+      "filename": "empty-tag.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"]
+    },
+    {
+      "filename": "uppercase-tag.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"]
+    },
+    {
+      "filename": "short-tag.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"]
+    },
+    {
+      "filename": "null-plus-mark.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"]
+    },
+    {
+      "filename": "optional-null-plus-mark.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"]
+    },
+    {
+      "filename": "old-j1.j2",
+      "classification": "ignored",
+      "visible": []
+    },
+    {
+      "filename": "mixed-j1-j2.j2",
+      "classification": "invalid",
+      "visible": ["Junction data unavailable"]
+    },
+    {
+      "filename": "j2-mark-nonclaim.j2",
+      "classification": "ignored",
+      "visible": []
+    }
+  ]
+}

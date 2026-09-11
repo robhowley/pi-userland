@@ -86,27 +86,26 @@ function exactByteAggregate() {
   expect(remaining).toBeGreaterThan(0);
   for (const candidate of blocks.flatMap((entry) => entry.items)) {
     if (remaining === 0) break;
-    const length = Math.min(512, remaining + 3);
+    const length = Math.min(512, remaining + 1);
     candidate.summary = 'x'.repeat(length);
-    remaining -= length - 3;
+    remaining -= length - 1;
   }
   expect(remaining).toBe(0);
   return blocks;
 }
 
-describe('J1 projection grammar', () => {
-  it('matches the minimal golden and hashes the exact UTF-8 J1', () => {
+describe('J2 projection grammar (historical J1 API names)', () => {
+  it('matches the minimal golden and hashes the exact UTF-8 J2', () => {
     const result = expectSet([block('p', sourceA, [item('i', { title: 'Title' })])]);
-    const golden = [
-      'J1',
-      `S␟0␟${sourceA}`,
-      'P␟0␟0␟p␟Producer p',
-      'C␟0␟0␟0␟i␟Title␟∅␟∅␟∅␟∅␟∅␟∅',
-    ].join('␞');
+    const body = [
+      `S\u001f0\u001f${sourceA}`,
+      'P\u001f0\u001f0\u001fp\u001fProducer p',
+      'C\u001f0\u001f0\u001f0\u001fi\u001fTitle\u001f\u001d\u001f\u001d\u001f\u001d\u001f\u001d\u001f\u001d\u001f\u001d',
+    ].join('\u001e');
+    const golden = `J2\u001f${createHash('sha256').update(body, 'utf8').digest('hex')}\u001e${body}`;
     expect(result.j1).toBe(golden);
     expect(result.digest).toBe(createHash('sha256').update(golden, 'utf8').digest('hex'));
-    expect(result.digest).toBe('7edaad49f3cd16de0220f5979dcddb7476d110bf6148f50cb983721aba2fceba');
-    expect(result.j1.endsWith('␞')).toBe(false);
+    expect(result.j1.endsWith('\u001e')).toBe(false);
   });
 
   it('uses exact arities, scoped references, literal item/row order, progress, and HTTPS', () => {
@@ -124,8 +123,8 @@ describe('J1 projection grammar', () => {
         }),
       ]),
     ]);
-    const records = result.j1.split('␞').map((record) => record.split('␟'));
-    expect(records.map((record) => record.length)).toEqual([1, 3, 3, 5, 12, 9, 9, 5, 12, 5, 12]);
+    const records = result.j1.split('\u001e').map((record) => record.split('\u001f'));
+    expect(records.map((record) => record.length)).toEqual([2, 3, 3, 5, 12, 9, 9, 5, 12, 5, 12]);
     expect(records.slice(1, 3).map((record) => record[2])).toEqual([sourceA, sourceB]);
     expect(records.filter(([kind]) => kind === 'P').map((record) => record.slice(1, 5))).toEqual([
       ['0', '0', 'same', 'Producer same'],
@@ -138,8 +137,8 @@ describe('J1 projection grammar', () => {
       '0',
       'first',
       'Title first',
-      '∅',
-      '∅',
+      '\u001d',
+      '\u001d',
       '2',
       '3',
       '2/3',
@@ -148,13 +147,15 @@ describe('J1 projection grammar', () => {
     expect(records.filter(([kind]) => kind === 'R').map((record) => record[4])).toEqual(['0', '1']);
   });
 
-  it('escapes reserved literals and distinguishes absent fields from emoji text', () => {
+  it('preserves printable literals and distinguishes absent fields from emoji text', () => {
     const literal = '%␞␟∅😀';
     const result = expectSet([
       block('p', sourceA, [item('i', { title: literal, rows: [{ value: literal }] })]),
     ]);
-    expect(result.j1).toContain('%25%1E%1F%00😀');
-    expect(result.j1).toContain('␟∅␟∅␟∅␟∅␟∅␟∅');
+    expect(result.j1).toContain(literal);
+    expect(result.j1).toContain(
+      '\u001f\u001d\u001f\u001d\u001f\u001d\u001f\u001d\u001f\u001d\u001f\u001d',
+    );
   });
 
   it('is deterministic across arrival/replay order and permits repeated keys across sources', () => {
@@ -193,7 +194,7 @@ describe('J1 projection grammar', () => {
   });
 });
 
-describe('J1 aggregate capacity', () => {
+describe('J2 aggregate capacity', () => {
   it('accepts every exact count, record, and field ceiling', () => {
     const result = expectSet(aggregateMaximum());
     expect(result.metrics).toMatchObject({
@@ -302,7 +303,7 @@ describe('J1 aggregate capacity', () => {
   });
 });
 
-describe('J1 hostile input', () => {
+describe('J2 hostile input', () => {
   it('rejects malformed values without throwing', () => {
     const candidates = [
       null,

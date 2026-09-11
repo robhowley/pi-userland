@@ -722,6 +722,205 @@ describe('coordinator runtime boundary', () => {
     await closed;
     expect(runtime.core.diagnostics()).toMatchObject({ deliveryOutcome: 'exit-failed' });
   });
+  it.each([false, true])(
+    'description commands are internal/default-disabled and never delay ACKs (reserved=%s)',
+    async (enabled) => {
+      const directory = await mkdtemp(join(tmpdir(), 'pj-description-'));
+      tempDirectories.push(directory);
+      const listen = join(directory, 'coordinator.sock');
+      const workspaceId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+      const windowId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+      const callbacks: Array<() => void> = [];
+      const execute = vi.fn((_file, args, _options, callback) => {
+        callbacks.push(() =>
+          callback(
+            null,
+            Buffer.from(
+              JSON.stringify({
+                window_id: windowId,
+                workspaces: [{ id: workspaceId, description: null }],
+              }),
+            ),
+          ),
+        );
+        expect(args).toContain('--window');
+      });
+      const persisted: unknown[] = [];
+      const lifecycle = vi.fn(async () => ({ ok: true }));
+      const runtime = await runCoordinatorRuntime(
+        [
+          '--listen',
+          listen,
+          '--ledger',
+          join(directory, 'ledger.json'),
+          '--cmux-socket',
+          '/tmp/cmux.sock',
+          '--workspace',
+          workspaceId,
+        ],
+        {
+          ...(enabled
+            ? { descriptionReservation: { socketPath: '/tmp/cmux.sock', windowId, workspaceId } }
+            : {}),
+          execFile: execute,
+          publish: lifecycle,
+          probePid: () => 'match',
+          schedule: () => undefined,
+          store: {
+            read: async () => null,
+            write: async (ledger: unknown) => {
+              persisted.push(ledger);
+            },
+          },
+        },
+      );
+      const socket = createConnection(listen);
+      await once(socket, 'connect');
+      const ack = nextJsonLine(socket);
+      socket.write(`${JSON.stringify(presentationSnapshot({ workspaceId }))}\n`);
+      expect(await ack).toMatchObject({ kind: 'ack', acceptedKind: 'snapshot' });
+      expect(persisted).toEqual([]);
+      expect(execute).toHaveBeenCalledTimes(enabled ? 1 : 0);
+      // Lifecycle accepts and persists while its process is queued behind description.
+      expect(
+        await runtime.core.acceptSnapshot(snapshot({ workspaceId }), 'lifecycle-socket'),
+      ).toMatchObject({ ok: true });
+      if (enabled) expect(lifecycle).not.toHaveBeenCalled();
+      callbacks.shift()?.();
+      await runtime.description.drain();
+      await runtime.core.drain();
+      expect(lifecycle).toHaveBeenCalledTimes(1);
+      expect(runtime.description.diagnostics()).toMatchObject(
+        enabled
+          ? { reservation: 'held', applied: 'clear' }
+          : { reservation: 'disabled', reason: 'missing' },
+      );
+      await runtime.close();
+      await expect(stat(listen)).rejects.toMatchObject({ code: 'ENOENT' });
+    },
+  );
+
+  it.each(['goodbye', 'expiry'])(
+    'failed final description clear does not keep an empty runtime alive after %s',
+    async (removal) => {
+      const directory = await mkdtemp(join(tmpdir(), 'pj-description-final-'));
+      tempDirectories.push(directory);
+      const listen = join(directory, 'coordinator.sock');
+      const workspaceId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+      const windowId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+      let now = 1_700_000_001_000;
+      let description: string | null = null;
+      const execute = vi.fn((_file, args, _options, callback) => {
+        if (args.includes('clear-description')) return callback(new Error('failed clear'));
+        if (args.includes('set-description')) description = args.at(-1);
+        callback(
+          null,
+          Buffer.from(
+            JSON.stringify({ window_id: windowId, workspaces: [{ id: workspaceId, description }] }),
+          ),
+        );
+      });
+      const runtime = await runCoordinatorRuntime(
+        [
+          '--listen',
+          listen,
+          '--ledger',
+          join(directory, 'ledger.json'),
+          '--cmux-socket',
+          '/tmp/cmux.sock',
+          '--workspace',
+          workspaceId,
+        ],
+        {
+          descriptionReservation: { socketPath: '/tmp/cmux.sock', windowId, workspaceId },
+          execFile: execute,
+          probePid: () => 'match',
+          now: () => now,
+          schedule: () => undefined,
+        },
+      );
+      const socket = createConnection(listen);
+      await once(socket, 'connect');
+      const ack = nextJsonLine(socket);
+      socket.write(
+        `${JSON.stringify(presentationSnapshot({ workspaceId, views: [{ producer: { key: 'test', label: 'Test' }, items: [{ key: 'item', title: 'Title', rows: [] }] }] }))}\n`,
+      );
+      const accepted = await ack;
+      await runtime.description.drain();
+      expect(runtime.description.diagnostics()).toMatchObject({ applied: 'set', dirty: false });
+      const exact = description;
+      const closed = once(runtime.server, 'close');
+      if (removal === 'goodbye') {
+        const goodbyeAck = nextJsonLine(socket);
+        socket.write(
+          `${JSON.stringify(presentationGoodbye(accepted['acceptedGeneration'], { workspaceId }))}\n`,
+        );
+        expect(await goodbyeAck).toMatchObject({ kind: 'ack', acceptedKind: 'goodbye' });
+      } else {
+        now += 60_000;
+        runtime.presentation.maintain();
+      }
+      await closed;
+      await runtime.close();
+      expect(description).toBe(exact);
+      expect(runtime.description.diagnostics()).toMatchObject({
+        applied: 'set',
+        desired: 'clear',
+        dirty: true,
+        running: false,
+      });
+      expect(
+        execute.mock.calls.filter((call) => call[1].includes('clear-description')),
+      ).toHaveLength(1);
+    },
+  );
+
+  it('forced close waits for a running description process and never clears', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pj-description-close-'));
+    tempDirectories.push(directory);
+    const listen = join(directory, 'coordinator.sock');
+    const workspaceId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+    const windowId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+    let finish!: () => void;
+    const execute = vi.fn((_file, _args, _options, callback) => {
+      finish = () => callback(new Error('timeout'));
+    });
+    const runtime = await runCoordinatorRuntime(
+      [
+        '--listen',
+        listen,
+        '--ledger',
+        join(directory, 'ledger.json'),
+        '--cmux-socket',
+        '/tmp/cmux.sock',
+        '--workspace',
+        workspaceId,
+      ],
+      {
+        descriptionReservation: { socketPath: '/tmp/cmux.sock', windowId, workspaceId },
+        execFile: execute,
+        probePid: () => 'match',
+        schedule: () => undefined,
+      },
+    );
+    const socket = createConnection(listen);
+    await once(socket, 'connect');
+    const ack = nextJsonLine(socket);
+    socket.write(`${JSON.stringify(presentationSnapshot({ workspaceId }))}\n`);
+    await ack;
+    let closed = false;
+    const closing = runtime.close().then(() => {
+      closed = true;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(closed).toBe(false);
+    finish();
+    await closing;
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(runtime.description.isIdle()).toBe(true);
+    await expect(stat(listen)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('does not stop at idle startup and gives presentation-only sources full lifetime', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'pj-presentation-'));
     tempDirectories.push(directory);

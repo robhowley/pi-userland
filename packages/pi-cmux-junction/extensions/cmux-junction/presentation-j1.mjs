@@ -2,17 +2,18 @@ import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import { decodePresentationRequest, PRESENTATION_PROTOCOL } from './presentation-protocol.mjs';
 
+// Historical J1 API names remain internal to avoid caller churn; output is J2 only.
 export const MAX_PRESENTATION_J1_SOURCES = 16;
 export const MAX_PRESENTATION_J1_BLOCKS = 64;
 export const MAX_PRESENTATION_J1_ITEMS = 512;
 export const MAX_PRESENTATION_J1_ROWS = 4_096;
 export const MAX_PRESENTATION_J1_RECORDS = 4_689;
-export const MAX_PRESENTATION_J1_FIELDS = 43_377;
+export const MAX_PRESENTATION_J1_FIELDS = 43_378;
 export const MAX_PRESENTATION_J1_BYTES = 262_144;
 
-const RECORD_SEPARATOR = '␞';
-const FIELD_SEPARATOR = '␟';
-const NULL = '∅';
+const RECORD_SEPARATOR = '\u001e';
+const FIELD_SEPARATOR = '\u001f';
+const NULL = '\u001d';
 const SOURCE_ID_PATTERN = /^[a-f0-9]{64}$/u;
 const BLOCK_FIELDS = ['sourceId', 'producer', 'items'];
 const VALIDATION_MESSAGE = Object.freeze({
@@ -108,16 +109,8 @@ function compareBlocks(left, right) {
   );
 }
 
-function escapeField(value) {
-  return value
-    .replaceAll('%', '%25')
-    .replaceAll(RECORD_SEPARATOR, '%1E')
-    .replaceAll(FIELD_SEPARATOR, '%1F')
-    .replaceAll(NULL, '%00');
-}
-
 function field(value) {
-  return value === undefined ? NULL : escapeField(String(value));
+  return value === undefined ? NULL : String(value);
 }
 
 function record(values) {
@@ -165,7 +158,7 @@ function buildPresentationJ1(input) {
     }
 
     const recordCount = 1 + sourceIds.size + blocks.length + itemCount + rowCount;
-    const fieldCount = 1 + sourceIds.size * 3 + blocks.length * 5 + itemCount * 12 + rowCount * 9;
+    const fieldCount = 2 + sourceIds.size * 3 + blocks.length * 5 + itemCount * 12 + rowCount * 9;
     let measured = metrics(
       sourceIds.size,
       blocks.length,
@@ -191,7 +184,7 @@ function buildPresentationJ1(input) {
     const sourceRefs = new Map(
       orderedSourceIds.map((sourceId, index) => [sourceId, String(index)]),
     );
-    const records = ['J1'];
+    const records = [];
     for (let index = 0; index < orderedSourceIds.length; index += 1) {
       records.push(record(['S', index, orderedSourceIds[index]]));
     }
@@ -236,7 +229,11 @@ function buildPresentationJ1(input) {
       }
     }
 
-    const j1 = records.join(RECORD_SEPARATOR);
+    const body = records.join(RECORD_SEPARATOR);
+    // Distinct ASCII hashes prevent cmux's canonical-equivalence setter dedupe.
+    // This is not renderer authentication; exact whole-description readback owns publication.
+    const tag = createHash('sha256').update(body, 'utf8').digest('hex');
+    const j1 = `J2${FIELD_SEPARATOR}${tag}${RECORD_SEPARATOR}${body}`;
     const byteCount = Buffer.byteLength(j1, 'utf8');
     measured = metrics(
       sourceIds.size,

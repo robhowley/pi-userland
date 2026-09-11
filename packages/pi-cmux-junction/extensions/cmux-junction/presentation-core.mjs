@@ -85,6 +85,14 @@ export function createPresentationCore(options) {
   let blocks = Object.freeze([]);
   let projection = projectPresentationJ1(blocks);
 
+  const notifyProjection = () => {
+    try {
+      Promise.resolve(options.onProjection?.(projection)).catch(() => undefined);
+    } catch {
+      // Publication cannot change committed source acceptance or delay its ACK.
+    }
+  };
+
   const notifyIfEmptied = (previousSize) => {
     if (previousSize > 0 && sources.size === 0) options.onEmpty?.();
   };
@@ -184,6 +192,7 @@ export function createPresentationCore(options) {
     nextGeneration = draftNextGeneration;
     blocks = draftBlocks;
     projection = draftProjection;
+    notifyProjection();
     return {
       ok: true,
       acceptedGeneration: generation,
@@ -221,6 +230,7 @@ export function createPresentationCore(options) {
     sources = draftSources;
     blocks = draftBlocks;
     projection = draftProjection;
+    notifyProjection();
     // Retain the physical binding until EOF so traffic after goodbye remains fenced.
     notifyIfEmptied(previousSize);
     return {
@@ -272,6 +282,7 @@ export function createPresentationCore(options) {
     bindings = draftBindings;
     blocks = draftBlocks;
     projection = draftProjection;
+    if (previousSize !== sources.size) notifyProjection();
     notifyIfEmptied(previousSize);
     return { ok: true, changed: previousSize !== sources.size };
   };

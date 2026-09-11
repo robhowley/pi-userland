@@ -81,3 +81,221 @@ robhowley-pi-userland-feature-example
 Set `PI_CMUX_JUNCTION_WORKTREE_ROOT` to another location. It accepts an absolute path, `~`, or a path under `~/`.
 
 Junction leaves worktrees in place. It reuses one only when the expected path and branch match; otherwise, it stops without changing existing Git state.
+
+## Manual J2 sidebar prototype (incomplete; not activated)
+
+`extensions/cmux-junction/sidebar/junction-board.swift` is an inert, manually installed
+asset for **cmux 0.64.22 (102), commit `ddd4a01bc5d8ebac19643930f5fd7d40e85f1534`**.
+Installing this package does not install/select the sidebar or publish descriptions.
+Do not use this prototype on workspaces containing descriptions you need to keep.
+J2 preserves combining marks and all currently accepted text without changing cmux.
+**Phase 6 remains incomplete:** URL predicate equivalence, foreign-input UTF-8 byte
+limits, shared renderer capacity and installed UI gates remain unresolved.
+
+### J2 wire and publication contract
+
+- Records use actual U+001E (RS); fields use actual U+001F (US); null is a whole
+  optional field containing U+001D (GS). These are controls, not control pictures.
+- Header: `J2 US sha256(body UTF-8) RS body`, with 64 lowercase ASCII hex digits.
+  Existing ordered S/P/C/R records form the exact body; no trailing separator.
+  Empty projection still means clear/null, never a header-only board.
+- Present fields are unchanged text: no escaping, normalization or trimming.
+  `%`, `%25`, `␞`, `␟` and literal `∅` are ordinary text. Existing well-formed
+  Unicode, C0/C1 exclusions, field restrictions and input byte limits are unchanged.
+- The ASCII body hash distinguishes canonically equivalent spellings that cmux's
+  Swift equality would otherwise deduplicate, under the usual SHA-256 collision
+  assumption. The renderer checks tag syntax and all body semantics it supports;
+  it **cannot recompute SHA-256**. The tag is not authentication or validity proof.
+- Publisher checks the body hash and whole-description digest over exact UTF-8;
+  exact readback remains authoritative. Preflight/action has no compare-and-swap:
+  another writer's intervening change can still be overwritten or cleared.
+- Historical internal `presentation-j1.mjs`, `*PresentationJ1`, `MAX_PRESENTATION_J1_*`
+  and result `.j1` names now carry J2 only, avoiding changes to existing callers.
+  There is no J1 decoder, migration or takeover. Old J1 descriptions are ignored
+  by this renderer and remain foreign to the publisher: never auto-overwritten,
+  adopted or cleared. Removing an old prototype needs separate manual authority.
+- Ceilings remain 16 sources, 64 blocks, 512 cards, 4,096 rows, 4,689 records and
+  262,144 bytes. Fields increase from 43,377 to **43,378** for the two-field header.
+  Header is 67 bytes (68 with following RS); separators/null now use one byte,
+  and escaping adds zero bytes. Metrics count actual output bytes. These ceilings
+  are not a claim that the carrier or renderer can admit their simultaneous maximum.
+
+### Offline checks
+
+The exact projector outputs and malformed variants live in `sidebar/fixtures/` next
+to the asset. `manifest.json` contains projector inputs, valid SHA-256 digests,
+structural counts/bytes, and expected visible text. Invalid metrics describe raw
+records, not accepted objects. `.j2` files have **no added newline**.
+
+From this package directory:
+
+```sh
+pnpm exec vitest run __tests__/presentation-j1.test.ts __tests__/presentation-j1-fixtures.test.ts __tests__/junction-board-asset.test.ts --reporter=json
+```
+
+Without `JUNCTION_SWIFT_INTERPRETER`, the interpreter tests are explicitly skipped;
+projector-byte tests still run. Do not call that an interpreter validation.
+To run behavior tests, point that variable at an **external pinned cmux interpreter
+harness**, not `swift` or a replacement decoder. The harness takes the asset path
+as argv[1], reads a JSON object on stdin, evaluates it as cmux state (omit null
+object fields), and writes JSON-encoded `RenderNode?` on stdout. Tests execute
+whole-workspace rejection, both orders of malformed/valid pairs, every C0/C1
+control including CRLF and mark adjacency, fixed actions, progress, unchanged text,
+and native workspace order. Eighty Unicode corpus fixtures compare exact JS bytes
+and full rendered text in all display-field positions, including both former
+combining-mark failures. Swift canonical equality alone is not the test oracle.
+
+A reproducible macOS harness can be built outside this repository from a clean
+checkout of that exact cmux commit. Set `CMUX_SOURCE` to its root and `HARNESS` to
+a new temporary directory. Put this in `$HARNESS/main.swift`:
+
+```swift
+import Foundation
+func value(_ x: Any) -> SwiftValue {
+    if let x = x as? String { return .string(x) }
+    if let x = x as? [Any] { return .array(x.map(value)) }
+    if let x = x as? [String: Any] {
+        return .object(x.filter { !($0.value is NSNull) }.mapValues(value))
+    }
+    if let x = x as? Int { return .int(x) }
+    return .bool(false)
+}
+let source = try String(contentsOfFile: CommandLine.arguments[1], encoding: .utf8)
+let input = try JSONSerialization.jsonObject(
+    with: FileHandle.standardInput.readDataToEndOfFile()) as! [String: Any]
+let node = SwiftViewInterpreter().evaluate(source, state: input.mapValues(value))
+print(String(data: try JSONEncoder().encode(node), encoding: .utf8)!)
+```
+
+```sh
+test "$(git -C "$CMUX_SOURCE" rev-parse HEAD)" = ddd4a01bc5d8ebac19643930f5fd7d40e85f1534
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+HOST="$DEVELOPER_DIR/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host"
+xcrun swiftc -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+  -I "$HOST" -L "$HOST" -Xlinker -rpath -Xlinker "$HOST" \
+  "$CMUX_SOURCE"/Packages/macOS/CmuxSwiftRender/Sources/CmuxSwiftRender/*.swift \
+  "$HARNESS/main.swift" -o "$HARNESS/interpreter"
+JUNCTION_SWIFT_INTERPRETER="$HARNESS/interpreter" pnpm exec vitest run \
+  __tests__/presentation-j1.test.ts __tests__/presentation-j1-fixtures.test.ts \
+  __tests__/junction-board-asset.test.ts --reporter=json
+```
+
+This uses pinned interpreter source with the local Xcode parser libraries, **not
+the installed app's exact linked binary**. Installed validation and visible UI
+observations remain separate requirements. `cmux sidebar validate` only accepts
+installed sidebar names, not an arbitrary source path.
+
+### Install only after recording the restore target
+
+1. Manually record the currently selected sidebar and the exact way to restore it
+   (custom name, or the native UI selection). Stop if this is unknown. Record the
+   installed cmux version, explicit socket path and window UUID.
+2. Choose two disposable, empty workspaces in that window; record both UUIDs and
+   confirm their descriptions are exactly JSON `null`. Do not rely on current
+   focus, indexes, environment-inferred workspace IDs, or clearing existing text.
+3. Set `ASSET` to this repository's Swift file and `TARGET` to
+   `~/.config/cmux/sidebars/junction-board.swift`. In a private temporary directory,
+   record whether `TARGET` was absent; otherwise back it up with `cp -p`. Record
+   its hash and permissions. Do not touch other assets or cmux configuration.
+4. With explicit permission to change the visible sidebar, install and validate:
+
+   ```sh
+   install -m 0600 "$ASSET" "$TARGET"
+   cmux sidebar validate junction-board --json
+   # Continue only after successful validation:
+   cmux sidebar reload junction-board --json
+   cmux sidebar select junction-board --json
+   ```
+
+   On failure, restore the backup/absence and prior selection; do not continue
+   injecting fixtures. Never change `sidebar.showWorkspaceDescription` as part
+   of this procedure.
+
+### Inject, observe, swap, clean up
+
+Use argv-based calls, not shell interpolation of J2. The following Python helper
+shows the exact-match rule; execute it manually in a scratch session after setting
+`SOCKET`, `WINDOW`, `WORKSPACE_A`, `WORKSPACE_B`, and `FIXTURES` explicitly. All IDs
+must be the recorded UUIDs. Keep the helper/session and fixture bytes until cleanup.
+No command below is run by Junction.
+
+```python
+import json, os, pathlib, subprocess
+socket, window = os.environ['SOCKET'], os.environ['WINDOW']
+a, b = os.environ['WORKSPACE_A'], os.environ['WORKSPACE_B']
+assert a != b
+fixtures = pathlib.Path(os.environ['FIXTURES'])
+good = (fixtures / 'every-optional.j2').read_bytes().decode('utf-8')
+bad = (fixtures / 'wrong-arity.j2').read_bytes().decode('utf-8')
+def call(*args):
+    return json.loads(subprocess.check_output([
+        'cmux', '--socket', socket, '--json', '--id-format', 'uuids', *args]))
+def read(workspace):
+    result = call('list-workspaces', '--window', window)
+    assert result['window_id'].lower() == window.lower()
+    matches = [w for w in result['workspaces'] if w['id'].lower() == workspace.lower()]
+    assert len(matches) == 1
+    return matches[0]['description']
+def replace(workspace, expected, desired):
+    assert read(workspace) == expected, 'Changed externally: stop; do not overwrite'
+    args = ['workspace-action', '--window', window, '--workspace', workspace,
+            '--action', 'clear-description' if desired is None else 'set-description']
+    if desired is not None:
+        args += ['--description', desired]
+    call(*args)
+    assert read(workspace) == desired, 'Uncertain result: inspect before continuing'
+assert read(a) is None and read(b) is None
+replace(a, None, good)
+replace(b, None, bad)
+# PAUSE: inspect/capture the UI before issuing the next pair.
+```
+
+- Verify workspace title, separate source/producer headings, card/row order,
+  optional status/summary, progress `2/3`, and both link buttons. Click one HTTPS
+  link and record the browser destination. The malformed workspace must show
+  exactly `Junction data unavailable`, with **no valid prefix**.
+- Record whether native descriptions are visible without changing their setting.
+- Swap with `replace(a, good, bad)` and `replace(b, bad, good)`; inspect again.
+  Only the malformed workspace should fall back. Preserve cmux's native order.
+- Clean up with `replace(a, bad, None)` and `replace(b, good, None)` after the swap
+  (use the actual expected bytes if stopped earlier). Confirm both reads are
+  `None`. If a call is uncertain or text changed externally, stop and inspect;
+  never issue a blind clear. Close only the recorded disposable workspaces after
+  successful cleanup, with explicit window/workspace UUIDs.
+- Restore the prior sidebar using the recorded method. Restore `TARGET` from its
+  backup, or remove it if originally absent, **only if its current bytes still
+  equal the installed repository asset**. Preserve backup permissions. Run
+  `cmux sidebar reload --all --json`, then verify the prior selection visually
+  and compare the restored asset/absence with the backup. Record success/failure.
+
+### Prototype limits and evidence to retain
+
+- The asset uses literal C0/C1 characters, including a literal CR multiline
+  string, because this interpreter does not decode Swift backslash escapes.
+  Copy/install it byte-for-byte. Editors that normalize CR to LF break control
+  rejection; rerun the behavior suite after editing. Git may display it as binary.
+- Whole-workspace validation precedes content views. Missing/ordinary/J1
+  descriptions are ignored. Bare `J2`, `J2 US` and `J2 RS` prefixes claim the
+  description; malformed claims produce one fallback. `J2` plus a combining mark
+  is not the exact claim marker. Mixed-version records fail validation.
+- Actual framing controls force grapheme breaks. Split/rejoin rejects lost empty
+  fields/records before semantic indexing. Control rejection uses split/removal,
+  including CRLF as a pair: Foundation `contains` can miss GS followed by a mark.
+  GS plus a mark is invalid, never null. No cmux changes or scalar APIs are needed.
+- Character ceilings are not UTF-8 byte checks. Exact byte-limit, IDNA/WHATWG URL
+  equivalence and hostile maximum-size parity are not established. The authored
+  link checker accepts plain lowercase HTTPS hosts and decimal ports; it rejects
+  bracketed IPv6 and escaped hosts rather than relying on unavailable Foundation
+  URL parsing. It also admits some projector-rejected hosts (for example a host
+  containing U+200D). This is a separate unresolved boundary, not fixed by J2.
+- No renderer admission, truncation, per-workspace ceiling or retries exist. The
+  host shares a 3,000-RenderNode budget across the whole sidebar; deliberately
+  oversized input can fail the entire evaluation, including other valid workspaces.
+  Prior pinned testing reached that failure with 64 cards and 1,024 rows below the
+  proposed 65,536-byte carrier target. J2 does not reduce node counts or resolve
+  admission. Do not infer a card ceiling or silently lower input capacity.
+- Retain fixture filenames/digests/counts/UTF-8 bytes, validation JSON, screenshots,
+  link destination, exact readbacks and cleanup/restore evidence. Once the visible
+  prototype works, measure actual view-node counts, refresh behavior and memory
+  for representative fixtures; decide any guardrail from those observations,
+  before Phase 7 activation if the risk is material.
