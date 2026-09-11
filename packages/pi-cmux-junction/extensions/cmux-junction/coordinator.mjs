@@ -5,12 +5,16 @@ import { execFile, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
-import { dirname } from 'node:path';
+import { dirname, normalize } from 'node:path';
 import process from 'node:process';
 import { clearInterval, setInterval, setTimeout } from 'node:timers';
 import { fileURLToPath } from 'node:url';
 import { classifyExecFileFailure, resolveCmuxExecutable } from './cmux-runtime.mjs';
-import { createDescriptionPublisher, runDescriptionCommand } from './description-publisher.mjs';
+import {
+  createDescriptionPublisher,
+  runDescriptionCommand,
+  validateReservation,
+} from './description-publisher.mjs';
 import {
   createPresentationCore,
   PRESENTATION_DISCONNECT_GRACE_MS,
@@ -37,6 +41,8 @@ import {
 
 export const STATUS_KEY = 'pi-junction';
 export const RECONNECT_GRACE_MS = 5_000;
+const DESCRIPTION_FINAL_CLEAR_MAX_ATTEMPTS = 3;
+const DESCRIPTION_FINAL_CLEAR_RETRY_DELAYS_MS = [500, 1_000];
 
 const states = new Set(LIFECYCLE_STATES);
 const activeRanks = new Map([
@@ -951,12 +957,17 @@ export function createAtomicLedgerStore(path, filesystem = {}) {
 export function parseRuntimeArgs(argv) {
   const expected = new Set(['listen', 'ledger', 'cmux-socket', 'workspace']);
   const values = {};
-  if (argv.length !== expected.size * 2) throw new Error('invalid coordinator arguments');
+  if (argv.length !== expected.size * 2 && argv.length !== (expected.size + 1) * 2)
+    throw new Error('invalid coordinator arguments');
   for (let index = 0; index < argv.length; index += 2) {
     const option = argv[index];
     const value = argv[index + 1];
     const name = option?.startsWith('--') ? option.slice(2) : '';
-    if (!expected.has(name) || value === undefined || Object.hasOwn(values, name)) {
+    if (
+      (!expected.has(name) && name !== 'description-reservation') ||
+      value === undefined ||
+      Object.hasOwn(values, name)
+    ) {
       throw new Error('invalid coordinator arguments');
     }
     values[name] = value;
@@ -968,6 +979,22 @@ export function parseRuntimeArgs(argv) {
   }
   if (!validIdentity(values.workspace)) throw new Error('invalid coordinator target');
   return values;
+}
+
+export function coordinatorDescriptionReservation(args, injected) {
+  try {
+    const value =
+      injected ??
+      (args['description-reservation'] === undefined
+        ? undefined
+        : JSON.parse(args['description-reservation']));
+    const reservation = validateReservation(value, args.workspace);
+    return reservation && reservation.socketPath === normalize(args['cmux-socket'])
+      ? reservation
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 const statusStyles = {
@@ -1054,20 +1081,68 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
   let stopRuntime = () => Promise.resolve();
   let presentation;
   let pendingPresentationAcks = 0;
+  const schedule = runtime.schedule ?? ((callback, delay) => setTimeout(callback, delay).unref());
   const description = createDescriptionPublisher({
-    reservation: runtime.descriptionReservation,
+    reservation: coordinatorDescriptionReservation(args, runtime.descriptionReservation),
     workspaceId: target.workspaceId,
     runCommand: (command) =>
       serialize(() => runDescriptionCommand(cmuxFile, command, env, runtime.execFile ?? execFile)),
   });
+  let descriptionFinalClearGeneration = 0;
+  let descriptionFinalClearAttempts = 0;
+  let descriptionFinalClearRetryScheduled = false;
+
+  const resetDescriptionFinalClear = () => {
+    descriptionFinalClearGeneration += 1;
+    descriptionFinalClearAttempts = 0;
+    descriptionFinalClearRetryScheduled = false;
+  };
+
   const stopIfQuiescent = () => {
     if (
-      core.isQuiescent() &&
-      presentation.isQuiescent() &&
-      description.isIdle() &&
-      pendingPresentationAcks === 0
+      stopping ||
+      !core.isQuiescent() ||
+      !presentation.isQuiescent() ||
+      !description.isIdle() ||
+      pendingPresentationAcks !== 0
     )
+      return;
+
+    if (!description.needsClearRetry()) {
       void stopRuntime();
+      return;
+    }
+
+    if (descriptionFinalClearAttempts === 0) descriptionFinalClearAttempts = 1;
+    if (descriptionFinalClearAttempts >= DESCRIPTION_FINAL_CLEAR_MAX_ATTEMPTS) {
+      void stopRuntime();
+      return;
+    }
+
+    if (descriptionFinalClearRetryScheduled) return;
+    const delay = DESCRIPTION_FINAL_CLEAR_RETRY_DELAYS_MS[descriptionFinalClearAttempts - 1];
+    if (delay === undefined) {
+      void stopRuntime();
+      return;
+    }
+    const generation = descriptionFinalClearGeneration;
+    descriptionFinalClearRetryScheduled = true;
+    schedule(() => {
+      if (generation !== descriptionFinalClearGeneration || stopping) return;
+      descriptionFinalClearRetryScheduled = false;
+      if (
+        !core.isQuiescent() ||
+        !presentation.isQuiescent() ||
+        !description.isIdle() ||
+        pendingPresentationAcks !== 0 ||
+        !description.needsClearRetry()
+      ) {
+        stopIfQuiescent();
+        return;
+      }
+      descriptionFinalClearAttempts += 1;
+      void description.reconcile().finally(stopIfQuiescent);
+    }, delay);
   };
   const core = createCoordinatorCore({
     target,
@@ -1075,7 +1150,7 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
     now: runtime.now,
     persist: (ledger) => store.write(ledger),
     probePid: runtime.probePid ?? probePidStart,
-    schedule: runtime.schedule ?? ((callback, delay) => setTimeout(callback, delay).unref()),
+    schedule,
     onFinalClear: stopIfQuiescent,
     publish: (status) =>
       serialize(() =>
@@ -1096,7 +1171,9 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
     capacity: runtime.presentationCapacity,
     sourceId: runtime.presentationSourceId,
     onProjection: (projection) => {
-      if (description.setDesired(projection)) void description.reconcile().finally(stopIfQuiescent);
+      if (!description.setDesired(projection)) return;
+      resetDescriptionFinalClear();
+      void description.reconcile().finally(stopIfQuiescent);
     },
   });
 
@@ -1107,7 +1184,6 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
   await runtimeChmod(dirname(args.listen), 0o700);
   await runtimeRm(args.listen, { force: true });
   const sockets = new Set();
-  const schedule = runtime.schedule ?? ((callback, delay) => setTimeout(callback, delay).unref());
   const server = createServer((socket) => {
     const socketToken = (runtime.randomId ?? randomUUID)();
     sockets.add(socket);

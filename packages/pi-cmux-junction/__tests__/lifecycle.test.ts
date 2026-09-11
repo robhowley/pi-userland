@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
+import {
+  DEFAULT_JUNCTION_CONFIG,
+  type JunctionConfig,
+} from '../extensions/cmux-junction/config.js';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import {
   LIFECYCLE_HEARTBEAT_MS,
@@ -55,7 +59,10 @@ function env(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 
 function harness(
   options: {
-    loadConfig?: (cwd: string, projectTrusted: boolean) => { disableStatus: boolean };
+    loadConfig?: (
+      cwd: string,
+      projectTrusted: boolean,
+    ) => Pick<JunctionConfig, 'disableStatus'> & Partial<JunctionConfig>;
     contextOverrides?: Record<string, unknown>;
     runner?: ProcessRunner;
     resolveTarget?: (cwd: string, target: any, options: any) => Promise<any>;
@@ -106,7 +113,7 @@ function harness(
   let now = 1_700_000_000_000;
   registerJunctionLifecycle(pi, {
     env: env(),
-    loadConfig,
+    loadConfig: (cwd, trusted) => ({ ...DEFAULT_JUNCTION_CONFIG, ...loadConfig(cwd, trusted) }),
     now: () => now,
     runtimeId: () => 'runtime-a',
     pid: 4321,
@@ -141,6 +148,26 @@ function harness(
 }
 
 describe('lifecycle eligibility', () => {
+  it('passes global authority to a lifecycle-first launch even with presentation disabled', async () => {
+    const reservation = {
+      socketPath: '/tmp/cmux.sock',
+      workspaceId: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+      windowId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    };
+    const h = harness({
+      loadConfig: () => ({ ...DEFAULT_JUNCTION_CONFIG, descriptionReservations: [reservation] }),
+      resolveTarget: async (_cwd, target) => ({
+        ok: true,
+        ...target,
+        workspaceId: reservation.workspaceId,
+      }),
+    });
+    await h.emit('session_start');
+    expect(h.createClient).toHaveBeenCalledWith(
+      expect.objectContaining({ descriptionReservation: reservation }),
+    );
+    await h.emit('session_shutdown');
+  });
   it('requires exact public TUI and inherited identity inputs', () => {
     const ctx = context().value;
     expect(lifecycleEligibility(ctx, env())).toMatchObject({
@@ -322,7 +349,7 @@ describe('Pi lifecycle adapter', () => {
         CMUX_SOCKET_PATH: '  /tmp/cmux.sock  ',
         CMUX_WORKSPACE_ID: 'workspace-stale',
       }),
-      loadConfig: () => ({ disableStatus: false }),
+      loadConfig: () => DEFAULT_JUNCTION_CONFIG,
       runner,
       runtimeId: () => 'runtime-a',
       pid: 4321,
@@ -395,7 +422,7 @@ describe('Pi lifecycle adapter', () => {
     });
     registerJunctionLifecycle(pi, {
       env: env(),
-      loadConfig: () => ({ disableStatus: false }),
+      loadConfig: () => DEFAULT_JUNCTION_CONFIG,
       runner,
       createClient,
       observeProcessStart: vi.fn(async () => 1_699_999_000_000),
@@ -688,7 +715,7 @@ describe('Pi lifecycle adapter', () => {
     const pi = { on: (name: string, handler: Function) => handlers.set(name, handler) } as any;
     registerJunctionLifecycle(pi, {
       env: env(),
-      loadConfig: () => ({ disableStatus: false }),
+      loadConfig: () => DEFAULT_JUNCTION_CONFIG,
       resolveTarget: async (_cwd, target) => ({
         ok: true,
         socketPath: target.socketPath,

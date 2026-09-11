@@ -88,6 +88,7 @@ type SpawnProcess = (
 type ConnectSocket = (path: string) => Socket;
 
 export interface PresentationClientOptions {
+  descriptionReservation?: import('./config.js').DescriptionReservation;
   target: PresentationTarget;
   source: PresentationSourceIdentity;
   coordinatorPath: string;
@@ -443,6 +444,7 @@ class AttachedPresentationClient implements PresentationClient {
           this.paths,
           this.options.target,
           this.options.coordinatorPath,
+          this.options.descriptionReservation,
         ),
         {
           shell: false,

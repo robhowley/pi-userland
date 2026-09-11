@@ -137,6 +137,7 @@ describe('presentation send pump', () => {
   it('subscribes before reading and sends the meaningful empty initial snapshot', async () => {
     const calls: string[] = [];
     const store: ProducerViewStore = {
+      clear: () => undefined,
       accept: () => ({ accepted: true, action: 'none' }),
       subscribe: () => {
         calls.push('subscribe');

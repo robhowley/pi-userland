@@ -31,7 +31,7 @@ function dataRecord(value, fields) {
   );
 }
 
-function validateReservation(value, target) {
+export function validateReservation(value, target) {
   try {
     if (!dataRecord(value, ['socketPath', 'windowId', 'workspaceId'])) return null;
     const { socketPath, windowId, workspaceId } = value;
@@ -293,6 +293,12 @@ export function createDescriptionPublisher({ reservation: input, runCommand, wor
       if (running) await running;
     },
     isIdle: () => running === null,
+    needsClearRetry: () =>
+      !stopping &&
+      desired?.kind === 'clear' &&
+      dirty &&
+      ownership !== 'disabled' &&
+      ownership !== 'lost',
     diagnostics: () =>
       ownership === 'disabled'
         ? { reservation: 'disabled', reason: disabledReason }

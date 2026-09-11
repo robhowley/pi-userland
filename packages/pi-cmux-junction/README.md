@@ -64,6 +64,31 @@ Status pills are enabled by default, but can be disabled in either the global or
 
 A project setting overrides the global setting. After editing a settings file directly, run `/reload`; settings from untrusted projects do not apply. Disabling status only hides the pill; `/junction` commands remain available. Junction does not manage cmux session restore.
 
+### Opt-in dashboard publication
+
+Dashboard publication is off by default and independent of `disableStatus`. Set `enablePresentation: true` in global or trusted-project `pi-cmux-junction` settings. Publication also requires an explicit reservation in **global** settings:
+
+```json
+{
+  "pi-cmux-junction": {
+    "enablePresentation": true,
+    "descriptionReservations": [
+      {
+        "socketPath": "/absolute/path/to/cmux.sock",
+        "windowId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "workspaceId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+      }
+    ]
+  }
+}
+```
+
+Replace these example identities with the intended target. Add one reservation per workspace; duplicate matches disable publication for that target. Project settings cannot grant reservation authority. Junction matches the normalized socket path and workspace UUID and pins description operations to the reserved window UUID. It refuses foreign description text; enabling it does not take over native descriptions, install/select a sidebar, or change navigation.
+
+Settings are read at session startup. `/reload` reapplies the local opt-in, but an already-running shared coordinator retains its original reservation until it exits and is relaunched. Both status-first and presentation-first launches receive the same matched global authority. No settings are written automatically.
+
+Producer views belong to the extension instance. Pi replaces that instance on new/resume/fork/reload, so a producer may announce before Junction's `session_start` without its fresh data being cleared. If session identity changes in place, Junction pauses presentation and clears the previous views before accepting the first new event (or during maintenance); shutdown releases the source.
+
 ## Worktrees
 
 Worktrees live under:

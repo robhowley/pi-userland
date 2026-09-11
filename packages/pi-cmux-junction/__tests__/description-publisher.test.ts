@@ -294,6 +294,7 @@ describe('exact description reconciliation', () => {
       await publish(f, intent);
       expect(f.get()).toBe(foreign);
       expect(f.publisher.diagnostics()).toMatchObject({ reservation: 'lost', applied: 'unknown' });
+      expect(f.publisher.needsClearRetry()).toBe(false);
       const count = f.calls.length;
       f.put(null);
       await publish(f);
@@ -414,6 +415,7 @@ describe('exact description reconciliation', () => {
         applied: kind === 'clear' ? 'set' : 'unknown',
         dirty: true,
       });
+      expect(f.publisher.needsClearRetry()).toBe(kind === 'clear');
     },
   );
   it.each(['set', 'clear'])(

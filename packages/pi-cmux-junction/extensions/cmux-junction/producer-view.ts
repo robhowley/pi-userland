@@ -104,6 +104,7 @@ export type ProducerViewUpdateResult =
   | { readonly accepted: false; readonly code: ProducerViewErrorCode; readonly path?: string };
 
 export interface ProducerViewStore {
+  clear(): void;
   accept(value: unknown): ProducerViewUpdateResult;
   snapshot(): readonly NormalizedProducerView[];
   subscribe(listener: (snapshot: readonly NormalizedProducerView[]) => void): () => void;
@@ -228,6 +229,14 @@ export function createProducerViewStore(): ProducerViewStore {
   }
 
   return {
+    clear(): void {
+      if (entries.size === 0) return;
+      entries.clear();
+      totalItems = 0;
+      totalRows = 0;
+      enqueueNotification();
+      drainNotifications();
+    },
     accept(value: unknown): ProducerViewUpdateResult {
       const normalized = normalizeProducerView(value);
       if (!normalized.ok) {
