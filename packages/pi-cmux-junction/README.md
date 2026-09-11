@@ -13,26 +13,28 @@ pi install npm:@robhowley/pi-cmux-junction
 From Pi running inside cmux in a Git repository:
 
 ```text
-/junction --branch <name>
-/junction --branch <name> --from <commit-ish>
-/junction fork --branch <name>
-/junction fork --branch <name> --from <commit-ish>
-/junction checkout --branch <local-branch>
+/junction --branch <name> [--tab]
+/junction --branch <name> --from <commit-ish> [--tab]
+/junction fork --branch <name> [--tab]
+/junction fork --branch <name> --from <commit-ish> [--tab]
+/junction checkout --branch <local-branch> [--tab]
 ```
 
-Run `/junction` without arguments or `/junction help` to show this help. Each worktree form opens a new cmux workspace and starts Pi there. Your current workspace stays focused.
+Run `/junction` without arguments or `/junction help` to show this help. Add `--tab` as the final argument to open the new Pi session in the same cmux pane and workspace as the current session; otherwise, Junction opens a new workspace. Both leave your current focus unchanged.
 
-- `/junction --branch <name>` — create a new worktree from the default base or reuse a matching worktree; start a fresh Pi session.
-- `/junction --branch <name> --from <commit-ish>` — create a new worktree from the specified commit-ish (never reuse); start a fresh Pi session.
-- `/junction fork --branch <name>` — wait for the current persisted session to idle, then create a new worktree from the default base or reuse a matching worktree; fork the conversation.
-- `/junction fork --branch <name> --from <commit-ish>` — wait for the current persisted session to idle, then create a new worktree from the specified commit-ish (never reuse); fork the conversation.
-- `/junction checkout --branch <local-branch>` — open an existing local branch in its worktree; start a fresh Pi session.
+- `/junction --branch <name> [--tab]` — create a new worktree from the default base or reuse a matching worktree; start a fresh Pi session.
+- `/junction --branch <name> --from <commit-ish> [--tab]` — create a new worktree from the specified commit-ish (never reuse); start a fresh Pi session.
+- `/junction fork --branch <name> [--tab]` — wait for the current persisted session to idle, then create a new worktree from the default base or reuse a matching worktree; fork the conversation.
+- `/junction fork --branch <name> --from <commit-ish> [--tab]` — wait for the current persisted session to idle, then create a new worktree from the specified commit-ish (never reuse); fork the conversation.
+- `/junction checkout --branch <local-branch> [--tab]` — open an existing local branch in its worktree; start a fresh Pi session.
 
 New sessions open in the same directory in the new worktree. If that directory is unavailable, Junction opens the worktree root and warns you. It uses the same Pi config directory and does not create missing directories or copy uncommitted files.
 
 No-`--from` forms use the repository's default base when creating a worktree and may reuse a matching worktree. Forms with `--from <commit-ish>` always create a new branch worktree from that committed ref and reject existing branch or path collisions.
 
 `checkout` requires the exact name of an existing local branch, uses its current tip, and does not accept `--from`.
+
+When opening a tab, Junction creates it and then asks cmux to start Pi. A success message confirms that cmux accepted the start command, not that Pi has finished starting. If startup is uncertain, Junction leaves the tab and worktree in place for inspection. It retries only when it can prove that no tab was created; the retry keeps `--tab` and drops `--from` because the worktree already exists.
 
 ## Detailed agent status
 

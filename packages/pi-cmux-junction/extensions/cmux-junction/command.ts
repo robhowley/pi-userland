@@ -3,8 +3,10 @@ import { access, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import type { ExtensionAPI, ExtensionCommandContext } from '@earendil-works/pi-coding-agent';
 import {
+  launchCmuxTab,
   launchCmuxWorkspace,
   preflightCmux,
+  preflightCmuxTab,
   type CmuxLaunchRecipe,
   type CmuxOptions,
 } from './cmux.js';
@@ -24,17 +26,19 @@ const FORK_SUBCOMMAND = 'fork';
 const CHECKOUT_SUBCOMMAND = 'checkout';
 const BRANCH_FLAG = '--branch';
 const FROM_FLAG = '--from';
-const FRESH_USAGE = `Usage: /junction ${BRANCH_FLAG} <name> [${FROM_FLAG} <commit-ish>]`;
-const FORK_USAGE = `Usage: /junction ${FORK_SUBCOMMAND} ${BRANCH_FLAG} <name> [${FROM_FLAG} <commit-ish>]`;
-const CHECKOUT_USAGE = `Usage: /junction ${CHECKOUT_SUBCOMMAND} ${BRANCH_FLAG} <local-branch>`;
+const TAB_FLAG = '--tab';
+const FRESH_USAGE = `Usage: /junction ${BRANCH_FLAG} <name> [${FROM_FLAG} <commit-ish>] [${TAB_FLAG}]`;
+const FORK_USAGE = `Usage: /junction ${FORK_SUBCOMMAND} ${BRANCH_FLAG} <name> [${FROM_FLAG} <commit-ish>] [${TAB_FLAG}]`;
+const CHECKOUT_USAGE = `Usage: /junction ${CHECKOUT_SUBCOMMAND} ${BRANCH_FLAG} <local-branch> [${TAB_FLAG}]`;
 const JUNCTION_HELP = [
   'Junction commands:',
   '  /junction [help] — show this command reference',
-  `  /junction ${BRANCH_FLAG} <name> — create a new worktree from the default base or reuse a matching worktree; launch a fresh Pi session`,
-  `  /junction ${BRANCH_FLAG} <name> ${FROM_FLAG} <commit-ish> — create a new worktree from the specified commit-ish (never reuse); launch a fresh Pi session`,
-  `  /junction ${FORK_SUBCOMMAND} ${BRANCH_FLAG} <name> — wait for the current persisted session to idle, then create a new worktree from the default base or reuse a matching worktree; fork the conversation`,
-  `  /junction ${FORK_SUBCOMMAND} ${BRANCH_FLAG} <name> ${FROM_FLAG} <commit-ish> — wait for the current persisted session to idle, then create a new worktree from the specified commit-ish (never reuse); fork the conversation`,
-  `  /junction ${CHECKOUT_SUBCOMMAND} ${BRANCH_FLAG} <local-branch> — open an existing local branch in its worktree; launch a fresh Pi session`,
+  `  /junction ${BRANCH_FLAG} <name> [${TAB_FLAG}] — create a new worktree from the default base or reuse a matching worktree; launch a fresh Pi session`,
+  `  /junction ${BRANCH_FLAG} <name> ${FROM_FLAG} <commit-ish> [${TAB_FLAG}] — create a new worktree from the specified commit-ish (never reuse); launch a fresh Pi session`,
+  `  /junction ${FORK_SUBCOMMAND} ${BRANCH_FLAG} <name> [${TAB_FLAG}] — wait for the current persisted session to idle, then create a new worktree from the default base or reuse a matching worktree; fork the conversation`,
+  `  /junction ${FORK_SUBCOMMAND} ${BRANCH_FLAG} <name> ${FROM_FLAG} <commit-ish> [${TAB_FLAG}] — wait for the current persisted session to idle, then create a new worktree from the specified commit-ish (never reuse); fork the conversation`,
+  `  /junction ${CHECKOUT_SUBCOMMAND} ${BRANCH_FLAG} <local-branch> [${TAB_FLAG}] — open an existing local branch in its worktree; launch a fresh Pi session`,
+  '  Append `--tab` to launch Pi in a new unfocused tab in this workspace instead of a new cmux workspace.',
 ].join('\n');
 
 export interface JunctionSessionContext {
@@ -75,8 +79,10 @@ export interface JunctionCommandOptions {
   plan?: JunctionPlanner;
   planCheckout?: JunctionCheckoutPlanner;
   preflight?: typeof preflightCmux;
+  preflightTab?: typeof preflightCmuxTab;
   apply?: typeof applyWorktreePlan;
   launch?: typeof launchCmuxWorkspace;
+  launchTab?: typeof launchCmuxTab;
   proveRetained?: RetainedWorktreeProof;
 }
 
@@ -87,6 +93,7 @@ export type JunctionResult =
       worktree: WorktreeSuccess;
       launchCwd: string;
       launchCwdWarning?: string;
+      tab?: { surfaceRef: string };
     }
   | { ok: false; status: 'invalid-command'; message: string }
   | { ok: false; status: 'source-session-failed'; message: string }
@@ -100,6 +107,7 @@ export type JunctionResult =
       path: string;
       launchCwd: string;
       worktreeRetained: true;
+      tab?: never;
       message: string;
     }
   | {
@@ -110,6 +118,39 @@ export type JunctionResult =
       launchCwd: string;
       worktreeRetained: true;
       retrySafe: false;
+      tab?: never;
+      message: string;
+    }
+  | {
+      ok: false;
+      status: 'partial-launch-failed';
+      branch: string;
+      path: string;
+      launchCwd: string;
+      worktreeRetained: true;
+      tab: { mutation: 'none' };
+      message: string;
+    }
+  | {
+      ok: false;
+      status: 'partial-launch-unknown';
+      branch: string;
+      path: string;
+      launchCwd: string;
+      worktreeRetained: true;
+      retrySafe: false;
+      tab: { mutation: 'may-exist' };
+      message: string;
+    }
+  | {
+      ok: false;
+      status: 'partial-launch-failed';
+      branch: string;
+      path: string;
+      launchCwd: string;
+      worktreeRetained: true;
+      retrySafe: false;
+      tab: { mutation: 'exists'; surfaceRef: string };
       message: string;
     };
 
@@ -119,7 +160,7 @@ export function registerJunctionCommand(
 ): void {
   pi.registerCommand(JUNCTION_COMMAND, {
     description:
-      'Create a branch worktree or check out an existing local branch, then launch Pi in a new cmux workspace',
+      'Create a branch worktree or check out an existing local branch, then launch Pi in a new cmux workspace; a final --tab launches Pi in a new unfocused tab in this workspace instead',
     getArgumentCompletions: getJunctionArgumentCompletions,
     handler: async (args, ctx) => {
       const trimmedArgs = args.trim();
@@ -154,6 +195,11 @@ const FROM_COMPLETION = {
   label: FROM_FLAG,
   description: 'Create from a committed Git ref; working-tree changes are not copied',
 };
+const TAB_COMPLETION = {
+  value: TAB_FLAG,
+  label: TAB_FLAG,
+  description: 'Launch Pi in a new unfocused tab in this workspace',
+};
 const HEAD_COMPLETION = {
   value: 'HEAD',
   label: 'HEAD',
@@ -178,6 +224,17 @@ export function getJunctionArgumentCompletions(prefix: string) {
     if (tokens.length === 2) {
       const token = tokens[1] ?? '';
       return BRANCH_FLAG.startsWith(token) && !trailingWhitespace ? [BRANCH_COMPLETION] : null;
+    }
+    if (tokens.length === 3 && tokens[1] === BRANCH_FLAG) {
+      const branch = tokens[2] ?? '';
+      if (branch.length === 0 || branch.startsWith('-')) return null;
+      return trailingWhitespace ? [TAB_COMPLETION] : null;
+    }
+    if (tokens.length === 4 && tokens[1] === BRANCH_FLAG) {
+      const branch = tokens[2] ?? '';
+      const token = tokens[3] ?? '';
+      if (branch.length === 0 || branch.startsWith('-')) return null;
+      return TAB_FLAG.startsWith(token) && !trailingWhitespace ? [TAB_COMPLETION] : null;
     }
     return null;
   }
@@ -214,7 +271,7 @@ export function getJunctionArgumentCompletions(prefix: string) {
   }
   if (argumentTokens.length === 2) {
     if (trailingWhitespace) {
-      return [FROM_COMPLETION];
+      return [FROM_COMPLETION, TAB_COMPLETION];
     }
     return null;
   }
@@ -225,21 +282,31 @@ export function getJunctionArgumentCompletions(prefix: string) {
     if (token === FROM_FLAG && trailingWhitespace) {
       return [HEAD_COMPLETION];
     }
-    return FROM_FLAG.startsWith(token) && !trailingWhitespace ? [FROM_COMPLETION] : null;
+    if (FROM_FLAG.startsWith(token) && !trailingWhitespace) return [FROM_COMPLETION];
+    return TAB_FLAG.startsWith(token) && !trailingWhitespace ? [TAB_COMPLETION] : null;
   }
   if (afterBranch[0] !== FROM_FLAG) {
     return null;
   }
-  if (afterBranch.length === 2 && !trailingWhitespace) {
-    return 'HEAD'.startsWith(afterBranch[1] ?? '') ? [HEAD_COMPLETION] : null;
+  if (afterBranch.length === 2) {
+    const value = afterBranch[1] ?? '';
+    if (value.length === 0 || value.startsWith('--')) return null;
+    if (trailingWhitespace) return [TAB_COMPLETION];
+    return 'HEAD'.startsWith(value) ? [HEAD_COMPLETION] : null;
+  }
+  if (afterBranch.length === 3 && !trailingWhitespace) {
+    const value = afterBranch[1] ?? '';
+    const token = afterBranch[2] ?? '';
+    if (value.length === 0 || value.startsWith('--')) return null;
+    return TAB_FLAG.startsWith(token) ? [TAB_COMPLETION] : null;
   }
   return null;
 }
 
 export type JunctionParseResult =
-  | { ok: true; mode: 'fresh'; branch: string; from?: string }
-  | { ok: true; mode: 'fork'; branch: string; from?: string }
-  | { ok: true; mode: 'checkout'; branch: string }
+  | { ok: true; mode: 'fresh'; branch: string; from?: string; tab?: true }
+  | { ok: true; mode: 'fork'; branch: string; from?: string; tab?: true }
+  | { ok: true; mode: 'checkout'; branch: string; tab?: true }
   | { ok: false; message: string };
 
 export function parseJunctionArgs(args: string): JunctionParseResult {
@@ -254,13 +321,18 @@ export function parseJunctionArgs(args: string): JunctionParseResult {
 }
 
 function parseCheckoutArgs(tokens: string[]): JunctionParseResult {
-  if (tokens.length === 0 || (tokens.length === 1 && tokens[0] === BRANCH_FLAG)) {
+  const hasTab = tokens.at(-1) === TAB_FLAG;
+  const grammarTokens = hasTab ? tokens.slice(0, -1) : tokens;
+  if (
+    grammarTokens.length === 0 ||
+    (grammarTokens.length === 1 && grammarTokens[0] === BRANCH_FLAG)
+  ) {
     return { ok: false, message: `Local branch name is required. ${CHECKOUT_USAGE}` };
   }
-  const branch = tokens[1];
+  const branch = grammarTokens[1];
   if (
-    tokens.length !== 2 ||
-    tokens[0] !== BRANCH_FLAG ||
+    grammarTokens.length !== 2 ||
+    grammarTokens[0] !== BRANCH_FLAG ||
     branch === undefined ||
     branch.length === 0 ||
     branch.startsWith('-')
@@ -270,7 +342,7 @@ function parseCheckoutArgs(tokens: string[]): JunctionParseResult {
       message: `Expected exactly ${BRANCH_FLAG} <local-branch>. ${CHECKOUT_USAGE}`,
     };
   }
-  return { ok: true, mode: 'checkout', branch };
+  return { ok: true, mode: 'checkout', branch, ...(hasTab ? { tab: true } : {}) };
 }
 
 function parseBranchArgs(
@@ -278,29 +350,39 @@ function parseBranchArgs(
   usage: string,
   mode: 'fresh' | 'fork',
 ): JunctionParseResult {
-  if (tokens.length === 0 || (tokens.length === 1 && tokens[0] === BRANCH_FLAG)) {
+  const hasTab = tokens.at(-1) === TAB_FLAG;
+  const grammarTokens = hasTab ? tokens.slice(0, -1) : tokens;
+  if (
+    grammarTokens.length === 0 ||
+    (grammarTokens.length === 1 && grammarTokens[0] === BRANCH_FLAG)
+  ) {
     return { ok: false, message: `Branch name is required. ${usage}` };
   }
-  if (tokens[0] !== BRANCH_FLAG) {
+  if (grammarTokens[0] !== BRANCH_FLAG) {
     return { ok: false, message: `Only ${BRANCH_FLAG} <name> is supported. ${usage}` };
   }
 
-  const branch = tokens[1];
+  const branch = grammarTokens[1];
   if (branch === undefined || branch.length === 0 || branch.startsWith('--')) {
     return { ok: false, message: `Expected exactly one branch and no other arguments. ${usage}` };
   }
-  if (tokens.length === 2) {
-    return { ok: true, mode, branch };
+  if (grammarTokens.length === 2) {
+    return { ok: true, mode, branch, ...(hasTab ? { tab: true } : {}) };
   }
-  if (tokens[2] !== FROM_FLAG) {
+  if (grammarTokens[2] !== FROM_FLAG) {
     return { ok: false, message: `Expected ${FROM_FLAG} after the branch. ${usage}` };
   }
 
-  const from = tokens[3];
-  if (from === undefined || from.length === 0 || from.startsWith('--') || tokens.length !== 4) {
+  const from = grammarTokens[3];
+  if (
+    from === undefined ||
+    from.length === 0 ||
+    from.startsWith('--') ||
+    grammarTokens.length !== 4
+  ) {
     return { ok: false, message: `Expected one commit-ish after ${FROM_FLAG}. ${usage}` };
   }
-  return { ok: true, mode, branch, from };
+  return { ok: true, mode, branch, from, ...(hasTab ? { tab: true } : {}) };
 }
 
 export async function runJunctionCommand(
@@ -353,9 +435,18 @@ export async function runJunctionCommand(
   const relativeCwd = relative(plan.repository.topLevel, sourceCwd);
 
   const cmuxOptions = buildCmuxOptions(options);
-  const preflight = await (options.preflight ?? preflightCmux)(cwd, cmuxOptions);
-  if (!preflight.ok) {
-    return { ok: false, status: 'preflight-failed', message: preflight.message };
+  const tabPreflight =
+    parsed.tab === true
+      ? await (options.preflightTab ?? preflightCmuxTab)(cwd, cmuxOptions)
+      : undefined;
+  if (tabPreflight !== undefined && !tabPreflight.ok) {
+    return { ok: false, status: 'preflight-failed', message: tabPreflight.message };
+  }
+  if (parsed.tab !== true) {
+    const preflight = await (options.preflight ?? preflightCmux)(cwd, cmuxOptions);
+    if (!preflight.ok) {
+      return { ok: false, status: 'preflight-failed', message: preflight.message };
+    }
   }
 
   const worktree = await (options.apply ?? applyWorktreePlan)(plan, worktreeOptions);
@@ -364,6 +455,84 @@ export async function runJunctionCommand(
   }
 
   const launchCwd = await chooseLaunchCwd(worktree.path, relativeCwd);
+  if (tabPreflight?.ok === true) {
+    const tabRecipe: CmuxLaunchRecipe = recipe ?? { mode: 'fresh' };
+    const tabLaunch = await (options.launchTab ?? launchCmuxTab)(
+      launchCwd.path,
+      tabPreflight.caller,
+      cmuxOptions,
+      tabRecipe,
+    );
+    if (!tabLaunch.ok) {
+      const retry =
+        mode === 'fork'
+          ? `/junction ${FORK_SUBCOMMAND} ${BRANCH_FLAG} ${worktree.branch} ${TAB_FLAG}`
+          : mode === 'checkout'
+            ? `/junction ${CHECKOUT_SUBCOMMAND} ${BRANCH_FLAG} ${worktree.branch} ${TAB_FLAG}`
+            : `/junction ${BRANCH_FLAG} ${worktree.branch} ${TAB_FLAG}`;
+      const retained = `Branch: ${worktree.branch}\nPath: ${worktree.path}\nLaunch cwd: ${launchCwd.path}`;
+
+      if (tabLaunch.mutation === 'may-exist') {
+        return {
+          ok: false,
+          status: 'partial-launch-unknown',
+          branch: worktree.branch,
+          path: worktree.path,
+          launchCwd: launchCwd.path,
+          worktreeRetained: true,
+          retrySafe: false,
+          tab: { mutation: 'may-exist' },
+          message: `Worktree retained, but cmux tab creation is unknown: ${tabLaunch.message}\n${retained}\nTarget: window ${tabLaunch.target.windowId}, workspace ${tabLaunch.target.workspaceId}, pane ${tabLaunch.target.paneId}.\nNo automatic retry or cleanup was attempted.`,
+        };
+      }
+      if (tabLaunch.mutation === 'exists') {
+        return {
+          ok: false,
+          status: 'partial-launch-failed',
+          branch: worktree.branch,
+          path: worktree.path,
+          launchCwd: launchCwd.path,
+          worktreeRetained: true,
+          retrySafe: false,
+          tab: { mutation: 'exists', surfaceRef: tabLaunch.surfaceRef },
+          message: `Worktree retained after Pi launch submission failed for cmux tab ${tabLaunch.surfaceRef}: ${tabLaunch.message}\n${retained}\nThe tab may be blank or partially launched. No automatic retry or cleanup was attempted.`,
+        };
+      }
+
+      const sourceLine =
+        plan.kind === 'create-explicit' ? `\nFrom: ${plan.baseRef} -> ${plan.baseSha}` : '';
+      const proofPassed =
+        plan.kind !== 'create-explicit' ||
+        (await proveExplicitRetention(plan, worktreeOptions, options.proveRetained));
+      const guidance = proofPassed
+        ? `Retry: ${retry}`
+        : 'Retained-state proof did not pass; inspect Git state before retrying.';
+      return {
+        ok: false,
+        status: 'partial-launch-failed',
+        branch: worktree.branch,
+        path: worktree.path,
+        launchCwd: launchCwd.path,
+        worktreeRetained: true,
+        tab: { mutation: 'none' },
+        message: `Worktree retained after cmux tab launch failed before creation: ${tabLaunch.message}\n${retained}${sourceLine}\nNo tab was created or launch command submitted.\n${guidance}`,
+      };
+    }
+
+    return {
+      ok: true,
+      status: worktree.status === 'created' ? 'created-and-launched' : 'reused-and-launched',
+      worktree,
+      launchCwd: launchCwd.path,
+      ...(launchCwd.fellBack
+        ? {
+            launchCwdWarning: `Could not preserve "${relativeCwd}" because it is absent or unsafe in the target worktree; launched at the worktree root.`,
+          }
+        : {}),
+      tab: { surfaceRef: tabLaunch.surfaceRef },
+    };
+  }
+
   const launch =
     recipe === undefined
       ? await (options.launch ?? launchCmuxWorkspace)(worktree.branch, launchCwd.path, cmuxOptions)
@@ -572,8 +741,12 @@ function notifyResult(ctx: ExtensionCommandContext, result: JunctionResult): voi
     result.worktree.kind === 'create-explicit'
       ? `\nFrom: ${result.worktree.baseRef} -> ${result.worktree.baseSha}`
       : '';
+  const launchSummary =
+    result.tab === undefined
+      ? `${verb} worktree and launched cmux workspace.`
+      : `${verb} worktree and cmux accepted one Pi launch command for tab ${result.tab.surfaceRef}; Pi startup is not confirmed.`;
   ctx.ui.notify(
-    `${verb} worktree and launched cmux workspace.\nBranch: ${result.worktree.branch}\nPath: ${result.worktree.path}\nLaunch cwd: ${result.launchCwd}${from}${warnings}`,
+    `${launchSummary}\nBranch: ${result.worktree.branch}\nPath: ${result.worktree.path}\nLaunch cwd: ${result.launchCwd}${from}${warnings}`,
     'info',
   );
 }
