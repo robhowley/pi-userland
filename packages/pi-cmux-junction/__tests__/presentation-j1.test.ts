@@ -147,6 +147,34 @@ describe('J2 projection grammar (historical J1 API names)', () => {
     expect(records.filter(([kind]) => kind === 'R').map((record) => record[4])).toEqual(['0', '1']);
   });
 
+  it('normalizes accepted hrefs at projection without changing other fields', () => {
+    const blocks = [
+      block('p', sourceA, [
+        item('i', {
+          title: 'HTTPS title',
+          href: 'HTTPS://EXAMPLE.COM:08443/é',
+          rows: [{ value: 'row', href: 'HTTPS://EXAMPLE.COM:0443/é' }],
+        }),
+      ]),
+    ];
+    const result = expectSet(blocks);
+    const records = result.j1.split('\u001e').map((record) => record.split('\u001f'));
+    expect(records.find(([kind]) => kind === 'C')?.[5]).toBe('HTTPS title');
+    expect(records.find(([kind]) => kind === 'C')?.[11]).toBe('https://example.com:8443/%C3%A9');
+    expect(records.find(([kind]) => kind === 'R')?.[8]).toBe('https://example.com/%C3%A9');
+    expect(projectPresentationJ1(blocks)).toEqual(result);
+  });
+
+  it('keeps a boundary Unicode href when normalization would exceed the href limit', () => {
+    const href = `https://example.com/${'é'.repeat(1014)}`;
+    expect(Buffer.byteLength(href, 'utf8')).toBe(2_048);
+    const result = expectSet([block('p', sourceA, [item('i', { title: 'Boundary URL', href })])]);
+    const card = result.j1.split('\u001e').map((record) => record.split('\u001f'))[3];
+    expect(card?.[11]).toBe(href);
+    expect(new URL(href).toString()).not.toBe(href);
+    expect(Buffer.byteLength(new URL(href).toString(), 'utf8')).toBeGreaterThan(2_048);
+  });
+
   it('preserves printable literals and distinguishes absent fields from emoji text', () => {
     const literal = '%␞␟∅😀';
     const result = expectSet([

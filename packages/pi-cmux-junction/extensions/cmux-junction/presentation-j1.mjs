@@ -1,6 +1,11 @@
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
-import { decodePresentationRequest, PRESENTATION_PROTOCOL } from './presentation-protocol.mjs';
+import { URL } from 'node:url';
+import {
+  decodePresentationRequest,
+  MAX_HREF_BYTES,
+  PRESENTATION_PROTOCOL,
+} from './presentation-protocol.mjs';
 
 // Historical J1 API names remain internal to avoid caller churn; output is J2 only.
 export const MAX_PRESENTATION_J1_SOURCES = 16;
@@ -113,6 +118,12 @@ function field(value) {
   return value === undefined ? NULL : String(value);
 }
 
+function normalizeHref(value) {
+  if (value === undefined) return undefined;
+  const normalized = new URL(value).toString();
+  return Buffer.byteLength(normalized, 'utf8') <= MAX_HREF_BYTES ? normalized : value;
+}
+
 function record(values) {
   return values.map(field).join(FIELD_SEPARATOR);
 }
@@ -207,7 +218,7 @@ function buildPresentationJ1(input) {
             item.progress?.value,
             item.progress?.max,
             item.progress?.label,
-            item.href,
+            normalizeHref(item.href),
           ]),
         );
         for (let rowRef = 0; rowRef < item.rows.length; rowRef += 1) {
@@ -222,7 +233,7 @@ function buildPresentationJ1(input) {
               row.label,
               row.value,
               row.detail,
-              row.href,
+              normalizeHref(row.href),
             ]),
           );
         }

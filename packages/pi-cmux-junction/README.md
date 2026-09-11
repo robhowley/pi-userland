@@ -88,9 +88,10 @@ Junction leaves worktrees in place. It reuses one only when the expected path an
 asset for **cmux 0.64.22 (102), commit `ddd4a01bc5d8ebac19643930f5fd7d40e85f1534`**.
 Installing this package does not install/select the sidebar or publish descriptions.
 Do not use this prototype on workspaces containing descriptions you need to keep.
-J2 preserves combining marks and all currently accepted text without changing cmux.
-**Phase 6 remains incomplete:** URL predicate equivalence, foreign-input UTF-8 byte
-limits, shared renderer capacity and installed UI gates remain unresolved.
+J2 preserves combining marks and display text without changing cmux. The Node
+projector normalizes only accepted href fields once, at publication.
+**Phase 6 remains incomplete:** foreign-input UTF-8 byte limits, shared renderer
+capacity and installed UI gates remain unresolved.
 
 ### J2 wire and publication contract
 
@@ -99,9 +100,11 @@ limits, shared renderer capacity and installed UI gates remain unresolved.
 - Header: `J2 US sha256(body UTF-8) RS body`, with 64 lowercase ASCII hex digits.
   Existing ordered S/P/C/R records form the exact body; no trailing separator.
   Empty projection still means clear/null, never a header-only board.
-- Present fields are unchanged text: no escaping, normalization or trimming.
-  `%`, `%25`, `␞`, `␟` and literal `∅` are ordinary text. Existing well-formed
-  Unicode, C0/C1 exclusions, field restrictions and input byte limits are unchanged.
+- Display fields are unchanged text: no escaping or trimming. The Node projector
+  serializes accepted hrefs with `new URL(href).toString()` once; it does not
+  normalize labels, titles, summaries or row text. `%`, `%25`, `␞`, `␟` and literal
+  `∅` remain ordinary text. Existing Unicode, C0/C1 exclusions, field restrictions
+  and input byte limits are unchanged.
 - The ASCII body hash distinguishes canonically equivalent spellings that cmux's
   Swift equality would otherwise deduplicate, under the usual SHA-256 collision
   assumption. The renderer checks tag syntax and all body semantics it supports;
@@ -282,12 +285,15 @@ replace(b, None, bad)
   fields/records before semantic indexing. Control rejection uses split/removal,
   including CRLF as a pair: Foundation `contains` can miss GS followed by a mark.
   GS plus a mark is invalid, never null. No cmux changes or scalar APIs are needed.
-- Character ceilings are not UTF-8 byte checks. Exact byte-limit, IDNA/WHATWG URL
-  equivalence and hostile maximum-size parity are not established. The authored
-  link checker accepts plain lowercase HTTPS hosts and decimal ports; it rejects
-  bracketed IPv6 and escaped hosts rather than relying on unavailable Foundation
-  URL parsing. It also admits some projector-rejected hosts (for example a host
-  containing U+200D). This is a separate unresolved boundary, not fixed by J2.
+- Character ceilings are not UTF-8 byte checks. The renderer does not reimplement
+  WHATWG or IDNA parsing. A non-null href is valid structural text; a button is
+  emitted only for lowercase `https://`, a lowercase ASCII DNS host with nonempty
+  dot-separated labels using `a-z`, `0-9`, `.` and `-`, an optional decimal port
+  from 0 through 65535 except normalized default port 443, and a path/query/fragment
+  with no URL whitespace or backslash. IPv6, userinfo, escaped or non-ASCII hosts,
+  other schemes, and malformed/unsupported values stay visible as text with no
+  action. The projector's Node URL normalization makes accepted producer inputs
+  deterministic; foreign descriptions still use this renderer allowlist.
 - No renderer admission, truncation, per-workspace ceiling or retries exist. The
   host shares a 3,000-RenderNode budget across the whole sidebar; deliberately
   oversized input can fail the entire evaluation, including other valid workspaces.

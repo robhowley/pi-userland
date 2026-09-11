@@ -45,7 +45,9 @@ describe('shared J2 projector fixtures (historical J1 API names)', () => {
           Array(8).fill(text),
         );
         expect(row[8]).toBe('\u001d');
-        expect(card[11]).toBe('https://example.com/é👩🏽‍💻');
+        expect(card[11]).toBe(
+          'https://example.com/%C3%A9%F0%9F%91%A9%F0%9F%8F%BD%E2%80%8D%F0%9F%92%BB',
+        );
       }
     });
   }

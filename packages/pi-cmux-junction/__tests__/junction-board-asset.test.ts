@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { projectPresentationJ1 } from '../extensions/cmux-junction/presentation-j1.mjs';
 
 const asset = fileURLToPath(
   new URL('../extensions/cmux-junction/sidebar/junction-board.swift', import.meta.url),
@@ -63,7 +64,7 @@ describe.skipIf(!interpreter)('pinned interpreted J2 behavior', () => {
     it(entry.filename, () => {
       const node = render([fixture(entry.filename)]);
       const visible = texts(node);
-      if (entry.classification !== 'valid') {
+      if (entry.classification === 'invalid' || entry.classification === 'ignored') {
         expect(visible).toEqual(entry.visible);
         return;
       }
@@ -139,18 +140,119 @@ describe.skipIf(!interpreter)('pinned interpreted J2 behavior', () => {
       texts(render([fixture('minimal.j2').replace('Minimal card', 'before\r\nafter')])),
     ).toEqual(['Junction data unavailable']);
   });
-  it('rejects malformed ports', () => {
-    expect(
-      texts(
-        render([
-          fixture('minimal.j2').replace(
-            '\u001d\u001f\u001d\u001f\u001d\u001f\u001d\u001f\u001d\u001f\u001d',
-            '\u001d\u001f\u001d\u001f\u001d\u001f\u001d\u001f\u001d\u001fhttps://example.com::',
-          ),
-        ]),
-      ),
-    ).toEqual(['Junction data unavailable']);
+  it('rejects control-containing hrefs without falling back partially', () => {
+    expect(texts(render([fixture('url-control.j2')]))).toEqual(['Junction data unavailable']);
   });
+  it('normalizes uppercase HTTPS before rendering a clickable action', () => {
+    const projected = projectPresentationJ1([
+      {
+        sourceId: 'a'.repeat(64),
+        producer: { key: 'build', label: 'Producer build' },
+        items: [
+          {
+            key: 'task',
+            title: 'Uppercase URL',
+            href: 'HTTPS://EXAMPLE.COM:08443/path',
+            rows: [],
+          },
+        ],
+      },
+    ]);
+    expect(projected.kind).toBe('set');
+    if (projected.kind !== 'set') return;
+    const node = render([projected.j1]);
+    expect(texts(node)).toContain('Uppercase URL');
+    expect(
+      flatten(node)
+        .filter((entry) => entry.kind === 'button')
+        .map((entry) => entry.action),
+    ).toEqual([{ commands: [{ openURL: { _0: 'https://example.com:8443/path' } }] }]);
+  });
+
+  it('keeps a boundary Unicode href as text without losing its card or board', () => {
+    const href = `https://example.com/${'é'.repeat(1014)}`;
+    expect(Buffer.byteLength(href, 'utf8')).toBe(2_048);
+    const projected = projectPresentationJ1([
+      {
+        sourceId: 'a'.repeat(64),
+        producer: { key: 'build', label: 'Producer build' },
+        items: [{ key: 'task', title: 'Boundary URL', href, rows: [] }],
+      },
+    ]);
+    expect(projected.kind).toBe('set');
+    if (projected.kind !== 'set') return;
+    const node = render([projected.j1]);
+    const visible = texts(node);
+    expect(visible).toContain('Workspace 0');
+    expect(visible).toContain('Boundary URL');
+    expect(visible).toContain(href);
+    expect(visible).not.toContain('Junction data unavailable');
+    expect(flatten(node).filter((entry) => entry.kind === 'button')).toEqual([]);
+  });
+
+  it.each([
+    ['IPv6 host', 'https://[::1]/card'],
+    ['U+200D host', 'https://a\u200Db/card'],
+    ['dangerous scheme', 'javascript:alert(1)'],
+    ['malformed URL text', 'https://example.com/a b'],
+    ['extra scheme', 'https://https://example.com/card'],
+    ['extra scheme in port', 'https://example.com:https://444/card'],
+    ['empty port', 'https://example.com:/card'],
+  ])('shows %s href text without authorizing an action', (_name, href) => {
+    const node = render([fixture('every-optional.j2').replace('https://example.com/card', href)]);
+    const visible = texts(node);
+    expect(visible).toEqual([
+      'Workspace 0',
+      'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      'Producer build',
+      'Every optional',
+      'Running',
+      'Summary',
+      'Progress',
+      '2.0',
+      'Row label',
+      'Row value',
+      'Row detail',
+      'Open link',
+      'Unlabelled row',
+      href,
+      'Next card',
+    ]);
+    expect(
+      flatten(node)
+        .filter((entry) => entry.kind === 'button')
+        .map((entry) => entry.action),
+    ).toEqual([{ commands: [{ openURL: { _0: 'https://example.com/row' } }] }]);
+  });
+
+  it('keeps a scheme-looking path inside a safe URL action', () => {
+    const href = 'https://example.com/path/https://nested';
+    const nodes = flatten(
+      render([fixture('every-optional.j2').replace('https://example.com/card', href)]),
+    );
+    expect(nodes.filter((entry) => entry.kind === 'button').map((entry) => entry.action)).toEqual([
+      { commands: [{ openURL: { _0: 'https://example.com/row' } }] },
+      { commands: [{ openURL: { _0: href } }] },
+    ]);
+  });
+
+  it('preserves card and row content when both hrefs are unsupported', () => {
+    const cardHref = 'https://[::1]/card';
+    const rowHref = 'javascript:alert(1)';
+    const node = render([
+      fixture('every-optional.j2')
+        .replace('https://example.com/card', cardHref)
+        .replace('https://example.com/row', rowHref),
+    ]);
+    const visible = texts(node);
+    expect(visible).toContain('Every optional');
+    expect(visible).toContain('Row value');
+    expect(visible).toContain(cardHref);
+    expect(visible).toContain(rowHref);
+    expect(visible).not.toContain('Junction data unavailable');
+    expect(flatten(node).filter((entry) => entry.kind === 'button')).toEqual([]);
+  });
+
   it('keeps native workspace order', () => {
     const visible = texts(render([fixture('minimal.j2'), fixture('every-optional.j2')]));
     expect(visible.indexOf('Workspace 0')).toBeLessThan(visible.indexOf('Workspace 1'));
