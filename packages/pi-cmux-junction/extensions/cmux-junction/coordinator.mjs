@@ -11,6 +11,18 @@ import { clearInterval, setInterval, setTimeout } from 'node:timers';
 import { fileURLToPath } from 'node:url';
 import { classifyExecFileFailure, resolveCmuxExecutable } from './cmux-runtime.mjs';
 import {
+  createPresentationCore,
+  PRESENTATION_DISCONNECT_GRACE_MS,
+  PRESENTATION_MAINTENANCE_MS,
+} from './presentation-core.mjs';
+import {
+  createPresentationAck,
+  createPresentationRejection,
+  decodePresentationRequestLine,
+  MAX_PRESENTATION_REQUEST_LINE_BYTES,
+  PRESENTATION_PROTOCOL,
+} from './presentation-protocol.mjs';
+import {
   LIFECYCLE_ACK_KIND,
   LIFECYCLE_COMMON_FIELDS,
   LIFECYCLE_IDENTITY_FIELDS,
@@ -875,6 +887,10 @@ export function createCoordinatorCore(options) {
     reconcile,
     drain,
     ledger: snapshotLedger,
+    isQuiescent: () =>
+      owners.size === 0 &&
+      ((!finalClearObligated && statusEqual(ledger.desired, ledger.applied)) ||
+        finalClearAttempts >= 3),
     diagnostics: () => ({
       targetHash: createHash('sha256')
         .update(`${options.target.socketPath}\0${options.target.workspaceId}`)
@@ -1024,7 +1040,11 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
   const initialLedger = await store.read();
   const env = runtime.env ?? process.env;
   const cmuxFile = await resolveCmuxExecutable(env, runtime.access);
-  let stopAfterClear = () => {};
+  let stopRuntime = () => {};
+  let presentation;
+  const stopIfQuiescent = () => {
+    if (core.isQuiescent() && presentation.isQuiescent()) stopRuntime();
+  };
   const core = createCoordinatorCore({
     target,
     initialLedger,
@@ -1032,11 +1052,18 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
     persist: (ledger) => store.write(ledger),
     probePid: runtime.probePid ?? probePidStart,
     schedule: runtime.schedule ?? ((callback, delay) => setTimeout(callback, delay).unref()),
-    onFinalClear: () => stopAfterClear(),
+    onFinalClear: stopIfQuiescent,
     publish:
       runtime.publish ??
       ((status) =>
         runCmux(cmuxFile, buildCmuxStatusArgs(target, status), env, runtime.execFile ?? execFile)),
+  });
+  presentation = createPresentationCore({
+    target,
+    now: runtime.now,
+    probePid: runtime.probePid ?? probePidStart,
+    capacity: runtime.presentationCapacity,
+    sourceId: runtime.presentationSourceId,
   });
 
   const runtimeMkdir = runtime.mkdir ?? mkdir;
@@ -1046,12 +1073,21 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
   await runtimeChmod(dirname(args.listen), 0o700);
   await runtimeRm(args.listen, { force: true });
   const sockets = new Set();
+  const schedule = runtime.schedule ?? ((callback, delay) => setTimeout(callback, delay).unref());
   const server = createServer((socket) => {
     const socketToken = (runtime.randomId ?? randomUUID)();
     sockets.add(socket);
     let buffer = '';
     let malformed = 0;
+    let protocol = null;
+    let presentationInFlight = false;
     socket.setEncoding('utf8');
+
+    const malformedLine = () => {
+      malformed += 1;
+      if (malformed >= 3) socket.destroy();
+    };
+
     socket.on('data', (chunk) => {
       buffer += chunk;
       for (;;) {
@@ -1059,41 +1095,98 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
         if (newline < 0) break;
         const line = buffer.slice(0, newline);
         buffer = buffer.slice(newline + 1);
-        const decoded = decodeWireLine(line, target);
-        if (!decoded.ok) {
-          malformed += 1;
-          if (malformed >= 3) socket.destroy();
+        let decoded;
+        let lineProtocol = protocol;
+        if (lineProtocol === null) {
+          try {
+            lineProtocol = JSON.parse(line)?.protocol;
+          } catch {
+            malformedLine();
+            continue;
+          }
+        }
+        if (lineProtocol === LIFECYCLE_PROTOCOL) {
+          decoded = decodeWireLine(line, target);
+        } else if (lineProtocol === PRESENTATION_PROTOCOL) {
+          decoded = decodePresentationRequestLine(line);
+        } else {
+          malformedLine();
           continue;
         }
+        if (!decoded.ok || (protocol !== null && lineProtocol !== protocol)) {
+          malformedLine();
+          continue;
+        }
+        protocol ??= lineProtocol;
         const message = decoded.value;
+
+        if (protocol === LIFECYCLE_PROTOCOL) {
+          const operation =
+            message.kind === 'snapshot'
+              ? core.acceptSnapshot(message, socketToken)
+              : core.goodbye(message, socketToken);
+          void operation
+            .then((result) => {
+              if (result.ok) {
+                socket.write(
+                  `${JSON.stringify(
+                    createAck(message, result.acceptedGeneration, result.acceptedRevision),
+                  )}\n`,
+                );
+              }
+            })
+            .catch(() => undefined);
+          continue;
+        }
+
+        if (presentationInFlight) {
+          socket.destroy();
+          break;
+        }
+        presentationInFlight = true;
         const operation =
           message.kind === 'snapshot'
-            ? core.acceptSnapshot(message, socketToken)
-            : core.goodbye(message, socketToken);
-        void operation
+            ? presentation.acceptSnapshot(message, socketToken)
+            : presentation.goodbye(message, socketToken);
+        void Promise.resolve(operation)
           .then((result) => {
-            if (result.ok) {
-              socket.write(
-                `${JSON.stringify(
-                  createAck(message, result.acceptedGeneration, result.acceptedRevision),
-                )}\n`,
-              );
-            }
+            if (socket.destroyed) return;
+            const response = result.ok
+              ? createPresentationAck(message, result.acceptedGeneration)
+              : createPresentationRejection(message, result.reason);
+            socket.write(`${JSON.stringify(response)}\n`, () => {
+              presentationInFlight = false;
+              if (result.ok) stopIfQuiescent();
+            });
           })
-          .catch(() => undefined);
+          .catch(() => {
+            presentationInFlight = false;
+          });
       }
-      if (Buffer.byteLength(buffer, 'utf8') > MAX_LIFECYCLE_FRAME_BYTES) socket.destroy();
+      const maximum =
+        protocol === LIFECYCLE_PROTOCOL || (protocol === null && !buffer.startsWith('{'))
+          ? MAX_LIFECYCLE_FRAME_BYTES
+          : MAX_PRESENTATION_REQUEST_LINE_BYTES;
+      if (Buffer.byteLength(buffer, 'utf8') > maximum) socket.destroy();
     });
     socket.on('close', () => {
       sockets.delete(socket);
-      void core
-        .connectionClosed(socketToken)
-        .catch(() => undefined)
-        .finally(() => {
-          const schedule =
-            runtime.schedule ?? ((callback, delay) => setTimeout(callback, delay).unref());
-          schedule(() => void core.maintain().catch(() => undefined), RECONNECT_GRACE_MS);
-        });
+      if (protocol === LIFECYCLE_PROTOCOL) {
+        void core
+          .connectionClosed(socketToken)
+          .catch(() => undefined)
+          .finally(() => {
+            schedule(() => void core.maintain().catch(() => undefined), RECONNECT_GRACE_MS);
+          });
+      } else if (protocol === PRESENTATION_PROTOCOL) {
+        const result = presentation.connectionClosed(socketToken);
+        if (result.changed) {
+          schedule(() => {
+            presentation.maintain();
+            stopIfQuiescent();
+          }, PRESENTATION_DISCONNECT_GRACE_MS);
+        }
+      }
     });
   });
   let bound = false;
@@ -1117,21 +1210,31 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
     throw error;
   }
   const maintenance = setInterval(() => {
+    if (presentation.maintain().changed) stopIfQuiescent();
     void core
       .maintain()
       .then(() => core.reconcile())
       .catch(() => undefined);
-  }, 30_000);
+  }, PRESENTATION_MAINTENANCE_MS);
   maintenance.unref();
   let stopping = false;
-  stopAfterClear = () => {
+  stopRuntime = () => {
     if (stopping) return;
     stopping = true;
     clearInterval(maintenance);
     for (const socket of sockets) socket.destroy();
     server.close(() => void runtimeRm(args.listen, { force: true }));
   };
-  return { server, core, close: stopAfterClear };
+  return {
+    server,
+    core,
+    presentation,
+    diagnostics: () => ({
+      lifecycle: core.diagnostics(),
+      presentation: presentation.diagnostics(),
+    }),
+    close: stopRuntime,
+  };
 }
 
 const isDirect = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];

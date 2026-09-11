@@ -20,6 +20,7 @@ import {
   runCoordinatorRuntime,
 } from '../extensions/cmux-junction/coordinator.mjs';
 import { MAX_LIFECYCLE_FRAME_BYTES } from '../extensions/cmux-junction/lifecycle-protocol.mjs';
+import { PRESENTATION_PROTOCOL } from '../extensions/cmux-junction/presentation-protocol.mjs';
 
 const fixturePath = new URL('../extensions/cmux-junction/wire-fixtures/v1.json', import.meta.url);
 const wireFixtures = JSON.parse(await readFile(fixturePath, 'utf8'));
@@ -38,6 +39,49 @@ function snapshot(overrides: Record<string, unknown> = {}) {
 
 function goodbye(ownerGeneration: number, overrides: Record<string, unknown> = {}) {
   return { ...baselineGoodbye, ownerGeneration, revision: 1, ...overrides };
+}
+
+function presentationSnapshot(overrides: Record<string, unknown> = {}) {
+  return {
+    protocol: PRESENTATION_PROTOCOL,
+    kind: 'snapshot',
+    workspaceId: target.workspaceId,
+    surfaceId: 'surface-presentation',
+    sessionId: 'session-presentation',
+    runtimeId: 'runtime-presentation',
+    pid: 5432,
+    processStartedAt: 1_700_000_000_000,
+    connectionId: 'connection-presentation',
+    sourceGeneration: null,
+    revision: 0,
+    views: [],
+    ...overrides,
+  };
+}
+
+function presentationGoodbye(generation: number, overrides: Record<string, unknown> = {}) {
+  const message = presentationSnapshot({
+    kind: 'goodbye',
+    sourceGeneration: generation,
+    revision: 1,
+    ...overrides,
+  });
+  delete (message as any).views;
+  return message;
+}
+
+async function nextJsonLine(socket: ReturnType<typeof createConnection>) {
+  let received = '';
+  return await new Promise<Record<string, any>>((resolve) => {
+    const onData = (chunk: string | Buffer) => {
+      received += chunk.toString();
+      const newline = received.indexOf('\n');
+      if (newline < 0) return;
+      socket.off('data', onData);
+      resolve(JSON.parse(received.slice(0, newline)));
+    };
+    socket.on('data', onData);
+  });
 }
 
 function deferred<T = void>() {
@@ -674,6 +718,193 @@ describe('coordinator runtime boundary', () => {
     }
     await closed;
     expect(runtime.core.diagnostics()).toMatchObject({ deliveryOutcome: 'exit-failed' });
+  });
+  it('does not stop at idle startup and gives presentation-only sources full lifetime', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pj-presentation-'));
+    tempDirectories.push(directory);
+    const listen = join(directory, 'coordinator.sock');
+    const published: unknown[] = [];
+    const runtime = await runCoordinatorRuntime(
+      [
+        '--listen',
+        listen,
+        '--ledger',
+        join(directory, 'ledger.json'),
+        '--cmux-socket',
+        target.socketPath,
+        '--workspace',
+        target.workspaceId,
+      ],
+      {
+        randomId: () => 'presentation-socket',
+        now: () => 1_700_000_001_000,
+        probePid: () => 'match',
+        schedule: () => undefined,
+        publish: async (status: unknown) => {
+          published.push(status);
+          return { ok: true };
+        },
+      },
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(runtime.server.listening).toBe(true);
+
+    const socket = createConnection(listen);
+    await once(socket, 'connect');
+    socket.setEncoding('utf8');
+    const snapshotAck = nextJsonLine(socket);
+    socket.write(`${JSON.stringify(presentationSnapshot())}\n`);
+    const accepted = await snapshotAck;
+    expect(runtime.presentation.isQuiescent()).toBe(false);
+
+    const serverClosed = once(runtime.server, 'close');
+    const goodbyeAck = nextJsonLine(socket);
+    socket.write(`${JSON.stringify(presentationGoodbye(accepted['acceptedGeneration']))}\n`);
+    await expect(goodbyeAck).resolves.toMatchObject({ kind: 'ack', acceptedKind: 'goodbye' });
+    await serverClosed;
+    expect(runtime.core.ledger().owners).toEqual([]);
+    expect(published).toEqual([]);
+  });
+
+  it('dispatches presentation separately and stops only after both cores are empty', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pj-shared-'));
+    tempDirectories.push(directory);
+    const listen = join(directory, 'coordinator.sock');
+    const scheduled: Array<{ callback: () => void; delay: number }> = [];
+    const published: unknown[] = [];
+    let token = 0;
+    let now = 1_700_000_001_000;
+    const runtime = await runCoordinatorRuntime(
+      [
+        '--listen',
+        listen,
+        '--ledger',
+        join(directory, 'ledger.json'),
+        '--cmux-socket',
+        target.socketPath,
+        '--workspace',
+        target.workspaceId,
+      ],
+      {
+        randomId: () => `socket-${++token}`,
+        now: () => now,
+        probePid: () => 'match',
+        schedule: (callback: () => void, delay: number) => scheduled.push({ callback, delay }),
+        publish: async (status: unknown) => {
+          published.push(status);
+          return { ok: true };
+        },
+      },
+    );
+    expect(runtime.server.listening).toBe(true);
+
+    const presentationSocket = createConnection(listen);
+    await once(presentationSocket, 'connect');
+    presentationSocket.setEncoding('utf8');
+    const presentationAck = nextJsonLine(presentationSocket);
+    presentationSocket.write(`${JSON.stringify(presentationSnapshot())}\n`);
+    const accepted = await presentationAck;
+    expect(accepted).toMatchObject({
+      protocol: PRESENTATION_PROTOCOL,
+      kind: 'ack',
+      acceptedKind: 'snapshot',
+    });
+    expect(runtime.presentation.diagnostics()).toMatchObject({ sourceCount: 1, blockCount: 0 });
+    expect(runtime.core.ledger().owners).toEqual([]);
+    expect(published).toEqual([]);
+
+    const lifecycleSocket = createConnection(listen);
+    await once(lifecycleSocket, 'connect');
+    lifecycleSocket.setEncoding('utf8');
+    const lifecycleAck = nextJsonLine(lifecycleSocket);
+    lifecycleSocket.write(`${JSON.stringify(snapshot())}\n`);
+    await lifecycleAck;
+    const lifecycleGoodbyeAck = nextJsonLine(lifecycleSocket);
+    lifecycleSocket.write(`${JSON.stringify(goodbye(1))}\n`);
+    await lifecycleGoodbyeAck;
+    expect(scheduled[0]?.delay).toBe(RECONNECT_GRACE_MS);
+    now += RECONNECT_GRACE_MS;
+    scheduled.shift()!.callback();
+    await runtime.core.drain();
+    expect(runtime.server.listening).toBe(true);
+
+    const serverClosed = once(runtime.server, 'close');
+    const goodbyeAck = nextJsonLine(presentationSocket);
+    presentationSocket.write(
+      `${JSON.stringify(presentationGoodbye(accepted['acceptedGeneration']))}\n`,
+    );
+    expect(await goodbyeAck).toMatchObject({ kind: 'ack', acceptedKind: 'goodbye' });
+    await serverClosed;
+    expect(published).toEqual([
+      { state: 'idle', label: 'Idle' },
+      { state: null, label: null },
+    ]);
+    expect(runtime.diagnostics().presentation).toMatchObject({ sourceCount: 0, blockCount: 0 });
+  });
+
+  it('locks each socket protocol, permits presentation-sized lines, and bounds in-flight work', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pj-protocol-'));
+    tempDirectories.push(directory);
+    const listen = join(directory, 'coordinator.sock');
+    let token = 0;
+    const runtime = await runCoordinatorRuntime(
+      [
+        '--listen',
+        listen,
+        '--ledger',
+        join(directory, 'ledger.json'),
+        '--cmux-socket',
+        target.socketPath,
+        '--workspace',
+        target.workspaceId,
+      ],
+      {
+        randomId: () => `socket-${++token}`,
+        now: () => 1_700_000_001_000,
+        probePid: () => 'match',
+        schedule: () => undefined,
+        publish: async () => ({ ok: true }),
+      },
+    );
+
+    const largeViews = Array.from({ length: 40 }, (_, index) => ({
+      producer: { key: `p-${String(index).padStart(2, '0')}`, label: `Producer ${index}` },
+      items: [
+        {
+          key: `item-${index}`,
+          title: `Item ${index}`,
+          summary: 'x'.repeat(512),
+          rows: [],
+        },
+      ],
+    }));
+    const locked = createConnection(listen);
+    await once(locked, 'connect');
+    locked.setEncoding('utf8');
+    const largeLine = `${JSON.stringify(presentationSnapshot({ views: largeViews }))}\n`;
+    expect(Buffer.byteLength(largeLine)).toBeGreaterThan(MAX_LIFECYCLE_FRAME_BYTES);
+    const largeAck = nextJsonLine(locked);
+    locked.write(largeLine);
+    await expect(largeAck).resolves.toMatchObject({ protocol: PRESENTATION_PROTOCOL, kind: 'ack' });
+    const lockedClosed = once(locked, 'close');
+    locked.write(`${JSON.stringify(snapshot())}\n`.repeat(3));
+    await lockedClosed;
+    expect(runtime.core.ledger().owners).toEqual([]);
+
+    const busy = createConnection(listen);
+    await once(busy, 'connect');
+    const busyClosed = once(busy, 'close');
+    busy.write(
+      `${JSON.stringify(presentationSnapshot({ connectionId: 'connection-busy' }))}\n${JSON.stringify(
+        presentationSnapshot({ connectionId: 'connection-busy', revision: 1 }),
+      )}\n`,
+    );
+    await busyClosed;
+    expect(runtime.presentation.diagnostics().sourceCount).toBeLessThanOrEqual(2);
+
+    const serverClosed = once(runtime.server, 'close');
+    runtime.close();
+    await serverClosed;
   });
 });
 
