@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.0](https://github.com/robhowley/pi-userland/compare/pi-cmux-junction-v0.4.1...pi-cmux-junction-v0.5.0) (2026-09-11)
+
+
+### Features
+
+* **pi-cmux-junction:** add producer view ingestion ([#187](https://github.com/robhowley/pi-userland/issues/187)) ([bca8657](https://github.com/robhowley/pi-userland/commit/bca86575ecb61067ef950cc60e998d6ff22a5049))
+* **pi-cmux-junction:** add tab placement ([#206](https://github.com/robhowley/pi-userland/issues/206)) ([22cb92d](https://github.com/robhowley/pi-userland/commit/22cb92d3a79e36b0c96eb79b502f7129fae893ad))
+
+
+### Bug Fixes
+
+* **pi-cmux-junction:** disable managed restore ([#208](https://github.com/robhowley/pi-userland/issues/208)) ([ccd8406](https://github.com/robhowley/pi-userland/commit/ccd840693b97defea838c6cb003654ce2d17a81a))
+
 ## [0.4.1](https://github.com/robhowley/pi-userland/compare/pi-cmux-junction-v0.4.0...pi-cmux-junction-v0.4.1) (2026-09-10)
 
 
