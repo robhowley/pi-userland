@@ -25,7 +25,6 @@ import {
   type LifecycleTarget,
 } from './lifecycle-client.js';
 import type { ProcessRunner } from './process.js';
-import { ResumeRuntime, hasNoSessionOption } from './resume.js';
 import { loadJunctionConfig } from './config.js';
 
 export const LIFECYCLE_HEARTBEAT_MS = 10_000;
@@ -64,7 +63,6 @@ export interface LifecycleDependencies {
   clearInterval?: (handle: IntervalHandle) => void;
   coordinatorPath?: string;
   loadConfig?: typeof loadJunctionConfig;
-  argv?: readonly string[];
 }
 
 type UiMethod = (...args: unknown[]) => unknown;
@@ -142,13 +140,9 @@ export function registerJunctionLifecycle(
   const coordinatorPath =
     dependencies.coordinatorPath ?? fileURLToPath(new URL('./coordinator.mjs', import.meta.url));
   const loadConfig = dependencies.loadConfig ?? loadJunctionConfig;
-  const argv = dependencies.argv ?? process.argv;
 
   let runtime: LifecycleRuntime | null = null;
-  let resumeRuntime: ResumeRuntime | null = null;
   let shutdownInFlight: Promise<void> | null = null;
-  let resumeShutdownInFlight: Promise<void> | null = null;
-  let generation = 0;
 
   const shutdownRuntime = (): Promise<void> => {
     if (shutdownInFlight) return shutdownInFlight;
@@ -161,83 +155,42 @@ export function registerJunctionLifecycle(
     return shutdownInFlight;
   };
 
-  const shutdownResume = (terminationReason?: string): Promise<void> => {
-    if (resumeShutdownInFlight) return resumeShutdownInFlight;
-    const current = resumeRuntime;
-    resumeRuntime = null;
-    if (!current) return Promise.resolve();
-    resumeShutdownInFlight = current.shutdown(terminationReason).finally(() => {
-      resumeShutdownInFlight = null;
-    });
-    return resumeShutdownInFlight;
-  };
-
-  const shutdownAll = async (terminationReason?: string): Promise<void> => {
-    const statusShutdown = shutdownRuntime();
-    await shutdownResume(terminationReason);
-    await statusShutdown;
-  };
-
   pi.on('session_start', async (_event, ctx) => {
-    const currentGeneration = ++generation;
     try {
-      await shutdownAll('session_change');
-      if (currentGeneration !== generation) return;
+      await shutdownRuntime();
       const config = loadConfig(ctx.cwd, ctx.isProjectTrusted());
-      const eligibility = lifecycleEligibility(ctx, env);
+      const eligibility = lifecycleEligibility(ctx, env, config.disableStatus);
       if (!eligibility.eligible || !eligibility.target || !eligibility.sessionId) return;
-
-      const resumeEligible = hasPersistedSession(ctx) && !hasNoSessionOption(argv);
-      if (config.disableStatus && !resumeEligible) return;
-
       const resolved = await resolveTarget(ctx.cwd, eligibility.target, cmuxOptions);
-      if (currentGeneration !== generation || !resolved.ok) return;
+      if (!resolved.ok) return;
       const { socketPath, workspaceId, surfaceId } = resolved;
       const target: LifecycleTarget = { socketPath, workspaceId, surfaceId };
-
-      if (resumeEligible) {
-        resumeRuntime = new ResumeRuntime({
-          target,
-          sessionId: eligibility.sessionId,
-          cwd: ctx.cwd,
-          argv,
-          cmux: cmuxOptions,
-        });
-        await resumeRuntime.register();
-        if (currentGeneration !== generation) return;
-      }
-
-      if (config.disableStatus) return;
-      try {
-        const processStartedAt = await observeStart(pid);
-        if (currentGeneration !== generation || processStartedAt === null) return;
-        const owner: LifecycleOwnerIdentity = {
-          sessionId: eligibility.sessionId,
-          runtimeId: runtimeId(),
-          pid,
-          processStartedAt,
-        };
-        const client = createClient({
-          target,
-          owner,
-          coordinatorPath,
-          env,
-          now,
-        });
-        runtime = new LifecycleRuntime({
-          ctx,
-          owner,
-          client,
-          now,
-          scheduleInterval,
-          cancelInterval,
-        });
-        await runtime.start();
-      } catch {
-        if (currentGeneration === generation) await shutdownRuntime();
-      }
+      const processStartedAt = await observeStart(pid);
+      if (processStartedAt === null) return;
+      const owner: LifecycleOwnerIdentity = {
+        sessionId: eligibility.sessionId,
+        runtimeId: runtimeId(),
+        pid,
+        processStartedAt,
+      };
+      const client = createClient({
+        target,
+        owner,
+        coordinatorPath,
+        env,
+        now,
+      });
+      runtime = new LifecycleRuntime({
+        ctx,
+        owner,
+        client,
+        now,
+        scheduleInterval,
+        cancelInterval,
+      });
+      await runtime.start();
     } catch {
-      if (currentGeneration === generation) await shutdownAll();
+      await shutdownRuntime();
     }
   });
 
@@ -313,10 +266,7 @@ export function registerJunctionLifecycle(
   pi.on('agent_settled', (_event, ctx) =>
     runtime?.deliver({ type: 'agent_settled', isIdle: ctx.isIdle() }),
   );
-  pi.on('session_shutdown', (event) => {
-    generation += 1;
-    return shutdownAll(typeof event.reason === 'string' ? event.reason : undefined);
-  });
+  pi.on('session_shutdown', shutdownRuntime);
 }
 
 class LifecycleRuntime {
@@ -559,15 +509,6 @@ export function restoreUiWrappers(
     }
   }
   delete target[UI_INSTALLATION_KEY];
-}
-
-function hasPersistedSession(ctx: LifecycleContext): boolean {
-  try {
-    const sessionFile = ctx.sessionManager.getSessionFile();
-    return typeof sessionFile === 'string' && sessionFile.trim().length > 0;
-  } catch {
-    return false;
-  }
 }
 
 function inheritedIdentity(value: unknown): string | null {
