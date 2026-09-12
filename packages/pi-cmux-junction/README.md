@@ -8,6 +8,55 @@ Branch into parallel Pi sessions: open Git worktrees in new cmux workspaces, for
 pi install npm:@robhowley/pi-cmux-junction
 ```
 
+## Install or update the sidebar file
+
+From Pi with this extension loaded, run:
+
+```text
+/junction board install
+```
+
+This file-only command works outside Git and without cmux installed or running. It
+copies the exact packaged bytes to `~/.config/cmux/sidebars/junction-board.swift`.
+It does not select, validate or reload the sidebar, change settings, launch a pane,
+or enable publication. If the sidebar is already open, cmux itself may hot-reload
+changed bytes. The prototype renderer limitations below still apply.
+
+- Missing Swift is installed without replacement; any same-name `junction-board.json`
+  blocks a fresh install. Existing Swift updates/no-ops leave that JSON alone.
+- Exact-current bytes stay untouched. A missing, malformed or mismatched receipt
+  produces a warning, never adoption or receipt repair.
+- Different bytes update only when they match the last-installed SHA-256 in
+  `.pi-cmux-junction-board.receipt` beside the board. Otherwise stop on refusal;
+  do not bypass it with manual copying. There is no force, adoption or uninstall command.
+- Symlink/non-regular board, receipt and lock objects are refused. `.config`, `cmux`
+  and `sidebars` beneath the resolved home must be real directories; symlink-based
+  dotfile layouts are unsupported. XDG_CONFIG_HOME does not change this path.
+- Package updates alone never change this file. Rerun the command from the loaded
+  updated extension. Receipt-owned bytes can update in either version direction.
+
+The adjacent `.pi-cmux-junction-board.lock` serializes cooperating installers;
+existing locks are not stolen. After a crash, inspect
+`~/.config/cmux/sidebars/.pi-cmux-junction-board.lock` and remove it manually only
+after confirming no installer is running. Other assets and settings are untouched.
+
+Fresh publication is atomic and no-replace; updates expose complete old/new bytes.
+The final identity/byte recheck plus rename is **not compare-and-swap**: an external
+editor or parent replacement after the check can still be overwritten or redirect
+writes. JSON collision checking and Swift publication are not one transaction.
+This is cooperative filesystem safety, not hostile-writer protection; strict
+preservation of every concurrent external edit would require refusing updates.
+There is no fsync/power-loss durability guarantee. Receipts record content, not
+inode provenance or authentication against the same account.
+
+Board and receipt publication are separate. Partial failure means the board was
+published but readback, receipt publication or cleanup failed; inspect the reported
+stage and leftover paths, rather than blindly retrying or rolling back. Failure
+before publication may still leave created directories. Cleanup failure is never
+reported as success, even after a no-op. A crash can leave new bytes with a stale
+or missing receipt: exact-current remains a no-op, but a later differing release
+refuses. Losing the receipt intentionally loses future update authority.
+
 ## Use
 
 From Pi running inside cmux in a Git repository:
@@ -20,7 +69,7 @@ From Pi running inside cmux in a Git repository:
 /junction checkout --branch <local-branch> [--tab]
 ```
 
-Run `/junction` without arguments or `/junction help` to show this help. Add `--tab` as the final argument to open the new Pi session in the same cmux pane and workspace as the current session; otherwise, Junction opens a new workspace. Both leave your current focus unchanged.
+Run `/junction` without arguments or `/junction help` to show this help. For worktree commands, add `--tab` as the final argument to open the new Pi session in the same cmux pane and workspace as the current session; otherwise, Junction opens a new workspace. Both leave your current focus unchanged.
 
 - `/junction --branch <name> [--tab]` — create a new worktree from the default base or reuse a matching worktree; start a fresh Pi session.
 - `/junction --branch <name> --from <commit-ish> [--tab]` — create a new worktree from the specified commit-ish (never reuse); start a fresh Pi session.
@@ -109,7 +158,7 @@ Junction leaves worktrees in place. It reuses one only when the expected path an
 
 ## Manual J2 sidebar prototype (incomplete; not activated)
 
-`extensions/cmux-junction/sidebar/junction-board.swift` is an inert, manually installed
+`extensions/cmux-junction/sidebar/junction-board.swift` is an explicitly installed
 asset for **cmux 0.64.22 (102), commit `ddd4a01bc5d8ebac19643930f5fd7d40e85f1534`**.
 Installing this package does not install/select the sidebar or publish descriptions.
 Do not use this prototype on workspaces containing descriptions you need to keep.
@@ -221,14 +270,16 @@ installed sidebar names, not an arbitrary source path.
 2. Choose two disposable, empty workspaces in that window; record both UUIDs and
    confirm their descriptions are exactly JSON `null`. Do not rely on current
    focus, indexes, environment-inferred workspace IDs, or clearing existing text.
-3. Set `ASSET` to this repository's Swift file and `TARGET` to
+3. Set `ASSET` to the loaded package's Swift file and `TARGET` to
    `~/.config/cmux/sidebars/junction-board.swift`. In a private temporary directory,
    record whether `TARGET` was absent; otherwise back it up with `cp -p`. Record
    its hash and permissions. Do not touch other assets or cmux configuration.
-4. With explicit permission to change the visible sidebar, install and validate:
+4. With explicit permission to install the file, run `/junction board install` in
+   Pi. Stop on refusal or partial failure; do not bypass the receipt checks with a
+   manual copy. Installation does not authorize validation, selection or publication.
+   With separate explicit permission to change the visible sidebar, validate:
 
    ```sh
-   install -m 0600 "$ASSET" "$TARGET"
    cmux sidebar validate junction-board --json
    # Continue only after successful validation:
    cmux sidebar reload junction-board --json
@@ -295,6 +346,7 @@ replace(b, None, bad)
   equal the installed repository asset**. Preserve backup permissions. Run
   `cmux sidebar reload --all --json`, then verify the prior selection visually
   and compare the restored asset/absence with the backup. Record success/failure.
+  Manual restoration does not repair receipt ownership or authorize future updates.
 
 ### Prototype limits and evidence to retain
 
