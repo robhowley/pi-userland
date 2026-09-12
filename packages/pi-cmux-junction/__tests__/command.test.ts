@@ -99,6 +99,110 @@ beforeEach(async () => {
 });
 
 describe('/junction command', () => {
+  it.each(['board install', '  board   install \t\n'])('parses only board install: %j', (args) => {
+    expect(parseJunctionArgs(args)).toEqual({ ok: true, mode: 'board-install' });
+  });
+  it.each([
+    'board',
+    'board update',
+    'board install extra',
+    'board install --tab',
+    'board install /tmp/x',
+    'board fork --branch x',
+    'board install --from HEAD',
+  ])('rejects board arguments: %s', async (args) => {
+    const installBoard = vi.fn();
+    expect(await runJunctionCommand(args, cwd, { installBoard })).toEqual({
+      ok: false,
+      status: 'invalid-command',
+      message: 'Usage: /junction board install',
+    });
+    expect(installBoard).not.toHaveBeenCalled();
+  });
+  it('offers full-prefix board completion through the registered callback', () => {
+    const registerCommand = vi.fn();
+    registerJunctionCommand({ registerCommand });
+    const complete = registerCommand.mock.calls[0]?.[1].getArgumentCompletions;
+    for (const prefix of ['b', 'bo', 'board'])
+      expect(complete(prefix)).toEqual([expect.objectContaining({ value: 'board' })]);
+    for (const prefix of ['board ', 'board i', '  board   i'])
+      expect(complete(prefix)).toEqual([
+        expect.objectContaining({ value: 'board install', label: 'install' }),
+      ]);
+    for (const prefix of ['board install ', 'board update', 'board i extra', 'board --tab'])
+      expect(complete(prefix)).toBeNull();
+  });
+  it('installs in a temporary home before any repository, cmux or session operation', async () => {
+    const forbidden = vi.fn(() => {
+      throw new Error('must not run');
+    });
+    const result = await runJunctionCommand(
+      'board install',
+      join(cwd, 'nonexistent'),
+      {
+        homeDir: sourceRoot,
+        runner: forbidden,
+        plan: forbidden,
+        planCheckout: forbidden,
+        preflight: forbidden,
+        preflightTab: forbidden,
+        apply: forbidden,
+        launch: forbidden,
+        launchTab: forbidden,
+      },
+      { waitForIdle: forbidden, sessionManager: { getSessionFile: forbidden } },
+    );
+    expect(result).toEqual({
+      ok: true,
+      status: 'board-installed',
+      path: join(sourceRoot, '.config/cmux/sidebars/junction-board.swift'),
+    });
+    expect(forbidden).not.toHaveBeenCalled();
+  });
+  it.each([
+    { ok: true, status: 'board-installed', path: '/test/board', text: 'Installed' },
+    { ok: true, status: 'board-updated', path: '/test/board', text: 'Updated' },
+    {
+      ok: true,
+      status: 'board-current',
+      path: '/test/board',
+      warning: 'unowned',
+      text: 'Already current',
+    },
+    {
+      ok: false,
+      status: 'board-install-failed',
+      path: '/test/board',
+      message: 'failure',
+      text: 'failure',
+    },
+    {
+      ok: false,
+      status: 'board-install-partial',
+      path: '/test/board',
+      message: 'partial',
+      text: 'partial',
+    },
+  ] as const)(
+    'notifies board outcome $status and forwards only homeDir',
+    async ({ text, ...result }) => {
+      const registerCommand = vi.fn();
+      const installBoard = vi.fn(async () => result);
+      registerJunctionCommand(
+        { registerCommand },
+        { installBoard, homeDir: sourceRoot, env: { X: 'ignored' }, timeoutMs: 1 },
+      );
+      const notify = vi.fn();
+      await registerCommand.mock.calls[0]?.[1].handler('board install', { cwd, ui: { notify } });
+      expect(installBoard).toHaveBeenCalledWith({ homeDir: sourceRoot });
+      expect(notify).toHaveBeenCalledWith(
+        expect.stringContaining(text),
+        result.ok ? 'info' : 'error',
+      );
+      if (result.ok) expect(notify.mock.calls[0]?.[0]).toContain(result.path);
+      if ('warning' in result) expect(notify.mock.calls[0]?.[0]).toContain('unowned');
+    },
+  );
   it('completes the branch flag from partial input', () => {
     expect(getJunctionArgumentCompletions('--b')).toEqual([
       {
@@ -146,6 +250,7 @@ describe('/junction command', () => {
       expect.objectContaining({ value: 'fork' }),
       checkout,
       branch,
+      expect.objectContaining({ value: 'board' }),
     ]);
     expect(getJunctionArgumentCompletions('c')).toEqual([checkout]);
     expect(getJunctionArgumentCompletions('checkout ')).toEqual([branch]);
@@ -1579,7 +1684,8 @@ describe('/junction command', () => {
     const apply = vi.fn(async () => WORKTREE);
     const launch = vi.fn(async () => ({ ok: true as const }));
 
-    registerJunctionCommand(pi, { plan, planCheckout, preflight, apply, launch });
+    const installBoard = vi.fn();
+    registerJunctionCommand(pi, { plan, planCheckout, preflight, apply, launch, installBoard });
     await handler?.(args, {
       cwd,
       ui: { notify },
@@ -1589,6 +1695,7 @@ describe('/junction command', () => {
 
     expect(notify).toHaveBeenCalledTimes(1);
     expect(notify).toHaveBeenCalledWith(expect.any(String), 'info');
+    expect(installBoard).not.toHaveBeenCalled();
     expect(description).toContain('--tab');
     const help = notify.mock.calls[0]?.[0];
     expect(help).toBe(
@@ -1600,7 +1707,8 @@ describe('/junction command', () => {
         '  /junction fork --branch <name> [--tab] — wait for the current persisted session to idle, then create a new worktree from the default base or reuse a matching worktree; fork the conversation',
         '  /junction fork --branch <name> --from <commit-ish> [--tab] — wait for the current persisted session to idle, then create a new worktree from the specified commit-ish (never reuse); fork the conversation',
         '  /junction checkout --branch <local-branch> [--tab] — open an existing local branch in its worktree; launch a fresh Pi session',
-        '  Append `--tab` to launch Pi in a new unfocused tab in this workspace instead of a new cmux workspace.',
+        '  /junction board install — install or safely update the packaged sidebar file; does not select it or enable publication',
+        '  For worktree commands, append `--tab` to launch Pi in a new unfocused tab in this workspace instead of a new cmux workspace.',
       ].join('\n'),
     );
     expect(waitForIdle).not.toHaveBeenCalled();

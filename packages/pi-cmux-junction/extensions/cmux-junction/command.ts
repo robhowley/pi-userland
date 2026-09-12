@@ -10,6 +10,7 @@ import {
   type CmuxLaunchRecipe,
   type CmuxOptions,
 } from './cmux.js';
+import { installJunctionBoard, type BoardInstallResult } from './board-install.js';
 import type { ProcessRunner } from './process.js';
 import {
   applyWorktreePlan,
@@ -38,7 +39,8 @@ const JUNCTION_HELP = [
   `  /junction ${FORK_SUBCOMMAND} ${BRANCH_FLAG} <name> [${TAB_FLAG}] — wait for the current persisted session to idle, then create a new worktree from the default base or reuse a matching worktree; fork the conversation`,
   `  /junction ${FORK_SUBCOMMAND} ${BRANCH_FLAG} <name> ${FROM_FLAG} <commit-ish> [${TAB_FLAG}] — wait for the current persisted session to idle, then create a new worktree from the specified commit-ish (never reuse); fork the conversation`,
   `  /junction ${CHECKOUT_SUBCOMMAND} ${BRANCH_FLAG} <local-branch> [${TAB_FLAG}] — open an existing local branch in its worktree; launch a fresh Pi session`,
-  '  Append `--tab` to launch Pi in a new unfocused tab in this workspace instead of a new cmux workspace.',
+  '  /junction board install — install or safely update the packaged sidebar file; does not select it or enable publication',
+  '  For worktree commands, append `--tab` to launch Pi in a new unfocused tab in this workspace instead of a new cmux workspace.',
 ].join('\n');
 
 export interface JunctionSessionContext {
@@ -71,6 +73,7 @@ export type RetainedWorktreeProof = (
 ) => Promise<boolean>;
 
 export interface JunctionCommandOptions {
+  installBoard?: typeof installJunctionBoard;
   runner?: ProcessRunner;
   env?: NodeJS.ProcessEnv;
   homeDir?: string;
@@ -87,6 +90,7 @@ export interface JunctionCommandOptions {
 }
 
 export type JunctionResult =
+  | BoardInstallResult
   | {
       ok: true;
       status: 'created-and-launched' | 'reused-and-launched';
@@ -160,7 +164,7 @@ export function registerJunctionCommand(
 ): void {
   pi.registerCommand(JUNCTION_COMMAND, {
     description:
-      'Create a branch worktree or check out an existing local branch, then launch Pi in a new cmux workspace; a final --tab launches Pi in a new unfocused tab in this workspace instead',
+      'Create a branch worktree or check out an existing local branch, then launch Pi in a new cmux workspace; a final --tab launches Pi in a new unfocused tab in this workspace instead; board install installs or safely updates the packaged sidebar file',
     getArgumentCompletions: getJunctionArgumentCompletions,
     handler: async (args, ctx) => {
       const trimmedArgs = args.trim();
@@ -175,6 +179,16 @@ export function registerJunctionCommand(
   });
 }
 
+const BOARD_COMPLETION = {
+  value: 'board',
+  label: 'board',
+  description: 'Install the packaged sidebar file',
+};
+const BOARD_INSTALL_COMPLETION = {
+  value: 'board install',
+  label: 'install',
+  description: 'Install or safely update the packaged sidebar file',
+};
 const BRANCH_COMPLETION = {
   value: BRANCH_FLAG,
   label: BRANCH_FLAG,
@@ -210,12 +224,20 @@ const HEAD_COMPLETION = {
 export function getJunctionArgumentCompletions(prefix: string) {
   const input = prefix.trimStart();
   if (input.length === 0) {
-    return [FORK_COMPLETION, CHECKOUT_COMPLETION, BRANCH_COMPLETION];
+    return [FORK_COMPLETION, CHECKOUT_COMPLETION, BRANCH_COMPLETION, BOARD_COMPLETION];
   }
 
   const trailingWhitespace = /\s$/u.test(input);
   const tokens = input.trim().split(/\s+/u);
   const firstToken = tokens[0] ?? '';
+
+  if (firstToken === 'board') {
+    if (tokens.length === 1)
+      return trailingWhitespace ? [BOARD_INSTALL_COMPLETION] : [BOARD_COMPLETION];
+    return tokens.length === 2 && !trailingWhitespace && 'install'.startsWith(tokens[1] ?? '')
+      ? [BOARD_INSTALL_COMPLETION]
+      : null;
+  }
 
   if (firstToken === CHECKOUT_SUBCOMMAND) {
     if (tokens.length === 1) {
@@ -244,6 +266,7 @@ export function getJunctionArgumentCompletions(prefix: string) {
 
   if (mode === 'fresh' && !firstToken.startsWith('-')) {
     if (trailingWhitespace || tokens.length !== 1) return null;
+    if ('board'.startsWith(firstToken)) return [BOARD_COMPLETION];
     if (FORK_SUBCOMMAND.startsWith(firstToken)) return [FORK_COMPLETION];
     if (CHECKOUT_SUBCOMMAND.startsWith(firstToken)) return [CHECKOUT_COMPLETION];
     return null;
@@ -304,6 +327,7 @@ export function getJunctionArgumentCompletions(prefix: string) {
 }
 
 export type JunctionParseResult =
+  | { ok: true; mode: 'board-install' }
   | { ok: true; mode: 'fresh'; branch: string; from?: string; tab?: true }
   | { ok: true; mode: 'fork'; branch: string; from?: string; tab?: true }
   | { ok: true; mode: 'checkout'; branch: string; tab?: true }
@@ -311,6 +335,11 @@ export type JunctionParseResult =
 
 export function parseJunctionArgs(args: string): JunctionParseResult {
   const tokens = args.trim().length === 0 ? [] : args.trim().split(/\s+/u);
+  if (tokens[0] === 'board') {
+    return tokens.length === 2 && tokens[1] === 'install'
+      ? { ok: true, mode: 'board-install' }
+      : { ok: false, message: 'Usage: /junction board install' };
+  }
   if (tokens[0] === FORK_SUBCOMMAND) {
     return parseBranchArgs(tokens.slice(1), FORK_USAGE, 'fork');
   }
@@ -394,6 +423,12 @@ export async function runJunctionCommand(
   const parsed = parseJunctionArgs(args);
   if (!parsed.ok) {
     return { ok: false, status: 'invalid-command', message: parsed.message };
+  }
+
+  if (parsed.mode === 'board-install') {
+    return (options.installBoard ?? installJunctionBoard)(
+      options.homeDir === undefined ? {} : { homeDir: options.homeDir },
+    );
   }
 
   const { mode } = parsed;
@@ -726,6 +761,24 @@ function sourceFailure(message: string): ForkSourceFailure {
 function notifyResult(ctx: ExtensionCommandContext, result: JunctionResult): void {
   if (!result.ok) {
     ctx.ui.notify(result.message, 'error');
+    return;
+  }
+
+  if (
+    result.status === 'board-installed' ||
+    result.status === 'board-updated' ||
+    result.status === 'board-current'
+  ) {
+    const verb =
+      result.status === 'board-installed'
+        ? 'Installed'
+        : result.status === 'board-updated'
+          ? 'Updated'
+          : 'Already current';
+    ctx.ui.notify(
+      `${verb}: ${result.path}${result.status === 'board-current' && result.warning ? `\nWarning: ${result.warning}` : ''}`,
+      'info',
+    );
     return;
   }
 
