@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { installJunctionBoard } from '../extensions/cmux-junction/board-install.js';
+vi.mock('../extensions/cmux-junction/board-install.js', () => ({ installJunctionBoard: vi.fn() }));
 import cmuxJunction from '../extensions/cmux-junction/index.js';
 
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
@@ -25,6 +27,7 @@ describe('pi-cmux-junction', () => {
     } as unknown as ExtensionAPI;
 
     cmuxJunction(pi);
+    expect(installJunctionBoard).not.toHaveBeenCalled();
 
     expect(eventsOn).toHaveBeenCalledTimes(1);
     expect(eventsOn).toHaveBeenCalledWith('pi-cmux-junction:update', expect.any(Function));
