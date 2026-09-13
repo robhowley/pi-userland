@@ -8,54 +8,52 @@ Branch into parallel Pi sessions: open Git worktrees in new cmux workspaces, for
 pi install npm:@robhowley/pi-cmux-junction
 ```
 
-## Install or update the sidebar file
+## Install the optional sidebar board
 
-From Pi with this extension loaded, run:
+With Junction loaded in Pi, run:
 
 ```text
 /junction board install
 ```
 
-This file-only command works outside Git and without cmux installed or running. It
-copies the exact packaged bytes to `~/.config/cmux/sidebars/junction-board.swift`.
-It does not select, validate or reload the sidebar, change settings, launch a pane,
-or enable publication. If the sidebar is already open, cmux itself may hot-reload
-changed bytes. The prototype renderer limitations below still apply.
+This installs `~/.config/cmux/sidebars/junction-board.swift`; it works without Git
+or a running cmux. It **does not open the board or enable dashboard publication**.
+The board is still an [incomplete prototype](#manual-j2-sidebar-prototype-incomplete-not-activated).
 
-- Missing Swift is installed without replacement; any same-name `junction-board.json`
-  blocks a fresh install. Existing Swift updates/no-ops leave that JSON alone.
-- Exact-current bytes stay untouched. A missing, malformed or mismatched receipt
-  produces a warning, never adoption or receipt repair.
-- Different bytes update only when they match the last-installed SHA-256 in
-  `.pi-cmux-junction-board.receipt` beside the board. Otherwise stop on refusal;
-  do not bypass it with manual copying. There is no force, adoption or uninstall command.
-- Symlink/non-regular board, receipt and lock objects are refused. `.config`, `cmux`
-  and `sidebars` beneath the resolved home must be real directories; symlink-based
-  dotfile layouts are unsupported. XDG_CONFIG_HOME does not change this path.
-- Package updates alone never change this file. Rerun the command from the loaded
-  updated extension. Receipt-owned bytes can update in either version direction.
+Run the same command after loading a package update:
 
-The adjacent `.pi-cmux-junction-board.lock` serializes cooperating installers;
-existing locks are not stolen. After a crash, inspect
-`~/.config/cmux/sidebars/.pi-cmux-junction-board.lock` and remove it manually only
-after confirming no installer is running. Other assets and settings are untouched.
+| Installed file                           | Result                     |
+| ---------------------------------------- | -------------------------- |
+| Missing                                  | Install it.                |
+| Already current                          | Leave it unchanged.        |
+| Unchanged since Junction installed it    | Update it.                 |
+| Modified or not recognized as Junction's | Stop without replacing it. |
 
-Fresh publication is atomic and no-replace; updates expose complete old/new bytes.
-The final identity/byte recheck plus rename is **not compare-and-swap**: an external
-editor or parent replacement after the check can still be overwritten or redirect
-writes. JSON collision checking and Swift publication are not one transaction.
-This is cooperative filesystem safety, not hostile-writer protection; strict
-preservation of every concurrent external edit would require refusing updates.
-There is no fsync/power-loss durability guarantee. Receipts record content, not
-inode provenance or authentication against the same account.
+Other assets and settings stay untouched. Avoid editing the board or its directory
+while installing: concurrent edits can still be overwritten. An already-open board
+may reload automatically through cmux.
 
-Board and receipt publication are separate. Partial failure means the board was
-published but readback, receipt publication or cleanup failed; inspect the reported
-stage and leftover paths, rather than blindly retrying or rolling back. Failure
-before publication may still leave created directories. Cleanup failure is never
-reported as success, even after a no-op. A crash can leave new bytes with a stale
-or missing receipt: exact-current remains a no-op, but a later differing release
-refuses. Losing the receipt intentionally loses future update authority.
+<details>
+<summary>Installation warnings and troubleshooting</summary>
+
+- **Unrecognized file:** Junction records installed content in the adjacent
+  `.pi-cmux-junction-board.receipt`. Missing or invalid receipts prevent updates;
+  current files stay unchanged with a warning. Junction never adopts files or
+  repairs receipts. Stop on refusal—there is no force option; don't bypass it by copying.
+- **Path conflict:** An existing `junction-board.json` blocks a fresh install.
+  Symlinks and non-file board/receipt/lock objects are refused. The `.config/cmux/sidebars`
+  directories must also be real directories; `XDG_CONFIG_HOME` is not used.
+- **Busy:** After a crash, inspect the adjacent `.pi-cmux-junction-board.lock`.
+  Remove it only after confirming no installer is running.
+- **Partial failure:** The board changed, but verification, receipt writing or
+  cleanup failed. Inspect the reported paths before doing anything else. A crash
+  can leave the receipt out of date and block future updates; there is no automatic repair.
+
+Package updates do not install the board automatically. The command uses the
+loaded package's version, even if older. It does not validate or explicitly reload
+cmux, and offers no power-loss recovery guarantee or uninstall command.
+
+</details>
 
 ## Use
 
@@ -274,10 +272,9 @@ installed sidebar names, not an arbitrary source path.
    `~/.config/cmux/sidebars/junction-board.swift`. In a private temporary directory,
    record whether `TARGET` was absent; otherwise back it up with `cp -p`. Record
    its hash and permissions. Do not touch other assets or cmux configuration.
-4. With explicit permission to install the file, run `/junction board install` in
-   Pi. Stop on refusal or partial failure; do not bypass the receipt checks with a
-   manual copy. Installation does not authorize validation, selection or publication.
-   With separate explicit permission to change the visible sidebar, validate:
+4. With permission to install the file, run `/junction board install` in Pi.
+   Stop on any failure; don't substitute a manual copy. Then, only with separate
+   permission to change the visible sidebar, validate:
 
    ```sh
    cmux sidebar validate junction-board --json
