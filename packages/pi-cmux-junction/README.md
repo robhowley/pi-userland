@@ -8,6 +8,53 @@ Branch into parallel Pi sessions: open Git worktrees in new cmux workspaces, for
 pi install npm:@robhowley/pi-cmux-junction
 ```
 
+## Install the optional sidebar board
+
+With Junction loaded in Pi, run:
+
+```text
+/junction board install
+```
+
+This installs `~/.config/cmux/sidebars/junction-board.swift`; it works without Git
+or a running cmux. It **does not open the board or enable dashboard publication**.
+The board is still an [incomplete prototype](#manual-j2-sidebar-prototype-incomplete-not-activated).
+
+Run the same command after loading a package update:
+
+| Installed file                           | Result                     |
+| ---------------------------------------- | -------------------------- |
+| Missing                                  | Install it.                |
+| Already current                          | Leave it unchanged.        |
+| Unchanged since Junction installed it    | Update it.                 |
+| Modified or not recognized as Junction's | Stop without replacing it. |
+
+Other assets and settings stay untouched. Avoid editing the board or its directory
+while installing: concurrent edits can still be overwritten. An already-open board
+may reload automatically through cmux.
+
+<details>
+<summary>Installation warnings and troubleshooting</summary>
+
+- **Unrecognized file:** Junction records installed content in the adjacent
+  `.pi-cmux-junction-board.receipt`. Missing or invalid receipts prevent updates;
+  current files stay unchanged with a warning. Junction never adopts files or
+  repairs receipts. Stop on refusal—there is no force option; don't bypass it by copying.
+- **Path conflict:** An existing `junction-board.json` blocks a fresh install.
+  Symlinks and non-file board/receipt/lock objects are refused. The `.config/cmux/sidebars`
+  directories must also be real directories; `XDG_CONFIG_HOME` is not used.
+- **Busy:** After a crash, inspect the adjacent `.pi-cmux-junction-board.lock`.
+  Remove it only after confirming no installer is running.
+- **Partial failure:** The board changed, but verification, receipt writing or
+  cleanup failed. Inspect the reported paths before doing anything else. A crash
+  can leave the receipt out of date and block future updates; there is no automatic repair.
+
+Package updates do not install the board automatically. The command uses the
+loaded package's version, even if older. It does not validate or explicitly reload
+cmux, and offers no power-loss recovery guarantee or uninstall command.
+
+</details>
+
 ## Use
 
 From Pi running inside cmux in a Git repository:
@@ -20,7 +67,7 @@ From Pi running inside cmux in a Git repository:
 /junction checkout --branch <local-branch> [--tab]
 ```
 
-Run `/junction` without arguments or `/junction help` to show this help. Add `--tab` as the final argument to open the new Pi session in the same cmux pane and workspace as the current session; otherwise, Junction opens a new workspace. Both leave your current focus unchanged.
+Run `/junction` without arguments or `/junction help` to show this help. For worktree commands, add `--tab` as the final argument to open the new Pi session in the same cmux pane and workspace as the current session; otherwise, Junction opens a new workspace. Both leave your current focus unchanged.
 
 - `/junction --branch <name> [--tab]` — create a new worktree from the default base or reuse a matching worktree; start a fresh Pi session.
 - `/junction --branch <name> --from <commit-ish> [--tab]` — create a new worktree from the specified commit-ish (never reuse); start a fresh Pi session.
@@ -109,7 +156,7 @@ Junction leaves worktrees in place. It reuses one only when the expected path an
 
 ## Manual J2 sidebar prototype (incomplete; not activated)
 
-`extensions/cmux-junction/sidebar/junction-board.swift` is an inert, manually installed
+`extensions/cmux-junction/sidebar/junction-board.swift` is an explicitly installed
 asset for **cmux 0.64.22 (102), commit `ddd4a01bc5d8ebac19643930f5fd7d40e85f1534`**.
 Installing this package does not install/select the sidebar or publish descriptions.
 Do not use this prototype on workspaces containing descriptions you need to keep.
@@ -221,14 +268,15 @@ installed sidebar names, not an arbitrary source path.
 2. Choose two disposable, empty workspaces in that window; record both UUIDs and
    confirm their descriptions are exactly JSON `null`. Do not rely on current
    focus, indexes, environment-inferred workspace IDs, or clearing existing text.
-3. Set `ASSET` to this repository's Swift file and `TARGET` to
+3. Set `ASSET` to the loaded package's Swift file and `TARGET` to
    `~/.config/cmux/sidebars/junction-board.swift`. In a private temporary directory,
    record whether `TARGET` was absent; otherwise back it up with `cp -p`. Record
    its hash and permissions. Do not touch other assets or cmux configuration.
-4. With explicit permission to change the visible sidebar, install and validate:
+4. With permission to install the file, run `/junction board install` in Pi.
+   Stop on any failure; don't substitute a manual copy. Then, only with separate
+   permission to change the visible sidebar, validate:
 
    ```sh
-   install -m 0600 "$ASSET" "$TARGET"
    cmux sidebar validate junction-board --json
    # Continue only after successful validation:
    cmux sidebar reload junction-board --json
@@ -295,6 +343,7 @@ replace(b, None, bad)
   equal the installed repository asset**. Preserve backup permissions. Run
   `cmux sidebar reload --all --json`, then verify the prior selection visually
   and compare the restored asset/absence with the backup. Record success/failure.
+  Manual restoration does not repair receipt ownership or authorize future updates.
 
 ### Prototype limits and evidence to retain
 
