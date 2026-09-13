@@ -1,4 +1,11 @@
-import { once } from 'node:events';
+import { EventEmitter, once } from 'node:events';
+import { registerJunctionLifecycle } from '../extensions/cmux-junction/lifecycle.js';
+import {
+  createProducerViewStore,
+  PRODUCER_VIEW_EVENT,
+} from '../extensions/cmux-junction/producer-view.js';
+import { attachPresentationClient } from '../extensions/cmux-junction/presentation-client.js';
+import { coordinatorLaunchArgs } from '../extensions/cmux-junction/lifecycle-client.js';
 import { chmod, readFile, stat, writeFile } from 'node:fs/promises';
 import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -15,11 +22,16 @@ import {
   decodeWireLine,
   decodeWireMessage,
   parseRuntimeArgs,
+  coordinatorDescriptionReservation,
   probePidStart,
   runCmux,
   runCoordinatorRuntime,
 } from '../extensions/cmux-junction/coordinator.mjs';
-import { MAX_LIFECYCLE_FRAME_BYTES } from '../extensions/cmux-junction/lifecycle-protocol.mjs';
+import {
+  LIFECYCLE_PROTOCOL,
+  MAX_LIFECYCLE_FRAME_BYTES,
+} from '../extensions/cmux-junction/lifecycle-protocol.mjs';
+import { PRESENTATION_PROTOCOL } from '../extensions/cmux-junction/presentation-protocol.mjs';
 
 const fixturePath = new URL('../extensions/cmux-junction/wire-fixtures/v1.json', import.meta.url);
 const wireFixtures = JSON.parse(await readFile(fixturePath, 'utf8'));
@@ -38,6 +50,49 @@ function snapshot(overrides: Record<string, unknown> = {}) {
 
 function goodbye(ownerGeneration: number, overrides: Record<string, unknown> = {}) {
   return { ...baselineGoodbye, ownerGeneration, revision: 1, ...overrides };
+}
+
+function presentationSnapshot(overrides: Record<string, unknown> = {}) {
+  return {
+    protocol: PRESENTATION_PROTOCOL,
+    kind: 'snapshot',
+    workspaceId: target.workspaceId,
+    surfaceId: 'surface-presentation',
+    sessionId: 'session-presentation',
+    runtimeId: 'runtime-presentation',
+    pid: 5432,
+    processStartedAt: 1_700_000_000_000,
+    connectionId: 'connection-presentation',
+    sourceGeneration: null,
+    revision: 0,
+    views: [],
+    ...overrides,
+  };
+}
+
+function presentationGoodbye(generation: number, overrides: Record<string, unknown> = {}) {
+  const message = presentationSnapshot({
+    kind: 'goodbye',
+    sourceGeneration: generation,
+    revision: 1,
+    ...overrides,
+  });
+  delete (message as any).views;
+  return message;
+}
+
+async function nextJsonLine(socket: ReturnType<typeof createConnection>) {
+  let received = '';
+  return await new Promise<Record<string, any>>((resolve) => {
+    const onData = (chunk: string | Buffer) => {
+      received += chunk.toString();
+      const newline = received.indexOf('\n');
+      if (newline < 0) return;
+      socket.off('data', onData);
+      resolve(JSON.parse(received.slice(0, newline)));
+    };
+    socket.on('data', onData);
+  });
 }
 
 function deferred<T = void>() {
@@ -674,6 +729,820 @@ describe('coordinator runtime boundary', () => {
     }
     await closed;
     expect(runtime.core.diagnostics()).toMatchObject({ deliveryOutcome: 'exit-failed' });
+  });
+  it('refuses malformed, foreign-socket, foreign-workspace and non-UUID publication authority', () => {
+    const reservation = {
+      socketPath: '/tmp/./cmux.sock',
+      workspaceId: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+      windowId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    };
+    const args = { 'cmux-socket': '/tmp/cmux.sock', workspace: reservation.workspaceId };
+    expect(
+      coordinatorDescriptionReservation(
+        { ...args, 'description-reservation': JSON.stringify(reservation) },
+        undefined,
+      ),
+    ).toEqual({ ...reservation, socketPath: '/tmp/cmux.sock' });
+    for (const value of [
+      '{',
+      JSON.stringify({ ...reservation, socketPath: '/tmp/foreign.sock' }),
+      JSON.stringify({ ...reservation, workspaceId: reservation.windowId }),
+      JSON.stringify({ ...reservation, windowId: 'window:1' }),
+    ]) {
+      expect(
+        coordinatorDescriptionReservation({ ...args, 'description-reservation': value }, undefined),
+      ).toBeUndefined();
+    }
+  });
+
+  it('publishes producer events with launch authority and retries the last session clear before stopping', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pj-production-plumbing-'));
+    tempDirectories.push(directory);
+    const paths = {
+      directory,
+      socketPath: join(directory, 'coordinator.sock'),
+      ledgerPath: join(directory, 'ledger.json'),
+      lockPath: join(directory, 'coordinator.lock'),
+    };
+    const reservation = {
+      socketPath: '/tmp/cmux.sock',
+      workspaceId: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+      windowId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    };
+    const target = {
+      socketPath: reservation.socketPath,
+      workspaceId: reservation.workspaceId,
+      surfaceId: 'surface-a',
+    };
+    let description: string | null = null;
+    let now = 1_700_000_001_000;
+    let failFinalClear = false;
+    let finalClearAttempts = 0;
+    const scheduled: Array<{ callback: () => void; delay: number }> = [];
+    const execute = vi.fn((_file, args, _options, callback) => {
+      if (failFinalClear && args.includes('clear-description')) {
+        finalClearAttempts += 1;
+        if (finalClearAttempts === 1) return callback(new Error('transient clear failure'));
+      }
+      expect(args.slice(0, 2)).toEqual(['--socket', reservation.socketPath]);
+      expect(args).toContain(reservation.windowId);
+      if (args.includes('set-description')) description = args.at(-1);
+      if (args.includes('clear-description')) description = null;
+      callback(
+        null,
+        Buffer.from(
+          JSON.stringify({
+            window_id: reservation.windowId,
+            workspaces: [{ id: reservation.workspaceId, description }],
+          }),
+        ),
+      );
+    });
+    const runtime = await runCoordinatorRuntime(
+      coordinatorLaunchArgs(paths, target, '/coordinator.mjs', reservation).slice(5),
+      {
+        execFile: execute,
+        now: () => now,
+        publish: async () => ({ ok: true }),
+        probePid: () => 'match',
+        schedule: (callback: () => void, delay: number) => scheduled.push({ callback, delay }),
+        store: { read: async () => null, write: async () => {} },
+      },
+    );
+    // Another Pi status source keeps this shared coordinator alive across the
+    // presentation client's fenced goodbye/reconnect during session change.
+    const otherPi = await runtime.core.acceptSnapshot(
+      snapshot({ workspaceId: target.workspaceId }),
+      'other-pi',
+    );
+    const handlers = new Map<string, Function>();
+    const events = new EventEmitter();
+    const store = createProducerViewStore();
+    let observeSession = () => {};
+    events.on(PRODUCER_VIEW_EVENT, (value) => {
+      observeSession();
+      store.accept(value);
+    });
+    let sessionId = 'session-a';
+    const ctx = {
+      mode: 'tui',
+      cwd: '/repo',
+      isProjectTrusted: () => true,
+      sessionManager: { getSessionId: () => sessionId },
+      ui: {},
+    };
+    const createClient = vi.fn();
+    const maintenance: Array<() => void> = [];
+    observeSession = registerJunctionLifecycle(
+      { on: (name: string, handler: Function) => handlers.set(name, handler) } as any,
+      {
+        producerViews: store,
+        env: {
+          CMUX_SOCKET_PATH: target.socketPath,
+          CMUX_WORKSPACE_ID: target.workspaceId,
+          CMUX_SURFACE_ID: target.surfaceId,
+        },
+        loadConfig: () => ({
+          disableStatus: true,
+          enablePresentation: true,
+          descriptionReservations: [reservation],
+        }),
+        resolveTarget: async () => ({ ok: true, ...target }),
+        observeProcessStart: async () => 1_700_000_000_000,
+        createClient,
+        attachPresentation: (views, options) =>
+          attachPresentationClient(views, {
+            ...options,
+            createPaths: () => paths,
+            preparePaths: async () => {},
+            spawn: () => {
+              throw new Error('already running');
+            },
+          }),
+        setInterval: ((callback: () => void) => {
+          maintenance.push(callback);
+          return maintenance.length;
+        }) as any,
+        clearInterval: () => {},
+      },
+    );
+    const announce = (title: string) =>
+      events.emit(PRODUCER_VIEW_EVENT, {
+        producer: { key: 'pi-session-hygiene', label: 'Session hygiene' },
+        items: [{ key: 'health', title }],
+      });
+    try {
+      // A producer loaded earlier can announce before Junction's start handler.
+      announce('Fresh health');
+      await handlers.get('session_start')?.({}, ctx);
+      await vi.waitFor(() => expect(description).toContain('Fresh health'));
+      expect(description).toMatch(/^J2/);
+      expect(createClient).not.toHaveBeenCalled();
+      expect(maintenance).toHaveLength(1);
+      sessionId = 'session-b';
+      announce('New health'); // observe/reset happens before this fresh event is accepted
+      maintenance[0]?.(); // must not erase the fresh announcement
+      await vi.waitFor(() => expect(description).toContain('New health'));
+      expect(description).not.toContain('Fresh health');
+      expect(store.snapshot()[0]?.items[0]?.title).toBe('New health');
+      sessionId = 'session-c';
+      maintenance[0]?.(); // no producer event: never relabel the previous snapshot
+      await vi.waitFor(() => expect(description).toBeNull());
+      expect(store.snapshot()).toEqual([]);
+      announce('Third health');
+      await vi.waitFor(() => expect(description).toContain('Third health'));
+      await runtime.core.goodbye(
+        goodbye(generation(otherPi), { workspaceId: target.workspaceId }),
+        'other-pi',
+      );
+      await runtime.core.drain();
+      expect(scheduled[0]!.delay).toBe(RECONNECT_GRACE_MS);
+      now += RECONNECT_GRACE_MS;
+      scheduled.shift()!.callback();
+      await runtime.core.drain();
+      expect(runtime.core.isQuiescent()).toBe(true);
+      failFinalClear = true;
+      const closed = once(runtime.server, 'close');
+      await handlers.get('session_shutdown')?.({}, ctx);
+      await vi.waitFor(() => expect(scheduled).toHaveLength(1));
+      expect(finalClearAttempts).toBe(1);
+      expect(description).toContain('Third health');
+      expect(runtime.server.listening).toBe(true);
+      expect(scheduled[0]!.delay).toBe(500);
+      scheduled.shift()!.callback();
+      await runtime.description.drain();
+      await closed;
+      expect(finalClearAttempts).toBe(2);
+      expect(description).toBeNull();
+      expect(scheduled).toHaveLength(0);
+      expect(runtime.description.diagnostics()).toMatchObject({ dirty: false, applied: 'clear' });
+      expect(store.snapshot()).toEqual([]);
+    } finally {
+      await handlers.get('session_shutdown')?.({}, ctx);
+      await runtime.close();
+    }
+  });
+
+  it.each([false, true])(
+    'description commands are internal/default-disabled and never delay ACKs (reserved=%s)',
+    async (enabled) => {
+      const directory = await mkdtemp(join(tmpdir(), 'pj-description-'));
+      tempDirectories.push(directory);
+      const listen = join(directory, 'coordinator.sock');
+      const workspaceId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+      const windowId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+      const callbacks: Array<() => void> = [];
+      const execute = vi.fn((_file, args, _options, callback) => {
+        callbacks.push(() =>
+          callback(
+            null,
+            Buffer.from(
+              JSON.stringify({
+                window_id: windowId,
+                workspaces: [{ id: workspaceId, description: null }],
+              }),
+            ),
+          ),
+        );
+        expect(args).toContain('--window');
+      });
+      const persisted: unknown[] = [];
+      const lifecycle = vi.fn(async () => ({ ok: true }));
+      const runtime = await runCoordinatorRuntime(
+        [
+          '--listen',
+          listen,
+          '--ledger',
+          join(directory, 'ledger.json'),
+          '--cmux-socket',
+          '/tmp/cmux.sock',
+          '--workspace',
+          workspaceId,
+        ],
+        {
+          ...(enabled
+            ? { descriptionReservation: { socketPath: '/tmp/cmux.sock', windowId, workspaceId } }
+            : {}),
+          execFile: execute,
+          publish: lifecycle,
+          probePid: () => 'match',
+          schedule: () => undefined,
+          store: {
+            read: async () => null,
+            write: async (ledger: unknown) => {
+              persisted.push(ledger);
+            },
+          },
+        },
+      );
+      const socket = createConnection(listen);
+      await once(socket, 'connect');
+      const ack = nextJsonLine(socket);
+      socket.write(`${JSON.stringify(presentationSnapshot({ workspaceId }))}\n`);
+      expect(await ack).toMatchObject({ kind: 'ack', acceptedKind: 'snapshot' });
+      expect(persisted).toEqual([]);
+      expect(execute).toHaveBeenCalledTimes(enabled ? 1 : 0);
+      // Lifecycle accepts and persists while its process is queued behind description.
+      expect(
+        await runtime.core.acceptSnapshot(snapshot({ workspaceId }), 'lifecycle-socket'),
+      ).toMatchObject({ ok: true });
+      if (enabled) expect(lifecycle).not.toHaveBeenCalled();
+      callbacks.shift()?.();
+      await runtime.description.drain();
+      await runtime.core.drain();
+      expect(lifecycle).toHaveBeenCalledTimes(1);
+      expect(runtime.description.diagnostics()).toMatchObject(
+        enabled
+          ? { reservation: 'held', applied: 'clear' }
+          : { reservation: 'disabled', reason: 'missing' },
+      );
+      await runtime.close();
+      await expect(stat(listen)).rejects.toMatchObject({ code: 'ENOENT' });
+    },
+  );
+
+  it.each(['goodbye', 'expiry'])(
+    'bounds failed final description clear retries after %s',
+    async (removal) => {
+      const directory = await mkdtemp(join(tmpdir(), 'pj-description-final-'));
+      tempDirectories.push(directory);
+      const listen = join(directory, 'coordinator.sock');
+      const workspaceId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+      const windowId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+      const scheduled: Array<{ callback: () => void; delay: number }> = [];
+      let now = 1_700_000_001_000;
+      let description: string | null = null;
+      const execute = vi.fn((_file, args, _options, callback) => {
+        if (args.includes('clear-description')) return callback(new Error('failed clear'));
+        if (args.includes('set-description')) description = args.at(-1);
+        callback(
+          null,
+          Buffer.from(
+            JSON.stringify({ window_id: windowId, workspaces: [{ id: workspaceId, description }] }),
+          ),
+        );
+      });
+      const runtime = await runCoordinatorRuntime(
+        [
+          '--listen',
+          listen,
+          '--ledger',
+          join(directory, 'ledger.json'),
+          '--cmux-socket',
+          '/tmp/cmux.sock',
+          '--workspace',
+          workspaceId,
+        ],
+        {
+          descriptionReservation: { socketPath: '/tmp/cmux.sock', windowId, workspaceId },
+          execFile: execute,
+          probePid: () => 'match',
+          now: () => now,
+          schedule: (callback: () => void, delay: number) => scheduled.push({ callback, delay }),
+        },
+      );
+      const socket = createConnection(listen);
+      await once(socket, 'connect');
+      const ack = nextJsonLine(socket);
+      socket.write(
+        `${JSON.stringify(presentationSnapshot({ workspaceId, views: [{ producer: { key: 'test', label: 'Test' }, items: [{ key: 'item', title: 'Title', rows: [] }] }] }))}\n`,
+      );
+      const accepted = await ack;
+      await runtime.description.drain();
+      expect(runtime.description.diagnostics()).toMatchObject({ applied: 'set', dirty: false });
+      const exact = description;
+      const closed = once(runtime.server, 'close');
+      if (removal === 'goodbye') {
+        const goodbyeAck = nextJsonLine(socket);
+        socket.write(
+          `${JSON.stringify(presentationGoodbye(accepted['acceptedGeneration'], { workspaceId }))}\n`,
+        );
+        expect(await goodbyeAck).toMatchObject({ kind: 'ack', acceptedKind: 'goodbye' });
+      } else {
+        now += 60_000;
+        runtime.presentation.maintain();
+      }
+
+      await vi.waitFor(() => expect(scheduled).toHaveLength(1));
+      expect(scheduled[0]!.delay).toBe(500);
+      for (const advance of [500, 1_000]) {
+        now += advance;
+        scheduled.shift()!.callback();
+        await runtime.description.drain();
+      }
+      await closed;
+      await runtime.close();
+      expect(description).toBe(exact);
+      expect(runtime.description.diagnostics()).toMatchObject({
+        applied: 'set',
+        desired: 'clear',
+        dirty: true,
+        running: false,
+      });
+      expect(
+        execute.mock.calls.filter((call) => call[1].includes('clear-description')),
+      ).toHaveLength(3);
+    },
+  );
+
+  it('keeps the coordinator alive for a failed final clear and stops after a successful retry', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pj-description-final-retry-'));
+    tempDirectories.push(directory);
+    const listen = join(directory, 'coordinator.sock');
+    const workspaceId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+    const windowId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+    const scheduled: Array<{ callback: () => void; delay: number }> = [];
+    let now = 1_700_000_001_000;
+    let description: string | null = null;
+    let clearAttempts = 0;
+    const execute = vi.fn((_file, args, _options, callback) => {
+      if (args.includes('clear-description')) {
+        clearAttempts += 1;
+        if (clearAttempts === 1) return callback(new Error('transient clear failure'));
+        description = null;
+      }
+      if (args.includes('set-description')) description = args.at(-1);
+      callback(
+        null,
+        Buffer.from(
+          JSON.stringify({ window_id: windowId, workspaces: [{ id: workspaceId, description }] }),
+        ),
+      );
+    });
+    const runtime = await runCoordinatorRuntime(
+      [
+        '--listen',
+        listen,
+        '--ledger',
+        join(directory, 'ledger.json'),
+        '--cmux-socket',
+        '/tmp/cmux.sock',
+        '--workspace',
+        workspaceId,
+      ],
+      {
+        descriptionReservation: { socketPath: '/tmp/cmux.sock', windowId, workspaceId },
+        execFile: execute,
+        probePid: () => 'match',
+        now: () => now,
+        schedule: (callback: () => void, delay: number) => scheduled.push({ callback, delay }),
+      },
+    );
+    const socket = createConnection(listen);
+    await once(socket, 'connect');
+    const snapshotAck = nextJsonLine(socket);
+    socket.write(
+      `${JSON.stringify(presentationSnapshot({ workspaceId, views: [{ producer: { key: 'test', label: 'Test' }, items: [{ key: 'item', title: 'Title', rows: [] }] }] }))}\n`,
+    );
+    const accepted = await snapshotAck;
+    await runtime.description.drain();
+    const closed = once(runtime.server, 'close');
+    const goodbyeAck = nextJsonLine(socket);
+    socket.write(
+      `${JSON.stringify(presentationGoodbye(accepted['acceptedGeneration'], { workspaceId }))}\n`,
+    );
+    await expect(goodbyeAck).resolves.toMatchObject({ kind: 'ack', acceptedKind: 'goodbye' });
+    await vi.waitFor(() => expect(scheduled).toHaveLength(1));
+    expect(scheduled[0]!.delay).toBe(500);
+    now += 500;
+    scheduled.shift()!.callback();
+    await runtime.description.drain();
+    await closed;
+    await runtime.close();
+
+    expect(clearAttempts).toBe(2);
+    expect(description).toBeNull();
+    expect(runtime.description.diagnostics()).toMatchObject({
+      reservation: 'held',
+      applied: 'clear',
+      desired: 'clear',
+      dirty: false,
+      running: false,
+    });
+    expect(scheduled).toHaveLength(0);
+  });
+
+  it('cancels and resets final-description retries for a newer projection', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pj-description-final-reset-'));
+    tempDirectories.push(directory);
+    const listen = join(directory, 'coordinator.sock');
+    const workspaceId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+    const windowId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+    const scheduled: Array<{ callback: () => void; delay: number }> = [];
+    const views = [
+      {
+        producer: { key: 'test', label: 'Test' },
+        items: [{ key: 'item', title: 'Title', rows: [] }],
+      },
+    ];
+    let socketNumber = 0;
+    let now = 1_700_000_001_000;
+    let description: string | null = null;
+    let clearAttempts = 0;
+    const execute = vi.fn((_file, args, _options, callback) => {
+      if (args.includes('clear-description')) {
+        clearAttempts += 1;
+        return callback(new Error('failed clear'));
+      }
+      if (args.includes('set-description')) description = args.at(-1);
+      callback(
+        null,
+        Buffer.from(
+          JSON.stringify({ window_id: windowId, workspaces: [{ id: workspaceId, description }] }),
+        ),
+      );
+    });
+    const runtime = await runCoordinatorRuntime(
+      [
+        '--listen',
+        listen,
+        '--ledger',
+        join(directory, 'ledger.json'),
+        '--cmux-socket',
+        '/tmp/cmux.sock',
+        '--workspace',
+        workspaceId,
+      ],
+      {
+        descriptionReservation: { socketPath: '/tmp/cmux.sock', windowId, workspaceId },
+        execFile: execute,
+        randomId: () => `socket-${++socketNumber}`,
+        probePid: () => 'match',
+        now: () => now,
+        schedule: (callback: () => void, delay: number) => scheduled.push({ callback, delay }),
+      },
+    );
+    const first = createConnection(listen);
+    await once(first, 'connect');
+    const firstSnapshotAck = nextJsonLine(first);
+    first.write(`${JSON.stringify(presentationSnapshot({ workspaceId, views }))}\n`);
+    const firstAccepted = await firstSnapshotAck;
+    await runtime.description.drain();
+
+    const firstGoodbyeAck = nextJsonLine(first);
+    first.write(
+      `${JSON.stringify(presentationGoodbye(firstAccepted['acceptedGeneration'], { workspaceId }))}\n`,
+    );
+    await expect(firstGoodbyeAck).resolves.toMatchObject({ kind: 'ack', acceptedKind: 'goodbye' });
+    await vi.waitFor(() => expect(scheduled).toHaveLength(1));
+    expect(scheduled[0]!.delay).toBe(500);
+    const staleRetry = scheduled.shift()!;
+    expect(clearAttempts).toBe(1);
+
+    const second = createConnection(listen);
+    await once(second, 'connect');
+    const secondSnapshotAck = nextJsonLine(second);
+    second.write(
+      `${JSON.stringify(
+        presentationSnapshot({
+          workspaceId,
+          surfaceId: 'surface-b',
+          sessionId: 'session-b',
+          runtimeId: 'runtime-b',
+          connectionId: 'connection-b',
+          views,
+        }),
+      )}\n`,
+    );
+    const secondAccepted = await secondSnapshotAck;
+    await runtime.description.drain();
+    expect(clearAttempts).toBe(1);
+
+    staleRetry.callback();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(clearAttempts).toBe(1);
+    expect(runtime.server.listening).toBe(true);
+
+    const closed = once(runtime.server, 'close');
+    const secondGoodbyeAck = nextJsonLine(second);
+    second.write(
+      `${JSON.stringify(
+        presentationGoodbye(secondAccepted['acceptedGeneration'], {
+          workspaceId,
+          surfaceId: 'surface-b',
+          sessionId: 'session-b',
+          runtimeId: 'runtime-b',
+          connectionId: 'connection-b',
+        }),
+      )}\n`,
+    );
+    await expect(secondGoodbyeAck).resolves.toMatchObject({ kind: 'ack', acceptedKind: 'goodbye' });
+    await vi.waitFor(() => expect(scheduled).toHaveLength(1));
+    expect(scheduled[0]!.delay).toBe(500);
+    now += 500;
+    scheduled.shift()!.callback();
+    await runtime.description.drain();
+    await vi.waitFor(() => expect(scheduled).toHaveLength(1));
+    expect(scheduled[0]!.delay).toBe(1_000);
+    now += 1_000;
+    scheduled.shift()!.callback();
+    await runtime.description.drain();
+    await closed;
+    await runtime.close();
+
+    expect(clearAttempts).toBe(4);
+    expect(runtime.description.diagnostics()).toMatchObject({
+      desired: 'clear',
+      applied: 'set',
+      dirty: true,
+    });
+  });
+
+  it('forced close waits for a running description process and never clears', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pj-description-close-'));
+    tempDirectories.push(directory);
+    const listen = join(directory, 'coordinator.sock');
+    const workspaceId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+    const windowId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+    let finish!: () => void;
+    const execute = vi.fn((_file, _args, _options, callback) => {
+      finish = () => callback(new Error('timeout'));
+    });
+    const runtime = await runCoordinatorRuntime(
+      [
+        '--listen',
+        listen,
+        '--ledger',
+        join(directory, 'ledger.json'),
+        '--cmux-socket',
+        '/tmp/cmux.sock',
+        '--workspace',
+        workspaceId,
+      ],
+      {
+        descriptionReservation: { socketPath: '/tmp/cmux.sock', windowId, workspaceId },
+        execFile: execute,
+        probePid: () => 'match',
+        schedule: () => undefined,
+      },
+    );
+    const socket = createConnection(listen);
+    await once(socket, 'connect');
+    const ack = nextJsonLine(socket);
+    socket.write(`${JSON.stringify(presentationSnapshot({ workspaceId }))}\n`);
+    await ack;
+    let closed = false;
+    const closing = runtime.close().then(() => {
+      closed = true;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(closed).toBe(false);
+    finish();
+    await closing;
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(runtime.description.isIdle()).toBe(true);
+    await expect(stat(listen)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('does not stop at idle startup and gives presentation-only sources full lifetime', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pj-presentation-'));
+    tempDirectories.push(directory);
+    const listen = join(directory, 'coordinator.sock');
+    const published: unknown[] = [];
+    const runtime = await runCoordinatorRuntime(
+      [
+        '--listen',
+        listen,
+        '--ledger',
+        join(directory, 'ledger.json'),
+        '--cmux-socket',
+        target.socketPath,
+        '--workspace',
+        target.workspaceId,
+      ],
+      {
+        randomId: () => 'presentation-socket',
+        now: () => 1_700_000_001_000,
+        probePid: () => 'match',
+        schedule: () => undefined,
+        publish: async (status: unknown) => {
+          published.push(status);
+          return { ok: true };
+        },
+      },
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(runtime.server.listening).toBe(true);
+
+    const socket = createConnection(listen);
+    await once(socket, 'connect');
+    socket.setEncoding('utf8');
+    const snapshotAck = nextJsonLine(socket);
+    socket.write(`${JSON.stringify(presentationSnapshot())}\n`);
+    const accepted = await snapshotAck;
+    expect(runtime.presentation.isQuiescent()).toBe(false);
+
+    const serverClosed = once(runtime.server, 'close');
+    const goodbyeAck = nextJsonLine(socket);
+    socket.write(`${JSON.stringify(presentationGoodbye(accepted['acceptedGeneration']))}\n`);
+    await expect(goodbyeAck).resolves.toMatchObject({ kind: 'ack', acceptedKind: 'goodbye' });
+    await serverClosed;
+    expect(runtime.core.ledger().owners).toEqual([]);
+    expect(published).toEqual([]);
+  });
+
+  it('dispatches presentation separately and stops only after both cores are empty', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pj-shared-'));
+    tempDirectories.push(directory);
+    const listen = join(directory, 'coordinator.sock');
+    const scheduled: Array<{ callback: () => void; delay: number }> = [];
+    const published: unknown[] = [];
+    let token = 0;
+    let now = 1_700_000_001_000;
+    const runtime = await runCoordinatorRuntime(
+      [
+        '--listen',
+        listen,
+        '--ledger',
+        join(directory, 'ledger.json'),
+        '--cmux-socket',
+        target.socketPath,
+        '--workspace',
+        target.workspaceId,
+      ],
+      {
+        randomId: () => `socket-${++token}`,
+        now: () => now,
+        probePid: () => 'match',
+        schedule: (callback: () => void, delay: number) => scheduled.push({ callback, delay }),
+        publish: async (status: unknown) => {
+          published.push(status);
+          return { ok: true };
+        },
+      },
+    );
+    expect(runtime.server.listening).toBe(true);
+
+    const presentationSocket = createConnection(listen);
+    await once(presentationSocket, 'connect');
+    presentationSocket.setEncoding('utf8');
+    const presentationAck = nextJsonLine(presentationSocket);
+    presentationSocket.write(`${JSON.stringify(presentationSnapshot())}\n`);
+    const accepted = await presentationAck;
+    expect(accepted).toMatchObject({
+      protocol: PRESENTATION_PROTOCOL,
+      kind: 'ack',
+      acceptedKind: 'snapshot',
+    });
+    expect(runtime.presentation.diagnostics()).toMatchObject({ sourceCount: 1, blockCount: 0 });
+    expect(runtime.core.ledger().owners).toEqual([]);
+    expect(published).toEqual([]);
+
+    const lifecycleSocket = createConnection(listen);
+    await once(lifecycleSocket, 'connect');
+    lifecycleSocket.setEncoding('utf8');
+    const lifecycleAck = nextJsonLine(lifecycleSocket);
+    lifecycleSocket.write(`${JSON.stringify(snapshot())}\n`);
+    await lifecycleAck;
+    const lifecycleGoodbyeAck = nextJsonLine(lifecycleSocket);
+    lifecycleSocket.write(`${JSON.stringify(goodbye(1))}\n`);
+    await lifecycleGoodbyeAck;
+    expect(scheduled[0]?.delay).toBe(RECONNECT_GRACE_MS);
+    now += RECONNECT_GRACE_MS;
+    scheduled.shift()!.callback();
+    await runtime.core.drain();
+    expect(runtime.server.listening).toBe(true);
+
+    const serverClosed = once(runtime.server, 'close');
+    const goodbyeAck = nextJsonLine(presentationSocket);
+    presentationSocket.write(
+      `${JSON.stringify(presentationGoodbye(accepted['acceptedGeneration']))}\n`,
+    );
+    expect(await goodbyeAck).toMatchObject({ kind: 'ack', acceptedKind: 'goodbye' });
+    await serverClosed;
+    expect(published).toEqual([
+      { state: 'idle', label: 'Idle' },
+      { state: null, label: null },
+    ]);
+    expect(runtime.diagnostics().presentation).toMatchObject({ sourceCount: 0, blockCount: 0 });
+  });
+
+  it('locks each socket protocol, permits presentation-sized lines, and bounds in-flight work', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pj-protocol-'));
+    tempDirectories.push(directory);
+    const listen = join(directory, 'coordinator.sock');
+    let token = 0;
+    const runtime = await runCoordinatorRuntime(
+      [
+        '--listen',
+        listen,
+        '--ledger',
+        join(directory, 'ledger.json'),
+        '--cmux-socket',
+        target.socketPath,
+        '--workspace',
+        target.workspaceId,
+      ],
+      {
+        randomId: () => `socket-${++token}`,
+        now: () => 1_700_000_001_000,
+        probePid: () => 'match',
+        schedule: () => undefined,
+        publish: async () => ({ ok: true }),
+      },
+    );
+
+    const largeViews = Array.from({ length: 40 }, (_, index) => ({
+      producer: { key: `p-${String(index).padStart(2, '0')}`, label: `Producer ${index}` },
+      items: [
+        {
+          key: `item-${index}`,
+          title: `Item ${index}`,
+          summary: 'x'.repeat(512),
+          rows: [],
+        },
+      ],
+    }));
+    const locked = createConnection(listen);
+    await once(locked, 'connect');
+    locked.setEncoding('utf8');
+    const largeLine = `${JSON.stringify(presentationSnapshot({ views: largeViews }))}\n`;
+    expect(Buffer.byteLength(largeLine)).toBeGreaterThan(MAX_LIFECYCLE_FRAME_BYTES);
+    const largeAck = nextJsonLine(locked);
+    locked.write(largeLine);
+    await expect(largeAck).resolves.toMatchObject({ protocol: PRESENTATION_PROTOCOL, kind: 'ack' });
+    const lockedClosed = once(locked, 'close');
+    locked.write(`${JSON.stringify(snapshot())}\n`.repeat(3));
+    await lockedClosed;
+    expect(runtime.core.ledger().owners).toEqual([]);
+
+    const presentationCount = runtime.presentation.diagnostics().sourceCount;
+    const malformedRecognized = createConnection(listen);
+    await once(malformedRecognized, 'connect');
+    malformedRecognized.setEncoding('utf8');
+    const malformedAck = nextJsonLine(malformedRecognized);
+    malformedRecognized.write(
+      `${JSON.stringify({ protocol: LIFECYCLE_PROTOCOL, kind: 'snapshot' })}\n${JSON.stringify(
+        presentationSnapshot({ connectionId: 'connection-after-malformed' }),
+      )}\n`,
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    malformedRecognized.write(
+      `${JSON.stringify(snapshot({ connectionId: 'lifecycle-after-malformed' }))}\n`,
+    );
+    await expect(malformedAck).resolves.toMatchObject({
+      protocol: LIFECYCLE_PROTOCOL,
+      kind: 'ack',
+    });
+    expect(runtime.presentation.diagnostics().sourceCount).toBe(presentationCount);
+    const malformedRecognizedClosed = once(malformedRecognized, 'close');
+    malformedRecognized.destroy();
+    await malformedRecognizedClosed;
+
+    const busy = createConnection(listen);
+    await once(busy, 'connect');
+    const busyClosed = once(busy, 'close');
+    busy.write(
+      `${JSON.stringify(presentationSnapshot({ connectionId: 'connection-busy' }))}\n${JSON.stringify(
+        presentationSnapshot({ connectionId: 'connection-busy', revision: 1 }),
+      )}\n`,
+    );
+    await busyClosed;
+    expect(runtime.presentation.diagnostics().sourceCount).toBeLessThanOrEqual(2);
+
+    const serverClosed = once(runtime.server, 'close');
+    runtime.close();
+    await serverClosed;
   });
 });
 

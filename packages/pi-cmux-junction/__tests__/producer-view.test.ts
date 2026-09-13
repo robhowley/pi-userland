@@ -1054,6 +1054,23 @@ describe('producer view source contract', () => {
   });
 
   describe('store', () => {
+    it('clears session views once and allows producers to announce again', () => {
+      const store = createProducerViewStore();
+      const view = {
+        producer: { key: 'hygiene', label: 'Hygiene' },
+        items: [{ key: 'health', title: 'Healthy' }],
+      };
+      const snapshots: Array<readonly NormalizedProducerView[]> = [];
+      store.subscribe((snapshot) => snapshots.push(snapshot));
+      store.accept(view);
+      const previous = store.snapshot();
+      store.clear();
+      store.clear();
+      expect(snapshots).toHaveLength(2);
+      expect(snapshots[1]).toEqual([]);
+      expect(previous).toHaveLength(1);
+      expect(store.accept(view)).toEqual({ accepted: true, action: 'replaced' });
+    });
     it('creates one isolated store per factory call', () => {
       const first = createProducerViewStore();
       const second = createProducerViewStore();

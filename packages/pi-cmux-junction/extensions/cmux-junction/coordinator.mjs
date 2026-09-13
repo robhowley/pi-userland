@@ -5,11 +5,28 @@ import { execFile, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
-import { dirname } from 'node:path';
+import { dirname, normalize } from 'node:path';
 import process from 'node:process';
 import { clearInterval, setInterval, setTimeout } from 'node:timers';
 import { fileURLToPath } from 'node:url';
 import { classifyExecFileFailure, resolveCmuxExecutable } from './cmux-runtime.mjs';
+import {
+  createDescriptionPublisher,
+  runDescriptionCommand,
+  validateReservation,
+} from './description-publisher.mjs';
+import {
+  createPresentationCore,
+  PRESENTATION_DISCONNECT_GRACE_MS,
+  PRESENTATION_MAINTENANCE_MS,
+} from './presentation-core.mjs';
+import {
+  createPresentationAck,
+  createPresentationRejection,
+  decodePresentationRequestLine,
+  MAX_PRESENTATION_REQUEST_LINE_BYTES,
+  PRESENTATION_PROTOCOL,
+} from './presentation-protocol.mjs';
 import {
   LIFECYCLE_ACK_KIND,
   LIFECYCLE_COMMON_FIELDS,
@@ -24,6 +41,8 @@ import {
 
 export const STATUS_KEY = 'pi-junction';
 export const RECONNECT_GRACE_MS = 5_000;
+const DESCRIPTION_FINAL_CLEAR_MAX_ATTEMPTS = 3;
+const DESCRIPTION_FINAL_CLEAR_RETRY_DELAYS_MS = [500, 1_000];
 
 const states = new Set(LIFECYCLE_STATES);
 const activeRanks = new Map([
@@ -875,6 +894,10 @@ export function createCoordinatorCore(options) {
     reconcile,
     drain,
     ledger: snapshotLedger,
+    isQuiescent: () =>
+      owners.size === 0 &&
+      ((!finalClearObligated && statusEqual(ledger.desired, ledger.applied)) ||
+        finalClearAttempts >= 3),
     diagnostics: () => ({
       targetHash: createHash('sha256')
         .update(`${options.target.socketPath}\0${options.target.workspaceId}`)
@@ -934,12 +957,17 @@ export function createAtomicLedgerStore(path, filesystem = {}) {
 export function parseRuntimeArgs(argv) {
   const expected = new Set(['listen', 'ledger', 'cmux-socket', 'workspace']);
   const values = {};
-  if (argv.length !== expected.size * 2) throw new Error('invalid coordinator arguments');
+  if (argv.length !== expected.size * 2 && argv.length !== (expected.size + 1) * 2)
+    throw new Error('invalid coordinator arguments');
   for (let index = 0; index < argv.length; index += 2) {
     const option = argv[index];
     const value = argv[index + 1];
     const name = option?.startsWith('--') ? option.slice(2) : '';
-    if (!expected.has(name) || value === undefined || Object.hasOwn(values, name)) {
+    if (
+      (!expected.has(name) && name !== 'description-reservation') ||
+      value === undefined ||
+      Object.hasOwn(values, name)
+    ) {
       throw new Error('invalid coordinator arguments');
     }
     values[name] = value;
@@ -951,6 +979,22 @@ export function parseRuntimeArgs(argv) {
   }
   if (!validIdentity(values.workspace)) throw new Error('invalid coordinator target');
   return values;
+}
+
+export function coordinatorDescriptionReservation(args, injected) {
+  try {
+    const value =
+      injected ??
+      (args['description-reservation'] === undefined
+        ? undefined
+        : JSON.parse(args['description-reservation']));
+    const reservation = validateReservation(value, args.workspace);
+    return reservation && reservation.socketPath === normalize(args['cmux-socket'])
+      ? reservation
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 const statusStyles = {
@@ -1024,19 +1068,113 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
   const initialLedger = await store.read();
   const env = runtime.env ?? process.env;
   const cmuxFile = await resolveCmuxExecutable(env, runtime.access);
-  let stopAfterClear = () => {};
+  let stopping = false;
+  let commandTail = Promise.resolve();
+  const serialize = (operation) => {
+    const result = commandTail.then(() => (stopping ? { ok: false } : operation()));
+    commandTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  };
+  let stopRuntime = () => Promise.resolve();
+  let presentation;
+  let pendingPresentationAcks = 0;
+  const schedule = runtime.schedule ?? ((callback, delay) => setTimeout(callback, delay).unref());
+  const description = createDescriptionPublisher({
+    reservation: coordinatorDescriptionReservation(args, runtime.descriptionReservation),
+    workspaceId: target.workspaceId,
+    runCommand: (command) =>
+      serialize(() => runDescriptionCommand(cmuxFile, command, env, runtime.execFile ?? execFile)),
+  });
+  let descriptionFinalClearGeneration = 0;
+  let descriptionFinalClearAttempts = 0;
+  let descriptionFinalClearRetryScheduled = false;
+
+  const resetDescriptionFinalClear = () => {
+    descriptionFinalClearGeneration += 1;
+    descriptionFinalClearAttempts = 0;
+    descriptionFinalClearRetryScheduled = false;
+  };
+
+  const stopIfQuiescent = () => {
+    if (
+      stopping ||
+      !core.isQuiescent() ||
+      !presentation.isQuiescent() ||
+      !description.isIdle() ||
+      pendingPresentationAcks !== 0
+    )
+      return;
+
+    if (!description.needsClearRetry()) {
+      void stopRuntime();
+      return;
+    }
+
+    if (descriptionFinalClearAttempts === 0) descriptionFinalClearAttempts = 1;
+    if (descriptionFinalClearAttempts >= DESCRIPTION_FINAL_CLEAR_MAX_ATTEMPTS) {
+      void stopRuntime();
+      return;
+    }
+
+    if (descriptionFinalClearRetryScheduled) return;
+    const delay = DESCRIPTION_FINAL_CLEAR_RETRY_DELAYS_MS[descriptionFinalClearAttempts - 1];
+    if (delay === undefined) {
+      void stopRuntime();
+      return;
+    }
+    const generation = descriptionFinalClearGeneration;
+    descriptionFinalClearRetryScheduled = true;
+    schedule(() => {
+      if (generation !== descriptionFinalClearGeneration || stopping) return;
+      descriptionFinalClearRetryScheduled = false;
+      if (
+        !core.isQuiescent() ||
+        !presentation.isQuiescent() ||
+        !description.isIdle() ||
+        pendingPresentationAcks !== 0 ||
+        !description.needsClearRetry()
+      ) {
+        stopIfQuiescent();
+        return;
+      }
+      descriptionFinalClearAttempts += 1;
+      void description.reconcile().finally(stopIfQuiescent);
+    }, delay);
+  };
   const core = createCoordinatorCore({
     target,
     initialLedger,
     now: runtime.now,
     persist: (ledger) => store.write(ledger),
     probePid: runtime.probePid ?? probePidStart,
-    schedule: runtime.schedule ?? ((callback, delay) => setTimeout(callback, delay).unref()),
-    onFinalClear: () => stopAfterClear(),
-    publish:
-      runtime.publish ??
-      ((status) =>
-        runCmux(cmuxFile, buildCmuxStatusArgs(target, status), env, runtime.execFile ?? execFile)),
+    schedule,
+    onFinalClear: stopIfQuiescent,
+    publish: (status) =>
+      serialize(() =>
+        runtime.publish
+          ? runtime.publish(status)
+          : runCmux(
+              cmuxFile,
+              buildCmuxStatusArgs(target, status),
+              env,
+              runtime.execFile ?? execFile,
+            ),
+      ),
+  });
+  presentation = createPresentationCore({
+    target,
+    now: runtime.now,
+    probePid: runtime.probePid ?? probePidStart,
+    capacity: runtime.presentationCapacity,
+    sourceId: runtime.presentationSourceId,
+    onProjection: (projection) => {
+      if (!description.setDesired(projection)) return;
+      resetDescriptionFinalClear();
+      void description.reconcile().finally(stopIfQuiescent);
+    },
   });
 
   const runtimeMkdir = runtime.mkdir ?? mkdir;
@@ -1051,7 +1189,15 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
     sockets.add(socket);
     let buffer = '';
     let malformed = 0;
+    let protocol = null;
+    let presentationInFlight = false;
     socket.setEncoding('utf8');
+
+    const malformedLine = () => {
+      malformed += 1;
+      if (malformed >= 3) socket.destroy();
+    };
+
     socket.on('data', (chunk) => {
       buffer += chunk;
       for (;;) {
@@ -1059,41 +1205,106 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
         if (newline < 0) break;
         const line = buffer.slice(0, newline);
         buffer = buffer.slice(newline + 1);
-        const decoded = decodeWireLine(line, target);
-        if (!decoded.ok) {
-          malformed += 1;
-          if (malformed >= 3) socket.destroy();
+        let decoded;
+        let lineProtocol = protocol;
+        if (lineProtocol === null) {
+          try {
+            lineProtocol = JSON.parse(line)?.protocol;
+          } catch {
+            malformedLine();
+            continue;
+          }
+        }
+        if (lineProtocol === LIFECYCLE_PROTOCOL) {
+          decoded = decodeWireLine(line, target);
+        } else if (lineProtocol === PRESENTATION_PROTOCOL) {
+          decoded = decodePresentationRequestLine(line);
+        } else {
+          malformedLine();
           continue;
         }
+        protocol ??= lineProtocol;
+        if (!decoded.ok || (protocol !== null && lineProtocol !== protocol)) {
+          malformedLine();
+          continue;
+        }
+        protocol ??= lineProtocol;
         const message = decoded.value;
+
+        if (protocol === LIFECYCLE_PROTOCOL) {
+          const operation =
+            message.kind === 'snapshot'
+              ? core.acceptSnapshot(message, socketToken)
+              : core.goodbye(message, socketToken);
+          void operation
+            .then((result) => {
+              if (result.ok) {
+                socket.write(
+                  `${JSON.stringify(
+                    createAck(message, result.acceptedGeneration, result.acceptedRevision),
+                  )}\n`,
+                );
+              }
+            })
+            .catch(() => undefined);
+          continue;
+        }
+
+        if (presentationInFlight) {
+          socket.destroy();
+          break;
+        }
+        presentationInFlight = true;
+        pendingPresentationAcks += 1;
         const operation =
           message.kind === 'snapshot'
-            ? core.acceptSnapshot(message, socketToken)
-            : core.goodbye(message, socketToken);
-        void operation
+            ? presentation.acceptSnapshot(message, socketToken)
+            : presentation.goodbye(message, socketToken);
+        void Promise.resolve(operation)
           .then((result) => {
-            if (result.ok) {
-              socket.write(
-                `${JSON.stringify(
-                  createAck(message, result.acceptedGeneration, result.acceptedRevision),
-                )}\n`,
-              );
+            if (socket.destroyed) {
+              pendingPresentationAcks -= 1;
+              stopIfQuiescent();
+              return;
             }
+            const response = result.ok
+              ? createPresentationAck(message, result.acceptedGeneration)
+              : createPresentationRejection(message, result.reason);
+            socket.write(`${JSON.stringify(response)}\n`, () => {
+              presentationInFlight = false;
+              pendingPresentationAcks -= 1;
+              if (result.ok) stopIfQuiescent();
+            });
           })
-          .catch(() => undefined);
+          .catch(() => {
+            presentationInFlight = false;
+            pendingPresentationAcks -= 1;
+          });
       }
-      if (Buffer.byteLength(buffer, 'utf8') > MAX_LIFECYCLE_FRAME_BYTES) socket.destroy();
+      const maximum =
+        protocol === LIFECYCLE_PROTOCOL || (protocol === null && !buffer.startsWith('{'))
+          ? MAX_LIFECYCLE_FRAME_BYTES
+          : MAX_PRESENTATION_REQUEST_LINE_BYTES;
+      if (Buffer.byteLength(buffer, 'utf8') > maximum) socket.destroy();
     });
     socket.on('close', () => {
       sockets.delete(socket);
-      void core
-        .connectionClosed(socketToken)
-        .catch(() => undefined)
-        .finally(() => {
-          const schedule =
-            runtime.schedule ?? ((callback, delay) => setTimeout(callback, delay).unref());
-          schedule(() => void core.maintain().catch(() => undefined), RECONNECT_GRACE_MS);
-        });
+      if (protocol === LIFECYCLE_PROTOCOL) {
+        void core
+          .connectionClosed(socketToken)
+          .catch(() => undefined)
+          .finally(() => {
+            schedule(() => void core.maintain().catch(() => undefined), RECONNECT_GRACE_MS);
+          });
+      } else if (protocol === PRESENTATION_PROTOCOL) {
+        const result = presentation.connectionClosed(socketToken);
+        if (result.changed) {
+          schedule(() => {
+            presentation.maintain();
+            stopIfQuiescent();
+          }, PRESENTATION_DISCONNECT_GRACE_MS);
+        }
+      }
     });
   });
   let bound = false;
@@ -1117,21 +1328,40 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
     throw error;
   }
   const maintenance = setInterval(() => {
+    if (presentation.maintain().changed) stopIfQuiescent();
     void core
       .maintain()
       .then(() => core.reconcile())
       .catch(() => undefined);
-  }, 30_000);
+  }, PRESENTATION_MAINTENANCE_MS);
   maintenance.unref();
-  let stopping = false;
-  stopAfterClear = () => {
-    if (stopping) return;
+  let closing;
+  stopRuntime = () => {
+    if (closing) return closing;
     stopping = true;
     clearInterval(maintenance);
+    const publicationStopped = description.shutdown();
     for (const socket of sockets) socket.destroy();
-    server.close(() => void runtimeRm(args.listen, { force: true }));
+    closing = (async () => {
+      await new Promise((resolve) => server.close(resolve));
+      await publicationStopped;
+      await commandTail;
+      await runtimeRm(args.listen, { force: true });
+    })();
+    return closing;
   };
-  return { server, core, close: stopAfterClear };
+  return {
+    server,
+    core,
+    presentation,
+    description,
+    diagnostics: () => ({
+      lifecycle: core.diagnostics(),
+      presentation: presentation.diagnostics(),
+      description: description.diagnostics(),
+    }),
+    close: stopRuntime,
+  };
 }
 
 const isDirect = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
