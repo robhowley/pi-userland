@@ -4,9 +4,13 @@ Branch into parallel Pi sessions: open Git worktrees in new cmux workspaces, for
 
 ## Install
 
+This package is unpublished. Install from your checkout:
+
 ```shell
-pi install npm:@robhowley/pi-cmux-junction
+pi install /absolute/path/to/pi-userland/packages/pi-cmux-junction
 ```
+
+Run `/reload` in Pi after installation.
 
 ## Install the optional sidebar board
 
@@ -18,7 +22,28 @@ With Junction loaded in Pi, run:
 
 This installs `~/.config/cmux/sidebars/junction-board.swift`; it works without Git
 or a running cmux. It **does not open the board or enable dashboard publication**.
-The board is still an [incomplete prototype](#manual-j2-sidebar-prototype-incomplete-not-activated).
+
+To open it, run these commands in a cmux terminal (select changes the visible sidebar):
+
+```shell
+cmux sidebar validate junction-board --json
+# Continue only if validation succeeds:
+cmux sidebar select junction-board --json
+```
+
+Then enable routing in your global Pi `settings.json` (`~/.pi/agent/settings.json`,
+or your `PI_CODING_AGENT_DIR`):
+
+```json
+{ "pi-cmux-junction": { "enablePresentation": true } }
+```
+
+Run `/reload` in each Pi session that should publish. Producer cards appear under
+that Pi runtime's workspace when an extension emits a Junction view. Installing
+Junction alone does not create cards. The board uses the workspace list supplied
+by cmux, not an independent all-window search. See [publication](#opt-in-dashboard-publication)
+for ownership and cleanup limits, and [board validation](#j2-sidebar-validation)
+for the remaining UI validation caveats.
 
 Run the same command after loading a package update:
 
@@ -113,26 +138,29 @@ A project setting overrides the global setting. After editing a settings file di
 
 ### Opt-in dashboard publication
 
-Dashboard publication is off by default and independent of `disableStatus`. Set `enablePresentation: true` in global or trusted-project `pi-cmux-junction` settings. Publication also requires an explicit reservation in **global** settings:
+Publication is off by default and independent of `disableStatus`. Only global
+`enablePresentation: true` grants permission; a trusted project can narrow it with
+`false`, but cannot enable publication by itself. After editing settings, `/reload`
+applies the change even if the shared coordinator started with status alone. No
+workspace IDs or launch-time permission arguments are needed.
 
-```json
-{
-  "pi-cmux-junction": {
-    "enablePresentation": true,
-    "descriptionReservations": [
-      {
-        "socketPath": "/absolute/path/to/cmux.sock",
-        "windowId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-        "workspaceId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-      }
-    ]
-  }
-}
-```
+Junction resolves the runtime's live cmux surface, then verifies its workspace and
+window, never the focused workspace. Every 30 seconds it checks for moves, removes
+the old contribution and replays current views through the destination's shared
+coordinator. Other sessions' views remain. New/resumed sessions never inherit the
+previous session's views.
 
-Replace these example identities with the intended target. Add one reservation per workspace; duplicate matches disable publication for that target. Project settings cannot grant reservation authority. Junction matches the normalized socket path and workspace UUID and pins description operations to the reserved window UUID. It refuses foreign description text; enabling it does not take over native descriptions, install/select a sidebar, or change navigation.
+Disabling publication or exiting withdraws that session. Before changing or clearing
+a description, Junction reads `workspace list --window <verified UUID>` and requires
+one matching workspace plus the exact bytes it last wrote. This lookup also works
+when the last source surface has disappeared. Failed or ambiguous lookups leave the
+description untouched. Existing descriptions, including J2 left by a previous
+coordinator process, remain foreign. Ownership is not persisted across restarts.
+There is no atomic compare-and-set; concurrent external writes remain a limitation.
 
-Settings are read at session startup. `/reload` reapplies the local opt-in, but an already-running shared coordinator retains its original reservation until it exits and is relaunched. Both status-first and presentation-first launches receive the same matched global authority. No settings are written automatically.
+When upgrading to this code, stop old Junction sessions/coordinators once before
+reopening Pi. Ordinary later permission changes need only `/reload`, not a shared
+process restart. Junction never writes settings automatically.
 
 Producer views belong to the extension instance. Pi replaces that instance on new/resume/fork/reload, so a producer may announce before Junction's `session_start` without its fresh data being cleared. If session identity changes in place, Junction pauses presentation and clears the previous views before accepting the first new event (or during maintenance); shutdown releases the source.
 
@@ -154,12 +182,13 @@ Set `PI_CMUX_JUNCTION_WORKTREE_ROOT` to another location. It accepts an absolute
 
 Junction leaves worktrees in place. It reuses one only when the expected path and branch match; otherwise, it stops without changing existing Git state.
 
-## Manual J2 sidebar prototype (incomplete; not activated)
+## J2 sidebar validation
 
 `extensions/cmux-junction/sidebar/junction-board.swift` is an explicitly installed
 asset for **cmux 0.64.22 (102), commit `ddd4a01bc5d8ebac19643930f5fd7d40e85f1534`**.
 Installing this package does not install/select the sidebar or publish descriptions.
-Do not use this prototype on workspaces containing descriptions you need to keep.
+Publication preserves existing descriptions; manual fixture injection below is
+for disposable workspaces only.
 J2 preserves combining marks and display text without changing cmux. The Node
 projector normalizes only accepted href fields once, at publication.
 **Phase 6 remains incomplete:** foreign-input UTF-8 byte limits, shared renderer

@@ -5,7 +5,7 @@ import { execFile, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
-import { dirname, normalize } from 'node:path';
+import { dirname } from 'node:path';
 import process from 'node:process';
 import { clearInterval, setInterval, setTimeout } from 'node:timers';
 import { fileURLToPath } from 'node:url';
@@ -13,7 +13,7 @@ import { classifyExecFileFailure, resolveCmuxExecutable } from './cmux-runtime.m
 import {
   createDescriptionPublisher,
   runDescriptionCommand,
-  validateReservation,
+  resolveDescriptionTarget,
 } from './description-publisher.mjs';
 import {
   createPresentationCore,
@@ -957,17 +957,12 @@ export function createAtomicLedgerStore(path, filesystem = {}) {
 export function parseRuntimeArgs(argv) {
   const expected = new Set(['listen', 'ledger', 'cmux-socket', 'workspace']);
   const values = {};
-  if (argv.length !== expected.size * 2 && argv.length !== (expected.size + 1) * 2)
-    throw new Error('invalid coordinator arguments');
+  if (argv.length !== expected.size * 2) throw new Error('invalid coordinator arguments');
   for (let index = 0; index < argv.length; index += 2) {
     const option = argv[index];
     const value = argv[index + 1];
     const name = option?.startsWith('--') ? option.slice(2) : '';
-    if (
-      (!expected.has(name) && name !== 'description-reservation') ||
-      value === undefined ||
-      Object.hasOwn(values, name)
-    ) {
+    if (!expected.has(name) || value === undefined || Object.hasOwn(values, name)) {
       throw new Error('invalid coordinator arguments');
     }
     values[name] = value;
@@ -979,22 +974,6 @@ export function parseRuntimeArgs(argv) {
   }
   if (!validIdentity(values.workspace)) throw new Error('invalid coordinator target');
   return values;
-}
-
-export function coordinatorDescriptionReservation(args, injected) {
-  try {
-    const value =
-      injected ??
-      (args['description-reservation'] === undefined
-        ? undefined
-        : JSON.parse(args['description-reservation']));
-    const reservation = validateReservation(value, args.workspace);
-    return reservation && reservation.socketPath === normalize(args['cmux-socket'])
-      ? reservation
-      : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 const statusStyles = {
@@ -1082,12 +1061,29 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
   let presentation;
   let pendingPresentationAcks = 0;
   const schedule = runtime.schedule ?? ((callback, delay) => setTimeout(callback, delay).unref());
+  const descriptionCommand = (command) =>
+    serialize(() => runDescriptionCommand(cmuxFile, command, env, runtime.execFile ?? execFile));
   const description = createDescriptionPublisher({
-    reservation: coordinatorDescriptionReservation(args, runtime.descriptionReservation),
     workspaceId: target.workspaceId,
-    runCommand: (command) =>
-      serialize(() => runDescriptionCommand(cmuxFile, command, env, runtime.execFile ?? execFile)),
+    runCommand: descriptionCommand,
   });
+  let descriptionTargetBound = false;
+  let descriptionBinding = null;
+  const publishPresentation = async () => {
+    if (!descriptionTargetBound) {
+      const surfaceId = presentation.publicationSurfaceId();
+      if (surfaceId === null) return;
+      descriptionBinding ??= resolveDescriptionTarget(target, surfaceId, descriptionCommand);
+      const resolved = await descriptionBinding;
+      descriptionBinding = null;
+      if (stopping || !resolved || !description.bindTarget(resolved)) return;
+      descriptionTargetBound = true;
+    }
+    // Read current intent after lookup, never resurrect an earlier projection.
+    if (!description.setDesired(presentation.projection())) return;
+    resetDescriptionFinalClear();
+    await description.reconcile();
+  };
   let descriptionFinalClearGeneration = 0;
   let descriptionFinalClearAttempts = 0;
   let descriptionFinalClearRetryScheduled = false;
@@ -1104,6 +1100,7 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
       !core.isQuiescent() ||
       !presentation.isQuiescent() ||
       !description.isIdle() ||
+      descriptionBinding !== null ||
       pendingPresentationAcks !== 0
     )
       return;
@@ -1170,11 +1167,7 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
     probePid: runtime.probePid ?? probePidStart,
     capacity: runtime.presentationCapacity,
     sourceId: runtime.presentationSourceId,
-    onProjection: (projection) => {
-      if (!description.setDesired(projection)) return;
-      resetDescriptionFinalClear();
-      void description.reconcile().finally(stopIfQuiescent);
-    },
+    onProjection: () => publishPresentation().finally(stopIfQuiescent),
   });
 
   const runtimeMkdir = runtime.mkdir ?? mkdir;

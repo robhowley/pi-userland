@@ -294,6 +294,7 @@ export function createPresentationCore(options) {
     maintain,
     blocks: () => blocks,
     projection: () => projection,
+    publicationSurfaceId: () => sources.values().next().value?.surfaceId ?? null,
     isQuiescent: () => sources.size === 0,
     diagnostics: () => ({
       sourceCount: sources.size,
