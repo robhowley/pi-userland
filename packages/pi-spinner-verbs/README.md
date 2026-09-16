@@ -95,7 +95,7 @@ Your custom file can be a plain JSON array:
 | `lord-of-the-rings` | One does not simply..., You shall not pass... So it begins... |
 | `action-movie` | Yippee-ki-yay..., I'll be back..., I know kung fu...          |
 | `fast-furious` | Ejecto seato, cuz..., Living a quarter mile at a time..., Granny shifting... |
-| `talladega-nights` | Shaking and baking..., I wanna go fast..., That just happened... |
+| `talladega-nights` | Shaking and baking..., I wanna go fast..., Pissing excellence... |
 | `game-show` | Come on down..., Survey says..., Is that your final answer... |
 | `harry-potter` | Accio..., Expecto Patronum..., Wingardium Leviosa...      |
 | `corporate-jargon` | Double clicking..., Pressure testing..., Closing the loop... |
