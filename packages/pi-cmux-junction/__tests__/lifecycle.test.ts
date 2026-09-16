@@ -148,26 +148,46 @@ function harness(
 }
 
 describe('lifecycle eligibility', () => {
-  it('passes global authority to a lifecycle-first launch even with presentation disabled', async () => {
-    const reservation = {
-      socketPath: '/tmp/cmux.sock',
-      workspaceId: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
-      windowId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
-    };
+  it('moves lifecycle ownership to a new coordinator without restarting the session', async () => {
+    let workspaceId = 'workspace-a';
     const h = harness({
-      loadConfig: () => ({ ...DEFAULT_JUNCTION_CONFIG, descriptionReservations: [reservation] }),
-      resolveTarget: async (_cwd, target) => ({
-        ok: true,
-        ...target,
-        workspaceId: reservation.workspaceId,
-      }),
+      resolveTarget: async (_cwd, target) => ({ ok: true, ...target, workspaceId }),
     });
     await h.emit('session_start');
-    expect(h.createClient).toHaveBeenCalledWith(
-      expect.objectContaining({ descriptionReservation: reservation }),
-    );
+    workspaceId = 'workspace-b';
+    h.intervals
+      .find((timer) => timer.delay === LIFECYCLE_TIMINGS.maintenanceIntervalMs)!
+      .callback();
+    await vi.waitFor(() => expect(h.createClient).toHaveBeenCalledTimes(2));
+    expect(h.client.goodbye).toHaveBeenCalledTimes(1);
+    expect(h.createClient.mock.calls[1]).toEqual([
+      expect.objectContaining({
+        target: expect.objectContaining({ workspaceId: 'workspace-b' }),
+        owner: expect.objectContaining({ sessionId: 'session-a' }),
+      }),
+    ]);
     await h.emit('session_shutdown');
   });
+  it('withdraws on failed live lookup and reconnects only after verification recovers', async () => {
+    let available = true;
+    const h = harness({
+      resolveTarget: async (_cwd, target) =>
+        available ? { ok: true, ...target } : { ok: false, reason: 'invalid-response' },
+    });
+    await h.emit('session_start');
+    const maintain = h.intervals.find(
+      (timer) => timer.delay === LIFECYCLE_TIMINGS.maintenanceIntervalMs,
+    )!.callback;
+    available = false;
+    maintain();
+    await vi.waitFor(() => expect(h.client.goodbye).toHaveBeenCalledTimes(1));
+    expect(h.createClient).toHaveBeenCalledTimes(1);
+    available = true;
+    maintain();
+    await vi.waitFor(() => expect(h.createClient).toHaveBeenCalledTimes(2));
+    await h.emit('session_shutdown');
+  });
+
   it('requires exact public TUI and inherited identity inputs', () => {
     const ctx = context().value;
     expect(lifecycleEligibility(ctx, env())).toMatchObject({
