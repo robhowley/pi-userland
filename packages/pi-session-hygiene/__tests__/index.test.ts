@@ -172,6 +172,7 @@ describe('session-hygiene', () => {
       expect(formatCacheRate(0, 0)).toBeNull();
       expect(formatCacheRate(100, 0)).toBe('cache 0%');
       expect(formatCacheRate(200, 800)).toBe('cache 80%');
+      expect(formatCacheRate(30, 970)).toBe('cache 97%');
     });
 
     it('updates the context and cache status chips for all health levels', () => {
@@ -320,13 +321,13 @@ describe('session-hygiene', () => {
       expect(api.events.emit).toHaveBeenCalledTimes(2);
       expect(api.events.emit).toHaveBeenNthCalledWith(1, 'pi-cmux-junction:update', {
         producer: { key: 'pi-session-hygiene', label: 'Session Hygiene' },
-        items: [{ key: 'session-hygiene', title: 'Session health', status: '🟢 ctx ok' }],
+        items: [{ key: 'session-hygiene', status: '🟢 ctx ok' }],
       });
       expect(api.events.emit).toHaveBeenNthCalledWith(2, 'pi-cmux-junction:update', {
         producer: { key: 'pi-session-hygiene', label: 'Session Hygiene' },
         items: [
-          { key: 'session-hygiene', title: 'Session health', status: '🟡 ctx watch' },
-          { key: 'session-hygiene-cache', title: 'Cache', status: 'cache 80%' },
+          { key: 'session-hygiene', status: '🟡 ctx watch' },
+          { key: 'session-hygiene-cache', status: 'Cache rate 80%' },
         ],
       });
       expect(ctx.ui.confirm).not.toHaveBeenCalled();
@@ -524,7 +525,7 @@ describe('session-hygiene', () => {
       ]);
       expect(ext.api.events.emit).toHaveBeenLastCalledWith('pi-cmux-junction:update', {
         producer: { key: 'pi-session-hygiene', label: 'Session Hygiene' },
-        items: [{ key: 'session-hygiene', title: 'Session health', status: '🟢 ctx ok' }],
+        items: [{ key: 'session-hygiene', status: '🟢 ctx ok' }],
       });
       expect(ctx.ui.confirm).not.toHaveBeenCalled();
     });
