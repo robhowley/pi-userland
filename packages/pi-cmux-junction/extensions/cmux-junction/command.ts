@@ -5,10 +5,12 @@ import type { ExtensionAPI, ExtensionCommandContext } from '@earendil-works/pi-c
 import {
   launchCmuxTab,
   launchCmuxWorkspace,
+  openJunctionBoard,
   preflightCmux,
   preflightCmuxTab,
   type CmuxLaunchRecipe,
   type CmuxOptions,
+  type JunctionBoardOpenResult,
 } from './cmux.js';
 import { installJunctionBoard, type BoardInstallResult } from './board-install.js';
 import type { ProcessRunner } from './process.js';
@@ -31,6 +33,8 @@ const TAB_FLAG = '--tab';
 const FRESH_USAGE = `Usage: /junction ${BRANCH_FLAG} <name> [${FROM_FLAG} <commit-ish>] [${TAB_FLAG}]`;
 const FORK_USAGE = `Usage: /junction ${FORK_SUBCOMMAND} ${BRANCH_FLAG} <name> [${FROM_FLAG} <commit-ish>] [${TAB_FLAG}]`;
 const CHECKOUT_USAGE = `Usage: /junction ${CHECKOUT_SUBCOMMAND} ${BRANCH_FLAG} <local-branch> [${TAB_FLAG}]`;
+const BOARD_INSTALL_USAGE = 'Usage: /junction board install';
+const BOARD_OPEN_USAGE = 'Usage: /junction board open';
 const JUNCTION_HELP = [
   'Junction commands:',
   '  /junction [help] — show this command reference',
@@ -40,6 +44,7 @@ const JUNCTION_HELP = [
   `  /junction ${FORK_SUBCOMMAND} ${BRANCH_FLAG} <name> ${FROM_FLAG} <commit-ish> [${TAB_FLAG}] — wait for the current persisted session to idle, then create a new worktree from the specified commit-ish (never reuse); fork the conversation`,
   `  /junction ${CHECKOUT_SUBCOMMAND} ${BRANCH_FLAG} <local-branch> [${TAB_FLAG}] — open an existing local branch in its worktree; launch a fresh Pi session`,
   '  /junction board install — install or safely update the packaged sidebar file; does not select it or enable publication',
+  '  /junction board open: open the installed board in the unfocused right sidebar for fixed window:1; does not install it or replace the left workspace sidebar',
   '  For worktree commands, append `--tab` to launch Pi in a new unfocused tab in this workspace instead of a new cmux workspace.',
 ].join('\n');
 
@@ -74,6 +79,7 @@ export type RetainedWorktreeProof = (
 
 export interface JunctionCommandOptions {
   installBoard?: typeof installJunctionBoard;
+  openBoard?: typeof openJunctionBoard;
   runner?: ProcessRunner;
   env?: NodeJS.ProcessEnv;
   homeDir?: string;
@@ -91,6 +97,7 @@ export interface JunctionCommandOptions {
 
 export type JunctionResult =
   | BoardInstallResult
+  | JunctionBoardOpenResult
   | {
       ok: true;
       status: 'created-and-launched' | 'reused-and-launched';
@@ -164,7 +171,7 @@ export function registerJunctionCommand(
 ): void {
   pi.registerCommand(JUNCTION_COMMAND, {
     description:
-      'Create a branch worktree or check out an existing local branch, then launch Pi in a new cmux workspace; a final --tab launches Pi in a new unfocused tab in this workspace instead; board install installs or safely updates the packaged sidebar file',
+      'Create a branch worktree or check out an existing local branch, then launch Pi in a new cmux workspace; a final --tab launches Pi in a new unfocused tab in this workspace instead; board install installs or safely updates the packaged sidebar file; board open opens it in fixed window:1 without focusing it',
     getArgumentCompletions: getJunctionArgumentCompletions,
     handler: async (args, ctx) => {
       const trimmedArgs = args.trim();
@@ -188,6 +195,11 @@ const BOARD_INSTALL_COMPLETION = {
   value: 'board install',
   label: 'install',
   description: 'Install or safely update the packaged sidebar file',
+};
+const BOARD_OPEN_COMPLETION = {
+  value: 'board open',
+  label: 'open',
+  description: 'Open the installed board in the right sidebar for fixed window:1',
 };
 const BRANCH_COMPLETION = {
   value: BRANCH_FLAG,
@@ -232,11 +244,19 @@ export function getJunctionArgumentCompletions(prefix: string) {
   const firstToken = tokens[0] ?? '';
 
   if (firstToken === 'board') {
-    if (tokens.length === 1)
-      return trailingWhitespace ? [BOARD_INSTALL_COMPLETION] : [BOARD_COMPLETION];
-    return tokens.length === 2 && !trailingWhitespace && 'install'.startsWith(tokens[1] ?? '')
-      ? [BOARD_INSTALL_COMPLETION]
-      : null;
+    if (tokens.length === 1) {
+      return trailingWhitespace
+        ? [BOARD_INSTALL_COMPLETION, BOARD_OPEN_COMPLETION]
+        : [BOARD_COMPLETION];
+    }
+    if (tokens.length === 2 && !trailingWhitespace) {
+      const action = tokens[1] ?? '';
+      const completions = [BOARD_INSTALL_COMPLETION, BOARD_OPEN_COMPLETION].filter((item) =>
+        item.value.slice('board '.length).startsWith(action),
+      );
+      return completions.length > 0 ? completions : null;
+    }
+    return null;
   }
 
   if (firstToken === CHECKOUT_SUBCOMMAND) {
@@ -328,6 +348,7 @@ export function getJunctionArgumentCompletions(prefix: string) {
 
 export type JunctionParseResult =
   | { ok: true; mode: 'board-install' }
+  | { ok: true; mode: 'board-open' }
   | { ok: true; mode: 'fresh'; branch: string; from?: string; tab?: true }
   | { ok: true; mode: 'fork'; branch: string; from?: string; tab?: true }
   | { ok: true; mode: 'checkout'; branch: string; tab?: true }
@@ -336,9 +357,16 @@ export type JunctionParseResult =
 export function parseJunctionArgs(args: string): JunctionParseResult {
   const tokens = args.trim().length === 0 ? [] : args.trim().split(/\s+/u);
   if (tokens[0] === 'board') {
-    return tokens.length === 2 && tokens[1] === 'install'
-      ? { ok: true, mode: 'board-install' }
-      : { ok: false, message: 'Usage: /junction board install' };
+    if (tokens.length === 2 && tokens[1] === 'install') {
+      return { ok: true, mode: 'board-install' };
+    }
+    if (tokens.length === 2 && tokens[1] === 'open') {
+      return { ok: true, mode: 'board-open' };
+    }
+    return {
+      ok: false,
+      message: tokens[1] === 'open' ? BOARD_OPEN_USAGE : BOARD_INSTALL_USAGE,
+    };
   }
   if (tokens[0] === FORK_SUBCOMMAND) {
     return parseBranchArgs(tokens.slice(1), FORK_USAGE, 'fork');
@@ -429,6 +457,9 @@ export async function runJunctionCommand(
     return (options.installBoard ?? installJunctionBoard)(
       options.homeDir === undefined ? {} : { homeDir: options.homeDir },
     );
+  }
+  if (parsed.mode === 'board-open') {
+    return (options.openBoard ?? openJunctionBoard)(cwd, buildCmuxOptions(options));
   }
 
   const { mode } = parsed;
@@ -761,6 +792,11 @@ function sourceFailure(message: string): ForkSourceFailure {
 function notifyResult(ctx: ExtensionCommandContext, result: JunctionResult): void {
   if (!result.ok) {
     ctx.ui.notify(result.message, 'error');
+    return;
+  }
+
+  if (result.status === 'board-opened') {
+    ctx.ui.notify('Opened Junction board in the unfocused right sidebar for window:1.', 'info');
     return;
   }
 
