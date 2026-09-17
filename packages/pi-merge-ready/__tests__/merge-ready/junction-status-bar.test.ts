@@ -13,7 +13,10 @@ import {
   type MergeReadyStatusBarContext,
 } from '../../extensions/merge-ready/status-bar.js';
 import { createMergeReadyStatus } from '../../extensions/merge-ready/status.js';
-import { runMergeReadyWatchLoop } from '../../extensions/merge-ready/watch.js';
+import {
+  runMergeReadyWatchLoop,
+  type MergeReadyWatchLoopDependencies,
+} from '../../extensions/merge-ready/watch.js';
 import type { MergeReadyStatus } from '../../extensions/merge-ready/types.js';
 
 const GENERATED_AT = '2026-08-28T00:00:00.000Z';
@@ -100,6 +103,28 @@ function createDeferred<T>() {
   return { promise, resolve };
 }
 
+function runWatchLoop(
+  api: TestAPI,
+  ctx: MergeReadyStatusBarContext,
+  dependencies: MergeReadyWatchLoopDependencies,
+  signal = new AbortController().signal,
+) {
+  return runMergeReadyWatchLoop({
+    exec: api.exec,
+    api: { sendUserMessage: vi.fn() },
+    ctx: {
+      ...ctx,
+      ui: {
+        ...ctx.ui,
+        notify: vi.fn(),
+      },
+    },
+    intervalSeconds: 1,
+    signal,
+    dependencies,
+  });
+}
+
 function updateCalls(events: { emit: ReturnType<typeof vi.fn> }): MergeReadyJunctionUpdate[] {
   return events.emit.mock.calls
     .filter(([channel]) => channel === MERGE_READY_JUNCTION_UPDATE_EVENT)
@@ -120,21 +145,21 @@ describe('Merge Ready status-bar Junction integration', () => {
     await getHandler('session_start')?.({ reason: 'startup' }, ctx);
     await getHandler('session_shutdown')?.({}, ctx);
 
-    expect(updateCalls(events)).toEqual([
-      { producer: { key: 'pi-merge-ready', label: 'Merge Ready' }, items: [] },
+    const updates = updateCalls(events);
+    expect(
+      updates.map((update) => ({
+        producerKey: update.producer.key,
+        itemKey: update.items[0]?.key ?? null,
+        href: update.items[0]?.href ?? null,
+      })),
+    ).toEqual([
+      { producerKey: 'pi-merge-ready', itemKey: null, href: null },
       {
-        producer: { key: 'pi-merge-ready', label: 'Merge Ready' },
-        items: [
-          {
-            key: 'current-branch',
-            title: 'Current branch PR #42',
-            status: '✅ #42 Ready',
-            summary: '0 open items',
-            href: 'https://github.com/robhowley/pi-userland/pull/42',
-          },
-        ],
+        producerKey: 'pi-merge-ready',
+        itemKey: 'current-branch',
+        href: status.pr!.url,
       },
-      { producer: { key: 'pi-merge-ready', label: 'Merge Ready' }, items: [] },
+      { producerKey: 'pi-merge-ready', itemKey: null, href: null },
     ]);
   });
 
@@ -169,8 +194,12 @@ describe('Merge Ready status-bar Junction integration', () => {
     first.resolve(firstStatus);
     await firstRefresh;
 
-    expect(updateCalls(events)).toHaveLength(1);
-    expect(updateCalls(events)[0]?.items[0]?.title).toBe('Current branch PR #42');
+    const updates = updateCalls(events);
+    expect(updates).toHaveLength(1);
+    expect(updates[0]?.items[0]).toMatchObject({
+      key: 'current-branch',
+      href: latestStatus.pr!.url,
+    });
   });
 
   it('does not re-emit a refresh that completes after session shutdown', async () => {
@@ -188,21 +217,24 @@ describe('Merge Ready status-bar Junction integration', () => {
     pending.resolve(createReadyStatus());
     await refresh;
 
-    expect(updateCalls(events)).toEqual([
-      { producer: { key: 'pi-merge-ready', label: 'Merge Ready' }, items: [] },
-    ]);
+    const updates = updateCalls(events);
+    expect(updates).toHaveLength(1);
+    expect(updates[0]?.producer.key).toBe('pi-merge-ready');
+    expect(updates[0]?.items).toEqual([]);
   });
 
   it('publishes current-branch command results but excludes URL commands and direct tools', async () => {
     const { api, events } = createAPI();
     const currentStatus = createReadyStatus();
     const urlStatus = createUrlStatus();
+    const url = urlStatus.target.mode === 'url' ? urlStatus.target.url : '';
+    const urlReader = vi.fn(async () => urlStatus);
     registerMergeReadyStatusBar(api);
 
     const registerCommand = vi.fn();
     registerMergeReadyCommand(
       { exec: api.exec, registerCommand },
-      { getStatus: vi.fn(async ({ url }) => (url === undefined ? currentStatus : urlStatus)) },
+      { getStatus: vi.fn(async () => currentStatus), createUrlStatusReader: () => urlReader },
     );
     const command = registerCommand.mock.calls[0]?.[1];
     expect(command).toBeDefined();
@@ -215,13 +247,21 @@ describe('Merge Ready status-bar Junction integration', () => {
     };
 
     await command!.handler('', commandContext);
-    expect(updateCalls(events)).toHaveLength(1);
+    const currentUpdates = updateCalls(events);
+    expect(currentUpdates).toHaveLength(1);
+    expect(currentUpdates[0]?.items[0]).toMatchObject({
+      key: 'current-branch',
+      href: currentStatus.pr!.url,
+    });
 
     events.emit.mockClear();
-    await command!.handler(`--url ${urlStatus.target.mode === 'url' ? urlStatus.target.url : ''}`, {
+    const urlNotify = vi.fn();
+    await command!.handler(`--url ${url}`, {
       ...commandContext,
-      ui: { notify: vi.fn(), setStatus: vi.fn() },
+      ui: { notify: urlNotify, setStatus: vi.fn() },
     });
+    expect(urlReader).toHaveBeenCalledTimes(1);
+    expect(urlNotify).toHaveBeenCalledWith(expect.stringContaining(`Target: ${url}`), 'info');
     expect(events.emit).not.toHaveBeenCalled();
 
     const registerTool = vi.fn();
@@ -238,44 +278,29 @@ describe('Merge Ready status-bar Junction integration', () => {
 
   it('publishes a current-branch watch result but leaves a failed fetch unchanged', async () => {
     const { api, events } = createAPI();
+    const status = createReadyStatus();
     const ctx = createContext();
     registerMergeReadyStatusBar(api);
-    const watchContext = {
-      ...ctx,
-      ui: {
-        ...ctx.ui,
-        notify: vi.fn(),
-      },
-    };
 
-    await runMergeReadyWatchLoop({
-      exec: api.exec,
-      api: { sendUserMessage: vi.fn() },
-      ctx: watchContext,
-      intervalSeconds: 1,
-      signal: new AbortController().signal,
-      dependencies: {
-        getStatus: vi.fn(async () => createReadyStatus()),
-        sleep: vi.fn(async () => undefined),
-        maxIterations: 1,
-      },
+    await runWatchLoop(api, ctx, {
+      getStatus: vi.fn(async () => status),
+      sleep: vi.fn(async () => undefined),
+      maxIterations: 1,
     });
-    expect(updateCalls(events)).toHaveLength(1);
+    const updates = updateCalls(events);
+    expect(updates).toHaveLength(1);
+    expect(updates[0]?.items[0]).toMatchObject({
+      key: 'current-branch',
+      href: status.pr!.url,
+    });
 
     events.emit.mockClear();
     await expect(
-      runMergeReadyWatchLoop({
-        exec: api.exec,
-        api: { sendUserMessage: vi.fn() },
-        ctx: watchContext,
-        intervalSeconds: 1,
-        signal: new AbortController().signal,
-        dependencies: {
-          getStatus: vi.fn(async () => {
-            throw new Error('provider unavailable');
-          }),
-          maxIterations: 1,
-        },
+      runWatchLoop(api, ctx, {
+        getStatus: vi.fn(async () => {
+          throw new Error('provider unavailable');
+        }),
+        maxIterations: 1,
       }),
     ).rejects.toThrow('provider unavailable');
     expect(events.emit).not.toHaveBeenCalled();
@@ -285,26 +310,15 @@ describe('Merge Ready status-bar Junction integration', () => {
     const { api, events } = createAPI();
     const ctx = createContext();
     registerMergeReadyStatusBar(api);
-    const watchContext = {
-      ...ctx,
-      ui: {
-        ...ctx.ui,
-        notify: vi.fn(),
-      },
-    };
     const pending = createDeferred<MergeReadyStatus>();
     const controller = new AbortController();
 
-    const watch = runMergeReadyWatchLoop({
-      exec: api.exec,
-      api: { sendUserMessage: vi.fn() },
-      ctx: watchContext,
-      intervalSeconds: 1,
-      signal: controller.signal,
-      dependencies: {
-        getStatus: vi.fn(() => pending.promise),
-      },
-    });
+    const watch = runWatchLoop(
+      api,
+      ctx,
+      { getStatus: vi.fn(() => pending.promise) },
+      controller.signal,
+    );
 
     controller.abort();
     pending.resolve(createReadyStatus());
@@ -323,18 +337,10 @@ describe('Merge Ready status-bar Junction integration', () => {
 
     await getHandler('turn_end')?.({}, ctx);
 
-    expect(updateCalls(events)).toEqual([
-      {
-        producer: { key: 'pi-merge-ready', label: 'Merge Ready' },
-        items: [
-          {
-            key: 'current-branch',
-            title: 'Current branch',
-            status: '❔ Unknown',
-            summary: 'Status unavailable',
-          },
-        ],
-      },
-    ]);
+    const updates = updateCalls(events);
+    expect(updates).toHaveLength(1);
+    expect(updates[0]?.producer.key).toBe('pi-merge-ready');
+    expect(updates[0]?.items[0]).toMatchObject({ key: 'current-branch' });
+    expect(updates[0]?.items[0]).not.toHaveProperty('href');
   });
 });

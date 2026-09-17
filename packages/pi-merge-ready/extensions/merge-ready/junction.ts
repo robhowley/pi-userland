@@ -43,13 +43,15 @@ export function createMergeReadyJunctionUpdate(
 
   const title =
     status.pr === null ? 'Current branch' : `Current branch PR #${String(status.pr.number)}`;
+  const openItemCount = status.openItems.length;
   const href =
     status.pr !== null && isMergeReadyJunctionHref(status.pr.url) ? status.pr.url : undefined;
 
   return createMergeReadyJunctionView({
+    key: MERGE_READY_JUNCTION_ITEM_KEY,
     title,
-    renderedStatus,
-    summary: formatOpenItemCount(status.openItems.length),
+    status: renderedStatus,
+    summary: `${String(openItemCount)} open item${openItemCount === 1 ? '' : 's'}`,
     ...(href === undefined ? {} : { href }),
   });
 }
@@ -58,8 +60,9 @@ export function createMergeReadyJunctionUnknownUpdate(
   renderedStatus: string,
 ): MergeReadyJunctionUpdate {
   return createMergeReadyJunctionView({
+    key: MERGE_READY_JUNCTION_ITEM_KEY,
     title: 'Current branch',
-    renderedStatus,
+    status: renderedStatus,
     summary: 'Status unavailable',
   });
 }
@@ -101,31 +104,18 @@ export function isMergeReadyJunctionHref(value: string): boolean {
     return (
       parsed.protocol === 'https:' &&
       parsed.hostname.length > 0 &&
-      parsed.username.length === 0 &&
-      parsed.password.length === 0
+      !parsed.username &&
+      !parsed.password
     );
   } catch {
     return false;
   }
 }
 
-function createMergeReadyJunctionView(options: {
-  title: string;
-  renderedStatus: string;
-  summary: string;
-  href?: string;
-}): MergeReadyJunctionUpdate {
+function createMergeReadyJunctionView(item: MergeReadyJunctionItem): MergeReadyJunctionUpdate {
   return {
     producer: createMergeReadyJunctionProducer(),
-    items: [
-      {
-        key: MERGE_READY_JUNCTION_ITEM_KEY,
-        title: options.title,
-        status: options.renderedStatus,
-        summary: options.summary,
-        ...(options.href === undefined ? {} : { href: options.href }),
-      },
-    ],
+    items: [item],
   };
 }
 
@@ -134,10 +124,6 @@ function createMergeReadyJunctionProducer(): MergeReadyJunctionUpdate['producer'
     key: MERGE_READY_JUNCTION_PRODUCER_KEY,
     label: MERGE_READY_JUNCTION_PRODUCER_LABEL,
   };
-}
-
-function formatOpenItemCount(count: number): string {
-  return `${String(count)} open item${count === 1 ? '' : 's'}`;
 }
 
 function hasLoneSurrogate(value: string): boolean {

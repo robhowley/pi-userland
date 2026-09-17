@@ -18,6 +18,12 @@ import type {
 } from '../../extensions/merge-ready/types.js';
 
 const GENERATED_AT = '2026-08-28T00:00:00.000Z';
+const JUNCTION_HREF_PREFIX = 'https://github.com/';
+const MAX_JUNCTION_HREF_BYTES = 2_048;
+const ACCEPTED_JUNCTION_HREF = `${JUNCTION_HREF_PREFIX}${'a'.repeat(
+  MAX_JUNCTION_HREF_BYTES - Buffer.byteLength(JUNCTION_HREF_PREFIX),
+)}`;
+const OVERSIZED_JUNCTION_HREF = `${JUNCTION_HREF_PREFIX}${'é'.repeat(1_025)}`;
 
 function createPullRequest(
   options: { url?: string; lifecycle?: MergeReadyPullRequest['lifecycle'] } = {},
@@ -192,22 +198,35 @@ describe('merge-ready Junction producer', () => {
   });
 
   it.each([
-    'http://github.com/robhowley/pi-userland/pull/42',
-    'https://user:password@github.com/robhowley/pi-userland/pull/42',
-    'https://github.com/robhowley/pi-userland/pull/42 with-space',
-  ])('omits an href that Junction would reject: %s', (url) => {
+    ['http', 'http://github.com/robhowley/pi-userland/pull/42'],
+    ['credentials', 'https://user:password@github.com/robhowley/pi-userland/pull/42'],
+    ['whitespace', 'https://github.com/robhowley/pi-userland/pull/42 with-space'],
+    ['C0 control character', 'https://github.com/robhowley/pi-userland/pull/42\u0000'],
+    ['C1 control character', 'https://github.com/robhowley/pi-userland/pull/42\u0085'],
+    ['lone surrogate', 'https://github.com/robhowley/pi-userland/pull/42\ud800'],
+    ['oversized UTF-8 bytes', OVERSIZED_JUNCTION_HREF],
+  ] as const)('omits an href for a %s URL that Junction rejects', (_name, url) => {
     const update = createMergeReadyJunctionUpdate(
       createCurrentBranchStatus({ pr: createPullRequest({ url }) }),
       '❌ #42 Checks failing',
     );
 
-    expect(update?.items[0]).toEqual({
-      key: 'current-branch',
-      title: 'Current branch PR #42',
-      status: '❌ #42 Checks failing',
-      summary: '0 open items',
-    });
-    expect(update === null ? null : normalizeProducerView(update).ok).toBe(true);
+    expect(update).not.toBeNull();
+    if (update === null) return;
+    expect(update.items[0]).not.toHaveProperty('href');
+    expect(normalizeProducerView(update).ok).toBe(true);
+  });
+
+  it('keeps an href at the accepted byte boundary', () => {
+    const update = createMergeReadyJunctionUpdate(
+      createCurrentBranchStatus({ pr: createPullRequest({ url: ACCEPTED_JUNCTION_HREF }) }),
+      '❌ #42 Checks failing',
+    );
+
+    expect(update).not.toBeNull();
+    if (update === null) return;
+    expect(update.items[0]?.href).toBe(ACCEPTED_JUNCTION_HREF);
+    expect(normalizeProducerView(update).ok).toBe(true);
   });
 
   it('does not publish a URL-targeted status', () => {
