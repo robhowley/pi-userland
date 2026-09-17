@@ -37,6 +37,7 @@ export { defineMergeReadyProvider, registerMergeReadyProvider } from './provider
 export * from './commands.js';
 export * from './config.js';
 export * from './status-bar.js';
+export * from './junction.js';
 export * from './tool.js';
 export * from './watch.js';
 export * from './watch-status.js';
