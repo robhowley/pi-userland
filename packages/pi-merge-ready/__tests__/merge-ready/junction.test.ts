@@ -18,6 +18,7 @@ import type {
 } from '../../extensions/merge-ready/types.js';
 
 const GENERATED_AT = '2026-08-28T00:00:00.000Z';
+const MAX_JUNCTION_TITLE_BYTES = 128;
 const JUNCTION_HREF_PREFIX = 'https://github.com/';
 const MAX_JUNCTION_HREF_BYTES = 2_048;
 const ACCEPTED_JUNCTION_HREF = `${JUNCTION_HREF_PREFIX}${'a'.repeat(
@@ -40,6 +41,7 @@ function createPullRequest(
 
 function createCurrentBranchStatus(
   options: {
+    branch?: string;
     pr?: MergeReadyPullRequest | null;
     signals?: MergeReadySignalsInput;
     openItems?: MergeReadyOpenItem[];
@@ -47,6 +49,10 @@ function createCurrentBranchStatus(
 ) {
   return createMergeReadyStatus({
     generatedAt: GENERATED_AT,
+    target: {
+      mode: 'current_branch',
+      ...(options.branch === undefined ? {} : { branch: options.branch }),
+    },
     pr: options.pr === undefined ? createPullRequest() : options.pr,
     signals: options.signals ?? {
       mergeability: 'mergeable',
@@ -160,15 +166,18 @@ describe('merge-ready Junction producer', () => {
     expect(update?.items[0]?.summary).toBe('0 open items');
   });
 
-  it('maps an accepted current-branch status to the shipped ProducerView shape', () => {
-    const update = createMergeReadyJunctionUpdate(createCurrentBranchStatus(), '✅ #42 Ready');
+  it('uses the local branch name with a PR suffix', () => {
+    const update = createMergeReadyJunctionUpdate(
+      createCurrentBranchStatus({ branch: 'feat/merge-ready' }),
+      '✅ #42 Ready',
+    );
 
     expect(update).toEqual({
       producer: { key: 'pi-merge-ready', label: 'Merge Ready' },
       items: [
         {
           key: 'current-branch',
-          title: 'Current branch PR #42',
+          title: 'feat/merge-ready PR #42',
           status: '✅ #42 Ready',
           summary: '0 open items',
           href: 'https://github.com/robhowley/pi-userland/pull/42',
@@ -178,9 +187,9 @@ describe('merge-ready Junction producer', () => {
     expect(update === null ? null : normalizeProducerView(update).ok).toBe(true);
   });
 
-  it('maps no PR without inventing a link', () => {
+  it('uses the local branch name without a PR suffix', () => {
     const update = createMergeReadyJunctionUpdate(
-      createCurrentBranchStatus({ pr: null }),
+      createCurrentBranchStatus({ branch: 'feat/local-branch', pr: null }),
       '❔ No PR',
     );
 
@@ -189,13 +198,55 @@ describe('merge-ready Junction producer', () => {
       items: [
         {
           key: 'current-branch',
-          title: 'Current branch',
+          title: 'feat/local-branch',
           status: '❔ No PR',
           summary: '1 open item',
         },
       ],
     });
   });
+
+  it('falls back to the generic title when the local branch is absent', () => {
+    const update = createMergeReadyJunctionUpdate(createCurrentBranchStatus(), '✅ #42 Ready');
+
+    expect(update?.items[0]?.title).toBe('Current branch PR #42');
+  });
+
+  it('uses the local branch instead of the PR head branch', () => {
+    const update = createMergeReadyJunctionUpdate(
+      createCurrentBranchStatus({ branch: 'feat/local-branch' }),
+      '✅ #42 Ready',
+    );
+
+    expect(update?.items[0]?.title).toBe('feat/local-branch PR #42');
+  });
+
+  it.each([
+    {
+      name: 'long ASCII branch',
+      branch: 'a'.repeat(200),
+      expectedTitle: `${'a'.repeat(MAX_JUNCTION_TITLE_BYTES - Buffer.byteLength(' PR #42'))} PR #42`,
+    },
+    {
+      name: 'long Unicode branch',
+      branch: '😀'.repeat(100),
+      expectedTitle: `${'😀'.repeat(30)} PR #42`,
+    },
+  ])(
+    'keeps a $name title within the UTF-8 byte limit and preserves the suffix',
+    ({ branch, expectedTitle }) => {
+      const update = createMergeReadyJunctionUpdate(
+        createCurrentBranchStatus({ branch }),
+        '✅ #42 Ready',
+      );
+
+      expect(update?.items[0]?.title).toBe(expectedTitle);
+      expect(Buffer.byteLength(update?.items[0]?.title ?? '', 'utf8')).toBeLessThanOrEqual(
+        MAX_JUNCTION_TITLE_BYTES,
+      );
+      expect(normalizeProducerView(update).ok).toBe(true);
+    },
+  );
 
   it.each([
     ['http', 'http://github.com/robhowley/pi-userland/pull/42'],

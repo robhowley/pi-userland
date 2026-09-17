@@ -25,6 +25,7 @@ export type MergeReadyJunctionUpdate = {
   items: MergeReadyJunctionItem[];
 };
 
+const MAX_JUNCTION_TITLE_BYTES = 128;
 const MAX_JUNCTION_HREF_BYTES = 2_048;
 // Keep these checks aligned with Junction's producer-view URL safety rules.
 // eslint-disable-next-line no-control-regex
@@ -41,8 +42,7 @@ export function createMergeReadyJunctionUpdate(
     return null;
   }
 
-  const title =
-    status.pr === null ? 'Current branch' : `Current branch PR #${String(status.pr.number)}`;
+  const title = createMergeReadyJunctionTitle(status);
   const openItemCount = status.openItems.length;
   const href =
     status.pr !== null && isMergeReadyJunctionHref(status.pr.url) ? status.pr.url : undefined;
@@ -110,6 +110,29 @@ export function isMergeReadyJunctionHref(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+function createMergeReadyJunctionTitle(status: MergeReadyJunctionStatus): string {
+  const branch = status.target.mode === 'current_branch' ? status.target.branch : undefined;
+  const prefix = branch || 'Current branch';
+  const suffix = status.pr === null ? '' : ` PR #${String(status.pr.number)}`;
+  const prefixBytes = MAX_JUNCTION_TITLE_BYTES - Buffer.byteLength(suffix, 'utf8');
+
+  return `${truncateUtf8(prefix, prefixBytes)}${suffix}`;
+}
+
+function truncateUtf8(value: string, maximumBytes: number): string {
+  let byteLength = 0;
+  let result = '';
+
+  for (const character of value) {
+    const characterBytes = Buffer.byteLength(character, 'utf8');
+    if (byteLength + characterBytes > maximumBytes) break;
+    result += character;
+    byteLength += characterBytes;
+  }
+
+  return result;
 }
 
 function createMergeReadyJunctionView(item: MergeReadyJunctionItem): MergeReadyJunctionUpdate {

@@ -63,7 +63,7 @@ When Pi's event bus is available, Merge Ready publishes current-branch status to
   "items": [
     {
       "key": "current-branch",
-      "title": "Current branch PR #64",
+      "title": "feat/my-branch PR #64",
       "status": "✅ #64 Ready",
       "summary": "0 open items",
       "href": "https://github.com/OWNER/REPO/pull/64"
