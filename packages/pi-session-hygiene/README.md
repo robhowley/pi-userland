@@ -15,7 +15,7 @@ Health is based on:
 
 The extension also publishes a separate cache chip when token usage data is available:
 
-- **Prompt cache hit rate** as `cache <percent>` from `cacheRead / (input + cacheRead)`
+- **Prompt cache hit rate** as `Cache rate <percent>%` from `cacheRead / (input + cacheRead)`
 
 It only updates the status bar. It does **not** prompt, auto-compact, or inject guidance into responses.
 
@@ -25,7 +25,7 @@ It only updates the status bar. It does **not** prompt, auto-compact, or inject 
 ~/src/my-project (main)
 ↑34 ↓18k R868k W175k $1.982 7.4%/1.0M (auto)
 🟡 ctx watch
-cache 98%
+Cache rate 98%
 ```
 
 ## Default Thresholds

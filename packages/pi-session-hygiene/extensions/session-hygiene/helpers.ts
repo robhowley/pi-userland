@@ -142,7 +142,7 @@ export function formatCacheRate(inputTokens: number, cacheReadTokens: number): s
   if (total === 0) return null;
 
   const rate = Math.round((cacheReadTokens / total) * 100);
-  return `cache ${rate}%`;
+  return `Cache rate ${rate}%`;
 }
 
 export function updateStatusIndicator(
@@ -162,10 +162,10 @@ export function updateStatusIndicator(
   events?.emit(JUNCTION_UPDATE_EVENT, {
     producer: { key: 'pi-session-hygiene', label: 'Session Hygiene' },
     items: [
-      { key: 'session-hygiene', title: 'Session health', status: healthStatus },
+      { key: 'session-hygiene', status: healthStatus },
       ...(cacheStatus === null
         ? []
-        : [{ key: 'session-hygiene-cache', title: 'Cache', status: cacheStatus }]),
+        : [{ key: 'session-hygiene-cache', status: cacheStatus }]),
     ],
   });
 }
