@@ -162,10 +162,12 @@ export function updateStatusIndicator(
   events?.emit(JUNCTION_UPDATE_EVENT, {
     producer: { key: 'pi-session-hygiene', label: 'Session Hygiene' },
     items: [
-      { key: 'session-hygiene', title: 'Session health', status: healthStatus },
+      { key: 'session-hygiene', status: healthStatus },
       ...(cacheStatus === null
         ? []
-        : [{ key: 'session-hygiene-cache', title: 'Cache', status: cacheStatus }]),
+        : [
+            { key: 'session-hygiene-cache', status: cacheStatus.replace(/^cache /, 'Cache rate ') },
+          ]),
     ],
   });
 }
