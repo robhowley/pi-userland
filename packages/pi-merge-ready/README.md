@@ -53,6 +53,27 @@ When Pi runs in a cmux TUI workspace outside CI, the same current-branch status 
 
 `PR #N` links to the pull request URL returned by its provider. cmux publishing is enabled by default when available. Set `pi-merge-ready.cmux.enabled` to `false`, then reload Pi to hide it.
 
+### pi-cmux-junction producer
+
+When Pi's event bus is available, Merge Ready publishes current-branch status to `pi-cmux-junction:update`:
+
+```json
+{
+  "producer": { "key": "pi-merge-ready", "label": "Merge Ready" },
+  "items": [
+    {
+      "key": "current-branch",
+      "title": "Current branch PR #64",
+      "status": "✅ #64 Ready",
+      "summary": "0 open items",
+      "href": "https://github.com/OWNER/REPO/pull/64"
+    }
+  ]
+}
+```
+
+The item status reuses the status-bar rendering. URL-targeted command/watch results and direct tool calls do not publish a view. Ambient failures replace the view with generic Unknown; command/watch failures retain the latest view. Session reset and shutdown withdraw it with `items: []`. Junction is optional, and emitter failures do not change Merge Ready behavior.
+
 ### cmux notifications
 
 For GitHub PRs, cmux sends a notification when the current-branch PR has an actionable merge-readiness change:

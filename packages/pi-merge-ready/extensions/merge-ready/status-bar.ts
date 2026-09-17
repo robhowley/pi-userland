@@ -9,6 +9,13 @@ import {
   type MergeReadyExecOptions,
   type MergeReadyExecResult,
 } from './git.js';
+import {
+  createMergeReadyJunctionUnknownUpdate,
+  createMergeReadyJunctionUpdate,
+  createMergeReadyJunctionWithdrawal,
+  emitMergeReadyJunctionUpdate,
+  type MergeReadyJunctionEventEmitter,
+} from './junction.js';
 import { BADGE_ICON_BY_ID } from './badge-icon.js';
 import { getMergeReadyStatus, type MergeReadyStatusReader } from './merge-ready.js';
 import { selectMergeReadyBadgeId } from './status.js';
@@ -33,6 +40,7 @@ export type MergeReadyStatusBarContext = {
 };
 
 export type MergeReadyStatusBarAPI = Pick<MergeReadyCommandAPI, 'exec'> & {
+  events?: MergeReadyJunctionEventEmitter;
   on: (
     event: MergeReadyStatusBarEventName,
     handler: (event: unknown, ctx: MergeReadyStatusBarContext) => void | Promise<void>,
@@ -97,6 +105,7 @@ export type MergeReadyStatusBarAmbientOwnership = {
 type MergeReadyStatusBarRuntime = {
   exec: MergeReadyExec | null;
   ctx: MergeReadyStatusBarAmbientSnapshot | null;
+  junctionEmitter: MergeReadyJunctionEventEmitter | undefined;
   cmuxPublisher: ReturnType<typeof createMergeReadyCmuxPublisher>;
   timer: ReturnType<typeof setTimeout> | null;
   dueAtMs: number | null;
@@ -157,6 +166,12 @@ export function registerMergeReadyStatusBar(
   pi: MergeReadyStatusBarAPI,
   dependencies: MergeReadyStatusBarDependencies = {},
 ): void {
+  try {
+    statusBarRuntime.junctionEmitter = pi.events;
+  } catch {
+    statusBarRuntime.junctionEmitter = undefined;
+  }
+
   pi.on('session_shutdown', async () => {
     const publisher = invalidateMergeReadyStatusBarRuntime();
     await publisher?.shutdown();
@@ -270,6 +285,10 @@ export function syncMergeReadyStatusBar(
   const cmuxAction = createMergeReadyCmuxAction(options.status, text);
   statusBarRuntime.cmuxPublisher?.enqueue(cmuxAction);
   statusBarRuntime.cmuxPublisher?.observeAttention(options.status);
+  emitMergeReadyJunctionUpdate(
+    statusBarRuntime.junctionEmitter,
+    createMergeReadyJunctionUpdate(options.status, text),
+  );
 
   return {
     text,
@@ -467,6 +486,7 @@ async function refreshMergeReadyStatusBarInternal(
   });
   statusBarRuntime.cmuxPublisher?.enqueue(entry.cmuxAction);
   observeMergeReadyStatusBarAttention(entry.observation);
+  emitMergeReadyJunctionUpdate(statusBarRuntime.junctionEmitter, entry.junctionUpdate);
 
   return {
     text: entry.text,
@@ -495,6 +515,7 @@ async function loadMergeReadyStatusBarEntry(options: {
   branchIdentity: string | null;
   cmuxAction: ReturnType<typeof createMergeReadyCmuxAction>;
   observation: MergeReadyStatusBarAttentionObservation;
+  junctionUpdate: ReturnType<typeof createMergeReadyJunctionUpdate>;
 }> {
   try {
     const status = await options.getStatus({
@@ -509,6 +530,7 @@ async function loadMergeReadyStatusBarEntry(options: {
       branchIdentity: resolveAmbientBranchIdentity(status),
       cmuxAction: createMergeReadyCmuxAction(status, text),
       observation: status.target.mode === 'current_branch' ? { kind: 'attention', status } : null,
+      junctionUpdate: createMergeReadyJunctionUpdate(status, text),
     };
   } catch (error) {
     logMergeReadyStatusBarCaughtError({
@@ -522,6 +544,7 @@ async function loadMergeReadyStatusBarEntry(options: {
       branchIdentity: null,
       cmuxAction: { kind: 'set', value: UNKNOWN_STATUS_BAR_TEXT },
       observation: isMergeReadyStatusBarAbortError(error) ? null : { kind: 'unknown' },
+      junctionUpdate: createMergeReadyJunctionUnknownUpdate(UNKNOWN_STATUS_BAR_TEXT),
     };
   }
 }
@@ -725,6 +748,7 @@ function createMergeReadyStatusBarRuntime(): MergeReadyStatusBarRuntime {
   return {
     exec: null,
     ctx: null,
+    junctionEmitter: undefined,
     cmuxPublisher: null,
     timer: null,
     dueAtMs: null,
@@ -737,6 +761,10 @@ function createMergeReadyStatusBarRuntime(): MergeReadyStatusBarRuntime {
 
 function invalidateMergeReadyStatusBarRuntime(): ReturnType<typeof createMergeReadyCmuxPublisher> {
   const publisher = statusBarRuntime.cmuxPublisher;
+  emitMergeReadyJunctionUpdate(
+    statusBarRuntime.junctionEmitter,
+    createMergeReadyJunctionWithdrawal(),
+  );
   clearMergeReadyStatusBarTimer();
   statusBarRuntime.exec = null;
   statusBarRuntime.ctx = null;
