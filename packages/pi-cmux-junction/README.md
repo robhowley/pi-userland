@@ -39,9 +39,10 @@ or your `PI_CODING_AGENT_DIR`):
 { "pi-cmux-junction": { "enablePresentation": true } }
 ```
 
-Run `/reload` in each Pi session that should publish. Producer cards appear under
-that Pi runtime's workspace when an extension emits a Junction view. Installing
-Junction alone does not create cards. The board uses the workspace list supplied
+Run `/reload` in each Pi session that should publish. With presentation enabled,
+Junction immediately publishes one status-only `Session` card from that session's
+existing lifecycle state. Other extensions may add producer cards alongside it,
+but no external producer is required. The board uses the workspace list supplied
 by cmux, not an independent all-window search. See [publication](#opt-in-dashboard-publication)
 for ownership and cleanup limits, and [board validation](#j2-sidebar-validation)
 for the remaining UI validation caveats.
@@ -142,9 +143,11 @@ A project setting overrides the global setting. After editing a settings file di
 
 Publication is off by default and independent of `disableStatus`. Only global
 `enablePresentation: true` grants permission; a trusted project can narrow it with
-`false`, but cannot enable publication by itself. After editing settings, `/reload`
-applies the change even if the shared coordinator started with status alone. No
-workspace IDs or launch-time permission arguments are needed.
+`false`, but cannot enable publication by itself. Once enabled, Junction publishes
+its own status-only `Session` card from the existing lifecycle state; other
+producer cards are optional. After editing settings, `/reload` applies the change
+even if the shared coordinator started with status alone. No workspace IDs or
+launch-time permission arguments are needed.
 
 Junction resolves the runtime's live cmux surface, then verifies its workspace and
 window, never the focused workspace. Every 30 seconds it checks for moves, removes

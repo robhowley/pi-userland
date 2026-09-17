@@ -42,6 +42,7 @@ import {
   LIFECYCLE_TOOL_NAME_PATTERN,
   MAX_LIFECYCLE_FRAME_BYTES,
 } from './lifecycle-protocol.mjs';
+import { formatLifecycleLabel } from './lifecycle-label.mjs';
 
 export const STATUS_KEY = 'pi-junction';
 export const RECONNECT_GRACE_MS = 5_000;
@@ -395,27 +396,6 @@ function statusEqual(left, right) {
   return left?.state === right?.state && left?.label === right?.label;
 }
 
-function aggregateLabel(state, toolName = null) {
-  switch (state) {
-    case 'compacting':
-      return 'Compacting';
-    case 'error':
-      return 'Error';
-    case 'awaiting-input':
-      return 'Needs input';
-    case 'tool-running':
-      return toolName ? `Tool running: ${toolName}` : 'Tool running';
-    case 'thinking':
-      return 'Thinking';
-    case 'unknown':
-      return 'Unknown';
-    case 'idle':
-      return 'Idle';
-    default:
-      return null;
-  }
-}
-
 export function probePidStart(pid, expectedStartedAt, dependencies = {}) {
   const signal = dependencies.signal ?? ((candidate) => process.kill(candidate, 0));
   try {
@@ -509,10 +489,10 @@ export function aggregateOwners(owners, now) {
       liveNonIdle[0].state === 'tool-running'
         ? liveNonIdle[0].owner.snapshot.toolName
         : null;
-    return { state: winner, label: aggregateLabel(winner, toolName) };
+    return { state: winner, label: formatLifecycleLabel(winner, toolName) };
   }
-  if (unresolved) return { state: 'unknown', label: aggregateLabel('unknown') };
-  return { state: 'idle', label: aggregateLabel('idle') };
+  if (unresolved) return { state: 'unknown', label: formatLifecycleLabel('unknown') };
+  return { state: 'idle', label: formatLifecycleLabel('idle') };
 }
 
 function emptyLedger(target, now) {
@@ -548,7 +528,7 @@ function validStatus(value) {
       : '';
     return LIFECYCLE_TOOL_NAME_PATTERN.test(toolName);
   }
-  return value.label === aggregateLabel(value.state);
+  return value.label === formatLifecycleLabel(value.state);
 }
 
 function validDurableOwner(owner, target, counters, updatedAt) {
