@@ -23,13 +23,14 @@ With Junction loaded in Pi, run:
 This installs `~/.config/cmux/sidebars/junction-board.swift`; it works without Git
 or a running cmux. It **does not open the board or enable dashboard publication**.
 
-To open it, run these commands in a cmux terminal (select changes the visible sidebar):
+To open the installed board without replacing the native left workspace sidebar, run:
 
-```shell
-cmux sidebar validate junction-board --json
-# Continue only if validation succeeds:
-cmux sidebar select junction-board --json
+```text
+/junction board open
 ```
+
+This uses cmux's unfocused right sidebar for fixed `window:1`. It does not install the
+board automatically. Run it only after `board install` succeeds.
 
 Then enable routing in your global Pi `settings.json` (`~/.pi/agent/settings.json`,
 or your `PI_CODING_AGENT_DIR`):
@@ -85,6 +86,7 @@ cmux, and offers no power-loss recovery guarantee or uninstall command.
 From Pi running inside cmux in a Git repository:
 
 ```text
+/junction board open
 /junction --branch <name> [--tab]
 /junction --branch <name> --from <commit-ish> [--tab]
 /junction fork --branch <name> [--tab]
