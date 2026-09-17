@@ -17,12 +17,14 @@ import {
   aggregateOwners,
   buildCmuxStatusArgs,
   classifyOwner,
+  composePresentationProducerLabel,
   createAtomicLedgerStore,
   createCoordinatorCore,
   decodeWireLine,
   decodeWireMessage,
   parseRuntimeArgs,
   probePidStart,
+  resolvePresentationSurfaceTitles,
   runCmux,
   runCoordinatorRuntime,
 } from '../extensions/cmux-junction/coordinator.mjs';
@@ -427,6 +429,88 @@ describe('owner liveness', () => {
     ).toBe('missing');
     expect(probePidStart(4321, startedAt, { signal: () => undefined, readStart: () => '' })).toBe(
       'unverifiable',
+    );
+  });
+});
+
+describe('presentation tab-title enrichment', () => {
+  const titleTarget = {
+    socketPath: '/tmp/cmux.sock',
+    workspaceId: 'workspace-title-target',
+  };
+
+  it('looks up the verified workspace once and ignores focused state', async () => {
+    const runCommand = vi.fn(async (_args: string[]) => ({
+      ok: true,
+      stdout: Buffer.from(
+        JSON.stringify({
+          workspace_id: titleTarget.workspaceId,
+          surfaces: [
+            { id: 'surface-a', title: '  Alpha  ', focused: false },
+            { id: 'surface-b', title: 'Beta', focused: true },
+          ],
+        }),
+      ),
+    }));
+
+    await expect(resolvePresentationSurfaceTitles(titleTarget, runCommand)).resolves.toEqual(
+      new Map([
+        ['surface-a', 'Alpha'],
+        ['surface-b', 'Beta'],
+      ]),
+    );
+    expect(runCommand).toHaveBeenCalledOnce();
+    expect(runCommand).toHaveBeenCalledWith([
+      '--socket',
+      titleTarget.socketPath,
+      'rpc',
+      'surface.list',
+      JSON.stringify({ workspace_id: titleTarget.workspaceId }),
+    ]);
+  });
+
+  it.each([
+    { ok: false },
+    { ok: true, stdout: Buffer.from('{') },
+    {
+      ok: true,
+      stdout: Buffer.from(JSON.stringify({ workspace_id: 'other', surfaces: [] })),
+    },
+    {
+      ok: true,
+      stdout: Buffer.from(JSON.stringify({ workspace_id: titleTarget.workspaceId })),
+    },
+    {
+      ok: true,
+      stdout: Buffer.from(
+        JSON.stringify({
+          workspace_id: titleTarget.workspaceId,
+          surfaces: [
+            { id: 'surface-a', title: '\u001e invalid' },
+            { id: 'surface-b', title: 'x'.repeat(129) },
+            { id: 'surface-c', title: '\ud800' },
+          ],
+        }),
+      ),
+    },
+  ])('falls back to no titles for unavailable or invalid surface data', async (result) => {
+    const runCommand = vi.fn(async () => result);
+    await expect(resolvePresentationSurfaceTitles(titleTarget, runCommand)).resolves.toEqual(
+      new Map(),
+    );
+  });
+
+  it('keeps the producer label while bounding a long title-derived label', () => {
+    const label = composePresentationProducerLabel('x'.repeat(128), 'Session Hygiene');
+    expect(label).toContain(' · Session Hygiene');
+    expect(label.endsWith(' · Session Hygiene')).toBe(true);
+    expect(Buffer.byteLength(label, 'utf8')).toBeLessThanOrEqual(128);
+    expect([...label].length).toBeLessThanOrEqual(128);
+    expect(composePresentationProducerLabel('x'.repeat(128), 'x'.repeat(128))).toBe(
+      'x'.repeat(128),
+    );
+    expect(composePresentationProducerLabel('\u001e unsafe', 'Session Hygiene')).toBe(
+      'Session Hygiene',
     );
   });
 });
@@ -897,6 +981,260 @@ describe('coordinator runtime boundary', () => {
     }
   });
 
+  it('publishes exact tab titles for same-producer sources and refreshes them on a heartbeat', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pj-presentation-titles-'));
+    tempDirectories.push(directory);
+    const listen = join(directory, 'coordinator.sock');
+    const workspaceId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+    const windowId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+    const views = [
+      {
+        producer: { key: 'merge-ready', label: 'Merge Ready' },
+        items: [{ key: 'pr', title: 'Current branch PR #210', rows: [] }],
+      },
+      {
+        producer: { key: 'session-hygiene', label: 'Session Hygiene' },
+        items: [{ key: 'health', title: 'Healthy', rows: [] }],
+      },
+    ];
+    let alphaTitle = 'π - alpha';
+    let description: string | null = null;
+    const surfaceListCalls: string[][] = [];
+    const execute = vi.fn((_file, args, _options, callback) => {
+      if (replyToTargetLookup(args, callback)) return;
+      if (args.includes('surface.list')) {
+        surfaceListCalls.push(args);
+        callback(
+          null,
+          Buffer.from(
+            JSON.stringify({
+              workspace_id: workspaceId,
+              surfaces: [
+                { id: 'surface-a', title: alphaTitle, focused: false },
+                { id: 'surface-b', title: 'π - beta', focused: false },
+                { id: 'focused-only', title: 'Focused tab', focused: true },
+              ],
+            }),
+          ),
+        );
+        return;
+      }
+      if (args.includes('set-description')) description = args.at(-1) ?? null;
+      callback(
+        null,
+        Buffer.from(
+          JSON.stringify({
+            window_id: windowId,
+            workspaces: [{ id: workspaceId, description }],
+          }),
+        ),
+      );
+    });
+    const runtime = await runCoordinatorRuntime(
+      [
+        '--listen',
+        listen,
+        '--ledger',
+        join(directory, 'ledger.json'),
+        '--cmux-socket',
+        '/tmp/cmux.sock',
+        '--workspace',
+        workspaceId,
+      ],
+      {
+        execFile: execute,
+        probePid: () => 'match',
+        store: { read: async () => null, write: async () => {} },
+      },
+    );
+    const first = createConnection(listen);
+    const second = createConnection(listen);
+    try {
+      await once(first, 'connect');
+      await once(second, 'connect');
+      const firstAck = nextJsonLine(first);
+      first.write(
+        `${JSON.stringify(presentationSnapshot({ workspaceId, surfaceId: 'surface-a', views }))}\n`,
+      );
+      const firstAccepted = await firstAck;
+      await vi.waitFor(() => expect(description).toContain('π - alpha'));
+
+      const secondAck = nextJsonLine(second);
+      second.write(
+        `${JSON.stringify(
+          presentationSnapshot({
+            workspaceId,
+            surfaceId: 'surface-b',
+            sessionId: 'session-b',
+            runtimeId: 'runtime-b',
+            pid: 5433,
+            connectionId: 'connection-b',
+            views,
+          }),
+        )}\n`,
+      );
+      await secondAck;
+      await vi.waitFor(() => expect(description).toContain('π - beta'));
+
+      const before = description!;
+      const beforeSources = before.split('\u001e').filter((record) => record.startsWith('S\u001f'));
+      const heartbeat = nextJsonLine(first);
+      alphaTitle = 'π - alpha-renamed';
+      first.write(
+        `${JSON.stringify(
+          presentationSnapshot({
+            workspaceId,
+            surfaceId: 'surface-a',
+            sourceGeneration: firstAccepted['acceptedGeneration'],
+            revision: 1,
+            views,
+          }),
+        )}\n`,
+      );
+      await heartbeat;
+      await vi.waitFor(() => expect(description).toContain('π - alpha-renamed'));
+      const after = description!;
+      const afterSources = after.split('\u001e').filter((record) => record.startsWith('S\u001f'));
+
+      expect(beforeSources.map((record) => record.split('\u001f').slice(0, 4))).toEqual(
+        afterSources.map((record) => record.split('\u001f').slice(0, 4)),
+      );
+      expect(afterSources.map((record) => record.split('\u001f')[4])).toEqual(
+        expect.arrayContaining(['π - alpha-renamed', 'π - beta']),
+      );
+      expect(before).not.toContain('Focused tab');
+      expect(after).not.toContain('Focused tab');
+      expect(surfaceListCalls).toHaveLength(3);
+      for (const args of surfaceListCalls) {
+        expect(args).toEqual([
+          '--socket',
+          '/tmp/cmux.sock',
+          'rpc',
+          'surface.list',
+          JSON.stringify({ workspace_id: workspaceId }),
+        ]);
+      }
+      const labels = after
+        .split('\u001e')
+        .filter((record) => record.startsWith('P\u001f'))
+        .map((record) => record.split('\u001f')[4]);
+      expect(labels).toEqual(['Merge Ready', 'Merge Ready', 'Session Hygiene', 'Session Hygiene']);
+      const producers = after.split('\u001e').filter((record) => record.startsWith('P\u001f'));
+      for (const source of afterSources) {
+        expect(
+          producers.filter((record) => record.split('\u001f')[1] === source.split('\u001f')[1]),
+        ).toHaveLength(2);
+      }
+    } finally {
+      first.destroy();
+      second.destroy();
+      await runtime.close();
+    }
+  });
+
+  it('reads current presentation intent after a delayed title lookup', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pj-presentation-title-race-'));
+    tempDirectories.push(directory);
+    const listen = join(directory, 'coordinator.sock');
+    const workspaceId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+    const windowId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+    const lookupStarted = deferred();
+    const lookupResult = deferred<void>();
+    let description: string | null = null;
+    const execute = vi.fn((_file, args, _options, callback) => {
+      if (replyToTargetLookup(args, callback)) return;
+      if (args.includes('surface.list')) {
+        lookupStarted.resolve();
+        void lookupResult.promise.then(() =>
+          callback(
+            null,
+            Buffer.from(
+              JSON.stringify({
+                workspace_id: workspaceId,
+                surfaces: [{ id: 'surface-a', title: 'Stale title' }],
+              }),
+            ),
+          ),
+        );
+        return;
+      }
+      if (args.includes('set-description')) description = args.at(-1) ?? null;
+      callback(
+        null,
+        Buffer.from(
+          JSON.stringify({
+            window_id: windowId,
+            workspaces: [{ id: workspaceId, description }],
+          }),
+        ),
+      );
+    });
+    const runtime = await runCoordinatorRuntime(
+      [
+        '--listen',
+        listen,
+        '--ledger',
+        join(directory, 'ledger.json'),
+        '--cmux-socket',
+        '/tmp/cmux.sock',
+        '--workspace',
+        workspaceId,
+      ],
+      {
+        execFile: execute,
+        probePid: () => 'match',
+        store: { read: async () => null, write: async () => {} },
+      },
+    );
+    const socket = createConnection(listen);
+    try {
+      await once(socket, 'connect');
+      const snapshotAck = nextJsonLine(socket);
+      socket.write(
+        `${JSON.stringify(
+          presentationSnapshot({
+            workspaceId,
+            surfaceId: 'surface-a',
+            views: [
+              {
+                producer: { key: 'session-hygiene', label: 'Session Hygiene' },
+                items: [{ key: 'health', title: 'Healthy', rows: [] }],
+              },
+            ],
+          }),
+        )}\n`,
+      );
+      const accepted = await snapshotAck;
+      await lookupStarted.promise;
+
+      const serverClosed = once(runtime.server, 'close');
+      const goodbyeAck = nextJsonLine(socket);
+      socket.write(
+        `${JSON.stringify(
+          presentationGoodbye(accepted['acceptedGeneration'], {
+            workspaceId,
+            surfaceId: 'surface-a',
+          }),
+        )}\n`,
+      );
+      await expect(goodbyeAck).resolves.toMatchObject({ kind: 'ack', acceptedKind: 'goodbye' });
+      lookupResult.resolve();
+      await serverClosed;
+      await vi.waitFor(() => expect(runtime.presentation.diagnostics().sourceCount).toBe(0));
+      await vi.waitFor(() => expect(runtime.description.isIdle()).toBe(true));
+      expect(description).toBeNull();
+      expect(
+        execute.mock.calls.some(
+          (call) =>
+            call[1].includes('set-description') && String(call[1].at(-1)).includes('Stale title'),
+        ),
+      ).toBe(false);
+    } finally {
+      socket.destroy();
+      await runtime.close();
+    }
+  });
+
   it('live lookup and description commands never delay ACKs', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'pj-description-'));
     tempDirectories.push(directory);
@@ -906,6 +1244,10 @@ describe('coordinator runtime boundary', () => {
     const callbacks: Array<() => void> = [];
     const execute = vi.fn((_file, args, _options, callback) => {
       if (replyToTargetLookup(args, callback)) return;
+      if (args.includes('surface.list')) {
+        callback(null, Buffer.from(JSON.stringify({ workspace_id: workspaceId, surfaces: [] })));
+        return;
+      }
       callbacks.push(() =>
         callback(
           null,
@@ -952,7 +1294,7 @@ describe('coordinator runtime boundary', () => {
     expect(await ack).toMatchObject({ kind: 'ack', acceptedKind: 'snapshot' });
     expect(persisted).toEqual([]);
     await vi.waitFor(() => expect(callbacks).toHaveLength(1));
-    expect(execute).toHaveBeenCalledTimes(3);
+    expect(execute).toHaveBeenCalledTimes(4);
     // Lifecycle accepts and persists while its process is queued behind description.
     expect(
       await runtime.core.acceptSnapshot(snapshot({ workspaceId }), 'lifecycle-socket'),

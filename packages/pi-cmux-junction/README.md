@@ -152,6 +152,18 @@ the old contribution and replays current views through the destination's shared
 coordinator. Other sessions' views remain. New/resumed sessions never inherit the
 previous session's views.
 
+The coordinator best-effort enriches each producer label with its publishing tab:
+`<tab title> · <producer label>`. It calls `rpc surface.list` once per
+publication, checks the returned workspace ID, and matches the source's exact
+`surfaceId` to `surfaces[].id`. It never uses focused-surface data. Titles are
+trimmed and rejected when empty, unsafe, over 128 UTF-8 bytes, or over 128
+characters. A failed lookup or invalid title keeps the producer label. If the
+combined label is too large, Junction keeps that label and uses only a bounded
+title prefix when it fits. Presentation heartbeats refresh titles, so a rename is
+visible on the next 10-second snapshot without a new producer event or a new
+poller. Source identity, the producer protocol, five-field J2 `P` records, and
+existing installed boards remain unchanged.
+
 Disabling publication or exiting withdraws that session. Before changing or clearing
 a description, Junction reads `workspace list --window <verified UUID>` and requires
 one matching workspace plus the exact bytes it last wrote. This lookup also works
@@ -163,6 +175,8 @@ There is no atomic compare-and-set; concurrent external writes remain a limitati
 When upgrading to this code, stop old Junction sessions/coordinators once before
 reopening Pi. Ordinary later permission changes need only `/reload`, not a shared
 process restart. Junction never writes settings automatically.
+
+Each producer item may provide `title`, `status`, or both. At least one is required; supplied values must be non-empty strings. Status-only cards omit the title and retain any link as an “Open link” action.
 
 Producer views belong to the extension instance. Pi replaces that instance on new/resume/fork/reload, so a producer may announce before Junction's `session_start` without its fresh data being cleared. If session identity changes in place, Junction pauses presentation and clears the previous views before accepting the first new event (or during maintenance); shutdown releases the source.
 
@@ -203,11 +217,13 @@ capacity and installed UI gates remain unresolved.
 - Header: `J2 US sha256(body UTF-8) RS body`, with 64 lowercase ASCII hex digits.
   Existing ordered S/P/C/R records form the exact body; no trailing separator.
   Empty projection still means clear/null, never a header-only board.
-- Display fields are unchanged text: no escaping or trimming. The Node projector
-  serializes accepted hrefs with `new URL(href).toString()` once; it does not
-  normalize labels, titles, summaries or row text. `%`, `%25`, `␞`, `␟` and literal
-  `∅` remain ordinary text. Existing Unicode, C0/C1 exclusions, field restrictions
-  and input byte limits are unchanged.
+- Producer and card display fields are unchanged text: no escaping or trimming.
+  The Node projector serializes accepted hrefs with `new URL(href).toString()`
+  once; it does not normalize producer labels, card titles, summaries or row text.
+  `%`, `%25`, `␞`, `␟` and literal `∅` remain ordinary text. The coordinator's
+  optional tab-title prefix is the only derived display text; it is validated and
+  bounded before projection. Existing Unicode, C0/C1 exclusions, field
+  restrictions and input byte limits are unchanged.
 - The ASCII body hash distinguishes canonically equivalent spellings that cmux's
   Swift equality would otherwise deduplicate, under the usual SHA-256 collision
   assumption. The renderer checks tag syntax and all body semantics it supports;
