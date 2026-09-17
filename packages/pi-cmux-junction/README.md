@@ -4,15 +4,90 @@ Branch into parallel Pi sessions: open Git worktrees in new cmux workspaces, for
 
 ## Install
 
+This package is unpublished. Install from your checkout:
+
 ```shell
-pi install npm:@robhowley/pi-cmux-junction
+pi install /absolute/path/to/pi-userland/packages/pi-cmux-junction
 ```
+
+Run `/reload` in Pi after installation.
+
+## Install the optional sidebar board
+
+With Junction loaded in Pi, run:
+
+```text
+/junction board install
+```
+
+This installs `~/.config/cmux/sidebars/junction-board.swift`; it works without Git
+or a running cmux. It **does not open the board or enable dashboard publication**.
+
+To open the installed board without replacing the native left workspace sidebar, run:
+
+```text
+/junction board open
+```
+
+This uses cmux's unfocused right sidebar for fixed `window:1`. It does not install the
+board automatically. Run it only after `board install` succeeds.
+
+Then enable routing in your global Pi `settings.json` (`~/.pi/agent/settings.json`,
+or your `PI_CODING_AGENT_DIR`):
+
+```json
+{ "pi-cmux-junction": { "enablePresentation": true } }
+```
+
+Run `/reload` in each Pi session that should publish. With presentation enabled,
+Junction immediately publishes one status-only `Session` card from that session's
+existing lifecycle state. Other extensions may add producer cards alongside it,
+but no external producer is required. The board uses the workspace list supplied
+by cmux, not an independent all-window search. See [publication](#opt-in-dashboard-publication)
+for ownership and cleanup limits, and [board validation](#j2-sidebar-validation)
+for the remaining UI validation caveats.
+
+Run the same command after loading a package update:
+
+| Installed file                           | Result                     |
+| ---------------------------------------- | -------------------------- |
+| Missing                                  | Install it.                |
+| Already current                          | Leave it unchanged.        |
+| Unchanged since Junction installed it    | Update it.                 |
+| Modified or not recognized as Junction's | Stop without replacing it. |
+
+Other assets and settings stay untouched. Avoid editing the board or its directory
+while installing: concurrent edits can still be overwritten. An already-open board
+may reload automatically through cmux.
+
+<details>
+<summary>Installation warnings and troubleshooting</summary>
+
+- **Unrecognized file:** Junction records installed content in the adjacent
+  `.pi-cmux-junction-board.receipt`. Missing or invalid receipts prevent updates;
+  current files stay unchanged with a warning. Junction never adopts files or
+  repairs receipts. Stop on refusal—there is no force option; don't bypass it by copying.
+- **Path conflict:** An existing `junction-board.json` blocks a fresh install.
+  Symlinks and non-file board/receipt/lock objects are refused. The `.config/cmux/sidebars`
+  directories must also be real directories; `XDG_CONFIG_HOME` is not used.
+- **Busy:** After a crash, inspect the adjacent `.pi-cmux-junction-board.lock`.
+  Remove it only after confirming no installer is running.
+- **Partial failure:** The board changed, but verification, receipt writing or
+  cleanup failed. Inspect the reported paths before doing anything else. A crash
+  can leave the receipt out of date and block future updates; there is no automatic repair.
+
+Package updates do not install the board automatically. The command uses the
+loaded package's version, even if older. It does not validate or explicitly reload
+cmux, and offers no power-loss recovery guarantee or uninstall command.
+
+</details>
 
 ## Use
 
 From Pi running inside cmux in a Git repository:
 
 ```text
+/junction board open
 /junction --branch <name> [--tab]
 /junction --branch <name> --from <commit-ish> [--tab]
 /junction fork --branch <name> [--tab]
@@ -20,7 +95,7 @@ From Pi running inside cmux in a Git repository:
 /junction checkout --branch <local-branch> [--tab]
 ```
 
-Run `/junction` without arguments or `/junction help` to show this help. Add `--tab` as the final argument to open the new Pi session in the same cmux pane and workspace as the current session; otherwise, Junction opens a new workspace. Both leave your current focus unchanged.
+Run `/junction` without arguments or `/junction help` to show this help. For worktree commands, add `--tab` as the final argument to open the new Pi session in the same cmux pane and workspace as the current session; otherwise, Junction opens a new workspace. Both leave your current focus unchanged.
 
 - `/junction --branch <name> [--tab]` — create a new worktree from the default base or reuse a matching worktree; start a fresh Pi session.
 - `/junction --branch <name> --from <commit-ish> [--tab]` — create a new worktree from the specified commit-ish (never reuse); start a fresh Pi session.
@@ -66,26 +141,45 @@ A project setting overrides the global setting. After editing a settings file di
 
 ### Opt-in dashboard publication
 
-Dashboard publication is off by default and independent of `disableStatus`. Set `enablePresentation: true` in global or trusted-project `pi-cmux-junction` settings. Publication also requires an explicit reservation in **global** settings:
+Publication is off by default and independent of `disableStatus`. Only global
+`enablePresentation: true` grants permission; a trusted project can narrow it with
+`false`, but cannot enable publication by itself. Once enabled, Junction publishes
+its own status-only `Session` card from the existing lifecycle state; other
+producer cards are optional. After editing settings, `/reload` applies the change
+even if the shared coordinator started with status alone. No workspace IDs or
+launch-time permission arguments are needed.
 
-```json
-{
-  "pi-cmux-junction": {
-    "enablePresentation": true,
-    "descriptionReservations": [
-      {
-        "socketPath": "/absolute/path/to/cmux.sock",
-        "windowId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-        "workspaceId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-      }
-    ]
-  }
-}
-```
+Junction resolves the runtime's live cmux surface, then verifies its workspace and
+window, never the focused workspace. Every 30 seconds it checks for moves, removes
+the old contribution and replays current views through the destination's shared
+coordinator. Other sessions' views remain. New/resumed sessions never inherit the
+previous session's views.
 
-Replace these example identities with the intended target. Add one reservation per workspace; duplicate matches disable publication for that target. Project settings cannot grant reservation authority. Junction matches the normalized socket path and workspace UUID and pins description operations to the reserved window UUID. It refuses foreign description text; enabling it does not take over native descriptions, install/select a sidebar, or change navigation.
+The coordinator best-effort enriches each producer label with its publishing tab:
+`<tab title> · <producer label>`. It calls `rpc surface.list` once per
+publication, checks the returned workspace ID, and matches the source's exact
+`surfaceId` to `surfaces[].id`. It never uses focused-surface data. Titles are
+trimmed and rejected when empty, unsafe, over 128 UTF-8 bytes, or over 128
+characters. A failed lookup or invalid title keeps the producer label. If the
+combined label is too large, Junction keeps that label and uses only a bounded
+title prefix when it fits. Presentation heartbeats refresh titles, so a rename is
+visible on the next 10-second snapshot without a new producer event or a new
+poller. Source identity, the producer protocol, five-field J2 `P` records, and
+existing installed boards remain unchanged.
 
-Settings are read at session startup. `/reload` reapplies the local opt-in, but an already-running shared coordinator retains its original reservation until it exits and is relaunched. Both status-first and presentation-first launches receive the same matched global authority. No settings are written automatically.
+Disabling publication or exiting withdraws that session. Before changing or clearing
+a description, Junction reads `workspace list --window <verified UUID>` and requires
+one matching workspace plus the exact bytes it last wrote. This lookup also works
+when the last source surface has disappeared. Failed or ambiguous lookups leave the
+description untouched. Existing descriptions, including J2 left by a previous
+coordinator process, remain foreign. Ownership is not persisted across restarts.
+There is no atomic compare-and-set; concurrent external writes remain a limitation.
+
+When upgrading to this code, stop old Junction sessions/coordinators once before
+reopening Pi. Ordinary later permission changes need only `/reload`, not a shared
+process restart. Junction never writes settings automatically.
+
+Each producer item may provide `title`, `status`, or both. At least one is required; supplied values must be non-empty strings. Status-only cards omit the title and retain any link as an “Open link” action.
 
 Producer views belong to the extension instance. Pi replaces that instance on new/resume/fork/reload, so a producer may announce before Junction's `session_start` without its fresh data being cleared. If session identity changes in place, Junction pauses presentation and clears the previous views before accepting the first new event (or during maintenance); shutdown releases the source.
 
@@ -107,12 +201,13 @@ Set `PI_CMUX_JUNCTION_WORKTREE_ROOT` to another location. It accepts an absolute
 
 Junction leaves worktrees in place. It reuses one only when the expected path and branch match; otherwise, it stops without changing existing Git state.
 
-## Manual J2 sidebar prototype (incomplete; not activated)
+## J2 sidebar validation
 
-`extensions/cmux-junction/sidebar/junction-board.swift` is an inert, manually installed
+`extensions/cmux-junction/sidebar/junction-board.swift` is an explicitly installed
 asset for **cmux 0.64.22 (102), commit `ddd4a01bc5d8ebac19643930f5fd7d40e85f1534`**.
 Installing this package does not install/select the sidebar or publish descriptions.
-Do not use this prototype on workspaces containing descriptions you need to keep.
+Publication preserves existing descriptions; manual fixture injection below is
+for disposable workspaces only.
 J2 preserves combining marks and display text without changing cmux. The Node
 projector normalizes only accepted href fields once, at publication.
 **Phase 6 remains incomplete:** foreign-input UTF-8 byte limits, shared renderer
@@ -125,11 +220,13 @@ capacity and installed UI gates remain unresolved.
 - Header: `J2 US sha256(body UTF-8) RS body`, with 64 lowercase ASCII hex digits.
   Existing ordered S/P/C/R records form the exact body; no trailing separator.
   Empty projection still means clear/null, never a header-only board.
-- Display fields are unchanged text: no escaping or trimming. The Node projector
-  serializes accepted hrefs with `new URL(href).toString()` once; it does not
-  normalize labels, titles, summaries or row text. `%`, `%25`, `␞`, `␟` and literal
-  `∅` remain ordinary text. Existing Unicode, C0/C1 exclusions, field restrictions
-  and input byte limits are unchanged.
+- Producer and card display fields are unchanged text: no escaping or trimming.
+  The Node projector serializes accepted hrefs with `new URL(href).toString()`
+  once; it does not normalize producer labels, card titles, summaries or row text.
+  `%`, `%25`, `␞`, `␟` and literal `∅` remain ordinary text. The coordinator's
+  optional tab-title prefix is the only derived display text; it is validated and
+  bounded before projection. Existing Unicode, C0/C1 exclusions, field
+  restrictions and input byte limits are unchanged.
 - The ASCII body hash distinguishes canonically equivalent spellings that cmux's
   Swift equality would otherwise deduplicate, under the usual SHA-256 collision
   assumption. The renderer checks tag syntax and all body semantics it supports;
@@ -221,14 +318,15 @@ installed sidebar names, not an arbitrary source path.
 2. Choose two disposable, empty workspaces in that window; record both UUIDs and
    confirm their descriptions are exactly JSON `null`. Do not rely on current
    focus, indexes, environment-inferred workspace IDs, or clearing existing text.
-3. Set `ASSET` to this repository's Swift file and `TARGET` to
+3. Set `ASSET` to the loaded package's Swift file and `TARGET` to
    `~/.config/cmux/sidebars/junction-board.swift`. In a private temporary directory,
    record whether `TARGET` was absent; otherwise back it up with `cp -p`. Record
    its hash and permissions. Do not touch other assets or cmux configuration.
-4. With explicit permission to change the visible sidebar, install and validate:
+4. With permission to install the file, run `/junction board install` in Pi.
+   Stop on any failure; don't substitute a manual copy. Then, only with separate
+   permission to change the visible sidebar, validate:
 
    ```sh
-   install -m 0600 "$ASSET" "$TARGET"
    cmux sidebar validate junction-board --json
    # Continue only after successful validation:
    cmux sidebar reload junction-board --json
@@ -295,6 +393,7 @@ replace(b, None, bad)
   equal the installed repository asset**. Preserve backup permissions. Run
   `cmux sidebar reload --all --json`, then verify the prior selection visually
   and compare the restored asset/absence with the backup. Record success/failure.
+  Manual restoration does not repair receipt ownership or authorize future updates.
 
 ### Prototype limits and evidence to retain
 

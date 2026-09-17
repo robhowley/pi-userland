@@ -103,7 +103,6 @@ type SpawnProcess = (
 type ConnectSocket = (path: string) => Socket;
 
 export interface LifecycleClientOptions {
-  descriptionReservation?: import('./config.js').DescriptionReservation;
   target: LifecycleTarget;
   owner: LifecycleOwnerIdentity;
   coordinatorPath: string;
@@ -158,7 +157,6 @@ export function coordinatorLaunchArgs(
   paths: LifecycleClientPaths,
   target: Pick<LifecycleTarget, 'socketPath' | 'workspaceId'>,
   coordinatorPath: string,
-  descriptionReservation?: import('./config.js').DescriptionReservation,
 ): string[] {
   return [
     '-k',
@@ -174,9 +172,6 @@ export function coordinatorLaunchArgs(
     target.socketPath,
     '--workspace',
     target.workspaceId,
-    ...(descriptionReservation
-      ? ['--description-reservation', JSON.stringify(descriptionReservation)]
-      : []),
   ];
 }
 
@@ -456,12 +451,7 @@ export class LifecycleClient {
     try {
       const child = this.options.spawn(
         '/usr/bin/lockf',
-        coordinatorLaunchArgs(
-          this.paths,
-          this.options.target,
-          this.options.coordinatorPath,
-          this.options.descriptionReservation,
-        ),
+        coordinatorLaunchArgs(this.paths, this.options.target, this.options.coordinatorPath),
         {
           shell: false,
           detached: true,

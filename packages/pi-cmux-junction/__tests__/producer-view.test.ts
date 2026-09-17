@@ -448,6 +448,14 @@ const unknownFieldCases: Array<{ name: string; path: string; value: unknown }> =
 ];
 
 describe('producer view source contract', () => {
+  it.each([{ title: 'Title' }, { status: 'Running' }, { title: 'Title', status: 'Running' }])(
+    'accepts title or status: %j',
+    (fields) => {
+      const item = { key: 'item', ...fields };
+      expect(valid(makeView('p', [item])).items).toEqual([{ ...item, rows: [] }]);
+    },
+  );
+
   describe('normalization', () => {
     it('exports the event name and every Phase 1 limit', () => {
       expect(PRODUCER_VIEW_EVENT).toBe('pi-cmux-junction:update');

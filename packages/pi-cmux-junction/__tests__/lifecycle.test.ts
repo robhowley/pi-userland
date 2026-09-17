@@ -11,6 +11,7 @@ import {
   lifecycleEligibility,
   registerJunctionLifecycle,
   restoreUiWrappers,
+  type LifecycleDependencies,
 } from '../extensions/cmux-junction/lifecycle.js';
 import {
   LIFECYCLE_TIMINGS,
@@ -20,6 +21,11 @@ import {
 } from '../extensions/cmux-junction/activity.js';
 import { resolveCmuxTarget } from '../extensions/cmux-junction/cmux.js';
 import type { ProcessRunner } from '../extensions/cmux-junction/process.js';
+import {
+  createProducerViewStore,
+  type ProducerView,
+  type ProducerViewStore,
+} from '../extensions/cmux-junction/producer-view.js';
 
 function context(overrides: Record<string, unknown> = {}) {
   let sessionId = 'session-a';
@@ -66,6 +72,9 @@ function harness(
     contextOverrides?: Record<string, unknown>;
     runner?: ProcessRunner;
     resolveTarget?: (cwd: string, target: any, options: any) => Promise<any>;
+    producerViews?: ProducerViewStore;
+    publishProducerView?: LifecycleDependencies['publishProducerView'];
+    attachPresentation?: LifecycleDependencies['attachPresentation'];
   } = {},
 ) {
   const handlers = new Map<string, (event: any, ctx: any) => unknown>();
@@ -96,6 +105,17 @@ function harness(
     }),
   };
   const intervals: Array<{ callback: () => void; delay: number }> = [];
+  const presentation = {
+    changeSession: vi.fn(async () => undefined),
+    goodbye: vi.fn(async () => true),
+    diagnostics: vi.fn(() => ({
+      generation: null,
+      revision: -1,
+      connected: false,
+      dirty: false,
+    })),
+  };
+  const attachPresentation = options.attachPresentation ?? vi.fn(() => presentation);
   const ctx = context(options.contextOverrides);
   const loadConfig = options.loadConfig ?? vi.fn(() => ({ disableStatus: false }));
   const createClient = vi.fn(() => client);
@@ -126,7 +146,12 @@ function harness(
       return timer as unknown as ReturnType<typeof setInterval>;
     }) as typeof setInterval,
     clearInterval,
+    attachPresentation,
     ...(options.runner === undefined ? {} : { runner: options.runner }),
+    ...(options.producerViews === undefined ? {} : { producerViews: options.producerViews }),
+    ...(options.publishProducerView === undefined
+      ? {}
+      : { publishProducerView: options.publishProducerView }),
   });
   const emit = async (name: string, event: Record<string, unknown> = {}, custom = ctx.value) => {
     await handlers.get(name)?.({ type: name, ...event }, custom);
@@ -148,26 +173,46 @@ function harness(
 }
 
 describe('lifecycle eligibility', () => {
-  it('passes global authority to a lifecycle-first launch even with presentation disabled', async () => {
-    const reservation = {
-      socketPath: '/tmp/cmux.sock',
-      workspaceId: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
-      windowId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
-    };
+  it('moves lifecycle ownership to a new coordinator without restarting the session', async () => {
+    let workspaceId = 'workspace-a';
     const h = harness({
-      loadConfig: () => ({ ...DEFAULT_JUNCTION_CONFIG, descriptionReservations: [reservation] }),
-      resolveTarget: async (_cwd, target) => ({
-        ok: true,
-        ...target,
-        workspaceId: reservation.workspaceId,
-      }),
+      resolveTarget: async (_cwd, target) => ({ ok: true, ...target, workspaceId }),
     });
     await h.emit('session_start');
-    expect(h.createClient).toHaveBeenCalledWith(
-      expect.objectContaining({ descriptionReservation: reservation }),
-    );
+    workspaceId = 'workspace-b';
+    h.intervals
+      .find((timer) => timer.delay === LIFECYCLE_TIMINGS.maintenanceIntervalMs)!
+      .callback();
+    await vi.waitFor(() => expect(h.createClient).toHaveBeenCalledTimes(2));
+    expect(h.client.goodbye).toHaveBeenCalledTimes(1);
+    expect(h.createClient.mock.calls[1]).toEqual([
+      expect.objectContaining({
+        target: expect.objectContaining({ workspaceId: 'workspace-b' }),
+        owner: expect.objectContaining({ sessionId: 'session-a' }),
+      }),
+    ]);
     await h.emit('session_shutdown');
   });
+  it('withdraws on failed live lookup and reconnects only after verification recovers', async () => {
+    let available = true;
+    const h = harness({
+      resolveTarget: async (_cwd, target) =>
+        available ? { ok: true, ...target } : { ok: false, reason: 'invalid-response' },
+    });
+    await h.emit('session_start');
+    const maintain = h.intervals.find(
+      (timer) => timer.delay === LIFECYCLE_TIMINGS.maintenanceIntervalMs,
+    )!.callback;
+    available = false;
+    maintain();
+    await vi.waitFor(() => expect(h.client.goodbye).toHaveBeenCalledTimes(1));
+    expect(h.createClient).toHaveBeenCalledTimes(1);
+    available = true;
+    maintain();
+    await vi.waitFor(() => expect(h.createClient).toHaveBeenCalledTimes(2));
+    await h.emit('session_shutdown');
+  });
+
   it('requires exact public TUI and inherited identity inputs', () => {
     const ctx = context().value;
     expect(lifecycleEligibility(ctx, env())).toMatchObject({
@@ -458,6 +503,179 @@ describe('Pi lifecycle adapter', () => {
     expect(h.observeProcessStart).toHaveBeenCalledOnce();
     expect(h.createClient).toHaveBeenCalledOnce();
     expect(h.client.start).toHaveBeenCalledOnce();
+  });
+
+  it('publishes the default lifecycle card only when its visible status changes', async () => {
+    const views: ProducerView[] = [];
+    const h = harness({
+      loadConfig: () => ({ disableStatus: false, enablePresentation: true }),
+      producerViews: createProducerViewStore(),
+      publishProducerView: (view) => views.push(view),
+    });
+
+    await h.emit('session_start');
+    await h.emit('input', { source: 'interactive' });
+    await h.emit('turn_start', { turnIndex: 0 });
+    await h.emit('tool_execution_start', { toolCallId: 'tool-1', toolName: 'bash' });
+    await h.emit('tool_execution_update', {
+      toolCallId: 'tool-1',
+      partialResult: { content: 'first output' },
+    });
+    await h.emit('tool_execution_update', {
+      toolCallId: 'tool-1',
+      partialResult: { content: 'second output' },
+    });
+    await h.emit('tool_execution_end', { toolCallId: 'tool-1' });
+    await h.emit('turn_end', { turnIndex: 0 });
+    await h.emit('agent_settled');
+
+    expect(views).toEqual([
+      {
+        producer: { key: 'pi-cmux-junction', label: 'Session' },
+        items: [{ key: 'lifecycle', status: 'Idle' }],
+      },
+      {
+        producer: { key: 'pi-cmux-junction', label: 'Session' },
+        items: [{ key: 'lifecycle', status: 'Thinking' }],
+      },
+      {
+        producer: { key: 'pi-cmux-junction', label: 'Session' },
+        items: [{ key: 'lifecycle', status: 'Tool running: bash' }],
+      },
+      {
+        producer: { key: 'pi-cmux-junction', label: 'Session' },
+        items: [{ key: 'lifecycle', status: 'Thinking' }],
+      },
+      {
+        producer: { key: 'pi-cmux-junction', label: 'Session' },
+        items: [{ key: 'lifecycle', status: 'Unknown' }],
+      },
+      {
+        producer: { key: 'pi-cmux-junction', label: 'Session' },
+        items: [{ key: 'lifecycle', status: 'Idle' }],
+      },
+    ]);
+
+    const heartbeat = h.intervals.find(({ delay }) => delay === LIFECYCLE_HEARTBEAT_MS)!;
+    const publishedCount = views.length;
+    h.setNow(1_700_000_000_001);
+    heartbeat.callback();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(views).toHaveLength(publishedCount);
+  });
+
+  it('publishes maintenance status changes but deduplicates timestamp-only snapshots', async () => {
+    const views: ProducerView[] = [];
+    const h = harness({
+      loadConfig: () => ({ disableStatus: false, enablePresentation: true }),
+      producerViews: createProducerViewStore(),
+      publishProducerView: (view) => views.push(view),
+    });
+    await h.emit('session_start');
+    await h.emit('turn_start', { turnIndex: 0 });
+    await h.emit('tool_execution_start', { toolCallId: 'tool-1', toolName: 'bash' });
+
+    const maintenance = h.intervals.find(
+      ({ delay }) => delay === LIFECYCLE_TIMINGS.maintenanceIntervalMs,
+    )!;
+    const publishedCount = views.length;
+    maintenance.callback();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(views).toHaveLength(publishedCount);
+
+    h.setNow(1_700_000_000_000 + LIFECYCLE_TIMINGS.toolStuckAfterMs + 1);
+    maintenance.callback();
+    await vi.waitFor(() => expect(views.at(-1)?.items[0]?.status).toBe('Unknown'));
+  });
+
+  it('resets the lifecycle card for a fresh session without removing other producers until replacement', async () => {
+    const producerViews = createProducerViewStore();
+    const views: ProducerView[] = [];
+    producerViews.accept({
+      producer: { key: 'other-producer', label: 'Other' },
+      items: [{ key: 'item', status: 'ready' }],
+    });
+    const h = harness({
+      loadConfig: () => ({ disableStatus: false, enablePresentation: true }),
+      producerViews,
+      publishProducerView: (view) => {
+        views.push(view);
+        producerViews.accept(view);
+      },
+    });
+
+    await h.emit('session_start');
+    expect(producerViews.snapshot()).toHaveLength(2);
+
+    h.ctx.setSessionId('session-b');
+    const maintenance = h.intervals.find(
+      ({ delay }) => delay === LIFECYCLE_TIMINGS.maintenanceIntervalMs,
+    )!;
+    maintenance.callback();
+    await vi.waitFor(() => expect(views).toHaveLength(2));
+
+    expect(views[1]).toEqual(views[0]);
+    expect(producerViews.snapshot()).toEqual([
+      {
+        producer: { key: 'pi-cmux-junction', label: 'Session' },
+        items: [
+          {
+            key: 'lifecycle',
+            rows: [],
+            status: 'Idle',
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('publishes the lifecycle card when status delivery is disabled', async () => {
+    const views: ProducerView[] = [];
+    const h = harness({
+      loadConfig: () => ({ disableStatus: true, enablePresentation: true }),
+      producerViews: createProducerViewStore(),
+      publishProducerView: (view) => views.push(view),
+    });
+
+    await h.emit('session_start');
+    await h.emit('turn_start', { turnIndex: 0 });
+
+    expect(h.createClient).not.toHaveBeenCalled();
+    expect(views.map((view) => view.items[0]?.status)).toEqual(['Idle', 'Thinking']);
+  });
+
+  it('tracks presentation-only dialog waits through completion and shutdown', async () => {
+    const views: ProducerView[] = [];
+    const h = harness({
+      loadConfig: () => ({ disableStatus: true, enablePresentation: true }),
+      producerViews: createProducerViewStore(),
+      publishProducerView: (view) => views.push(view),
+    });
+    let release!: (value: string) => void;
+    const originalSelect = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          release = resolve;
+        }),
+    );
+    (h.ctx.ui as any).select = originalSelect;
+
+    await h.emit('session_start');
+    expect(h.createClient).not.toHaveBeenCalled();
+    expect(h.ctx.ui.select).not.toBe(originalSelect);
+
+    const pending = (h.ctx.ui as any).select('Choose a value', ['value']);
+    const statuses = () => views.map((view) => view.items[0]?.status);
+    await vi.waitFor(() => expect(statuses()).toEqual(['Idle', 'Needs input']));
+
+    release('value');
+    await expect(pending).resolves.toBe('value');
+    await vi.waitFor(() => expect(statuses()).toEqual(['Idle', 'Needs input', 'Idle']));
+
+    await h.emit('session_shutdown');
+    expect(h.ctx.ui.select).toBe(originalSelect);
   });
 
   it('maps public events in serialized order and settles only on the real idle event', async () => {

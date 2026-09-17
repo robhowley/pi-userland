@@ -25,7 +25,8 @@ export const MAX_PRESENTATION_ROWS = 4_096;
 
 const MAX_PRODUCER_KEY_BYTES = 64;
 const MAX_ITEM_KEY_BYTES = 64;
-const MAX_LABEL_BYTES = 128;
+export const MAX_PRESENTATION_LABEL_BYTES = 128;
+const MAX_LABEL_BYTES = MAX_PRESENTATION_LABEL_BYTES;
 const MAX_SUMMARY_BYTES = 512;
 const MAX_ROW_TEXT_BYTES = 256;
 export const MAX_HREF_BYTES = 2_048;
@@ -299,12 +300,12 @@ function normalizeProducer(value) {
 }
 
 function normalizeItem(value) {
-  if (!plainRecord(value) || !exactOptionalFields(value, ITEM_FIELDS, ['key', 'title', 'rows']))
-    return null;
+  if (!plainRecord(value) || !exactOptionalFields(value, ITEM_FIELDS, ['key', 'rows'])) return null;
   if (
     !validIdentifier(value.key, MAX_ITEM_KEY_BYTES) ||
-    !validText(value.title, MAX_LABEL_BYTES) ||
+    !optionalText(value.title, MAX_LABEL_BYTES) ||
     !optionalText(value.status, MAX_LABEL_BYTES) ||
+    (value.title === undefined && value.status === undefined) ||
     !optionalText(value.summary, MAX_SUMMARY_BYTES) ||
     !optionalUrl(value.href) ||
     !Array.isArray(value.rows) ||
@@ -322,7 +323,7 @@ function normalizeItem(value) {
   }
   return Object.freeze({
     key: value.key,
-    title: value.title,
+    ...(value.title === undefined ? {} : { title: value.title }),
     ...(value.status === undefined ? {} : { status: value.status }),
     ...(value.summary === undefined ? {} : { summary: value.summary }),
     ...(progress === undefined ? {} : { progress }),
