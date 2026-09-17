@@ -142,7 +142,7 @@ export function formatCacheRate(inputTokens: number, cacheReadTokens: number): s
   if (total === 0) return null;
 
   const rate = Math.round((cacheReadTokens / total) * 100);
-  return `Cache rate ${rate}%`;
+  return `cache ${rate}%`;
 }
 
 export function updateStatusIndicator(
@@ -165,7 +165,7 @@ export function updateStatusIndicator(
       { key: 'session-hygiene', status: healthStatus },
       ...(cacheStatus === null
         ? []
-        : [{ key: 'session-hygiene-cache', status: cacheStatus }]),
+        : [{ key: 'session-hygiene-cache', status: cacheStatus.replace(/^cache /, 'Cache rate ') }]),
     ],
   });
 }

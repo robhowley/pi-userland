@@ -170,9 +170,9 @@ describe('session-hygiene', () => {
 
     it('formats cache hit rate', () => {
       expect(formatCacheRate(0, 0)).toBeNull();
-      expect(formatCacheRate(100, 0)).toBe('Cache rate 0%');
-      expect(formatCacheRate(200, 800)).toBe('Cache rate 80%');
-      expect(formatCacheRate(30, 970)).toBe('Cache rate 97%');
+      expect(formatCacheRate(100, 0)).toBe('cache 0%');
+      expect(formatCacheRate(200, 800)).toBe('cache 80%');
+      expect(formatCacheRate(30, 970)).toBe('cache 97%');
     });
 
     it('updates the context and cache status chips for all health levels', () => {
@@ -186,9 +186,9 @@ describe('session-hygiene', () => {
         ['session-hygiene', '🟢 ctx ok'],
         ['session-hygiene-cache', undefined],
         ['session-hygiene', '🟡 ctx watch'],
-        ['session-hygiene-cache', 'Cache rate 80%'],
+        ['session-hygiene-cache', 'cache 80%'],
         ['session-hygiene', '🔴 ctx compact'],
-        ['session-hygiene-cache', 'Cache rate 0%'],
+        ['session-hygiene-cache', 'cache 0%'],
       ]);
     });
 
@@ -316,7 +316,7 @@ describe('session-hygiene', () => {
       expect(lastStatusCall(ctx)).toEqual(['session-hygiene', '🟡 ctx watch']);
       expect(lastStatusCall(ctx, 'session-hygiene-cache')).toEqual([
         'session-hygiene-cache',
-        'Cache rate 80%',
+        'cache 80%',
       ]);
       expect(api.events.emit).toHaveBeenCalledTimes(2);
       expect(api.events.emit).toHaveBeenNthCalledWith(1, 'pi-cmux-junction:update', {
@@ -343,7 +343,7 @@ describe('session-hygiene', () => {
       expect(lastStatusCall(ctx)).toEqual(['session-hygiene', '🟢 ctx ok']);
       expect(lastStatusCall(ctx, 'session-hygiene-cache')).toEqual([
         'session-hygiene-cache',
-        'Cache rate 90%',
+        'cache 90%',
       ]);
     });
 
@@ -513,7 +513,7 @@ describe('session-hygiene', () => {
       expect(lastStatusCall(ctx)).toEqual(['session-hygiene', '🟢 ctx ok']);
       expect(lastStatusCall(ctx, 'session-hygiene-cache')).toEqual([
         'session-hygiene-cache',
-        'Cache rate 80%',
+        'cache 80%',
       ]);
 
       await ext.sessionCompact({}, ctx);
