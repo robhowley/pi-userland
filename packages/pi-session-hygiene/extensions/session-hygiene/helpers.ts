@@ -165,7 +165,9 @@ export function updateStatusIndicator(
       { key: 'session-hygiene', status: healthStatus },
       ...(cacheStatus === null
         ? []
-        : [{ key: 'session-hygiene-cache', status: cacheStatus.replace(/^cache /, 'Cache rate ') }]),
+        : [
+            { key: 'session-hygiene-cache', status: cacheStatus.replace(/^cache /, 'Cache rate ') },
+          ]),
     ],
   });
 }
