@@ -135,7 +135,7 @@ export function runDescriptionCommand(file, args, env, execute = execFile) {
   });
 }
 
-function readJson(result) {
+export function readDescriptionCommandJson(result) {
   if (result?.ok !== true) throw new Error('process');
   const raw = result.stdout;
   if (!Buffer.isBuffer(raw) && typeof raw !== 'string') throw new Error('output');
@@ -151,7 +151,7 @@ function readJson(result) {
 export async function resolveDescriptionTarget(target, surfaceId, runCommand) {
   try {
     const args = ['--socket', target.socketPath];
-    const resolved = readJson(
+    const resolved = readDescriptionCommandJson(
       await runCommand([
         ...args,
         'rpc',
@@ -165,7 +165,7 @@ export async function resolveDescriptionTarget(target, surfaceId, runCommand) {
       resolved.workspace_id !== target.workspaceId
     )
       return null;
-    const identified = readJson(
+    const identified = readDescriptionCommandJson(
       await runCommand([
         ...args,
         'identify',
@@ -200,7 +200,7 @@ export async function resolveDescriptionTarget(target, surfaceId, runCommand) {
 }
 
 function readDescription(result, target) {
-  const value = readJson(result);
+  const value = readDescriptionCommandJson(result);
   if (
     !value ||
     Array.isArray(value) ||
