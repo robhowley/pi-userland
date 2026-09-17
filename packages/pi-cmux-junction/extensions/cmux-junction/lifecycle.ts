@@ -27,7 +27,8 @@ import {
 import type { ProcessRunner } from './process.js';
 import { loadJunctionConfig } from './config.js';
 import { attachPresentationClient, type PresentationClient } from './presentation-client.js';
-import type { ProducerViewStore } from './producer-view.js';
+import { formatLifecycleLabel } from './lifecycle-label.mjs';
+import type { ProducerView, ProducerViewStore } from './producer-view.js';
 
 export const LIFECYCLE_HEARTBEAT_MS = 10_000;
 
@@ -53,6 +54,7 @@ export interface LifecycleDeliveryClient {
 
 export interface LifecycleDependencies {
   producerViews?: ProducerViewStore;
+  publishProducerView?: (view: ProducerView) => void;
   attachPresentation?: typeof attachPresentationClient;
   env?: NodeJS.ProcessEnv;
   now?: () => number;
@@ -199,6 +201,7 @@ export function registerJunctionLifecycle(
         connect,
         resolveTarget: () => resolveTarget(ctx.cwd, eligibility.target!, cmuxOptions),
         producerViews: dependencies.producerViews,
+        publishProducerView: presentationEnabled ? dependencies.publishProducerView : undefined,
         now,
         scheduleInterval,
         cancelInterval,
@@ -303,7 +306,9 @@ class LifecycleRuntime {
   };
   private readonly resolveTarget: () => ReturnType<typeof resolveCmuxTarget>;
   private readonly producerViews: ProducerViewStore | undefined;
+  private readonly publishProducerView: LifecycleDependencies['publishProducerView'];
   private presentationSessionId: string;
+  private publishedLifecycleStatus: string | null = null;
   private readonly now: () => number;
   private readonly scheduleInterval: LifecycleDependencies['setInterval'];
   private readonly cancelInterval: LifecycleDependencies['clearInterval'];
@@ -322,6 +327,7 @@ class LifecycleRuntime {
     connect: LifecycleRuntime['connect'];
     resolveTarget: LifecycleRuntime['resolveTarget'];
     producerViews: ProducerViewStore | undefined;
+    publishProducerView: LifecycleDependencies['publishProducerView'];
     now: () => number;
     scheduleInterval: NonNullable<LifecycleDependencies['setInterval']>;
     cancelInterval: NonNullable<LifecycleDependencies['clearInterval']>;
@@ -334,6 +340,7 @@ class LifecycleRuntime {
     this.connect = options.connect;
     this.resolveTarget = options.resolveTarget;
     this.producerViews = options.producerViews;
+    this.publishProducerView = options.publishProducerView;
     this.presentationSessionId = options.owner.sessionId;
     this.now = options.now;
     this.scheduleInterval = options.scheduleInterval;
@@ -342,7 +349,7 @@ class LifecycleRuntime {
   }
 
   async start(): Promise<void> {
-    if (this.client)
+    if (this.client || this.presentation)
       this.uiInstallation = installUiWrappers(this.ctx.ui, (event) => this.deliver(event));
     await this.enqueue(
       {
@@ -377,6 +384,7 @@ class LifecycleRuntime {
     }
     if (sessionId === this.presentationSessionId) return;
     this.presentationSessionId = sessionId;
+    this.publishedLifecycleStatus = null;
     // changeSession pauses delivery synchronously; clear before accepting the
     // first event for the new identity so it cannot replay the previous views.
     void this.presentation?.changeSession(sessionId).catch(() => undefined);
@@ -456,7 +464,11 @@ class LifecycleRuntime {
         this.now(),
       );
       this.state = transition.state;
-      if (changedSession && sessionId !== null) void this.client?.changeSession(sessionId);
+      if (changedSession && sessionId !== null) {
+        this.publishedLifecycleStatus = null;
+        void this.client?.changeSession(sessionId);
+      }
+      if (transition.shouldPublish) this.publishLifecycleView(transition.snapshot);
       if (reconnected) void this.client?.start(transition.snapshot).catch(() => undefined);
       else if (transition.shouldPublish) this.safelySnapshot(transition.snapshot);
     });
@@ -475,8 +487,10 @@ class LifecycleRuntime {
       const transition = reduceLifecycle(this.state, event, this.now());
       this.state = transition.state;
       if (initial) {
+        this.publishLifecycleView(transition.snapshot);
         void this.client?.start(transition.snapshot).catch(() => undefined);
       } else if (transition.shouldPublish) {
+        this.publishLifecycleView(transition.snapshot);
         this.safelySnapshot(transition.snapshot);
       }
     });
@@ -486,6 +500,20 @@ class LifecycleRuntime {
     const result = this.tail.then(operation, operation);
     this.tail = result.catch(() => undefined);
     return result.catch(() => undefined);
+  }
+
+  private publishLifecycleView(snapshot: LifecycleSnapshot): void {
+    const status = formatLifecycleLabel(snapshot.state, snapshot.toolName);
+    if (status === null || status === this.publishedLifecycleStatus) return;
+    this.publishedLifecycleStatus = status;
+    try {
+      this.publishProducerView?.({
+        producer: { key: 'pi-cmux-junction', label: 'Session' },
+        items: [{ key: 'lifecycle', status }],
+      });
+    } catch {
+      // Producer publication must not interrupt lifecycle delivery.
+    }
   }
 
   private safelySnapshot(snapshot: LifecycleSnapshot): void {

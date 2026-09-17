@@ -11,5 +11,8 @@ export default function (pi: ExtensionAPI): void {
     producerViews.accept(value);
   });
   registerJunctionCommand(pi);
-  observeSession = registerJunctionLifecycle(pi, { producerViews });
+  observeSession = registerJunctionLifecycle(pi, {
+    producerViews,
+    publishProducerView: (view) => pi.events.emit(PRODUCER_VIEW_EVENT, view),
+  });
 }
