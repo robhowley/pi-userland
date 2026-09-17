@@ -20,12 +20,15 @@ const interpreter = process.env['JUNCTION_SWIFT_INTERPRETER'];
 function fixture(filename: string) {
   return readFileSync(new URL(filename, directory), 'utf8');
 }
-function render(descriptions: (string | null)[]): Node {
+function render(
+  descriptions: (string | null)[],
+  titles = descriptions.map((_, i) => `Workspace ${i}`),
+): Node {
   const result = spawnSync(interpreter!, [asset], {
     input: JSON.stringify({
       workspaces: descriptions.map((description, i) => ({
         id: `w${i}`,
-        title: `Workspace ${i}`,
+        title: titles[i] ?? `Workspace ${i}`,
         ...(description === null ? {} : { description }),
       })),
     }),
@@ -96,6 +99,32 @@ describe.skipIf(!interpreter)('pinned interpreted J2 behavior', () => {
       });
     }
   }
+  it('keeps the workspace heading while hiding tab-title prefixes from producer headings', () => {
+    const projected = projectPresentationJ1([
+      {
+        sourceId: 'a'.repeat(64),
+        producer: { key: 'merge-ready', label: 'userland root · Merge Ready' },
+        items: [{ key: 'pr', title: 'Current branch PR', rows: [] }],
+      },
+      {
+        sourceId: 'b'.repeat(64),
+        producer: { key: 'session-hygiene', label: 'userland root · Session Hygiene' },
+        items: [{ key: 'health', title: 'Session health', rows: [] }],
+      },
+    ]);
+    expect(projected.kind).toBe('set');
+    if (projected.kind !== 'set') return;
+
+    expect(projected.j1).toContain('userland root · Merge Ready');
+    expect(projected.j1).toContain('userland root · Session Hygiene');
+    expect(texts(render([projected.j1], ['userland root']))).toEqual([
+      'userland root',
+      'Merge Ready',
+      'Current branch PR',
+      'Session Hygiene',
+      'Session health',
+    ]);
+  });
   it('ignores absent descriptions without hiding the next workspace', () => {
     expect(texts(render([null, fixture('minimal.j2')]))).toEqual([
       'Workspace 1',
