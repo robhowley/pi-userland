@@ -21,9 +21,10 @@ import type { MergeReadyStatus } from '../../extensions/merge-ready/types.js';
 
 const GENERATED_AT = '2026-08-28T00:00:00.000Z';
 
-function createReadyStatus(number = 42): MergeReadyStatus {
+function createReadyStatus(number = 42, branch?: string): MergeReadyStatus {
   return createMergeReadyStatus({
     generatedAt: GENERATED_AT,
+    ...(branch === undefined ? {} : { target: { mode: 'current_branch', branch } }),
     pr: {
       lifecycle: 'open',
       number,
@@ -138,7 +139,7 @@ beforeEach(() => {
 describe('Merge Ready status-bar Junction integration', () => {
   it('withdraws on session reset and shutdown, then announces the fresh status', async () => {
     const { api, events, getHandler } = createAPI();
-    const status = createReadyStatus();
+    const status = createReadyStatus(42, 'feat/status-bar-title');
     registerMergeReadyStatusBar(api, { getStatus: vi.fn(async () => status) });
     const ctx = createContext();
 
@@ -150,16 +151,18 @@ describe('Merge Ready status-bar Junction integration', () => {
       updates.map((update) => ({
         producerKey: update.producer.key,
         itemKey: update.items[0]?.key ?? null,
+        title: update.items[0]?.title ?? null,
         href: update.items[0]?.href ?? null,
       })),
     ).toEqual([
-      { producerKey: 'pi-merge-ready', itemKey: null, href: null },
+      { producerKey: 'pi-merge-ready', itemKey: null, title: null, href: null },
       {
         producerKey: 'pi-merge-ready',
         itemKey: 'current-branch',
+        title: 'feat/status-bar-title PR #42',
         href: status.pr!.url,
       },
-      { producerKey: 'pi-merge-ready', itemKey: null, href: null },
+      { producerKey: 'pi-merge-ready', itemKey: null, title: null, href: null },
     ]);
   });
 
