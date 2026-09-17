@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.17.0](https://github.com/robhowley/pi-userland/compare/pi-merge-ready-v0.16.1...pi-merge-ready-v0.17.0) (2026-09-17)
+
+
+### Features
+
+* **pi-merge-ready:** publish current-branch status to junction ([#212](https://github.com/robhowley/pi-userland/issues/212)) ([6c8dbda](https://github.com/robhowley/pi-userland/commit/6c8dbda30f3a5462478110e91f392f1c7b908769))
+
+
+### Bug Fixes
+
+* **pi-merge-ready:** show branch name in junction title ([#213](https://github.com/robhowley/pi-userland/issues/213)) ([8d8b6ff](https://github.com/robhowley/pi-userland/commit/8d8b6ffeb40a412f2739fdb05687aafb32392aa8))
+
 ## [0.16.1](https://github.com/robhowley/pi-userland/compare/pi-merge-ready-v0.16.0...pi-merge-ready-v0.16.1) (2026-09-09)
 
 

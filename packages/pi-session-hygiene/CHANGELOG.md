@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.0](https://github.com/robhowley/pi-userland/compare/pi-session-hygiene-v0.2.5...pi-session-hygiene-v0.3.0) (2026-09-17)
+
+
+### Features
+
+* **pi-session-hygiene:** emit Junction status updates ([#207](https://github.com/robhowley/pi-userland/issues/207)) ([ac5788f](https://github.com/robhowley/pi-userland/commit/ac5788f5675894b26c135c2ca5d66774b4457ba6))
+
+
+### Bug Fixes
+
+* **pi-session-hygiene:** simplify junction status items ([#214](https://github.com/robhowley/pi-userland/issues/214)) ([8ea817c](https://github.com/robhowley/pi-userland/commit/8ea817c4c049101ba9a0091996ba67497849301a))
+
 ## [0.2.5](https://github.com/robhowley/pi-userland/compare/pi-session-hygiene-v0.2.4...pi-session-hygiene-v0.2.5) (2026-09-09)
 
 
