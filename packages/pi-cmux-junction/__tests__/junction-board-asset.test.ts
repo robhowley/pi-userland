@@ -54,8 +54,8 @@ describe('fixed authored sidebar surface', () => {
   it('has only the authored HTTPS action and no external runtime operations', () => {
     const source = readFileSync(asset, 'utf8');
     expect(source.match(/openURL\(/gu)).toHaveLength(2);
-    expect(source.match(/Button\("Open link"\) \{ openURL\(validatedHref\) \}/gu)).toHaveLength(2);
-    expect(source).not.toContain('Button { openURL(validatedHref) }');
+    expect(source.match(/Button\("Open link"\) \{ openURL\(validatedHref\) \}/gu)).toHaveLength(1);
+    expect(source.match(/Button\(action: \{ openURL\(validatedHref\) \}\)/gu)).toHaveLength(1);
     expect(source).not.toMatch(/\b(?:cmux|Process|FileHandle|URLSession|JSONDecoder|import)\s*\(/u);
   });
 });
@@ -192,6 +192,49 @@ describe.skipIf(!interpreter)('pinned interpreted J2 behavior', () => {
     ).toEqual([{ commands: [{ openURL: { _0: 'https://example.com:8443/path' } }] }]);
   });
 
+  it('renders an approved item href on the item title', () => {
+    const href = 'https://example.com/item';
+    const projected = projectPresentationJ1([
+      {
+        sourceId: 'a'.repeat(64),
+        producer: { key: 'build', label: 'Producer build' },
+        items: [{ key: 'task', title: 'Linked item', href, rows: [] }],
+      },
+    ]);
+    expect(projected.kind).toBe('set');
+    if (projected.kind !== 'set') return;
+
+    const node = render([projected.j1]);
+    const buttons = flatten(node).filter((entry) => entry.kind === 'button');
+    expect(buttons).toHaveLength(1);
+    expect(texts(buttons[0]!)).toEqual(['Linked item']);
+    expect(buttons[0]?.action).toEqual({
+      commands: [{ openURL: { _0: href } }],
+    });
+    expect(texts(node)).not.toContain(href);
+  });
+
+  it('renders an item title plainly when href is absent', () => {
+    const node = render([fixture('minimal.j2')]);
+    expect(texts(node)).toContain('Minimal card');
+    expect(flatten(node).filter((entry) => entry.kind === 'button')).toEqual([]);
+  });
+
+  it('keeps unsupported item href text and the row link action', () => {
+    const cardHref = 'https://[::1]/card';
+    const node = render([
+      fixture('every-optional.j2').replace('https://example.com/card', cardHref),
+    ]);
+    const buttons = flatten(node).filter((entry) => entry.kind === 'button');
+
+    expect(texts(node)).toContain(cardHref);
+    expect(buttons).toHaveLength(1);
+    expect(texts(buttons[0]!)).toEqual(['Open link']);
+    expect(buttons[0]?.action).toEqual({
+      commands: [{ openURL: { _0: 'https://example.com/row' } }],
+    });
+  });
+
   it('keeps a boundary Unicode href as text without losing its card or board', () => {
     const href = `https://example.com/${'é'.repeat(1014)}`;
     expect(Buffer.byteLength(href, 'utf8')).toBe(2_048);
@@ -282,7 +325,7 @@ describe.skipIf(!interpreter)('pinned interpreted J2 behavior', () => {
   it('renders labeled HTTPS links and omits absent links', () => {
     const nodes = flatten(render([fixture('every-optional.j2')]));
     const buttons = nodes.filter((n) => n.kind === 'button');
-    expect(buttons.map((n) => n.text)).toEqual(['Open link', 'Open link']);
+    expect(buttons.map((n) => texts(n))).toEqual([['Open link'], ['Every optional']]);
     expect(buttons.map((n) => n.action)).toEqual([
       { commands: [{ openURL: { _0: 'https://example.com/row' } }] },
       { commands: [{ openURL: { _0: 'https://example.com/card' } }] },
