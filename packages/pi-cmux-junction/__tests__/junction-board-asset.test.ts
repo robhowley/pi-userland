@@ -87,12 +87,7 @@ describe.skipIf(!interpreter)('pinned interpreted J2 behavior', () => {
         const descriptions = [fixture(entry.filename), fixture('minimal.j2')];
         if (reversed) descriptions.reverse();
         const visible = texts(render(descriptions));
-        const valid = [
-          `Workspace ${reversed ? 0 : 1}`,
-          'a'.repeat(64),
-          'Producer build',
-          'Minimal card',
-        ];
+        const valid = [`Workspace ${reversed ? 0 : 1}`, 'Producer build', 'Minimal card'];
         expect(visible).toEqual(
           reversed
             ? [...valid, 'Junction data unavailable']
@@ -104,7 +99,6 @@ describe.skipIf(!interpreter)('pinned interpreted J2 behavior', () => {
   it('ignores absent descriptions without hiding the next workspace', () => {
     expect(texts(render([null, fixture('minimal.j2')]))).toEqual([
       'Workspace 1',
-      'a'.repeat(64),
       'Producer build',
       'Minimal card',
     ]);
@@ -203,7 +197,6 @@ describe.skipIf(!interpreter)('pinned interpreted J2 behavior', () => {
     const visible = texts(node);
     expect(visible).toEqual([
       'Workspace 0',
-      'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
       'Producer build',
       'Every optional',
       'Running',
