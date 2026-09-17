@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.7.0](https://github.com/robhowley/pi-userland/compare/pi-spinner-verbs-v3.6.1...pi-spinner-verbs-v3.7.0) (2026-09-17)
+
+
+### Features
+
+* **pi-spinner-verbs:** add talladega-nights theme ([#211](https://github.com/robhowley/pi-userland/issues/211)) ([28c3a7a](https://github.com/robhowley/pi-userland/commit/28c3a7a9480ac6fe39557fb39077cf84ff043f81))
+
 ## [3.6.1](https://github.com/robhowley/pi-userland/compare/pi-spinner-verbs-v3.6.0...pi-spinner-verbs-v3.6.1) (2026-09-09)
 
 
