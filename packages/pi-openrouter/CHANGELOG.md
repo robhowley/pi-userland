@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.14.4](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.14.3...pi-openrouter-v0.14.4) (2026-10-07)
+
+
+### Bug Fixes
+
+* **pi-openrouter:** preserve built-in api, baseUrl, and compat during model sync ([#196](https://github.com/robhowley/pi-userland/issues/196)) ([b6d5cd5](https://github.com/robhowley/pi-userland/commit/b6d5cd5d4b2b43df3a54394e7cabe209f2e82fce))
+* **pi-openrouter:** unwrap paginator response from @openrouter/sdk &gt;= 0.13.45 ([#215](https://github.com/robhowley/pi-userland/issues/215)) ([2a6bd26](https://github.com/robhowley/pi-userland/commit/2a6bd26831e23c712461fdaa0428ee5a6479fdd7))
+
 ## [0.14.3](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.14.2...pi-openrouter-v0.14.3) (2026-09-09)
 
 
