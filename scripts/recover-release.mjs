@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const registry = 'https://registry.npmjs.org';
+const stableVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
 export function command(file, args, cwd) {
   const result = spawnSync(file, args, { cwd, encoding: 'utf8' });
@@ -52,6 +53,7 @@ export function recover(input, root, run = command, log = console.log) {
   // Validate the entire selection before any install, build, or publication.
   const releases = selectReleases(input, root, run);
   const results = [];
+  let failed = false;
   for (const release of releases) {
     const { tag, commit, packagePath, name, version } = release;
     let temporary;
@@ -70,6 +72,23 @@ export function recover(input, root, run = command, log = console.log) {
         results.push(`${tag}: skipped (already published)`);
         continue;
       }
+      const targetParts = version.split('.').map(Number);
+      const newer = published.find((publishedVersion) => {
+        const match = stableVersionPattern.exec(publishedVersion);
+        if (!match) return false;
+        const publishedParts = match.slice(1).map(Number);
+        for (let index = 0; index < targetParts.length; index += 1) {
+          if (publishedParts[index] !== targetParts[index]) {
+            return publishedParts[index] > targetParts[index];
+          }
+        }
+        return false;
+      });
+      if (newer) {
+        failed = true;
+        results.push(`${tag}: refused (newer stable version ${newer} is already published)`);
+        continue;
+      }
       temporary = mkdtempSync(path.join(tmpdir(), 'release-recovery-'));
       checkout = path.join(temporary, 'source');
       run('git', ['worktree', 'add', '--detach', checkout, commit], root);
@@ -83,12 +102,14 @@ export function recover(input, root, run = command, log = console.log) {
       );
       results.push(`${tag}: published (${commit})`);
     } catch (error) {
+      failed = true;
       results.push(`${tag}: FAILED (${error.message})`);
     } finally {
       if (checkout) {
         try {
           run('git', ['worktree', 'remove', '--force', checkout], root);
         } catch (error) {
+          failed = true;
           results.push(`${tag}: FAILED (checkout cleanup: ${error.message})`);
         }
       }
@@ -96,7 +117,7 @@ export function recover(input, root, run = command, log = console.log) {
     }
   }
   log(`Recovery summary:\n${results.join('\n')}`);
-  return results.some((result) => result.includes(': FAILED')) ? 1 : 0;
+  return failed ? 1 : 0;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

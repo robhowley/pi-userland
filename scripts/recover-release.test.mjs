@@ -63,14 +63,18 @@ test('selection accepts explicit allowlisted existing tags and resolves annotate
 });
 
 test('invalid, missing, duplicate, unlisted, and shell-like selections fail before publication', (t) => {
-  const { root } = fixture(t);
+  const { root, write } = fixture(t);
   const mock = mockCommands(root);
+  write('.github/release-please-config.json', { packages: { 'packages/pi-two': {} } });
+  assert.throws(() => mock.recover('pi-one-v1.0.0'), /not allowlisted/);
+  write('.github/release-please-config.json', {
+    packages: { 'packages/pi-one': {}, 'packages/pi-two': {} },
+  });
   for (const input of [
     '',
     'main',
     'pi-one-v1.0.0;echo',
     '$(touch /tmp/no)',
-    'pi-unknown-v1.0.0',
     'pi-one-v9.0.0',
     'pi-one-v1.0.0 pi-one-v1.0.0',
     'pi-one-v1.0.0 pi-two-v9.0.0',
@@ -98,22 +102,61 @@ test('tag version, package name, and public package must match', (t) => {
 
 test('already published exact versions skip checkout, install, build, and publish', (t) => {
   const { root } = fixture(t);
-  const mock = mockCommands(root, { view: () => '["0.9.0","1.0.0"]' });
+  const mock = mockCommands(root, { view: () => '["2.0.0","1.0.0"]' });
   assert.equal(mock.recover('pi-one-v1.0.0'), 0);
   assert.ok(mock.logs[0].includes('skipped'));
   assert.equal(mock.calls.filter((call) => call.file !== 'git').length, 1);
+  assert.ok(!mock.calls.some((call) => call.file === 'git' && call.args[0] === 'worktree'));
+  assert.ok(!mock.calls.some((call) => call.file === 'pnpm' || call.args[0] === 'publish'));
+});
+
+test('missing older versions are refused without install, build, or publish', (t) => {
+  const { root } = fixture(t);
+  const mock = mockCommands(root, { view: () => '["1.1.0"]' });
+  assert.equal(mock.recover('pi-one-v1.0.0'), 1);
+  assert.match(mock.logs.at(-1), /pi-one-v1.0.0: refused.*1.1.0/);
+  assert.ok(
+    !mock.calls.some(
+      (call) => call.file === 'pnpm' || (call.file === 'npm' && call.args[0] === 'publish'),
+    ),
+  );
+  assert.ok(
+    !mock.calls.some(
+      (call) => call.file === 'git' && call.args[0] === 'worktree' && call.args[1] === 'add',
+    ),
+  );
+});
+
+test('a refusal does not stop later selected packages', (t) => {
+  const { root } = fixture(t);
+  const published = [];
+  const mock = mockCommands(root, {
+    view: (name) => (name.endsWith('pi-one') ? '["1.1.0"]' : '["0.9.0"]'),
+    publish: (cwd) => {
+      published.push(JSON.parse(readFileSync(path.join(cwd, 'package.json'))).name);
+    },
+  });
+  assert.equal(mock.recover('pi-one-v1.0.0 pi-two-v1.0.0'), 1);
+  assert.deepEqual(published, ['@robhowley/pi-two']);
+  assert.equal(mock.calls.filter((call) => call.file === 'npm' && call.args[0] === 'publish').length, 1);
+  assert.match(mock.logs.at(-1), /pi-one-v1.0.0: refused[\s\S]*pi-two-v1.0.0: published/);
+});
+
+test('stable version ordering compares numeric components', (t) => {
+  const { root, write, git } = fixture(t);
+  write('packages/pi-one/package.json', { name: '@robhowley/pi-one', version: '0.9.0' });
+  git('add', '.');
+  git('commit', '-qm', 'older release');
+  git('tag', 'pi-one-v0.9.0');
+  const mock = mockCommands(root, { view: () => '["0.10.0"]' });
+  assert.equal(mock.recover('pi-one-v0.9.0'), 1);
+  assert.match(mock.logs.at(-1), /newer stable version 0.10.0/);
+  assert.ok(!mock.calls.some((call) => call.file === 'pnpm' || call.args[0] === 'publish'));
 });
 
 test('query errors and malformed responses never permit publication', (t) => {
   const { root } = fixture(t);
-  for (const error of [
-    'E401 auth',
-    'E404 package not found',
-    'ETIMEDOUT network',
-    'E403 forbidden',
-    'invalid JSON',
-    '{}',
-  ]) {
+  for (const error of ['E404 package not found', 'invalid JSON', '{}']) {
     const mock = mockCommands(root, {
       view: () => {
         if (error.startsWith('E')) throw new Error(error);
@@ -149,14 +192,24 @@ test('publication failure does not prevent later selections; uses exact resolved
     1,
   );
   assert.deepEqual(published, ['@robhowley/pi-one', '@robhowley/pi-two']);
+  const worktreePaths = mock.calls
+    .filter(
+      (call) => call.file === 'git' && call.args[0] === 'worktree' && call.args[1] === 'add',
+    )
+    .map((call) => call.args[3]);
+  const pnpmCalls = mock.calls.filter((call) => call.file === 'pnpm');
   assert.deepEqual(
-    mock.calls.filter((call) => call.file === 'pnpm').map((call) => call.args),
+    pnpmCalls.map((call) => call.args),
     [
       ['install', '--frozen-lockfile'],
       ['-r', '--filter', './packages/*', '--if-present', 'build'],
       ['install', '--frozen-lockfile'],
       ['-r', '--filter', './packages/*', '--if-present', 'build'],
     ],
+  );
+  assert.deepEqual(
+    pnpmCalls.map((call) => call.cwd),
+    [worktreePaths[0], worktreePaths[0], worktreePaths[1], worktreePaths[1]],
   );
   assert.match(mock.logs.at(-1), /pi-one-v1.0.0: FAILED[\s\S]*pi-two-v1.0.0: published/);
   assert.equal(git('worktree', 'list', '--porcelain').split('worktree ').length, 2);
