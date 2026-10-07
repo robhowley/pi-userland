@@ -83,6 +83,20 @@ export type CmuxLaunchResult =
   | { ok: true }
   | { ok: false; reason: 'launch-failed' | 'launch-unknown'; message: string };
 
+export type JunctionBoardOpenResult =
+  | { ok: true; status: 'board-opened' }
+  | { ok: false; status: 'board-open-failed'; message: string };
+
+const JUNCTION_BOARD_OPEN_ARGS = [
+  'right-sidebar',
+  'set',
+  'custom',
+  'junction-board',
+  '--window',
+  'window:1',
+  '--no-focus',
+] as const;
+
 export async function preflightCmux(
   cwd: string,
   options: CmuxOptions = {},
@@ -350,6 +364,33 @@ export async function launchCmuxTab(
   if (!processSucceeded(send)) return sendFailedResult(created.surfaceRef, target);
 
   return { ok: true, mutation: 'exists', surfaceRef: created.surfaceRef, target };
+}
+
+export async function openJunctionBoard(
+  cwd: string,
+  options: CmuxOptions = {},
+): Promise<JunctionBoardOpenResult> {
+  const env = options.env ?? process.env;
+  let result: ProcessResult;
+  try {
+    const cmuxFile = await resolveCmuxExecutable(env);
+    result = await run(cmuxFile, JUNCTION_BOARD_OPEN_ARGS, cwd, env, options);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      status: 'board-open-failed',
+      message: `Could not open Junction board in window:1: ${message}`,
+    };
+  }
+  if (!processSucceeded(result)) {
+    return {
+      ok: false,
+      status: 'board-open-failed',
+      message: `Could not open Junction board in window:1: ${processError(result)}`,
+    };
+  }
+  return { ok: true, status: 'board-opened' };
 }
 
 export async function launchCmuxWorkspace(

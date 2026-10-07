@@ -10,7 +10,7 @@ import {
 } from '../extensions/cmux-junction/description-publisher.mjs';
 import { projectPresentationJ1 } from '../extensions/cmux-junction/presentation-j1.mjs';
 
-const reservation = {
+const descriptionTarget = {
   socketPath: '/tmp/a/../cmux.sock',
   windowId: 'AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA',
   workspaceId: 'BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB',
@@ -27,8 +27,8 @@ function set(label = '日本語 $(echo no); "quoted"'): any {
 }
 function list(description: unknown) {
   return {
-    window_id: reservation.windowId,
-    workspaces: [{ id: reservation.workspaceId, description, remote: null }],
+    window_id: descriptionTarget.windowId,
+    workspaces: [{ id: descriptionTarget.workspaceId, description, remote: null }],
   };
 }
 function fake(initial: string | null = null) {
@@ -41,7 +41,7 @@ function fake(initial: string | null = null) {
     value = args.includes('set-description') ? args.at(-1)! : null;
     return { ok: true };
   });
-  const publisher = createDescriptionPublisher({ reservation, runCommand });
+  const publisher = createDescriptionPublisher({ target: descriptionTarget, runCommand });
   return {
     publisher,
     runCommand,
@@ -57,7 +57,7 @@ async function publish(f: ReturnType<typeof fake>, intent = set()) {
   await f.publisher.reconcile();
 }
 
-describe('description reservation and process boundary', () => {
+describe('description target and process boundary', () => {
   it('replaces canonical-equivalent text with distinct body tags and exact bytes', async () => {
     const f = fake();
     const composed = set('é');
@@ -77,7 +77,7 @@ describe('description reservation and process boundary', () => {
         const f = fake(old);
         await publish(f, intent);
         expect(f.get()).toBe(old);
-        expect(f.publisher.diagnostics().reservation).toBe('lost');
+        expect(f.publisher.diagnostics().ownership).toBe('lost');
         expect(f.calls).toHaveLength(1);
         expect(f.calls[0]).toContain('list');
       }
@@ -101,28 +101,28 @@ describe('description reservation and process boundary', () => {
     {},
     [],
     1,
-    { ...reservation, extra: true },
-    { ...reservation, [Symbol('hidden')]: true },
-    Object.create(reservation),
-    Object.assign(Object.create({ foreign: true }), reservation),
+    { ...descriptionTarget, extra: true },
+    { ...descriptionTarget, [Symbol('hidden')]: true },
+    Object.create(descriptionTarget),
+    Object.assign(Object.create({ foreign: true }), descriptionTarget),
     {
-      ...reservation,
+      ...descriptionTarget,
       get windowId() {
         throw new Error('never read');
       },
     },
     ...['', ' ', 'relative', '/tmp/\0x', '/tmp/\nx', '/tmp/\u0085x'].map((socketPath) => ({
-      ...reservation,
+      ...descriptionTarget,
       socketPath,
     })),
     ...['', 'workspace:1', '1', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'].map((workspaceId) => ({
-      ...reservation,
+      ...descriptionTarget,
       workspaceId,
     })),
-    { ...reservation, windowId: 'window:1' },
-  ])('disables invalid/missing reservations with zero I/O: %#', async (input) => {
+    { ...descriptionTarget, windowId: 'window:1' },
+  ])('disables invalid/missing targets with zero I/O: %#', async (input) => {
     const runCommand = vi.fn();
-    const p = createDescriptionPublisher({ reservation: input, runCommand });
+    const p = createDescriptionPublisher({ target: input, runCommand });
     p.setDesired(set());
     await p.reconcile();
     await p.drain();
@@ -130,8 +130,7 @@ describe('description reservation and process boundary', () => {
     expect(p.isIdle()).toBe(true);
     expect(runCommand).not.toHaveBeenCalled();
     expect(p.diagnostics()).toEqual({
-      reservation: 'disabled',
-      reason: input === null || input === undefined ? 'missing' : 'invalid',
+      ownership: 'disabled',
     });
   });
   it('reads the pinned list-shape fixture without using refs or unrelated fields', async () => {
@@ -142,16 +141,16 @@ describe('description reservation and process boundary', () => {
       ),
     );
     const runCommand = vi.fn(async () => ({ ok: true, stdout }));
-    const p = createDescriptionPublisher({ reservation, runCommand });
+    const p = createDescriptionPublisher({ target: descriptionTarget, runCommand });
     p.setDesired(clear);
     await p.reconcile();
-    expect(p.diagnostics()).toMatchObject({ reservation: 'held', applied: 'clear' });
+    expect(p.diagnostics()).toMatchObject({ ownership: 'held', applied: 'clear' });
     expect(runCommand).toHaveBeenCalledTimes(1);
   });
   it('permanently disables target mismatch', async () => {
     const runCommand = vi.fn();
     const p = createDescriptionPublisher({
-      reservation,
+      target: descriptionTarget,
       workspaceId: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
       runCommand,
     });
@@ -164,14 +163,14 @@ describe('description reservation and process boundary', () => {
     await f.publisher.reconcile();
     expect(f.calls).toEqual([]);
     expect(f.publisher.diagnostics()).toMatchObject({
-      reservation: 'unclaimed',
+      ownership: 'unclaimed',
       desired: 'no-intent',
       applied: 'unknown',
     });
     const intent = set();
     await publish(f, intent);
     const prefix = ['--socket', '/tmp/cmux.sock', '--json', '--id-format', 'both'];
-    const window = reservation.windowId.toLowerCase();
+    const window = descriptionTarget.windowId.toLowerCase();
     expect(f.calls).toEqual([
       [...prefix, 'workspace', 'list', '--window', window],
       [
@@ -182,7 +181,7 @@ describe('description reservation and process boundary', () => {
         '--action',
         'set-description',
         '--workspace',
-        reservation.workspaceId.toLowerCase(),
+        descriptionTarget.workspaceId.toLowerCase(),
         '--description',
         intent.j1,
       ],
@@ -267,7 +266,7 @@ describe('description reservation and process boundary', () => {
       ...list(null),
       workspaces: [...list(null).workspaces, ...list(null).workspaces],
     }),
-    JSON.stringify({ ...list(null), workspaces: [{ id: reservation.workspaceId }] }),
+    JSON.stringify({ ...list(null), workspaces: [{ id: descriptionTarget.workspaceId }] }),
     JSON.stringify(list(1)),
     JSON.stringify(list({})),
     JSON.stringify({ ...list(null), workspaces: {} }),
@@ -280,7 +279,7 @@ describe('description reservation and process boundary', () => {
     expect(f.calls).toEqual([]);
     expect(f.runCommand).toHaveBeenCalledTimes(1);
     expect(f.publisher.diagnostics()).toMatchObject({
-      reservation: 'unclaimed',
+      ownership: 'unclaimed',
       applied: 'unknown',
       dirty: true,
     });
@@ -288,12 +287,50 @@ describe('description reservation and process boundary', () => {
 });
 
 describe('exact description reconciliation', () => {
+  it('binds a live target once and refuses coordinator retargeting', async () => {
+    const runCommand = vi.fn();
+    const publisher = createDescriptionPublisher({
+      runCommand,
+      workspaceId: descriptionTarget.workspaceId,
+    });
+    expect(publisher.bindTarget(descriptionTarget)).toBe(true);
+    expect(
+      publisher.bindTarget({
+        ...descriptionTarget,
+        windowId: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+      }),
+    ).toBe(false);
+    expect(
+      publisher.bindTarget({
+        ...descriptionTarget,
+        workspaceId: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+      }),
+    ).toBe(false);
+    expect(publisher.bindTarget({ ...descriptionTarget, socketPath: '/tmp/other.sock' })).toBe(
+      false,
+    );
+    expect(runCommand).not.toHaveBeenCalled();
+    await publisher.shutdown();
+    expect(publisher.bindTarget(descriptionTarget)).toBe(false);
+  });
+
+  it("does not clear another writer's newer valid J2", async () => {
+    const f = fake();
+    await publish(f);
+    const newer = set('another coordinator').j1;
+    f.put(newer);
+    await publish(f, clear);
+    expect(f.get()).toBe(newer);
+    expect(f.calls.filter((args) => args.includes('clear-description'))).toEqual([]);
+    expect(f.publisher.diagnostics()).toMatchObject({ ownership: 'lost' });
+  });
+
   it.each(['', 'foreign'])('preserves foreign strings for clear and set: %j', async (foreign) => {
     for (const intent of [clear, set()]) {
       const f = fake(foreign);
       await publish(f, intent);
       expect(f.get()).toBe(foreign);
-      expect(f.publisher.diagnostics()).toMatchObject({ reservation: 'lost', applied: 'unknown' });
+      expect(f.publisher.diagnostics()).toMatchObject({ ownership: 'lost', applied: 'unknown' });
       expect(f.publisher.needsClearRetry()).toBe(false);
       const count = f.calls.length;
       f.put(null);
@@ -301,12 +338,12 @@ describe('exact description reconciliation', () => {
       expect(f.calls).toHaveLength(count);
     }
   });
-  it('claims empty with clear, adopts exact bytes on restart, replaces and clears with readback', async () => {
+  it('claims empty, refuses restart adoption, replaces and clears only verified bytes', async () => {
     const f = fake();
     await publish(f, clear);
     expect(f.calls).toHaveLength(1);
     expect(f.publisher.diagnostics()).toMatchObject({
-      reservation: 'held',
+      ownership: 'held',
       applied: 'clear',
       dirty: false,
     });
@@ -315,6 +352,9 @@ describe('exact description reconciliation', () => {
     const restarted = fake(a);
     await publish(restarted);
     expect(restarted.calls).toHaveLength(1);
+    expect(restarted.publisher.diagnostics()).toMatchObject({ ownership: 'lost' });
+    await publish(restarted, clear);
+    expect(restarted.get()).toBe(a);
     await publish(f, set('replacement'));
     expect(f.get()).toBe(set('replacement').j1);
     await publish(f, clear);
@@ -328,7 +368,7 @@ describe('exact description reconciliation', () => {
     f.runCommand.mockRejectedValueOnce(new Error('read failed'));
     await f.publisher.reconcile();
     expect(f.publisher.diagnostics()).toMatchObject({
-      reservation: 'held',
+      ownership: 'held',
       applied: 'set',
       dirty: true,
     });
@@ -352,7 +392,7 @@ describe('exact description reconciliation', () => {
       await publish(f, kind === 'set' ? set('replacement') : clear);
       expect(f.calls).toHaveLength(count + 1);
       expect(f.get()).toBe('foreign');
-      expect(f.publisher.diagnostics().reservation).toBe('lost');
+      expect(f.publisher.diagnostics().ownership).toBe('lost');
     },
   );
   it.each(['set', 'clear'])(
@@ -367,7 +407,7 @@ describe('exact description reconciliation', () => {
       });
       await publish(f, kind === 'set' ? set('replacement') : clear);
       expect(f.get()).toBe(kind === 'set' ? set('replacement').j1 : null);
-      expect(f.publisher.diagnostics()).toMatchObject({ reservation: 'held', dirty: false });
+      expect(f.publisher.diagnostics()).toMatchObject({ ownership: 'held', dirty: false });
     },
   );
   it('foreign write after clear is preserved and never counted as an applied clear', async () => {
@@ -382,7 +422,7 @@ describe('exact description reconciliation', () => {
     await publish(f, clear);
     expect(f.get()).toBe('foreign');
     expect(f.publisher.diagnostics()).toMatchObject({
-      reservation: 'lost',
+      ownership: 'lost',
       applied: 'set',
       dirty: true,
     });
@@ -397,7 +437,7 @@ describe('exact description reconciliation', () => {
     });
     await publish(f);
     expect(f.get()).toBe('foreign');
-    expect(f.publisher.diagnostics()).toMatchObject({ reservation: 'lost', applied: 'unknown' });
+    expect(f.publisher.diagnostics()).toMatchObject({ ownership: 'lost', applied: 'unknown' });
   });
   it.each(['set', 'clear'])(
     'zero-exit %s action with unchanged readback remains dirty',
@@ -463,8 +503,8 @@ describe('exact description reconciliation', () => {
       await f.publisher.reconcile();
       expect(f.publisher.diagnostics()).toMatchObject(
         observed === 'foreign'
-          ? { reservation: 'lost', dirty: true }
-          : { reservation: 'held', dirty: false },
+          ? { ownership: 'lost', dirty: true }
+          : { ownership: 'held', dirty: false },
       );
     },
   );
@@ -520,7 +560,7 @@ describe('exact description reconciliation', () => {
         latest.kind === 'set' ? latest.j1 : null,
       ]);
       expect(f.publisher.diagnostics()).toMatchObject({
-        reservation: 'held',
+        ownership: 'held',
         applied: latest.kind,
         dirty: false,
         running: false,
