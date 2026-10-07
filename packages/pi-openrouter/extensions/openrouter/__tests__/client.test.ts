@@ -107,6 +107,41 @@ describe('fetchUserModels', () => {
     expect(mockClient.models.listForUser).toHaveBeenCalled();
   });
 
+  it('should unwrap the paginator wrapper returned by @openrouter/sdk >= 0.13.45', async () => {
+    setKeys('test-key', undefined);
+
+    // SDK 0.13.45+ wraps listForUser results in a paginator:
+    // { result: { data, links, totalCount }, next, ~next }
+    const mockResponse = {
+      result: {
+        data: [
+          {
+            id: 'openai/gpt-4',
+            name: 'GPT-4',
+            context_length: 8192,
+            pricing: { prompt: '0.00003', completion: '0.00006' },
+          },
+        ],
+        links: {},
+        totalCount: 1,
+      },
+      next: vi.fn(),
+      '~next': undefined,
+    };
+
+    const MockOpenRouter = vi.mocked((await import('@openrouter/sdk/sdk/sdk.js')).OpenRouter);
+    const mockClient = createMockSDKClient({
+      listForUser: vi.fn().mockResolvedValue(mockResponse),
+    });
+    MockOpenRouter.mockImplementation(() => mockClient as any);
+
+    const result = await fetchUserModels();
+
+    expect(result!.data).toHaveLength(1);
+    expect(result!.data[0]!.id).toBe('openai/gpt-4');
+    expect(mockClient.models.listForUser).toHaveBeenCalled();
+  });
+
   it('should throw ApiError on 401 unauthorized', async () => {
     setKeys('invalid-key', undefined);
 

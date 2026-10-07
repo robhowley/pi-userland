@@ -51,7 +51,21 @@ export async function fetchUserModels(): Promise<ModelsListResponse> {
   try {
     const sdkClient = new OpenRouter({ apiKey: key });
     const response = await sdkClient.models.listForUser({ bearer: key }, {});
-    return response as ModelsListResponse;
+
+    // SDK compatibility: @openrouter/sdk 0.13.45 changed `models.listForUser()`
+    // to return a paginator wrapper ({ result: { data }, next, ~next }) instead
+    // of the flat ModelsListResponse ({ data }) returned by <= 0.13.44.
+    // The caret range ^0.13.13 resolves to the latest 0.13.x, so both shapes
+    // can occur depending on the resolved SDK version. Normalize to the flat
+    // shape the sync engine expects.
+    const wrapped = response as unknown as { result?: ModelsListResponse };
+    const flat: ModelsListResponse = wrapped.result ?? (response as ModelsListResponse);
+
+    if (!Array.isArray(flat?.data)) {
+      throw new ApiError('Unexpected response shape from OpenRouter models/user endpoint', 500);
+    }
+
+    return flat;
   } catch (err: unknown) {
     throw mapSdkError(err);
   }
