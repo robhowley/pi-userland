@@ -58,7 +58,18 @@ jobs:
         if: steps.release.outputs.releases_created == 'true'
         run: |
           echo "Released packages: ${{ steps.release.outputs.paths_released }}"
-          echo '${{ steps.release.outputs.paths_released }}' | jq -r '.[]' | while read -r pkg; do
-            echo "Publishing $pkg"
-            (cd "$pkg" && npm publish)
-          done
+          echo '${{ steps.release.outputs.paths_released }}' | jq -r '.[]' | (
+            failed_packages=()
+            while IFS= read -r pkg; do
+              echo "Publishing $pkg"
+              if ! (cd "$pkg" && npm publish); then
+                failed_packages+=("$pkg")
+              fi
+            done
+
+            if ((${#failed_packages[@]} > 0)); then
+              echo "Failed to publish packages:"
+              printf '  %s\n' "${failed_packages[@]}"
+              exit 1
+            fi
+          )
