@@ -62,10 +62,7 @@ export async function fetchUserModels(): Promise<ModelsListResponse> {
     const flat: ModelsListResponse = wrapped.result ?? (response as ModelsListResponse);
 
     if (!Array.isArray(flat?.data)) {
-      throw new ApiError(
-        'Unexpected response shape from OpenRouter models/user endpoint',
-        500,
-      );
+      throw new ApiError('Unexpected response shape from OpenRouter models/user endpoint', 500);
     }
 
     return flat;
