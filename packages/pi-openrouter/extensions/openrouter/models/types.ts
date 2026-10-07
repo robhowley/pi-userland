@@ -1,3 +1,5 @@
+import type { Api, Model } from '@earendil-works/pi-ai';
+
 /**
  * Raw OpenRouter model from /api/v1/models/user
  */
@@ -57,6 +59,16 @@ export interface ThinkingLevelMap {
 export interface PiModelConfig {
   id: string;
   name: string;
+  /**
+   * Per-model transport override from Pi's built-in registry.
+   * Omitted to inherit the provider-level default.
+   */
+  api?: Api;
+  /**
+   * Endpoint paired with `api`. Built-in Anthropic entries use a different base URL
+   * than the OpenAI-compatible ones, so this only ever travels alongside `api`.
+   */
+  baseUrl?: string;
   reasoning: boolean;
   input: ('text' | 'image')[];
   cost: {
@@ -68,6 +80,11 @@ export interface PiModelConfig {
   contextWindow: number;
   maxTokens: number;
   thinkingLevelMap?: ThinkingLevelMap;
+  /**
+   * Transport-specific compatibility flags from Pi's built-in registry.
+   * The OpenRouter API does not describe these.
+   */
+  compat?: Model<Api>['compat'];
 }
 
 /**

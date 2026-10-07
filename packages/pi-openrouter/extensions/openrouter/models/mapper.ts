@@ -1,25 +1,26 @@
+import type { Api, Model } from '@earendil-works/pi-ai';
+import type { Model as SDKModel } from '@openrouter/sdk/models/index.js';
 import type { OpenRouterModel, PiModelConfig, SkipReason, MapResult } from './types.js';
 import { ROUTER_ALIASES } from './types.js';
 import { getSkipReasonHint } from './skip-hints.js';
-import type { Model as SDKModel } from '@openrouter/sdk/models/index.js';
 import { loadModelOverrides, getModelOverride } from './overrides.js';
 import { normalizeOpenRouterModel } from '../normalizers.js';
 
 // Cache for built-in OpenRouter models from pi-ai
 // Populated lazily on first access
-let builtInOpenRouterModels: Map<string, PiModelConfig> | undefined;
+let builtInOpenRouterModels: Map<string, Model<Api>> | undefined;
 
 /**
  * Load built-in OpenRouter models from pi-ai package if available.
  * This allows us to preserve thinkingLevelMap and other metadata from
  * Pi's built-in registry when syncing models from OpenRouter API.
  */
-async function loadBuiltInOpenRouterModels(): Promise<Map<string, PiModelConfig>> {
+async function loadBuiltInOpenRouterModels(): Promise<Map<string, Model<Api>>> {
   if (builtInOpenRouterModels !== undefined) {
     return builtInOpenRouterModels;
   }
 
-  const models = new Map<string, PiModelConfig>();
+  const models = new Map<string, Model<Api>>();
 
   try {
     // Import from pi-ai to get built-in model registry
@@ -28,11 +29,7 @@ async function loadBuiltInOpenRouterModels(): Promise<Map<string, PiModelConfig>
     const openrouterModels = getBuiltinModels('openrouter');
     if (Array.isArray(openrouterModels)) {
       for (const model of openrouterModels) {
-        // Extract thinkingLevelMap from built-in model if present
-        const modelWithThinking = model as { id: string; thinkingLevelMap?: unknown };
-        if (modelWithThinking.id) {
-          models.set(modelWithThinking.id, model as PiModelConfig);
-        }
+        models.set(model.id, model);
       }
     }
   } catch {
@@ -41,16 +38,6 @@ async function loadBuiltInOpenRouterModels(): Promise<Map<string, PiModelConfig>
 
   builtInOpenRouterModels = models;
   return models;
-}
-
-/**
- * Get thinkingLevelMap from built-in registry for a model, if available.
- */
-async function getBuiltInThinkingLevelMap(
-  modelId: string,
-): Promise<PiModelConfig['thinkingLevelMap'] | undefined> {
-  const builtIn = await loadBuiltInOpenRouterModels();
-  return builtIn.get(modelId)?.thinkingLevelMap;
 }
 
 const COST_PER_MILLION = 1_000_000;
@@ -145,7 +132,8 @@ function validateModel(model: OpenRouterModel): ValidationResult {
 
 /**
  * Build PiModelConfig from a validated OpenRouterModel.
- * Merges thinkingLevelMap from Pi's built-in registry and user overrides.
+ * Merges thinkingLevelMap and transport metadata from Pi's built-in registry and
+ * thinkingLevelMap from user overrides.
  * Priority: user overrides > built-in registry > API data
  */
 async function buildPiConfig(
@@ -161,10 +149,8 @@ async function buildPiConfig(
   const inputModalities = model.architecture?.input_modalities;
   const supportsImages = inputModalities?.includes('image') ?? false;
 
-  // Fetch thinkingLevelMap from built-in registry if this is a reasoning model
-  const builtInThinkingLevelMap = hasReasoning
-    ? await getBuiltInThinkingLevelMap(model.id)
-    : undefined;
+  const builtIn = (await loadBuiltInOpenRouterModels()).get(model.id);
+  const builtInThinkingLevelMap = hasReasoning ? builtIn?.thinkingLevelMap : undefined;
 
   // Fetch user override for this model
   const userOverride = userOverrides ? getModelOverride(userOverrides, model.id) : undefined;
@@ -201,6 +187,14 @@ async function buildPiConfig(
   // Only add thinkingLevelMap if it's defined for exactOptionalPropertyTypes compatibility
   if (thinkingLevelMap !== undefined) {
     config.thinkingLevelMap = thinkingLevelMap;
+  }
+
+  if (builtIn !== undefined) {
+    config.api = builtIn.api;
+    config.baseUrl = builtIn.baseUrl;
+    if (builtIn.compat !== undefined) {
+      config.compat = builtIn.compat;
+    }
   }
 
   return config;
