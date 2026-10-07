@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      recovery_tags:
+        description: 'Existing tags to publish, comma/space separated (e.g. pi-merge-ready-v0.17.0). Blank runs Release Please.'
+        required: false
+        type: string
 
 concurrency:
   group: release-please
@@ -16,6 +21,7 @@ permissions:
 
 jobs:
   release:
+    if: github.event_name != 'workflow_dispatch' || inputs.recovery_tags == ''
     runs-on: ubuntu-latest
     outputs:
       paths_released: ${{ steps.release.outputs.paths_released }}
@@ -73,3 +79,35 @@ jobs:
               exit 1
             fi
           )
+
+  recover:
+    if: github.event_name == 'workflow_dispatch' && inputs.recovery_tags != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.14'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install npm 11
+        # Same trusted publishing identity as the normal release job.
+        run: npm install -g npm@11
+
+      - name: Publish selected existing releases
+        # Stable tags only, one per package. Already published versions are skipped.
+        # Package-level npm 404s fail closed; new packages need separate bootstrap.
+        env:
+          RECOVERY_TAGS: ${{ inputs.recovery_tags }}
+        run: node scripts/recover-release.mjs
