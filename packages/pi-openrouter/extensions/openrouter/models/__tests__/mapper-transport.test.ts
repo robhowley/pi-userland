@@ -1,10 +1,55 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Api, Model } from '@earendil-works/pi-ai';
 import { createValidModel } from '../../__tests__/fixtures.js';
 import type { ModelOverridesFile } from '../types.js';
 
-const { loadModelOverrides } = vi.hoisted(() => ({
-  loadModelOverrides: vi.fn<() => Promise<ModelOverridesFile>>(),
-}));
+const { loadModelOverrides, builtInModels } = vi.hoisted(() => {
+  const builtInModels: Model<Api>[] = [
+    {
+      id: 'anthropic/model',
+      name: 'Anthropic Model',
+      api: 'anthropic-messages',
+      provider: 'openrouter',
+      baseUrl: 'https://openrouter.ai/api',
+      reasoning: false,
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+      compat: { supportsTemperature: false, forceAdaptiveThinking: true },
+    },
+    {
+      id: 'openai/model',
+      name: 'OpenAI Model',
+      api: 'openai-completions',
+      provider: 'openrouter',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      reasoning: false,
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+      compat: { thinkingFormat: 'openrouter', supportsDeveloperRole: false },
+    },
+    {
+      id: 'transport/no-compat',
+      name: 'No Compat Model',
+      api: 'anthropic-messages',
+      provider: 'openrouter',
+      baseUrl: 'https://openrouter.ai/api',
+      reasoning: false,
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+    },
+  ];
+
+  return {
+    loadModelOverrides: vi.fn<() => Promise<ModelOverridesFile>>(),
+    builtInModels,
+  };
+});
 
 vi.mock('../overrides.js', () => ({
   loadModelOverrides,
@@ -12,38 +57,9 @@ vi.mock('../overrides.js', () => ({
     overrides.overrides[modelId],
 }));
 
-// Mirrors the shape of Pi's built-in OpenRouter catalog: an Anthropic-transport entry with
-// transport-specific compat, an OpenAI-compatible entry, and entries that describe a
-// transport only partially.
+// Mirrors the shape of Pi's built-in OpenRouter catalog with complete Model values.
 vi.mock('@earendil-works/pi-ai/providers/all', () => ({
-  getBuiltinModels: vi.fn(() => [
-    {
-      id: 'anthropic/model',
-      api: 'anthropic-messages',
-      baseUrl: 'https://openrouter.ai/api',
-      compat: { supportsMidConvoEffort: true, forceAdaptiveThinking: true },
-    },
-    {
-      id: 'openai/model',
-      api: 'openai-completions',
-      baseUrl: 'https://openrouter.ai/api/v1',
-      compat: { thinkingFormat: 'openrouter', supportsDeveloperRole: false },
-    },
-    {
-      id: 'transport/no-compat',
-      api: 'anthropic-messages',
-      baseUrl: 'https://openrouter.ai/api',
-    },
-    {
-      id: 'transport/missing-base-url',
-      api: 'anthropic-messages',
-      compat: { forceAdaptiveThinking: true },
-    },
-    {
-      id: 'transport/compat-only',
-      compat: { thinkingFormat: 'openrouter' },
-    },
-  ]),
+  getBuiltinModels: vi.fn(() => builtInModels),
 }));
 
 import { mapOpenRouterModels } from '../mapper.js';
@@ -64,7 +80,7 @@ describe('mapOpenRouterModels built-in transport metadata', () => {
       id: 'anthropic/model',
       api: 'anthropic-messages',
       baseUrl: 'https://openrouter.ai/api',
-      compat: { supportsMidConvoEffort: true, forceAdaptiveThinking: true },
+      compat: { supportsTemperature: false, forceAdaptiveThinking: true },
     });
   });
 
@@ -83,31 +99,15 @@ describe('mapOpenRouterModels built-in transport metadata', () => {
       api: 'anthropic-messages',
       baseUrl: 'https://openrouter.ai/api',
     });
-    expect(config?.compat).toBeUndefined();
-  });
-
-  it('drops a half-described transport rather than applying compat without its baseUrl', async () => {
-    const config = await mapOne('transport/missing-base-url');
-
-    expect(config?.api).toBeUndefined();
-    expect(config?.baseUrl).toBeUndefined();
-    expect(config?.compat).toBeUndefined();
-  });
-
-  it('keeps compat for an entry that inherits the provider-level transport', async () => {
-    const config = await mapOne('transport/compat-only');
-
-    expect(config?.api).toBeUndefined();
-    expect(config?.baseUrl).toBeUndefined();
-    expect(config?.compat).toEqual({ thinkingFormat: 'openrouter' });
+    expect(config).not.toHaveProperty('compat');
   });
 
   it('leaves transport fields unset for models absent from the built-in registry', async () => {
     const config = await mapOne('unknown/model');
 
-    expect(config?.api).toBeUndefined();
-    expect(config?.baseUrl).toBeUndefined();
-    expect(config?.compat).toBeUndefined();
+    expect(config).not.toHaveProperty('api');
+    expect(config).not.toHaveProperty('baseUrl');
+    expect(config).not.toHaveProperty('compat');
   });
 
   it('applies transport metadata to non-reasoning models', async () => {

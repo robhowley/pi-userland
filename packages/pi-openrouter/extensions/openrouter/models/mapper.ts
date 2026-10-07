@@ -1,25 +1,26 @@
+import type { Api, Model } from '@earendil-works/pi-ai';
+import type { Model as SDKModel } from '@openrouter/sdk/models/index.js';
 import type { OpenRouterModel, PiModelConfig, SkipReason, MapResult } from './types.js';
 import { ROUTER_ALIASES } from './types.js';
 import { getSkipReasonHint } from './skip-hints.js';
-import type { Model as SDKModel } from '@openrouter/sdk/models/index.js';
 import { loadModelOverrides, getModelOverride } from './overrides.js';
 import { normalizeOpenRouterModel } from '../normalizers.js';
 
 // Cache for built-in OpenRouter models from pi-ai
 // Populated lazily on first access
-let builtInOpenRouterModels: Map<string, PiModelConfig> | undefined;
+let builtInOpenRouterModels: Map<string, Model<Api>> | undefined;
 
 /**
  * Load built-in OpenRouter models from pi-ai package if available.
  * This allows us to preserve thinkingLevelMap and other metadata from
  * Pi's built-in registry when syncing models from OpenRouter API.
  */
-async function loadBuiltInOpenRouterModels(): Promise<Map<string, PiModelConfig>> {
+async function loadBuiltInOpenRouterModels(): Promise<Map<string, Model<Api>>> {
   if (builtInOpenRouterModels !== undefined) {
     return builtInOpenRouterModels;
   }
 
-  const models = new Map<string, PiModelConfig>();
+  const models = new Map<string, Model<Api>>();
 
   try {
     // Import from pi-ai to get built-in model registry
@@ -28,11 +29,7 @@ async function loadBuiltInOpenRouterModels(): Promise<Map<string, PiModelConfig>
     const openrouterModels = getBuiltinModels('openrouter');
     if (Array.isArray(openrouterModels)) {
       for (const model of openrouterModels) {
-        // Extract thinkingLevelMap from built-in model if present
-        const modelWithThinking = model as { id: string; thinkingLevelMap?: unknown };
-        if (modelWithThinking.id) {
-          models.set(modelWithThinking.id, model as PiModelConfig);
-        }
+        models.set(model.id, model);
       }
     }
   } catch {
@@ -41,54 +38,6 @@ async function loadBuiltInOpenRouterModels(): Promise<Map<string, PiModelConfig>
 
   builtInOpenRouterModels = models;
   return models;
-}
-
-/**
- * Get thinkingLevelMap from built-in registry for a model, if available.
- */
-async function getBuiltInThinkingLevelMap(
-  modelId: string,
-): Promise<PiModelConfig['thinkingLevelMap'] | undefined> {
-  const builtIn = await loadBuiltInOpenRouterModels();
-  return builtIn.get(modelId)?.thinkingLevelMap;
-}
-
-/**
- * Transport metadata owned by Pi's built-in registry that the OpenRouter API does not
- * describe: the `api`, its matching `baseUrl`, and the `compat` flags authored for it.
- */
-interface BuiltInTransport {
-  api?: PiModelConfig['api'];
-  baseUrl?: PiModelConfig['baseUrl'];
-  compat?: PiModelConfig['compat'];
-}
-
-/**
- * Get transport metadata from the built-in registry for a model, if available.
- *
- * These fields travel together on purpose. `compat` is transport-specific in Pi's model
- * type (`AnthropicMessagesCompat` vs `OpenAICompletionsCompat`), and built-in Anthropic
- * entries use a different base URL than the OpenAI-compatible ones. Applying one field
- * without the others yields an incoherent model config, so a half-described transport is
- * dropped rather than partially applied.
- */
-async function getBuiltInTransport(modelId: string): Promise<BuiltInTransport | undefined> {
-  const builtIn = await loadBuiltInOpenRouterModels();
-  const model = builtIn.get(modelId);
-  if (model === undefined) {
-    return undefined;
-  }
-
-  const { api, baseUrl, compat } = model;
-  const hasTransport = api !== undefined && baseUrl !== undefined;
-
-  // compat is only meaningful next to the transport it was authored for. Keep it when the
-  // transport resolved, or when the entry declares no api and inherits the provider default.
-  if (!hasTransport) {
-    return api === undefined && compat !== undefined ? { compat } : undefined;
-  }
-
-  return compat !== undefined ? { api, baseUrl, compat } : { api, baseUrl };
 }
 
 const COST_PER_MILLION = 1_000_000;
@@ -200,13 +149,8 @@ async function buildPiConfig(
   const inputModalities = model.architecture?.input_modalities;
   const supportsImages = inputModalities?.includes('image') ?? false;
 
-  // Fetch thinkingLevelMap from built-in registry if this is a reasoning model
-  const builtInThinkingLevelMap = hasReasoning
-    ? await getBuiltInThinkingLevelMap(model.id)
-    : undefined;
-
-  // Transport metadata is not reasoning-specific, so it is looked up for every model.
-  const builtInTransport = await getBuiltInTransport(model.id);
+  const builtIn = (await loadBuiltInOpenRouterModels()).get(model.id);
+  const builtInThinkingLevelMap = hasReasoning ? builtIn?.thinkingLevelMap : undefined;
 
   // Fetch user override for this model
   const userOverride = userOverrides ? getModelOverride(userOverrides, model.id) : undefined;
@@ -245,16 +189,12 @@ async function buildPiConfig(
     config.thinkingLevelMap = thinkingLevelMap;
   }
 
-  if (builtInTransport?.api !== undefined) {
-    config.api = builtInTransport.api;
-  }
-
-  if (builtInTransport?.baseUrl !== undefined) {
-    config.baseUrl = builtInTransport.baseUrl;
-  }
-
-  if (builtInTransport?.compat !== undefined) {
-    config.compat = builtInTransport.compat;
+  if (builtIn !== undefined) {
+    config.api = builtIn.api;
+    config.baseUrl = builtIn.baseUrl;
+    if (builtIn.compat !== undefined) {
+      config.compat = builtIn.compat;
+    }
   }
 
   return config;

@@ -1,10 +1,35 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Api, Model } from '@earendil-works/pi-ai';
 import { createValidModel } from '../../__tests__/fixtures.js';
 import type { ModelOverridesFile } from '../types.js';
 
-const { loadModelOverrides } = vi.hoisted(() => ({
-  loadModelOverrides: vi.fn<() => Promise<ModelOverridesFile>>(),
-}));
+const { loadModelOverrides, builtInModels } = vi.hoisted(() => {
+  const builtInModels: Model<Api>[] = [
+    {
+      id: 'test/model',
+      name: 'Test Model',
+      api: 'openai-completions',
+      provider: 'openrouter',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      reasoning: true,
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+      thinkingLevelMap: {
+        minimal: 'builtin-minimal',
+        high: 'builtin-high',
+        xhigh: 'builtin-xhigh',
+        max: 'builtin-max',
+      },
+    },
+  ];
+
+  return {
+    loadModelOverrides: vi.fn<() => Promise<ModelOverridesFile>>(),
+    builtInModels,
+  };
+});
 
 vi.mock('../overrides.js', () => ({
   loadModelOverrides,
@@ -13,17 +38,7 @@ vi.mock('../overrides.js', () => ({
 }));
 
 vi.mock('@earendil-works/pi-ai/providers/all', () => ({
-  getBuiltinModels: vi.fn(() => [
-    {
-      id: 'test/model',
-      thinkingLevelMap: {
-        minimal: 'builtin-minimal',
-        high: 'builtin-high',
-        xhigh: 'builtin-xhigh',
-        max: 'builtin-max',
-      },
-    },
-  ]),
+  getBuiltinModels: vi.fn(() => builtInModels),
 }));
 
 import { mapOpenRouterModels } from '../mapper.js';
