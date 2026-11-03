@@ -14,7 +14,7 @@ const accountClientMocks = vi.hoisted(() => ({
   setApiKeyDisabled: vi.fn(),
 }));
 
-vi.mock('@mariozechner/pi-tui', () => ({
+vi.mock('@earendil-works/pi-tui', () => ({
   matchesKey: tuiMocks.matchesKey,
   truncateToWidth: (text: string) => text,
 }));
