@@ -1,4 +1,4 @@
-import { matchesKey, truncateToWidth } from '@mariozechner/pi-tui';
+import { matchesKey, truncateToWidth } from '@earendil-works/pi-tui';
 import type { Theme } from '@mariozechner/pi-coding-agent';
 import type { ModelStats, ProviderStats, UsageSummary } from './types.js';
 import { renderSpendBarChart } from './chart.js';
