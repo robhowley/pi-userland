@@ -83,6 +83,19 @@ importers:
         specifier: ^22.15.17
         version: 22.19.17
 
+  packages/pi-remembrancer:
+    dependencies:
+      '@earendil-works/pi-ai':
+        specifier: '*'
+        version: 0.84.4(ws@8.20.0)(zod@4.3.6)
+      '@earendil-works/pi-coding-agent':
+        specifier: '*'
+        version: 0.84.4(ws@8.20.0)(zod@4.3.6)
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.17
+        version: 22.19.17
+
   packages/pi-session-deck:
     dependencies:
       '@earendil-works/pi-ai':

@@ -1,0 +1,44 @@
+{
+  "name": "@robhowley/pi-remembrancer",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Track and review commitments across Pi sessions to keep your personal Taskwarrior list current.",
+  "files": [
+    "extensions",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-userland"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/remembrancer"
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/robhowley/pi-userland.git",
+    "directory": "packages/pi-remembrancer"
+  },
+  "homepage": "https://pi-userland.dev",
+  "scripts": {
+    "lint": "eslint extensions/ __tests__/",
+    "format:check": "prettier --check extensions/ __tests__/",
+    "format:write": "prettier --write extensions/ __tests__/",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run __tests__"
+  },
+  "license": "MIT",
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.17"
+  }
+}
