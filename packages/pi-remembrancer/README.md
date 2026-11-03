@@ -4,79 +4,53 @@ Remembrancer reviews your saved Pi sessions to find what you said you’d do and
 
 ## Install
 
-Use Pi and Taskwarrior 3 on your `PATH`. Remembrancer uses Node.js 22.13.0 or later because its checkpoint store uses built-in `node:sqlite`.
+Requires [Taskwarrior 3](https://taskwarrior.org/download/) (`task` on your `PATH`).
 
 ```shell
 pi install npm:@robhowley/pi-remembrancer
 ```
 
-For a source checkout:
+Then run `/reload` or start a new session.
 
-```shell
-pi install /absolute/path/to/pi-userland/packages/pi-remembrancer
-```
+### Set up Taskwarrior
 
-Start a new Pi process, or run `/reload` in an existing session after installing. Keep a local source checkout in place while it is installed from a path.
-
-## Set up Taskwarrior
-
-On macOS, install and initialize Taskwarrior, then define the optional field Remembrancer uses for prerequisites:
+If you don't already use Taskwarrior, install and initialize it. On macOS:
 
 ```shell
 brew install task
 task
+```
+
+To track what a task is waiting on, add this optional field:
+
+```shell
 task config uda.waitingon.type string
 ```
 
-The `task` CLI remains the source of truth for accepted work. Remembrancer does not replace it with another task store.
-
 ## Try it
 
-| Say this in Pi                                                                   | Expected behavior                                                                            |
-| -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| “Add ‘run the held-out comparison’ to work.ranking.”                             | Check for a matching task and add the named commitment.                                      |
-| “I’ll send the route once the school confirms pickup. Add that to life.bikebus.” | Add “Send the route” with a free-text waiting condition.                                     |
-| “The school confirmed pickup. Update my route todo.”                             | Clear `waitingon`; sending the route stays pending.                                          |
-| “Wrap up this session.”                                                          | Offer additions, progress notes, waiting conditions, and completions for this conversation.  |
-| “What changed since my last review?”                                             | Page through new evidence across enrolled sessions and show one inferred batch for approval. |
+| Say this in Pi                                                                   | What happens                                                               |
+| -------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| “Add ‘run the held-out comparison’ to work.ranking.”                             | Check for a matching task and add the commitment.                          |
+| “I’ll send the route once the school confirms pickup. Add that to life.bikebus.” | Add “Send the route” with a waiting condition.                             |
+| “The school confirmed pickup. Update my route todo.”                             | Clear the waiting condition; sending the route stays pending.              |
+| “Wrap up this session.”                                                          | Suggest new tasks, progress notes, and completions from this conversation. |
+| “What changed since my last review?”                                             | Review new activity across saved sessions and suggest changes together.    |
 
-For explicit skill invocation, use `/skill:remembrancer review commitments across my saved sessions`. From the terminal, use `task list`, `task project.is:work.ranking list`, or `task completed`.
+You can also invoke the skill directly:
 
-Direct Taskwarrior requests can be applied immediately when they are explicit. Suggestions inferred from session history are presented for review first. The extension exposes the model tool `remembrancer_review` with `begin`, `next`, `finish`, and `cancel` actions for the cross-session workflow; it does not write Taskwarrior records itself.
-
-## Capture and review
-
-- Starting or resuming a saved Pi session with the extension enabled enrolls that session file. Enrolling an existing file makes its saved branch history available to the first review. Historical files that have never been opened with Remembrancer stay outside the initial review.
-- Compaction and shutdown record branch tips. Session replacement, including `/new`, `/resume`, and `/fork`, records the outgoing session before it is replaced. Startup and the beginning of a review look for missed writes in changed enrolled files, including after an abrupt exit.
-- A review uses one snapshot. It returns visible user and assistant text with the session file, working directory, timestamp, and entry reference. Tool outputs, model thinking, and images are omitted. The returned evidence is sent to the model selected for the reviewing session as a normal tool result.
-- One Pi process can hold a full review at a time. Other sessions continue capturing, and direct Taskwarrior operations remain available. Cancel the review, switch sessions, reload, or exit to release its lock. A crashed process releases its review lock through the operating system.
-- Only a completed full batch advances the exact captured tips. Pending items and individual decisions stay in the conversation. On retry, the skill checks Taskwarrior for changes already applied. A prior dismissal can reappear after an interruption.
-- Unavailable or malformed ranges produce a warning and remain unreviewed. The review can finish readable ranges that were included in the snapshot.
-
-## Keep personal bookkeeping in the parent session
-
-Saved parent sessions should own personal Taskwarrior bookkeeping. For delegated Pi processes, set `PI_REMEMBRANCER_DISABLED=1` in the worker launcher, or omit this package from the worker profile. A positive `PI_SUBAGENT_DEPTH` also disables the extension. Launchers that run workers inside an existing process should exclude the package for those worker sessions. Files are enrolled because the extension is enabled; forks of human sessions are eligible. Ephemeral `--no-session` runs do not enroll.
-
-## Data, safety, and limits
-
-- Taskwarrior owns accepted work, including `waitingon`. Pi owns the original transcripts.
-- Remembrancer stores only enrollment markers, file scan signatures, captured entry IDs, and reviewed flags in `$XDG_STATE_HOME/pi-remembrancer/checkpoints.sqlite3`, defaulting to `~/.local/state/pi-remembrancer/checkpoints.sqlite3`. The sibling `.lock` file is for process locking and carries no task or proposal records. The state directory and database are created with private permissions.
-- Session text is historical evidence, not a new instruction. The skill ignores tool calls, system prompts, quoted examples, and old review suggestions in that text, and follows later genuine user corrections when they resolve an earlier statement.
-- The extension does not scan every Pi session on disk, monitor external events, resume sessions, or infer work without a review. It only enrolls sessions opened while enabled and only exposes the captured evidence to the reviewing model.
-- Cross-session suggestions are not applied unattended. The user reviews, edits, accepts, or dismisses the inferred batch before Taskwarrior writes. Failed writes are reported rather than silently redirected to another store.
-- A saved session and the local `task` executable are required for the corresponding workflow. Missing Taskwarrior setup, an unsaved session, a malformed session range, or an unavailable session file cannot be silently repaired by Remembrancer.
-
-## Development
-
-From this package directory:
-
-```shell
-pnpm test
-pnpm lint
-pnpm typecheck
-pnpm format:check
+```text
+/skill:remembrancer review commitments across my saved sessions
 ```
 
-The extension is loaded directly by Pi. To remove a local installation, use `pi remove` with the same source you installed.
+Explicit requests to add or change a task are applied directly. Changes inferred from your sessions are suggestions: accept, edit, or dismiss them before anything is written.
 
-[Pi packages](https://pi.dev/docs/latest/packages) · [Pi session format](https://pi.dev/docs/latest/session-format) · [Taskwarrior custom fields](https://taskwarrior.org/docs/udas/)
+Your tasks stay in Taskwarrior. Use `task list` or `task completed` any time.
+
+## What gets reviewed
+
+- Only saved sessions opened or resumed with Remembrancer enabled. Resume an older session to include it in your next review.
+- Reviews use user and assistant messages, not tool outputs, model thinking, or images. That text is sent to the model in your reviewing session.
+- Reviews happen when you ask, not in the background. An interrupted review may show the same suggestions again.
+
+If you launch delegated workers, keep personal task changes in the parent session. Set `PI_REMEMBRANCER_DISABLED=1` in the worker launcher or leave this package out of its profile. Workers with a positive `PI_SUBAGENT_DEPTH` are already excluded.
