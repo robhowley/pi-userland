@@ -3,8 +3,12 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Track and review commitments across Pi sessions to keep your personal Taskwarrior list current.",
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "files": [
     "extensions",
+    "skills/remembrancer",
     "README.md",
     "LICENSE"
   ],
@@ -18,6 +22,9 @@
   "pi": {
     "extensions": [
       "./extensions/remembrancer"
+    ],
+    "skills": [
+      "./skills/remembrancer"
     ]
   },
   "repository": {

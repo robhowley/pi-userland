@@ -21,7 +21,7 @@ Small, focused packages to augment your Pi environment without adding unnecessar
 | [`pi-spinner-verbs`](packages/pi-spinner-verbs/README.md)         | Customizes thinking text with themed verbs (e.g., "Paying the iron price...", "With fire and blood...") for sessions with more personality.                                                            |
 | [`pi-structured-return`](packages/pi-structured-return/README.md) | Save money by turning noisy CLI output into compact structured results (fewer tokens), full logs preserved.                                                                                            |
 | [`pi-yolo-seatbelt`](packages/pi-yolo-seatbelt/README.md)         | Configurable guardrails for destructive commands. Keep the YOLO workflow but avoid bash catastrophe.                                                                                                   |
-| [`pi-remembrancer`](packages/pi-remembrancer/README.md) | Track and review commitments across Pi sessions to keep your personal Taskwarrior list current. (Skeleton only.) |
+| [`pi-remembrancer`](packages/pi-remembrancer/README.md)           | Track and review commitments across Pi sessions to keep your personal Taskwarrior list current.                                                                                                        |
 
 ## Install
 
