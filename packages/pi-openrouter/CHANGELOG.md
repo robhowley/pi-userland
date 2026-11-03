@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.5](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.14.4...pi-openrouter-v0.14.5) (2026-11-03)
+
+
+### Bug Fixes
+
+* **pi-openrouter:** declare host packages as peer dependencies ([#218](https://github.com/robhowley/pi-userland/issues/218)) ([5b1b909](https://github.com/robhowley/pi-userland/commit/5b1b90924c6d9f0b9ed89d2106fdfc889dec04c5))
+
 ## [0.14.4](https://github.com/robhowley/pi-userland/compare/pi-openrouter-v0.14.3...pi-openrouter-v0.14.4) (2026-10-07)
 
 
