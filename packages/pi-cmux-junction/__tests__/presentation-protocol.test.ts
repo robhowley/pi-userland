@@ -105,6 +105,26 @@ function exactSizeView(index: number) {
 }
 
 describe('presentation request protocol', () => {
+  it.each([
+    [{ title: 'Title' }, true],
+    [{ status: 'Running' }, true],
+    [{ title: 'Title', status: 'Running' }, true],
+    [{}, false],
+    [{ title: '' }, false],
+    [{ status: '' }, false],
+    [{ title: '', status: 'Running' }, false],
+    [{ title: 'Title', status: '' }, false],
+  ])('requires a title or status: %j', (fields, valid) => {
+    const item = { key: 'item', rows: [], ...fields };
+    const decoded = decodePresentationRequest(
+      snapshot({
+        views: [{ ...hygieneView, items: [item] }],
+      }),
+    );
+    expect(decoded.ok).toBe(valid);
+    if ('value' in decoded) expect(decoded.value.views[0].items[0]).toEqual(item);
+  });
+
   it('freezes separate exact snapshot and goodbye envelopes without sentAt', () => {
     expect(PRESENTATION_PROTOCOL).toBe('pi-junction.presentation.v1');
     expect(PRESENTATION_PROTOCOL).not.toBe('pi-junction.lifecycle.v1');

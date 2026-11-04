@@ -25,9 +25,10 @@ import {
   type LifecycleTarget,
 } from './lifecycle-client.js';
 import type { ProcessRunner } from './process.js';
-import { loadJunctionConfig, matchDescriptionReservation } from './config.js';
+import { loadJunctionConfig } from './config.js';
 import { attachPresentationClient, type PresentationClient } from './presentation-client.js';
-import type { ProducerViewStore } from './producer-view.js';
+import { formatLifecycleLabel } from './lifecycle-label.mjs';
+import type { ProducerView, ProducerViewStore } from './producer-view.js';
 
 export const LIFECYCLE_HEARTBEAT_MS = 10_000;
 
@@ -53,6 +54,7 @@ export interface LifecycleDeliveryClient {
 
 export interface LifecycleDependencies {
   producerViews?: ProducerViewStore;
+  publishProducerView?: (view: ProducerView) => void;
   attachPresentation?: typeof attachPresentationClient;
   env?: NodeJS.ProcessEnv;
   now?: () => number;
@@ -170,12 +172,7 @@ export function registerJunctionLifecycle(
       if (!resolved.ok) return;
       const { socketPath, workspaceId, surfaceId } = resolved;
       const target: LifecycleTarget = { socketPath, workspaceId, surfaceId };
-      const descriptionReservation = matchDescriptionReservation(
-        config.descriptionReservations,
-        target,
-      );
-      const presentationEnabled =
-        config.enablePresentation && descriptionReservation && dependencies.producerViews;
+      const presentationEnabled = config.enablePresentation && dependencies.producerViews;
       if (config.disableStatus && !presentationEnabled) return;
       const processStartedAt = await observeStart(pid);
       if (processStartedAt === null) return;
@@ -185,34 +182,26 @@ export function registerJunctionLifecycle(
         pid,
         processStartedAt,
       };
-      const client = config.disableStatus
-        ? null
-        : createClient({
-            target,
-            owner,
-            coordinatorPath,
-            env,
-            now,
-            ...(descriptionReservation ? { descriptionReservation } : {}),
-          });
-      const presentation = presentationEnabled
-        ? (dependencies.attachPresentation ?? attachPresentationClient)(
-            dependencies.producerViews!,
-            {
-              target,
-              source: owner,
-              coordinatorPath,
-              env,
-              descriptionReservation,
-            },
-          )
-        : null;
+      const connect = (target: LifecycleTarget, owner: LifecycleOwnerIdentity) => ({
+        client: config.disableStatus
+          ? null
+          : createClient({ target, owner, coordinatorPath, env, now }),
+        presentation: presentationEnabled
+          ? (dependencies.attachPresentation ?? attachPresentationClient)(
+              dependencies.producerViews!,
+              { target, source: owner, coordinatorPath, env },
+            )
+          : null,
+      });
       runtime = new LifecycleRuntime({
         ctx,
         owner,
-        client,
-        presentation,
+        ...connect(target, owner),
+        target,
+        connect,
+        resolveTarget: () => resolveTarget(ctx.cwd, eligibility.target!, cmuxOptions),
         producerViews: dependencies.producerViews,
+        publishProducerView: presentationEnabled ? dependencies.publishProducerView : undefined,
         now,
         scheduleInterval,
         cancelInterval,
@@ -305,10 +294,21 @@ class LifecycleRuntime {
   private state: LifecycleReducerState;
   private readonly owner: LifecycleOwnerIdentity;
   private readonly ctx: LifecycleContext;
-  private readonly client: LifecycleDeliveryClient | null;
-  private readonly presentation: PresentationClient | null;
+  private client: LifecycleDeliveryClient | null;
+  private presentation: PresentationClient | null;
+  private target: LifecycleTarget;
+  private readonly connect: (
+    target: LifecycleTarget,
+    owner: LifecycleOwnerIdentity,
+  ) => {
+    client: LifecycleDeliveryClient | null;
+    presentation: PresentationClient | null;
+  };
+  private readonly resolveTarget: () => ReturnType<typeof resolveCmuxTarget>;
   private readonly producerViews: ProducerViewStore | undefined;
+  private readonly publishProducerView: LifecycleDependencies['publishProducerView'];
   private presentationSessionId: string;
+  private publishedLifecycleStatus: string | null = null;
   private readonly now: () => number;
   private readonly scheduleInterval: LifecycleDependencies['setInterval'];
   private readonly cancelInterval: LifecycleDependencies['clearInterval'];
@@ -323,7 +323,11 @@ class LifecycleRuntime {
     owner: LifecycleOwnerIdentity;
     client: LifecycleDeliveryClient | null;
     presentation: PresentationClient | null;
+    target: LifecycleTarget;
+    connect: LifecycleRuntime['connect'];
+    resolveTarget: LifecycleRuntime['resolveTarget'];
     producerViews: ProducerViewStore | undefined;
+    publishProducerView: LifecycleDependencies['publishProducerView'];
     now: () => number;
     scheduleInterval: NonNullable<LifecycleDependencies['setInterval']>;
     cancelInterval: NonNullable<LifecycleDependencies['clearInterval']>;
@@ -332,7 +336,11 @@ class LifecycleRuntime {
     this.owner = options.owner;
     this.client = options.client;
     this.presentation = options.presentation;
+    this.target = options.target;
+    this.connect = options.connect;
+    this.resolveTarget = options.resolveTarget;
     this.producerViews = options.producerViews;
+    this.publishProducerView = options.publishProducerView;
     this.presentationSessionId = options.owner.sessionId;
     this.now = options.now;
     this.scheduleInterval = options.scheduleInterval;
@@ -341,7 +349,7 @@ class LifecycleRuntime {
   }
 
   async start(): Promise<void> {
-    if (this.client)
+    if (this.client || this.presentation)
       this.uiInstallation = installUiWrappers(this.ctx.ui, (event) => this.deliver(event));
     await this.enqueue(
       {
@@ -357,7 +365,7 @@ class LifecycleRuntime {
         if (sessionId === null) {
           void this.shutdown();
         } else {
-          void this.maintain(sessionId);
+          void this.maintain();
         }
       }, LIFECYCLE_TIMINGS.maintenanceIntervalMs) ?? null;
     if (this.client)
@@ -376,6 +384,7 @@ class LifecycleRuntime {
     }
     if (sessionId === this.presentationSessionId) return;
     this.presentationSessionId = sessionId;
+    this.publishedLifecycleStatus = null;
     // changeSession pauses delivery synchronously; clear before accepting the
     // first event for the new identity so it cannot replay the previous views.
     void this.presentation?.changeSession(sessionId).catch(() => undefined);
@@ -418,10 +427,36 @@ class LifecycleRuntime {
     }
   }
 
-  private maintain(sessionId: string | null): Promise<void> {
+  private maintain(): Promise<void> {
     if (!this.intakeOpen) return Promise.resolve();
     this.observePresentationSession();
     return this.append(async () => {
+      if (!this.intakeOpen) return;
+      const resolved = await this.resolveTarget().catch(() => ({ ok: false as const }));
+      if (!this.intakeOpen) return;
+      if (
+        !resolved.ok ||
+        resolved.workspaceId !== this.target.workspaceId ||
+        resolved.socketPath !== this.target.socketPath ||
+        resolved.surfaceId !== this.target.surfaceId
+      ) {
+        // Close the old source before replaying the store into a new coordinator.
+        // Do not clear the store: moving is not changing the Pi session.
+        await Promise.all([this.client?.goodbye(), this.presentation?.goodbye()]);
+        this.client = null;
+        this.presentation = null;
+        if (!this.intakeOpen) return;
+        if (resolved.ok) this.target = resolved;
+      }
+      this.observePresentationSession();
+      const sessionId = inheritedIdentity(this.ctx.sessionManager.getSessionId());
+      let reconnected = false;
+      if (resolved.ok && !this.client && !this.presentation && sessionId !== null) {
+        const connected = this.connect(this.target, { ...this.owner, sessionId });
+        this.client = connected.client;
+        this.presentation = connected.presentation;
+        reconnected = true;
+      }
       const changedSession = sessionId !== null && sessionId !== this.state.sessionId;
       const transition = reduceLifecycle(
         this.state,
@@ -429,8 +464,13 @@ class LifecycleRuntime {
         this.now(),
       );
       this.state = transition.state;
-      if (changedSession && sessionId !== null) void this.client?.changeSession(sessionId);
-      if (transition.shouldPublish) this.safelySnapshot(transition.snapshot);
+      if (changedSession && sessionId !== null) {
+        this.publishedLifecycleStatus = null;
+        void this.client?.changeSession(sessionId);
+      }
+      if (transition.shouldPublish) this.publishLifecycleView(transition.snapshot);
+      if (reconnected) void this.client?.start(transition.snapshot).catch(() => undefined);
+      else if (transition.shouldPublish) this.safelySnapshot(transition.snapshot);
     });
   }
 
@@ -447,8 +487,10 @@ class LifecycleRuntime {
       const transition = reduceLifecycle(this.state, event, this.now());
       this.state = transition.state;
       if (initial) {
+        this.publishLifecycleView(transition.snapshot);
         void this.client?.start(transition.snapshot).catch(() => undefined);
       } else if (transition.shouldPublish) {
+        this.publishLifecycleView(transition.snapshot);
         this.safelySnapshot(transition.snapshot);
       }
     });
@@ -458,6 +500,20 @@ class LifecycleRuntime {
     const result = this.tail.then(operation, operation);
     this.tail = result.catch(() => undefined);
     return result.catch(() => undefined);
+  }
+
+  private publishLifecycleView(snapshot: LifecycleSnapshot): void {
+    const status = formatLifecycleLabel(snapshot.state, snapshot.toolName);
+    if (status === null || status === this.publishedLifecycleStatus) return;
+    this.publishedLifecycleStatus = status;
+    try {
+      this.publishProducerView?.({
+        producer: { key: 'pi-cmux-junction', label: 'Session' },
+        items: [{ key: 'lifecycle', status }],
+      });
+    } catch {
+      // Producer publication must not interrupt lifecycle delivery.
+    }
   }
 
   private safelySnapshot(snapshot: LifecycleSnapshot): void {

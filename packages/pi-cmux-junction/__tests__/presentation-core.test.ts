@@ -212,6 +212,36 @@ describe('presentation source identity and blocks', () => {
     expect(core.blocks()[0].sourceId).toBe(sourceId(message));
   });
 
+  it('exposes source-to-surface metadata without changing identity on view updates', () => {
+    const core = createPresentationCore({ target, probePid: () => 'match' });
+    const message = snapshot({ surfaceId: 'publishing-surface' });
+    const accepted = acceptedGeneration(core.acceptSnapshot(message, 'socket-a'));
+    const expectedSourceId = sourceId(message);
+
+    expect(core.sourceMetadata()).toEqual([
+      { sourceId: expectedSourceId, surfaceId: 'publishing-surface' },
+    ]);
+    expect(Object.isFrozen(core.sourceMetadata())).toBe(true);
+
+    expect(
+      core.acceptSnapshot(
+        snapshot({
+          surfaceId: 'publishing-surface',
+          sourceGeneration: accepted,
+          revision: 1,
+          views: [
+            { ...view('producer-a'), items: [{ key: 'renamed', title: 'Renamed', rows: [] }] },
+          ],
+        }),
+        'socket-a',
+      ),
+    ).toMatchObject({ ok: true });
+    expect(core.blocks()[0]?.sourceId).toBe(expectedSourceId);
+    expect(core.sourceMetadata()).toEqual([
+      { sourceId: expectedSourceId, surfaceId: 'publishing-surface' },
+    ]);
+  });
+
   it('keeps one block per source and producer with deterministic exact-key ordering', () => {
     const core = createPresentationCore({ target, probePid: () => 'match' });
     const second = snapshot({
