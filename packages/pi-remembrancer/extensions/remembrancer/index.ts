@@ -1,10 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { StringEnum, Type } from '@earendil-works/pi-ai';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { CheckpointStore } from './checkpoints.js';
-import { prepareReview, recover, type Evidence, type Tip } from './capture.js';
+import { prepareReview, type Evidence, type Tip } from './evidence.js';
 
 type Batch = {
   token: string;
@@ -46,36 +45,12 @@ export default function remembrancer(pi: ExtensionAPI) {
   let batch: Batch | undefined;
   const store = () => (db ??= new CheckpointStore());
 
-  function snapshot(ctx: ExtensionContext, recordTip: boolean) {
+  function enroll(ctx: ExtensionContext) {
     const sm = ctx.sessionManager;
     const file = sm.getSessionFile();
     if (!file) return;
     const source = { file: resolve(file), sessionId: sm.getSessionId() };
     store().enroll(source.sessionId, source.file);
-    const entryId = sm.getLeafId();
-    if (recordTip && entryId) store().capture({ ...source, entryId });
-  }
-
-  // Recover only sessions that ran the extension, including custom session dirs.
-  // Save the pre-read signature so any concurrent append is discovered next time.
-  function recoverChanged() {
-    const warnings: string[] = [];
-    for (const source of store().sources()) {
-      try {
-        const stat = statSync(source.file);
-        const signature = stat.size + ':' + stat.mtimeMs;
-        if (source.signature === signature || !stat.size) continue;
-        const read = recover([source]);
-        warnings.push(...read.warnings);
-        if (!read.trees.size) continue;
-        for (const tip of read.tips) store().capture(tip);
-        store().noteScan(source.sessionId, signature, source.file);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
-          warnings.push(source.file + ': ' + String(error));
-      }
-    }
-    return warnings;
   }
 
   function release() {
@@ -83,21 +58,11 @@ export default function remembrancer(pi: ExtensionAPI) {
     db?.releaseReview();
   }
 
-  pi.on('session_start', (_event, ctx) => {
-    if (!ctx.sessionManager.getSessionFile()) return;
-    snapshot(ctx, false);
-    const warnings = recoverChanged();
-    if (warnings.length && ctx.hasUI) ctx.ui.notify('Remembrancer: ' + warnings[0], 'warning');
-  });
-  pi.on('session_compact', (_event, ctx) => snapshot(ctx, true));
-  pi.on('session_shutdown', (_event, ctx) => {
-    try {
-      snapshot(ctx, true);
-    } finally {
-      batch = undefined;
-      db?.close();
-      db = undefined;
-    }
+  pi.on('session_start', (_event, ctx) => enroll(ctx));
+  pi.on('session_shutdown', () => {
+    batch = undefined;
+    db?.close();
+    db = undefined;
   });
 
   pi.registerTool({
@@ -122,10 +87,8 @@ export default function remembrancer(pi: ExtensionAPI) {
         if (batch) throw new Error('Review already open. Continue or cancel batch ' + batch.token);
         store().claimReview();
         try {
-          snapshot(ctx, true);
-          const warnings = recoverChanged();
-          const review = prepareReview(store().pending(), store().reviewed());
-          warnings.push(...review.warnings);
+          enroll(ctx);
+          const review = prepareReview(store().sources(), store().reviewed());
           batch = {
             token: randomUUID(),
             tips: review.tips,
@@ -135,7 +98,7 @@ export default function remembrancer(pi: ExtensionAPI) {
           };
           return result({
             ...page(batch),
-            warnings: [...new Set(warnings)],
+            warnings: review.warnings,
             capturedTips: batch.tips.length,
           });
         } catch (error) {
@@ -153,7 +116,7 @@ export default function remembrancer(pi: ExtensionAPI) {
       if (args.action !== 'finish') throw new Error('Unknown remembrancer_review action');
       if (batch.index < batch.evidence.length)
         throw new Error('Read all evidence pages before finishing.');
-      // Only the exact captured tips advance. A later append remains eligible.
+      // Only the frozen boundaries advance. A later append remains eligible.
       store().finish(batch.tips);
       const reviewedTips = batch.tips.length;
       release();

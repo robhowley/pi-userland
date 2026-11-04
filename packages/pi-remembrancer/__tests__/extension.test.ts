@@ -1,9 +1,14 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import remembrancer from '../extensions/remembrancer/index.js';
+
+vi.mock('node:fs', async (original) => {
+  const fs = await original<typeof import('node:fs')>();
+  return { ...fs, readFileSync: vi.fn(fs.readFileSync) };
+});
 
 type Handler = (...args: unknown[]) => unknown;
 type TestTool = {
@@ -20,7 +25,7 @@ type TestTool = {
 type ToolResponse = { content: [{ type: 'text'; text: string }] };
 type ReviewResult = {
   batch?: string;
-  entries?: unknown[];
+  entries?: { text: string; entryId: string; offset: number; continues: boolean }[];
   hasMore?: boolean;
   capturedTips?: number;
   finished?: boolean;
@@ -56,31 +61,29 @@ it('registers the remembrancer lifecycle and review tool without legacy names', 
   const extension = fakeExtension();
   remembrancer(extension.api);
 
-  expect([...extension.handlers.keys()]).toEqual([
-    'session_start',
-    'session_compact',
-    'session_shutdown',
-  ]);
   expect(extension.tools).toHaveLength(1);
   expect(extension.tools[0]?.name).toBe('remembrancer_review');
   expect(extension.tools[0]?.description).toContain('remembrancer skill');
 });
 
-it('does not register when disabled for delegated sessions', () => {
-  const previous = process.env['PI_REMEMBRANCER_DISABLED'];
-  process.env['PI_REMEMBRANCER_DISABLED'] = '1';
-  try {
-    const extension = fakeExtension();
-    remembrancer(extension.api);
-    expect(extension.handlers).toEqual(new Map());
-    expect(extension.tools).toEqual([]);
-  } finally {
-    if (previous === undefined) delete process.env['PI_REMEMBRANCER_DISABLED'];
-    else process.env['PI_REMEMBRANCER_DISABLED'] = previous;
-  }
-});
+it.each(['PI_REMEMBRANCER_DISABLED', 'PI_SUBAGENT_DEPTH'])(
+  'does not enroll delegated sessions with %s',
+  (variable) => {
+    const previous = process.env[variable];
+    process.env[variable] = '1';
+    try {
+      const extension = fakeExtension();
+      remembrancer(extension.api);
+      expect(extension.handlers).toEqual(new Map());
+      expect(extension.tools).toEqual([]);
+    } finally {
+      if (previous === undefined) delete process.env[variable];
+      else process.env[variable] = previous;
+    }
+  },
+);
 
-it('captures, pages, and finishes only after all review evidence is read', async () => {
+it('pages faithfully, cancels without consuming, persists finish and isolates later appends', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'remembrancer-extension-'));
   const previousState = process.env['XDG_STATE_HOME'];
   process.env['XDG_STATE_HOME'] = join(dir, 'state');
@@ -116,7 +119,6 @@ it('captures, pages, and finishes only after all review evidence is read', async
     sessionManager: {
       getSessionFile: () => file,
       getSessionId: () => 'session',
-      getLeafId: () => 'answer',
     },
   } as unknown as ExtensionContext;
   const start = extension.handlers.get('session_start');
@@ -126,10 +128,15 @@ it('captures, pages, and finishes only after all review evidence is read', async
     throw new Error('Extension did not register its runtime contract');
 
   try {
+    writeFileSync(join(dir, 'unenrolled.jsonl'), 'invalid history, not eligible');
+    vi.mocked(readFileSync).mockClear();
     await start({}, context);
+    expect(readFileSync).not.toHaveBeenCalled();
     const firstPage = decode(
       await tool.execute('call-1', { action: 'begin' }, undefined, undefined, context),
     );
+    expect(readFileSync).toHaveBeenCalledTimes(1);
+    expect(readFileSync).toHaveBeenCalledWith(file, 'utf8');
     expect(firstPage.capturedTips).toBe(1);
     expect(firstPage.hasMore).toBe(true);
     expect(firstPage.entries).toEqual(expect.any(Array));
@@ -156,6 +163,22 @@ it('captures, pages, and finishes only after all review evidence is read', async
       ),
     );
     expect(secondPage.hasMore).toBe(false);
+    const chunks = [...firstPage.entries!, ...secondPage.entries!].filter(
+      (entry) => entry.entryId === 'answer',
+    );
+    expect(chunks.map((entry) => entry.text).join('')).toBe(longText);
+    expect(chunks[0]?.offset).toBe(0);
+    expect(chunks[1]?.offset).toBe(chunks[0]!.text.length);
+    expect(chunks.map((entry) => entry.continues)).toEqual([true, false]);
+    appendFileSync(
+      file,
+      JSON.stringify({
+        type: 'message',
+        id: 'later',
+        parentId: 'answer',
+        message: { role: 'user', content: 'later' },
+      }) + '\n',
+    );
 
     const finished = decode(
       await tool.execute(
@@ -167,6 +190,32 @@ it('captures, pages, and finishes only after all review evidence is read', async
       ),
     );
     expect(finished).toEqual({ finished: true, reviewedTips: 1 });
+    await shutdown({}, context);
+    await start({}, context);
+    const call = async (action: string, token?: string) =>
+      decode(
+        await tool.execute(
+          'call',
+          { action, ...(token === undefined ? {} : { batch: token }) },
+          undefined,
+          undefined,
+          context,
+        ),
+      );
+    const later = await call('begin');
+    expect(later.entries?.map((entry) => entry.text)).toEqual(['later']);
+    await expect(call('next', 'wrong-token')).rejects.toThrow(/matching open review/);
+    await expect(call('begin')).rejects.toThrow(/already open/);
+    await call('cancel', later.batch);
+    await shutdown({}, context);
+    await start({}, context);
+    const retry = await call('begin');
+    expect(retry.entries).toEqual(later.entries);
+    await call('finish', retry.batch);
+    const empty = await call('begin');
+    expect(empty.entries).toEqual([]);
+    expect(empty.capturedTips).toBe(0);
+    await call('cancel', empty.batch);
   } finally {
     await shutdown({}, context);
     if (previousState === undefined) delete process.env['XDG_STATE_HOME'];

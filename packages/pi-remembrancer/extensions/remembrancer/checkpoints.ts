@@ -3,10 +3,7 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-import type { Tip } from './capture.js';
-
-export type Checkpoint = Tip;
-export type Source = Pick<Tip, 'sessionId' | 'file'> & { signature: string | null };
+import type { Source, Tip } from './evidence.js';
 
 function defaultFile(): string {
   const state = process.env['XDG_STATE_HOME'];
@@ -41,17 +38,18 @@ export class CheckpointStore {
     this.filename = filename;
     this.db = openPrivate(filename);
     this.db.exec(`PRAGMA busy_timeout = 5000;
-      CREATE TABLE IF NOT EXISTS checkpoints (
-        session_id TEXT NOT NULL,
-        tip_id TEXT NOT NULL,
-        session_file TEXT NOT NULL,
-        reviewed INTEGER NOT NULL DEFAULT 0,
-        scan_signature TEXT,
+      CREATE TABLE IF NOT EXISTS sources (
+        session_id TEXT PRIMARY KEY,
+        session_file TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS reviewed_boundaries (
+        session_id TEXT NOT NULL REFERENCES sources(session_id),
+        tip_id TEXT NOT NULL CHECK(tip_id <> ''),
         PRIMARY KEY (session_id, tip_id)
       )`);
   }
 
-  // A separate lock file lets other Pi sessions checkpoint during an interactive review.
+  // A separate lock file lets other Pi sessions enroll during an interactive review.
   // SQLite releases this transaction's OS lock on close, including process death.
   claimReview(): void {
     if (this.reviewLock) throw new Error('A remembrancer review is already open');
@@ -72,70 +70,40 @@ export class CheckpointStore {
     this.reviewLock = undefined;
   }
 
-  capture(tip: Checkpoint): void {
-    if (!tip.entryId) throw new Error('Checkpoint entry ID is required');
-    this.db
-      .prepare(
-        `INSERT INTO checkpoints (session_id, tip_id, session_file) VALUES (?, ?, ?)
-      ON CONFLICT (session_id, tip_id) DO NOTHING`,
-      )
-      .run(tip.sessionId, tip.entryId, tip.file);
-  }
-
   enroll(sessionId: string, file: string): void {
     this.db
       .prepare(
-        `INSERT INTO checkpoints (session_id, tip_id, session_file) VALUES (?, '', ?)
-      ON CONFLICT (session_id, tip_id) DO UPDATE SET session_file = excluded.session_file, scan_signature = NULL
-      WHERE session_file <> excluded.session_file`,
+        `INSERT INTO sources (session_id, session_file) VALUES (?, ?)
+      ON CONFLICT (session_id) DO UPDATE SET session_file = excluded.session_file`,
       )
       .run(sessionId, file);
   }
 
   sources(): Source[] {
     return this.db
-      .prepare(
-        `SELECT session_id AS sessionId, session_file AS file, scan_signature AS signature FROM checkpoints
-      WHERE tip_id = '' ORDER BY rowid`,
-      )
+      .prepare(`SELECT session_id AS sessionId, session_file AS file FROM sources ORDER BY rowid`)
       .all() as unknown as Source[];
   }
 
-  noteScan(sessionId: string, signature: string, file?: string): void {
-    this.db
-      .prepare(
-        `UPDATE checkpoints SET scan_signature = ? WHERE session_id = ? AND tip_id = ''
-      AND (? IS NULL OR session_file = ?)`,
-      )
-      .run(signature, sessionId, file ?? null, file ?? null);
-  }
-
-  private list(flag: number): Checkpoint[] {
+  reviewed(): Tip[] {
     return this.db
       .prepare(
-        `SELECT tip.session_id AS sessionId, tip.tip_id AS entryId,
-      COALESCE(source.session_file, tip.session_file) AS file FROM checkpoints AS tip
-      LEFT JOIN checkpoints AS source ON source.session_id = tip.session_id AND source.tip_id = ''
-      WHERE tip.reviewed = ? AND tip.tip_id <> '' ORDER BY tip.rowid`,
+        `SELECT tip.session_id AS sessionId, tip.tip_id AS entryId, source.session_file AS file
+      FROM reviewed_boundaries AS tip JOIN sources AS source USING (session_id) ORDER BY tip.rowid`,
       )
-      .all(flag) as unknown as Checkpoint[];
+      .all() as unknown as Tip[];
   }
 
-  pending(): Checkpoint[] {
-    return this.list(0);
-  }
-  reviewed(): Checkpoint[] {
-    return this.list(1);
-  }
-
-  finish(tips: readonly Checkpoint[]): void {
+  finish(tips: readonly Tip[]): void {
     const mark = this.db.prepare(
-      'UPDATE checkpoints SET reviewed = 1 WHERE session_id = ? AND tip_id = ?',
+      `INSERT INTO reviewed_boundaries (session_id, tip_id)
+       SELECT session_id, ? FROM sources WHERE session_id = ?
+       ON CONFLICT DO NOTHING`,
     );
     this.db.exec('BEGIN IMMEDIATE');
     try {
       for (const tip of tips) {
-        if (!tip.entryId || mark.run(tip.sessionId, tip.entryId).changes === 0)
+        if (!tip.entryId || mark.run(tip.entryId, tip.sessionId).changes === 0)
           throw new Error('Cannot finish an unknown checkpoint');
       }
       this.db.exec('COMMIT');

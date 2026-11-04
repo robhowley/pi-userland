@@ -51,6 +51,7 @@ Your tasks stay in Taskwarrior. Use `task list` or `task completed` any time.
 
 - Only saved sessions opened or resumed with Remembrancer enabled. Resume an older session to include it in your next review.
 - Reviews use user and assistant messages, not tool outputs, model thinking, or images. That text is sent to the model in your reviewing session.
+- Forked sessions can repeat shared context. That is expected, so a commitment or prior dismissal may appear again while branches are reconciled.
 - Reviews happen when you ask, not in the background. An interrupted review may show the same suggestions again.
 
 If you launch delegated workers, keep personal task changes in the parent session. Set `PI_REMEMBRANCER_DISABLED=1` in the worker launcher or leave this package out of its profile. Workers with a positive `PI_SUBAGENT_DEPTH` are already excluded.
