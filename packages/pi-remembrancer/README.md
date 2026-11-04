@@ -1,6 +1,8 @@
 # pi-remembrancer
 
-Remembrancer reviews your saved Pi sessions to find what you said you’d do and what you’ve done since. It checks what’s already in your personal Taskwarrior list and suggests new tasks, progress notes, and completions for you to review together.
+Remembrancer is an agent-powered personal task manager built on Taskwarrior. It reads your saved Pi sessions to find what you said you’d do and what you’ve done since. It checks what’s already on your list, then suggests new tasks, progress notes, and completions for you to review in one pass.
+
+> **Remembrancer** _(noun)_ - an officer of the medieval English Exchequer who kept the _memoranda rolls_, a record of debts owed to the Crown and other unfinished business to bring back before the court.
 
 ## Install
 
