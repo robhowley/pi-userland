@@ -22,6 +22,13 @@ Authorization applies to every workflow:
 - Use the optional `waitingon` string field only when recording a prerequisite. Infer a prerequisite only when the conversation establishes it. “Send the route after the school confirms pickup” means the action is “Send the route” and the field is “School confirms pickup.” An inferred clearing of that field is a proposal unless the user explicitly requests it. The task remains pending until the promised action happens.
 - If the `task` CLI is missing, explain the required setup from the package README. Check `waitingon` configuration only when the requested or accepted change needs that field. Do not silently replace the task store or change the user's configuration.
 
+## Task context
+
+- Keep the description focused on the promised action or outcome and progress annotations short. Link substantial supporting information instead of copying it into the task.
+- Use an annotation shaped `Context: <location> (<brief purpose or locator>)`. Use an unambiguous absolute path or full URL, adding a section or entry identifier when needed. Preserve branch identifiers when they distinguish the evidence.
+- Reuse existing supporting information. Do not require a link for every task, create a document just to supply one, or invent a location. Report unavailable context rather than guessing a replacement.
+- Inspect existing annotations before adding a pointer; do not repeat one already present. Context annotations follow the same approval and operation-scope rules as other task changes, including no updates to existing tasks during capture-only requests.
+
 ## Taskwarrior commands
 
 Read actual records, including UUID, annotations, and status, before matching. Pass user or session text as one literal, safely shell-quoted argument. Never interpolate untrusted session text into shell syntax. Use the full UUID from Taskwarrior for a specific update.
