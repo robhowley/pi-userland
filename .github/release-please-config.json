@@ -3,6 +3,7 @@
   "packages": {
     "packages/pi-cmux-junction": {},
     "packages/pi-merge-ready": {},
+    "packages/pi-remembrancer": {},
     "packages/pi-session-deck": {},
     "packages/pi-openrouter": {},
     "packages/pi-session-hygiene": {},
