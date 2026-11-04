@@ -10,14 +10,6 @@ Use the local Taskwarrior `task` CLI. The list is for obligations the user accep
 
 A cross-session review is evidence gathering, not approval. Present one compact batch of proposed changes and let the user accept, edit, or dismiss it before writing. An explicit direct request to change a task is different: in the parent session, apply that request immediately after checking the actual record. A delegated worker reports the request and evidence to its parent instead of writing the personal list.
 
-Remembrancer is enabled by default. To disable extension review and enrollment, add this to the global settings file in Pi's active agent directory, normally `~/.pi/agent/settings.json`:
-
-```json
-{ "pi-remembrancer": { "disabled": true } }
-```
-
-A trusted project's `.pi/settings.json` takes precedence over the global value. After changing settings, run `/reload` or start a new session. This setting disables extension review and enrollment only; it does not unload this skill or prevent Taskwarrior writes.
-
 ## Direct requests
 
 - Apply a clear request to add, update, or finish one task immediately. Ask once if multiple obligations match. A direct request never advances a cross-session review checkpoint.
