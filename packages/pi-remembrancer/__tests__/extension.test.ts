@@ -1,4 +1,12 @@
-import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
@@ -57,51 +65,225 @@ function decode(response: unknown): ReviewResult {
   return JSON.parse(text) as ReviewResult;
 }
 
-it('registers the remembrancer lifecycle and review tool without legacy names', () => {
+function contextFor(cwd: string, file?: string): ExtensionContext {
+  return {
+    cwd,
+    isProjectTrusted: () => true,
+    hasUI: false,
+    ui: { notify() {} },
+    sessionManager: {
+      getSessionFile: () => file,
+      getSessionId: () => 'session',
+    },
+  } as unknown as ExtensionContext;
+}
+
+it('registers the remembrancer lifecycle and review tool after enabled startup', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'remembrancer-extension-startup-'));
+  const previousAgentDir = process.env['PI_CODING_AGENT_DIR'];
+  process.env['PI_CODING_AGENT_DIR'] = join(dir, 'agent');
   const extension = fakeExtension();
   remembrancer(extension.api);
+  const start = extension.handlers.get('session_start');
+  const shutdown = extension.handlers.get('session_shutdown');
+  if (!start || !shutdown) throw new Error('Extension did not register its lifecycle');
 
-  expect(extension.tools).toHaveLength(1);
-  expect(extension.tools[0]?.name).toBe('remembrancer_review');
-  expect(extension.tools[0]?.description).toContain('remembrancer skill');
-});
-
-it('does not register when explicitly disabled', () => {
-  const previous = process.env['PI_REMEMBRANCER_DISABLED'];
-  process.env['PI_REMEMBRANCER_DISABLED'] = '1';
   try {
-    const extension = fakeExtension();
-    remembrancer(extension.api);
-    expect(extension.handlers).toEqual(new Map());
-    expect(extension.tools).toEqual([]);
+    await start({}, contextFor(dir));
+    expect(extension.tools).toHaveLength(1);
+    expect(extension.tools[0]?.name).toBe('remembrancer_review');
+    expect(extension.tools[0]?.description).toContain('remembrancer skill');
   } finally {
-    if (previous === undefined) delete process.env['PI_REMEMBRANCER_DISABLED'];
-    else process.env['PI_REMEMBRANCER_DISABLED'] = previous;
+    await shutdown({}, contextFor(dir));
+    if (previousAgentDir === undefined) delete process.env['PI_CODING_AGENT_DIR'];
+    else process.env['PI_CODING_AGENT_DIR'] = previousAgentDir;
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 
-it('registers when PI_SUBAGENT_DEPTH is positive', () => {
-  const previousDepth = process.env['PI_SUBAGENT_DEPTH'];
-  const previousDisabled = process.env['PI_REMEMBRANCER_DISABLED'];
-  process.env['PI_SUBAGENT_DEPTH'] = '1';
-  delete process.env['PI_REMEMBRANCER_DISABLED'];
+it('does not register or read session history when disabled by settings', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'remembrancer-extension-disabled-'));
+  const agentDir = join(dir, 'agent');
+  const stateDir = join(dir, 'state');
+  const file = join(dir, 'session.jsonl');
+  const previousAgentDir = process.env['PI_CODING_AGENT_DIR'];
+  const previousState = process.env['XDG_STATE_HOME'];
+  process.env['PI_CODING_AGENT_DIR'] = agentDir;
+  process.env['XDG_STATE_HOME'] = stateDir;
+  mkdirSync(agentDir, { recursive: true });
+  writeFileSync(
+    join(agentDir, 'settings.json'),
+    JSON.stringify({ 'pi-remembrancer': { disabled: true } }),
+  );
+  writeFileSync(file, 'session history should not be read');
+
+  const extension = fakeExtension();
+  remembrancer(extension.api);
+  const start = extension.handlers.get('session_start');
+  const shutdown = extension.handlers.get('session_shutdown');
+  if (!start || !shutdown) throw new Error('Extension did not register its lifecycle');
+
   try {
-    const extension = fakeExtension();
-    remembrancer(extension.api);
-    expect(extension.handlers.has('session_start')).toBe(true);
-    expect(extension.handlers.has('session_shutdown')).toBe(true);
+    vi.mocked(readFileSync).mockClear();
+    await start({}, contextFor(dir, file));
+    expect(extension.tools).toEqual([]);
+    expect(readFileSync).not.toHaveBeenCalledWith(file, 'utf8');
+    expect(existsSync(join(stateDir, 'pi-remembrancer', 'checkpoints.sqlite3'))).toBe(false);
+  } finally {
+    await shutdown({}, contextFor(dir, file));
+    if (previousAgentDir === undefined) delete process.env['PI_CODING_AGENT_DIR'];
+    else process.env['PI_CODING_AGENT_DIR'] = previousAgentDir;
+    if (previousState === undefined) delete process.env['XDG_STATE_HOME'];
+    else process.env['XDG_STATE_HOME'] = previousState;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it('ignores the legacy disable and depth environment variables', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'remembrancer-extension-env-'));
+  const previousAgentDir = process.env['PI_CODING_AGENT_DIR'];
+  const previousDisabled = process.env['PI_REMEMBRANCER_DISABLED'];
+  const previousDepth = process.env['PI_SUBAGENT_DEPTH'];
+  process.env['PI_CODING_AGENT_DIR'] = join(dir, 'agent');
+  process.env['PI_REMEMBRANCER_DISABLED'] = '1';
+  process.env['PI_SUBAGENT_DEPTH'] = '1';
+  const extension = fakeExtension();
+  remembrancer(extension.api);
+  const start = extension.handlers.get('session_start');
+  const shutdown = extension.handlers.get('session_shutdown');
+  if (!start || !shutdown) throw new Error('Extension did not register its lifecycle');
+
+  try {
+    await start({}, contextFor(dir));
     expect(extension.tools).toHaveLength(1);
   } finally {
-    if (previousDepth === undefined) delete process.env['PI_SUBAGENT_DEPTH'];
-    else process.env['PI_SUBAGENT_DEPTH'] = previousDepth;
+    await shutdown({}, contextFor(dir));
+    if (previousAgentDir === undefined) delete process.env['PI_CODING_AGENT_DIR'];
+    else process.env['PI_CODING_AGENT_DIR'] = previousAgentDir;
     if (previousDisabled === undefined) delete process.env['PI_REMEMBRANCER_DISABLED'];
     else process.env['PI_REMEMBRANCER_DISABLED'] = previousDisabled;
+    if (previousDepth === undefined) delete process.env['PI_SUBAGENT_DEPTH'];
+    else process.env['PI_SUBAGENT_DEPTH'] = previousDepth;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it('releases an open review across a fresh disabled runtime without advancing checkpoints', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'remembrancer-extension-reload-'));
+  const agentDir = join(dir, 'agent');
+  const stateDir = join(dir, 'state');
+  const settingsFile = join(agentDir, 'settings.json');
+  const file = join(dir, 'session.jsonl');
+  const previousAgentDir = process.env['PI_CODING_AGENT_DIR'];
+  const previousState = process.env['XDG_STATE_HOME'];
+  process.env['PI_CODING_AGENT_DIR'] = agentDir;
+  process.env['XDG_STATE_HOME'] = stateDir;
+  mkdirSync(agentDir, { recursive: true });
+  writeFileSync(
+    file,
+    [
+      JSON.stringify({ type: 'session', id: 'session', cwd: dir }),
+      JSON.stringify({
+        type: 'message',
+        id: 'root',
+        parentId: null,
+        timestamp: '2026-01-30',
+        message: { role: 'user', content: 'Review this session' },
+      }),
+      JSON.stringify({
+        type: 'message',
+        id: 'answer',
+        parentId: 'root',
+        timestamp: '2026-01-30',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'one commitment' }] },
+      }),
+      '',
+    ].join('\n'),
+  );
+
+  const context = contextFor(dir, file);
+  const enabledSettings = JSON.stringify({ 'pi-remembrancer': { disabled: false } });
+  const disabledSettings = JSON.stringify({ 'pi-remembrancer': { disabled: true } });
+  writeFileSync(settingsFile, enabledSettings);
+  const firstRuntime = fakeExtension();
+  remembrancer(firstRuntime.api);
+  const firstStart = firstRuntime.handlers.get('session_start');
+  const firstShutdown = firstRuntime.handlers.get('session_shutdown');
+  if (!firstStart || !firstShutdown)
+    throw new Error('First runtime did not register its lifecycle');
+
+  let secondShutdown: Handler | undefined;
+  let thirdShutdown: Handler | undefined;
+  try {
+    await firstStart({}, context);
+    const firstTool = firstRuntime.tools[0];
+    if (!firstTool) throw new Error('First runtime did not register the review tool');
+    const firstReview = decode(
+      await firstTool.execute('call-1', { action: 'begin' }, undefined, undefined, context),
+    );
+    expect(firstReview.capturedTips).toBe(1);
+    expect(firstReview.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          entryId: 'answer',
+          text: 'one commitment',
+          offset: 0,
+          continues: false,
+        }),
+      ]),
+    );
+
+    await firstShutdown({}, context);
+    writeFileSync(settingsFile, disabledSettings);
+    const secondRuntime = fakeExtension();
+    remembrancer(secondRuntime.api);
+    const secondStart = secondRuntime.handlers.get('session_start');
+    secondShutdown = secondRuntime.handlers.get('session_shutdown');
+    if (!secondStart || !secondShutdown)
+      throw new Error('Second runtime did not register its lifecycle');
+    await secondStart({}, context);
+    expect(secondRuntime.tools).toEqual([]);
+    await secondShutdown({}, context);
+
+    writeFileSync(settingsFile, enabledSettings);
+    const thirdRuntime = fakeExtension();
+    remembrancer(thirdRuntime.api);
+    const thirdStart = thirdRuntime.handlers.get('session_start');
+    thirdShutdown = thirdRuntime.handlers.get('session_shutdown');
+    if (!thirdStart || !thirdShutdown)
+      throw new Error('Third runtime did not register its lifecycle');
+    await thirdStart({}, context);
+    const thirdTool = thirdRuntime.tools[0];
+    if (!thirdTool) throw new Error('Third runtime did not register the review tool');
+    const resumedReview = decode(
+      await thirdTool.execute('call-2', { action: 'begin' }, undefined, undefined, context),
+    );
+    expect(resumedReview.capturedTips).toBe(1);
+    expect(resumedReview.entries).toEqual(firstReview.entries);
+    await thirdTool.execute(
+      'call-3',
+      { action: 'cancel', batch: resumedReview.batch as string },
+      undefined,
+      undefined,
+      context,
+    );
+  } finally {
+    await thirdShutdown?.({}, context);
+    await secondShutdown?.({}, context);
+    await firstShutdown({}, context);
+    if (previousAgentDir === undefined) delete process.env['PI_CODING_AGENT_DIR'];
+    else process.env['PI_CODING_AGENT_DIR'] = previousAgentDir;
+    if (previousState === undefined) delete process.env['XDG_STATE_HOME'];
+    else process.env['XDG_STATE_HOME'] = previousState;
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 
 it('pages faithfully, cancels without consuming, persists finish and isolates later appends', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'remembrancer-extension-'));
+  const previousAgentDir = process.env['PI_CODING_AGENT_DIR'];
   const previousState = process.env['XDG_STATE_HOME'];
+  process.env['PI_CODING_AGENT_DIR'] = join(dir, 'agent');
   process.env['XDG_STATE_HOME'] = join(dir, 'state');
   const file = join(dir, 'session.jsonl');
   const longText = 'x'.repeat(12_050);
@@ -129,24 +311,17 @@ it('pages faithfully, cancels without consuming, persists finish and isolates la
 
   const extension = fakeExtension();
   remembrancer(extension.api);
-  const context = {
-    hasUI: false,
-    ui: { notify() {} },
-    sessionManager: {
-      getSessionFile: () => file,
-      getSessionId: () => 'session',
-    },
-  } as unknown as ExtensionContext;
+  const context = contextFor(dir, file);
   const start = extension.handlers.get('session_start');
   const shutdown = extension.handlers.get('session_shutdown');
-  const tool = extension.tools[0];
-  if (!start || !shutdown || !tool)
-    throw new Error('Extension did not register its runtime contract');
+  if (!start || !shutdown) throw new Error('Extension did not register its runtime contract');
 
   try {
     writeFileSync(join(dir, 'unenrolled.jsonl'), 'invalid history, not eligible');
     vi.mocked(readFileSync).mockClear();
     await start({}, context);
+    const tool = extension.tools[0];
+    if (!tool) throw new Error('Extension did not register its review tool');
     expect(readFileSync).not.toHaveBeenCalled();
     const firstPage = decode(
       await tool.execute('call-1', { action: 'begin' }, undefined, undefined, context),
@@ -234,6 +409,8 @@ it('pages faithfully, cancels without consuming, persists finish and isolates la
     await call('cancel', empty.batch);
   } finally {
     await shutdown({}, context);
+    if (previousAgentDir === undefined) delete process.env['PI_CODING_AGENT_DIR'];
+    else process.env['PI_CODING_AGENT_DIR'] = previousAgentDir;
     if (previousState === undefined) delete process.env['XDG_STATE_HOME'];
     else process.env['XDG_STATE_HOME'] = previousState;
     rmSync(dir, { recursive: true, force: true });

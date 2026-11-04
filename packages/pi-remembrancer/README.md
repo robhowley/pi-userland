@@ -56,4 +56,14 @@ Your tasks stay in Taskwarrior. Use `task list` or `task completed` any time.
 - Forked sessions can repeat shared context. That is expected, so a commitment or prior dismissal may appear again while branches are reconciled.
 - Reviews happen when you ask, not in the background. An interrupted review may show the same suggestions again.
 
-If you launch delegated workers, keep personal task changes in the parent session. To opt a worker out of Remembrancer, set `PI_REMEMBRANCER_DISABLED=1` in its launcher or leave this package out of its profile.
+## Settings
+
+Remembrancer is enabled by default. To disable extension review and enrollment, add this to the global settings file in Pi's active agent directory, normally `~/.pi/agent/settings.json`:
+
+```json
+{ "pi-remembrancer": { "disabled": true } }
+```
+
+A trusted project's `.pi/settings.json` takes precedence over the global value. After changing settings, run `/reload` or start a new session. This setting disables extension review and enrollment only; it does not unload the separately discoverable skill or prevent Taskwarrior writes.
+
+If you launch delegated workers, keep personal task changes in the parent session.

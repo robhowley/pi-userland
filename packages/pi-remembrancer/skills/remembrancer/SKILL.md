@@ -6,11 +6,17 @@ compatibility: Requires Taskwarrior 3's `task` CLI on PATH. Cross-session review
 
 # Remembrancer
 
-Use the local Taskwarrior `task` CLI. The list is for obligations the user accepted or explicitly wants tracked. Keep personal Taskwarrior mutations in the parent session. Delegated workers report evidence and proposed changes back to the parent, which decides whether to apply any personal task changes. This is a workflow rule, not a hard write restriction.
+Use the local Taskwarrior `task` CLI. The list is for obligations the user accepted or explicitly wants tracked. Child agents must not mutate the user's personal Taskwarrior list. They report evidence and proposed changes to the parent, which decides whether to apply any personal task changes. This is a workflow rule, not a hard write restriction.
 
 A cross-session review is evidence gathering, not approval. Present one compact batch of proposed changes and let the user accept, edit, or dismiss it before writing. An explicit direct request to change a task is different: in the parent session, apply that request immediately after checking the actual record. A delegated worker reports the request and evidence to its parent instead of writing the personal list.
 
-Set `PI_REMEMBRANCER_DISABLED=1` explicitly in a worker launcher when it should not use Remembrancer. This opt-out is caller-controlled, not automatic worker detection or a hard write restriction.
+Remembrancer is enabled by default. To disable extension review and enrollment, add this to the global settings file in Pi's active agent directory, normally `~/.pi/agent/settings.json`:
+
+```json
+{ "pi-remembrancer": { "disabled": true } }
+```
+
+A trusted project's `.pi/settings.json` takes precedence over the global value. After changing settings, run `/reload` or start a new session. This setting disables extension review and enrollment only; it does not unload this skill or prevent Taskwarrior writes.
 
 ## Direct requests
 
