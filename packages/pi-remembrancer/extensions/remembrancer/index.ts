@@ -36,11 +36,7 @@ function page(batch: Batch) {
 }
 
 export default function remembrancer(pi: ExtensionAPI) {
-  if (
-    process.env['PI_REMEMBRANCER_DISABLED'] === '1' ||
-    Number(process.env['PI_SUBAGENT_DEPTH']) > 0
-  )
-    return;
+  if (process.env['PI_REMEMBRANCER_DISABLED'] === '1') return;
   let db: CheckpointStore | undefined;
   let batch: Batch | undefined;
   const store = () => (db ??= new CheckpointStore());

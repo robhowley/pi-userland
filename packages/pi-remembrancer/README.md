@@ -56,4 +56,4 @@ Your tasks stay in Taskwarrior. Use `task list` or `task completed` any time.
 - Forked sessions can repeat shared context. That is expected, so a commitment or prior dismissal may appear again while branches are reconciled.
 - Reviews happen when you ask, not in the background. An interrupted review may show the same suggestions again.
 
-If you launch delegated workers, keep personal task changes in the parent session. Set `PI_REMEMBRANCER_DISABLED=1` in the worker launcher or leave this package out of its profile. Workers with a positive `PI_SUBAGENT_DEPTH` are already excluded.
+If you launch delegated workers, keep personal task changes in the parent session. To opt a worker out of Remembrancer, set `PI_REMEMBRANCER_DISABLED=1` in its launcher or leave this package out of its profile.

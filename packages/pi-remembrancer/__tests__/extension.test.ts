@@ -66,22 +66,38 @@ it('registers the remembrancer lifecycle and review tool without legacy names', 
   expect(extension.tools[0]?.description).toContain('remembrancer skill');
 });
 
-it.each(['PI_REMEMBRANCER_DISABLED', 'PI_SUBAGENT_DEPTH'])(
-  'does not enroll delegated sessions with %s',
-  (variable) => {
-    const previous = process.env[variable];
-    process.env[variable] = '1';
-    try {
-      const extension = fakeExtension();
-      remembrancer(extension.api);
-      expect(extension.handlers).toEqual(new Map());
-      expect(extension.tools).toEqual([]);
-    } finally {
-      if (previous === undefined) delete process.env[variable];
-      else process.env[variable] = previous;
-    }
-  },
-);
+it('does not register when explicitly disabled', () => {
+  const previous = process.env['PI_REMEMBRANCER_DISABLED'];
+  process.env['PI_REMEMBRANCER_DISABLED'] = '1';
+  try {
+    const extension = fakeExtension();
+    remembrancer(extension.api);
+    expect(extension.handlers).toEqual(new Map());
+    expect(extension.tools).toEqual([]);
+  } finally {
+    if (previous === undefined) delete process.env['PI_REMEMBRANCER_DISABLED'];
+    else process.env['PI_REMEMBRANCER_DISABLED'] = previous;
+  }
+});
+
+it('registers when PI_SUBAGENT_DEPTH is positive', () => {
+  const previousDepth = process.env['PI_SUBAGENT_DEPTH'];
+  const previousDisabled = process.env['PI_REMEMBRANCER_DISABLED'];
+  process.env['PI_SUBAGENT_DEPTH'] = '1';
+  delete process.env['PI_REMEMBRANCER_DISABLED'];
+  try {
+    const extension = fakeExtension();
+    remembrancer(extension.api);
+    expect(extension.handlers.has('session_start')).toBe(true);
+    expect(extension.handlers.has('session_shutdown')).toBe(true);
+    expect(extension.tools).toHaveLength(1);
+  } finally {
+    if (previousDepth === undefined) delete process.env['PI_SUBAGENT_DEPTH'];
+    else process.env['PI_SUBAGENT_DEPTH'] = previousDepth;
+    if (previousDisabled === undefined) delete process.env['PI_REMEMBRANCER_DISABLED'];
+    else process.env['PI_REMEMBRANCER_DISABLED'] = previousDisabled;
+  }
+});
 
 it('pages faithfully, cancels without consuming, persists finish and isolates later appends', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'remembrancer-extension-'));

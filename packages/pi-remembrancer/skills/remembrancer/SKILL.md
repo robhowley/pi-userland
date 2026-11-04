@@ -6,11 +6,11 @@ compatibility: Requires Taskwarrior 3's `task` CLI on PATH. Cross-session review
 
 # Remembrancer
 
-Use the local Taskwarrior `task` CLI. The list is for obligations the user accepted or explicitly wants tracked. Keep personal writes in the parent session so delegated workers cannot change the user's list behind their back.
+Use the local Taskwarrior `task` CLI. The list is for obligations the user accepted or explicitly wants tracked. Keep personal Taskwarrior mutations in the parent session. Delegated workers report evidence and proposed changes back to the parent, which decides whether to apply any personal task changes. This is a workflow rule, not a hard write restriction.
 
-A cross-session review is evidence gathering, not approval. Present one compact batch of proposed changes and let the user accept, edit, or dismiss it before writing. An explicit direct request to change a task is different: apply that request immediately after checking the actual record.
+A cross-session review is evidence gathering, not approval. Present one compact batch of proposed changes and let the user accept, edit, or dismiss it before writing. An explicit direct request to change a task is different: in the parent session, apply that request immediately after checking the actual record. A delegated worker reports the request and evidence to its parent instead of writing the personal list.
 
-A delegated worker, or a session launched with `PI_REMEMBRANCER_DISABLED=1`, reports evidence to its parent and leaves the personal list alone. A positive `PI_SUBAGENT_DEPTH` also disables the extension.
+Set `PI_REMEMBRANCER_DISABLED=1` explicitly in a worker launcher when it should not use Remembrancer. This opt-out is caller-controlled, not automatic worker detection or a hard write restriction.
 
 ## Direct requests
 
