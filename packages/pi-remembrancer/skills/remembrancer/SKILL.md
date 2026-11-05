@@ -49,7 +49,7 @@ task "$uuid" done
 Route by where the user asks you to look, not by whether the requested operation sounds like capture or close:
 
 - For a current-session request such as “wrap up this session” or “capture follow-ups”, use the current conversation as evidence. Project, topic, time, capture-only, and close-only qualifiers are supported here and restrict reconciliation within that conversation.
-- For an unscoped saved-session request such as “what changed since my last review?”, use ordinary full cross-session review. For an explicit bounded historical request such as “seed 14d”, call `remembrancer_review` with `action: "begin"` and `seed: "14d"`; seed reconciles the full eligible historical batch.
+- For an unscoped saved-session request such as “what changed since my last review?”, use ordinary full cross-session review. For an explicit bounded historical request, including a command-generated `/remembrancer seed <Nd>` or natural-language “seed <Nd>”, call `remembrancer_review` with `action: "begin"` and `seed` set to the requested duration; seed reconciles the full eligible historical batch.
 - A seed is not an arbitrary historical slice. Reject date strings, project/topic slices, capture-only historical checkpoints, and historical-only expansion. For other saved-session or historical requests scoped by project, topic, time, capture-only, or close-only, ask the user to choose either the supported full review, an explicit seed, or user-approved current-session evidence. Do not silently broaden the request, substitute the current conversation without approval, mark excluded history reviewed, or invent scoped-history checkpoint machinery.
 
 ## Reconcile evidence

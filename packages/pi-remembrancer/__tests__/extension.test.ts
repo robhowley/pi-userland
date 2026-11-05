@@ -4,11 +4,13 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { expect, it, vi } from 'vitest';
 import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
@@ -69,24 +71,38 @@ type ReviewResult = {
   nextOffset?: number | null;
 };
 
+type TestCommand = {
+  handler: Handler;
+  getArgumentCompletions?: (
+    prefix: string,
+  ) => Array<{ value: string; label: string; description?: string }> | null;
+};
 type FakeExtension = {
   handlers: Map<string, Handler>;
   tools: TestTool[];
+  commands: Map<string, TestCommand>;
+  sendUserMessage: ReturnType<typeof vi.fn>;
   api: ExtensionAPI;
 };
 
 function fakeExtension(): FakeExtension {
   const handlers = new Map<string, Handler>();
   const tools: TestTool[] = [];
+  const commands = new Map<string, TestCommand>();
+  const sendUserMessage = vi.fn();
   const api = {
     on(event: string, handler: Handler) {
       handlers.set(event, handler);
     },
+    registerCommand(name: string, command: TestCommand) {
+      commands.set(name, command);
+    },
     registerTool(tool: TestTool) {
       tools.push(tool);
     },
+    sendUserMessage,
   } as unknown as ExtensionAPI;
-  return { handlers, tools, api };
+  return { handlers, tools, commands, sendUserMessage, api };
 }
 
 function decode(response: unknown): ReviewResult {
@@ -99,12 +115,17 @@ function contextFor(
   file?: string,
   archive = file ? dirname(file) : cwd,
   defaultSessionDir = false,
+  options: {
+    isIdle?: () => boolean;
+    notify?: (message: string, type?: 'info' | 'warning' | 'error') => void;
+  } = {},
 ): ExtensionContext {
   return {
     cwd,
     isProjectTrusted: () => true,
     hasUI: false,
-    ui: { notify() {} },
+    isIdle: options.isIdle ?? (() => true),
+    ui: { notify: options.notify ?? (() => {}) },
     sessionManager: {
       getSessionFile: () => file,
       getSessionId: () => 'session',
@@ -112,6 +133,19 @@ function contextFor(
       usesDefaultSessionDir: () => defaultSessionDir,
     },
   } as unknown as ExtensionContext;
+}
+
+async function installedAutocompleteProvider(command: TestCommand, cwd: string) {
+  const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+  const agentPackage = realpathSync(
+    join(packageRoot, 'node_modules', '@earendil-works', 'pi-coding-agent'),
+  );
+  const tuiEntry = join(dirname(agentPackage), 'pi-tui', 'dist', 'autocomplete.js');
+  const { CombinedAutocompleteProvider } = await import(pathToFileURL(tuiEntry).href);
+  return new CombinedAutocompleteProvider(
+    [{ name: 'remembrancer', getArgumentCompletions: command.getArgumentCompletions }],
+    cwd,
+  );
 }
 
 it('registers the remembrancer lifecycle and review tool after enabled startup', async () => {
@@ -131,6 +165,138 @@ it('registers the remembrancer lifecycle and review tool after enabled startup',
     expect(extension.tools[0]?.description).toContain('remembrancer skill');
   } finally {
     await shutdown({}, contextFor(dir));
+    if (previousAgentDir === undefined) delete process.env['PI_CODING_AGENT_DIR'];
+    else process.env['PI_CODING_AGENT_DIR'] = previousAgentDir;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it('routes the slash command through the Remembrancer skill and completes its arguments', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'remembrancer-command-'));
+  const previousAgentDir = process.env['PI_CODING_AGENT_DIR'];
+  const agentDir = join(dir, 'agent');
+  process.env['PI_CODING_AGENT_DIR'] = agentDir;
+  mkdirSync(agentDir, { recursive: true });
+  const extension = fakeExtension();
+  remembrancer(extension.api);
+  const command = extension.commands.get('remembrancer');
+  if (!command) throw new Error('Remembrancer command was not registered');
+  const notify = vi.fn();
+  const context = contextFor(dir, undefined, dir, false, { notify });
+
+  try {
+    await command.handler('help', context);
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining('Usage: /remembrancer'), 'info');
+
+    await command.handler('seed 14d', context);
+    expect(extension.sendUserMessage).toHaveBeenCalledWith('/skill:remembrancer seed 14d', {
+      expandPromptTemplates: true,
+    });
+    expect(notify).toHaveBeenCalledTimes(1);
+
+    const getArgumentCompletions = command.getArgumentCompletions;
+    if (!getArgumentCompletions) throw new Error('Remembrancer completions were not registered');
+
+    expect(getArgumentCompletions('')).toEqual([
+      expect.objectContaining({ value: 'seed ', label: 'seed' }),
+      expect.objectContaining({ value: 'help', label: 'help' }),
+    ]);
+    expect(getArgumentCompletions('seed ')).toEqual([
+      expect.objectContaining({ value: 'seed 1d', label: '1d' }),
+      expect.objectContaining({ value: 'seed 7d', label: '7d' }),
+      expect.objectContaining({ value: 'seed 14d', label: '14d' }),
+      expect.objectContaining({ value: 'seed 30d', label: '30d' }),
+      expect.objectContaining({ value: 'seed 90d', label: '90d' }),
+    ]);
+    expect(getArgumentCompletions('seed 1')).toEqual([
+      expect.objectContaining({ value: 'seed 1d', label: '1d' }),
+      expect.objectContaining({ value: 'seed 14d', label: '14d' }),
+    ]);
+    expect(getArgumentCompletions('seed 14d ')).toBeNull();
+
+    const provider = await installedAutocompleteProvider(command, dir);
+    const subcommandLine = '/remembrancer ';
+    const subcommandSuggestions = await provider.getSuggestions(
+      [subcommandLine],
+      0,
+      subcommandLine.length,
+      { signal: new AbortController().signal },
+    );
+    if (!subcommandSuggestions) throw new Error('Pi returned no subcommand completions');
+    const seed = subcommandSuggestions.items.find(
+      (item: { label: string }) => item.label === 'seed',
+    );
+    if (!seed) throw new Error('Pi returned no seed completion');
+    expect(
+      provider.applyCompletion(
+        [subcommandLine],
+        0,
+        subcommandLine.length,
+        seed,
+        subcommandSuggestions.prefix,
+      ).lines[0],
+    ).toBe('/remembrancer seed ');
+
+    const durationLine = '/remembrancer seed ';
+    const durationSuggestions = await provider.getSuggestions(
+      [durationLine],
+      0,
+      durationLine.length,
+      { signal: new AbortController().signal },
+    );
+    if (!durationSuggestions) throw new Error('Pi returned no duration completions');
+    const duration = durationSuggestions.items.find(
+      (item: { label: string }) => item.label === '14d',
+    );
+    if (!duration) throw new Error('Pi returned no 14d completion');
+    expect(durationSuggestions.prefix).toBe('seed ');
+    expect(
+      provider.applyCompletion(
+        [durationLine],
+        0,
+        durationLine.length,
+        duration,
+        durationSuggestions.prefix,
+      ).lines[0],
+    ).toBe('/remembrancer seed 14d');
+  } finally {
+    if (previousAgentDir === undefined) delete process.env['PI_CODING_AGENT_DIR'];
+    else process.env['PI_CODING_AGENT_DIR'] = previousAgentDir;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it('rejects invalid slash command arguments without starting a model turn', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'remembrancer-command-invalid-'));
+  const previousAgentDir = process.env['PI_CODING_AGENT_DIR'];
+  const agentDir = join(dir, 'agent');
+  process.env['PI_CODING_AGENT_DIR'] = agentDir;
+  mkdirSync(agentDir, { recursive: true });
+  const extension = fakeExtension();
+  remembrancer(extension.api);
+  const command = extension.commands.get('remembrancer');
+  if (!command) throw new Error('Remembrancer command was not registered');
+  const notify = vi.fn();
+  const context = contextFor(dir, undefined, dir, false, { notify });
+
+  try {
+    for (const args of [
+      'review 14d',
+      'seed',
+      'seed 14d extra',
+      'seed 0d',
+      `seed ${'9'.repeat(400)}d`,
+      'help extra',
+    ]) {
+      await command.handler(args, context);
+    }
+    expect(extension.sendUserMessage).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledTimes(6);
+    for (const call of notify.mock.calls) {
+      expect(call[0]).toContain('Usage: /remembrancer');
+      expect(call[1]).toBe('error');
+    }
+  } finally {
     if (previousAgentDir === undefined) delete process.env['PI_CODING_AGENT_DIR'];
     else process.env['PI_CODING_AGENT_DIR'] = previousAgentDir;
     rmSync(dir, { recursive: true, force: true });
@@ -163,10 +329,101 @@ it('does not register or read session history when disabled by settings', async 
     vi.mocked(readFileSync).mockClear();
     await start({}, contextFor(dir, file));
     expect(extension.tools).toEqual([]);
+    const command = extension.commands.get('remembrancer');
+    if (!command) throw new Error('Remembrancer command was not registered');
+    const notify = vi.fn();
+    await command.handler('seed 14d', contextFor(dir, file, dirname(file), false, { notify }));
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining('disabled'), 'warning');
+    expect(extension.sendUserMessage).not.toHaveBeenCalled();
     expect(readFileSync).not.toHaveBeenCalledWith(file, 'utf8');
     expect(existsSync(join(stateDir, 'pi-remembrancer', 'checkpoints.sqlite3'))).toBe(false);
   } finally {
     await shutdown({}, contextFor(dir, file));
+    if (previousAgentDir === undefined) delete process.env['PI_CODING_AGENT_DIR'];
+    else process.env['PI_CODING_AGENT_DIR'] = previousAgentDir;
+    if (previousState === undefined) delete process.env['XDG_STATE_HOME'];
+    else process.env['XDG_STATE_HOME'] = previousState;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it('rejects a seed while Pi is busy without sending a user message', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'remembrancer-command-busy-'));
+  const previousAgentDir = process.env['PI_CODING_AGENT_DIR'];
+  process.env['PI_CODING_AGENT_DIR'] = join(dir, 'agent');
+  mkdirSync(join(dir, 'agent'), { recursive: true });
+  const extension = fakeExtension();
+  remembrancer(extension.api);
+  const command = extension.commands.get('remembrancer');
+  if (!command) throw new Error('Remembrancer command was not registered');
+  const notify = vi.fn();
+
+  try {
+    await command.handler(
+      'seed 14d',
+      contextFor(dir, undefined, dir, false, { isIdle: () => false, notify }),
+    );
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining('Pi is busy'), 'warning');
+    expect(extension.sendUserMessage).not.toHaveBeenCalled();
+  } finally {
+    if (previousAgentDir === undefined) delete process.env['PI_CODING_AGENT_DIR'];
+    else process.env['PI_CODING_AGENT_DIR'] = previousAgentDir;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it('rejects a seed while a local review is open', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'remembrancer-command-open-review-'));
+  const stateDir = join(dir, 'state');
+  const file = join(dir, 'session.jsonl');
+  const previousAgentDir = process.env['PI_CODING_AGENT_DIR'];
+  const previousState = process.env['XDG_STATE_HOME'];
+  process.env['PI_CODING_AGENT_DIR'] = join(dir, 'agent');
+  process.env['XDG_STATE_HOME'] = stateDir;
+  mkdirSync(join(dir, 'agent'), { recursive: true });
+  writeFileSync(
+    file,
+    [
+      JSON.stringify({ type: 'session', id: 'session', cwd: dir }),
+      JSON.stringify({
+        type: 'message',
+        id: 'message',
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: 'user', content: 'review this' },
+      }),
+      '',
+    ].join('\n'),
+  );
+  const extension = fakeExtension();
+  remembrancer(extension.api);
+  const start = extension.handlers.get('session_start');
+  const shutdown = extension.handlers.get('session_shutdown');
+  if (!start || !shutdown) throw new Error('Extension did not register its lifecycle');
+  const notify = vi.fn();
+  const context = contextFor(dir, file, dir, false, { notify });
+
+  try {
+    await start({}, context);
+    const tool = extension.tools[0];
+    if (!tool) throw new Error('Extension did not register the review tool');
+    const review = decode(
+      await tool.execute('begin', { action: 'begin' }, undefined, undefined, context),
+    );
+    const command = extension.commands.get('remembrancer');
+    if (!command) throw new Error('Remembrancer command was not registered');
+    await command.handler('seed 14d', context);
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining('already open'), 'warning');
+    expect(extension.sendUserMessage).not.toHaveBeenCalled();
+    await tool.execute(
+      'cancel',
+      { action: 'cancel', batch: review.batch },
+      undefined,
+      undefined,
+      context,
+    );
+  } finally {
+    await shutdown({}, context);
     if (previousAgentDir === undefined) delete process.env['PI_CODING_AGENT_DIR'];
     else process.env['PI_CODING_AGENT_DIR'] = previousAgentDir;
     if (previousState === undefined) delete process.env['XDG_STATE_HOME'];

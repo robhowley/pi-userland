@@ -49,6 +49,93 @@ type Batch = {
   offset: number;
 };
 
+export const REMEMBRANCER_COMMAND_NAME = 'remembrancer';
+export const REMEMBRANCER_COMMAND_USAGE =
+  'Usage: /remembrancer seed <Nd>\n       /remembrancer help';
+export const REMEMBRANCER_HELP = [
+  REMEMBRANCER_COMMAND_USAGE,
+  'Seed saved-session evidence from a bounded historical window, then follow the Remembrancer skill.',
+  'Natural-language review requests remain supported.',
+].join('\n');
+
+const REMEMBRANCER_SUBCOMMANDS = [
+  {
+    value: 'seed ',
+    label: 'seed',
+    description: 'Review saved-session evidence from a bounded historical window',
+  },
+  { value: 'help', label: 'help', description: 'Show Remembrancer command usage' },
+];
+const REMEMBRANCER_SEED_DURATIONS = [
+  { value: '1d', label: '1d', description: 'Last day' },
+  { value: '7d', label: '7d', description: 'Last 7 days' },
+  { value: '14d', label: '14d', description: 'Last 14 days' },
+  { value: '30d', label: '30d', description: 'Last 30 days' },
+  { value: '90d', label: '90d', description: 'Last 90 days' },
+];
+
+type RemembrancerCommandArgs =
+  | { ok: true; mode: 'help' }
+  | { ok: true; mode: 'seed'; duration: string }
+  | { ok: false; message: string };
+
+export function parseRemembrancerCommandArgs(args: string): RemembrancerCommandArgs {
+  const tokens = args.trim().length === 0 ? [] : args.trim().split(/\s+/u);
+  const subcommand = tokens[0];
+
+  if (tokens.length === 0 || (subcommand === 'help' && tokens.length === 1))
+    return { ok: true, mode: 'help' };
+  if (subcommand === 'help')
+    return { ok: false, message: `Help does not accept arguments. ${REMEMBRANCER_COMMAND_USAGE}` };
+  if (subcommand !== 'seed')
+    return {
+      ok: false,
+      message: `Unknown subcommand: ${subcommand}. ${REMEMBRANCER_COMMAND_USAGE}`,
+    };
+  if (tokens.length !== 2)
+    return {
+      ok: false,
+      message: `Seed requires exactly one duration such as 14d. ${REMEMBRANCER_COMMAND_USAGE}`,
+    };
+
+  const duration = tokens[1]!;
+  try {
+    resolveSeedSince(duration);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      message: `Invalid seed duration "${duration}": ${detail}. ${REMEMBRANCER_COMMAND_USAGE}`,
+    };
+  }
+  return { ok: true, mode: 'seed', duration };
+}
+
+export function getRemembrancerArgumentCompletions(prefix: string) {
+  const input = prefix.trimStart();
+  const trailingWhitespace = /\s$/u.test(input);
+  const tokens = input.trim().length === 0 ? [] : input.trim().split(/\s+/u);
+
+  if (tokens.length === 0) return REMEMBRANCER_SUBCOMMANDS;
+  if (tokens.length === 1) {
+    const token = tokens[0]!;
+    if (trailingWhitespace) {
+      return token === 'seed'
+        ? REMEMBRANCER_SEED_DURATIONS.map((item) => ({ ...item, value: `seed ${item.value}` }))
+        : null;
+    }
+    const matches = REMEMBRANCER_SUBCOMMANDS.filter((item) => item.value.startsWith(token));
+    return matches.length > 0 ? matches : null;
+  }
+  if (tokens[0] !== 'seed' || tokens.length !== 2 || trailingWhitespace) return null;
+
+  const token = tokens[1]!;
+  const matches = REMEMBRANCER_SEED_DURATIONS.filter((item) => item.value.startsWith(token));
+  return matches.length > 0
+    ? matches.map((item) => ({ ...item, value: `seed ${item.value}` }))
+    : null;
+}
+
 const selectedParameters = Type.Object({
   sessionId: Type.String(),
   branchId: Type.String(),
@@ -146,6 +233,47 @@ export default function remembrancer(pi: ExtensionAPI) {
       details: {},
     };
   }
+
+  pi.registerCommand(REMEMBRANCER_COMMAND_NAME, {
+    description: 'Start a bounded historical Remembrancer review',
+    getArgumentCompletions: getRemembrancerArgumentCompletions,
+    handler: async (args, ctx) => {
+      const parsed = parseRemembrancerCommandArgs(args);
+      if (!parsed.ok) {
+        ctx.ui.notify(parsed.message, 'error');
+        return;
+      }
+      if (parsed.mode === 'help') {
+        ctx.ui.notify(REMEMBRANCER_HELP, 'info');
+        return;
+      }
+      if (loadRemembrancerConfig(ctx.cwd, ctx.isProjectTrusted()).disabled) {
+        ctx.ui.notify(
+          'Remembrancer is disabled in settings. Set pi-remembrancer.disabled to false to enable it.',
+          'warning',
+        );
+        return;
+      }
+      if (!ctx.isIdle()) {
+        ctx.ui.notify(
+          'Pi is busy. Wait for the current run to finish, then retry the seed command.',
+          'warning',
+        );
+        return;
+      }
+      if (batch) {
+        ctx.ui.notify(
+          'A Remembrancer review is already open in this Pi session. Finish or cancel it before starting another seed.',
+          'warning',
+        );
+        return;
+      }
+
+      pi.sendUserMessage(`/skill:remembrancer seed ${parsed.duration}`, {
+        expandPromptTemplates: true,
+      });
+    },
+  });
 
   function beginReview(args: ReviewArgs, ctx: ExtensionContext, requestedSince: string | null) {
     if (args.seed === undefined) enroll(ctx);

@@ -33,14 +33,17 @@ The `waitingon` field is optional. Configure it only for operations that record 
 
 ## Try it
 
+Type slash commands in Pi’s prompt. The duration must be a positive whole number of days in `<Nd>` form, such as `14d` or `30d`.
+
 | Say this in Pi                                                                    | What happens                                                               |
 | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `/remembrancer seed 14d`                                                          | Review the last 14 days in Pi’s configured session archive.                |
+| `/remembrancer seed 30d`                                                          | Review the last 30 days in Pi’s configured session archive.                |
 | “Add ‘run the held-out comparison’ to work.ranking.”                              | Check for a matching task and add the commitment.                          |
 | “I’ll send the route after the school confirms pickup. Add that to life.bikebus.” | Add “Send the route” with a waiting condition.                             |
 | “The school confirmed pickup. Update my route todo.”                              | Clear the waiting condition; sending the route stays pending.              |
 | “Wrap up this session.”                                                           | Suggest new tasks, progress notes, and completions from this conversation. |
 | “What changed since my last review?”                                              | Review new activity across saved sessions and suggest changes together.    |
-| “Seed 14d.”                                                                       | Review the last 14 days in Pi’s configured session archive.                |
 
 You can also invoke the skill directly:
 
@@ -48,15 +51,17 @@ You can also invoke the skill directly:
 /skill:remembrancer review commitments across my saved sessions
 ```
 
+Natural-language requests such as “Seed 14d.” still work.
+
 Explicit requests to add or change a task are applied directly after the actual record is checked. Changes inferred from your sessions are suggestions: accept, edit, or dismiss them before anything is written.
 
 Your tasks stay in Taskwarrior. Use `task list` or `task completed` any time.
 
 ### Start with recent history
 
-Ask for `seed 14d` to review the past 14 days of saved conversations in Pi’s configured session archive, including sessions from before you installed Remembrancer. After completing that review, ask “What changed since my last review?” to pick up new activity from those sessions without widening that review window.
+Use `/remembrancer seed 14d` to review the past 14 days of saved conversations in Pi’s configured session archive, including sessions from before you installed Remembrancer. After completing that review, ask “What changed since my last review?” to pick up new activity from those sessions without widening that review window.
 
-Want to go further back? Ask for `seed 30d`. Remembrancer adds the earlier history to the review window and includes any new activity. Seeding again never shortens the history you track.
+Want to go further back? Use `/remembrancer seed 30d`. Remembrancer adds the earlier history to the review window and includes any new activity. Seeding again never shortens the history you track.
 
 Use a positive whole number of days. Saved-session reviews do not support custom date ranges or project-only slices; you can scope a review of the current conversation instead.
 
