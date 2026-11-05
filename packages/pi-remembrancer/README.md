@@ -49,13 +49,18 @@ You can also invoke the skill directly:
 
 Explicit requests to add or change a task are applied directly after the actual record is checked. Changes inferred from your sessions are suggestions: accept, edit, or dismiss them before anything is written.
 
-Historical review is a full review of eligible enrolled saved sessions. The review tool cannot select a historical slice or finish a partial historical checkpoint. For a narrower need, choose a full review or a current-session scope rather than silently broadening the request.
+Historical review is a full review of its frozen eligible sources. Ask for `seed 14d` to establish an inclusive absolute start date. A seed scans the active configured Pi session archive, including valid pre-installation and worker sessions stored there, plus already enrolled sources. It respects the current runtime disable switch, does not infer historical opt-outs or worker identity, and does not add extra roots or exclusion settings. Ordinary review remains enrollment-based.
+
+A wholly new source found during seed uses the requested absolute start date. A wholly new source encountered during ordinary review keeps the existing unrestricted behavior. New branches inside a seeded session use that session's saved default only to select evidence when no ancestor checkpoint exists. Existing checkpoints remain the proof of what was reviewed, with legacy NULL checkpoints retaining unrestricted coverage.
+
+The review tool cannot select an arbitrary historical slice or certify an unavailable source as covered. If discovery is incomplete, finish reports partial completion and advances only successful frozen sources. For a narrower need, choose a full review or a current-session scope rather than silently broadening the request. During an open review, use `action: "context"` with the batch token and exact selected evidence identity, requesting only the needed preceding range (`before` 1–40, with `offset` for long text). Context is frozen, on demand, and never independent proposal evidence.
 
 Your tasks stay in Taskwarrior. Use `task list` or `task completed` any time.
 
 ## What gets reviewed
 
-- Only saved sessions opened or resumed with Remembrancer enabled. Resume an older session to include it in your next review.
+- Ordinary reviews use saved sessions enrolled while Remembrancer is enabled. Resume an older session to include it in a later ordinary review.
+- Seed reviews also scan the active configured Pi session archive, including valid pre-installation and worker sessions stored there. The current runtime disable switch applies; historical opt-outs and worker identity are not inferred.
 - Reviews use user and assistant messages, not tool outputs, model thinking, or images. That text is sent to the model in your reviewing session.
 - Forked sessions can repeat shared context. A cancelled or interrupted review can also return previously considered candidates. Reconcile branch provenance and applicable dismissals rather than treating recurrence as new authority.
 - Reviews happen when you ask, not in the background. Unavailable saved-session ranges remain unreviewed.
