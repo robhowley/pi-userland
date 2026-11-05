@@ -51,19 +51,19 @@ You can also invoke the skill directly:
 /skill:remembrancer review commitments across my saved sessions
 ```
 
-Natural-language requests such as “Seed 14d.” still work.
-
 Explicit requests to add or change a task are applied directly after the actual record is checked. Changes inferred from your sessions are suggestions: accept, edit, or dismiss them before anything is written.
 
 Your tasks stay in Taskwarrior. Use `task list` or `task completed` any time.
 
 ### Start with recent history
 
-Use `/remembrancer seed 14d` to review the past 14 days of saved conversations in Pi’s configured session archive, including sessions from before you installed Remembrancer. After completing that review, ask “What changed since my last review?” to pick up new activity from those sessions without widening that review window.
+New install? Find an initial set of todos in your prior sessions:
 
-Want to go further back? Use `/remembrancer seed 30d`. Remembrancer adds the earlier history to the review window and includes any new activity. Seeding again never shortens the history you track.
+```text
+/remembrancer seed <N>d
+```
 
-Use a positive whole number of days. Saved-session reviews do not support custom date ranges or project-only slices; you can scope a review of the current conversation instead.
+Replace `<N>` with a positive whole number of days, such as `14` for the past 14 days.
 
 ## What gets reviewed
 
