@@ -19,6 +19,7 @@ Authorization applies to every workflow:
 - A direct request may cover one or more tasks. Apply a clear add, update, or finish request after checking the actual record. If the intended task cannot be identified, ask for clarification instead of guessing. A direct request never advances a cross-session review checkpoint.
 - Use the requested project, including a requested new project. When matching an existing project, preserve its exact spelling. Treat the repository as a hint only, and do not assign unrelated obligations to the current repository project by default.
 - For “show my todos”, list pending items globally or within the requested scope. Include waiting conditions when they matter.
+- For a basic list, return compact task records using the recipe below. Read annotations when asked about details, priorities, or what can be worked on now. Missing structured waiting fields do not prove a task is unblocked.
 - Use the optional `waitingon` string field only when recording a prerequisite. Infer a prerequisite only when the conversation establishes it. “Send the route after the school confirms pickup” means the action is “Send the route” and the field is “School confirms pickup.” An inferred clearing of that field is a proposal unless the user explicitly requests it. The task remains pending until the promised action happens. Use native Taskwarrior dependencies between independently tracked obligations and `waitingon` for prerequisites that do not warrant separate tasks, without creating tasks merely to represent every prerequisite.
 - If the `task` CLI is missing, explain the required setup from the package README. Check `waitingon` configuration only when the requested or accepted change needs that field. Do not silently replace the task store or change the user's configuration.
 
@@ -43,6 +44,18 @@ task "$uuid" annotate -- 'The harness is ready. Evaluation is pending.'
 task "$uuid" modify waitingon:
 task "$uuid" done
 ```
+
+For a compact list, substitute the requested project; omit the project filter
+for a global list. Project the JSON locally before returning it to the model:
+
+```sh
+set -o pipefail
+task project.is:work.ranking status:pending export |
+  jq -c '[.[] | {id, uuid, description, status, project, waitingon, depends}]'
+```
+
+This recipe requires `jq`. If unavailable, use an equivalent local JSON
+projection rather than installing it automatically.
 
 ## Choose the evidence source
 
