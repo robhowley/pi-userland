@@ -40,6 +40,7 @@ The `waitingon` field is optional. Configure it only for operations that record 
 | “The school confirmed pickup. Update my route todo.”                              | Clear the waiting condition; sending the route stays pending.              |
 | “Wrap up this session.”                                                           | Suggest new tasks, progress notes, and completions from this conversation. |
 | “What changed since my last review?”                                              | Review new activity across saved sessions and suggest changes together.    |
+| “Seed 14d.”                                                                       | Review the last 14 days in Pi’s configured session archive.                |
 
 You can also invoke the skill directly:
 
@@ -49,21 +50,23 @@ You can also invoke the skill directly:
 
 Explicit requests to add or change a task are applied directly after the actual record is checked. Changes inferred from your sessions are suggestions: accept, edit, or dismiss them before anything is written.
 
-Historical review is a full review of its frozen eligible sources. Ask for `seed 14d` to establish an inclusive absolute start date. A seed scans the active configured Pi session archive, including valid pre-installation and worker sessions stored there, plus already enrolled sources. It respects the current runtime disable switch, does not infer historical opt-outs or worker identity, and does not add extra roots or exclusion settings. Ordinary review remains enrollment-based.
-
-A wholly new source found during seed uses the requested absolute start date. A wholly new source encountered during ordinary review keeps the existing unrestricted behavior. New branches inside a seeded session use that session's saved default only to select evidence when no ancestor checkpoint exists. Existing checkpoints remain the proof of what was reviewed, with legacy NULL checkpoints retaining unrestricted coverage.
-
-The review tool cannot select an arbitrary historical slice or certify an unavailable source as covered. If discovery is incomplete, finish reports partial completion and advances only successful frozen sources. For a narrower need, choose a full review or a current-session scope rather than silently broadening the request. During an open review, use `action: "context"` with the batch token and exact selected evidence identity, requesting only the needed preceding range (`before` 1–40, with `offset` for long text). Context is frozen, on demand, and never independent proposal evidence.
-
 Your tasks stay in Taskwarrior. Use `task list` or `task completed` any time.
+
+### Start with recent history
+
+Ask for `seed 14d` to review the past 14 days of saved conversations in Pi’s configured session archive, including sessions from before you installed Remembrancer. After completing that review, ask “What changed since my last review?” to pick up new activity from those sessions without widening that review window.
+
+Want to go further back? Ask for `seed 30d`. Remembrancer adds the earlier history to the review window and includes any new activity. Seeding again never shortens the history you track.
+
+Use a positive whole number of days. Saved-session reviews do not support custom date ranges or project-only slices; you can scope a review of the current conversation instead.
 
 ## What gets reviewed
 
-- Ordinary reviews use saved sessions enrolled while Remembrancer is enabled. Resume an older session to include it in a later ordinary review.
-- Seed reviews also scan the active configured Pi session archive, including valid pre-installation and worker sessions stored there. The current runtime disable switch applies; historical opt-outs and worker identity are not inferred.
-- Reviews use user and assistant messages, not tool outputs, model thinking, or images. That text is sent to the model in your reviewing session.
-- Forked sessions can repeat shared context. A cancelled or interrupted review can also return previously considered candidates. Reconcile branch provenance and applicable dismissals rather than treating recurrence as new authority.
-- Reviews happen when you ask, not in the background. Unavailable saved-session ranges remain unreviewed.
+- Regular reviews cover sessions opened or resumed with Remembrancer enabled. An older session included for the first time this way can bring in its full history; use seed to set a starting point instead.
+- Seed also searches Pi's configured session archive, including saved worker sessions. It does not reconstruct which sessions had Remembrancer disabled in the past.
+- Only user and assistant text is sent to the model in your reviewing session, not tool outputs, model thinking, or images.
+- Reviews run only when you ask. Activity added during a review waits for the next one.
+- If a session cannot be read, Remembrancer reports it and leaves it for a later review. Cancelling a review leaves review progress unsaved, but it does not undo task changes already applied.
 
 ## Settings
 
@@ -75,4 +78,4 @@ Remembrancer is enabled by default. To disable extension review and enrollment, 
 
 A trusted project's `.pi/settings.json` takes precedence over the global value. After changing settings, run `/reload` or start a new session. This setting disables extension review and enrollment only; it does not unload the separately discoverable skill or prevent Taskwarrior writes.
 
-Only the main user-facing session should write personal Taskwarrior changes. Delegated workers should return evidence and proposed changes to that session. This is a workflow convention, not a hard write restriction enforced by the extension or Taskwarrior. If you launch delegated workers, keep personal task changes in the main user-facing session.
+If you use delegated workers, keep task changes in your main session and have workers return suggestions only. Remembrancer does not enforce this restriction.
