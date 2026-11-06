@@ -173,7 +173,11 @@ function usesDefaultSessionDir(ctx: ExtensionContext): boolean {
   const manager = ctx.sessionManager as ExtensionContext['sessionManager'] & {
     usesDefaultSessionDir?: () => boolean;
   };
-  return manager.usesDefaultSessionDir?.() === true;
+  if (typeof manager.usesDefaultSessionDir !== 'function')
+    throw new Error(
+      'Upgrade Pi to use Remembrancer seed: this version cannot identify session archive storage.',
+    );
+  return manager.usesDefaultSessionDir();
 }
 
 function contextPage(items: Evidence[], offset: number) {

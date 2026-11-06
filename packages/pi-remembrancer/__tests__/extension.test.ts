@@ -763,8 +763,25 @@ it('seeds every default Pi archive bucket, stages new sources, and keeps ordinar
     await start({}, context);
     const tool = extension.tools[0];
     if (!tool) throw new Error('Extension did not register the review tool');
+    const legacyContext = contextFor(dir, current, archive, true);
+    Reflect.deleteProperty(legacyContext.sessionManager, 'usesDefaultSessionDir');
+    const beforeRejectedSeed = persisted();
+    vi.mocked(readFileSync).mockClear();
+    await expect(
+      tool.execute(
+        'legacy-seed',
+        { action: 'begin', seed: '14d' },
+        undefined,
+        undefined,
+        legacyContext,
+      ),
+    ).rejects.toThrow('Upgrade Pi to use Remembrancer seed');
+    expect(readFileSync).not.toHaveBeenCalledWith(current, 'utf8');
+    expect(readFileSync).not.toHaveBeenCalledWith(worker, 'utf8');
+    expect(persisted()).toEqual(beforeRejectedSeed);
+
     const ordinary = decode(
-      await tool.execute('ordinary', { action: 'begin' }, undefined, undefined, context),
+      await tool.execute('ordinary', { action: 'begin' }, undefined, undefined, legacyContext),
     );
     expect(ordinary.entries?.map((entry) => entry.text)).toEqual(['current commitment']);
     await tool.execute(
