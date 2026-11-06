@@ -150,7 +150,7 @@ it('registers compact renderers and uses the configured host expansion hint', as
         .render(120)
         .map((line) => stripTerminalSequences(line).trimEnd())
         .join('\n'),
-    ).toBe('Remembrancer · begin · seed 14d');
+    ).toBe('remembrancer_review(action=begin, seed=14d)');
 
     const output = textAt(
       tool.renderResult!,
@@ -161,6 +161,48 @@ it('registers compact renderers and uses the configured host expansion hint', as
     );
     expect(output).toContain('Nothing new · review still open');
     expect(output).toContain('ctrl+x to expand');
+  } finally {
+    await shutdown();
+  }
+});
+
+it('renders context targets by actual parameter name and abbreviates only the collapsed session ID', async () => {
+  const { tool, shutdown } = installedRendererTool();
+  try {
+    const contextCall = tool.renderCall!(
+      {
+        action: 'context',
+        batch: 'batch-token',
+        selected: {
+          sessionId: '01a1af0a-f428-7476-849f-483859d09d91',
+          branchId: 'branch-id',
+          entryId: 'entry-id',
+          editId: null,
+        },
+        before: 1,
+        offset: 0,
+      },
+      identityTheme,
+      context({ action: 'context' }),
+    );
+    expect(
+      contextCall
+        .render(120)
+        .map((line) => stripTerminalSequences(line).trimEnd())
+        .join('\n'),
+    ).toBe('remembrancer_review(action=context, selected.sessionId=01a1af0a…)');
+
+    const shortSessionCall = tool.renderCall!(
+      { action: 'context', selected: { sessionId: 'short-id' } },
+      identityTheme,
+      context({ action: 'context' }),
+    );
+    expect(
+      shortSessionCall
+        .render(120)
+        .map((line) => line.trimEnd())
+        .join('\n'),
+    ).toBe('remembrancer_review(action=context, selected.sessionId=short-id)');
   } finally {
     await shutdown();
   }
@@ -205,6 +247,9 @@ it('renders the required missing-file warning layout with full warning reasons',
         '    token: batch-token',
         '    seed: none',
         '    requestedSince: none',
+        '',
+        '  Arguments',
+        '    action: begin',
       ].join('\n'),
     );
   } finally {
@@ -424,6 +469,63 @@ it('keeps all returned evidence order, provenance, continuation fields, and batc
   }
 });
 
+it('shows complete actual arguments in expanded successful and failed calls', async () => {
+  const { tool, shutdown } = installedRendererTool();
+  try {
+    const args = {
+      action: 'context',
+      batch: 'full-batch-token',
+      selected: {
+        sessionId: '01a1af0a-f428-7476-849f-483859d09d91',
+        branchId: 'full-branch-id',
+        entryId: 'full-entry-id',
+        editId: 'full-edit-id',
+      },
+      before: 3,
+      offset: 120,
+    };
+    const output = textAt(
+      tool.renderResult!,
+      { contextOnly: true, entries: [], nextOffset: null },
+      details('context'),
+      { expanded: true },
+      { args },
+    );
+    for (const expected of [
+      'action: context',
+      'batch: full-batch-token',
+      'selected.sessionId: 01a1af0a-f428-7476-849f-483859d09d91',
+      'selected.branchId: full-branch-id',
+      'selected.entryId: full-entry-id',
+      'selected.editId: full-edit-id',
+      'before: 3',
+      'offset: 120',
+    ])
+      expect(output).toContain(expected);
+    expect(output).not.toContain('selected.sessionId: 01a1af0a…');
+
+    const failed = tool.renderResult!(
+      {
+        content: [{ type: 'text', text: 'Read all evidence pages before finishing.' }],
+        details: undefined,
+      } as RenderResult,
+      { expanded: true, isPartial: false },
+      identityTheme,
+      context(args, { isError: true }),
+    );
+    const failedOutput = failed
+      .render(120)
+      .map((line) => stripTerminalSequences(line).trimEnd())
+      .join('\n');
+    expect(failedOutput).toContain('Could not context');
+    expect(failedOutput).toContain('Read all evidence pages before finishing.');
+    expect(failedOutput).toContain('selected.entryId: full-entry-id');
+    expect(failedOutput).toContain('offset: 120');
+  } finally {
+    await shutdown();
+  }
+});
+
 it('marks context as interpretation-only and preserves the cancel explanation', async () => {
   const { tool, shutdown } = installedRendererTool();
   try {
@@ -541,7 +643,7 @@ it('sanitizes control input, wraps Text output at 40/80/120 columns, and replays
         response(frozen, frozenDetails),
         { expanded: true, isPartial: false },
         identityTheme,
-        context({ action: 'next' }),
+        context({ action: 'next', batch: unsafePath }),
       ) as Component;
       const lines = renderer.render(width);
       expect(lines.every((line) => visibleWidth(stripTerminalSequences(line)) <= width)).toBe(true);
