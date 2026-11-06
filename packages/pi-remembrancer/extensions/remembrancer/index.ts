@@ -9,6 +9,7 @@ import {
   branchEvidence,
   prepareReview,
   resolveSeedSince,
+  ReviewBudget,
   type Checkpoint,
   type Evidence,
   type SeedDefault,
@@ -218,12 +219,15 @@ export default function remembrancer(pi: ExtensionAPI) {
   let batch: Batch | undefined;
   const store = () => (db ??= new CheckpointStore());
 
-  function enroll(ctx: ExtensionContext) {
+  function currentSource(ctx: ExtensionContext): Source | undefined {
     const sm = ctx.sessionManager;
     const file = sm.getSessionFile();
-    if (!file) return;
-    const source = { file: resolve(file), sessionId: sm.getSessionId() };
-    store().enroll(source.sessionId, source.file);
+    return file ? { file: resolve(file), sessionId: sm.getSessionId() } : undefined;
+  }
+
+  function enroll(ctx: ExtensionContext) {
+    const source = currentSource(ctx);
+    if (source) store().enroll(source.sessionId, source.file);
   }
 
   function release() {
@@ -280,9 +284,16 @@ export default function remembrancer(pi: ExtensionAPI) {
   });
 
   function beginReview(args: ReviewArgs, ctx: ExtensionContext, requestedSince: string | null) {
-    if (args.seed === undefined) enroll(ctx);
-
+    const current = args.seed === undefined ? currentSource(ctx) : undefined;
+    const budget = new ReviewBudget();
     const enrolled = store().sources();
+    const reviewSources = current
+      ? enrolled.some((source) => source.sessionId === current.sessionId)
+        ? enrolled.map((source) =>
+            source.sessionId === current.sessionId ? { ...source, file: current.file } : source,
+          )
+        : [...enrolled, current]
+      : enrolled;
     const discovery =
       requestedSince === null
         ? undefined
@@ -291,15 +302,19 @@ export default function remembrancer(pi: ExtensionAPI) {
             enrolled,
             requestedSince,
             usesDefaultSessionDir(ctx),
+            budget,
           );
-    const sources = discovery?.sources ?? enrolled;
+    const sources = discovery?.sources ?? reviewSources;
     const review = prepareReview(
       sources,
       store().reviewed(),
       { requestedSince },
       discovery?.snapshots,
+      budget,
     );
     const successful = new Set(review.successfulSources.map(sourceKey));
+    if (current && successful.has(sourceKey(current)))
+      store().enroll(current.sessionId, current.file);
     const stagedSources = (discovery?.newSources ?? []).filter((source) =>
       successful.has(sourceKey(source)),
     );

@@ -1,10 +1,13 @@
-import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import {
+  branchEvidence,
   prepareReview,
+  readSession,
   resolveSeedSince,
+  ReviewBudget,
   type Source,
 } from '../extensions/remembrancer/evidence.js';
 
@@ -49,6 +52,41 @@ it('includes an evidence timestamp exactly at the requested UTC cutoff', () => {
     requestedSince: '2026-01-15T12:00:00.000Z',
   });
   expect(texts(review)).toEqual(['at']);
+});
+
+it('processes same-path identities independently while charging the path once', () => {
+  const source = fixture(msg('message', null, 'evidence'));
+  const conflicting = { ...source, sessionId: 'different-session' };
+
+  const review = prepareReview(
+    [source, conflicting],
+    [],
+    undefined,
+    [],
+    new ReviewBudget({ sources: 1 }),
+  );
+
+  expect(texts(review)).toEqual(['evidence']);
+  expect(review.successfulSources).toEqual([{ ...source, seedSince: null }]);
+  expect(review.incomplete).toBe(true);
+  expect(review.warnings).toHaveLength(1);
+  expect(review.warnings[0]).toContain('Session header ID changed');
+});
+
+it('deduplicates exact source references without consuming another source slot', () => {
+  const source = fixture(msg('message', null, 'evidence'));
+
+  const review = prepareReview(
+    [source, { ...source }],
+    [],
+    undefined,
+    [],
+    new ReviewBudget({ sources: 1 }),
+  );
+
+  expect(texts(review)).toEqual(['evidence']);
+  expect(review.successfulSources).toEqual([{ ...source, seedSince: null }]);
+  expect(review.incomplete).toBe(false);
 });
 
 it('selects a requested date, then expands an unchanged tip without replaying covered versions', () => {
@@ -200,6 +238,11 @@ it('does not suppress an original version re-exposed on a fork after expansion',
       .filter((item) => item.branchId === 'forked')
       .map((item) => [item.entryId, item.editId]),
   ).toContainEqual(['root', null]);
+  expect(
+    expanded.evidence
+      .filter((item) => item.branchId === 'edited-child')
+      .map((item) => [item.entryId, item.editId, item.text]),
+  ).toContainEqual(['root', 'edit', 'edited original']);
 });
 
 it('keeps legacy NULL checkpoints unrestricted during a seed request', () => {
@@ -216,10 +259,16 @@ it('keeps legacy NULL checkpoints unrestricted during a seed request', () => {
 
 it('freezes leaves and text, incrementally selects only later messages on a reviewed branch', () => {
   const source = fixture(msg('root', null), msg('a', 'root'));
+  const original = readFileSync(source.file, 'utf8');
   const first = prepareReview([source], []);
-  appendFileSync(source.file, lines(msg('later', 'a')));
+  const frozenEvidence = first.evidence.map((item) => ({ ...item }));
+  writeFileSync(source.file, 'rewritten after begin');
+  rmSync(source.file);
   expect(first.tips.map((tip) => tip.entryId)).toEqual(['a']);
+  expect(first.evidence).toEqual(frozenEvidence);
   expect(texts(first)).toEqual(['root', 'a']);
+  writeFileSync(source.file, original);
+  appendFileSync(source.file, lines(msg('later', 'a')));
   const next = prepareReview([source], first.tips);
   expect(texts(next)).toEqual(['later']);
   expect(next.evidence[0]).toMatchObject({
@@ -275,31 +324,252 @@ it('keeps alternatives separate and applies the latest branch-local edit', () =>
   ]);
 });
 
-it('omits hidden roles, non-text blocks, redacted text and summaries, retaining raw pre-compaction text', () => {
+it('projects compact review fields while preserving topology and branch-visible output', () => {
   const source = fixture(
-    msg('root', null),
     {
-      ...msg('assistant', 'root'),
+      type: 'message',
+      id: 'root',
+      parentId: null,
+      timestamp: '2026-01-01T00:00:00.000Z',
       message: {
-        role: 'assistant',
+        role: 'user',
         content: [
-          { type: 'thinking', thinking: 'secret' },
-          { type: 'text', text: 'visible' },
-          { type: 'toolCall', name: 'bash' },
+          { type: 'text', text: 'root 😀' },
+          { type: 'thinking', thinking: 'drop root thinking' },
+          { type: 'image', data: 'drop root image' },
+          { type: 'text', text: 'tail é' },
+        ],
+        usage: { input: 999_999 },
+      },
+    },
+    {
+      type: 'message',
+      id: 'empty',
+      parentId: 'root',
+      timestamp: '2026-01-02T00:00:00.000Z',
+      message: {
+        role: 'user',
+        content: [
+          { type: 'thinking', thinking: 'drop empty thinking' },
+          { type: 'image', data: 'drop empty image' },
         ],
       },
     },
-    { ...msg('tool', 'assistant'), message: { role: 'toolResult', content: 'hidden' } },
-    { type: 'compaction', id: 'compact', parentId: 'tool', summary: 'not evidence' },
+    {
+      type: 'message',
+      id: 'tool',
+      parentId: 'empty',
+      timestamp: '2026-01-03T00:00:00.000Z',
+      message: {
+        role: 'toolResult',
+        content: [
+          { type: 'text', text: 'drop tool output' },
+          { type: 'image', data: 'drop tool image' },
+        ],
+        toolCallId: 'drop tool call',
+      },
+    },
+    {
+      type: 'compaction',
+      id: 'compact',
+      parentId: 'tool',
+      timestamp: '2026-01-04T00:00:00.000Z',
+      summary: 'drop summary',
+      details: { hidden: 'drop compaction details' },
+    },
+    {
+      type: 'message',
+      id: 'assistant',
+      parentId: 'compact',
+      timestamp: '2026-01-05T00:00:00.000Z',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'drop assistant thinking' },
+          { type: 'text', text: 'visible ✅' },
+          { type: 'image', data: 'drop assistant image' },
+          { type: 'text', text: 'second' },
+        ],
+        provider: 'drop provider',
+      },
+    },
+    {
+      type: 'message',
+      id: 'fork-a',
+      parentId: 'assistant',
+      timestamp: '2026-01-06T00:00:00.000Z',
+      message: { role: 'user', content: 'fork A' },
+    },
     {
       type: 'context_edit',
-      id: 'redact',
-      parentId: 'compact',
+      id: 'edit-a-old',
+      parentId: 'fork-a',
       targetId: 'root',
+      timestamp: '2026-01-07T00:00:00.000Z',
+      replacement: { content: [{ type: 'text', text: 'first correction' }] },
+    },
+    {
+      type: 'context_edit',
+      id: 'edit-a-latest',
+      parentId: 'edit-a-old',
+      targetId: 'root',
+      timestamp: '2026-01-08T00:00:00.000Z',
+      replacement: {
+        content: [
+          { type: 'text', text: 'edited root 🛠️' },
+          { type: 'thinking', thinking: 'drop edit thinking' },
+          { type: 'text', text: 'tail' },
+        ],
+        details: { hidden: 'drop edit details' },
+      },
+    },
+    {
+      type: 'message',
+      id: 'a-child',
+      parentId: 'edit-a-latest',
+      timestamp: '2026-01-09T00:00:00.000Z',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'A 𐐷' },
+          { type: 'text', text: 'second' },
+        ],
+      },
+    },
+    {
+      type: 'message',
+      id: 'fork-b',
+      parentId: 'assistant',
+      timestamp: '2026-01-06T01:00:00.000Z',
+      message: { role: 'assistant', content: 'fork B' },
+    },
+    {
+      type: 'context_edit',
+      id: 'redact-b',
+      parentId: 'fork-b',
+      targetId: 'assistant',
+      timestamp: '2026-01-07T01:00:00.000Z',
       replacement: null,
+      details: { hidden: 'drop redaction details' },
+    },
+    {
+      type: 'message',
+      id: 'b-child',
+      parentId: 'redact-b',
+      timestamp: '2026-01-09T01:00:00.000Z',
+      message: { role: 'user', content: 'B child' },
     },
   );
-  expect(texts(prepareReview([source], []))).toEqual(['visible']);
+  const tree = readSession(source.file);
+  const entries = tree.entries;
+
+  expect([...entries.keys()]).toEqual([
+    'root',
+    'empty',
+    'tool',
+    'compact',
+    'assistant',
+    'fork-a',
+    'edit-a-old',
+    'edit-a-latest',
+    'a-child',
+    'fork-b',
+    'redact-b',
+    'b-child',
+  ]);
+  expect(tree.tips.map((tip) => tip.entryId)).toEqual(['a-child', 'b-child']);
+  expect(entries.get('root')).toEqual({
+    id: 'root',
+    parentId: null,
+    type: 'message',
+    timestamp: '2026-01-01T00:00:00.000Z',
+    message: { role: 'user', content: 'root 😀\ntail é' },
+  });
+  expect(entries.get('empty')).toEqual({
+    id: 'empty',
+    parentId: 'root',
+    type: 'message',
+    timestamp: '2026-01-02T00:00:00.000Z',
+    message: { role: 'user', content: '' },
+  });
+  expect(entries.get('assistant')).toEqual({
+    id: 'assistant',
+    parentId: 'compact',
+    type: 'message',
+    timestamp: '2026-01-05T00:00:00.000Z',
+    message: { role: 'assistant', content: 'visible ✅\nsecond' },
+  });
+  expect(entries.get('edit-a-latest')).toEqual({
+    id: 'edit-a-latest',
+    parentId: 'edit-a-old',
+    type: 'context_edit',
+    timestamp: '2026-01-08T00:00:00.000Z',
+    targetId: 'root',
+    replacement: { content: 'edited root 🛠️\ntail' },
+  });
+  expect(entries.get('redact-b')).toEqual({
+    id: 'redact-b',
+    parentId: 'fork-b',
+    type: 'context_edit',
+    timestamp: '2026-01-07T01:00:00.000Z',
+    targetId: 'assistant',
+    replacement: null,
+  });
+  expect(entries.get('tool')).not.toHaveProperty('message');
+  expect(entries.get('compact')).not.toHaveProperty('summary');
+  expect(entries.get('compact')).not.toHaveProperty('details');
+  for (const entry of entries.values()) {
+    expect(entry).not.toHaveProperty('usage');
+    expect(entry).not.toHaveProperty('provider');
+    expect(entry).not.toHaveProperty('thinking');
+    expect(entry).not.toHaveProperty('image');
+  }
+  const compactEntries = JSON.stringify([...entries.values()]);
+  for (const discarded of [
+    'drop root thinking',
+    'drop root image',
+    'drop empty thinking',
+    'drop empty image',
+    'drop tool output',
+    'drop tool image',
+    'drop tool call',
+    'drop summary',
+    'drop assistant thinking',
+    'drop assistant image',
+    'drop provider',
+    'drop edit thinking',
+    'drop edit details',
+    'drop redaction details',
+  ])
+    expect(compactEntries).not.toContain(discarded);
+
+  const branchShape = (tip: string) =>
+    branchEvidence(tree, { ...source, entryId: tip }).map((item) => [
+      item.entryId,
+      item.role,
+      item.text,
+      item.editId,
+    ]);
+  expect(branchShape('a-child')).toEqual([
+    ['root', 'user', 'edited root 🛠️\ntail', 'edit-a-latest'],
+    ['assistant', 'assistant', 'visible ✅\nsecond', null],
+    ['fork-a', 'user', 'fork A', null],
+    ['a-child', 'assistant', 'A 𐐷\nsecond', null],
+  ]);
+  expect(branchShape('b-child')).toEqual([
+    ['root', 'user', 'root 😀\ntail é', null],
+    ['fork-b', 'assistant', 'fork B', null],
+    ['b-child', 'user', 'B child', null],
+  ]);
+  expect(texts(prepareReview([source], [], undefined, [{ source, tree }]))).toEqual([
+    'edited root 🛠️\ntail',
+    'visible ✅\nsecond',
+    'fork A',
+    'A 𐐷\nsecond',
+    'root 😀\ntail é',
+    'fork B',
+    'B child',
+  ]);
 });
 
 it('repeats copied fork context without reading or deduplicating parent/sibling files', () => {

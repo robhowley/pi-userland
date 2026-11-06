@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { closeSync, fstatSync, openSync, readSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 
 export type Tip = { file: string; sessionId: string; entryId: string };
@@ -89,6 +90,10 @@ function selectionKey(item: Evidence): string {
   return `${item.entryId}\u0000${item.editId ?? ''}`;
 }
 
+function sourceKey(source: Pick<Source, 'sessionId' | 'file'>): string {
+  return `${source.sessionId}\u0000${resolve(source.file)}`;
+}
+
 function normalizedOptions(options?: ReviewOptions | string): { requestedSince: string | null } {
   if (typeof options === 'string') return { requestedSince: absoluteTimestamp(options) };
   if (!options) return { requestedSince: null };
@@ -124,21 +129,208 @@ export function resolveSeedSince(
   return since.toISOString();
 }
 
-export function readSession(file: string) {
-  const raw = readFileSync(file, 'utf8');
-  const lines = raw.split('\n');
-  const header = JSON.parse(lines.shift() || '{}');
-  if (header?.type !== 'session' || typeof header.id !== 'string' || header.id.trim() === '')
-    throw Error(`Invalid session header in ${file}`);
+// Internal limits, injectable only for isolated tests. Text and compact-data
+// limits use UTF-8 string bytes plus small fixed slots; raw payloads exist for
+// only one record at a time.
+export const REVIEW_LIMITS = {
+  recordBytes: 32 * 1024 * 1024,
+  sourceEntries: 20_000,
+  sourceBytes: 8 * 1024 * 1024,
+  sourceTextBytes: 4 * 1024 * 1024,
+  sourceBranches: 512,
+  sourceBranchEntries: 100_000,
+  totalEntries: 300_000,
+  totalBytes: 64 * 1024 * 1024,
+  totalTextBytes: 32 * 1024 * 1024,
+  totalBranchEntries: 1_000_000,
+  sources: 2048,
+};
+export type ReviewLimits = typeof REVIEW_LIMITS;
+export class ReviewLimitError extends Error {}
+
+const COMPACT_HEADER_BYTES = 32;
+const COMPACT_ENTRY_BYTES = 64;
+
+function stringBytes(value: unknown): number {
+  return typeof value === 'string' ? Buffer.byteLength(value) : 0;
+}
+
+function compactEntryBytes(entry: Entry): number {
+  let bytes =
+    COMPACT_ENTRY_BYTES +
+    stringBytes(entry.id) +
+    stringBytes(entry.parentId) +
+    stringBytes(entry.type) +
+    stringBytes(entry.timestamp);
+  if (entry.message)
+    bytes +=
+      COMPACT_ENTRY_BYTES + stringBytes(entry.message.role) + stringBytes(entry.message.content);
+  if (entry.targetId) bytes += COMPACT_ENTRY_BYTES + stringBytes(entry.targetId);
+  if (entry.replacement) bytes += COMPACT_ENTRY_BYTES + stringBytes(entry.replacement.content);
+  return bytes;
+}
+
+export class ReviewBudget {
+  readonly limits: ReviewLimits;
+  private trees = new WeakSet<SessionTree>();
+  private sourcePaths = new Set<string>();
+  private entries = 0;
+  private bytes = 0;
+  private textBytes = 0;
+  private branches = 0;
+  constructor(limits: Partial<ReviewLimits> = {}) {
+    this.limits = { ...REVIEW_LIMITS, ...limits };
+  }
+  reserveSource(file: string) {
+    const path = resolve(file);
+    if (this.sourcePaths.has(path)) return;
+    if (this.sourcePaths.size >= this.limits.sources)
+      throw new ReviewLimitError('Aggregate review source limit exceeded');
+    this.sourcePaths.add(path);
+  }
+  retain(tree: SessionTree) {
+    if (this.trees.has(tree)) return;
+    this.entries += tree.entries.size;
+    this.bytes += tree.bytes;
+    this.textBytes += tree.textBytes;
+    if (
+      this.entries > this.limits.totalEntries ||
+      this.bytes > this.limits.totalBytes ||
+      this.textBytes > this.limits.totalTextBytes
+    )
+      throw new ReviewLimitError('Aggregate review snapshot limit exceeded');
+    this.trees.add(tree);
+  }
+  review(tree: SessionTree) {
+    // Three walks cover ancestor lookup, previous evidence and current evidence.
+    // This also bounds descriptors, selection keys and unknown-time warnings.
+    this.branches += tree.branchEntries * 3;
+    if (this.branches > this.limits.totalBranchEntries)
+      throw new ReviewLimitError('Aggregate review branch/evidence limit exceeded');
+  }
+}
+
+function visibleText(content: unknown, maxBytes = Number.POSITIVE_INFINITY): string {
+  if (typeof content === 'string') {
+    if (Buffer.byteLength(content) > maxBytes)
+      throw Error('Session retained text/metadata limit exceeded');
+    return content;
+  }
+  if (!Array.isArray(content)) return '';
+
+  const texts: string[] = [];
+  let bytes = 0;
+  for (const block of content) {
+    if (block?.type !== 'text' || typeof block.text !== 'string') continue;
+    bytes += Buffer.byteLength(block.text) + (texts.length > 0 ? 1 : 0);
+    if (bytes > maxBytes) throw Error('Session retained text/metadata limit exceeded');
+    texts.push(block.text);
+  }
+  return texts.join('\n');
+}
+
+/** Read only the opening extent. Verify its bytes again without retaining them. */
+function readRecords(file: string, limit: number, consume: (line: string, number: number) => void) {
+  const fd = openSync(file, 'r');
+  try {
+    const initial = fstatSync(fd);
+    if (!initial.isFile()) throw Error('Session source is not a regular file');
+    const chunk = Buffer.allocUnsafe(64 * 1024);
+    let parts: Buffer[] = [];
+    let length = 0;
+    let lineNumber = 1;
+    const hash = createHash('sha256');
+    for (let position = 0; position < initial.size; ) {
+      const count = readSync(
+        fd,
+        chunk,
+        0,
+        Math.min(chunk.length, initial.size - position),
+        position,
+      );
+      if (!count) throw Error('Session source truncated during read');
+      position += count;
+      hash.update(chunk.subarray(0, count));
+      let start = 0;
+      while (start < count) {
+        const newline = chunk.indexOf(10, start);
+        const end = newline < 0 || newline >= count ? count : newline;
+        const size = end - start;
+        if (length + size > limit) throw Error('Session raw record limit exceeded');
+        if (size) parts.push(Buffer.from(chunk.subarray(start, end)));
+        length += size;
+        if (end < count) {
+          consume(Buffer.concat(parts, length).toString('utf8'), lineNumber++);
+          parts = [];
+          length = 0;
+        }
+        start = end + 1;
+      }
+    }
+    if (length) consume(Buffer.concat(parts, length).toString('utf8'), lineNumber);
+    parts = [];
+    const verify = createHash('sha256');
+    for (let position = 0; position < initial.size; ) {
+      const count = readSync(
+        fd,
+        chunk,
+        0,
+        Math.min(chunk.length, initial.size - position),
+        position,
+      );
+      if (!count) throw Error('Session source truncated during verification');
+      verify.update(chunk.subarray(0, count));
+      position += count;
+    }
+    const final = fstatSync(fd);
+    const path = statSync(file);
+    if (
+      final.size < initial.size ||
+      path.dev !== initial.dev ||
+      path.ino !== initial.ino ||
+      hash.digest('hex') !== verify.digest('hex') ||
+      (final.size === initial.size &&
+        (final.mtimeMs !== initial.mtimeMs || final.ctimeMs !== initial.ctimeMs))
+    )
+      throw Error('Session source changed during read');
+  } finally {
+    closeSync(fd);
+  }
+}
+
+export function readSession(file: string, limits: ReviewLimits = REVIEW_LIMITS) {
+  let header: { type?: string; id?: unknown; cwd?: unknown } = {};
   const entries = new Map<string, Entry>();
   const leaves = new Set<string>();
-  for (const [index, line] of lines.entries()) {
-    if (!line.trim()) continue;
+  const depths = new Map<string, number>();
+  let bytes = 0;
+  let textBytes = 0;
+  const bounded = (value: string, max = 256) => {
+    if (Buffer.byteLength(value) > max) throw Error('Session metadata limit exceeded');
+    return value;
+  };
+  readRecords(file, limits.recordBytes, (line, lineNumber) => {
+    if (lineNumber === 1) {
+      const raw = JSON.parse(line || '{}');
+      header = {
+        type: raw?.type,
+        id: raw?.id,
+        cwd: typeof raw?.cwd === 'string' ? raw.cwd : undefined,
+      };
+      if (header?.type !== 'session' || typeof header.id !== 'string' || !header.id.trim())
+        throw Error(`Invalid session header in ${file}`);
+      bounded(header.id);
+      if (typeof header.cwd === 'string') bounded(header.cwd, 16 * 1024);
+      bytes += COMPACT_HEADER_BYTES + stringBytes(header.id) + stringBytes(header.cwd);
+      if (bytes > limits.sourceBytes) throw Error('Session retained text/metadata limit exceeded');
+      return;
+    }
+    if (!line.trim()) return;
     let e: Entry;
     try {
       e = JSON.parse(line) as Entry;
-    } catch (err) {
-      throw Error(`Invalid JSON at ${file}:${index + 2}`, { cause: err });
+    } catch (error) {
+      throw Error(`Invalid JSON at ${file}:${lineNumber}`, { cause: error });
     }
     if (
       !e ||
@@ -148,14 +340,43 @@ export function readSession(file: string) {
       entries.has(e.id) ||
       !(e.parentId === null || entries.has(e.parentId))
     )
-      throw Error(`Invalid session tree at ${file}:${index + 2}`);
-    entries.set(e.id, e);
-    if (e.parentId) leaves.delete(e.parentId);
-    leaves.add(e.id);
-  }
+      throw Error(`Invalid session tree at ${file}:${lineNumber}`);
+    if (entries.size >= limits.sourceEntries) throw Error('Session entry limit exceeded');
+    const compact: Entry = {
+      id: bounded(e.id),
+      parentId: e.parentId,
+      type: bounded(e.type),
+      timestamp: bounded(timestampText(e.timestamp)),
+    };
+    const projectText = (content: unknown) => {
+      const text = visibleText(content, limits.sourceTextBytes - textBytes);
+      textBytes += Buffer.byteLength(text);
+      return text;
+    };
+    if (e.type === 'message' && (e.message?.role === 'user' || e.message?.role === 'assistant'))
+      compact.message = { role: e.message.role, content: projectText(e.message.content) };
+    if (e.type === 'context_edit') {
+      if (typeof e.targetId === 'string') compact.targetId = bounded(e.targetId);
+      compact.replacement =
+        e.replacement === null || e.replacement === undefined
+          ? null
+          : { content: projectText(e.replacement.content) };
+    }
+    bytes += compactEntryBytes(compact);
+    if (bytes > limits.sourceBytes) throw Error('Session retained text/metadata limit exceeded');
+    entries.set(compact.id, compact);
+    depths.set(compact.id, (compact.parentId === null ? 0 : depths.get(compact.parentId)!) + 1);
+    if (compact.parentId) leaves.delete(compact.parentId);
+    leaves.add(compact.id);
+  });
+  if (header?.type !== 'session' || typeof header.id !== 'string' || header.id.trim() === '')
+    throw Error(`Invalid session header in ${file}`);
+  const branchEntries = [...leaves].reduce((sum, id) => sum + depths.get(id)!, 0);
+  if (leaves.size > limits.sourceBranches || branchEntries * 3 > limits.sourceBranchEntries)
+    throw Error('Session branch/evidence limit exceeded');
   const tips: Tip[] = [...leaves].map((entryId) => ({
     file: resolve(file),
-    sessionId: header.id,
+    sessionId: header.id as string,
     entryId,
   }));
   return {
@@ -163,6 +384,9 @@ export function readSession(file: string) {
     cwd: typeof header.cwd === 'string' && header.cwd.trim() ? String(header.cwd) : '(unknown)',
     entries,
     tips,
+    bytes,
+    textBytes,
+    branchEntries,
   };
 }
 
@@ -189,15 +413,7 @@ export function branchEvidence(
     const role = e.message?.role;
     if (e.type !== 'message' || (role !== 'user' && role !== 'assistant')) continue;
     const content = edit ? edit.replacement?.content : e.message?.content;
-    const text =
-      typeof content === 'string'
-        ? content
-        : Array.isArray(content)
-          ? content
-              .filter((b) => b?.type === 'text' && typeof b.text === 'string')
-              .map((b) => b.text)
-              .join('\n')
-          : '';
+    const text = visibleText(content);
     if (!text) continue;
     evidence.push({
       ...tip,
@@ -220,6 +436,7 @@ export function prepareReview(
   reviewed: readonly (Tip | Checkpoint)[],
   options?: ReviewOptions | string,
   snapshots: readonly SessionSnapshot[] = [],
+  budget = new ReviewBudget(),
 ): PreparedReview {
   const { requestedSince } = normalizedOptions(options);
   const tips: Tip[] = [];
@@ -243,20 +460,37 @@ export function prepareReview(
     );
   };
 
+  const snapshotsBySource = new Map<string, SessionSnapshot>();
+  const treesByPath = new Map<string, SessionTree>();
+  for (const snapshot of snapshots) {
+    const path = resolve(snapshot.source.file);
+    const key = sourceKey(snapshot.source);
+    budget.reserveSource(path);
+    if (snapshotsBySource.has(key)) continue;
+    budget.retain(snapshot.tree);
+    snapshotsBySource.set(key, snapshot);
+    if (!treesByPath.has(path)) treesByPath.set(path, snapshot.tree);
+  }
+  const sourceKeys = new Set<string>();
   for (const source of sources) {
+    const path = resolve(source.file);
+    const key = sourceKey(source);
+    if (sourceKeys.has(key)) continue;
+    sourceKeys.add(key);
+    budget.reserveSource(path);
     try {
       const sourceSince =
         source.seedSince === undefined || source.seedSince === null
           ? null
           : absoluteTimestamp(source.seedSince);
       const normalizedSource = { ...source, seedSince: sourceSince };
-      const snapshot = snapshots.find(
-        (candidate) =>
-          candidate.source.sessionId === source.sessionId &&
-          resolve(candidate.source.file) === resolve(source.file),
-      );
-      const tree = snapshot?.tree ?? readSession(source.file);
+      const snapshot = snapshotsBySource.get(key);
+      const tree =
+        snapshot?.tree ?? treesByPath.get(path) ?? readSession(source.file, budget.limits);
+      budget.retain(tree);
+      if (!treesByPath.has(path)) treesByPath.set(path, tree);
       if (tree.sessionId !== source.sessionId) throw Error('Session header ID changed');
+      budget.review(tree);
       const boundaries = new Map<string, Checkpoint>();
       for (const tip of reviewed) {
         if (tip.sessionId !== source.sessionId) continue;
@@ -322,6 +556,7 @@ export function prepareReview(
       frozenSnapshots.push({ source: normalizedSource, tree });
       successfulSources.push(normalizedSource);
     } catch (error) {
+      if (error instanceof ReviewLimitError) throw error;
       incomplete = true;
       warnings.push(`${source.file}: ${String(error)}`);
     }

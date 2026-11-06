@@ -15,6 +15,7 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 import { expect, it, vi } from 'vitest';
 import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
 import remembrancer from '../extensions/remembrancer/index.js';
+import { REVIEW_LIMITS } from '../extensions/remembrancer/evidence.js';
 
 vi.mock('node:fs', async (original) => {
   const fs = await original<typeof import('node:fs')>();
@@ -572,6 +573,174 @@ it('releases an open review across a fresh disabled runtime without advancing ch
   }
 });
 
+it.each(['recordBytes', 'sourceEntries', 'sourceTextBytes', 'sourceBranches'] as const)(
+  'preserves persisted coverage on %s failure and retries a repaired source',
+  async (limit) => {
+    const dir = mkdtempSync(join(tmpdir(), 'remembrancer-source-limit-'));
+    const previousState = process.env['XDG_STATE_HOME'];
+    const previousAgent = process.env['PI_CODING_AGENT_DIR'];
+    process.env['XDG_STATE_HOME'] = join(dir, 'state');
+    process.env['PI_CODING_AGENT_DIR'] = join(dir, 'agent');
+    const file = join(dir, 'session.jsonl');
+    const header = { type: 'session', id: 'session' };
+    const message = (id: string, parentId: string | null, content = id) => ({
+      type: 'message',
+      id,
+      parentId,
+      timestamp: new Date().toISOString(),
+      message: { role: 'user', content },
+    });
+    const save = (...records: unknown[]) =>
+      writeFileSync(
+        file,
+        [header, ...records].map((record) => JSON.stringify(record)).join('\n') + '\n',
+      );
+    save(message('old', null));
+    const extension = fakeExtension();
+    remembrancer(extension.api);
+    const context = contextFor(dir, file);
+    const shutdown = extension.handlers.get('session_shutdown')!;
+    const state = () => {
+      const store = new CheckpointStore(
+        join(dir, 'state', 'pi-remembrancer', 'checkpoints.sqlite3'),
+      );
+      try {
+        return { sources: store.sources(), reviewed: store.reviewed() };
+      } finally {
+        store.close();
+      }
+    };
+    const original = REVIEW_LIMITS[limit];
+    try {
+      await extension.handlers.get('session_start')!({}, context);
+      const tool = extension.tools[0]!;
+      const call = async (action: string, batch?: string, seed?: string) =>
+        decode(await tool.execute('call', { action, batch, seed }, undefined, undefined, context));
+      const first = await call('begin');
+      await call('finish', first.batch);
+      const before = state();
+      REVIEW_LIMITS[limit] = {
+        recordBytes: 200,
+        sourceEntries: 2,
+        sourceTextBytes: 10,
+        sourceBranches: 1,
+      }[limit];
+      if (limit === 'sourceBranches')
+        save(message('old', null), message('new', 'old'), message('fork', 'old'));
+      else if (limit === 'sourceEntries')
+        save(message('old', null), message('new', 'old'), message('third', 'new'));
+      else save(message('old', null), message('new', 'old', 'x'.repeat(300)));
+      const failed = await call('begin', undefined, '14d');
+      expect(failed.entries).toEqual([]);
+      expect(failed.incomplete).toBe(true);
+      expect(failed.warnings?.join()).toMatch(/limit exceeded/);
+      expect(await call('finish', failed.batch)).toMatchObject({
+        status: 'partial',
+        reviewedTips: 0,
+      });
+      expect(state()).toEqual(before);
+      save(message('old', null), message('new', 'old'));
+      const retry = await call('begin');
+      expect(retry.entries?.map((entry) => entry.entryId)).toEqual(['new']);
+      await call('finish', retry.batch);
+      expect(state().reviewed.map((tip) => tip.entryId)).toEqual(['old', 'new']);
+    } finally {
+      REVIEW_LIMITS[limit] = original;
+      await shutdown({}, context);
+      if (previousState === undefined) delete process.env['XDG_STATE_HOME'];
+      else process.env['XDG_STATE_HOME'] = previousState;
+      if (previousAgent === undefined) delete process.env['PI_CODING_AGENT_DIR'];
+      else process.env['PI_CODING_AGENT_DIR'] = previousAgent;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
+
+it.each(['discovery', 'prepare', 'source'] as const)(
+  'aborts %s exhaustion without state changes and releases the lock for retry',
+  async (phase) => {
+    const dir = mkdtempSync(join(tmpdir(), 'remembrancer-abort-'));
+    const previousState = process.env['XDG_STATE_HOME'];
+    const previousAgent = process.env['PI_CODING_AGENT_DIR'];
+    process.env['XDG_STATE_HOME'] = join(dir, 'state');
+    process.env['PI_CODING_AGENT_DIR'] = join(dir, 'agent');
+    const file = join(dir, 'session.jsonl');
+    writeFileSync(
+      file,
+      [
+        JSON.stringify({ type: 'session', id: 'session' }),
+        JSON.stringify({
+          type: 'message',
+          id: 'root',
+          parentId: null,
+          timestamp: new Date().toISOString(),
+          message: { role: 'user', content: 'complete evidence' },
+        }),
+        '',
+      ].join('\n'),
+    );
+    const extension = fakeExtension();
+    remembrancer(extension.api);
+    const context = contextFor(dir, file);
+    const start = extension.handlers.get('session_start')!;
+    const shutdown = extension.handlers.get('session_shutdown')!;
+    const state = () => {
+      const store = new CheckpointStore(
+        join(dir, 'state', 'pi-remembrancer', 'checkpoints.sqlite3'),
+      );
+      try {
+        return { sources: store.sources(), reviewed: store.reviewed() };
+      } finally {
+        store.close();
+      }
+    };
+    const limit =
+      phase === 'discovery'
+        ? 'totalEntries'
+        : phase === 'prepare'
+          ? 'totalBranchEntries'
+          : 'sources';
+    const original = REVIEW_LIMITS[limit];
+    try {
+      await start({}, context);
+      const before = state();
+      const tool = extension.tools[0]!;
+      REVIEW_LIMITS[limit] = 0;
+      await expect(
+        tool.execute('abort', { action: 'begin', seed: '14d' }, undefined, undefined, context),
+      ).rejects.toThrow(/Aggregate review/);
+      expect(state()).toEqual(before);
+      REVIEW_LIMITS[limit] = original;
+      const retry = decode(
+        await tool.execute(
+          'retry',
+          { action: 'begin', seed: '14d' },
+          undefined,
+          undefined,
+          context,
+        ),
+      );
+      expect(retry.entries?.map((entry) => entry.text)).toEqual(['complete evidence']);
+      await tool.execute(
+        'finish',
+        { action: 'finish', batch: retry.batch },
+        undefined,
+        undefined,
+        context,
+      );
+      expect(state().reviewed.map((tip) => tip.entryId)).toEqual(['root']);
+    } finally {
+      REVIEW_LIMITS[limit] = original;
+      await shutdown({}, context);
+      if (previousState === undefined) delete process.env['XDG_STATE_HOME'];
+      else process.env['XDG_STATE_HOME'] = previousState;
+      if (previousAgent === undefined) delete process.env['PI_CODING_AGENT_DIR'];
+      else process.env['PI_CODING_AGENT_DIR'] = previousAgent;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
+
 it('pages faithfully, cancels without consuming, persists finish and isolates later appends', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'remembrancer-extension-'));
   const previousAgentDir = process.env['PI_CODING_AGENT_DIR'];
@@ -579,7 +748,7 @@ it('pages faithfully, cancels without consuming, persists finish and isolates la
   process.env['PI_CODING_AGENT_DIR'] = join(dir, 'agent');
   process.env['XDG_STATE_HOME'] = join(dir, 'state');
   const file = join(dir, 'session.jsonl');
-  const longText = 'x'.repeat(12_050);
+  const longText = '🌱漢字'.repeat(3_020);
   writeFileSync(
     file,
     [
@@ -619,8 +788,8 @@ it('pages faithfully, cancels without consuming, persists finish and isolates la
     const firstPage = decode(
       await tool.execute('call-1', { action: 'begin' }, undefined, undefined, context),
     );
-    expect(readFileSync).toHaveBeenCalledTimes(1);
-    expect(readFileSync).toHaveBeenCalledWith(file, 'utf8');
+    const original = readFileSync(file, 'utf8');
+    writeFileSync(file, '{rewritten after begin\n');
     expect(firstPage.capturedTips).toBe(1);
     expect(firstPage.hasMore).toBe(true);
     expect(firstPage.entries).toEqual(expect.any(Array));
@@ -654,6 +823,7 @@ it('pages faithfully, cancels without consuming, persists finish and isolates la
     expect(chunks[0]?.offset).toBe(0);
     expect(chunks[1]?.offset).toBe(chunks[0]!.text.length);
     expect(chunks.map((entry) => entry.continues)).toEqual([true, false]);
+    writeFileSync(file, original);
     appendFileSync(
       file,
       JSON.stringify({
@@ -702,6 +872,87 @@ it('pages faithfully, cancels without consuming, persists finish and isolates la
     await call('cancel', empty.batch);
   } finally {
     await shutdown({}, context);
+    if (previousAgentDir === undefined) delete process.env['PI_CODING_AGENT_DIR'];
+    else process.env['PI_CODING_AGENT_DIR'] = previousAgentDir;
+    if (previousState === undefined) delete process.env['XDG_STATE_HOME'];
+    else process.env['XDG_STATE_HOME'] = previousState;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it('does not enroll a newly referenced current source after ordinary preparation fails', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'remembrancer-extension-enrollment-failure-'));
+  const state = join(dir, 'state');
+  const previousAgentDir = process.env['PI_CODING_AGENT_DIR'];
+  const previousState = process.env['XDG_STATE_HOME'];
+  process.env['PI_CODING_AGENT_DIR'] = join(dir, 'agent');
+  process.env['XDG_STATE_HOME'] = state;
+  const file = join(dir, 'session.jsonl');
+  writeFileSync(file, '{broken\n');
+
+  const extension = fakeExtension();
+  remembrancer(extension.api);
+  const start = extension.handlers.get('session_start');
+  const shutdown = extension.handlers.get('session_shutdown');
+  if (!start || !shutdown) throw new Error('Extension did not register its lifecycle');
+  const startupContext = contextFor(dir);
+  const reviewContext = contextFor(dir, file, dir);
+  const checkpointPath = join(state, 'pi-remembrancer', 'checkpoints.sqlite3');
+  const persisted = () => {
+    const store = new CheckpointStore(checkpointPath);
+    try {
+      return { sources: store.sources(), reviewed: store.reviewed() };
+    } finally {
+      store.close();
+    }
+  };
+  const repair = () =>
+    writeFileSync(
+      file,
+      [
+        JSON.stringify({ type: 'session', id: 'session', cwd: dir }),
+        JSON.stringify({
+          type: 'message',
+          id: 'repaired',
+          parentId: null,
+          timestamp: '2026-01-30T00:00:00.000Z',
+          message: { role: 'user', content: 'repaired evidence' },
+        }),
+        '',
+      ].join('\n'),
+    );
+
+  try {
+    await start({}, startupContext);
+    const tool = extension.tools[0];
+    if (!tool) throw new Error('Extension did not register the review tool');
+    const call = async (action: string, batch?: string) =>
+      decode(
+        await tool.execute(
+          'enrollment-failure',
+          { action, batch },
+          undefined,
+          undefined,
+          reviewContext,
+        ),
+      );
+
+    const failed = await call('begin');
+    expect(failed.entries).toEqual([]);
+    expect(failed.incomplete).toBe(true);
+    await call('finish', failed.batch);
+    expect(persisted()).toEqual({ sources: [], reviewed: [] });
+
+    repair();
+    const retry = await call('begin');
+    expect(retry.entries?.map((entry) => entry.text)).toEqual(['repaired evidence']);
+    await call('finish', retry.batch);
+    expect(persisted()).toEqual({
+      sources: [{ sessionId: 'session', file, seedSince: null }],
+      reviewed: [{ sessionId: 'session', file, entryId: 'repaired', since: null }],
+    });
+  } finally {
+    await shutdown({}, reviewContext);
     if (previousAgentDir === undefined) delete process.env['PI_CODING_AGENT_DIR'];
     else process.env['PI_CODING_AGENT_DIR'] = previousAgentDir;
     if (previousState === undefined) delete process.env['XDG_STATE_HOME'];
@@ -1179,6 +1430,15 @@ it('finishes healthy seed sources as partial when archive discovery is incomplet
   const extension = fakeExtension();
   remembrancer(extension.api);
   const context = contextFor(dir, healthy, archive);
+  const checkpointPath = join(state, 'pi-remembrancer', 'checkpoints.sqlite3');
+  const persisted = () => {
+    const store = new CheckpointStore(checkpointPath);
+    try {
+      return { sources: store.sources(), reviewed: store.reviewed() };
+    } finally {
+      store.close();
+    }
+  };
   const start = extension.handlers.get('session_start');
   const shutdown = extension.handlers.get('session_shutdown');
   if (!start || !shutdown) throw new Error('Extension did not register its lifecycle');
@@ -1212,6 +1472,17 @@ it('finishes healthy seed sources as partial when archive discovery is incomplet
     expect(finished.incomplete).toBe(true);
     expect(finished.status).toBe('partial');
     expect(finished.warnings?.join('\\n')).toMatch(/broken/);
+    expect(persisted()).toEqual({
+      sources: [{ sessionId: 'session', file: healthy, seedSince: review.requestedSince }],
+      reviewed: [
+        {
+          sessionId: 'session',
+          file: healthy,
+          entryId: 'healthy-message',
+          since: review.requestedSince,
+        },
+      ],
+    });
   } finally {
     await shutdown({}, context);
     if (previousAgentDir === undefined) delete process.env['PI_CODING_AGENT_DIR'];

@@ -1,7 +1,14 @@
 import { readdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { StoredSource } from './checkpoints.js';
-import { readSession, type SessionSnapshot, type Source, type SessionTree } from './evidence.js';
+import {
+  readSession,
+  ReviewBudget,
+  ReviewLimitError,
+  type SessionSnapshot,
+  type Source,
+  type SessionTree,
+} from './evidence.js';
 
 export type DiscoveryResult = {
   sources: Source[];
@@ -93,47 +100,83 @@ export function discoverSources(
   enrolled: readonly StoredSource[],
   requestedSince: string | null,
   scanAllProjects = false,
+  budget = new ReviewBudget(),
 ): DiscoveryResult {
   const warnings: string[] = [];
   let incomplete = false;
-  const sources: Source[] = enrolled.map((source) => ({
-    ...source,
-    file: resolve(source.file),
-  }));
+  const sources: Source[] = [];
   const newSources: Source[] = [];
   const snapshots: SessionSnapshot[] = [];
-  const enrolledById = new Map(sources.map((source) => [source.sessionId, source]));
-  const enrolledByFile = new Map(sources.map((source) => [resolve(source.file), source]));
+  const enrolledById = new Map<string, Source>();
+  const enrolledByFile = new Map<string, Source[]>();
+  const enrolledKeys = new Set<string>();
+  const conflictingEnrolledPaths = new Set<string>();
+  for (const source of enrolled) {
+    const normalized = { ...source, file: resolve(source.file) };
+    const key = sourceKey(normalized);
+    if (enrolledKeys.has(key)) continue;
+    enrolledKeys.add(key);
+    const samePath = enrolledByFile.get(normalized.file) ?? [];
+    if (samePath.some((candidate) => candidate.sessionId !== normalized.sessionId))
+      conflictingEnrolledPaths.add(normalized.file);
+    samePath.push(normalized);
+    enrolledByFile.set(normalized.file, samePath);
+    sources.push(normalized);
+    enrolledById.set(normalized.sessionId, normalized);
+  }
   const candidates: Candidate[] = [];
+  const snapshotKeys = new Set<string>();
+  const addSnapshot = (source: Source, tree: SessionTree) => {
+    const key = sourceKey(source);
+    if (snapshotKeys.has(key)) return;
+    snapshotKeys.add(key);
+    snapshots.push({ source, tree });
+  };
   const blockedSessionIds = new Set<string>();
   const scan = scanFiles(sessionDir, scanAllProjects);
   warnings.push(...scan.warnings);
   incomplete = scan.incomplete;
 
+  const candidatePaths = new Set<string>();
   for (const file of scan.files) {
     const resolvedFile = resolve(file);
+    if (candidatePaths.has(resolvedFile)) continue;
+    candidatePaths.add(resolvedFile);
+    budget.reserveSource(resolvedFile);
     try {
       if (!statSync(resolvedFile).isFile()) continue;
-      candidates.push({ file: resolvedFile, tree: readSession(resolvedFile) });
+      const tree = readSession(resolvedFile, budget.limits);
+      budget.retain(tree);
+      candidates.push({ file: resolvedFile, tree });
     } catch (error) {
+      if (error instanceof ReviewLimitError) throw error;
+      const enrolledSources = enrolledByFile.get(resolvedFile) ?? [];
+      for (const enrolledSource of enrolledSources) blockedSessionIds.add(enrolledSource.sessionId);
       incomplete = true;
       warnings.push(`${resolvedFile}: ${String(error)}`);
     }
   }
 
+  for (const path of conflictingEnrolledPaths) {
+    if (candidatePaths.has(path)) continue;
+    incomplete = true;
+    const identities = (enrolledByFile.get(path) ?? []).map((source) => source.sessionId);
+    warnings.push(`${path}: enrolled for multiple session IDs: ${identities.join(', ')}`);
+  }
+
   const freshById = new Map<string, Candidate[]>();
   for (const candidate of candidates) {
-    const enrolledAtPath = enrolledByFile.get(candidate.file);
-    if (enrolledAtPath) {
-      if (enrolledAtPath.sessionId !== candidate.tree.sessionId) {
-        incomplete = true;
-        blockedSessionIds.add(enrolledAtPath.sessionId);
-        warnings.push(
-          `${candidate.file}: session header ID changed from ${enrolledAtPath.sessionId} to ${candidate.tree.sessionId}`,
-        );
-        continue;
+    const enrolledAtPath = enrolledByFile.get(candidate.file) ?? [];
+    if (enrolledAtPath.length > 0) {
+      for (const enrolledSource of enrolledAtPath) {
+        if (enrolledSource.sessionId !== candidate.tree.sessionId) {
+          incomplete = true;
+          warnings.push(
+            `${candidate.file}: session header ID changed from ${enrolledSource.sessionId} to ${candidate.tree.sessionId}`,
+          );
+        }
+        addSnapshot(enrolledSource, candidate.tree);
       }
-      snapshots.push({ source: enrolledAtPath, tree: candidate.tree });
       continue;
     }
 
@@ -171,7 +214,7 @@ export function discoverSources(
     };
     sources.push(source);
     newSources.push(source);
-    snapshots.push({ source, tree: candidate.tree });
+    addSnapshot(source, candidate.tree);
   }
 
   const seen = new Set<string>();
