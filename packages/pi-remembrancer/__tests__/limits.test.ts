@@ -65,7 +65,7 @@ it.each([
       newSources: [],
       snapshots: [],
     });
-    expect(discovery.warnings.join()).toMatch(/limit exceeded/);
+    expect(discovery.warnings.map((warning) => warning.message).join()).toMatch(/limit exceeded/);
     const enrolled = discoverSources(
       dirname(source.file),
       [source],
@@ -89,7 +89,7 @@ it.each([
       successfulSources: [],
       snapshots: [],
     });
-    expect(failed.warnings.join()).toMatch(/limit exceeded/);
+    expect(failed.warnings.map((warning) => warning.message).join()).toMatch(/limit exceeded/);
     const retry = prepareReview([source], [checkpoint]);
     expect(retry.evidence.map((item) => item.entryId)).toEqual(['new']);
     expect(retry.checkpoints.map((item) => item.entryId)).toEqual(['new']);
@@ -289,5 +289,5 @@ it('keeps unknown cwd and timestamps without retaining non-string metadata', () 
   expect(readSession(source.file).cwd).toBe('(unknown)');
   const review = prepareReview([source], []);
   expect(review.evidence[0]?.timestamp).toBe('');
-  expect(review.warnings.join()).toMatch(/timestamp unknown/);
+  expect(review.warnings.map((warning) => warning.message).join()).toMatch(/timestamp unknown/);
 });

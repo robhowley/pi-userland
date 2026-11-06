@@ -70,7 +70,12 @@ it('processes same-path identities independently while charging the path once', 
   expect(review.successfulSources).toEqual([{ ...source, seedSince: null }]);
   expect(review.incomplete).toBe(true);
   expect(review.warnings).toHaveLength(1);
-  expect(review.warnings[0]).toContain('Session header ID changed');
+  expect(review.warnings[0]).toMatchObject({
+    message: expect.stringContaining('Session header ID changed'),
+    kind: 'identity-ambiguity',
+    sources: [source.file],
+    reason: 'Session header ID changed',
+  });
 });
 
 it('deduplicates exact source references without consuming another source slot', () => {
@@ -201,7 +206,12 @@ it('uses the applied edit timestamp and includes unknown-time versions without i
   });
   expect(texts(unknown)).toEqual(['unknown-time correction', 'child']);
   expect(unknown.warnings).toHaveLength(1);
-  expect(unknown.warnings[0]).toContain('bad-edit');
+  expect(unknown.warnings[0]).toMatchObject({
+    message: expect.stringContaining('bad-edit'),
+    kind: 'unknown-timestamp',
+    sources: [unknownSource.file],
+    reason: 'selection timestamp unknown for root (edit bad-edit)',
+  });
   expect(unknown.incomplete).toBe(false);
 
   const repeated = prepareReview([unknownSource], unknown.checkpoints, {

@@ -47,7 +47,21 @@ type TestTool = {
     ctx: ExtensionContext,
   ) => Promise<unknown>;
 };
-type ToolResponse = { content: [{ type: 'text'; text: string }] };
+type ResultWarning = {
+  message: string;
+  sources: string[];
+  reason: string;
+  kind: 'source-failure' | 'archive-scan' | 'identity-ambiguity' | 'unknown-timestamp';
+};
+type ResultDetails = {
+  action: 'begin' | 'next' | 'context' | 'finish' | 'cancel';
+  batch: string;
+  seed?: string;
+  requestedSince?: string;
+  incomplete: boolean;
+  warnings: ResultWarning[];
+};
+type ToolResponse = { content: [{ type: 'text'; text: string }]; details: ResultDetails };
 type ReviewResult = {
   batch?: string;
   entries?: {
@@ -880,6 +894,196 @@ it('pages faithfully, cancels without consuming, persists finish and isolates la
   }
 });
 
+it('keeps structured warnings in frozen details across every successful action without changing model JSON', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'remembrancer-extension-details-'));
+  const previousAgentDir = process.env['PI_CODING_AGENT_DIR'];
+  const previousState = process.env['XDG_STATE_HOME'];
+  process.env['PI_CODING_AGENT_DIR'] = join(dir, 'agent');
+  process.env['XDG_STATE_HOME'] = join(dir, 'state');
+  const file = join(dir, 'session.jsonl');
+  writeFileSync(
+    file,
+    [
+      JSON.stringify({ type: 'session', id: 'session', cwd: dir }),
+      JSON.stringify({
+        type: 'message',
+        id: 'root',
+        parentId: null,
+        timestamp: 'not-a-date',
+        message: { role: 'user', content: 'prior context' },
+      }),
+      JSON.stringify({
+        type: 'message',
+        id: 'selected',
+        parentId: 'root',
+        timestamp: '2026-01-30T00:00:00.000Z',
+        message: { role: 'user', content: 'x'.repeat(12_050) },
+      }),
+      '',
+    ].join('\n'),
+  );
+
+  const extension = fakeExtension();
+  remembrancer(extension.api);
+  const context = contextFor(dir, file);
+  const start = extension.handlers.get('session_start');
+  const shutdown = extension.handlers.get('session_shutdown');
+  if (!start || !shutdown) throw new Error('Extension did not register its lifecycle');
+
+  const warning: ResultWarning = {
+    message: `${file}: selection timestamp unknown for root`,
+    sources: [file],
+    reason: 'selection timestamp unknown for root',
+    kind: 'unknown-timestamp',
+  };
+  const detailsOf = (response: unknown) => (response as ToolResponse).details;
+  try {
+    await start({}, context);
+    const tool = extension.tools[0];
+    if (!tool) throw new Error('Extension did not register its review tool');
+
+    const beginResponse = await tool.execute(
+      'details-begin',
+      { action: 'begin' },
+      undefined,
+      undefined,
+      context,
+    );
+    const begin = decode(beginResponse);
+    expect(begin).toMatchObject({
+      status: 'review',
+      incomplete: false,
+      warnings: [warning.message],
+      coverageChanged: true,
+      capturedTips: 1,
+      hasMore: true,
+    });
+    expect((beginResponse as ToolResponse).content[0].text).not.toContain('unknown-timestamp');
+    expect(detailsOf(beginResponse)).toEqual({
+      action: 'begin',
+      batch: begin.batch,
+      incomplete: false,
+      warnings: [warning],
+    });
+
+    const nextResponse = await tool.execute(
+      'details-next',
+      { action: 'next', batch: begin.batch },
+      undefined,
+      undefined,
+      context,
+    );
+    const next = decode(nextResponse);
+    expect(next).toMatchObject({ batch: begin.batch, hasMore: false });
+    expect(detailsOf(nextResponse)).toEqual({
+      action: 'next',
+      batch: begin.batch,
+      incomplete: false,
+      warnings: [warning],
+    });
+
+    const selected = {
+      sessionId: 'session',
+      branchId: 'selected',
+      entryId: 'selected',
+      editId: null,
+    };
+    const contextResponse = await tool.execute(
+      'details-context',
+      { action: 'context', batch: begin.batch, selected },
+      undefined,
+      undefined,
+      context,
+    );
+    const contextResult = decode(contextResponse);
+    expect(contextResult).toMatchObject({
+      batch: begin.batch,
+      contextOnly: true,
+      entries: [{ entryId: 'root', text: 'prior context' }],
+    });
+    expect(detailsOf(contextResponse)).toEqual({
+      action: 'context',
+      batch: begin.batch,
+      incomplete: false,
+      warnings: [warning],
+    });
+
+    const finishResponse = await tool.execute(
+      'details-finish',
+      { action: 'finish', batch: begin.batch },
+      undefined,
+      undefined,
+      context,
+    );
+    expect(decode(finishResponse)).toEqual({ finished: true, reviewedTips: 1 });
+    expect((finishResponse as ToolResponse).content[0].text).toBe(
+      '{"finished":true,"reviewedTips":1}',
+    );
+    expect(detailsOf(finishResponse)).toEqual({
+      action: 'finish',
+      batch: begin.batch,
+      incomplete: false,
+      warnings: [warning],
+    });
+
+    const secondResponse = await tool.execute(
+      'details-informational-finish-begin',
+      { action: 'begin' },
+      undefined,
+      undefined,
+      context,
+    );
+    const second = decode(secondResponse);
+    expect(second).toMatchObject({ status: 'already-covered', warnings: [warning.message] });
+    const secondFinishResponse = await tool.execute(
+      'details-informational-finish',
+      { action: 'finish', batch: second.batch },
+      undefined,
+      undefined,
+      context,
+    );
+    expect(decode(secondFinishResponse)).toEqual({ finished: true, reviewedTips: 0 });
+    expect(detailsOf(secondFinishResponse)).toEqual({
+      action: 'finish',
+      batch: second.batch,
+      incomplete: false,
+      warnings: [warning],
+    });
+
+    const thirdResponse = await tool.execute(
+      'details-cancel-begin',
+      { action: 'begin' },
+      undefined,
+      undefined,
+      context,
+    );
+    const third = decode(thirdResponse);
+    expect(third).toMatchObject({ status: 'already-covered', warnings: [warning.message] });
+    const cancelResponse = await tool.execute(
+      'details-cancel',
+      { action: 'cancel', batch: third.batch },
+      undefined,
+      undefined,
+      context,
+    );
+    expect(decode(cancelResponse)).toEqual({ cancelled: true });
+    expect((cancelResponse as ToolResponse).content[0].text).toBe('{"cancelled":true}');
+    expect(detailsOf(cancelResponse)).toEqual({
+      action: 'cancel',
+      batch: third.batch,
+      incomplete: false,
+      warnings: [warning],
+    });
+  } finally {
+    await shutdown({}, context);
+    if (previousAgentDir === undefined) delete process.env['PI_CODING_AGENT_DIR'];
+    else process.env['PI_CODING_AGENT_DIR'] = previousAgentDir;
+    if (previousState === undefined) delete process.env['XDG_STATE_HOME'];
+    else process.env['XDG_STATE_HOME'] = previousState;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 it('does not enroll a newly referenced current source after ordinary preparation fails', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'remembrancer-extension-enrollment-failure-'));
   const state = join(dir, 'state');
@@ -1081,10 +1285,23 @@ it('seeds every default Pi archive bucket, stages new sources, and keeps ordinar
       context,
     );
 
-    const seed = decode(
-      await tool.execute('seed', { action: 'begin', seed: '14d' }, undefined, undefined, context),
+    const seedResponse = await tool.execute(
+      'seed',
+      { action: 'begin', seed: '14d' },
+      undefined,
+      undefined,
+      context,
     );
+    const seed = decode(seedResponse);
     expect(seed.requestedSince).toBeTruthy();
+    expect((seedResponse as ToolResponse).details).toMatchObject({
+      action: 'begin',
+      batch: seed.batch,
+      seed: '14d',
+      requestedSince: seed.requestedSince,
+      incomplete: false,
+      warnings: [],
+    });
     expect(seed.entries?.map((entry) => entry.text)).toEqual([
       'current commitment',
       'worker commitment',

@@ -35,6 +35,12 @@ Remembrancer checks your existing tasks and suggests additions, progress notes, 
 
 Your tasks stay in Taskwarrior. Use `task list` or `task completed` any time.
 
+## Review result display
+
+Direct `remembrancer_review` tool rows use a compact result with expandable warnings and evidence. The display reads only the saved result data, so it remains available after the review batch is released. It does not reduce model tokens, add scan progress or a separate replay feature. It does not rewrite saved history or promise support for older saved results.
+
+This renderer applies to direct tool rows only. Codemode calls are nested, so their outer row still prints raw JSON rather than receiving a separate rendered row.
+
 ## Everyday examples
 
 Explicit requests to add or change a task are applied directly after the actual record is checked. Changes inferred from your sessions need your approval.

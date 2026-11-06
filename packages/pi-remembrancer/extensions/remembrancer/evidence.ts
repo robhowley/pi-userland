@@ -1,6 +1,7 @@
 import { closeSync, fstatSync, openSync, readSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
+import { createWarning, type WarningRecord } from './warnings.js';
 
 export type Tip = { file: string; sessionId: string; entryId: string };
 export type Checkpoint = Tip & { since: string | null };
@@ -27,7 +28,7 @@ export type PreparedReview = {
   evidence: Evidence[];
   snapshots: SessionSnapshot[];
   successfulSources: Source[];
-  warnings: string[];
+  warnings: WarningRecord[];
   incomplete: boolean;
   coverageChanged: boolean;
 };
@@ -445,7 +446,7 @@ export function prepareReview(
   const evidence: Evidence[] = [];
   const frozenSnapshots: SessionSnapshot[] = [];
   const successfulSources: Source[] = [];
-  const warnings: string[] = [];
+  const warnings: WarningRecord[] = [];
   let incomplete = false;
   const warnedUnknown = new Set<string>();
 
@@ -453,10 +454,11 @@ export function prepareReview(
     const key = `${source.sessionId}\u0000${item.branchId}\u0000${selectionKey(item)}`;
     if (warnedUnknown.has(key)) return;
     warnedUnknown.add(key);
+    const reason = `selection timestamp unknown for ${item.entryId}${
+      item.editId ? ` (edit ${item.editId})` : ''
+    }`;
     warnings.push(
-      `${source.file}: selection timestamp unknown for ${item.entryId}${
-        item.editId ? ` (edit ${item.editId})` : ''
-      }`,
+      createWarning(`${source.file}: ${reason}`, [source.file], reason, 'unknown-timestamp'),
     );
   };
 
@@ -489,7 +491,14 @@ export function prepareReview(
         snapshot?.tree ?? treesByPath.get(path) ?? readSession(source.file, budget.limits);
       budget.retain(tree);
       if (!treesByPath.has(path)) treesByPath.set(path, tree);
-      if (tree.sessionId !== source.sessionId) throw Error('Session header ID changed');
+      if (tree.sessionId !== source.sessionId) {
+        const reason = 'Session header ID changed';
+        incomplete = true;
+        warnings.push(
+          createWarning(`${source.file}: ${reason}`, [source.file], reason, 'identity-ambiguity'),
+        );
+        continue;
+      }
       budget.review(tree);
       const boundaries = new Map<string, Checkpoint>();
       for (const tip of reviewed) {
@@ -558,7 +567,10 @@ export function prepareReview(
     } catch (error) {
       if (error instanceof ReviewLimitError) throw error;
       incomplete = true;
-      warnings.push(`${source.file}: ${String(error)}`);
+      const reason = String(error);
+      warnings.push(
+        createWarning(`${source.file}: ${reason}`, [source.file], reason, 'source-failure'),
+      );
     }
   }
 

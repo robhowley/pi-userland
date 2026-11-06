@@ -1,6 +1,7 @@
 import { readdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { StoredSource } from './checkpoints.js';
+import { createWarning, type WarningRecord } from './warnings.js';
 import {
   readSession,
   ReviewBudget,
@@ -14,7 +15,7 @@ export type DiscoveryResult = {
   sources: Source[];
   newSources: Source[];
   snapshots: SessionSnapshot[];
-  warnings: string[];
+  warnings: WarningRecord[];
   incomplete: boolean;
 };
 
@@ -25,7 +26,7 @@ type Candidate = {
 
 type FileScan = {
   files: string[];
-  warnings: string[];
+  warnings: WarningRecord[];
   incomplete: boolean;
 };
 
@@ -33,13 +34,14 @@ function sourceKey(source: Pick<Source, 'sessionId' | 'file'>): string {
   return `${source.sessionId}\u0000${resolve(source.file)}`;
 }
 
-function collisionWarning(sessionId: string, files: readonly string[]): string {
-  return `Session ${sessionId} has multiple archive files: ${files.join(', ')}`;
+function collisionWarning(sessionId: string, files: readonly string[]): WarningRecord {
+  const reason = `Session ${sessionId} has multiple archive files: ${files.join(', ')}`;
+  return createWarning(reason, files, reason, 'identity-ambiguity');
 }
 
 function scanFiles(sessionDir: string, scanAllProjects: boolean): FileScan {
   const directory = resolve(sessionDir);
-  const warnings: string[] = [];
+  const warnings: WarningRecord[] = [];
   let incomplete = false;
   let files: string[] = [];
 
@@ -50,9 +52,17 @@ function scanFiles(sessionDir: string, scanAllProjects: boolean): FileScan {
         .map((entry) => join(directory, entry.name))
         .sort();
     } catch (error) {
+      const reason = String(error);
       return {
         files: [],
-        warnings: [`${directory}: unable to enumerate session archive: ${String(error)}`],
+        warnings: [
+          createWarning(
+            `${directory}: unable to enumerate session archive: ${reason}`,
+            [directory],
+            reason,
+            'archive-scan',
+          ),
+        ],
         incomplete: true,
       };
     }
@@ -66,9 +76,17 @@ function scanFiles(sessionDir: string, scanAllProjects: boolean): FileScan {
       (entry) => entry.isDirectory() || entry.isSymbolicLink(),
     );
   } catch (error) {
+    const reason = String(error);
     return {
       files: [],
-      warnings: [`${root}: unable to enumerate session archive: ${String(error)}`],
+      warnings: [
+        createWarning(
+          `${root}: unable to enumerate session archive: ${reason}`,
+          [root],
+          reason,
+          'archive-scan',
+        ),
+      ],
       incomplete: true,
     };
   }
@@ -83,7 +101,15 @@ function scanFiles(sessionDir: string, scanAllProjects: boolean): FileScan {
       );
     } catch (error) {
       incomplete = true;
-      warnings.push(`${bucketPath}: unable to enumerate session archive: ${String(error)}`);
+      const reason = String(error);
+      warnings.push(
+        createWarning(
+          `${bucketPath}: unable to enumerate session archive: ${reason}`,
+          [bucketPath],
+          reason,
+          'archive-scan',
+        ),
+      );
     }
   }
 
@@ -102,7 +128,7 @@ export function discoverSources(
   scanAllProjects = false,
   budget = new ReviewBudget(),
 ): DiscoveryResult {
-  const warnings: string[] = [];
+  const warnings: WarningRecord[] = [];
   let incomplete = false;
   const sources: Source[] = [];
   const newSources: Source[] = [];
@@ -153,7 +179,10 @@ export function discoverSources(
       const enrolledSources = enrolledByFile.get(resolvedFile) ?? [];
       for (const enrolledSource of enrolledSources) blockedSessionIds.add(enrolledSource.sessionId);
       incomplete = true;
-      warnings.push(`${resolvedFile}: ${String(error)}`);
+      const reason = String(error);
+      warnings.push(
+        createWarning(`${resolvedFile}: ${reason}`, [resolvedFile], reason, 'source-failure'),
+      );
     }
   }
 
@@ -161,7 +190,8 @@ export function discoverSources(
     if (candidatePaths.has(path)) continue;
     incomplete = true;
     const identities = (enrolledByFile.get(path) ?? []).map((source) => source.sessionId);
-    warnings.push(`${path}: enrolled for multiple session IDs: ${identities.join(', ')}`);
+    const reason = `enrolled for multiple session IDs: ${identities.join(', ')}`;
+    warnings.push(createWarning(`${path}: ${reason}`, [path], reason, 'identity-ambiguity'));
   }
 
   const freshById = new Map<string, Candidate[]>();
@@ -171,8 +201,14 @@ export function discoverSources(
       for (const enrolledSource of enrolledAtPath) {
         if (enrolledSource.sessionId !== candidate.tree.sessionId) {
           incomplete = true;
+          const reason = `session header ID changed from ${enrolledSource.sessionId} to ${candidate.tree.sessionId}`;
           warnings.push(
-            `${candidate.file}: session header ID changed from ${enrolledSource.sessionId} to ${candidate.tree.sessionId}`,
+            createWarning(
+              `${candidate.file}: ${reason}`,
+              [candidate.file],
+              reason,
+              'identity-ambiguity',
+            ),
           );
         }
         addSnapshot(enrolledSource, candidate.tree);
