@@ -78,7 +78,11 @@ function detailsValue(value: unknown): ReviewResultDetails | undefined {
   if (!candidate) return undefined;
   const action = actionValue(candidate['action']);
   if (!action || typeof candidate['batch'] !== 'string') return undefined;
-  if (typeof candidate['incomplete'] !== 'boolean' || !Array.isArray(candidate['warnings']))
+  if (
+    typeof candidate['incomplete'] !== 'boolean' ||
+    !Array.isArray(candidate['warnings']) ||
+    !candidate['warnings'].every(isWarningRecord)
+  )
     return undefined;
   return candidate as unknown as ReviewResultDetails;
 }
@@ -203,10 +207,6 @@ function isWarningRecord(value: unknown): value is WarningRecord {
     typeof candidate['reason'] === 'string' &&
     isWarningKind(candidate['kind']),
   );
-}
-
-function safeWarnings(details: ReviewResultDetails): WarningRecord[] {
-  return details.warnings.filter(isWarningRecord);
 }
 
 function indent(value: string, prefix: string): string {
@@ -341,7 +341,6 @@ export const renderReviewResult: ReviewRenderResult = (result, options, theme, c
 
   const summary = compactSummary(payload, details);
   const warningText = warningLine(details);
-  const warnings = safeWarnings(details);
   const lines = [styled(theme, 'toolOutput', summary)];
   if (warningText) lines.push(styled(theme, 'warning', warningText));
 
@@ -350,7 +349,7 @@ export const renderReviewResult: ReviewRenderResult = (result, options, theme, c
     return new Text(lines.join('\n'), 0, 0);
   }
 
-  appendWarningBlocks(lines, warnings, theme);
+  appendWarningBlocks(lines, details.warnings, theme);
   appendEvidenceBlocks(
     lines,
     Array.isArray(payload['entries']) ? payload['entries'] : [],

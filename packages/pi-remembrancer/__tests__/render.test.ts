@@ -381,13 +381,23 @@ it('keeps all returned evidence order, provenance, continuation fields, and batc
         text: 'second chunk',
       },
     ];
-    const output = textAt(
-      tool.renderResult!,
-      { entries, hasMore: false },
-      details('next', { seed: '14d', requestedSince: '2026-01-01T00:00:00.000Z' }),
-      { expanded: true },
-    );
+    const resultDetails = details('next', {
+      seed: '14d',
+      requestedSince: '2026-01-01T00:00:00.000Z',
+      warnings: [warning('source-failure')],
+    });
+    const collapsed = textAt(tool.renderResult!, { entries, hasMore: false }, resultDetails);
+    expect(collapsed).not.toContain('first chunk');
+    expect(collapsed).not.toContain('warning reason');
+    expect(collapsed).not.toContain('token: batch-token');
+    expect(collapsed).not.toContain('seed: 14d');
+    expect(collapsed).not.toContain('requestedSince: 2026-01-01T00:00:00.000Z');
+
+    const output = textAt(tool.renderResult!, { entries, hasMore: false }, resultDetails, {
+      expanded: true,
+    });
     expect(output.indexOf('first chunk')).toBeLessThan(output.indexOf('second chunk'));
+    expect(output).toContain('warning reason');
     for (const expected of [
       'role: user',
       'timestamp: 2026-01-01T00:00:00.000Z',
@@ -474,6 +484,30 @@ it('preserves original execution errors and handles unrecognized data without th
   }
 });
 
+it('falls back to raw results when warning details are malformed', async () => {
+  const { tool, shutdown } = installedRendererTool();
+  try {
+    const malformed = tool.renderResult!(
+      {
+        content: [{ type: 'text', text: '{"old":"result"}' }],
+        details: {
+          action: 'begin',
+          batch: 'batch-token',
+          incomplete: false,
+          warnings: [null],
+          coverageChanged: false,
+        },
+      } as RenderResult,
+      { expanded: false, isPartial: false },
+      identityTheme,
+      context({ action: 'begin' }),
+    );
+    expect(malformed.render(120).join('\n')).toContain('{"old":"result"}');
+  } finally {
+    await shutdown();
+  }
+});
+
 it('sanitizes control input, wraps Text output at 40/80/120 columns, and replays frozen JSON', async () => {
   const { tool, shutdown } = installedRendererTool();
   try {
@@ -511,12 +545,13 @@ it('sanitizes control input, wraps Text output at 40/80/120 columns, and replays
       ) as Component;
       const lines = renderer.render(width);
       expect(lines.every((line) => visibleWidth(stripTerminalSequences(line)) <= width)).toBe(true);
-      const visible = lines.map(stripTerminalSequences).join('\n');
-      expect(visible).not.toContain('\u001b');
-      expect(visible).not.toContain('\r');
-      expect(visible).toContain('line one');
-      expect(visible).toContain('line two');
-      expect(visible).toContain('漢字');
+      const rendered = lines.join('\n');
+      for (const control of ['\u001b', '\r', '\u0000', '\u0007']) {
+        expect(rendered).not.toContain(control);
+      }
+      expect(rendered).toContain('line one');
+      expect(rendered).toContain('line two');
+      expect(rendered).toContain('漢字');
     }
   } finally {
     await shutdown();
