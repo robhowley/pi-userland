@@ -74,14 +74,6 @@ Skip this setup if you do not need waiting conditions; other task operations wor
 - Reviews run only when you ask. Activity added during a review waits for the next one.
 - If a session cannot be read, Remembrancer reports it and leaves it for a later review. Cancelling a review leaves review progress unsaved, but it does not undo task changes already applied.
 
-### Review memory limits
-
-Reviews keep frozen text and tree links, discarding tool, image and thinking payloads as each JSONL record is read. Later appends are excluded; detected replacement, truncation or inconsistent reads fail that source.
-
-Internal limits are 32 MiB per raw record; 20,000 retained entries, 4 MiB of retained visible UTF-8 text, 8 MiB of compact-data estimates (retained UTF-8 strings plus fixed per-entry slots) and 512 branches per source. Across a review, limits are 2,048 unique candidate paths, 300,000 retained entries, 32 MiB of retained visible UTF-8 text and 64 MiB of compact-data estimates. Branch traversal also has limits (100,000 entry visits per source and 1,000,000 per review, allowing three walks per branch) to bound duplicated evidence.
-
-A source failure reserves its unique candidate path, then produces a warning without advancing its coverage or enrolling it. Repeated references to the same path are read once. An aggregate limit aborts the entire begin operation and releases the review lock without saving review progress. Limits are not configurable; shortening the seed window does not reduce snapshot loading.
-
 ## Settings
 
 Remembrancer is enabled by default. To turn off saved-session reviews and stop including newly opened or resumed sessions in future reviews, add this to Pi's global settings file, normally `~/.pi/agent/settings.json`:
@@ -91,5 +83,3 @@ Remembrancer is enabled by default. To turn off saved-session reviews and stop i
 ```
 
 A trusted project's `.pi/settings.json` takes precedence over the global value. After changing settings, run `/reload` or start a new session. The skill remains available: direct task requests can still change Taskwarrior tasks.
-
-If you use delegated workers, keep task changes in your main session and have workers return suggestions only. Remembrancer does not enforce this restriction.
