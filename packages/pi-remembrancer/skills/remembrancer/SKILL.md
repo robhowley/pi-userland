@@ -61,9 +61,10 @@ projection rather than installing it automatically.
 
 Route by where the user asks you to look, not by whether the requested operation sounds like capture or close:
 
-- For a current-session request such as “wrap up this session” or “capture follow-ups”, use the current conversation as evidence. Project, topic, time, capture-only, and close-only qualifiers are supported here and restrict reconciliation within that conversation.
-- For an unscoped saved-session request such as “what changed since my last review?”, use the full cross-session review.
-- For a saved-session or historical request scoped by project, topic, time, capture-only, or close-only, stop and ask the user to choose either the supported full unscoped historical review or user-approved current-session evidence. The `remembrancer_review` tool cannot select a historical slice or finish a partial checkpoint, and finishing advances all frozen tips. Do not claim or imply that scoped proposals over full history are supported, silently broaden the request to all history, substitute the current conversation without approval, mark excluded history reviewed, or invent scoped-history checkpoint machinery.
+- **Current conversation:** For “wrap up this session” or “capture follow-ups”, use this conversation. Respect project, topic, time, capture-only, and close-only limits.
+- **Saved sessions:** For “what changed since my last review?”, use full cross-session review.
+- **Seed:** For “review the last 14 days”, `/remembrancer seed <Nd>`, or “seed <Nd>”, call `remembrancer_review` with `action: "begin"` and `seed` set to the requested positive whole number of days, such as `"14d"`. Review the full returned batch, including new activity, not just newly included older history.
+- **Other historical scopes:** Date strings, project/topic filters, capture-only, and close-only historical reviews are unsupported. Ask the user to choose a full review, a seed duration, or current-conversation evidence. Do not broaden the request or switch evidence sources without approval, or mark skipped history reviewed.
 
 ## Reconcile evidence
 
@@ -82,11 +83,10 @@ Use this procedure for evidence from both the current conversation and a frozen 
 
 ## Full cross-session review
 
-1. For an explicit unscoped saved-session request, such as “what changed since my last review?”, call `remembrancer_review` with `action: "begin"`. The extension enrolls eligible saved sessions and freezes their current branch boundaries for the batch.
-2. Read every returned page with `action: "next"` and the same batch token until no pages remain. Later appends are not part of this batch. Reading a page or presenting a proposal does not mark it reviewed.
-3. Reconcile all returned evidence with the shared procedure above. Obtain only the supporting context needed for a task decision from a linked local session.
-4. Report unavailable sources or ranges from tool warnings. They remain unreviewed and are excluded from finished boundaries. For the available frozen snapshot, finish only after every page has been read and reviewed, every proposed change has been accepted or dismissed, and every accepted change has been applied and verified. A fully reviewed empty batch can finish. Then call `remembrancer_review` with `action: "finish"` and the same batch token. Finishing advances only successfully reviewed frozen boundaries; later appends remain eligible.
-5. Awaiting a user decision is not cancellation. Keep the batch open and do not finish while a proposal lacks a decision. If the user abandons or explicitly defers the review, or a write or evidence failure prevents completion, report the problem and call `action: "cancel"`. Cancellation releases the batch without advancing a checkpoint. A later review may return the same candidates.
+1. Begin the review with the requested `remembrancer_review` action. For `seed 14d`, add `seed: "14d"`. Read every returned page with `action: "next"` and the same batch token until no pages remain. Later changes are not part of the batch.
+2. If a selected item needs interpretation, call `action: "context"` with the same batch token and request only the needed context. Context supports interpretation, not new proposal evidence, and does not advance pages.
+3. Follow **Reconcile evidence** above. Report unavailable sources from warnings; they remain unreviewed but do not prevent finishing the available batch as a partial result. Unknown-time warnings are informational and do not by themselves make the review partial.
+4. After every available page is read, every proposal decided, and every accepted change applied and verified, call `remembrancer_review` with `action: "finish"` and the same batch token. An empty batch can finish. Do not finish while a proposal is undecided. If the user abandons the review, or a failure prevents resolving the available evidence or applying and verifying accepted changes, report it and call `action: "cancel"`. Later changes remain eligible.
 
 ## Historical evidence safety
 
