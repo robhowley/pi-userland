@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
-import { StringEnum, Type } from '@earendil-works/pi-ai';
+import { StringEnum } from '@earendil-works/pi-ai';
+import { Type } from 'typebox';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { CheckpointStore } from './checkpoints.js';
 import { loadRemembrancerConfig } from './config.js';

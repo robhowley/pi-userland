@@ -13,12 +13,12 @@ import {
   saveConfig,
   updateStatusIndicator,
 } from '../extensions/session-hygiene/helpers.ts';
-import type { AssistantMessage } from '@mariozechner/pi-ai';
+import type { AssistantMessage } from '@earendil-works/pi-ai';
 import type {
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
-} from '@mariozechner/pi-coding-agent';
+} from '@earendil-works/pi-coding-agent';
 import * as fs from 'node:fs';
 
 vi.mock('node:fs');

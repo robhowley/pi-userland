@@ -39,6 +39,13 @@ pi install git:github.com/robhowley/pi-userland
 
 ## Development
 
+Pi 1.x is a hard cutover in this repository:
+
+- Node.js `>=22.19.0`
+- `@earendil-works/pi-*` imports only, with no legacy compatibility aliases
+- Each actually imported `@earendil-works/pi-*` host package is a peer at `^1.4.0` and a dev validation dependency pinned to `1.4.0`
+- `typebox` is a peer at `^1.3.27` and a dev dependency pinned to `1.3.27` when schemas or TypeBox types are imported
+
 ### Setup
 
 ```bash
@@ -55,15 +62,15 @@ pnpm format:check
 
 ### Add a package
 
-```bash
-packages/<name>/
-```
+Use [the new-package skill](.agents/skills/new-package/SKILL.md) for the scaffold.
 
 Requirements:
 
 - independently publishable
 - narrow scope
 - minimal cross-package dependencies
+- declare every actually used Pi host dependency as a peer, never a runtime dependency
+- follow the Pi 1.x peer and dev validation versions above
 
 ### Add a private app or release builder
 

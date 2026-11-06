@@ -3,6 +3,9 @@
   "version": "0.14.5",
   "type": "module",
   "description": "Live OpenRouter spend/account TUI overlays, user-scoped or free-only model sync, api key management, and session tagging for Pi.",
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "license": "MIT",
   "files": [
     "extensions",
@@ -40,15 +43,14 @@
     "@openrouter/sdk": "^0.13.13"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*"
+    "@earendil-works/pi-ai": "^1.4.0",
+    "@earendil-works/pi-coding-agent": "^1.4.0",
+    "@earendil-works/pi-tui": "^1.4.0"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "0.84.4",
-    "@earendil-works/pi-coding-agent": "0.84.4",
-    "@earendil-works/pi-tui": "0.84.4",
-    "@mariozechner/pi-coding-agent": "*",
+    "@earendil-works/pi-ai": "1.4.0",
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@earendil-works/pi-tui": "1.4.0",
     "@types/node": "^22.15.17"
   }
 }

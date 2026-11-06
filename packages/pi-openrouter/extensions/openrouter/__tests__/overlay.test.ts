@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { UsageOverlayComponent } from '../overlay.js';
 import { createUsageSummary, createUsageAggregate } from './fixtures.js';
-import type { Theme } from '@mariozechner/pi-coding-agent';
+import type { Theme } from '@earendil-works/pi-coding-agent';
 
 /**
  * Minimal identity theme for testing.

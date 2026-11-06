@@ -186,7 +186,7 @@ describe('mapOpenRouterModel', () => {
     it('should include thinkingLevelMap when available from built-in registry', async () => {
       // This test documents the expected behavior when the model exists
       // in Pi's built-in registry. The actual lookup happens via dynamic import
-      // of @mariozechner/pi-ai or @earendil-works/pi-ai at runtime.
+      // of @earendil-works/pi-ai at runtime.
       const model = createValidModel({
         id: 'deepseek/deepseek-v4-pro',
         supported_parameters: ['reasoning'],

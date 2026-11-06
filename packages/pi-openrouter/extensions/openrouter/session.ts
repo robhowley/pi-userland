@@ -1,4 +1,4 @@
-import type { BeforeProviderRequestEvent } from '@mariozechner/pi-coding-agent';
+import type { BeforeProviderRequestEvent } from '@earendil-works/pi-coding-agent';
 
 // =============================================================================
 // Types & State

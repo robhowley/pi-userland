@@ -1,11 +1,11 @@
 import type { Dirent } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { visibleWidth, type KeyId } from '@mariozechner/pi-tui';
+import { visibleWidth, type KeyId } from '@earendil-works/pi-tui';
 import type { Theme } from '@earendil-works/pi-coding-agent';
 
-vi.mock('@mariozechner/pi-tui', async () => {
+vi.mock('@earendil-works/pi-tui', async () => {
   const actual =
-    await vi.importActual<typeof import('@mariozechner/pi-tui')>('@mariozechner/pi-tui');
+    await vi.importActual<typeof import('@earendil-works/pi-tui')>('@earendil-works/pi-tui');
   const visibleWidth = (value: string) => value.length;
   const truncateToWidth = (value: string, width: number) => value.slice(0, Math.max(0, width));
   const wrapTextWithAnsi = (value: string, width: number) => {

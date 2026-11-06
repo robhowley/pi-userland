@@ -39,6 +39,13 @@ docs: update package installation guide
 refactor: standardize package.json structure
 ```
 
+### Runtime and dependency policy
+
+- Run validation on Node.js `>=22.19.0`.
+- This repository targets Pi 1.x only. Use `@earendil-works/pi-*` imports, not legacy namespaces or compatibility aliases.
+- Declare each Pi host package the extension actually imports in `peerDependencies` with a `^1.4.0` range, and pin the same package to `1.4.0` in `devDependencies` for validation. Do not declare unused host packages or put host packages in `dependencies`.
+- If code imports `typebox` for schemas or types, declare `typebox` as a `^1.3.27` peer and pin `1.3.27` for development validation.
+
 ### Branch Protection
 
 PRs must follow this format to merge. The CI `pr-title-check` workflow enforces this.

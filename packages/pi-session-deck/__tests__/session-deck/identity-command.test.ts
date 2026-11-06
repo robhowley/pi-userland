@@ -1,9 +1,9 @@
-import type { KeyId } from '@mariozechner/pi-tui';
+import type { KeyId } from '@earendil-works/pi-tui';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@mariozechner/pi-tui', async () => {
+vi.mock('@earendil-works/pi-tui', async () => {
   const actual =
-    await vi.importActual<typeof import('@mariozechner/pi-tui')>('@mariozechner/pi-tui');
+    await vi.importActual<typeof import('@earendil-works/pi-tui')>('@earendil-works/pi-tui');
 
   return {
     ...actual,
