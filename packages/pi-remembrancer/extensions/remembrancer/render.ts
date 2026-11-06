@@ -67,6 +67,10 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
+function abbreviateSessionId(value: string): string {
+  return value.length > 8 ? `${value.slice(0, 8)}…` : value;
+}
+
 function actionValue(value: unknown): ReviewAction | undefined {
   return typeof value === 'string' && REVIEW_ACTIONS.includes(value as ReviewAction)
     ? (value as ReviewAction)
@@ -281,6 +285,39 @@ function appendBatchDetails(
   lines.push(`    requestedSince: ${sanitizeText(stringValue(details.requestedSince) ?? 'none')}`);
 }
 
+function appendArgumentLines(lines: string[], value: unknown, prefix = ''): void {
+  const object = record(value);
+  if (object && !Array.isArray(value)) {
+    const entries = Object.entries(object);
+    if (entries.length === 0) {
+      lines.push(indent(prefix ? `${prefix}: {}` : '{}', '    '));
+      return;
+    }
+    for (const [key, child] of entries) {
+      const path = prefix ? `${prefix}.${key}` : key;
+      if (record(child) && !Array.isArray(child)) appendArgumentLines(lines, child, path);
+      else {
+        const rendered = typeof child === 'string' ? child : String(child);
+        lines.push(indent(`${path}: ${rendered}`, '    '));
+      }
+    }
+    return;
+  }
+
+  lines.push(indent(`${prefix}: ${String(value)}`, '    '));
+}
+
+function appendArguments(
+  lines: string[],
+  args: unknown,
+  theme: Parameters<ReviewRenderResult>[2],
+): void {
+  if (!record(args)) return;
+  lines.push('');
+  lines.push(`  ${theme.bold('Arguments')}`);
+  appendArgumentLines(lines, args);
+}
+
 function expansionHint(context: RendererContext): string {
   const configured = (context as ContextWithKeyHint).keyHint;
   if (typeof configured === 'function') return configured('app.tools.expand', 'to expand');
@@ -299,31 +336,49 @@ function rawResultComponent(
 ): Text {
   const safe = sanitizeText(raw);
   const text = safe || 'No result content';
-  return new Text(
-    expanded ? text : `${text}\n${theme.fg('dim', sanitizeText(expansionHint(context)))}`,
-    0,
-    0,
-  );
+  if (!expanded)
+    return new Text(`${text}\n${theme.fg('dim', sanitizeText(expansionHint(context)))}`, 0, 0);
+
+  const lines = [text];
+  appendArguments(lines, context.args, theme);
+  return new Text(lines.join('\n'), 0, 0);
 }
 
 function errorComponent(
   action: ReviewAction,
   raw: string,
+  expanded: boolean,
+  args: unknown,
   theme: Parameters<ReviewRenderResult>[2],
 ): Text {
   const lines = [theme.fg('error', sanitizeText(`Could not ${action}`))];
   if (raw) lines.push(sanitizeText(raw));
+  if (expanded) appendArguments(lines, args, theme);
   return new Text(lines.join('\n'), 0, 0);
 }
 
 export const renderReviewCall: ReviewRenderCall = (args, theme) => {
   const input = record(args);
-  const action = actionValue(input?.['action']) ?? 'begin';
-  let title = theme.fg('toolTitle', theme.bold('Remembrancer'));
-  title += ` · ${sanitizeText(action)}`;
+  const parameters: string[] = [];
+  const action = stringValue(input?.['action']);
+  if (action !== undefined) parameters.push(`action=${sanitizeText(action)}`);
+
   const seed = stringValue(input?.['seed']);
-  if (seed !== undefined) title += ` · seed ${sanitizeText(seed)}`;
-  return new Text(title, 0, 0);
+  if (seed !== undefined) parameters.push(`seed=${sanitizeText(seed)}`);
+
+  if (action === 'context') {
+    const selected = record(input?.['selected']);
+    const sessionId = stringValue(selected?.['sessionId']);
+    if (sessionId !== undefined)
+      parameters.push(`selected.sessionId=${abbreviateSessionId(sanitizeText(sessionId))}`);
+  }
+
+  const parameterText = parameters.length > 0 ? `(${parameters.join(', ')})` : '';
+  return new Text(
+    `${theme.fg('toolTitle', theme.bold('remembrancer_review'))}${parameterText}`,
+    0,
+    0,
+  );
 };
 
 export const renderReviewResult: ReviewRenderResult = (result, options, theme, context) => {
@@ -333,7 +388,7 @@ export const renderReviewResult: ReviewRenderResult = (result, options, theme, c
 
   if (options.isPartial)
     return new Text(theme.fg('warning', sanitizeText(`Pending · ${action}`)), 0, 0);
-  if (context.isError) return errorComponent(action, raw, theme);
+  if (context.isError) return errorComponent(action, raw, options.expanded, context.args, theme);
   if (!details) return rawResultComponent(raw, options.expanded, theme, context);
 
   const payload = parsePayload(raw);
@@ -361,5 +416,6 @@ export const renderReviewResult: ReviewRenderResult = (result, options, theme, c
     lines.push('  Previously applied Taskwarrior changes were not undone.');
   }
   appendBatchDetails(lines, details, theme);
+  appendArguments(lines, context.args, theme);
   return new Text(lines.join('\n'), 0, 0);
 };
