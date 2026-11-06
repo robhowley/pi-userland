@@ -6,6 +6,13 @@ import { CheckpointStore } from './checkpoints.js';
 import { loadRemembrancerConfig } from './config.js';
 import { discoverSources } from './discovery.js';
 import {
+  renderReviewCall,
+  renderReviewResult,
+  type ReviewResultDetails,
+  type ReviewAction,
+} from './render.js';
+import { copyWarnings, warningMessages, type WarningRecord } from './warnings.js';
+import {
   branchEvidence,
   prepareReview,
   resolveSeedSince,
@@ -42,9 +49,10 @@ type Batch = {
   stagedSources: Source[];
   snapshots: SessionSnapshot[];
   evidence: Evidence[];
-  warnings: string[];
+  warnings: WarningRecord[];
   incomplete: boolean;
   coverageChanged: boolean;
+  seed?: string;
   requestedSince: string | null;
   index: number;
   offset: number;
@@ -235,10 +243,22 @@ export default function remembrancer(pi: ExtensionAPI) {
     db?.releaseReview();
   }
 
-  function result(data: object) {
+  function result(data: object, details: ReviewResultDetails) {
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(data) }],
-      details: {},
+      details,
+    };
+  }
+
+  function resultDetails(action: ReviewAction, current: Batch): ReviewResultDetails {
+    return {
+      action,
+      batch: current.token,
+      ...(current.seed === undefined ? {} : { seed: current.seed }),
+      ...(current.requestedSince === null ? {} : { requestedSince: current.requestedSince }),
+      incomplete: current.incomplete,
+      warnings: copyWarnings(current.warnings),
+      coverageChanged: current.coverageChanged,
     };
   }
 
@@ -318,7 +338,8 @@ export default function remembrancer(pi: ExtensionAPI) {
     const stagedSources = (discovery?.newSources ?? []).filter((source) =>
       successful.has(sourceKey(source)),
     );
-    const warnings = [...(discovery?.warnings ?? []), ...review.warnings];
+    const warningRecords = [...(discovery?.warnings ?? []), ...review.warnings];
+    const warnings = warningMessages(warningRecords);
     const incomplete = Boolean(discovery?.incomplete || review.incomplete);
     const coverageChanged = review.coverageChanged || stagedSources.length > 0;
 
@@ -330,9 +351,10 @@ export default function remembrancer(pi: ExtensionAPI) {
       stagedSources,
       snapshots: review.snapshots,
       evidence: review.evidence,
-      warnings,
+      warnings: warningRecords,
       incomplete,
       coverageChanged,
+      ...(args.seed === undefined ? {} : { seed: args.seed }),
       requestedSince,
       index: 0,
       offset: 0,
@@ -426,6 +448,8 @@ export default function remembrancer(pi: ExtensionAPI) {
       label: 'Remembrancer review',
       description:
         'Read incremental cross-session evidence or finish a fully resolved review. Follow the remembrancer skill. Read every page before finishing.',
+      renderCall: renderReviewCall,
+      renderResult: renderReviewResult,
       parameters: Type.Object({
         action: StringEnum(['begin', 'next', 'context', 'finish', 'cancel'] as const),
         batch: Type.Optional(
@@ -462,7 +486,8 @@ export default function remembrancer(pi: ExtensionAPI) {
           const requestedSince = args.seed === undefined ? null : resolveSeedSince(args.seed);
           store().claimReview();
           try {
-            return result(beginReview(args, ctx, requestedSince));
+            const response = beginReview(args, ctx, requestedSince);
+            return result(response, resultDetails('begin', batch!));
           } catch (error) {
             release();
             throw error;
@@ -471,11 +496,15 @@ export default function remembrancer(pi: ExtensionAPI) {
 
         if (!batch || args.batch !== batch.token)
           throw new Error('No matching open review in this Pi session.');
-        if (args.action === 'next') return result(page(batch));
-        if (args.action === 'context') return result(contextReview(args));
+        if (args.action === 'next') return result(page(batch), resultDetails('next', batch));
+        if (args.action === 'context') {
+          const response = contextReview(args);
+          return result(response, resultDetails('context', batch));
+        }
         if (args.action === 'cancel') {
+          const details = resultDetails('cancel', batch);
           release();
-          return result({ cancelled: true });
+          return result({ cancelled: true }, details);
         }
         if (args.action !== 'finish') throw new Error('Unknown remembrancer_review action');
         if (batch.index < batch.evidence.length)
@@ -488,12 +517,13 @@ export default function remembrancer(pi: ExtensionAPI) {
         });
         const reviewedTips = batch.tips.length;
         const finishedBatch = batch;
+        const details = resultDetails('finish', finishedBatch);
         release();
         const response: Record<string, unknown> = { finished: true, reviewedTips };
         if (finishedBatch.requestedSince !== null || finishedBatch.incomplete) {
           response['coverageChanged'] = finishedBatch.coverageChanged;
           response['incomplete'] = finishedBatch.incomplete;
-          response['warnings'] = finishedBatch.warnings;
+          response['warnings'] = warningMessages(finishedBatch.warnings);
           response['status'] = finishedBatch.incomplete
             ? 'partial'
             : finishedBatch.coverageChanged
@@ -502,7 +532,7 @@ export default function remembrancer(pi: ExtensionAPI) {
           if (finishedBatch.requestedSince !== null)
             response['requestedSince'] = finishedBatch.requestedSince;
         }
-        return result(response);
+        return result(response, details);
       },
     });
   }

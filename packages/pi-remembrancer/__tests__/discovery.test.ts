@@ -88,12 +88,24 @@ it('reports malformed archive entries, inaccessible roots, and duplicate identit
   const result = discoverSources(root, [], '2026-01-16T00:00:00.000Z');
   expect(result.sources).toEqual([{ ...valid, seedSince: '2026-01-16T00:00:00.000Z' }]);
   expect(result.incomplete).toBe(true);
-  expect(result.warnings.join('\n')).toMatch(/broken|duplicate/);
+  expect(result.warnings.map((warning) => warning.message).join('\n')).toMatch(/broken|duplicate/);
+  expect(
+    result.warnings.find((warning) => warning.sources.includes(join(root, 'broken.jsonl'))),
+  ).toMatchObject({
+    kind: 'source-failure',
+    sources: [join(root, 'broken.jsonl')],
+  });
 
   const missing = discoverSources(join(root, 'missing'), [], '2026-01-16T00:00:00.000Z');
   expect(missing.sources).toEqual([]);
   expect(missing.incomplete).toBe(true);
-  expect(missing.warnings.join('\n')).toMatch(/unable to enumerate/);
+  expect(missing.warnings.map((warning) => warning.message).join('\n')).toMatch(
+    /unable to enumerate/,
+  );
+  expect(missing.warnings[0]).toMatchObject({
+    kind: 'archive-scan',
+    sources: [join(root, 'missing')],
+  });
 });
 
 it('keeps conflicting enrolled identities on one path and completes the matching identity', () => {
@@ -116,7 +128,9 @@ it('keeps conflicting enrolled identities on one path and completes the matching
   ]);
   expect(result.newSources).toEqual([]);
   expect(result.incomplete).toBe(true);
-  expect(result.warnings.join('\n')).toContain('session header ID changed');
+  expect(result.warnings.map((warning) => warning.message).join('\n')).toContain(
+    'session header ID changed',
+  );
 });
 
 it('keeps an enrolled path when another archive file claims its session ID', () => {
@@ -137,7 +151,13 @@ it('keeps an enrolled path when another archive file claims its session ID', () 
   expect(result.newSources).toEqual([]);
   expect(result.snapshots).toEqual([]);
   expect(result.incomplete).toBe(true);
-  expect(result.warnings.join('\n')).toContain('multiple archive files');
+  expect(result.warnings.map((warning) => warning.message).join('\n')).toContain(
+    'multiple archive files',
+  );
+  expect(result.warnings[0]).toMatchObject({
+    kind: 'identity-ambiguity',
+    sources: [enrolledFile, otherFile],
+  });
 });
 
 function readFile(file: string): string {
