@@ -2,7 +2,7 @@ import type {
   BeforeProviderRequestEvent,
   ExtensionAPI,
   ExtensionContext,
-} from '@mariozechner/pi-coding-agent';
+} from '@earendil-works/pi-coding-agent';
 import { stopBackgroundRefresh } from './cache.js';
 import { isOpenRouterRequest } from './session.js';
 import { createSessionState, type SessionState } from './session-state.js';

@@ -2,6 +2,9 @@
   "name": "@robhowley/pi-merge-ready",
   "version": "0.17.0",
   "description": "See if your pull request is ready, what’s blocking it, and let Pi fix what it can.",
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -52,10 +55,12 @@
     "test": "vitest run __tests__"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-ai": "^1.4.0",
+    "@earendil-works/pi-coding-agent": "^1.4.0"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "1.4.0",
+    "@earendil-works/pi-coding-agent": "1.4.0",
     "@types/node": "^22.15.17"
   }
 }

@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { ExtensionContext, ModelRegistry } from '@mariozechner/pi-coding-agent';
+import type { ExtensionContext, ModelRegistry } from '@earendil-works/pi-coding-agent';
 import type { CatalogMode, PiModelConfig, SkipReason, SyncResult } from '../types.js';
 import { ROUTER_ALIASES } from '../types.js';
 import { createPiModelConfig, createValidModel } from '../../__tests__/fixtures.js';
@@ -61,10 +61,13 @@ function createMockExtensionContext(
       registerProvider: overrides.registerProvider ?? mockFn(),
     } as unknown as ModelRegistry,
     ui: createMockUI(),
+    mode: 'tui',
     hasUI: true,
     cwd: '/tmp',
     sessionManager: createMockSessionManager(),
     model: undefined,
+    scopedModels: [],
+    isProjectTrusted: () => true,
     isIdle: () => true,
     signal: undefined,
     abort: mockFn(),
@@ -84,8 +87,10 @@ function createMockUI(): ExtensionContext['ui'] {
     input: mockFn(),
     notify: mockFn(),
     onTerminalInput: mockFn(),
+    addAutocompleteProvider: mockFn(),
     setStatus: mockFn(),
     setWorkingMessage: mockFn(),
+    setWorkingVisible: mockFn(),
     setWorkingIndicator: mockFn(),
     setHiddenThinkingLabel: mockFn(),
     setWidget: mockFn(),
@@ -98,6 +103,7 @@ function createMockUI(): ExtensionContext['ui'] {
     getEditorText: mockFn(),
     editor: mockFn(),
     setEditorComponent: mockFn(),
+    getEditorComponent: mockFn(),
     theme: {} as any,
     getAllThemes: mockFn(),
     getTheme: mockFn(),

@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { Api, Model } from '@earendil-works/pi-ai';
+import type { Api, Model, ProviderHeaders } from '@earendil-works/pi-ai';
 import type { ModelRegistry } from '@earendil-works/pi-coding-agent';
 import type { MergeReadyWatchUiPaths } from './supervisor-state.js';
 
@@ -381,14 +381,20 @@ function sortJsonValue(value: unknown): unknown {
 }
 
 function normalizeHeaders(
-  headers: Record<string, string> | undefined,
+  headers: ProviderHeaders | undefined,
 ): Record<string, string> | undefined {
   if (!headers) {
     return undefined;
   }
 
-  const entries = Object.entries(headers);
-  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+  const normalized: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    if (value !== null) {
+      normalized[name] = value;
+    }
+  }
+
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
 function asRecord(value: unknown, message: string): Record<string, unknown> {

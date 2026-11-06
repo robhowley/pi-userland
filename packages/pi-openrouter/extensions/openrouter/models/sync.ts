@@ -8,7 +8,7 @@ import { sdkModelToOpenRouterModel } from '../normalizers.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import type { ExtensionContext } from '@mariozechner/pi-coding-agent';
+import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { loadCache, saveCache } from './cache.js';
 import { mapOpenRouterModels } from './mapper.js';
 import { ROUTER_DEFINITIONS } from './types.js';

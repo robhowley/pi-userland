@@ -2,9 +2,8 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { realpath, stat } from 'node:fs/promises';
 import {
-  AuthStorage,
   DefaultResourceLoader,
-  ModelRegistry,
+  ModelRuntime,
   SessionManager,
   createAgentSession,
   createEventBus,
@@ -67,17 +66,15 @@ export type MergeReadyWatchResourceLoaderLike = {
 };
 
 type MergeReadyWatchSessionRuntimeConfig = {
-  authStorage: AuthStorage;
   model: MergeReadyWatchUiRuntimeSnapshot['model'];
-  modelRegistry: ModelRegistry;
+  modelRuntime: ModelRuntime;
   thinkingLevel: MergeReadyWatchUiRuntimeSnapshot['thinkingLevel'];
 };
 
 export type MergeReadyWatchSessionRunnerDependencies = {
   agentDir?: string;
-  createAuthStorage?: (authStoragePath: string) => AuthStorage;
   createEventBus?: typeof createEventBus;
-  createModelRegistry?: (authStorage: AuthStorage, modelRegistryPath: string) => ModelRegistry;
+  createModelRuntime?: (authPath: string, modelsPath: string) => Promise<ModelRuntime>;
   createResourceLoader?: (options: {
     cwd: string;
     agentDir: string;
@@ -86,11 +83,10 @@ export type MergeReadyWatchSessionRunnerDependencies = {
     skillPath: string;
   }) => MergeReadyWatchResourceLoaderLike;
   createSession?: (options: {
-    authStorage?: AuthStorage;
     cwd: string;
     agentDir: string;
     model?: MergeReadyWatchUiRuntimeSnapshot['model'];
-    modelRegistry?: ModelRegistry;
+    modelRuntime?: ModelRuntime;
     resourceLoader: MergeReadyWatchResourceLoaderLike;
     sessionManager: SessionManager;
     thinkingLevel?: MergeReadyWatchUiRuntimeSnapshot['thinkingLevel'];
@@ -140,11 +136,8 @@ type MergeReadyWatchStartResultHookPayload = {
 
 export class MergeReadyWatchSessionRunner {
   private readonly agentDir: string;
-  private readonly createAuthStorage: NonNullable<
-    MergeReadyWatchSessionRunnerDependencies['createAuthStorage']
-  >;
-  private readonly createModelRegistry: NonNullable<
-    MergeReadyWatchSessionRunnerDependencies['createModelRegistry']
+  private readonly createModelRuntime: NonNullable<
+    MergeReadyWatchSessionRunnerDependencies['createModelRuntime']
   >;
   private readonly createResourceLoader: NonNullable<
     MergeReadyWatchSessionRunnerDependencies['createResourceLoader']
@@ -177,8 +170,10 @@ export class MergeReadyWatchSessionRunner {
     this.agentDir = path.resolve(
       options.runtimeSnapshot?.agentDir ?? dependencies.agentDir ?? getAgentDir(),
     );
-    this.createAuthStorage = dependencies.createAuthStorage ?? AuthStorage.create;
-    this.createModelRegistry = dependencies.createModelRegistry ?? ModelRegistry.create;
+    this.createModelRuntime =
+      dependencies.createModelRuntime ??
+      ((authPath, modelsPath) =>
+        ModelRuntime.create({ authPath, modelsPath, refreshOnCreate: false }));
     this.createResourceLoader =
       dependencies.createResourceLoader ?? createDefaultMergeReadyWatchResourceLoader;
     this.createSession = dependencies.createSession ?? createDefaultMergeReadyWatchSession;
@@ -249,7 +244,7 @@ export class MergeReadyWatchSessionRunner {
     await resourceLoader.reload();
 
     const sessionManager = this.createSessionManager(cwd);
-    const sessionRuntime = this.createWatchSessionRuntime();
+    const sessionRuntime = await this.createWatchSessionRuntime();
     let session: MergeReadyWatchSessionLike;
     try {
       ({ session } = await this.createSession({
@@ -587,7 +582,9 @@ export class MergeReadyWatchSessionRunner {
     };
   }
 
-  private createWatchSessionRuntime(): MergeReadyWatchSessionRuntimeConfig | undefined {
+  private async createWatchSessionRuntime(): Promise<
+    MergeReadyWatchSessionRuntimeConfig | undefined
+  > {
     const snapshot = this.runtimeSnapshot;
     if (!snapshot) {
       return undefined;
@@ -596,46 +593,38 @@ export class MergeReadyWatchSessionRunner {
     assertMergeReadyWatchUiRuntimeSnapshot(snapshot);
     const runtimePaths = getMergeReadyWatchUiRuntimePaths(this.agentDir);
 
-    let authStorage: AuthStorage;
+    let modelRuntime: ModelRuntime;
     try {
-      authStorage = this.createAuthStorage(runtimePaths.authStoragePath);
+      modelRuntime = await this.createModelRuntime(
+        runtimePaths.authStoragePath,
+        runtimePaths.modelRegistryPath,
+      );
     } catch (error) {
       throw new MergeReadyWatchUiRuntimePreflightError(
-        `failed to load auth storage from ${runtimePaths.authStoragePath}: ${getErrorMessage(error)}`,
-      );
-    }
-
-    const authStorageErrors = authStorage.drainErrors();
-    if (authStorageErrors.length > 0) {
-      throw new MergeReadyWatchUiRuntimePreflightError(
-        `failed to load auth storage from ${runtimePaths.authStoragePath}: ${authStorageErrors.map((error) => error.message).join('; ')}`,
+        `failed to load model runtime from ${runtimePaths.authStoragePath} and ${runtimePaths.modelRegistryPath}: ${getErrorMessage(error)}`,
       );
     }
 
     if (snapshot.auth.apiKey) {
-      authStorage.setRuntimeApiKey(snapshot.auth.provider, snapshot.auth.apiKey);
+      try {
+        await modelRuntime.setRuntimeApiKey(snapshot.auth.provider, snapshot.auth.apiKey);
+      } catch (error) {
+        throw new MergeReadyWatchUiRuntimePreflightError(
+          `failed to apply runtime auth for ${snapshot.auth.provider}: ${getErrorMessage(error)}`,
+        );
+      }
     }
 
-    let modelRegistry: ModelRegistry;
-    try {
-      modelRegistry = this.createModelRegistry(authStorage, runtimePaths.modelRegistryPath);
-    } catch (error) {
+    const modelRuntimeError = modelRuntime.getError();
+    if (modelRuntimeError) {
       throw new MergeReadyWatchUiRuntimePreflightError(
-        `failed to load model registry from ${runtimePaths.modelRegistryPath}: ${getErrorMessage(error)}`,
-      );
-    }
-
-    const modelRegistryError = modelRegistry.getError();
-    if (modelRegistryError) {
-      throw new MergeReadyWatchUiRuntimePreflightError(
-        `failed to load model registry from ${runtimePaths.modelRegistryPath}: ${modelRegistryError}`,
+        `failed to load model runtime from ${runtimePaths.modelRegistryPath}: ${modelRuntimeError}`,
       );
     }
 
     return {
-      authStorage,
       model: createMergeReadyWatchUiSnapshotModel(snapshot),
-      modelRegistry,
+      modelRuntime,
       thinkingLevel: snapshot.thinkingLevel,
     };
   }
@@ -720,21 +709,19 @@ function createDefaultMergeReadyWatchResourceLoader(options: {
 }
 
 async function createDefaultMergeReadyWatchSession(options: {
-  authStorage?: AuthStorage;
   cwd: string;
   agentDir: string;
   model?: MergeReadyWatchUiRuntimeSnapshot['model'];
-  modelRegistry?: ModelRegistry;
+  modelRuntime?: ModelRuntime;
   resourceLoader: MergeReadyWatchResourceLoaderLike;
   sessionManager: SessionManager;
   thinkingLevel?: MergeReadyWatchUiRuntimeSnapshot['thinkingLevel'];
 }): Promise<{ session: MergeReadyWatchSessionLike }> {
   const { session } = await createAgentSession({
-    ...(options.authStorage === undefined ? {} : { authStorage: options.authStorage }),
     cwd: options.cwd,
     agentDir: options.agentDir,
     ...(options.model === undefined ? {} : { model: options.model }),
-    ...(options.modelRegistry === undefined ? {} : { modelRegistry: options.modelRegistry }),
+    ...(options.modelRuntime === undefined ? {} : { modelRuntime: options.modelRuntime }),
     resourceLoader: options.resourceLoader as never,
     sessionManager: options.sessionManager,
     ...(options.thinkingLevel === undefined ? {} : { thinkingLevel: options.thinkingLevel }),

@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "type": "module",
   "description": "The full Pi session lifecycle in one place: create and organize sessions across repos and worktrees, see what each agent is doing or waiting on, and reopen or end them from a TUI or iTerm2 Toolbelt.",
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "files": [
     "dist",
     "extensions",
@@ -51,11 +54,14 @@
   },
   "license": "MIT",
   "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
-    "@mariozechner/pi-tui": "*"
+    "@earendil-works/pi-ai": "^1.4.0",
+    "@earendil-works/pi-coding-agent": "^1.4.0",
+    "@earendil-works/pi-tui": "^1.4.0"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "1.4.0",
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@earendil-works/pi-tui": "1.4.0",
     "@types/node": "^22.15.17"
   }
 }

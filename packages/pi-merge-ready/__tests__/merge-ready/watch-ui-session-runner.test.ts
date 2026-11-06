@@ -2,8 +2,7 @@ import { mkdir, mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises'
 import os from 'node:os';
 import path from 'node:path';
 import {
-  AuthStorage,
-  ModelRegistry,
+  ModelRuntime,
   SessionManager,
   createEventBus,
 } from '@earendil-works/pi-coding-agent';
@@ -459,7 +458,7 @@ describe('merge-ready watch UI session runner', () => {
     const expectedSnapshotDefaultCwd = await realpath(snapshotDefaultCwd);
     const paths = getMergeReadyWatchUiPaths(agentDir);
     const promptDeferred = createDeferred<void>();
-    const authStorage = AuthStorage.inMemory();
+    const modelRuntime = await ModelRuntime.create({ refreshOnCreate: false });
     let authStoragePath: string | undefined;
     let modelRegistryPath: string | undefined;
 
@@ -488,14 +487,10 @@ describe('merge-ready watch UI session runner', () => {
       skillPath: '/pkg/skills/merge-ready-loop/SKILL.md',
       dependencies: {
         agentDir: '/tmp/wrong-agent-dir',
-        createAuthStorage: vi.fn((receivedAuthStoragePath) => {
+        createModelRuntime: vi.fn(async (receivedAuthStoragePath, receivedModelRegistryPath) => {
           authStoragePath = receivedAuthStoragePath;
-          return authStorage;
-        }),
-        createModelRegistry: vi.fn((receivedAuthStorage, receivedModelRegistryPath) => {
-          expect(receivedAuthStorage).toBe(authStorage);
           modelRegistryPath = receivedModelRegistryPath;
-          return ModelRegistry.inMemory(receivedAuthStorage);
+          return modelRuntime;
         }),
         createResourceLoader,
         createSession,
@@ -515,7 +510,7 @@ describe('merge-ready watch UI session runner', () => {
     expect(createSession).toHaveBeenCalledWith(
       expect.objectContaining({
         agentDir,
-        authStorage,
+        modelRuntime,
         model: expect.objectContaining({
           provider: 'anthropic',
           id: BASE_MODEL.id,

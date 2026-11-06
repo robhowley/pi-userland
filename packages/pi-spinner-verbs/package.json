@@ -3,6 +3,9 @@
   "version": "3.7.0",
   "type": "module",
   "description": "Themed thinking text for Pi: built-in spinner verb packs, random per-session themes, and custom verb files.",
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "license": "MIT",
   "files": [
     "extensions",
@@ -39,9 +42,10 @@
     "test": "vitest run __tests__"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "^1.4.0"
   },
   "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.4.0",
     "@types/node": "^22.15.17"
   }
 }

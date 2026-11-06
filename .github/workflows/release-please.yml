@@ -43,13 +43,13 @@ jobs:
       - uses: actions/setup-node@v4
         if: steps.release.outputs.releases_created == 'true'
         with:
-          node-version: '22.14'
+          node-version: '22.19'
           cache: 'pnpm'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Install npm 11
         if: steps.release.outputs.releases_created == 'true'
-        # npm trusted publishing requires npm 11.5.1+ on Node 22.14+.
+        # npm trusted publishing requires npm 11.5.1+ on Node 22.19+.
         run: npm install -g npm@11
 
       - name: Install dependencies
@@ -98,7 +98,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '22.14'
+          node-version: '22.19'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Install npm 11

@@ -1,10 +1,11 @@
 ---
 name: new-package
 description: |
-  Create a new Pi package in the pi-userland monorepo. Use this skill whenever the user mentions adding, scaffolding,
-  or creating a new package, extension, or module — even if they don't explicitly say 'new package.' Also trigger when
-  the user discusses pi-userland, monorepo setup, or needs boilerplate for a Pi extension. Always ask for confirmation
-  before running commands.
+  Create a new Pi package in the pi-userland monorepo using the Pi 1.x hard-cutover
+  dependency and Node.js policy. Use this skill whenever the user mentions adding,
+  scaffolding, or creating a new package, extension, or module — even if they don't
+  explicitly say 'new package.' Also trigger for pi-userland monorepo setup or
+  extension boilerplate. Always ask for confirmation before running commands.
 ---
 
 # Pi userland new package scaffolding
@@ -42,6 +43,15 @@ packages/<name>/
 ```
 
 Where `<basename>` is `<name>` without the `pi-` prefix (e.g., `session-hygiene` for package `pi-session-hygiene`).
+
+## Pi 1.x dependency policy
+
+- Target Node.js `>=22.19.0`.
+- Use only `@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`, `@earendil-works/pi-coding-agent`, and `@earendil-works/pi-tui` imports. This is a hard cutover: do not add legacy namespace imports, compatibility aliases, or fallback imports.
+- Pi provides the listed Pi packages and `typebox` at runtime. Declare every host package the extension actually imports in `peerDependencies`, declare no unused host package, and never put a host package in `dependencies`.
+- Use `^1.4.0` peer ranges for `@earendil-works/pi-*` packages. Pin the same packages to `1.4.0` in `devDependencies` so local validation uses the cutover baseline.
+- If the extension imports `typebox` for schemas or types, add `typebox: "^1.3.27"` to `peerDependencies` and `typebox: "1.3.27"` to `devDependencies`. Import TypeBox from `typebox`, not from `pi-ai`.
+- Put other libraries used at runtime in `dependencies`.
 
 ## Commands to run
 
@@ -89,11 +99,14 @@ mkdir -p packages/$NAME/__tests__
     "test": "vitest run __tests__"
   },
   "license": "MIT",
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "^1.4.0"
   },
   "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.4.0",
     "@types/node": "^22.15.17"
   }
 }
@@ -102,7 +115,7 @@ mkdir -p packages/$NAME/__tests__
 ## Extension template (extensions/<basename>/index.ts)
 
 ```typescript
-import type { ExtensionAPI, ExtensionContext } from '@mariozechner/pi-coding-agent';
+import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 
 export default function (pi: ExtensionAPI) {
   pi.on('session_start', async (_event, ctx) => {
@@ -118,6 +131,10 @@ export default function (pi: ExtensionAPI) {
 
 Brief description of what this package does.
 
+## Requirements
+
+- Pi 1.x and Node.js `>=22.19.0`.
+
 ## Installation
 
 ```shell
@@ -132,7 +149,8 @@ pi install npm:@robhowley/<name>
 **Process:**
 1. Package name: `pi-session-hygiene` ✓ (follows `pi-*` pattern)
 2. Basename: `session-hygiene`
-3. Run scaffolding commands with `$NAME=pi-session-hygiene`, `$BASENAME=session-hygiene`
+3. Inspect the extension imports and declare only the host packages it actually uses as peers.
+4. Run scaffolding commands with `$NAME=pi-session-hygiene`, `$BASENAME=session-hygiene`
 
 **Resulting structure:**
 ```
@@ -157,4 +175,6 @@ After creating the package:
 - Package must be independently publishable
 - Narrow scope
 - Minimal cross-package dependencies
+- Declare actually used Pi host dependencies as peers, with exact `1.4.0` dev pins
+- Add the `typebox` peer only when the package imports it for schemas or types, using the `^1.3.27` peer and `1.3.27` dev baseline
 - Uses `@robhowley/` npm scope

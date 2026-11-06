@@ -1,5 +1,5 @@
-import type { ExtensionAPI } from '@mariozechner/pi-coding-agent';
-import { isToolCallEventType } from '@mariozechner/pi-coding-agent';
+import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { isToolCallEventType } from '@earendil-works/pi-coding-agent';
 import { evaluate, RuleSeverity } from './evaluate.js';
 import { logDecision } from './logger.js';
 import { loadConfig } from './config.js';
