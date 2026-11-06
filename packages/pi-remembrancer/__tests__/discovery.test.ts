@@ -96,6 +96,29 @@ it('reports malformed archive entries, inaccessible roots, and duplicate identit
   expect(missing.warnings.join('\n')).toMatch(/unable to enumerate/);
 });
 
+it('keeps conflicting enrolled identities on one path and completes the matching identity', () => {
+  const root = mkdtempSync(join(tmpdir(), 'remembrancer-discovery-same-path-'));
+  roots.push(root);
+  const file = join(root, 'session.jsonl');
+  const matching = session(file, 'matching');
+  const conflicting = { file, sessionId: 'conflicting', seedSince: null };
+
+  const result = discoverSources(
+    root,
+    [{ ...matching, seedSince: null }, conflicting],
+    '2026-01-16T00:00:00.000Z',
+  );
+
+  expect(result.sources).toEqual([{ ...matching, seedSince: null }, conflicting]);
+  expect(result.snapshots.map((snapshot) => snapshot.source.sessionId)).toEqual([
+    'matching',
+    'conflicting',
+  ]);
+  expect(result.newSources).toEqual([]);
+  expect(result.incomplete).toBe(true);
+  expect(result.warnings.join('\n')).toContain('session header ID changed');
+});
+
 it('keeps an enrolled path when another archive file claims its session ID', () => {
   const root = mkdtempSync(join(tmpdir(), 'remembrancer-discovery-collision-'));
   roots.push(root);
