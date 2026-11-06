@@ -258,6 +258,7 @@ export default function remembrancer(pi: ExtensionAPI) {
       ...(current.requestedSince === null ? {} : { requestedSince: current.requestedSince }),
       incomplete: current.incomplete,
       warnings: copyWarnings(current.warnings),
+      coverageChanged: current.coverageChanged,
     };
   }
 

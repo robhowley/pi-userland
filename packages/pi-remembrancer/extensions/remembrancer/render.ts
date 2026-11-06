@@ -12,6 +12,7 @@ export type ReviewResultDetails = {
   requestedSince?: string;
   incomplete: boolean;
   warnings: WarningRecord[];
+  coverageChanged: boolean;
 };
 
 type ReviewToolDefinition = ToolDefinition<TSchema, ReviewResultDetails>;
@@ -107,6 +108,10 @@ function formatCount(count: number, singular: string, plural = `${singular}s`): 
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
+function countValue(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
 function entryCount(payload: ResultPayload): number {
   return Array.isArray(payload['entries']) ? payload['entries'].length : 0;
 }
@@ -121,7 +126,7 @@ function compactSummary(payload: ResultPayload, details: ReviewResultDetails): s
   switch (details.action) {
     case 'begin': {
       if (entries > 0)
-        return `${formatCount(entries, 'excerpt')} · ${payload['capturedTips'] ?? 0} branch tips · ${hasMore(payload) ? 'more evidence' : 'last evidence page'}`;
+        return `${formatCount(entries, 'excerpt')} · ${formatCount(countValue(payload['capturedTips']), 'branch tip')} · ${hasMore(payload) ? 'more evidence' : 'last evidence page'}`;
       if (payload['coverageChanged'] === true || payload['status'] === 'coverage-pending')
         return 'No new evidence · new coverage to save';
       if (details.incomplete || payload['status'] === 'incomplete')
@@ -136,14 +141,19 @@ function compactSummary(payload: ResultPayload, details: ReviewResultDetails): s
       if (entries === 0) return 'No preceding context';
       return `${formatCount(entries, 'prior excerpt')} · context only · ${payload['nextOffset'] === null ? 'end of context' : 'more context'}`;
     case 'finish': {
-      const tips = payload['reviewedTips'] ?? 0;
+      const tips = countValue(payload['reviewedTips']);
       if (details.incomplete || payload['status'] === 'partial')
-        return `Finished available sources · ${tips} branch tips recorded`;
-      if (payload['status'] === 'coverage-finished' || payload['coverageChanged'] === true)
-        return `Finished · coverage saved · ${tips} branch tips`;
+        return `Finished available sources · ${formatCount(tips, 'branch tip')} recorded`;
       if (payload['status'] === 'already-covered' || payload['coverageChanged'] === false)
         return 'Finished · no coverage changes';
-      return `Finished · ${tips} branch tips recorded`;
+      if (
+        payload['status'] === 'coverage-finished' ||
+        payload['coverageChanged'] === true ||
+        (details.coverageChanged && tips === 0)
+      )
+        return `Finished · coverage saved · ${formatCount(tips, 'branch tip')}`;
+      if (details.coverageChanged === false) return 'Finished · no coverage changes';
+      return `Finished · ${formatCount(tips, 'branch tip')} recorded`;
     }
     case 'cancel':
       return 'Cancelled · review progress not saved';

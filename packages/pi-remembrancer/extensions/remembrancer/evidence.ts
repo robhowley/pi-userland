@@ -495,7 +495,12 @@ export function prepareReview(
         const reason = 'Session header ID changed';
         incomplete = true;
         warnings.push(
-          createWarning(`${source.file}: ${reason}`, [source.file], reason, 'identity-ambiguity'),
+          createWarning(
+            `${source.file}: Error: ${reason}`,
+            [source.file],
+            reason,
+            'identity-ambiguity',
+          ),
         );
         continue;
       }

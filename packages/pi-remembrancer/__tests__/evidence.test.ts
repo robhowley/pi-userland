@@ -70,8 +70,8 @@ it('processes same-path identities independently while charging the path once', 
   expect(review.successfulSources).toEqual([{ ...source, seedSince: null }]);
   expect(review.incomplete).toBe(true);
   expect(review.warnings).toHaveLength(1);
-  expect(review.warnings[0]).toMatchObject({
-    message: expect.stringContaining('Session header ID changed'),
+  expect(review.warnings[0]).toEqual({
+    message: `${source.file}: Error: Session header ID changed`,
     kind: 'identity-ambiguity',
     sources: [source.file],
     reason: 'Session header ID changed',

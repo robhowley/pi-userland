@@ -11,7 +11,12 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  ToolDefinition,
+} from '@earendil-works/pi-coding-agent';
+import { stripTerminalSequences } from '@earendil-works/pi-tui';
 import { expect, it, vi } from 'vitest';
 import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
 import remembrancer from '../extensions/remembrancer/index.js';
@@ -23,6 +28,9 @@ vi.mock('node:fs', async (original) => {
 });
 
 type Handler = (...args: unknown[]) => unknown;
+type ResultRenderer = NonNullable<ToolDefinition['renderResult']>;
+type ResultRendererOptions = Parameters<ResultRenderer>[1];
+type ResultRendererContext = Parameters<ResultRenderer>[3];
 type Selected = {
   sessionId: string;
   branchId: string;
@@ -46,6 +54,7 @@ type TestTool = {
     update: unknown,
     ctx: ExtensionContext,
   ) => Promise<unknown>;
+  renderResult?: ToolDefinition['renderResult'];
 };
 type ResultWarning = {
   message: string;
@@ -60,6 +69,7 @@ type ResultDetails = {
   requestedSince?: string;
   incomplete: boolean;
   warnings: ResultWarning[];
+  coverageChanged: boolean;
 };
 type ToolResponse = { content: [{ type: 'text'; text: string }]; details: ResultDetails };
 type ReviewResult = {
@@ -123,6 +133,40 @@ function fakeExtension(): FakeExtension {
 function decode(response: unknown): ReviewResult {
   const text = (response as ToolResponse).content[0].text;
   return JSON.parse(text) as ReviewResult;
+}
+
+const identityTheme = {
+  fg: (_color: string, text: string) => text,
+  bold: (text: string) => text,
+} as unknown as Parameters<ResultRenderer>[2];
+
+function renderSummary(tool: TestTool, response: unknown, action: ResultDetails['action']): string {
+  const renderer = tool.renderResult;
+  if (!renderer) throw new Error('Remembrancer renderer was not registered');
+  const component = renderer(
+    response as Parameters<ResultRenderer>[0],
+    { expanded: false, isPartial: false } as ResultRendererOptions,
+    identityTheme,
+    {
+      args: { action },
+      toolCallId: 'render-call',
+      invalidate: vi.fn(),
+      lastComponent: undefined,
+      state: {},
+      cwd: '/work',
+      executionStarted: true,
+      argsComplete: true,
+      isPartial: false,
+      expanded: false,
+      showImages: true,
+      isError: false,
+      keyHint: () => 'ctrl+o to expand',
+    } as ResultRendererContext,
+  );
+  return component
+    .render(120)
+    .map((line) => stripTerminalSequences(line).trimEnd())
+    .join('\n');
 }
 
 function contextFor(
@@ -964,6 +1008,7 @@ it('keeps structured warnings in frozen details across every successful action w
       batch: begin.batch,
       incomplete: false,
       warnings: [warning],
+      coverageChanged: true,
     });
 
     const nextResponse = await tool.execute(
@@ -980,6 +1025,7 @@ it('keeps structured warnings in frozen details across every successful action w
       batch: begin.batch,
       incomplete: false,
       warnings: [warning],
+      coverageChanged: true,
     });
 
     const selected = {
@@ -1006,6 +1052,7 @@ it('keeps structured warnings in frozen details across every successful action w
       batch: begin.batch,
       incomplete: false,
       warnings: [warning],
+      coverageChanged: true,
     });
 
     const finishResponse = await tool.execute(
@@ -1024,6 +1071,7 @@ it('keeps structured warnings in frozen details across every successful action w
       batch: begin.batch,
       incomplete: false,
       warnings: [warning],
+      coverageChanged: true,
     });
 
     const secondResponse = await tool.execute(
@@ -1048,6 +1096,7 @@ it('keeps structured warnings in frozen details across every successful action w
       batch: second.batch,
       incomplete: false,
       warnings: [warning],
+      coverageChanged: false,
     });
 
     const thirdResponse = await tool.execute(
@@ -1073,7 +1122,183 @@ it('keeps structured warnings in frozen details across every successful action w
       batch: third.batch,
       incomplete: false,
       warnings: [warning],
+      coverageChanged: false,
     });
+  } finally {
+    await shutdown({}, context);
+    if (previousAgentDir === undefined) delete process.env['PI_CODING_AGENT_DIR'];
+    else process.env['PI_CODING_AGENT_DIR'] = previousAgentDir;
+    if (previousState === undefined) delete process.env['XDG_STATE_HOME'];
+    else process.env['XDG_STATE_HOME'] = previousState;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it('renders registered execute results with coverage and branch-tip states', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'remembrancer-extension-render-integration-'));
+  const archive = join(dir, 'archive');
+  const previousAgentDir = process.env['PI_CODING_AGENT_DIR'];
+  const previousState = process.env['XDG_STATE_HOME'];
+  mkdirSync(archive, { recursive: true });
+  process.env['PI_CODING_AGENT_DIR'] = join(dir, 'agent');
+  process.env['XDG_STATE_HOME'] = join(dir, 'state');
+  const recent = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const writeSession = (file: string, id: string, messageId: string, text: string) =>
+    writeFileSync(
+      file,
+      [
+        JSON.stringify({ type: 'session', id, cwd: dir }),
+        JSON.stringify({
+          type: 'message',
+          id: messageId,
+          parentId: null,
+          timestamp: recent,
+          message: { role: 'user', content: text },
+        }),
+        '',
+      ].join('\n'),
+    );
+  const writeEmptySession = (file: string, id: string) =>
+    writeFileSync(file, [JSON.stringify({ type: 'session', id, cwd: dir }), ''].join('\n'));
+  const current = join(archive, 'ordinary.jsonl');
+  writeSession(current, 'session', 'ordinary', 'ordinary evidence');
+
+  const extension = fakeExtension();
+  remembrancer(extension.api);
+  const context = contextFor(dir, current, archive);
+  const start = extension.handlers.get('session_start');
+  const shutdown = extension.handlers.get('session_shutdown');
+  if (!start || !shutdown) throw new Error('Extension did not register its runtime contract');
+
+  try {
+    await start({}, context);
+    const tool = extension.tools[0];
+    if (!tool) throw new Error('Extension did not register the review tool');
+
+    const ordinaryBeginResponse = await tool.execute(
+      'render-ordinary-begin',
+      { action: 'begin' },
+      undefined,
+      undefined,
+      context,
+    );
+    const ordinaryBegin = decode(ordinaryBeginResponse);
+    const ordinaryFinishResponse = await tool.execute(
+      'render-ordinary-finish',
+      { action: 'finish', batch: ordinaryBegin.batch },
+      undefined,
+      undefined,
+      context,
+    );
+    expect(decode(ordinaryFinishResponse)).toEqual({ finished: true, reviewedTips: 1 });
+    expect((ordinaryFinishResponse as ToolResponse).details.coverageChanged).toBe(true);
+    expect(renderSummary(tool, ordinaryFinishResponse, 'finish')).toContain(
+      'Finished · 1 branch tip recorded',
+    );
+
+    const alreadyCoveredBeginResponse = await tool.execute(
+      'render-already-covered-begin',
+      { action: 'begin' },
+      undefined,
+      undefined,
+      context,
+    );
+    const alreadyCoveredBegin = decode(alreadyCoveredBeginResponse);
+    const alreadyCoveredFinishResponse = await tool.execute(
+      'render-already-covered-finish',
+      { action: 'finish', batch: alreadyCoveredBegin.batch },
+      undefined,
+      undefined,
+      context,
+    );
+    expect(decode(alreadyCoveredFinishResponse)).toEqual({ finished: true, reviewedTips: 0 });
+    expect((alreadyCoveredFinishResponse as ToolResponse).details.coverageChanged).toBe(false);
+    const alreadyCoveredSummary = renderSummary(tool, alreadyCoveredFinishResponse, 'finish');
+    expect(alreadyCoveredSummary).toContain('Finished · no coverage changes');
+    expect(alreadyCoveredSummary).not.toContain('Finished · 0 branch tips');
+
+    writeEmptySession(join(archive, 'empty.jsonl'), 'empty');
+    const zeroTipBeginResponse = await tool.execute(
+      'render-zero-tip-seed-begin',
+      { action: 'begin', seed: '14d' },
+      undefined,
+      undefined,
+      context,
+    );
+    const zeroTipBegin = decode(zeroTipBeginResponse);
+    expect(zeroTipBegin.entries).toEqual([]);
+    const zeroTipFinishResponse = await tool.execute(
+      'render-zero-tip-seed-finish',
+      { action: 'finish', batch: zeroTipBegin.batch },
+      undefined,
+      undefined,
+      context,
+    );
+    expect(decode(zeroTipFinishResponse)).toMatchObject({
+      finished: true,
+      reviewedTips: 0,
+      status: 'coverage-finished',
+      coverageChanged: true,
+    });
+    expect((zeroTipFinishResponse as ToolResponse).details.coverageChanged).toBe(true);
+    expect(renderSummary(tool, zeroTipFinishResponse, 'finish')).toContain(
+      'Finished · coverage saved · 0 branch tips',
+    );
+
+    writeSession(join(archive, 'seeded.jsonl'), 'seeded', 'seeded-message', 'seeded evidence');
+    const seededBeginResponse = await tool.execute(
+      'render-seeded-begin',
+      { action: 'begin', seed: '14d' },
+      undefined,
+      undefined,
+      context,
+    );
+    const seededBegin = decode(seededBeginResponse);
+    expect(seededBegin.entries?.map((entry) => entry.text)).toEqual(['seeded evidence']);
+    const seededFinishResponse = await tool.execute(
+      'render-seeded-finish',
+      { action: 'finish', batch: seededBegin.batch },
+      undefined,
+      undefined,
+      context,
+    );
+    expect(decode(seededFinishResponse)).toMatchObject({
+      finished: true,
+      reviewedTips: 1,
+      status: 'coverage-finished',
+      coverageChanged: true,
+    });
+    expect(renderSummary(tool, seededFinishResponse, 'finish')).toContain(
+      'Finished · coverage saved · 1 branch tip',
+    );
+
+    writeSession(join(archive, 'partial.jsonl'), 'partial', 'partial-message', 'partial evidence');
+    writeFileSync(join(archive, 'broken.jsonl'), '{broken\n');
+    const partialBeginResponse = await tool.execute(
+      'render-partial-begin',
+      { action: 'begin', seed: '14d' },
+      undefined,
+      undefined,
+      context,
+    );
+    const partialBegin = decode(partialBeginResponse);
+    expect(partialBegin.incomplete).toBe(true);
+    const partialFinishResponse = await tool.execute(
+      'render-partial-finish',
+      { action: 'finish', batch: partialBegin.batch },
+      undefined,
+      undefined,
+      context,
+    );
+    expect(decode(partialFinishResponse)).toMatchObject({
+      finished: true,
+      reviewedTips: 1,
+      status: 'partial',
+      incomplete: true,
+    });
+    const partialSummary = renderSummary(tool, partialFinishResponse, 'finish');
+    expect(partialSummary).toContain('Finished available sources · 1 branch tip recorded');
+    expect(partialSummary).toContain('Some sources could not be reviewed · 1 warning');
   } finally {
     await shutdown({}, context);
     if (previousAgentDir === undefined) delete process.env['PI_CODING_AGENT_DIR'];

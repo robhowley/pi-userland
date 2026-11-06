@@ -37,6 +37,7 @@ function details(
     batch: 'batch-token',
     incomplete: false,
     warnings: [],
+    coverageChanged: false,
     ...overrides,
   };
 }
@@ -168,8 +169,10 @@ it('registers compact renderers and uses the configured host expansion hint', as
 it('renders the required missing-file warning layout with full warning reasons', async () => {
   const { tool, shutdown } = installedRendererTool();
   try {
+    const missingReason = `Error: ENOENT: no such file or directory, open ${sourcePath}`;
     const missing = warning('source-failure', {
-      reason: 'ENOENT: no such file or directory',
+      message: `${sourcePath}: ${missingReason}`,
+      reason: missingReason,
       sources: [sourcePath],
     });
     const output = textAt(
@@ -183,19 +186,25 @@ it('renders the required missing-file warning layout with full warning reasons',
       details('begin', { incomplete: true, warnings: [missing] }),
       { expanded: true },
     );
-    expect(output).toContain('No evidence available · review still open');
-    expect(output).toContain('! Some sources could not be reviewed · 1 warning');
-    expect(output).toContain(
+    expect(output).toBe(
       [
+        'No evidence available · review still open',
+        '! Some sources could not be reviewed · 1 warning',
+        '',
         '  Source',
         `    ${sourcePath}`,
         '',
         '  Error',
-        '    ENOENT: no such file or directory',
+        `    ${missingReason}`,
         '',
         '  Effect',
         '    This source remains unreviewed.',
         '    Available sources can still be reviewed and finished.',
+        '',
+        '  Batch',
+        '    token: batch-token',
+        '    seed: none',
+        '    requestedSince: none',
       ].join('\n'),
     );
   } finally {
@@ -207,6 +216,16 @@ it('covers every compact action state, including zero-tip coverage and context e
   const { tool, shutdown } = installedRendererTool();
   try {
     const cases: Array<[ReviewResultDetails['action'], Payload, string]> = [
+      [
+        'begin',
+        { entries: [{ text: 'one' }], hasMore: true, capturedTips: 0 },
+        '1 excerpt · 0 branch tips · more evidence',
+      ],
+      [
+        'begin',
+        { entries: [{ text: 'one' }], hasMore: false, capturedTips: 1 },
+        '1 excerpt · 1 branch tip · last evidence page',
+      ],
       [
         'begin',
         { entries: [{ text: 'one' }], hasMore: true, capturedTips: 2 },
@@ -245,8 +264,8 @@ it('covers every compact action state, including zero-tip coverage and context e
       ['finish', { finished: true, reviewedTips: 4 }, 'Finished · 4 branch tips recorded'],
       [
         'finish',
-        { finished: true, reviewedTips: 4, status: 'coverage-finished', coverageChanged: true },
-        'Finished · coverage saved · 4 branch tips',
+        { finished: true, reviewedTips: 1, status: 'coverage-finished', coverageChanged: true },
+        'Finished · coverage saved · 1 branch tip',
       ],
       [
         'finish',
@@ -255,13 +274,19 @@ it('covers every compact action state, including zero-tip coverage and context e
       ],
       [
         'finish',
-        { finished: true, reviewedTips: 4, status: 'partial', incomplete: true },
-        'Finished available sources · 4 branch tips recorded',
+        { finished: true, reviewedTips: 0, status: 'partial', incomplete: true },
+        'Finished available sources · 0 branch tips recorded',
       ],
       ['cancel', { cancelled: true }, 'Cancelled · review progress not saved'],
     ];
     for (const [action, payload, expected] of cases) {
-      const resultDetails = details(action, { incomplete: payload['incomplete'] === true });
+      const resultDetails = details(action, {
+        incomplete: payload['incomplete'] === true,
+        coverageChanged:
+          action === 'finish' &&
+          payload['status'] === undefined &&
+          payload['coverageChanged'] === undefined,
+      });
       expect(textAt(tool.renderResult!, payload, resultDetails)).toContain(expected);
     }
   } finally {
