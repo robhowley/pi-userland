@@ -99,6 +99,197 @@ beforeEach(async () => {
 });
 
 describe('/junction command', () => {
+  it.each(['board install', '  board   install \t\n'])('parses only board install: %j', (args) => {
+    expect(parseJunctionArgs(args)).toEqual({ ok: true, mode: 'board-install' });
+  });
+  it.each(['board open', '  board   open \t\n'])('parses only board open: %j', (args) => {
+    expect(parseJunctionArgs(args)).toEqual({ ok: true, mode: 'board-open' });
+  });
+  it.each([
+    'board',
+    'board update',
+    'board install extra',
+    'board install --tab',
+    'board install /tmp/x',
+    'board fork --branch x',
+    'board install --from HEAD',
+  ])('rejects board arguments: %s', async (args) => {
+    const installBoard = vi.fn();
+    expect(await runJunctionCommand(args, cwd, { installBoard })).toEqual({
+      ok: false,
+      status: 'invalid-command',
+      message: 'Usage: /junction board install',
+    });
+    expect(installBoard).not.toHaveBeenCalled();
+  });
+  it.each(['board open extra', 'board open --tab', 'board open /tmp/x'])(
+    'rejects malformed board open arguments: %s',
+    async (args) => {
+      const openBoard = vi.fn();
+      expect(await runJunctionCommand(args, cwd, { openBoard })).toEqual({
+        ok: false,
+        status: 'invalid-command',
+        message: 'Usage: /junction board open',
+      });
+      expect(openBoard).not.toHaveBeenCalled();
+    },
+  );
+  it('offers full-prefix board completion through the registered callback', () => {
+    const registerCommand = vi.fn();
+    registerJunctionCommand({ registerCommand });
+    const complete = registerCommand.mock.calls[0]?.[1].getArgumentCompletions;
+    for (const prefix of ['b', 'bo', 'board'])
+      expect(complete(prefix)).toEqual([expect.objectContaining({ value: 'board' })]);
+    expect(complete('board ')).toEqual([
+      expect.objectContaining({ value: 'board install', label: 'install' }),
+      expect.objectContaining({ value: 'board open', label: 'open' }),
+    ]);
+    for (const prefix of ['board i', '  board   i'])
+      expect(complete(prefix)).toEqual([
+        expect.objectContaining({ value: 'board install', label: 'install' }),
+      ]);
+    for (const prefix of ['board o', 'board open'])
+      expect(complete(prefix)).toEqual([
+        expect.objectContaining({ value: 'board open', label: 'open' }),
+      ]);
+    for (const prefix of [
+      'board install ',
+      'board open ',
+      'board update',
+      'board i extra',
+      'board o extra',
+      'board --tab',
+    ])
+      expect(complete(prefix)).toBeNull();
+  });
+  it('installs in a temporary home before any repository, cmux or session operation', async () => {
+    const forbidden = vi.fn(() => {
+      throw new Error('must not run');
+    });
+    const result = await runJunctionCommand(
+      'board install',
+      join(cwd, 'nonexistent'),
+      {
+        homeDir: sourceRoot,
+        runner: forbidden,
+        plan: forbidden,
+        planCheckout: forbidden,
+        preflight: forbidden,
+        preflightTab: forbidden,
+        apply: forbidden,
+        launch: forbidden,
+        launchTab: forbidden,
+      },
+      { waitForIdle: forbidden, sessionManager: { getSessionFile: forbidden } },
+    );
+    expect(result).toEqual({
+      ok: true,
+      status: 'board-installed',
+      path: join(sourceRoot, '.config/cmux/sidebars/junction-board.swift'),
+    });
+    expect(forbidden).not.toHaveBeenCalled();
+  });
+  it('opens the board before any repository, Git or session operation', async () => {
+    const forbidden = vi.fn(() => {
+      throw new Error('must not run');
+    });
+    const openBoard = vi.fn(async () => ({ ok: true as const, status: 'board-opened' as const }));
+    const result = await runJunctionCommand(
+      'board open',
+      join(cwd, 'nonexistent'),
+      {
+        openBoard,
+        runner: forbidden,
+        plan: forbidden,
+        planCheckout: forbidden,
+        preflight: forbidden,
+        preflightTab: forbidden,
+        apply: forbidden,
+        launch: forbidden,
+        launchTab: forbidden,
+      },
+      { waitForIdle: forbidden, sessionManager: { getSessionFile: forbidden } },
+    );
+    expect(result).toEqual({ ok: true, status: 'board-opened' });
+    expect(openBoard).toHaveBeenCalledWith(
+      join(cwd, 'nonexistent'),
+      expect.objectContaining({ runner: forbidden }),
+    );
+    expect(forbidden).not.toHaveBeenCalled();
+  });
+  it.each([
+    { ok: true, status: 'board-installed', path: '/test/board', text: 'Installed' },
+    { ok: true, status: 'board-updated', path: '/test/board', text: 'Updated' },
+    {
+      ok: true,
+      status: 'board-current',
+      path: '/test/board',
+      warning: 'unowned',
+      text: 'Already current',
+    },
+    {
+      ok: false,
+      status: 'board-install-failed',
+      path: '/test/board',
+      message: 'failure',
+      text: 'failure',
+    },
+    {
+      ok: false,
+      status: 'board-install-partial',
+      path: '/test/board',
+      message: 'partial',
+      text: 'partial',
+    },
+  ] as const)(
+    'notifies board outcome $status and forwards only homeDir',
+    async ({ text, ...result }) => {
+      const registerCommand = vi.fn();
+      const installBoard = vi.fn(async () => result);
+      registerJunctionCommand(
+        { registerCommand },
+        { installBoard, homeDir: sourceRoot, env: { X: 'ignored' }, timeoutMs: 1 },
+      );
+      const notify = vi.fn();
+      await registerCommand.mock.calls[0]?.[1].handler('board install', { cwd, ui: { notify } });
+      expect(installBoard).toHaveBeenCalledWith({ homeDir: sourceRoot });
+      expect(notify).toHaveBeenCalledWith(
+        expect.stringContaining(text),
+        result.ok ? 'info' : 'error',
+      );
+      if (result.ok) expect(notify.mock.calls[0]?.[0]).toContain(result.path);
+      if ('warning' in result) expect(notify.mock.calls[0]?.[0]).toContain('unowned');
+    },
+  );
+  it('notifies board-open success without touching the left sidebar', async () => {
+    const registerCommand = vi.fn();
+    const openBoard = vi.fn(async () => ({ ok: true as const, status: 'board-opened' as const }));
+    registerJunctionCommand({ registerCommand }, { openBoard });
+    const notify = vi.fn();
+    await registerCommand.mock.calls[0]?.[1].handler('board open', { cwd, ui: { notify } });
+    expect(notify).toHaveBeenCalledWith(
+      'Opened Junction board in the unfocused right sidebar for window:1.',
+      'info',
+    );
+  });
+
+  it('notifies board-open failures as errors', async () => {
+    const registerCommand = vi.fn();
+    const openBoard = vi.fn(async () => ({
+      ok: false as const,
+      status: 'board-open-failed' as const,
+      message: 'Could not open Junction board in window:1: cmux failed',
+    }));
+    registerJunctionCommand({ registerCommand }, { openBoard });
+    const notify = vi.fn();
+    await registerCommand.mock.calls[0]?.[1].handler('board open', { cwd, ui: { notify } });
+    expect(openBoard).toHaveBeenCalledWith(cwd, expect.any(Object));
+    expect(notify).toHaveBeenCalledWith(
+      'Could not open Junction board in window:1: cmux failed',
+      'error',
+    );
+  });
+
   it('completes the branch flag from partial input', () => {
     expect(getJunctionArgumentCompletions('--b')).toEqual([
       {
@@ -146,6 +337,7 @@ describe('/junction command', () => {
       expect.objectContaining({ value: 'fork' }),
       checkout,
       branch,
+      expect.objectContaining({ value: 'board' }),
     ]);
     expect(getJunctionArgumentCompletions('c')).toEqual([checkout]);
     expect(getJunctionArgumentCompletions('checkout ')).toEqual([branch]);
@@ -1579,7 +1771,8 @@ describe('/junction command', () => {
     const apply = vi.fn(async () => WORKTREE);
     const launch = vi.fn(async () => ({ ok: true as const }));
 
-    registerJunctionCommand(pi, { plan, planCheckout, preflight, apply, launch });
+    const installBoard = vi.fn();
+    registerJunctionCommand(pi, { plan, planCheckout, preflight, apply, launch, installBoard });
     await handler?.(args, {
       cwd,
       ui: { notify },
@@ -1589,6 +1782,7 @@ describe('/junction command', () => {
 
     expect(notify).toHaveBeenCalledTimes(1);
     expect(notify).toHaveBeenCalledWith(expect.any(String), 'info');
+    expect(installBoard).not.toHaveBeenCalled();
     expect(description).toContain('--tab');
     const help = notify.mock.calls[0]?.[0];
     expect(help).toBe(
@@ -1600,7 +1794,9 @@ describe('/junction command', () => {
         '  /junction fork --branch <name> [--tab] — wait for the current persisted session to idle, then create a new worktree from the default base or reuse a matching worktree; fork the conversation',
         '  /junction fork --branch <name> --from <commit-ish> [--tab] — wait for the current persisted session to idle, then create a new worktree from the specified commit-ish (never reuse); fork the conversation',
         '  /junction checkout --branch <local-branch> [--tab] — open an existing local branch in its worktree; launch a fresh Pi session',
-        '  Append `--tab` to launch Pi in a new unfocused tab in this workspace instead of a new cmux workspace.',
+        '  /junction board install — install or safely update the packaged sidebar file; does not select it or enable publication',
+        '  /junction board open: open the installed board in the unfocused right sidebar for fixed window:1; does not install it or replace the left workspace sidebar',
+        '  For worktree commands, append `--tab` to launch Pi in a new unfocused tab in this workspace instead of a new cmux workspace.',
       ].join('\n'),
     );
     expect(waitForIdle).not.toHaveBeenCalled();

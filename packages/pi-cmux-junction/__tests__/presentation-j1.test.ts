@@ -19,7 +19,7 @@ const sourceB = 'b'.repeat(64);
 type TestRow = { label?: string; value: string; detail?: string; href?: string };
 type TestItem = {
   key: string;
-  title: string;
+  title?: string;
   status?: string;
   summary?: string;
   progress?: { label: string; value: number; max: number };
@@ -95,6 +95,75 @@ function exactByteAggregate() {
 }
 
 describe('J2 projection grammar (historical J1 API names)', () => {
+  it('adds bounded surface metadata without changing source ownership or producer labels', () => {
+    const blocks = [
+      block('merge-ready'),
+      block('session-hygiene'),
+      block('merge-ready', sourceB),
+      block('session-hygiene', sourceB),
+    ];
+    const legacy = expectSet(blocks);
+    const extended = expectSet(
+      blocks.map((entry) => ({
+        ...entry,
+        tab: {
+          id: entry.sourceId === sourceA ? '1'.repeat(64) : '2'.repeat(64),
+          label: 'Same tab label',
+        },
+      })),
+    );
+    const sources = extended.j1
+      .split('\u001e')
+      .filter((record) => record.startsWith('S\u001f'))
+      .map((record) => record.split('\u001f'));
+    expect(sources).toEqual([
+      ['S', '0', sourceA, '1'.repeat(64), 'Same tab label'],
+      ['S', '1', sourceB, '2'.repeat(64), 'Same tab label'],
+    ]);
+    expect(extended.j1.split('\u001e').slice(3)).toEqual(legacy.j1.split('\u001e').slice(3));
+    expect(extended.metrics.fieldCount).toBe(legacy.metrics.fieldCount + 4);
+    expect(extended.metrics.byteCount).toBe(Buffer.byteLength(extended.j1));
+    expect(extended.metrics.sourceCount).toBe(2);
+  });
+
+  it('retains an unnamed surface and rejects contradictory metadata for one source', () => {
+    const tab = { id: '1'.repeat(64), label: null };
+    expect(expectSet([{ ...block(), tab }]).j1).toContain(
+      `S\u001f0\u001f${sourceA}\u001f${tab.id}\u001f\u001d`,
+    );
+    for (const second of [
+      block('other'),
+      { ...block('other'), tab: { ...tab, label: 'Other name' } },
+    ]) {
+      expect(projectPresentationJ1([{ ...block(), tab }, second]).kind).toBe('reject');
+    }
+  });
+
+  it.each([
+    { id: 'bad', label: 'Tab' },
+    { id: '1'.repeat(64), label: 'bad\rlabel' },
+    { id: '1'.repeat(64), label: '\ud800' },
+    { id: '1'.repeat(64), label: 'x'.repeat(129) },
+    { id: '1'.repeat(64), label: '' },
+    { id: '1'.repeat(64), label: 'Tab', extra: true },
+  ])('rejects invalid tab metadata %j', (tab) => {
+    expect(projectPresentationJ1([{ ...block(), tab }]).kind).toBe('reject');
+  });
+
+  it('counts optional metadata against the existing hard field ceiling', () => {
+    const blocks = aggregateMaximum();
+    expect(
+      projectPresentationJ1(
+        blocks.map((entry) => ({ ...entry, tab: { id: '1'.repeat(64), label: 'Tab' } })),
+      ),
+    ).toMatchObject({ kind: 'reject', limit: 'fields' });
+    expect(projectPresentationJ1(blocks).kind).toBe('set');
+  });
+  it('encodes an absent title for status-only cards', () => {
+    const result = expectSet([block('p', sourceA, [{ key: 'i', status: 'Running', rows: [] }])]);
+    expect(result.j1).toContain('C\u001f0\u001f0\u001f0\u001fi\u001f\u001d\u001fRunning\u001f');
+  });
+
   it('matches the minimal golden and hashes the exact UTF-8 J2', () => {
     const result = expectSet([block('p', sourceA, [item('i', { title: 'Title' })])]);
     const body = [
@@ -106,6 +175,27 @@ describe('J2 projection grammar (historical J1 API names)', () => {
     expect(result.j1).toBe(golden);
     expect(result.digest).toBe(createHash('sha256').update(golden, 'utf8').digest('hex'));
     expect(result.j1.endsWith('\u001e')).toBe(false);
+  });
+
+  it('keeps enriched producer labels in the existing five-field P record', () => {
+    const result = expectSet([
+      {
+        ...block('session-hygiene'),
+        producer: { key: 'session-hygiene', label: 'π - pi-userland · Session Hygiene' },
+      },
+    ]);
+    const producer = result.j1
+      .split('\u001e')
+      .map((record) => record.split('\u001f'))
+      .find(([kind]) => kind === 'P');
+    expect(producer).toEqual([
+      'P',
+      '0',
+      '0',
+      'session-hygiene',
+      'π - pi-userland · Session Hygiene',
+    ]);
+    expect(producer).toHaveLength(5);
   });
 
   it('uses exact arities, scoped references, literal item/row order, progress, and HTTPS', () => {
