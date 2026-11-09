@@ -32,7 +32,7 @@ Authorization applies to every workflow:
 
 ## Taskwarrior commands
 
-Read actual records, including UUID, annotations, and status, before matching. Pass user or session text as one literal, safely shell-quoted argument. Never interpolate untrusted session text into shell syntax. Use the full UUID from Taskwarrior for a specific update.
+Use compact records for initial task discovery. Before confirming a match or proposing a change, read the candidate’s full record, including UUID, status and annotations. Pass user or session text as one literal, safely shell-quoted argument. Never interpolate untrusted session text into shell syntax. Use the full UUID from Taskwarrior for a specific update.
 
 ```sh
 task list
@@ -53,6 +53,10 @@ set -o pipefail
 task project.is:work.ranking status:pending export |
   jq -c '[.[] | {id, uuid, description, status, project, waitingon, depends}]'
 ```
+
+Reuse this compact recipe for reconciliation, including catch-up, but omit
+`status:pending` so completed tasks are included. Keep annotations out of
+discovery output; fetch them only for candidate tasks.
 
 This recipe requires `jq`. If unavailable, use an equivalent local JSON
 projection rather than installing it automatically.
