@@ -283,6 +283,35 @@ it('does not skip empty evidence while advancing a page cursor', () => {
   ]);
 });
 
+it('returns 200 small entries per page and resumes without losing evidence', () => {
+  const evidence = Array.from({ length: 201 }, (_, index) =>
+    pageEntry({ entryId: `entry-${index}`, text: `item-${index}` }),
+  );
+  const build = (
+    entries: Parameters<typeof groupEvidencePage>[0],
+    cursor: { index: number; offset: number },
+  ) => ({
+    batch: 'batch',
+    groups: groupEvidencePage(entries),
+    hasMore: cursor.index < evidence.length,
+  });
+
+  const first = boundedEvidencePage(evidence, { index: 0, offset: 0 }, build);
+  expect(first.cursor).toEqual({ index: 200, offset: 0 });
+  expect(first.data['hasMore']).toBe(true);
+  expect(expandEvidenceGroups(first.data as ReviewResult)).toEqual(evidence.slice(0, 200));
+
+  const second = boundedEvidencePage(evidence, first.cursor, build);
+  expect(second.cursor).toEqual({ index: 201, offset: 0 });
+  expect(second.data['hasMore']).toBe(false);
+  expect(expandEvidenceGroups(second.data as ReviewResult)).toEqual(evidence.slice(200));
+  for (const page of [first, second]) {
+    expect(Buffer.byteLength(JSON.stringify(page.data), 'utf8')).toBeLessThanOrEqual(
+      REVIEW_RESPONSE_MAX_BYTES,
+    );
+  }
+});
+
 it('splits an exact-cap Unicode prefix and resumes from its UTF-16 offset', () => {
   const evidence = [pageEntry({ text: '🌱x' })];
   let envelope = { padding: '' };
@@ -1027,7 +1056,7 @@ it('pages faithfully, cancels without consuming, persists finish and isolates la
   process.env['PI_CODING_AGENT_DIR'] = join(dir, 'agent');
   process.env['XDG_STATE_HOME'] = join(dir, 'state');
   const file = join(dir, 'session.jsonl');
-  const longText = '🌱漢字'.repeat(3_020);
+  const longText = '🌱漢字'.repeat(6_020);
   writeFileSync(
     file,
     [
@@ -1179,7 +1208,7 @@ it('pages faithfully, cancels without consuming, persists finish and isolates la
 
 it.each([
   ['escaped controls', '\u0000'.repeat(12_000)],
-  ['a surrogate pair at the character limit', `${'a'.repeat(11_999)}🌱tail`],
+  ['a surrogate pair at the character limit', `${'a'.repeat(47_999)}🌱tail`],
 ] as const)('bounds complete JSON pages and reconstructs %s text exactly', async (kind, text) => {
   const dir = mkdtempSync(join(tmpdir(), 'remembrancer-response-size-'));
   const previousAgentDir = process.env['PI_CODING_AGENT_DIR'];
@@ -1251,7 +1280,7 @@ it.each([
     expect(entries.at(-1)?.continues).toBe(false);
 
     if (kind === 'a surrogate pair at the character limit') {
-      expect(entries[0]?.text.length).toBe(11_999);
+      expect(entries[0]?.text.length).toBe(47_999);
       expect(entries[0]!.text.charCodeAt(entries[0]!.text.length - 1)).not.toBeGreaterThanOrEqual(
         0xd800,
       );
@@ -1385,7 +1414,7 @@ it('keeps structured warnings in frozen details across every successful action w
         id: 'selected',
         parentId: 'root',
         timestamp: '2026-01-30T00:00:00.000Z',
-        message: { role: 'user', content: 'x'.repeat(12_050) },
+        message: { role: 'user', content: 'x'.repeat(48_050) },
       }),
       '',
     ].join('\n'),
@@ -2393,7 +2422,7 @@ it('returns frozen selected context on demand without advancing pages or reading
   const file = join(archive, 'session.jsonl');
   const old = new Date(Date.now() - 30 * 86_400_000).toISOString();
   const recent = new Date(Date.now() - 7 * 86_400_000).toISOString();
-  const oldContext = `${'x'.repeat(11_999)}🌱${'x'.repeat(49)}`;
+  const oldContext = `${'x'.repeat(47_999)}🌱${'x'.repeat(49)}`;
   writeFileSync(
     file,
     [
@@ -2489,15 +2518,15 @@ it('returns frozen selected context on demand without advancing pages or reading
       branchId: 'selected',
       reviewedThrough: null,
     });
-    expect(expandEvidenceGroups(first)[0]?.text.length).toBe(11_999);
-    expect(first.nextOffset).toBe(11_999);
-    await expect(contextCall(12_000)).rejects.toThrow(/splits a surrogate pair/);
+    expect(expandEvidenceGroups(first)[0]?.text.length).toBe(47_999);
+    expect(first.nextOffset).toBe(47_999);
+    await expect(contextCall(48_000)).rejects.toThrow(/splits a surrogate pair/);
     const tail = await contextCall(first.nextOffset as number);
     expect(
       expandEvidenceGroups(tail)
         .map((entry) => entry.text)
         .join(''),
-    ).toBe(oldContext.slice(11_999));
+    ).toBe(oldContext.slice(47_999));
     expect(tail.nextOffset).toBeNull();
     await expect(contextCall(oldContext.length + 1)).rejects.toThrow(/beyond/);
 
@@ -2583,7 +2612,7 @@ it('bounds context by frozen visible identity and preserves page and write lifec
       id: 'selected-long',
       parentId,
       timestamp: recent,
-      message: { role: 'user', content: 'x'.repeat(12_050) },
+      message: { role: 'user', content: 'x'.repeat(48_050) },
     },
     {
       type: 'message',
