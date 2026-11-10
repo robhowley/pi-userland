@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.0](https://github.com/robhowley/pi-userland/compare/pi-remembrancer-v0.3.0...pi-remembrancer-v0.4.0) (2026-11-10)
+
+
+### Features
+
+* **pi-remembrancer:** group review evidence metadata ([#233](https://github.com/robhowley/pi-userland/issues/233)) ([a0fb370](https://github.com/robhowley/pi-userland/commit/a0fb3706b770c2ba992678ce86b76a63633841bf))
+* **pi-remembrancer:** use compact discovery for catch-up ([#231](https://github.com/robhowley/pi-userland/issues/231)) ([aa19f92](https://github.com/robhowley/pi-userland/commit/aa19f929bd4f341f391a9e7b432d24e074a4ccc0))
+
+
+### Performance Improvements
+
+* **pi-remembrancer:** increase review page limits ([#234](https://github.com/robhowley/pi-userland/issues/234)) ([f1ee226](https://github.com/robhowley/pi-userland/commit/f1ee2267ace546d1636048ee9468621fd8eb983e))
+
 ## [0.3.0](https://github.com/robhowley/pi-userland/compare/pi-remembrancer-v0.2.0...pi-remembrancer-v0.3.0) (2026-11-06)
 
 
