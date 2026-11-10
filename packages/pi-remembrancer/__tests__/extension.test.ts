@@ -48,6 +48,7 @@ type TestTool = {
     id: string,
     args: {
       action: string;
+      proposals?: import('../extensions/remembrancer/proposals.js').ProposalSubmission[];
       batch?: string | undefined;
       seed?: string | undefined;
       selected?: Selected | undefined;
@@ -411,7 +412,7 @@ function renderSummary(tool: TestTool, response: unknown, action: ResultDetails[
       showImages: true,
       isError: false,
       keyHint: () => 'ctrl+o to expand',
-    } as ResultRendererContext,
+    } as unknown as ResultRendererContext,
   );
   return component
     .render(120)
@@ -446,16 +447,122 @@ function contextFor(
 
 async function installedAutocompleteProvider(command: TestCommand, cwd: string) {
   const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-  const agentPackage = realpathSync(
-    join(packageRoot, 'node_modules', '@earendil-works', 'pi-coding-agent'),
+  const tuiEntry = join(
+    realpathSync(join(packageRoot, 'node_modules', '@earendil-works', 'pi-tui')),
+    'dist',
+    'autocomplete.js',
   );
-  const tuiEntry = join(dirname(agentPackage), 'pi-tui', 'dist', 'autocomplete.js');
   const { CombinedAutocompleteProvider } = await import(pathToFileURL(tuiEntry).href);
   return new CombinedAutocompleteProvider(
     [{ name: 'remembrancer', getArgumentCompletions: command.getArgumentCompletions }],
     cwd,
   );
 }
+
+it('finishes manual analysis with durable pending proposals, without task execution', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'manual-proposals-'));
+  const previousState = process.env['XDG_STATE_HOME'];
+  const previousAgent = process.env['PI_CODING_AGENT_DIR'];
+  process.env['XDG_STATE_HOME'] = dir;
+  process.env['PI_CODING_AGENT_DIR'] = join(dir, 'agent');
+  const file = join(dir, 'session.jsonl');
+  writeFileSync(
+    file,
+    [
+      JSON.stringify({ type: 'session', id: 'session', cwd: dir }),
+      JSON.stringify({
+        type: 'message',
+        id: 'promise',
+        parentId: null,
+        message: { role: 'user', content: 'Send Maya the comparison' },
+      }),
+      '',
+    ].join('\n'),
+  );
+  const extension = fakeExtension();
+  remembrancer(extension.api);
+  const context = contextFor(dir, file);
+  try {
+    await extension.handlers.get('session_start')!({}, context);
+    const tool = extension.tools[0]!;
+    const begin = decode(
+      await tool.execute('begin', { action: 'begin' }, undefined, undefined, context),
+    );
+    const item = expandEvidenceGroups(begin)[0]!;
+    await expect(
+      tool.execute(
+        'missing',
+        { action: 'finish', batch: begin.batch },
+        undefined,
+        undefined,
+        context,
+      ),
+    ).rejects.toThrow(/proposals array/);
+    const result = decode(
+      await tool.execute(
+        'finish',
+        {
+          action: 'finish',
+          batch: begin.batch,
+          proposals: [
+            {
+              change: {
+                operation: 'add',
+                fields: { description: 'Send comparison' },
+                annotations: [],
+              },
+              expected: null,
+              question: null,
+              explanation: 'User promise',
+              references: [
+                {
+                  sessionId: item.sessionId,
+                  branchId: item.branchId,
+                  entryId: item.entryId,
+                  editId: item.editId,
+                  offset: 0,
+                  quote: 'Send Maya',
+                },
+              ],
+            },
+          ],
+        },
+        undefined,
+        undefined,
+        context,
+      ),
+    );
+    expect(result.finished).toBe(true);
+    const store = new CheckpointStore();
+    try {
+      expect(store.proposals()).toMatchObject([
+        { state: 'pending', revision: 1, change: { operation: 'add' } },
+      ]);
+      expect(store.reviewed()).toHaveLength(1);
+    } finally {
+      store.close();
+    }
+    const next = decode(
+      await tool.execute('begin', { action: 'begin' }, undefined, undefined, context),
+    );
+    const lookup = (await tool.execute(
+      'lookup',
+      { action: 'proposals', batch: next.batch },
+      undefined,
+      undefined,
+      context,
+    )) as ToolResponse;
+    expect(JSON.parse(lookup.content[0].text).proposals).toHaveLength(1);
+    expect(next.groups).toEqual([]);
+  } finally {
+    await extension.handlers.get('session_shutdown')!({}, context);
+    if (previousState === undefined) delete process.env['XDG_STATE_HOME'];
+    else process.env['XDG_STATE_HOME'] = previousState;
+    if (previousAgent === undefined) delete process.env['PI_CODING_AGENT_DIR'];
+    else process.env['PI_CODING_AGENT_DIR'] = previousAgent;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 it('registers the remembrancer lifecycle and review tool after enabled startup', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'remembrancer-extension-startup-'));
@@ -923,7 +1030,15 @@ it.each(['recordBytes', 'sourceEntries', 'sourceTextBytes', 'sourceBranches'] as
       await extension.handlers.get('session_start')!({}, context);
       const tool = extension.tools[0]!;
       const call = async (action: string, batch?: string, seed?: string) =>
-        decode(await tool.execute('call', { action, batch, seed }, undefined, undefined, context));
+        decode(
+          await tool.execute(
+            'call',
+            { action, ...(action === 'finish' ? { proposals: [] } : {}), batch, seed },
+            undefined,
+            undefined,
+            context,
+          ),
+        );
       const first = await call('begin');
       await call('finish', first.batch);
       const before = state();
@@ -942,10 +1057,8 @@ it.each(['recordBytes', 'sourceEntries', 'sourceTextBytes', 'sourceBranches'] as
       expect(expandEvidenceGroups(failed)).toEqual([]);
       expect(failed.incomplete).toBe(true);
       expect(failed.warnings?.join()).toMatch(/limit exceeded/);
-      expect(await call('finish', failed.batch)).toMatchObject({
-        status: 'partial',
-        reviewedTips: 0,
-      });
+      await expect(call('finish', failed.batch)).rejects.toThrow(/incomplete/);
+      await call('cancel', failed.batch);
       expect(state()).toEqual(before);
       save(message('old', null), message('new', 'old'));
       const retry = await call('begin');
@@ -1031,7 +1144,7 @@ it.each(['discovery', 'prepare', 'source'] as const)(
       expect(expandEvidenceGroups(retry).map((entry) => entry.text)).toEqual(['complete evidence']);
       await tool.execute(
         'finish',
-        { action: 'finish', batch: retry.batch },
+        { action: 'finish', proposals: [], batch: retry.batch },
         undefined,
         undefined,
         context,
@@ -1107,7 +1220,7 @@ it('pages faithfully, cancels without consuming, persists finish and isolates la
     await expect(
       tool.execute(
         'call-2',
-        { action: 'finish', batch: batch as string },
+        { action: 'finish', proposals: [], batch: batch as string },
         undefined,
         undefined,
         context,
@@ -1163,7 +1276,7 @@ it('pages faithfully, cancels without consuming, persists finish and isolates la
     const finished = decode(
       await tool.execute(
         'call-4',
-        { action: 'finish', batch: batch as string },
+        { action: 'finish', proposals: [], batch: batch as string },
         undefined,
         undefined,
         context,
@@ -1176,7 +1289,11 @@ it('pages faithfully, cancels without consuming, persists finish and isolates la
       decode(
         await tool.execute(
           'call',
-          { action, ...(token === undefined ? {} : { batch: token }) },
+          {
+            action,
+            ...(action === 'finish' ? { proposals: [] } : {}),
+            ...(token === undefined ? {} : { batch: token }),
+          },
           undefined,
           undefined,
           context,
@@ -1516,7 +1633,7 @@ it('keeps structured warnings in frozen details across every successful action w
 
     const finishResponse = await tool.execute(
       'details-finish',
-      { action: 'finish', batch: begin.batch },
+      { action: 'finish', proposals: [], batch: begin.batch },
       undefined,
       undefined,
       context,
@@ -1544,7 +1661,7 @@ it('keeps structured warnings in frozen details across every successful action w
     expect(second).toMatchObject({ status: 'already-covered', warnings: [warning.message] });
     const secondFinishResponse = await tool.execute(
       'details-informational-finish',
-      { action: 'finish', batch: second.batch },
+      { action: 'finish', proposals: [], batch: second.batch },
       undefined,
       undefined,
       context,
@@ -1644,7 +1761,7 @@ it('renders registered execute results with coverage and branch-tip states', asy
     const ordinaryBegin = decode(ordinaryBeginResponse);
     const ordinaryFinishResponse = await tool.execute(
       'render-ordinary-finish',
-      { action: 'finish', batch: ordinaryBegin.batch },
+      { action: 'finish', proposals: [], batch: ordinaryBegin.batch },
       undefined,
       undefined,
       context,
@@ -1665,7 +1782,7 @@ it('renders registered execute results with coverage and branch-tip states', asy
     const alreadyCoveredBegin = decode(alreadyCoveredBeginResponse);
     const alreadyCoveredFinishResponse = await tool.execute(
       'render-already-covered-finish',
-      { action: 'finish', batch: alreadyCoveredBegin.batch },
+      { action: 'finish', proposals: [], batch: alreadyCoveredBegin.batch },
       undefined,
       undefined,
       context,
@@ -1688,7 +1805,7 @@ it('renders registered execute results with coverage and branch-tip states', asy
     expect(zeroTipBegin.groups).toEqual([]);
     const zeroTipFinishResponse = await tool.execute(
       'render-zero-tip-seed-finish',
-      { action: 'finish', batch: zeroTipBegin.batch },
+      { action: 'finish', proposals: [], batch: zeroTipBegin.batch },
       undefined,
       undefined,
       context,
@@ -1718,7 +1835,7 @@ it('renders registered execute results with coverage and branch-tip states', asy
     ]);
     const seededFinishResponse = await tool.execute(
       'render-seeded-finish',
-      { action: 'finish', batch: seededBegin.batch },
+      { action: 'finish', proposals: [], batch: seededBegin.batch },
       undefined,
       undefined,
       context,
@@ -1744,22 +1861,15 @@ it('renders registered execute results with coverage and branch-tip states', asy
     );
     const partialBegin = decode(partialBeginResponse);
     expect(partialBegin.incomplete).toBe(true);
-    const partialFinishResponse = await tool.execute(
-      'render-partial-finish',
-      { action: 'finish', batch: partialBegin.batch },
-      undefined,
-      undefined,
-      context,
-    );
-    expect(decode(partialFinishResponse)).toMatchObject({
-      finished: true,
-      reviewedTips: 1,
-      status: 'partial',
-      incomplete: true,
-    });
-    const partialSummary = renderSummary(tool, partialFinishResponse, 'finish');
-    expect(partialSummary).toContain('Finished available sources · 1 branch tip recorded');
-    expect(partialSummary).toContain('Some sources could not be reviewed · 1 warning');
+    await expect(
+      tool.execute(
+        'render-partial-finish',
+        { action: 'finish', proposals: [], batch: partialBegin.batch },
+        undefined,
+        undefined,
+        context,
+      ),
+    ).rejects.toThrow(/incomplete/);
   } finally {
     await shutdown({}, context);
     if (previousAgentDir === undefined) delete process.env['PI_CODING_AGENT_DIR'];
@@ -1820,7 +1930,7 @@ it('does not enroll a newly referenced current source after ordinary preparation
       decode(
         await tool.execute(
           'enrollment-failure',
-          { action, batch },
+          { action, ...(action === 'finish' ? { proposals: [] } : {}), batch },
           undefined,
           undefined,
           reviewContext,
@@ -1830,7 +1940,8 @@ it('does not enroll a newly referenced current source after ordinary preparation
     const failed = await call('begin');
     expect(failed.groups).toEqual([]);
     expect(failed.incomplete).toBe(true);
-    await call('finish', failed.batch);
+    await expect(call('finish', failed.batch)).rejects.toThrow(/incomplete/);
+    await call('cancel', failed.batch);
     expect(persisted()).toEqual({ sources: [], reviewed: [] });
 
     repair();
@@ -2010,7 +2121,7 @@ it('seeds every default Pi archive bucket, stages new sources, and keeps ordinar
     const finished = decode(
       await tool.execute(
         'seed-finish',
-        { action: 'finish', batch: seed.batch },
+        { action: 'finish', proposals: [], batch: seed.batch },
         undefined,
         undefined,
         context,
@@ -2073,7 +2184,7 @@ it('seeds every default Pi archive bucket, stages new sources, and keeps ordinar
     const expanded = decode(
       await tool.execute(
         'empty-expansion-finish',
-        { action: 'finish', batch: retriedEmptyExpansion.batch },
+        { action: 'finish', proposals: [], batch: retriedEmptyExpansion.batch },
         undefined,
         undefined,
         context,
@@ -2124,7 +2235,7 @@ it('seeds every default Pi archive bucket, stages new sources, and keeps ordinar
     expect(next.status).toBe('review');
     await retryTool.execute(
       'next-finish',
-      { action: 'finish', batch: next.batch },
+      { action: 'finish', proposals: [], batch: next.batch },
       undefined,
       undefined,
       context,
@@ -2157,7 +2268,7 @@ it('seeds every default Pi archive bucket, stages new sources, and keeps ordinar
   }
 });
 
-it('finishes healthy sources despite blank IDs and leaves an ambiguous source unchanged', async () => {
+it('refuses incomplete identity scope and leaves all coverage unchanged', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'remembrancer-extension-identity-'));
   const archive = join(dir, 'archive');
   const state = join(dir, 'state');
@@ -2243,36 +2354,19 @@ it('finishes healthy sources despite blank IDs and leaves an ambiguous source un
       ['healthy', 'healthy-message', 'healthy-message', null],
     ]);
     expect(first.incomplete).toBe(true);
-    const firstFinished = decode(
-      await firstTool.execute(
+    await expect(
+      firstTool.execute(
         'identity-first-finish',
-        { action: 'finish', batch: first.batch },
+        { action: 'finish', proposals: [], batch: first.batch },
         undefined,
         undefined,
         context,
       ),
-    );
-    expect(firstFinished).toMatchObject({
-      finished: true,
-      reviewedTips: 2,
-      status: 'partial',
-      incomplete: true,
-    });
+    ).rejects.toThrow(/incomplete/);
     const firstState = persisted();
     expect(firstState).toEqual({
-      sources: [
-        { sessionId: 'session', file: enrolled, seedSince: first.requestedSince },
-        { sessionId: 'healthy', file: healthy, seedSince: first.requestedSince },
-      ],
-      reviewed: [
-        { sessionId: 'session', file: enrolled, entryId: 'enrolled', since: first.requestedSince },
-        {
-          sessionId: 'healthy',
-          file: healthy,
-          entryId: 'healthy-message',
-          since: first.requestedSince,
-        },
-      ],
+      sources: [{ sessionId: 'session', file: enrolled, seedSince: null }],
+      reviewed: [],
     });
 
     writeSession(join(archive, 'duplicate.jsonl'), 'session', 'duplicate', 'ambiguous copy');
@@ -2288,24 +2382,18 @@ it('finishes healthy sources despite blank IDs and leaves an ambiguous source un
         context,
       ),
     );
-    expect(second.groups).toEqual([]);
+    expect(expandEvidenceGroups(second).map((entry) => entry.sessionId)).toEqual(['healthy']);
     expect(second.incomplete).toBe(true);
     expect(second.status).toBe('incomplete');
-    const secondFinished = decode(
-      await secondTool.execute(
+    await expect(
+      secondTool.execute(
         'identity-second-finish',
-        { action: 'finish', batch: second.batch },
+        { action: 'finish', proposals: [], batch: second.batch },
         undefined,
         undefined,
         context,
       ),
-    );
-    expect(secondFinished).toMatchObject({
-      finished: true,
-      reviewedTips: 0,
-      status: 'partial',
-      incomplete: true,
-    });
+    ).rejects.toThrow(/incomplete/);
     expect(persisted()).toEqual(firstState);
   } finally {
     await shutdown({}, context);
@@ -2317,7 +2405,7 @@ it('finishes healthy sources despite blank IDs and leaves an ambiguous source un
   }
 });
 
-it('finishes healthy seed sources as partial when archive discovery is incomplete', async () => {
+it('refuses healthy seed coverage when archive discovery is incomplete', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'remembrancer-extension-partial-'));
   const archive = join(dir, 'archive');
   const state = join(dir, 'state');
@@ -2376,29 +2464,19 @@ it('finishes healthy seed sources as partial when archive discovery is incomplet
     expect(expandEvidenceGroups(review).map((entry) => entry.text)).toEqual(['healthy commitment']);
     expect(review.incomplete).toBe(true);
     expect(review.status).toBe('incomplete');
-    const finished = decode(
-      await tool.execute(
+    await expect(
+      tool.execute(
         'partial-finish',
-        { action: 'finish', batch: review.batch },
+        { action: 'finish', proposals: [], batch: review.batch },
         undefined,
         undefined,
         context,
       ),
-    );
-    expect(finished.finished).toBe(true);
-    expect(finished.incomplete).toBe(true);
-    expect(finished.status).toBe('partial');
-    expect(finished.warnings?.join('\\n')).toMatch(/broken/);
+    ).rejects.toThrow(/incomplete/);
+    expect(review.warnings?.join('\\n')).toMatch(/broken/);
     expect(persisted()).toEqual({
-      sources: [{ sessionId: 'session', file: healthy, seedSince: review.requestedSince }],
-      reviewed: [
-        {
-          sessionId: 'session',
-          file: healthy,
-          entryId: 'healthy-message',
-          since: review.requestedSince,
-        },
-      ],
+      sources: [{ sessionId: 'session', file: healthy, seedSince: null }],
+      reviewed: [],
     });
   } finally {
     await shutdown({}, context);
@@ -2544,7 +2622,7 @@ it('returns frozen selected context on demand without advancing pages or reading
     expect(repeated.groups).toEqual(first.groups);
     await tool.execute(
       'finish',
-      { action: 'finish', batch: review.batch },
+      { action: 'finish', proposals: [], batch: review.batch },
       undefined,
       undefined,
       context,
@@ -2728,7 +2806,7 @@ it('bounds context by frozen visible identity and preserves page and write lifec
     await expect(
       tool!.execute(
         'context-safety-finish-too-soon',
-        { action: 'finish', batch: first.batch },
+        { action: 'finish', proposals: [], batch: first.batch },
         undefined,
         undefined,
         context,
@@ -2773,7 +2851,7 @@ it('bounds context by frozen visible identity and preserves page and write lifec
     const finished = decode(
       await tool!.execute(
         'context-safety-finish',
-        { action: 'finish', batch: third.batch },
+        { action: 'finish', proposals: [], batch: third.batch },
         undefined,
         undefined,
         context,

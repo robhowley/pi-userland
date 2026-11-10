@@ -33,8 +33,8 @@ describe.sequential('remembrancer config', () => {
   const globalSettingsPath = () => join(agentDir, 'settings.json');
   const projectSettingsPath = () => join(cwd, '.pi', 'settings.json');
 
-  it('defaults to enabled', () => {
-    expect(loadRemembrancerConfig(cwd, true)).toEqual({ disabled: false });
+  it('defaults to enabled with automatic capture off', () => {
+    expect(loadRemembrancerConfig(cwd, true)).toEqual({ disabled: false, autoCapture: false });
   });
 
   it.each([true, false])('loads global disabled=%s from the active agent directory', (disabled) => {
@@ -43,57 +43,76 @@ describe.sequential('remembrancer config', () => {
     expect(loadRemembrancerConfig(cwd, true).disabled).toBe(disabled);
   });
 
-  it.each([
-    { global: true, project: false },
-    { global: false, project: true },
-  ])('lets a trusted project setting override global settings', ({ global, project }) => {
-    writeJson(globalSettingsPath(), { 'pi-remembrancer': { disabled: global } });
-    writeJson(projectSettingsPath(), { 'pi-remembrancer': { disabled: project } });
+  it.each([true, false])(
+    'loads global autoCapture=%s from the active agent directory',
+    (autoCapture) => {
+      writeJson(globalSettingsPath(), { 'pi-remembrancer': { autoCapture } });
 
-    expect(loadRemembrancerConfig(cwd, true).disabled).toBe(project);
-  });
+      expect(loadRemembrancerConfig(cwd, true).autoCapture).toBe(autoCapture);
+    },
+  );
 
-  it('ignores a project setting when the project is untrusted', () => {
-    writeJson(globalSettingsPath(), { 'pi-remembrancer': { disabled: false } });
-    writeJson(projectSettingsPath(), { 'pi-remembrancer': { disabled: true } });
+  it('keeps automatic capture independent of disabled', () => {
+    writeJson(globalSettingsPath(), { 'pi-remembrancer': { disabled: true, autoCapture: true } });
 
-    expect(loadRemembrancerConfig(cwd, false).disabled).toBe(false);
+    expect(loadRemembrancerConfig(cwd, true)).toEqual({ disabled: true, autoCapture: true });
   });
 
   it.each([
-    { 'pi-remembrancer': { disabled: 'true' } },
-    { 'pi-remembrancer': 'malformed' },
-    { 'pi-remembrancer': [] },
-  ])('falls back to global for an invalid project scope', (project) => {
-    writeJson(globalSettingsPath(), { 'pi-remembrancer': { disabled: true } });
+    { setting: 'disabled' as const, global: true, project: false },
+    { setting: 'disabled' as const, global: false, project: true },
+    { setting: 'autoCapture' as const, global: true, project: false },
+    { setting: 'autoCapture' as const, global: false, project: true },
+  ])('lets a trusted project override $setting', ({ setting, global, project }) => {
+    writeJson(globalSettingsPath(), { 'pi-remembrancer': { [setting]: global } });
+    writeJson(projectSettingsPath(), { 'pi-remembrancer': { [setting]: project } });
+
+    expect(loadRemembrancerConfig(cwd, true)[setting]).toBe(project);
+  });
+
+  it('ignores project settings when the project is untrusted', () => {
+    writeJson(globalSettingsPath(), { 'pi-remembrancer': { disabled: false, autoCapture: false } });
+    writeJson(projectSettingsPath(), { 'pi-remembrancer': { disabled: true, autoCapture: true } });
+
+    expect(loadRemembrancerConfig(cwd, false)).toEqual({ disabled: false, autoCapture: false });
+  });
+
+  it.each([
+    { setting: 'disabled' as const, project: { 'pi-remembrancer': { disabled: 'true' } } },
+    { setting: 'autoCapture' as const, project: { 'pi-remembrancer': { autoCapture: 'true' } } },
+    { setting: 'disabled' as const, project: { 'pi-remembrancer': 'malformed' } },
+    { setting: 'autoCapture' as const, project: { 'pi-remembrancer': [] } },
+  ])('falls back to global for an invalid project $setting value', ({ setting, project }) => {
+    writeJson(globalSettingsPath(), { 'pi-remembrancer': { [setting]: true } });
     writeJson(projectSettingsPath(), project);
 
-    expect(loadRemembrancerConfig(cwd, true).disabled).toBe(true);
+    expect(loadRemembrancerConfig(cwd, true)[setting]).toBe(true);
   });
 
   it('falls back to global when project settings JSON is malformed', () => {
-    writeJson(globalSettingsPath(), { 'pi-remembrancer': { disabled: true } });
+    writeJson(globalSettingsPath(), { 'pi-remembrancer': { disabled: true, autoCapture: true } });
     mkdirSync(dirname(projectSettingsPath()), { recursive: true });
     writeFileSync(projectSettingsPath(), '{', 'utf8');
 
-    expect(loadRemembrancerConfig(cwd, true).disabled).toBe(true);
+    expect(loadRemembrancerConfig(cwd, true)).toEqual({ disabled: true, autoCapture: true });
   });
 
   it.each([
-    { 'pi-remembrancer': { disabled: 1 } },
-    { 'pi-remembrancer': null },
-    { 'pi-remembrancer': [] },
-    { is_disabled: true, isDisabled: true },
-  ])('falls back to enabled for an invalid global scope', (global) => {
+    { setting: 'disabled' as const, global: { 'pi-remembrancer': { disabled: 1 } } },
+    { setting: 'autoCapture' as const, global: { 'pi-remembrancer': { autoCapture: 'true' } } },
+    { setting: 'disabled' as const, global: { 'pi-remembrancer': null } },
+    { setting: 'autoCapture' as const, global: { 'pi-remembrancer': [] } },
+    { setting: 'disabled' as const, global: { is_disabled: true, isDisabled: true } },
+  ])('falls back to the default for an invalid global $setting value', ({ setting, global }) => {
     writeJson(globalSettingsPath(), global);
 
-    expect(loadRemembrancerConfig(cwd, true).disabled).toBe(false);
+    expect(loadRemembrancerConfig(cwd, true)[setting]).toBe(false);
   });
 
-  it('falls back to enabled when global settings JSON is malformed', () => {
+  it('falls back to defaults when global settings JSON is malformed', () => {
     mkdirSync(dirname(globalSettingsPath()), { recursive: true });
     writeFileSync(globalSettingsPath(), '{', 'utf8');
 
-    expect(loadRemembrancerConfig(cwd, true).disabled).toBe(false);
+    expect(loadRemembrancerConfig(cwd, true)).toEqual({ disabled: false, autoCapture: false });
   });
 });

@@ -1,5 +1,4 @@
 import { keyHint, type ToolDefinition } from '@earendil-works/pi-coding-agent';
-import type { TSchema } from '@earendil-works/pi-ai';
 import { Text, stripTerminalSequences } from '@earendil-works/pi-tui';
 import type { WarningRecord } from './warnings.js';
 
@@ -15,7 +14,7 @@ export type ReviewResultDetails = {
   coverageChanged: boolean;
 };
 
-type ReviewToolDefinition = ToolDefinition<TSchema, ReviewResultDetails>;
+type ReviewToolDefinition = ToolDefinition<ToolDefinition['parameters'], ReviewResultDetails>;
 type ReviewRenderCall = NonNullable<ReviewToolDefinition['renderCall']>;
 type ReviewRenderResult = NonNullable<ReviewToolDefinition['renderResult']>;
 
