@@ -295,18 +295,20 @@ export function boundedEvidencePage(
     while (low < high) {
       const middle = Math.ceil((low + high) / 2);
       const length = safePrefixLength(item.text, offset, middle);
-      if (length > 0) {
-        const start = offset;
-        const entry: EvidencePageEntry = {
-          ...item,
-          text: item.text.slice(start, start + length),
-          offset: start,
-          continues: true,
-        };
-        if (candidateFits(entry, { index, offset: start + length })) {
-          low = middle;
-          continue;
-        }
+      if (length === 0) {
+        low = middle + 1;
+        continue;
+      }
+      const start = offset;
+      const entry: EvidencePageEntry = {
+        ...item,
+        text: item.text.slice(start, start + length),
+        offset: start,
+        continues: true,
+      };
+      if (candidateFits(entry, { index, offset: start + length })) {
+        low = middle;
+        continue;
       }
       high = middle - 1;
     }

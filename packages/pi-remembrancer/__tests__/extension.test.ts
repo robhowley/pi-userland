@@ -283,6 +283,57 @@ it('does not skip empty evidence while advancing a page cursor', () => {
   ]);
 });
 
+it('splits an exact-cap Unicode prefix and resumes from its UTF-16 offset', () => {
+  const evidence = [pageEntry({ text: '🌱x' })];
+  let envelope = { padding: '' };
+  const build = (
+    entries: Parameters<typeof groupEvidencePage>[0],
+    cursor: { index: number; offset: number },
+  ) => ({
+    batch: 'batch',
+    groups: groupEvidencePage(entries),
+    hasMore: cursor.index < evidence.length,
+    ...envelope,
+  });
+  const responseBytes = (response: unknown) => Buffer.byteLength(JSON.stringify(response), 'utf8');
+  const emoji = pageEntry({ text: '🌱', offset: 0, continues: true });
+  const complete = pageEntry({ text: '🌱x', offset: 0, continues: false });
+  const afterEmoji = { index: 0, offset: 2 };
+  const exhausted = { index: 1, offset: 0 };
+  const paddingBytes = REVIEW_RESPONSE_MAX_BYTES - responseBytes(build([emoji], afterEmoji));
+  envelope = { padding: 'p'.repeat(paddingBytes) };
+
+  expect(paddingBytes).toBeGreaterThan(0);
+  expect(responseBytes(build([emoji], afterEmoji))).toBe(REVIEW_RESPONSE_MAX_BYTES);
+  expect(responseBytes(build([complete], exhausted))).toBeGreaterThan(REVIEW_RESPONSE_MAX_BYTES);
+
+  const first = boundedEvidencePage(evidence, { index: 0, offset: 0 }, build);
+  expect(first.cursor).toEqual(afterEmoji);
+  expect(first.data).toMatchObject({
+    hasMore: true,
+    groups: [{ entries: [{ text: '🌱', offset: 0, continues: true }] }],
+  });
+  expect(responseBytes(first.data)).toBeLessThanOrEqual(REVIEW_RESPONSE_MAX_BYTES);
+
+  const second = boundedEvidencePage(evidence, first.cursor, build);
+  expect(second.cursor).toEqual(exhausted);
+  expect(second.data).toMatchObject({
+    hasMore: false,
+    groups: [{ entries: [{ text: 'x', offset: 2, continues: false }] }],
+  });
+  expect(responseBytes(second.data)).toBeLessThanOrEqual(REVIEW_RESPONSE_MAX_BYTES);
+
+  const chunks = [
+    ...expandEvidenceGroups(first.data as ReviewResult),
+    ...expandEvidenceGroups(second.data as ReviewResult),
+  ];
+  expect(chunks.map(({ text, offset, continues }) => ({ text, offset, continues }))).toEqual([
+    { text: '🌱', offset: 0, continues: true },
+    { text: 'x', offset: 2, continues: false },
+  ]);
+  expect(chunks.map(({ text }) => text).join('')).toBe(evidence[0]?.text);
+});
+
 it('retains empty text entries in the grouped shape', () => {
   const groups = groupEvidencePage([pageEntry({ entryId: 'empty', text: '' })]);
   expect(groups[0]?.entries).toEqual([
