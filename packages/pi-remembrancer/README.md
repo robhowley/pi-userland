@@ -74,8 +74,6 @@ Skip this setup if you do not need waiting conditions; other task operations wor
 - Reviews run only when you ask. Activity added during a review waits for the next one.
 - If a session cannot be read, Remembrancer reports it and leaves it for a later review. Cancelling a review leaves review progress unsaved, but it does not undo task changes already applied.
 
-Review evidence is returned in consecutive groups sharing `file`, `sessionId`, `cwd`, `branchId`, and `reviewedThrough`. Each group holds its `entries` with `entryId`, `role`, `text`, `timestamp`, `editId`, `offset`, and `continues`. Pages repeat their own group metadata, preserve entry order, and split long text across pages without omission. Context responses use the same grouped shape; build a context selection from the group's `sessionId` and `branchId` and the entry's `entryId` and `editId`. Each complete JSON response is limited to 50 KiB UTF-8, including metadata and escaped text. Oversized non-splittable metadata is reported as an error.
-
 ## Settings
 
 Remembrancer is enabled by default. To turn off saved-session reviews and stop including newly opened or resumed sessions in future reviews, add this to Pi's global settings file, normally `~/.pi/agent/settings.json`:
