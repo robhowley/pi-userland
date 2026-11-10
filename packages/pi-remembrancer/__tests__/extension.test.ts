@@ -19,8 +19,12 @@ import type {
 import { stripTerminalSequences } from '@earendil-works/pi-tui';
 import { expect, it, vi } from 'vitest';
 import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
-import remembrancer from '../extensions/remembrancer/index.js';
-import { REVIEW_LIMITS } from '../extensions/remembrancer/evidence.js';
+import remembrancer, {
+  boundedEvidencePage,
+  groupEvidencePage,
+  REVIEW_RESPONSE_MAX_BYTES,
+} from '../extensions/remembrancer/index.js';
+import { REVIEW_LIMITS, type Evidence } from '../extensions/remembrancer/evidence.js';
 
 vi.mock('node:fs', async (original) => {
   const fs = await original<typeof import('node:fs')>();
@@ -72,17 +76,27 @@ type ResultDetails = {
   coverageChanged: boolean;
 };
 type ToolResponse = { content: [{ type: 'text'; text: string }]; details: ResultDetails };
+type ReviewEvidenceEntry = {
+  entryId: string;
+  role: string;
+  text: string;
+  timestamp: string;
+  editId: string | null;
+  offset: number;
+  continues: boolean;
+};
+type ReviewEvidenceGroup = {
+  file: string;
+  sessionId: string;
+  cwd: string;
+  branchId: string;
+  reviewedThrough: string | null;
+  entries: ReviewEvidenceEntry[];
+};
+type ExpandedReviewEvidence = ReviewEvidenceEntry & Omit<ReviewEvidenceGroup, 'entries'>;
 type ReviewResult = {
   batch?: string;
-  entries?: {
-    text: string;
-    sessionId?: string;
-    branchId?: string;
-    entryId: string;
-    editId?: string | null;
-    offset: number;
-    continues: boolean;
-  }[];
+  groups?: ReviewEvidenceGroup[];
   hasMore?: boolean;
   capturedTips?: number;
   finished?: boolean;
@@ -132,13 +146,169 @@ function fakeExtension(): FakeExtension {
 
 function decode(response: unknown): ReviewResult {
   const text = (response as ToolResponse).content[0].text;
+  expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(REVIEW_RESPONSE_MAX_BYTES);
   return JSON.parse(text) as ReviewResult;
+}
+
+function pageEntry(overrides: Partial<Evidence> & { offset?: number; continues?: boolean } = {}) {
+  return {
+    file: '/archive/a.jsonl',
+    sessionId: 'session-a',
+    entryId: 'entry-a',
+    role: 'user',
+    text: 'evidence',
+    cwd: '/work/a',
+    timestamp: '2026-01-01T00:00:00.000Z',
+    branchId: 'branch-a',
+    reviewedThrough: null,
+    editId: null,
+    offset: 0,
+    continues: false,
+    ...overrides,
+  };
+}
+
+function expandEvidenceGroups(result: ReviewResult): ExpandedReviewEvidence[] {
+  return (result.groups ?? []).flatMap(({ entries, ...source }) =>
+    entries.map((entry) => ({ ...source, ...entry })),
+  );
 }
 
 const identityTheme = {
   fg: (_color: string, text: string) => text,
   bold: (text: string) => text,
 } as unknown as Parameters<ResultRenderer>[2];
+
+it('groups consecutive matching provenance without reordering or deduplicating entries', () => {
+  const first = pageEntry({ entryId: 'same', text: 'same' });
+  const duplicate = { ...first };
+  const middle = pageEntry({
+    file: '/archive/b.jsonl',
+    sessionId: 'session-b',
+    cwd: '/work/b',
+    branchId: 'branch-b',
+    reviewedThrough: 'checkpoint-b',
+    entryId: 'middle',
+    role: 'assistant',
+    text: 'middle',
+    timestamp: '2026-01-02T00:00:00.000Z',
+    editId: 'edit-b',
+    offset: 7,
+    continues: true,
+  });
+  const groups = groupEvidencePage([first, duplicate, middle, { ...first }]);
+  expect(groups).toEqual([
+    {
+      file: '/archive/a.jsonl',
+      sessionId: 'session-a',
+      cwd: '/work/a',
+      branchId: 'branch-a',
+      reviewedThrough: null,
+      entries: [
+        {
+          entryId: 'same',
+          role: 'user',
+          text: 'same',
+          timestamp: '2026-01-01T00:00:00.000Z',
+          editId: null,
+          offset: 0,
+          continues: false,
+        },
+        {
+          entryId: 'same',
+          role: 'user',
+          text: 'same',
+          timestamp: '2026-01-01T00:00:00.000Z',
+          editId: null,
+          offset: 0,
+          continues: false,
+        },
+      ],
+    },
+    {
+      file: '/archive/b.jsonl',
+      sessionId: 'session-b',
+      cwd: '/work/b',
+      branchId: 'branch-b',
+      reviewedThrough: 'checkpoint-b',
+      entries: [
+        {
+          entryId: 'middle',
+          role: 'assistant',
+          text: 'middle',
+          timestamp: '2026-01-02T00:00:00.000Z',
+          editId: 'edit-b',
+          offset: 7,
+          continues: true,
+        },
+      ],
+    },
+    {
+      file: '/archive/a.jsonl',
+      sessionId: 'session-a',
+      cwd: '/work/a',
+      branchId: 'branch-a',
+      reviewedThrough: null,
+      entries: [
+        {
+          entryId: 'same',
+          role: 'user',
+          text: 'same',
+          timestamp: '2026-01-01T00:00:00.000Z',
+          editId: null,
+          offset: 0,
+          continues: false,
+        },
+      ],
+    },
+  ]);
+});
+
+it('does not skip empty evidence while advancing a page cursor', () => {
+  const evidence = [pageEntry({ entryId: 'empty', text: '' }), pageEntry({ entryId: 'later' })];
+  const page = boundedEvidencePage(evidence, { index: 0, offset: 0 }, (entries, cursor) => ({
+    batch: 'batch',
+    groups: groupEvidencePage(entries),
+    hasMore: cursor.index < evidence.length,
+  }));
+
+  expect(page.cursor).toEqual({ index: 2, offset: 0 });
+  expect(page.data['groups']).toMatchObject([
+    {
+      entries: [
+        { entryId: 'empty', text: '' },
+        { entryId: 'later', text: 'evidence' },
+      ],
+    },
+  ]);
+});
+
+it('retains empty text entries in the grouped shape', () => {
+  const groups = groupEvidencePage([pageEntry({ entryId: 'empty', text: '' })]);
+  expect(groups[0]?.entries).toEqual([
+    {
+      entryId: 'empty',
+      role: 'user',
+      text: '',
+      timestamp: '2026-01-01T00:00:00.000Z',
+      editId: null,
+      offset: 0,
+      continues: false,
+    },
+  ]);
+});
+
+it.each(['file', 'sessionId', 'cwd', 'branchId', 'reviewedThrough'] as const)(
+  'starts a new group when shared %s differs',
+  (field) => {
+    const first = pageEntry();
+    const changed = {
+      ...first,
+      [field]: field === 'reviewedThrough' ? 'checkpoint' : `${first[field]}-changed`,
+    };
+    expect(groupEvidencePage([first, changed])).toHaveLength(2);
+  },
+);
 
 function renderSummary(tool: TestTool, response: unknown, action: ResultDetails['action']): string {
   const renderer = tool.renderResult;
@@ -574,7 +744,7 @@ it('releases an open review across a fresh disabled runtime without advancing ch
       await firstTool.execute('call-1', { action: 'begin' }, undefined, undefined, context),
     );
     expect(firstReview.capturedTips).toBe(1);
-    expect(firstReview.entries).toEqual(
+    expect(expandEvidenceGroups(firstReview)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           entryId: 'answer',
@@ -611,7 +781,7 @@ it('releases an open review across a fresh disabled runtime without advancing ch
       await thirdTool.execute('call-2', { action: 'begin' }, undefined, undefined, context),
     );
     expect(resumedReview.capturedTips).toBe(1);
-    expect(resumedReview.entries).toEqual(firstReview.entries);
+    expect(expandEvidenceGroups(resumedReview)).toEqual(expandEvidenceGroups(firstReview));
     await thirdTool.execute(
       'call-3',
       { action: 'cancel', batch: resumedReview.batch as string },
@@ -689,7 +859,7 @@ it.each(['recordBytes', 'sourceEntries', 'sourceTextBytes', 'sourceBranches'] as
         save(message('old', null), message('new', 'old'), message('third', 'new'));
       else save(message('old', null), message('new', 'old', 'x'.repeat(300)));
       const failed = await call('begin', undefined, '14d');
-      expect(failed.entries).toEqual([]);
+      expect(expandEvidenceGroups(failed)).toEqual([]);
       expect(failed.incomplete).toBe(true);
       expect(failed.warnings?.join()).toMatch(/limit exceeded/);
       expect(await call('finish', failed.batch)).toMatchObject({
@@ -699,7 +869,7 @@ it.each(['recordBytes', 'sourceEntries', 'sourceTextBytes', 'sourceBranches'] as
       expect(state()).toEqual(before);
       save(message('old', null), message('new', 'old'));
       const retry = await call('begin');
-      expect(retry.entries?.map((entry) => entry.entryId)).toEqual(['new']);
+      expect(expandEvidenceGroups(retry).map((entry) => entry.entryId)).toEqual(['new']);
       await call('finish', retry.batch);
       expect(state().reviewed.map((tip) => tip.entryId)).toEqual(['old', 'new']);
     } finally {
@@ -778,7 +948,7 @@ it.each(['discovery', 'prepare', 'source'] as const)(
           context,
         ),
       );
-      expect(retry.entries?.map((entry) => entry.text)).toEqual(['complete evidence']);
+      expect(expandEvidenceGroups(retry).map((entry) => entry.text)).toEqual(['complete evidence']);
       await tool.execute(
         'finish',
         { action: 'finish', batch: retry.batch },
@@ -850,7 +1020,7 @@ it('pages faithfully, cancels without consuming, persists finish and isolates la
     writeFileSync(file, '{rewritten after begin\n');
     expect(firstPage.capturedTips).toBe(1);
     expect(firstPage.hasMore).toBe(true);
-    expect(firstPage.entries).toEqual(expect.any(Array));
+    expect(firstPage.groups).toEqual(expect.any(Array));
 
     const batch = firstPage.batch;
     expect(typeof batch).toBe('string');
@@ -874,7 +1044,25 @@ it('pages faithfully, cancels without consuming, persists finish and isolates la
       ),
     );
     expect(secondPage.hasMore).toBe(false);
-    const chunks = [...firstPage.entries!, ...secondPage.entries!].filter(
+    const firstPageEntries = expandEvidenceGroups(firstPage);
+    const secondPageEntries = expandEvidenceGroups(secondPage);
+    expect(firstPageEntries[0]).toMatchObject({
+      file,
+      sessionId: 'session',
+      cwd: dir,
+      branchId: 'answer',
+      reviewedThrough: null,
+    });
+    expect(secondPage.groups?.[0]).toEqual(
+      expect.objectContaining({
+        file,
+        sessionId: 'session',
+        cwd: dir,
+        branchId: 'answer',
+        reviewedThrough: null,
+      }),
+    );
+    const chunks = [...firstPageEntries, ...secondPageEntries].filter(
       (entry) => entry.entryId === 'answer',
     );
     expect(chunks.map((entry) => entry.text).join('')).toBe(longText);
@@ -915,19 +1103,204 @@ it('pages faithfully, cancels without consuming, persists finish and isolates la
         ),
       );
     const later = await call('begin');
-    expect(later.entries?.map((entry) => entry.text)).toEqual(['later']);
+    expect(expandEvidenceGroups(later).map((entry) => entry.text)).toEqual(['later']);
     await expect(call('next', 'wrong-token')).rejects.toThrow(/matching open review/);
     await expect(call('begin')).rejects.toThrow(/already open/);
     await call('cancel', later.batch);
     await shutdown({}, context);
     await start({}, context);
     const retry = await call('begin');
-    expect(retry.entries).toEqual(later.entries);
+    expect(retry.groups).toEqual(later.groups);
     await call('finish', retry.batch);
     const empty = await call('begin');
-    expect(empty.entries).toEqual([]);
+    expect(empty.groups).toEqual([]);
     expect(empty.capturedTips).toBe(0);
     await call('cancel', empty.batch);
+  } finally {
+    await shutdown({}, context);
+    if (previousAgentDir === undefined) delete process.env['PI_CODING_AGENT_DIR'];
+    else process.env['PI_CODING_AGENT_DIR'] = previousAgentDir;
+    if (previousState === undefined) delete process.env['XDG_STATE_HOME'];
+    else process.env['XDG_STATE_HOME'] = previousState;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it.each([
+  ['escaped controls', '\u0000'.repeat(12_000)],
+  ['a surrogate pair at the character limit', `${'a'.repeat(11_999)}🌱tail`],
+] as const)('bounds complete JSON pages and reconstructs %s text exactly', async (kind, text) => {
+  const dir = mkdtempSync(join(tmpdir(), 'remembrancer-response-size-'));
+  const previousAgentDir = process.env['PI_CODING_AGENT_DIR'];
+  const previousState = process.env['XDG_STATE_HOME'];
+  process.env['PI_CODING_AGENT_DIR'] = join(dir, 'agent');
+  process.env['XDG_STATE_HOME'] = join(dir, 'state');
+  const file = join(dir, 'session.jsonl');
+  writeFileSync(
+    file,
+    [
+      JSON.stringify({ type: 'session', id: 'session', cwd: dir }),
+      JSON.stringify({
+        type: 'message',
+        id: 'evidence',
+        parentId: null,
+        timestamp: '2026-01-30T00:00:00.000Z',
+        message: { role: 'user', content: text },
+      }),
+      '',
+    ].join('\n'),
+  );
+
+  const extension = fakeExtension();
+  remembrancer(extension.api);
+  const context = contextFor(dir, file);
+  const start = extension.handlers.get('session_start')!;
+  const shutdown = extension.handlers.get('session_shutdown')!;
+  try {
+    await start({}, context);
+    const tool = extension.tools[0]!;
+    const first = decode(
+      await tool.execute('size-begin', { action: 'begin' }, undefined, undefined, context),
+    );
+    const pages = [first];
+    let current = first;
+    while (current.hasMore) {
+      if (pages.length >= 10) throw new Error('Response pagination did not finish');
+      current = decode(
+        await tool.execute(
+          'size-next',
+          { action: 'next', batch: first.batch },
+          undefined,
+          undefined,
+          context,
+        ),
+      );
+      pages.push(current);
+    }
+
+    for (const response of pages) {
+      expect(response).not.toHaveProperty('entries');
+      expect(response.groups).toHaveLength(1);
+      expect(response.groups?.[0]).toMatchObject({
+        file,
+        sessionId: 'session',
+        cwd: dir,
+        branchId: 'evidence',
+        reviewedThrough: null,
+      });
+    }
+    const entries = pages.flatMap(expandEvidenceGroups);
+    expect(entries.map((entry) => entry.text).join('')).toBe(text);
+    let offset = 0;
+    for (const entry of entries) {
+      expect(entry.offset).toBe(offset);
+      offset += entry.text.length;
+      expect(entry.continues).toBe(offset < text.length);
+    }
+    expect(entries.at(-1)?.continues).toBe(false);
+
+    if (kind === 'a surrogate pair at the character limit') {
+      expect(entries[0]?.text.length).toBe(11_999);
+      expect(entries[0]!.text.charCodeAt(entries[0]!.text.length - 1)).not.toBeGreaterThanOrEqual(
+        0xd800,
+      );
+      expect(entries[1]?.text.startsWith('🌱')).toBe(true);
+      expect(entries[1]!.text.charCodeAt(0)).not.toBeGreaterThanOrEqual(0xdc00);
+    } else {
+      expect(entries[0]?.text.length).toBeLessThan(text.length);
+    }
+
+    decode(
+      await tool.execute(
+        'size-cancel',
+        { action: 'cancel', batch: first.batch },
+        undefined,
+        undefined,
+        context,
+      ),
+    );
+  } finally {
+    await shutdown({}, context);
+    if (previousAgentDir === undefined) delete process.env['PI_CODING_AGENT_DIR'];
+    else process.env['PI_CODING_AGENT_DIR'] = previousAgentDir;
+    if (previousState === undefined) delete process.env['XDG_STATE_HOME'];
+    else process.env['XDG_STATE_HOME'] = previousState;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it('fails oversized group metadata and begin envelopes without changing checkpoints', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'remembrancer-response-metadata-'));
+  const state = join(dir, 'state');
+  const previousAgentDir = process.env['PI_CODING_AGENT_DIR'];
+  const previousState = process.env['XDG_STATE_HOME'];
+  process.env['PI_CODING_AGENT_DIR'] = join(dir, 'agent');
+  process.env['XDG_STATE_HOME'] = state;
+  const file = join(dir, 'session.jsonl');
+  const writeSession = (cwd: string, unknownTimestamps: boolean) => {
+    const rows: unknown[] = [{ type: 'session', id: 'session', cwd }];
+    let parentId: string | null = null;
+    const count = unknownTimestamps ? 600 : 1;
+    for (let index = 0; index < count; index++) {
+      const row: Record<string, unknown> = {
+        type: 'message',
+        id: `entry-${String(index).padStart(4, '0')}`,
+        parentId,
+        message: { role: 'user', content: `evidence-${index}` },
+      };
+      if (!unknownTimestamps) row['timestamp'] = '2026-01-30T00:00:00.000Z';
+      rows.push(row);
+      parentId = row['id'] as string;
+    }
+    writeFileSync(file, rows.map((row) => JSON.stringify(row)).join('\n') + '\n');
+  };
+  const context = contextFor(dir, file);
+  const extension = fakeExtension();
+  remembrancer(extension.api);
+  const start = extension.handlers.get('session_start')!;
+  const shutdown = extension.handlers.get('session_shutdown')!;
+  const checkpointPath = join(state, 'pi-remembrancer', 'checkpoints.sqlite3');
+  const persisted = () => {
+    const store = new CheckpointStore(checkpointPath);
+    try {
+      return { sources: store.sources(), reviewed: store.reviewed() };
+    } finally {
+      store.close();
+    }
+  };
+
+  try {
+    writeSession('\u0000'.repeat(9_000), false);
+    await start({}, context);
+    const tool = extension.tools[0]!;
+    const before = persisted();
+    await expect(
+      tool.execute('large-group-metadata', { action: 'begin' }, undefined, undefined, context),
+    ).rejects.toThrow(/complete evidence entry.*UTF-8 limit/);
+    expect(persisted()).toEqual(before);
+
+    writeSession(dir, true);
+    await expect(
+      tool.execute('large-begin-envelope', { action: 'begin' }, undefined, undefined, context),
+    ).rejects.toThrow(/complete evidence entry.*UTF-8 limit/);
+    expect(persisted()).toEqual(before);
+
+    writeSession(dir, false);
+    const begin = decode(
+      await tool.execute('metadata-retry', { action: 'begin' }, undefined, undefined, context),
+    );
+    expect(begin.groups?.[0]?.entries).toHaveLength(1);
+    expect(persisted()).toEqual(before);
+    decode(
+      await tool.execute(
+        'metadata-cancel',
+        { action: 'cancel', batch: begin.batch },
+        undefined,
+        undefined,
+        context,
+      ),
+    );
+    expect(persisted()).toEqual(before);
   } finally {
     await shutdown({}, context);
     if (previousAgentDir === undefined) delete process.env['PI_CODING_AGENT_DIR'];
@@ -1045,7 +1418,13 @@ it('keeps structured warnings in frozen details across every successful action w
     expect(contextResult).toMatchObject({
       batch: begin.batch,
       contextOnly: true,
-      entries: [{ entryId: 'root', text: 'prior context' }],
+      groups: [
+        {
+          sessionId: 'session',
+          branchId: 'selected',
+          entries: [{ entryId: 'root', text: 'prior context' }],
+        },
+      ],
     });
     expect(detailsOf(contextResponse)).toEqual({
       action: 'context',
@@ -1226,7 +1605,7 @@ it('renders registered execute results with coverage and branch-tip states', asy
       context,
     );
     const zeroTipBegin = decode(zeroTipBeginResponse);
-    expect(zeroTipBegin.entries).toEqual([]);
+    expect(zeroTipBegin.groups).toEqual([]);
     const zeroTipFinishResponse = await tool.execute(
       'render-zero-tip-seed-finish',
       { action: 'finish', batch: zeroTipBegin.batch },
@@ -1254,7 +1633,9 @@ it('renders registered execute results with coverage and branch-tip states', asy
       context,
     );
     const seededBegin = decode(seededBeginResponse);
-    expect(seededBegin.entries?.map((entry) => entry.text)).toEqual(['seeded evidence']);
+    expect(expandEvidenceGroups(seededBegin).map((entry) => entry.text)).toEqual([
+      'seeded evidence',
+    ]);
     const seededFinishResponse = await tool.execute(
       'render-seeded-finish',
       { action: 'finish', batch: seededBegin.batch },
@@ -1367,14 +1748,14 @@ it('does not enroll a newly referenced current source after ordinary preparation
       );
 
     const failed = await call('begin');
-    expect(failed.entries).toEqual([]);
+    expect(failed.groups).toEqual([]);
     expect(failed.incomplete).toBe(true);
     await call('finish', failed.batch);
     expect(persisted()).toEqual({ sources: [], reviewed: [] });
 
     repair();
     const retry = await call('begin');
-    expect(retry.entries?.map((entry) => entry.text)).toEqual(['repaired evidence']);
+    expect(expandEvidenceGroups(retry).map((entry) => entry.text)).toEqual(['repaired evidence']);
     await call('finish', retry.batch);
     expect(persisted()).toEqual({
       sources: [{ sessionId: 'session', file, seedSince: null }],
@@ -1463,7 +1844,9 @@ it('seeds every default Pi archive bucket, stages new sources, and keeps ordinar
     const ordinary = decode(
       await tool.execute('ordinary', { action: 'begin' }, undefined, undefined, legacyContext),
     );
-    expect(ordinary.entries?.map((entry) => entry.text)).toEqual(['current commitment']);
+    expect(expandEvidenceGroups(ordinary).map((entry) => entry.text)).toEqual([
+      'current commitment',
+    ]);
     await tool.execute(
       'ordinary-cancel',
       { action: 'cancel', batch: ordinary.batch },
@@ -1481,7 +1864,7 @@ it('seeds every default Pi archive bucket, stages new sources, and keeps ordinar
         context,
       ),
     );
-    expect(cancelledSeed.entries?.map((entry) => entry.text)).toEqual([
+    expect(expandEvidenceGroups(cancelledSeed).map((entry) => entry.text)).toEqual([
       'current commitment',
       'worker commitment',
     ]);
@@ -1501,7 +1884,9 @@ it('seeds every default Pi archive bucket, stages new sources, and keeps ordinar
         context,
       ),
     );
-    expect(ordinaryAfterCancel.entries?.map((entry) => entry.text)).toEqual(['current commitment']);
+    expect(expandEvidenceGroups(ordinaryAfterCancel).map((entry) => entry.text)).toEqual([
+      'current commitment',
+    ]);
     await tool.execute(
       'cancel-ordinary-after-cancel',
       { action: 'cancel', batch: ordinaryAfterCancel.batch },
@@ -1527,12 +1912,17 @@ it('seeds every default Pi archive bucket, stages new sources, and keeps ordinar
       incomplete: false,
       warnings: [],
     });
-    expect(seed.entries?.map((entry) => entry.text)).toEqual([
+    expect(expandEvidenceGroups(seed).map((entry) => entry.text)).toEqual([
       'current commitment',
       'worker commitment',
     ]);
     expect(
-      seed.entries?.map((entry) => [entry.sessionId, entry.branchId, entry.entryId, entry.editId]),
+      expandEvidenceGroups(seed).map((entry) => [
+        entry.sessionId,
+        entry.branchId,
+        entry.entryId,
+        entry.editId,
+      ]),
     ).toEqual([
       ['session', 'current', 'current', null],
       ['worker', 'worker-message', 'worker-message', null],
@@ -1579,7 +1969,7 @@ it('seeds every default Pi archive bucket, stages new sources, and keeps ordinar
         context,
       ),
     );
-    expect(emptyExpansion.entries).toEqual([]);
+    expect(emptyExpansion.groups).toEqual([]);
     expect(emptyExpansion.status).toBe('coverage-pending');
     await tool.execute(
       'empty-expansion-cancel',
@@ -1598,7 +1988,7 @@ it('seeds every default Pi archive bucket, stages new sources, and keeps ordinar
         context,
       ),
     );
-    expect(retriedEmptyExpansion.entries).toEqual([]);
+    expect(retriedEmptyExpansion.groups).toEqual([]);
     expect(retriedEmptyExpansion.status).toBe('coverage-pending');
     const expanded = decode(
       await tool.execute(
@@ -1650,7 +2040,7 @@ it('seeds every default Pi archive bucket, stages new sources, and keeps ordinar
         context,
       ),
     );
-    expect(next.entries?.map((entry) => entry.text)).toEqual(['late commitment']);
+    expect(expandEvidenceGroups(next).map((entry) => entry.text)).toEqual(['late commitment']);
     expect(next.status).toBe('review');
     await retryTool.execute(
       'next-finish',
@@ -1668,7 +2058,7 @@ it('seeds every default Pi archive bucket, stages new sources, and keeps ordinar
         context,
       ),
     );
-    expect(empty.entries).toEqual([]);
+    expect(empty.groups).toEqual([]);
     expect(empty.status).toBe('already-covered');
     await retryTool.execute(
       'empty-cancel',
@@ -1762,7 +2152,12 @@ it('finishes healthy sources despite blank IDs and leaves an ambiguous source un
       ),
     );
     expect(
-      first.entries?.map((entry) => [entry.sessionId, entry.branchId, entry.entryId, entry.editId]),
+      expandEvidenceGroups(first).map((entry) => [
+        entry.sessionId,
+        entry.branchId,
+        entry.entryId,
+        entry.editId,
+      ]),
     ).toEqual([
       ['session', 'enrolled', 'enrolled', null],
       ['healthy', 'healthy-message', 'healthy-message', null],
@@ -1813,7 +2208,7 @@ it('finishes healthy sources despite blank IDs and leaves an ambiguous source un
         context,
       ),
     );
-    expect(second.entries).toEqual([]);
+    expect(second.groups).toEqual([]);
     expect(second.incomplete).toBe(true);
     expect(second.status).toBe('incomplete');
     const secondFinished = decode(
@@ -1898,7 +2293,7 @@ it('finishes healthy seed sources as partial when archive discovery is incomplet
         context,
       ),
     );
-    expect(review.entries?.map((entry) => entry.text)).toEqual(['healthy commitment']);
+    expect(expandEvidenceGroups(review).map((entry) => entry.text)).toEqual(['healthy commitment']);
     expect(review.incomplete).toBe(true);
     expect(review.status).toBe('incomplete');
     const finished = decode(
@@ -1947,7 +2342,7 @@ it('returns frozen selected context on demand without advancing pages or reading
   const file = join(archive, 'session.jsonl');
   const old = new Date(Date.now() - 30 * 86_400_000).toISOString();
   const recent = new Date(Date.now() - 7 * 86_400_000).toISOString();
-  const oldContext = 'x'.repeat(12_050);
+  const oldContext = `${'x'.repeat(11_999)}🌱${'x'.repeat(49)}`;
   writeFileSync(
     file,
     [
@@ -1984,12 +2379,15 @@ it('returns frozen selected context on demand without advancing pages or reading
     const review = decode(
       await tool.execute('begin', { action: 'begin', seed: '14d' }, undefined, undefined, context),
     );
-    expect(review.entries?.map((entry) => entry.text)).toEqual(['selected commitment']);
+    expect(expandEvidenceGroups(review).map((entry) => entry.text)).toEqual([
+      'selected commitment',
+    ]);
+    const selectedEvidence = expandEvidenceGroups(review)[0]!;
     const selected = {
-      sessionId: 'session',
-      branchId: 'selected',
-      entryId: 'selected',
-      editId: null,
+      sessionId: selectedEvidence.sessionId,
+      branchId: selectedEvidence.branchId,
+      entryId: selectedEvidence.entryId,
+      editId: selectedEvidence.editId,
     };
     const contextCall = async (offset?: number, before?: number) =>
       decode(
@@ -2033,10 +2431,22 @@ it('returns frozen selected context on demand without advancing pages or reading
     ).rejects.toThrow(/Context arguments require/);
     const first = await contextCall();
     expect(first.contextOnly).toBe(true);
-    expect(first.entries?.[0]?.text.length).toBe(12_000);
-    expect(first.nextOffset).toBe(12_000);
+    expect(first.groups?.[0]).toMatchObject({
+      file,
+      sessionId: 'session',
+      cwd: dir,
+      branchId: 'selected',
+      reviewedThrough: null,
+    });
+    expect(expandEvidenceGroups(first)[0]?.text.length).toBe(11_999);
+    expect(first.nextOffset).toBe(11_999);
+    await expect(contextCall(12_000)).rejects.toThrow(/splits a surrogate pair/);
     const tail = await contextCall(first.nextOffset as number);
-    expect(tail.entries?.map((entry) => entry.text).join('')).toBe(oldContext.slice(12_000));
+    expect(
+      expandEvidenceGroups(tail)
+        .map((entry) => entry.text)
+        .join(''),
+    ).toBe(oldContext.slice(11_999));
     expect(tail.nextOffset).toBeNull();
     await expect(contextCall(oldContext.length + 1)).rejects.toThrow(/beyond/);
 
@@ -2051,7 +2461,7 @@ it('returns frozen selected context on demand without advancing pages or reading
       }) + '\n',
     );
     const repeated = await contextCall();
-    expect(repeated.entries).toEqual(first.entries);
+    expect(repeated.groups).toEqual(first.groups);
     await tool.execute(
       'finish',
       { action: 'finish', batch: review.batch },
@@ -2202,7 +2612,7 @@ it('bounds context by frozen visible identity and preserves page and write lifec
   try {
     await start({}, context);
     const first = await begin();
-    expect(first.entries?.[0]).toMatchObject({
+    expect(expandEvidenceGroups(first)[0]).toMatchObject({
       sessionId: 'session',
       branchId: 'selected-second',
       entryId: 'selected-long',
@@ -2213,11 +2623,12 @@ it('bounds context by frozen visible identity and preserves page and write lifec
     const beforeContext = persisted();
     const visibleContext = await contextCall({ before: 40 });
     expect(visibleContext.contextOnly).toBe(true);
-    expect(visibleContext.entries).toHaveLength(40);
-    expect(visibleContext.entries?.map((entry) => entry.text)).not.toContain('hidden context');
-    expect(visibleContext.entries?.map((entry) => entry.text)).not.toContain('context-2');
-    expect(visibleContext.entries?.[0]?.text).toBe('context-1');
-    expect(visibleContext.entries?.at(-1)?.text).toBe('context-41');
+    const visibleContextEntries = expandEvidenceGroups(visibleContext);
+    expect(visibleContextEntries).toHaveLength(40);
+    expect(visibleContextEntries.map((entry) => entry.text)).not.toContain('hidden context');
+    expect(visibleContextEntries.map((entry) => entry.text)).not.toContain('context-2');
+    expect(visibleContextEntries[0]?.text).toBe('context-1');
+    expect(visibleContextEntries.at(-1)?.text).toBe('context-41');
     expect(persisted()).toEqual(beforeContext);
 
     await expect(
@@ -2278,7 +2689,7 @@ it('bounds context by frozen visible identity and preserves page and write lifec
       ),
     );
     expect(next.hasMore).toBe(false);
-    expect(next.entries?.map((entry) => entry.entryId)).toContain('selected-second');
+    expect(expandEvidenceGroups(next).map((entry) => entry.entryId)).toContain('selected-second');
     const finished = decode(
       await tool!.execute(
         'context-safety-finish',
@@ -2305,7 +2716,7 @@ it('bounds context by frozen visible identity and preserves page and write lifec
         },
       ],
     });
-    expect(second.entries).toEqual(third.entries);
+    expect(second.groups).toEqual(third.groups);
   } finally {
     await shutdown({}, context);
     if (previousAgentDir === undefined) delete process.env['PI_CODING_AGENT_DIR'];

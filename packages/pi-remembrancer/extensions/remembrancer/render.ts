@@ -24,15 +24,18 @@ type EvidenceEntry = {
   text?: unknown;
   role?: unknown;
   timestamp?: unknown;
-  sessionId?: unknown;
-  branchId?: unknown;
   entryId?: unknown;
   editId?: unknown;
-  file?: unknown;
-  cwd?: unknown;
-  reviewedThrough?: unknown;
   offset?: unknown;
   continues?: unknown;
+};
+type EvidenceGroup = {
+  file?: unknown;
+  sessionId?: unknown;
+  cwd?: unknown;
+  branchId?: unknown;
+  reviewedThrough?: unknown;
+  entries?: unknown;
 };
 
 type RendererContext = Parameters<ReviewRenderResult>[3];
@@ -121,7 +124,11 @@ function countValue(value: unknown): number {
 }
 
 function entryCount(payload: ResultPayload): number {
-  return Array.isArray(payload['entries']) ? payload['entries'].length : 0;
+  if (!Array.isArray(payload['groups'])) return 0;
+  return payload['groups'].reduce((count, value) => {
+    const group = record(value) as EvidenceGroup | undefined;
+    return count + (Array.isArray(group?.entries) ? group.entries.length : 0);
+  }, 0);
 }
 
 function hasMore(payload: ResultPayload): boolean {
@@ -248,28 +255,34 @@ function appendWarningBlocks(
 
 function appendEvidenceBlocks(
   lines: string[],
-  entries: readonly unknown[],
+  groups: readonly unknown[],
   contextOnly: boolean,
   theme: Parameters<ReviewRenderResult>[2],
 ): void {
-  for (const [index, value] of entries.entries()) {
-    const entry = record(value) as EvidenceEntry | undefined;
-    lines.push('');
-    lines.push(`  ${theme.bold(`${contextOnly ? 'Context' : 'Evidence'} ${index + 1}`)}`);
-    lines.push(`    role: ${sanitizeText(String(entry?.role ?? 'unknown'))}`);
-    lines.push(`    timestamp: ${sanitizeText(String(entry?.timestamp ?? 'unknown'))}`);
-    lines.push(`    sessionId: ${sanitizeText(String(entry?.sessionId ?? 'unknown'))}`);
-    lines.push(`    branchId: ${sanitizeText(String(entry?.branchId ?? 'unknown'))}`);
-    lines.push(`    entryId: ${sanitizeText(String(entry?.entryId ?? 'unknown'))}`);
-    lines.push(`    editId: ${sanitizeText(String(entry?.editId ?? 'none'))}`);
-    lines.push(`    source: ${sanitizeText(String(entry?.file ?? 'unknown'))}`);
-    lines.push(`    cwd: ${sanitizeText(String(entry?.cwd ?? 'unknown'))}`);
-    lines.push(`    reviewedThrough: ${sanitizeText(String(entry?.reviewedThrough ?? 'none'))}`);
-    lines.push(`    offset: ${sanitizeText(String(entry?.offset ?? 0))}`);
-    lines.push(`    continues: ${entry?.continues === true ? 'true' : 'false'}`);
-    lines.push('    text:');
-    lines.push(indent(String(entry?.text ?? ''), '      '));
-    if (contextOnly) lines.push('    interpretation only: true');
+  let index = 0;
+  for (const value of groups) {
+    const group = record(value) as EvidenceGroup | undefined;
+    if (!Array.isArray(group?.entries)) continue;
+    for (const entryValue of group.entries) {
+      const entry = record(entryValue) as EvidenceEntry | undefined;
+      index++;
+      lines.push('');
+      lines.push(`  ${theme.bold(`${contextOnly ? 'Context' : 'Evidence'} ${index}`)}`);
+      lines.push(`    role: ${sanitizeText(String(entry?.role ?? 'unknown'))}`);
+      lines.push(`    timestamp: ${sanitizeText(String(entry?.timestamp ?? 'unknown'))}`);
+      lines.push(`    sessionId: ${sanitizeText(String(group?.sessionId ?? 'unknown'))}`);
+      lines.push(`    branchId: ${sanitizeText(String(group?.branchId ?? 'unknown'))}`);
+      lines.push(`    entryId: ${sanitizeText(String(entry?.entryId ?? 'unknown'))}`);
+      lines.push(`    editId: ${sanitizeText(String(entry?.editId ?? 'none'))}`);
+      lines.push(`    source: ${sanitizeText(String(group?.file ?? 'unknown'))}`);
+      lines.push(`    cwd: ${sanitizeText(String(group?.cwd ?? 'unknown'))}`);
+      lines.push(`    reviewedThrough: ${sanitizeText(String(group?.reviewedThrough ?? 'none'))}`);
+      lines.push(`    offset: ${sanitizeText(String(entry?.offset ?? 0))}`);
+      lines.push(`    continues: ${entry?.continues === true ? 'true' : 'false'}`);
+      lines.push('    text:');
+      lines.push(indent(String(entry?.text ?? ''), '      '));
+      if (contextOnly) lines.push('    interpretation only: true');
+    }
   }
 }
 
@@ -407,7 +420,7 @@ export const renderReviewResult: ReviewRenderResult = (result, options, theme, c
   appendWarningBlocks(lines, details.warnings, theme);
   appendEvidenceBlocks(
     lines,
-    Array.isArray(payload['entries']) ? payload['entries'] : [],
+    Array.isArray(payload['groups']) ? payload['groups'] : [],
     payload['contextOnly'] === true,
     theme,
   );

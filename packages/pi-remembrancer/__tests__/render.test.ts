@@ -52,6 +52,25 @@ function warning(kind: Warning['kind'], overrides: Partial<Warning> = {}): Warni
   };
 }
 
+function evidenceGroup(
+  entries: readonly unknown[],
+  source: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    file: '/archive/session.jsonl',
+    sessionId: 'session',
+    cwd: '/work',
+    branchId: 'branch',
+    reviewedThrough: null,
+    ...source,
+    entries,
+  };
+}
+
+function evidenceGroups(entries: readonly unknown[]): Record<string, unknown>[] {
+  return entries.length === 0 ? [] : [evidenceGroup(entries)];
+}
+
 function response(payload: Payload, resultDetails: ReviewResultDetails): RenderResult {
   return {
     content: [{ type: 'text', text: JSON.stringify(payload) }],
@@ -154,7 +173,7 @@ it('registers compact renderers and uses the configured host expansion hint', as
 
     const output = textAt(
       tool.renderResult!,
-      { entries: [], status: 'already-covered', capturedTips: 0 },
+      { groups: [], status: 'already-covered', capturedTips: 0 },
       details('begin'),
       {},
       { keyHint: () => 'ctrl+x to expand' },
@@ -220,7 +239,7 @@ it('renders the required missing-file warning layout with full warning reasons',
     const output = textAt(
       tool.renderResult!,
       {
-        entries: [],
+        groups: [],
         hasMore: true,
         status: 'incomplete',
         capturedTips: 38,
@@ -260,52 +279,54 @@ it('renders the required missing-file warning layout with full warning reasons',
 it('covers every compact action state, including zero-tip coverage and context exhaustion', async () => {
   const { tool, shutdown } = installedRendererTool();
   try {
+    const oneEntry = evidenceGroups([{ text: 'one' }]);
+    const noEntries = { groups: [] };
     const cases: Array<[ReviewResultDetails['action'], Payload, string]> = [
       [
         'begin',
-        { entries: [{ text: 'one' }], hasMore: true, capturedTips: 0 },
+        { groups: oneEntry, hasMore: true, capturedTips: 0 },
         '1 excerpt · 0 branch tips · more evidence',
       ],
       [
         'begin',
-        { entries: [{ text: 'one' }], hasMore: false, capturedTips: 1 },
+        { groups: oneEntry, hasMore: false, capturedTips: 1 },
         '1 excerpt · 1 branch tip · last evidence page',
       ],
       [
         'begin',
-        { entries: [{ text: 'one' }], hasMore: true, capturedTips: 2 },
+        { groups: oneEntry, hasMore: true, capturedTips: 2 },
         '1 excerpt · 2 branch tips · more evidence',
       ],
       [
         'begin',
-        { entries: [{ text: 'one' }], hasMore: false, capturedTips: 2 },
+        { groups: oneEntry, hasMore: false, capturedTips: 2 },
         '1 excerpt · 2 branch tips · last evidence page',
       ],
       [
         'begin',
-        { entries: [], status: 'coverage-pending', coverageChanged: true },
+        { groups: [], status: 'coverage-pending', coverageChanged: true },
         'No new evidence · new coverage to save',
       ],
       [
         'begin',
-        { entries: [], status: 'already-covered', coverageChanged: false },
+        { groups: [], status: 'already-covered', coverageChanged: false },
         'Nothing new · review still open',
       ],
-      ['begin', { entries: [], status: 'incomplete' }, 'No evidence available · review still open'],
-      ['next', { entries: [{ text: 'one' }], hasMore: true }, '1 excerpt · more evidence'],
-      ['next', { entries: [{ text: 'one' }], hasMore: false }, '1 excerpt · last evidence page'],
-      ['next', { entries: [], hasMore: false }, 'No more evidence · review still open'],
+      ['begin', { groups: [], status: 'incomplete' }, 'No evidence available · review still open'],
+      ['next', { groups: oneEntry, hasMore: true }, '1 excerpt · more evidence'],
+      ['next', { groups: oneEntry, hasMore: false }, '1 excerpt · last evidence page'],
+      ['next', { ...noEntries, hasMore: false }, 'No more evidence · review still open'],
       [
         'context',
-        { contextOnly: true, entries: [{ text: 'one' }], nextOffset: 3 },
+        { contextOnly: true, groups: oneEntry, nextOffset: 3 },
         '1 prior excerpt · context only · more context',
       ],
       [
         'context',
-        { contextOnly: true, entries: [{ text: 'one' }], nextOffset: null },
+        { contextOnly: true, groups: oneEntry, nextOffset: null },
         '1 prior excerpt · context only · end of context',
       ],
-      ['context', { contextOnly: true, entries: [], nextOffset: null }, 'No preceding context'],
+      ['context', { contextOnly: true, ...noEntries, nextOffset: null }, 'No preceding context'],
       ['finish', { finished: true, reviewedTips: 4 }, 'Finished · 4 branch tips recorded'],
       [
         'finish',
@@ -344,7 +365,7 @@ it('keeps partial results pending instead of treating domain incompleteness as s
   try {
     const output = textAt(
       tool.renderResult!,
-      { entries: [], status: 'incomplete' },
+      { groups: [], status: 'incomplete' },
       details('begin', { incomplete: true }),
       { isPartial: true },
     );
@@ -364,7 +385,7 @@ it('renders informational and mixed warnings with distinct effects', async () =>
     });
     const output = textAt(
       tool.renderResult!,
-      { entries: [{ text: 'evidence' }], hasMore: false, capturedTips: 1 },
+      { groups: evidenceGroups([{ text: 'evidence' }]), hasMore: false, capturedTips: 1 },
       details('begin', { warnings: [informational] }),
       { expanded: true },
     );
@@ -380,7 +401,7 @@ it('renders informational and mixed warnings with distinct effects', async () =>
     ];
     const mixedOutput = textAt(
       tool.renderResult!,
-      { entries: [], status: 'incomplete' },
+      { groups: [], status: 'incomplete' },
       details('begin', { incomplete: true, warnings: mixed }),
       { expanded: true },
     );
@@ -396,49 +417,61 @@ it('renders informational and mixed warnings with distinct effects', async () =>
 it('keeps all returned evidence order, provenance, continuation fields, and batch metadata', async () => {
   const { tool, shutdown } = installedRendererTool();
   try {
-    const entries = [
-      {
-        role: 'user',
-        timestamp: '2026-01-01T00:00:00.000Z',
-        sessionId: 'session-a',
-        branchId: 'branch-a',
-        entryId: 'entry-a',
-        editId: null,
-        file: '/archive/a.jsonl',
-        cwd: '/work/a',
-        reviewedThrough: null,
-        offset: 0,
-        continues: true,
-        text: 'first chunk',
-      },
-      {
-        role: 'assistant',
-        timestamp: '2026-01-02T00:00:00.000Z',
-        sessionId: 'session-b',
-        branchId: 'branch-b',
-        entryId: 'entry-b',
-        editId: 'edit-b',
-        file: '/archive/b.jsonl',
-        cwd: '/work/b',
-        reviewedThrough: 'checkpoint-b',
-        offset: 11,
-        continues: false,
-        text: 'second chunk',
-      },
+    const groups = [
+      evidenceGroup(
+        [
+          {
+            role: 'user',
+            timestamp: '2026-01-01T00:00:00.000Z',
+            entryId: 'entry-a',
+            editId: null,
+            offset: 0,
+            continues: true,
+            text: 'first chunk',
+          },
+        ],
+        {
+          file: '/archive/a.jsonl',
+          sessionId: 'session-a',
+          cwd: '/work/a',
+          branchId: 'branch-a',
+          reviewedThrough: null,
+        },
+      ),
+      evidenceGroup(
+        [
+          {
+            role: 'assistant',
+            timestamp: '2026-01-02T00:00:00.000Z',
+            entryId: 'entry-b',
+            editId: 'edit-b',
+            offset: 11,
+            continues: false,
+            text: 'second chunk',
+          },
+        ],
+        {
+          file: '/archive/b.jsonl',
+          sessionId: 'session-b',
+          cwd: '/work/b',
+          branchId: 'branch-b',
+          reviewedThrough: 'checkpoint-b',
+        },
+      ),
     ];
     const resultDetails = details('next', {
       seed: '14d',
       requestedSince: '2026-01-01T00:00:00.000Z',
       warnings: [warning('source-failure')],
     });
-    const collapsed = textAt(tool.renderResult!, { entries, hasMore: false }, resultDetails);
+    const collapsed = textAt(tool.renderResult!, { groups, hasMore: false }, resultDetails);
     expect(collapsed).not.toContain('first chunk');
     expect(collapsed).not.toContain('warning reason');
     expect(collapsed).not.toContain('token: batch-token');
     expect(collapsed).not.toContain('seed: 14d');
     expect(collapsed).not.toContain('requestedSince: 2026-01-01T00:00:00.000Z');
 
-    const output = textAt(tool.renderResult!, { entries, hasMore: false }, resultDetails, {
+    const output = textAt(tool.renderResult!, { groups, hasMore: false }, resultDetails, {
       expanded: true,
     });
     expect(output.indexOf('first chunk')).toBeLessThan(output.indexOf('second chunk'));
@@ -486,7 +519,7 @@ it('shows complete actual arguments in expanded successful and failed calls', as
     };
     const output = textAt(
       tool.renderResult!,
-      { contextOnly: true, entries: [], nextOffset: null },
+      { contextOnly: true, groups: [], nextOffset: null },
       details('context'),
       { expanded: true },
       { args },
@@ -533,7 +566,11 @@ it('marks context as interpretation-only and preserves the cancel explanation', 
       tool.renderResult!,
       {
         contextOnly: true,
-        entries: [{ entryId: 'context-entry', text: 'supporting context', continues: false }],
+        groups: [
+          evidenceGroup([
+            { entryId: 'context-entry', text: 'supporting context', continues: false },
+          ]),
+        ],
         nextOffset: null,
       },
       details('context'),
@@ -615,21 +652,27 @@ it('sanitizes control input, wraps Text output at 40/80/120 columns, and replays
   try {
     const unsafePath = `${sourcePath}\u001b[31m\r\u0000/with-a-very-long-unicode-name-漢字`;
     const frozenPayload: Payload = {
-      entries: [
-        {
-          role: 'assistant',
-          timestamp: '2026-01-03',
-          sessionId: 'session',
-          branchId: 'branch',
-          entryId: 'entry',
-          editId: null,
-          file: unsafePath,
-          cwd: '/very/long/working/directory/with/漢字',
-          reviewedThrough: null,
-          offset: 12000,
-          continues: false,
-          text: `line one\r\u0007\nline two with a long path ${unsafePath}`,
-        },
+      groups: [
+        evidenceGroup(
+          [
+            {
+              role: 'assistant',
+              timestamp: '2026-01-03',
+              entryId: 'entry',
+              editId: null,
+              offset: 12000,
+              continues: false,
+              text: `line one\r\u0007\nline two with a long path ${unsafePath}`,
+            },
+          ],
+          {
+            sessionId: 'session',
+            branchId: 'branch',
+            file: unsafePath,
+            cwd: '/very/long/working/directory/with/漢字',
+            reviewedThrough: null,
+          },
+        ),
       ],
       hasMore: false,
     };

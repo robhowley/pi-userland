@@ -87,8 +87,38 @@ Use this procedure for evidence from both the current conversation and a frozen 
 
 ## Full cross-session review
 
-1. Begin the review with the requested `remembrancer_review` action. For `seed 14d`, add `seed: "14d"`. Read every returned page with `action: "next"` and the same batch token until no pages remain. Later changes are not part of the batch.
-2. If a selected item needs interpretation, call `action: "context"` with the same batch token and request only the needed context. Context supports interpretation, not new proposal evidence, and does not advance pages.
+1. Begin the review with the requested `remembrancer_review` action. For `seed 14d`, add `seed: "14d"`. Read every returned page with `action: "next"` and the same batch token until no pages remain. Later changes are not part of the batch. Evidence pages have this shape:
+
+   ```json
+   {
+     "batch": "...",
+     "groups": [
+       {
+         "file": "...",
+         "sessionId": "...",
+         "cwd": "...",
+         "branchId": "...",
+         "reviewedThrough": null,
+         "entries": [
+           {
+             "entryId": "...",
+             "role": "user",
+             "text": "...",
+             "timestamp": "...",
+             "editId": null,
+             "offset": 0,
+             "continues": false
+           }
+         ]
+       }
+     ],
+     "hasMore": false
+   }
+   ```
+
+   Combine only adjacent entries whose `file`, `sessionId`, `cwd`, `branchId`, and `reviewedThrough` all match. Each next page repeats its own group metadata. Read entries in array order, preserve duplicates and nulls, and join chunks by their offsets and `continues` flags. The complete serialized JSON response, including metadata and escaping, is limited to 50 KiB UTF-8; long text continues on later pages without omission.
+
+2. If a selected item needs interpretation, call `action: "context"` with the same batch token and request only the needed context. Context uses the same grouped evidence shape, plus `selected`, `contextOnly`, and `nextOffset`. Build `selected` from the containing group and entry: `{sessionId: group.sessionId, branchId: group.branchId, entryId: entry.entryId, editId: entry.editId}`. Context supports interpretation, not new proposal evidence, and does not advance review pages.
 3. Follow **Reconcile evidence** above. Report unavailable sources from warnings; they remain unreviewed but do not prevent finishing the available batch as a partial result. Unknown-time warnings are informational and do not by themselves make the review partial.
 4. After every available page is read, every proposal decided, and every accepted change applied and verified, call `remembrancer_review` with `action: "finish"` and the same batch token. An empty batch can finish. Do not finish while a proposal is undecided. If the user abandons the review, or a failure prevents resolving the available evidence or applying and verifying accepted changes, report it and call `action: "cancel"`. Later changes remain eligible.
 
