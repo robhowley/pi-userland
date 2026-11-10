@@ -153,8 +153,8 @@ const selectedParameters = Type.Object({
 });
 
 export const REVIEW_RESPONSE_MAX_BYTES = 50 * 1024;
-const PAGE_MAX_TEXT_UNITS = 12_000;
-const PAGE_MAX_ENTRIES = 40;
+const PAGE_MAX_TEXT_UNITS = 48_000;
+const PAGE_MAX_ENTRIES = 200;
 
 export type EvidencePageEntry = Evidence & { offset: number; continues: boolean };
 type EvidencePageItem = Pick<Evidence, 'entryId' | 'role' | 'text' | 'timestamp' | 'editId'> & {
