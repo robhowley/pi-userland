@@ -48,9 +48,10 @@ export type ProposalState =
   | 'already_satisfied'
   | 'failed'
   | 'uncertain';
-export type ApplicationResult =
+export type ApplicationResult = { actual?: Record<string, unknown> | null } & (
   | { state: 'applied' | 'already_satisfied'; verified: TaskSnapshot; error: null }
-  | { state: 'failed' | 'uncertain'; verified: TaskSnapshot | null; error: string };
+  | { state: 'failed' | 'uncertain'; verified: TaskSnapshot | null; error: string }
+);
 export type Proposal = ProposalDraft & {
   id: string;
   revision: number;
@@ -59,9 +60,11 @@ export type Proposal = ProposalDraft & {
   sources: ProposalSource[];
   state: ProposalState;
   claim: string | null;
+  applicationBefore?: TaskSnapshot | null;
   result: ApplicationResult | null;
   createdAt: string;
   updatedAt: string;
+  history?: Omit<Proposal, 'history'>[];
 };
 
 export function stringEnumSchema<const Values extends readonly string[]>(values: Values) {

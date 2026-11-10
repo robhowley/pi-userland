@@ -55,6 +55,20 @@ You can also invoke the skill directly:
 /skill:remembrancer review commitments across my saved sessions
 ```
 
+## Saved proposals
+
+`/remembrancer proposals` opens local, durable proposals in TUI mode. Startup shows their pending count without calling a model or Taskwarrior, even with automatic capture off. `disabled` hides this workflow.
+
+- Arrow keys navigate; Page Up/Down scroll every field, annotation and saved quote.
+- `Ctrl+A` applies only the displayed item. Enter never applies.
+- `e` edits the JSON draft and saves it without changing tasks; `d` dismisses one proposal.
+- `s` opens saved source excerpts and locations, even when the original file is missing. This view does not load surrounding transcript context or switch sessions.
+- Closing preserves drafts, decisions and previously applied changes. There is no accept-all.
+
+A changed task or proposal requires approval of a refreshed preview. An interrupted application stays uncertain and is never automatically retried. Reopen it to inspect the actual task; `Ctrl+A` then only verifies and records an already-satisfied result. If it does not match, resolve the task manually. Taskwarrior and local storage cannot commit atomically, and unrelated external task edits can still race the final check.
+
+Manual review saves proposals and analyzed coverage together, separately from approval. Automatic shutdown capture is not wired.
+
 ## Optional waiting conditions
 
 To record what a task is waiting on, add the `waitingon` field:

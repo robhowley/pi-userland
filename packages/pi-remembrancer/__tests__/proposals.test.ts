@@ -171,6 +171,122 @@ it('persists drafts, decisions and claims across restart; uncertain writes canno
   }
 });
 
+it.each(['edit', 'dismiss'] as const)(
+  'archives failed application evidence on %s and fences the old claimant after restart',
+  (action) => {
+    const dir = mkdtempSync(join(tmpdir(), 'proposal-failed-'));
+    const path = join(dir, 'state.sqlite');
+    let store = new CheckpointStore(path);
+    try {
+      const [first] = store.finish(freeze(store), [submission]);
+      const claim = store.claimProposal(first!.id, first!.revision, null);
+      const failed = store.recordProposalResult(claim.id, claim.revision, claim.claim!, {
+        state: 'failed',
+        verified: snapshot,
+        actual: { uuid: snapshot.uuid, description: 'Partial external write' },
+        error: 'Write partially completed',
+      });
+      store.close();
+      store = new CheckpointStore(path);
+      expect(store.proposal(failed.id)).toEqual(failed);
+      const decision =
+        action === 'edit'
+          ? store.editProposal(failed.id, failed.revision, {
+              change: submission.change,
+              expected: null,
+              question: null,
+            })
+          : store.dismissProposal(failed.id, failed.revision);
+      expect(decision.state).toBe(action === 'edit' ? 'pending' : 'dismissed');
+      expect(decision.claim).toBeNull();
+      expect(decision.result).toBeNull();
+      expect(decision).not.toHaveProperty('applicationBefore');
+      const { history, ...previous } = failed;
+      expect(decision.history).toEqual([...history!, previous]);
+      store.close();
+      store = new CheckpointStore(path);
+      expect(store.proposal(decision.id)).toEqual(decision);
+      const result = { state: 'applied' as const, verified: snapshot, error: null };
+      expect(() =>
+        store.recordProposalResult(decision.id, claim.revision, claim.claim!, result),
+      ).toThrow(/revision/);
+      expect(() =>
+        store.recordProposalResult(decision.id, decision.revision, claim.claim!, result),
+      ).toThrow(/state/);
+      if (action === 'edit') {
+        const next = store.claimProposal(decision.id, decision.revision);
+        expect(next.claim).not.toBe(claim.claim);
+        expect(() =>
+          store.recordProposalResult(next.id, next.revision, claim.claim!, result),
+        ).toThrow(/claim/);
+        expect(store.proposal(next.id)).toEqual(next);
+      }
+    } finally {
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
+
+it.each(['applied', 'already_satisfied', 'failed', 'uncertain'] as const)(
+  'persists matching %s outcome and claim, rejecting invalid outcomes without mutation',
+  (state) => {
+    const dir = mkdtempSync(join(tmpdir(), 'proposal-result-'));
+    const path = join(dir, 'state.sqlite');
+    let store = new CheckpointStore(path);
+    try {
+      const [first] = store.finish(freeze(store), [submission]);
+      const claim = store.claimProposal(first!.id, first!.revision, null);
+      for (const invalid of [
+        { state: 'pending', verified: null, error: null },
+        { state: 'applied', verified: null, error: null },
+        { state: 'failed', verified: null, error: '' },
+      ]) {
+        expect(() =>
+          store.recordProposalResult(claim.id, claim.revision, claim.claim!, invalid as never),
+        ).toThrow();
+        expect(store.proposal(claim.id)).toEqual(claim);
+      }
+      const result =
+        state === 'applied' || state === 'already_satisfied'
+          ? { state, verified: snapshot, error: null }
+          : { state, verified: snapshot, error: 'Partial write' };
+      const saved = store.recordProposalResult(claim.id, claim.revision, claim.claim!, result);
+      store.close();
+      store = new CheckpointStore(path);
+      expect(store.proposal(saved.id)).toEqual(saved);
+      expect(saved).toMatchObject({ state, claim: claim.claim, result, applicationBefore: null });
+      expect(() => store.claimProposal(saved.id, saved.revision)).toThrow(/state/);
+      if (state === 'uncertain') {
+        expect(() => store.dismissProposal(saved.id, saved.revision)).toThrow(/state/);
+        expect(() =>
+          store.editProposal(saved.id, saved.revision, {
+            change: submission.change,
+            expected: null,
+            question: null,
+          }),
+        ).toThrow(/state/);
+        const resolved = store.recordProposalResult(saved.id, saved.revision, claim.claim!, {
+          state: 'already_satisfied',
+          verified: snapshot,
+          error: null,
+        });
+        store.close();
+        store = new CheckpointStore(path);
+        expect(store.proposal(saved.id)).toEqual(resolved);
+        expect(resolved.history?.at(-1)?.result).toEqual(result);
+      } else {
+        expect(() =>
+          store.recordProposalResult(saved.id, saved.revision, claim.claim!, result),
+        ).toThrow(/state/);
+      }
+    } finally {
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
+
 it('rejects arbitrary locators, wrong branches, edits, offsets, quotes and unsupported task fields', () => {
   for (const patch of [
     { branchId: 'other' },

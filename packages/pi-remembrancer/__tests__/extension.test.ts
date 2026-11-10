@@ -587,6 +587,56 @@ it('registers the remembrancer lifecycle and review tool after enabled startup',
   }
 });
 
+it.each(['rpc', 'json', 'print', undefined])(
+  'proposal command refuses %s before UI or model calls',
+  async (mode) => {
+    const extension = fakeExtension();
+    remembrancer(extension.api);
+    const notify = vi.fn();
+    const ctx = { ...contextFor('/unused', undefined, '/unused', false, { notify }), mode };
+    await expect(extension.commands.get('remembrancer')!.handler('proposals', ctx)).rejects.toThrow(
+      /TUI/,
+    );
+    expect(notify).not.toHaveBeenCalled();
+    expect(extension.sendUserMessage).not.toHaveBeenCalled();
+  },
+);
+
+it('startup counts stored proposals without analysis and honors disabled', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'proposal-notice-'));
+  const previousState = process.env['XDG_STATE_HOME'];
+  const previousAgent = process.env['PI_CODING_AGENT_DIR'];
+  process.env['XDG_STATE_HOME'] = dir;
+  process.env['PI_CODING_AGENT_DIR'] = join(dir, 'agent');
+  mkdirSync(join(dir, 'agent'));
+  const extension = fakeExtension();
+  remembrancer(extension.api);
+  const notify = vi.fn();
+  const count = vi.spyOn(CheckpointStore.prototype, 'proposalCount').mockReturnValue(3);
+  const ctx = { ...contextFor(dir, undefined, dir, false, { notify }), mode: 'tui' };
+  try {
+    await extension.handlers.get('session_start')!({}, ctx);
+    expect(notify).toHaveBeenCalledWith('3 task proposals · /remembrancer proposals', 'info');
+    expect(count).toHaveBeenCalledOnce();
+    expect(extension.sendUserMessage).not.toHaveBeenCalled();
+    writeFileSync(
+      join(dir, 'agent', 'settings.json'),
+      JSON.stringify({ 'pi-remembrancer': { disabled: true } }),
+    );
+    await extension.handlers.get('session_start')!({}, ctx);
+    expect(count).toHaveBeenCalledOnce();
+    expect(notify).toHaveBeenCalledOnce();
+  } finally {
+    await extension.handlers.get('session_shutdown')!({}, ctx);
+    count.mockRestore();
+    if (previousState === undefined) delete process.env['XDG_STATE_HOME'];
+    else process.env['XDG_STATE_HOME'] = previousState;
+    if (previousAgent === undefined) delete process.env['PI_CODING_AGENT_DIR'];
+    else process.env['PI_CODING_AGENT_DIR'] = previousAgent;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 it('routes the slash command through the Remembrancer skill and completes its arguments', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'remembrancer-command-'));
   const previousAgentDir = process.env['PI_CODING_AGENT_DIR'];
@@ -614,6 +664,7 @@ it('routes the slash command through the Remembrancer skill and completes its ar
     if (!getArgumentCompletions) throw new Error('Remembrancer completions were not registered');
 
     expect(getArgumentCompletions('')).toEqual([
+      expect.objectContaining({ value: 'proposals', label: 'proposals' }),
       expect.objectContaining({ value: 'seed ', label: 'seed' }),
       expect.objectContaining({ value: 'help', label: 'help' }),
     ]);

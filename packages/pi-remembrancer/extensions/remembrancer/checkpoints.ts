@@ -8,6 +8,7 @@ import {
   type ProposalSubmission,
   type ProposalState,
   type ApplicationResult,
+  type TaskSnapshot,
 } from './proposals.js';
 import type { Evidence } from './evidence.js';
 import { chmodSync, closeSync, mkdirSync, openSync } from 'node:fs';
@@ -226,6 +227,19 @@ export class CheckpointStore {
   }
 
   private saveProposal(proposal: Proposal, expectedRevision?: number): void {
+    // Draft decisions have no active application. Outcomes retain the claim and
+    // snapshot they describe; previous applications live only in history.
+    const { state, claim, result, applicationBefore } = proposal;
+    const valid =
+      state === 'pending' || state === 'dismissed'
+        ? claim === null && result === null && applicationBefore === undefined
+        : typeof claim === 'string' &&
+          claim.length > 0 &&
+          (state === 'applying'
+            ? result === null
+            : ['applied', 'already_satisfied', 'failed', 'uncertain'].includes(state) &&
+              result?.state === state);
+    if (!valid) throw new Error('Invalid proposal application state');
     if (expectedRevision === undefined) {
       this.db
         .prepare('INSERT INTO proposals VALUES (?, ?, ?, ?)')
@@ -251,7 +265,13 @@ export class CheckpointStore {
     const value = this.proposal(id);
     if (!value || value.revision !== revision) throw new Error('Proposal revision conflict');
     if (!states.includes(value.state)) throw new Error('Illegal proposal state transition');
-    return { ...value, revision: revision + 1, updatedAt: new Date(this.now()).toISOString() };
+    const { history = [], ...previous } = value;
+    return {
+      ...value,
+      history: [...history, previous],
+      revision: revision + 1,
+      updatedAt: new Date(this.now()).toISOString(),
+    };
   }
 
   editProposal(id: string, revision: number, draft: ProposalDraft): Proposal {
@@ -259,6 +279,9 @@ export class CheckpointStore {
     const value = this.changedProposal(id, revision, ['pending', 'failed']);
     value.draft = structuredClone(draft);
     value.state = 'pending';
+    value.claim = null;
+    value.result = null;
+    delete value.applicationBefore;
     this.saveProposal(value, revision);
     return value;
   }
@@ -266,14 +289,24 @@ export class CheckpointStore {
   dismissProposal(id: string, revision: number): Proposal {
     const value = this.changedProposal(id, revision, ['pending', 'failed']);
     value.state = 'dismissed';
+    value.claim = null;
+    value.result = null;
+    delete value.applicationBefore;
     this.saveProposal(value, revision);
     return value;
   }
 
-  claimProposal(id: string, revision: number): Proposal {
+  claimProposal(id: string, revision: number, before?: TaskSnapshot | null): Proposal {
+    if (before) validateSnapshot(before);
     const value = this.changedProposal(id, revision, ['pending']);
     if ((value.draft ?? value).question !== null)
       throw new Error('Resolve proposal question before applying');
+    const change = (value.draft ?? value).change;
+    if (before !== undefined) {
+      if (change.operation === 'add' ? before !== null : before?.uuid !== change.targetUuid)
+        throw new Error('Application snapshot does not match target');
+      value.applicationBefore = structuredClone(before);
+    }
     value.state = 'applying';
     value.claim = randomUUID();
     value.result = null;
