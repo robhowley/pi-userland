@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import {
   appendFileSync,
   existsSync,
@@ -44,6 +45,10 @@ type Selected = {
 type TestTool = {
   name: string;
   description: string;
+  parameters: ToolDefinition['parameters'] & {
+    properties: Record<string, unknown>;
+    required: string[];
+  };
   execute: (
     id: string,
     args: {
@@ -479,6 +484,275 @@ it('registers the remembrancer lifecycle and review tool after enabled startup',
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+it.each(
+  [undefined, false, true].flatMap((autoCapture) =>
+    [false, true].map((partial) => ({ autoCapture, partial })),
+  ),
+)(
+  'preserves manual finish after a six-minute approval wait (autoCapture=$autoCapture, partial=$partial)',
+  async ({ autoCapture, partial }) => {
+    const dir = mkdtempSync(join(tmpdir(), 'remembrancer-manual-compatibility-'));
+    const agentDir = join(dir, 'agent');
+    const state = join(dir, 'state');
+    const previousAgent = process.env['PI_CODING_AGENT_DIR'];
+    const previousState = process.env['XDG_STATE_HOME'];
+    process.env['PI_CODING_AGENT_DIR'] = agentDir;
+    process.env['XDG_STATE_HOME'] = state;
+    mkdirSync(agentDir);
+    writeFileSync(
+      join(agentDir, 'settings.json'),
+      JSON.stringify({
+        'pi-remembrancer': autoCapture === undefined ? {} : { autoCapture },
+      }),
+    );
+    const file = join(dir, 'session.jsonl');
+    const text = 'commitment '.repeat(5_000);
+    writeFileSync(
+      file,
+      [
+        { type: 'session', id: 'session', cwd: dir },
+        {
+          type: 'message',
+          id: 'commitment',
+          parentId: null,
+          timestamp: '2026-01-30T00:00:00.000Z',
+          message: { role: 'user', content: text },
+        },
+      ]
+        .map((row) => JSON.stringify(row))
+        .join('\n') + '\n',
+    );
+    const checkpointPath = join(state, 'pi-remembrancer', 'checkpoints.sqlite3');
+    const child = fileURLToPath(new URL('./fixtures/review-lock-child.mjs', import.meta.url));
+    const probe = (action = 'claim', ...args: string[]) => {
+      const result = spawnSync(
+        process.execPath,
+        ['--experimental-strip-types', child, checkpointPath, action, ...args],
+        { encoding: 'utf8', timeout: 5_000 },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      return result.stdout;
+    };
+    const missing = { sessionId: 'unavailable', file: join(dir, 'missing.jsonl'), entryId: 'old' };
+    const extension = fakeExtension();
+    remembrancer(extension.api);
+    const context = contextFor(dir, file);
+    const start = extension.handlers.get('session_start')!;
+    const shutdown = extension.handlers.get('session_shutdown')!;
+    let inspector: CheckpointStore | undefined;
+    try {
+      await start({}, context);
+      inspector = new CheckpointStore(checkpointPath);
+      if (partial) {
+        inspector.enroll(missing.sessionId, missing.file);
+        inspector.finish([missing]);
+      }
+      const before = inspector.reviewed();
+      const tool = extension.tools[0]!;
+      expect(Object.keys(tool.parameters.properties)).toEqual([
+        'action',
+        'batch',
+        'seed',
+        'selected',
+        'before',
+        'offset',
+      ]);
+      expect(tool.parameters.required).toEqual(['action']);
+      expect(tool.parameters.properties['action']).toMatchObject({
+        enum: ['begin', 'next', 'context', 'finish', 'cancel'],
+      });
+      expect(context.hasUI).toBe(false);
+      vi.useFakeTimers();
+      const first = decode(
+        await tool.execute('begin', { action: 'begin' }, undefined, undefined, context),
+      );
+      expect(first.hasMore).toBe(true);
+      expect(first.incomplete).toBe(partial);
+      await expect(
+        tool.execute(
+          'unread',
+          { action: 'finish', batch: first.batch },
+          undefined,
+          undefined,
+          context,
+        ),
+      ).rejects.toThrow('Read all evidence pages before finishing.');
+      const pages = [first];
+      while (pages.at(-1)!.hasMore) {
+        if (pages.length > 10) throw new Error('Manual pagination did not finish');
+        pages.push(
+          decode(
+            await tool.execute(
+              'next',
+              { action: 'next', batch: first.batch },
+              undefined,
+              undefined,
+              context,
+            ),
+          ),
+        );
+      }
+      expect(
+        pages
+          .flatMap(expandEvidenceGroups)
+          .map((entry) => entry.text)
+          .join(''),
+      ).toBe(text);
+      expect(probe()).toBe('busy');
+      await vi.advanceTimersByTimeAsync(6 * 60_000);
+      expect(inspector.reviewed()).toEqual(before);
+      // Capture will use this same process lock, not a timed successor lease.
+      expect(probe()).toBe('busy');
+      expect(JSON.parse(probe('enroll', 'new-session', join(dir, 'new-session.jsonl')))).toEqual(
+        expect.arrayContaining([
+          { sessionId: 'new-session', file: join(dir, 'new-session.jsonl'), seedSince: null },
+        ]),
+      );
+      expect(probe()).toBe('busy');
+      const response = await tool.execute(
+        'finish',
+        { action: 'finish', batch: first.batch },
+        undefined,
+        undefined,
+        context,
+      );
+      expect(decode(response)).toEqual(
+        partial
+          ? {
+              finished: true,
+              reviewedTips: 1,
+              coverageChanged: true,
+              incomplete: true,
+              warnings: first.warnings,
+              status: 'partial',
+            }
+          : { finished: true, reviewedTips: 1 },
+      );
+      if (partial) expect(first.warnings?.join('\n')).toContain(missing.file);
+      expect((response as ToolResponse).details).toEqual({
+        action: 'finish',
+        batch: first.batch,
+        incomplete: partial,
+        warnings: expect.any(Array),
+        coverageChanged: true,
+      });
+      expect(inspector.reviewed()).toEqual([
+        ...before,
+        { sessionId: 'session', file, entryId: 'commitment', since: null },
+      ]);
+      expect(probe()).toBe('acquired');
+      // The competing enrollment was not part of the frozen manual plan.
+      expect(inspector.reviewed().some((tip) => tip.sessionId === 'new-session')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+      inspector?.close();
+      await shutdown({ reason: 'quit' }, context);
+      if (previousAgent === undefined) delete process.env['PI_CODING_AGENT_DIR'];
+      else process.env['PI_CODING_AGENT_DIR'] = previousAgent;
+      if (previousState === undefined) delete process.env['XDG_STATE_HOME'];
+      else process.env['XDG_STATE_HOME'] = previousState;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
+
+it.each(['cancel', 'quit', 'reload', 'new', 'resume', 'fork'] as const)(
+  'releases manual ownership on %s without saving coverage',
+  async (action) => {
+    const dir = mkdtempSync(join(tmpdir(), 'remembrancer-manual-release-'));
+    const previousAgent = process.env['PI_CODING_AGENT_DIR'];
+    const previousState = process.env['XDG_STATE_HOME'];
+    process.env['PI_CODING_AGENT_DIR'] = join(dir, 'agent');
+    process.env['XDG_STATE_HOME'] = join(dir, 'state');
+    const file = join(dir, 'session.jsonl');
+    writeFileSync(
+      file,
+      [
+        { type: 'session', id: 'session', cwd: dir },
+        {
+          type: 'message',
+          id: 'evidence',
+          parentId: null,
+          timestamp: '2026-01-30',
+          message: { role: 'user', content: 'Keep this eligible' },
+        },
+      ]
+        .map((row) => JSON.stringify(row))
+        .join('\n') + '\n',
+    );
+    const path = join(dir, 'state', 'pi-remembrancer', 'checkpoints.sqlite3');
+    const probe = () => {
+      const result = spawnSync(
+        process.execPath,
+        [
+          '--experimental-strip-types',
+          fileURLToPath(new URL('./fixtures/review-lock-child.mjs', import.meta.url)),
+          path,
+          'claim',
+        ],
+        { encoding: 'utf8', timeout: 5_000 },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      return result.stdout;
+    };
+    const extension = fakeExtension();
+    remembrancer(extension.api);
+    const context = contextFor(dir, file);
+    const start = extension.handlers.get('session_start')!;
+    const shutdown = extension.handlers.get('session_shutdown')!;
+    try {
+      await start({}, context);
+      const tool = extension.tools[0]!;
+      const first = decode(
+        await tool.execute('begin', { action: 'begin' }, undefined, undefined, context),
+      );
+      expect(probe()).toBe('busy');
+      if (action === 'cancel') {
+        expect(
+          decode(
+            await tool.execute(
+              'cancel',
+              { action, batch: first.batch },
+              undefined,
+              undefined,
+              context,
+            ),
+          ),
+        ).toEqual({ cancelled: true });
+      } else {
+        await shutdown({ reason: action }, context);
+        await start({ reason: action }, context);
+      }
+      expect(probe()).toBe('acquired');
+      const inspector = new CheckpointStore(path);
+      try {
+        expect(inspector.reviewed()).toEqual([]);
+      } finally {
+        inspector.close();
+      }
+      const retryTool = extension.tools.at(-1)!;
+      const retry = decode(
+        await retryTool.execute('retry', { action: 'begin' }, undefined, undefined, context),
+      );
+      expect(retry.groups).toEqual(first.groups);
+      await retryTool.execute(
+        'cancel-retry',
+        { action: 'cancel', batch: retry.batch },
+        undefined,
+        undefined,
+        context,
+      );
+    } finally {
+      await shutdown({ reason: 'quit' }, context);
+      if (previousAgent === undefined) delete process.env['PI_CODING_AGENT_DIR'];
+      else process.env['PI_CODING_AGENT_DIR'] = previousAgent;
+      if (previousState === undefined) delete process.env['XDG_STATE_HOME'];
+      else process.env['XDG_STATE_HOME'] = previousState;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
 
 it('routes the slash command through the Remembrancer skill and completes its arguments', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'remembrancer-command-'));
