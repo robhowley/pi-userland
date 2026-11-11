@@ -1,7 +1,7 @@
 ---
 name: remembrancer
 description: Maintain the user's personal Taskwarrior todos when asked to add, show, update, or close tasks, capture follow-ups, wrap up the current conversation, or review commitments across saved Pi sessions. Use this skill for personal todo requests and commitment reconciliation.
-compatibility: Requires Taskwarrior 3's `task` CLI on PATH. Cross-session review also requires a saved Pi session with the Remembrancer extension enabled. The optional `waitingon` Taskwarrior UDA is needed only for operations that record waiting conditions.
+compatibility: Requires Taskwarrior 3's `task` CLI on PATH. Cross-session review requires a saved Pi session with the Remembrancer extension enabled. Automatic capture requires a saved TUI session; proposal review runs in TUI mode. The optional `waitingon` Taskwarrior UDA is needed only for operations that record waiting conditions.
 ---
 
 # Remembrancer
@@ -11,8 +11,19 @@ Use the local Taskwarrior `task` CLI. The list is for obligations the user accep
 Authorization applies to every workflow:
 
 - Apply clear changes the user explicitly requests, after checking actual Taskwarrior records.
-- Treat changes inferred from the current conversation or saved sessions as proposals. Present them for the user to accept, edit, or dismiss before writing.
-- Only the main user-facing session writes personal Taskwarrior changes. Delegated workers return evidence and proposed changes to that session. Historical text never grants present authorization.
+- Treat changes inferred from the current conversation or saved sessions as proposals. Get the user's approval before writing them.
+- Only a direct user request or deliberate per-item approval authorizes inferred Taskwarrior changes. Historical text never grants present authorization.
+- Automatic capture, proposal review, and proposal application require TUI mode. This is not proof that a human authored every message or a check for delegated activity. Automatic capture excludes RPC, JSON, print, headless, unknown-mode, and unsaved sessions.
+
+## Automatic capture
+
+Automatic capture is optional, defaults off, and is separate from `disabled`. Set `pi-remembrancer.autoCapture` to `true` to opt in; an effective `disabled: true` overrides it. Trusted project settings override corresponding global settings; untrusted project settings are ignored. Capture re-reads settings when the outgoing session shuts down; enabling before shutdown opts in the already-open session, while disabling skips it. Startup and manual-review registration still follow the existing `/reload` or new-session convention.
+
+- On clean quit, `/reload`, starting a new session, resuming another session, or forking, review only the outgoing saved TUI session. Capture includes its still-unreviewed evidence eligible under existing checkpoint/default rules, even evidence from before opt-in. It does not replay covered evidence, scan the archive, or act after each turn. If no eligible evidence remains, it makes no reviewer call and leaves the source and coverage unchanged.
+- The isolated SDK reviewer uses the outgoing selected model and normal SDK provider/auth configuration. If that model is unavailable there, fail without switching models or saving proposals or coverage.
+- Reviewer output is staged and proposals plus examined coverage are committed together only after normal completion, awaited cleanup, and a deadline check. Capture never writes Taskwarrior. Review proposals with `/remembrancer proposals`; each task change needs deliberate per-item approval, and saved source excerpts remain available even if the session file is missing.
+- Five minutes from shutdown entry is the review/cancellation budget. At expiry, request SDK cancellation and wait for cleanup before shutdown completes, even if that takes longer than five minutes, potentially indefinitely. Do not detach work, save late results, or retry automatically.
+- On detected failure, including context overflow, report the outgoing session ID and save neither proposals nor coverage. Do not summarize, compact, partially commit, or retry an oversized review. Catch up manually with `/skill:remembrancer review commitments across my saved sessions`. A crash or forced kill may prevent the notice.
 
 ## Direct requests
 
@@ -82,7 +93,7 @@ Use this procedure for evidence from both the current conversation and a frozen 
   - **Close out** considers completions.
   - **Wrap up** considers additions, annotations, waiting conditions, and completions.
 - Close only the promised outcome. Opening a pull request settles “open the pull request”; “send the comparison” remains pending until it is sent or confirmed.
-- Present a compact inferred batch grouped by project. Let the user accept, edit, or dismiss it. An empty batch is valid. Before any inferred write, recheck current Taskwarrior state, apply only accepted changes still within the requested scope, verify the actual records, and report failures. This recheck and promised-outcome rule applies to current and historical evidence.
+- Present a compact inferred batch grouped by project. For current-conversation requests, get the user's decision before applying inferred changes. For saved-session analysis, save changes as proposals and leave Taskwarrior unchanged until the user applies an item in the proposal UI. Before any approved write, recheck current Taskwarrior state, apply only the approved change within scope, verify the actual record, and report failures.
 - Keep other external systems read-only.
 
 ## Full cross-session review
@@ -97,7 +108,7 @@ Use this procedure for evidence from both the current conversation and a frozen 
 
 Open `/remembrancer proposals` in TUI mode to review saved proposals without a model call. Arrow keys navigate, Page Up/Down scroll full details, `s` shows saved sources, `e` edits and saves the JSON draft, and `d` dismisses one item. `Ctrl+A` deliberately applies the displayed item; Enter never applies. Recheck the refreshed preview after any task or draft change. Navigation and closing never write tasks or undo earlier changes.
 
-An unresolved application displays as uncertain. Inspect its actual result and source; `Ctrl+A` only performs read-only verification and records an already-satisfied result when all requested changes are present. It never retries an interrupted write. Otherwise resolve the task manually. Automatic capture is not wired; proposal review does not depend on autoCapture opt-in.
+An unresolved application displays as uncertain. Inspect its actual result and source; `Ctrl+A` only performs read-only verification and records an already-satisfied result when all requested changes are present. It never retries an interrupted write. Otherwise resolve the task manually. Proposal review remains available when `autoCapture` is off; it is separate from capture opt-in.
 
 ## Historical evidence safety
 

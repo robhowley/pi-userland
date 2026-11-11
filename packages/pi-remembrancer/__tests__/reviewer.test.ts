@@ -34,6 +34,7 @@ type MockSession = {
   prompt: ReturnType<typeof vi.fn>;
   abort: ReturnType<typeof vi.fn>;
   dispose: ReturnType<typeof vi.fn>;
+  subscribe: ReturnType<typeof vi.fn>;
 };
 
 let session: MockSession;
@@ -66,6 +67,7 @@ describe('runReviewer', () => {
       prompt: vi.fn().mockResolvedValue(undefined),
       abort: vi.fn().mockResolvedValue(undefined),
       dispose: vi.fn(),
+      subscribe: vi.fn().mockReturnValue(vi.fn()),
     };
     sdk.createAgentSession.mockResolvedValue({ session });
     sdk.createExtensionRuntime.mockReturnValue(extensionRuntime);
@@ -94,7 +96,7 @@ describe('runReviewer', () => {
       noTools: 'all',
       tools: ['remembrancer_read_evidence', 'remembrancer_submit'],
     });
-    expect(options.customTools).toEqual(tools);
+    expect(options.customTools?.map((tool) => tool.name)).toEqual(tools.map((tool) => tool.name));
     expect(options).not.toHaveProperty('modelRuntime');
     expect(options).not.toHaveProperty('agentDir');
 
@@ -121,7 +123,57 @@ describe('runReviewer', () => {
     );
     expect(prompt).toContain('Only returned frozen evidence is in extraction scope');
     expect(prompt).not.toContain(cwd);
-    expect(prompt).not.toContain('batch');
+    expect(prompt).toContain('alone in its tool batch');
+    expect(session.dispose).toHaveBeenCalledOnce();
+  });
+
+  it.each(['error', 'aborted'])(
+    'rejects resolved prompts with assistant %s outcomes',
+    async (stopReason) => {
+      session.prompt.mockImplementation(async () => {
+        const listener = session.subscribe.mock.calls[0]![0];
+        listener({
+          type: 'message_end',
+          message: { role: 'assistant', stopReason, errorMessage: 'context overflow', content: [] },
+        });
+      });
+      await expect(runReviewer(input())).rejects.toThrow('context overflow');
+      expect(session.dispose).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('blocks every tool in a mixed submission batch before extraction or staging', async () => {
+    const evidence = makeTool('remembrancer_read_evidence');
+    const submit = makeTool('remembrancer_submit');
+    session.prompt.mockImplementation(async () => {
+      const listener = session.subscribe.mock.calls[0]![0];
+      listener({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          stopReason: 'toolUse',
+          content: [
+            { type: 'toolCall', name: evidence.name },
+            { type: 'toolCall', name: submit.name },
+          ],
+        },
+      });
+      const options = sdk.createAgentSession.mock.calls[0]![0] as CreateAgentSessionOptions;
+      for (const tool of options.customTools!) {
+        expect(() =>
+          tool.execute(
+            'id',
+            {},
+            undefined,
+            undefined,
+            {} as Parameters<ToolDefinition['execute']>[4],
+          ),
+        ).toThrow('alone');
+      }
+    });
+    await expect(runReviewer(input({ tools: [evidence, submit] }))).rejects.toThrow('alone');
+    expect(evidence.execute).not.toHaveBeenCalled();
+    expect(submit.execute).not.toHaveBeenCalled();
     expect(session.dispose).toHaveBeenCalledOnce();
   });
 

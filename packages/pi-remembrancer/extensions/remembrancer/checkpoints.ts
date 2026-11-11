@@ -373,13 +373,28 @@ export class CheckpointStore {
       .all() as unknown as Checkpoint[];
   }
 
-  finish(token: string, submissions: readonly ProposalSubmission[]): Proposal[] {
+  validateReview(token: string, submissions: readonly ProposalSubmission[]): void {
+    this.assertReview(token);
     const frozen = this.frozen;
     if (!frozen || frozen.token !== token) throw new Error('No matching frozen review');
     if (!frozen.delivered) throw new Error('Read all evidence pages before finishing');
     if (frozen.incomplete) throw new Error('Cannot finish incomplete review');
     if (!Array.isArray(submissions))
       throw new Error('Finish requires proposals array (empty is valid)');
+    const ids = new Set<string>();
+    for (const submission of submissions) {
+      validateSubmission(submission, frozen.evidence);
+      if (submission.id !== undefined) {
+        if (ids.has(submission.id)) throw new Error('Repeated proposal revision');
+        ids.add(submission.id);
+        this.changedProposal(submission.id, submission.expectedRevision!, ['pending']);
+      }
+    }
+  }
+
+  finish(token: string, submissions: readonly ProposalSubmission[]): Proposal[] {
+    this.validateReview(token, submissions);
+    const frozen = this.frozen!;
     const plan = frozen.plan;
     const saved: Proposal[] = [];
     const sources = plan.sources ?? [];

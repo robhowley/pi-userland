@@ -57,7 +57,7 @@ You can also invoke the skill directly:
 
 ## Saved proposals
 
-`/remembrancer proposals` opens local, durable proposals in TUI mode. Startup shows their pending count without calling a model or Taskwarrior, even with automatic capture off. `disabled` hides this workflow.
+`/remembrancer proposals` opens local, durable proposals in TUI mode. Startup quietly shows the pending count, such as `3 task proposals · /remembrancer proposals`, without a model call, evidence scan, or Taskwarrior call. This works with automatic capture off; `disabled` prevents the workflow.
 
 - Arrow keys navigate; Page Up/Down scroll every field, annotation and saved quote.
 - `Ctrl+A` applies only the displayed item. Enter never applies.
@@ -67,7 +67,15 @@ You can also invoke the skill directly:
 
 A changed task or proposal requires approval of a refreshed preview. An interrupted application stays uncertain and is never automatically retried. Reopen it to inspect the actual task; `Ctrl+A` then only verifies and records an already-satisfied result. If it does not match, resolve the task manually. Taskwarrior and local storage cannot commit atomically, and unrelated external task edits can still race the final check.
 
-Manual review saves proposals and analyzed coverage together, separately from approval. Automatic shutdown capture is not wired.
+Manual analysis and automatic capture save proposals and examined coverage together. Finishing analysis does not approve or apply proposals; capture leaves Taskwarrior unchanged until you explicitly apply an item. Direct task requests use their separate flow.
+
+## Automatic capture
+
+Automatic capture is off by default. When enabled, Remembrancer reviews the outgoing saved session on clean quit, `/reload`, starting a new session, resuming another session, or forking. It does not act after each turn. Only saved TUI sessions are supported; unsaved, RPC, JSON, print, headless, and unknown-mode sessions are skipped. TUI mode is not proof that a human authored every message or a check for delegated activity. Settings are re-read at shutdown, so enabling capture before shutdown opts in the already-open session, while disabling it skips capture.
+
+Capture uses only still-unreviewed evidence eligible under that session's existing checkpoint/default rules, including evidence from before opt-in. It preserves existing coverage, does not replay covered evidence, and does not scan the session archive. If no eligible evidence remains, capture makes no reviewer call and leaves the source and coverage unchanged. The temporary reviewer uses the outgoing selected model with the SDK's normal provider and authentication configuration. If that model is unavailable there, capture fails without changing models or saving proposals or coverage.
+
+The five-minute review and cancellation budget starts when shutdown begins; it is not a hard shutdown deadline. Remembrancer stages reviewer output and commits proposals with coverage only after normal reviewer completion, awaited cleanup, and a deadline check. At expiry it requests SDK cancellation and waits for cleanup before shutdown finishes, even if that takes longer than five minutes, potentially indefinitely. Late results are not saved; work is not detached or retried. A detected failure, including an oversized review that cannot fit the model context, reports the session and saves neither proposals nor coverage. Oversized reviews are not summarized, compacted, or partially committed. Use a manual review to catch up, for example `/skill:remembrancer review commitments across my saved sessions`. A crash or forced kill may prevent a notice.
 
 ## Optional waiting conditions
 
@@ -81,19 +89,25 @@ Skip this setup if you do not need waiting conditions; other task operations wor
 
 ## What gets reviewed
 
-- Regular reviews cover sessions opened or resumed with Remembrancer enabled. An older session included for the first time this way can bring in its full history; use seed to set a starting point instead.
-- Seed also searches Pi's configured session archive, including saved worker sessions. It does not reconstruct which sessions had Remembrancer disabled in the past.
+- Manual cross-session reviews include sessions Remembrancer enrolled when they were opened or resumed. A session included for the first time can bring in its full history; use seed to set a starting point instead.
+- A manual seed also searches Pi's configured session archive, including saved worker sessions. Automatic capture never scans that archive. Manual seed does not reconstruct which sessions had Remembrancer disabled in the past.
 - A shorter seed duration does not narrow existing review coverage. Repeating a seed skips unchanged text that has already been reviewed.
-- Only user and assistant text is sent to the model in your reviewing session, not tool outputs, model thinking, or images.
-- Reviews run only when you ask. Activity added during a review waits for the next one.
-- If a session cannot be read, Remembrancer reports it and leaves it for a later review. Cancelling a review leaves review progress unsaved, but it does not undo task changes already applied.
+- Only user and assistant text is sent for analysis, not tool outputs, model thinking, or images.
+- Manual reviews run when you ask. Automatic capture runs only at the shutdown boundaries above. Activity beyond a frozen review boundary waits for a later review.
+- If a session cannot be read, Remembrancer reports it and leaves it unreviewed. An incomplete manual review cannot finish. Cancelling a review leaves coverage unsaved, but does not undo task changes already applied.
 
 ## Settings
 
-Remembrancer is enabled by default. To turn off saved-session reviews and stop including newly opened or resumed sessions in future reviews, add this to Pi's global settings file, normally `~/.pi/agent/settings.json`:
+Remembrancer is enabled by default. Automatic capture is a separate opt-in and defaults to `false`. To enable it, add this to Pi's global settings file, normally `~/.pi/agent/settings.json`:
+
+```json
+{ "pi-remembrancer": { "autoCapture": true } }
+```
+
+To disable Remembrancer, including automatic capture, set `disabled`:
 
 ```json
 { "pi-remembrancer": { "disabled": true } }
 ```
 
-A trusted project's `.pi/settings.json` takes precedence over the global value. After changing settings, run `/reload` or start a new session. The skill remains available: direct task requests can still change Taskwarrior tasks.
+An effective `disabled: true` overrides `autoCapture`. Values in a trusted project's `.pi/settings.json` override corresponding global settings; untrusted project settings are ignored. Automatic capture re-reads the applicable settings at outgoing shutdown, so `autoCapture` can apply to an already-open session. Startup and manual-review registration retain the existing `/reload` or new-session convention; after changing `disabled`, reload or start a new session. The skill remains available, and direct task requests remain separate from automatic capture.

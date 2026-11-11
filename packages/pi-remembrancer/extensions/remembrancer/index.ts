@@ -15,6 +15,7 @@ import type {
   ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
 import { CheckpointStore } from './checkpoints.js';
+import { captureOutgoing, CAPTURE_BUDGET_MS } from './capture.js';
 import { openProposals } from './proposal-ui.js';
 import { loadRemembrancerConfig } from './config.js';
 import { discoverSources } from './discovery.js';
@@ -324,12 +325,16 @@ export default function remembrancer(pi: ExtensionAPI) {
       if (count) ctx.ui.notify(`${count} task proposals · /remembrancer proposals`, 'info');
     }
   });
-  pi.on('session_shutdown', () => {
-    batch = undefined;
-    analysis = undefined;
-    lease = undefined;
-    db?.close();
-    db = undefined;
+  pi.on('session_shutdown', async (_event, ctx) => {
+    const deadline = Date.now() + CAPTURE_BUDGET_MS;
+    try {
+      // A manual review is abandoned at this boundary, without advancing coverage.
+      release();
+      await captureOutgoing(ctx, store, deadline);
+    } finally {
+      db?.close();
+      db = undefined;
+    }
   });
 
   function registerReviewTool() {
