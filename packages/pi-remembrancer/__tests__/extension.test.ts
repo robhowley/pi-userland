@@ -781,6 +781,7 @@ it('routes the slash command through the Remembrancer skill and completes its ar
     if (!getArgumentCompletions) throw new Error('Remembrancer completions were not registered');
 
     expect(getArgumentCompletions('')).toEqual([
+      expect.objectContaining({ value: 'proposals', label: 'proposals' }),
       expect.objectContaining({ value: 'seed ', label: 'seed' }),
       expect.objectContaining({ value: 'help', label: 'help' }),
     ]);

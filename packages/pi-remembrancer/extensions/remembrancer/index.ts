@@ -5,6 +5,7 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 import { CheckpointStore } from './checkpoints.js';
 import { loadRemembrancerConfig } from './config.js';
 import { captureOutgoing, CAPTURE_BUDGET_MS } from './capture.js';
+import { openProposals } from './proposal-ui.js';
 import { discoverSources } from './discovery.js';
 import {
   renderReviewCall,
@@ -69,7 +70,7 @@ type Batch = {
 
 export const REMEMBRANCER_COMMAND_NAME = 'remembrancer';
 export const REMEMBRANCER_COMMAND_USAGE =
-  'Usage: /remembrancer seed <Nd>\n       /remembrancer help';
+  'Usage: /remembrancer seed <Nd>\n       /remembrancer proposals\n       /remembrancer help';
 export const REMEMBRANCER_HELP = [
   REMEMBRANCER_COMMAND_USAGE,
   'Seed saved-session evidence from a bounded historical window, then follow the Remembrancer skill.',
@@ -77,6 +78,7 @@ export const REMEMBRANCER_HELP = [
 ].join('\n');
 
 const REMEMBRANCER_SUBCOMMANDS = [
+  { value: 'proposals', label: 'proposals', description: 'Review stored task proposals locally' },
   {
     value: 'seed ',
     label: 'seed',
@@ -94,6 +96,7 @@ const REMEMBRANCER_SEED_DURATIONS = [
 
 type RemembrancerCommandArgs =
   | { ok: true; mode: 'help' }
+  | { ok: true; mode: 'proposals' }
   | { ok: true; mode: 'seed'; duration: string }
   | { ok: false; message: string };
 
@@ -103,6 +106,7 @@ export function parseRemembrancerCommandArgs(args: string): RemembrancerCommandA
 
   if (tokens.length === 0 || (subcommand === 'help' && tokens.length === 1))
     return { ok: true, mode: 'help' };
+  if (subcommand === 'proposals' && tokens.length === 1) return { ok: true, mode: 'proposals' };
   if (subcommand === 'help')
     return { ok: false, message: `Help does not accept arguments. ${REMEMBRANCER_COMMAND_USAGE}` };
   if (subcommand !== 'seed')
@@ -229,7 +233,7 @@ export default function remembrancer(pi: ExtensionAPI) {
   }
 
   pi.registerCommand(REMEMBRANCER_COMMAND_NAME, {
-    description: 'Start a bounded historical Remembrancer review',
+    description: 'Review stored task proposals or start a bounded historical review',
     getArgumentCompletions: getRemembrancerArgumentCompletions,
     handler: async (args, ctx) => {
       const parsed = parseRemembrancerCommandArgs(args);
@@ -246,6 +250,11 @@ export default function remembrancer(pi: ExtensionAPI) {
           'Remembrancer is disabled in settings. Set pi-remembrancer.disabled to false to enable it.',
           'warning',
         );
+        return;
+      }
+      if (parsed.mode === 'proposals') {
+        if (ctx.mode !== 'tui') throw new Error('Task proposals require TUI mode');
+        await openProposals(ctx, store());
         return;
       }
       if (!ctx.isIdle()) {
@@ -393,6 +402,10 @@ export default function remembrancer(pi: ExtensionAPI) {
     if (loadRemembrancerConfig(ctx.cwd, ctx.isProjectTrusted()).disabled) return;
     registerReviewTool();
     enroll(ctx);
+    if (ctx.mode === 'tui') {
+      const count = store().proposalCount();
+      if (count) ctx.ui.notify(`${count} task proposals · /remembrancer proposals`, 'info');
+    }
   });
   pi.on('session_shutdown', async (_event, ctx) => {
     const deadline = Date.now() + CAPTURE_BUDGET_MS;
