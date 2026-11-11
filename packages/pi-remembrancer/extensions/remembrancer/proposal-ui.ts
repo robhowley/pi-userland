@@ -1,6 +1,8 @@
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { matchesKey, SelectList, Text } from '@earendil-works/pi-tui';
 import type { CheckpointStore } from './checkpoints.js';
+import { branchEvidence, readSession } from './evidence.js';
+import { boundedEvidencePage } from './review.js';
 import { type Proposal, type ProposalDraft, validateDraft } from './proposals.js';
 import {
   applyProposal,
@@ -21,16 +23,42 @@ function project(proposal: Proposal): string {
     '(no project)'
   );
 }
+function savedSourceText(source: Proposal['sources'][number]): string {
+  return `${source.role} ${exact(source.timestamp)} ${exact(source.locator)}\n${exact(source.quote)}\nFile: ${exact(source.file)}\nSession: ${exact(source.sessionId)}\nBranch: ${exact(source.branchId)}\nEntry: ${exact(source.entryId)}\nEdit: ${exact(source.editId)}\nExcerpt offset: ${source.offset}`;
+}
+// Called only by the deliberate Source action, never while rendering a preview.
 export function sourceText(proposal: Proposal): string {
-  return (
-    proposal.sources
-      .map(
-        (source) =>
-          `${source.role} ${exact(source.timestamp)} ${exact(source.locator)}\n${exact(source.quote)}\nFile: ${exact(source.file)}\nSession: ${exact(source.sessionId)}\nBranch: ${exact(source.branchId)}\nEntry: ${exact(source.entryId)}\nEdit: ${exact(source.editId)}\nExcerpt offset: ${source.offset}`,
-      )
-      .join('\n\n') +
-    '\n\nSaved excerpts only. Extra file context is unavailable in this view; no session switch or archive scan.'
-  );
+  return proposal.sources
+    .map((source) => {
+      const saved = savedSourceText(source);
+      try {
+        const tree = readSession(source.file);
+        const branch = branchEvidence(tree, {
+          file: source.file,
+          sessionId: source.sessionId,
+          entryId: source.branchId,
+        });
+        const index = branch.findIndex(
+          (item) => item.entryId === source.entryId && item.editId === source.editId,
+        );
+        const selected = branch[index];
+        if (
+          !selected ||
+          selected.role !== source.role ||
+          selected.timestamp !== source.timestamp ||
+          selected.text.slice(source.offset, source.offset + source.quote.length) !== source.quote
+        )
+          throw new Error('Saved reference no longer matches');
+        const surrounding = branch.slice(Math.max(0, index - 2), index + 3);
+        const page = boundedEvidencePage(surrounding, { index: 0, offset: 0 }, (entries) => ({
+          entries,
+        }));
+        return `${saved}\n\nLocal context (up to two messages before and after, saved branch):\n${JSON.stringify(page.data)}${page.cursor.index < surrounding.length ? '\nAdditional context omitted at the display limit.' : ''}`;
+      } catch {
+        return `${saved}\n\nExtra file context is unavailable: source missing, unreadable, over limits, or saved reference no longer matches.`;
+      }
+    })
+    .join('\n\n');
 }
 export function previewText(preview: TaskPreview): string {
   const { proposal, task } = preview;
@@ -115,6 +143,7 @@ export async function openProposals(
     const action = await ctx.ui.custom<'apply' | 'edit' | 'dismiss' | 'navigate' | 'close'>(
       (tui, theme, kb, done) => {
         let source = false;
+        let sourceBody = '';
         let scroll = 0;
         let total = 0;
         const list = new SelectList(
@@ -150,10 +179,10 @@ export async function openProposals(
           render(width: number) {
             const body = new Text(
               source
-                ? sourceText(proposal)
+                ? sourceBody
                 : preview
                   ? previewText(preview)
-                  : `${exact(previewError)}\n${sourceText(proposal)}`,
+                  : `${exact(previewError)}\n${proposal.sources.map(savedSourceText).join('\n\n')}`,
               0,
               0,
             ).render(width);
@@ -181,6 +210,7 @@ export async function openProposals(
             else if (matchesKey(data, 'pageUp')) scroll -= 12;
             else if (data === 's') {
               source = !source;
+              if (source) sourceBody = sourceText(proposal);
               scroll = 0;
             } else if (source && kb.matches(data, 'tui.select.cancel')) {
               source = false;
@@ -188,7 +218,7 @@ export async function openProposals(
             } else if (!source && matchesKey(data, 'ctrl+a')) done('apply');
             else if (!source && data === 'e') done('edit');
             else if (!source && data === 'd') done('dismiss');
-            else if (!kb.matches(data, 'tui.select.confirm')) list.handleInput(data);
+            else if (!source && !kb.matches(data, 'tui.select.confirm')) list.handleInput(data);
             tui.requestRender();
           },
         };

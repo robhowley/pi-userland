@@ -250,7 +250,7 @@ it.each(['unread', 'partial', 'duplicate', 'invalid', 'model error', 'missing su
   'rejects %s without coverage/proposals',
   async (failure) => {
     if (failure === 'partial')
-      appendFileSync(file, message('large', 'promise', 'x'.repeat(30_000)));
+      appendFileSync(file, message('large', 'promise', 'x'.repeat(60_000)));
     runner.mockImplementation(async (input) => {
       if (failure === 'missing submission') return;
       if (failure === 'partial') await call(input, 'read_evidence');

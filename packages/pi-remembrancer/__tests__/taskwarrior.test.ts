@@ -8,6 +8,8 @@ import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
 import type { Evidence } from '../extensions/remembrancer/evidence.js';
+import * as evidenceModule from '../extensions/remembrancer/evidence.js';
+import { REVIEW_RESPONSE_MAX_BYTES } from '../extensions/remembrancer/review.js';
 import type { ProposalDraft } from '../extensions/remembrancer/proposals.js';
 import {
   applyProposal,
@@ -41,9 +43,11 @@ const evidence: Evidence = {
   reviewedThrough: null,
 };
 const stores: CheckpointStore[] = [];
+const sourceDirs: string[] = [];
 afterEach(() => {
   stores.forEach((s) => s.close());
   stores.length = 0;
+  sourceDirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true }));
   vi.restoreAllMocks();
 });
 function seed(
@@ -291,10 +295,136 @@ it('complete preview and missing-source view preserve all exact values', async (
   expect(sourceText(f.proposal)).toContain('Send comparison');
   expect(sourceText(f.proposal)).toContain('Extra file context is unavailable');
 });
+function sourceFixture(before = 'Earlier context') {
+  const f = setup();
+  const dir = mkdtempSync(join(tmpdir(), 'remembrancer-source-'));
+  sourceDirs.push(dir);
+  const file = join(dir, 'session.jsonl');
+  const records: unknown[] = [{ type: 'session', id: 'session', cwd: '/work' }];
+  let parentId: string | null = null;
+  for (const [id, text] of [
+    ['outside-before', 'Outside preceding window'],
+    ['before', before],
+    ['reply', 'Supporting reply'],
+    ['leaf', evidence.text],
+    ['after', 'Following context'],
+    ['boundary', 'Saved branch boundary'],
+    ['outside-after', 'Outside saved branch'],
+  ]) {
+    records.push({
+      type: 'message',
+      id,
+      parentId,
+      timestamp: evidence.timestamp,
+      message: { role: id === 'reply' ? 'assistant' : 'user', content: text },
+    });
+    parentId = id!;
+  }
+  records.push(
+    {
+      type: 'context_edit',
+      id: 'new-edit',
+      parentId,
+      targetId: 'leaf',
+      timestamp: evidence.timestamp,
+      replacement: { content: 'Newer replacement' },
+    },
+    {
+      type: 'message',
+      id: 'other-branch',
+      parentId: null,
+      message: { role: 'user', content: 'Wrong branch content' },
+    },
+  );
+  writeFileSync(file, records.map((record) => JSON.stringify(record)).join('\n'));
+  Object.assign(f.proposal.sources[0]!, { file, branchId: 'boundary' });
+  return { ...f, file };
+}
+it('Source shows bounded surrounding messages on the saved branch, not a newer edit', () => {
+  const f = sourceFixture();
+  const text = sourceText(f.proposal);
+  for (const value of [
+    'Send comparison',
+    'Earlier context',
+    'Supporting reply',
+    'Following context',
+    'Saved branch boundary',
+    'assistant',
+    'Session: "session"',
+    'Branch: "boundary"',
+    'Entry: "leaf"',
+    'Edit: null',
+  ])
+    expect(text).toContain(value);
+  for (const value of [
+    'Outside preceding window',
+    'Outside saved branch',
+    'Wrong branch content',
+    'Newer replacement',
+    'unavailable',
+  ])
+    expect(text).not.toContain(value);
+  expect(f.execute).not.toHaveBeenCalled();
+});
+it('Source caps additional context while always retaining the saved exact quote', () => {
+  const f = sourceFixture('x'.repeat(100_000));
+  const text = sourceText(f.proposal);
+  expect(text).toContain('Send comparison');
+  expect(text).toContain('Additional context omitted at the display limit');
+  expect(Buffer.byteLength(text)).toBeLessThan(REVIEW_RESPONSE_MAX_BYTES + 1024);
+});
+it.each([
+  'missing',
+  'corrupt',
+  'session',
+  'branch',
+  'entry',
+  'edit',
+  'quote',
+  'offset',
+  'unreadable',
+  'limits',
+])('Source retains saved quote and identifiers when %s prevents matching context', (failure) => {
+  const f = sourceFixture();
+  const source = f.proposal.sources[0]!;
+  if (failure === 'missing') rmSync(f.file);
+  if (failure === 'corrupt') writeFileSync(f.file, '{bad json');
+  if (failure === 'session') source.sessionId = 'different';
+  if (failure === 'branch') source.branchId = 'other-branch';
+  if (failure === 'entry') source.entryId = 'gone';
+  if (failure === 'edit') source.branchId = 'new-edit';
+  if (failure === 'quote') source.quote = 'Original saved quote';
+  if (failure === 'offset') source.offset = 1;
+  if (failure === 'unreadable' || failure === 'limits')
+    vi.spyOn(evidenceModule, 'readSession').mockImplementation(() => {
+      throw new Error(failure);
+    });
+  const text = sourceText(f.proposal);
+  expect(text).toContain(JSON.stringify(source.quote));
+  expect(text).toContain(`Session: ${JSON.stringify(source.sessionId)}`);
+  expect(text).toContain(`Branch: ${JSON.stringify(source.branchId)}`);
+  expect(text).toContain(`Entry: ${JSON.stringify(source.entryId)}`);
+  expect(text).toContain('Extra file context is unavailable');
+  expect(text).not.toContain('Local context');
+  expect(f.execute).not.toHaveBeenCalled();
+});
+it('Source accepts the exact saved edit but rejects an edit from another branch', () => {
+  const f = sourceFixture();
+  Object.assign(f.proposal.sources[0]!, {
+    branchId: 'new-edit',
+    editId: 'new-edit',
+    quote: 'Newer replacement',
+  });
+  expect(sourceText(f.proposal)).toContain('Local context');
+  f.proposal.sources[0]!.branchId = 'boundary';
+  expect(sourceText(f.proposal)).toContain('Extra file context is unavailable');
+});
 it('Enter, Source, paging, edit, navigation and closing do not write tasks; draft persists', async () => {
   const f = setup();
   seed(f.store);
   let calls = 0;
+  const readSource = vi.spyOn(evidenceModule, 'readSession');
+  const switchSession = vi.fn();
   const editor = vi.fn(async () =>
     JSON.stringify({
       change: { operation: 'add', fields: { description: 'Edited' }, annotations: ['Link'] },
@@ -316,8 +446,18 @@ it('Enter, Source, paging, edit, navigation and closing do not write tasks; draf
     );
     component.render(80);
     if (calls++ === 0) {
-      for (const key of ['\r', 's', '\u001b[6~', '\u001b[5~', 's', 'e'])
+      expect(readSource).not.toHaveBeenCalled();
+      component.handleInput?.('\r');
+      expect(readSource).not.toHaveBeenCalled();
+      component.handleInput?.('s');
+      expect(readSource).toHaveBeenCalledOnce();
+      for (const key of ['\u001b[6~', '\u001b[5~', '\u001b[B']) {
         component.handleInput?.(key);
+        component.render(80);
+        expect(result).toBeUndefined();
+      }
+      expect(readSource).toHaveBeenCalledOnce();
+      for (const key of ['s', 'e']) component.handleInput?.(key);
     } else if (calls === 2) component.handleInput?.('\u001b[B');
     else component.handleInput?.('\u001b');
     return result;
@@ -325,9 +465,12 @@ it('Enter, Source, paging, edit, navigation and closing do not write tasks; draf
   const ctx = {
     mode: 'tui',
     ui: { custom, editor, notify: vi.fn() },
+    switchSession,
   } as unknown as ExtensionContext;
   await openProposals(ctx, f.store, f.execute);
   expect(editor).toHaveBeenCalledOnce();
+  expect(readSource).toHaveBeenCalledOnce();
+  expect(switchSession).not.toHaveBeenCalled();
   expect(
     f.store
       .proposals()
@@ -337,6 +480,31 @@ it('Enter, Source, paging, edit, navigation and closing do not write tasks; draf
       ),
   ).toBe(true);
   expect(f.execute).not.toHaveBeenCalled();
+});
+it('a failed task preview still shows the saved quote without reading source files', async () => {
+  const f = setup(update);
+  const readSource = vi.spyOn(evidenceModule, 'readSession');
+  type Factory = Parameters<ExtensionContext['ui']['custom']>[0];
+  const ctx = {
+    mode: 'tui',
+    ui: {
+      custom: async (factory: Factory) => {
+        const component = await factory(
+          { requestRender() {} } as Parameters<Factory>[0],
+          { fg: (_color: string, text: string) => text } as Parameters<Factory>[1],
+          getKeybindings() as Parameters<Factory>[2],
+          () => {},
+        );
+        expect(component.render(120).join('\n')).toContain('Send comparison');
+        expect(readSource).not.toHaveBeenCalled();
+        return 'close';
+      },
+    },
+  } as unknown as ExtensionContext;
+  await openProposals(ctx, f.store, async () => {
+    throw new Error('Task unavailable');
+  });
+  expect(readSource).not.toHaveBeenCalled();
 });
 it('retains unexpected actual output when verification cannot validate a snapshot', async () => {
   const f = setup(update);

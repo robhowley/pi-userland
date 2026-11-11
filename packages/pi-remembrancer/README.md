@@ -62,7 +62,7 @@ You can also invoke the skill directly:
 - Arrow keys navigate; Page Up/Down scroll every field, annotation and saved quote.
 - `Ctrl+A` applies only the displayed item. Enter never applies.
 - `e` edits the JSON draft and saves it without changing tasks; `d` dismisses one proposal.
-- `s` opens saved source excerpts and locations, even when the original file is missing. This view does not load surrounding transcript context or switch sessions.
+- `s` opens saved source excerpts and locations, then reads only the referenced local files for up to two messages before and after each excerpt on its saved branch. Additional context is bounded by the review display limits per reference and explicitly marked unavailable if the file or reference no longer matches. Saved quotes remain visible even when files disappear. Source is read-only, scrollable with PgUp/PgDn, and never switches sessions or scans the archive. Opening the list or preview does not read source files.
 - Closing preserves drafts, decisions and previously applied changes. There is no accept-all.
 
 A changed task or proposal requires approval of a refreshed preview. An interrupted application stays uncertain and is never automatically retried. Reopen it to inspect the actual task; `Ctrl+A` then only verifies and records an already-satisfied result. If it does not match, resolve the task manually. Taskwarrior and local storage cannot commit atomically, and unrelated external task edits can still race the final check.

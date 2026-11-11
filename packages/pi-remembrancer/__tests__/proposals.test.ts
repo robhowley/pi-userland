@@ -355,7 +355,7 @@ it('shares session-only paging without archive discovery and leaves later eviden
   });
   writeFileSync(
     file,
-    [{ type: 'session', id: 'session', cwd: dir }, message('old', null, 'x'.repeat(14000))]
+    [{ type: 'session', id: 'session', cwd: dir }, message('old', null, 'x'.repeat(60_000))]
       .map((value) => JSON.stringify(value))
       .join('\n') + '\n',
   );
