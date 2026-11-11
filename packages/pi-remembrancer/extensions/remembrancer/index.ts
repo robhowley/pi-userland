@@ -4,6 +4,7 @@ import { StringEnum, Type } from '@earendil-works/pi-ai';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { CheckpointStore } from './checkpoints.js';
 import { loadRemembrancerConfig } from './config.js';
+import { captureOutgoing, CAPTURE_BUDGET_MS } from './capture.js';
 import { discoverSources } from './discovery.js';
 import {
   renderReviewCall,
@@ -393,10 +394,16 @@ export default function remembrancer(pi: ExtensionAPI) {
     registerReviewTool();
     enroll(ctx);
   });
-  pi.on('session_shutdown', () => {
-    batch = undefined;
-    db?.close();
-    db = undefined;
+  pi.on('session_shutdown', async (_event, ctx) => {
+    const deadline = Date.now() + CAPTURE_BUDGET_MS;
+    try {
+      // Abandon manual coverage before capture claims the same process lock.
+      release();
+      await captureOutgoing(ctx, store, deadline);
+    } finally {
+      db?.close();
+      db = undefined;
+    }
   });
 
   function registerReviewTool() {

@@ -395,3 +395,41 @@ The clean-baseline gate passed before Phase 1 changes began.
 - Independently inspected full Vitest JSON: `success: true`, zero failed assertions/suites, no suite-load messages. Compared test-name/status multisets to Phase 1: all 138 cases retained and passing, 31 added, none missing. No original test assertions were changed.
 - Initial development checks exposed the child import-resolution issue, one exact-optional fixture type error and two missing `URL` imports in the new loader. Fixed only new code/fixture setup; no baseline assertions were removed or weakened. Initial artifacts: tests `36946107-c326-46c7-98fc-924f764eba04.stdout.log`, types `564bc25b-7336-4315-97bc-cb1cd028f3f6.stdout.log`, lint `ed3caf25-d6bb-4258-a278-d4dd9ed1462b.stdout.log`.
 - Phase 2 gate passed. Final whitespace/scope and post-record formatting checks precede the local commit. Capture invocation, isolated reviewer, settings, Taskwarrior application, proposal UI and live-provider/live-TUI validation remain outside this phase. No push or PR mutation.
+
+### Phase 3: isolated reviewer and opt-in shutdown capture (2026-11-11)
+
+#### Scope and implementation
+
+- Started from Phase 2 commit `248150ef457de5dee36ebfa101cb84750359dd0a` on `remem-auto-v2`; original base and pinned donor remain unchanged.
+- Read this plan, the Phase 2 report, additive rebuild wiki handoff and code/structured-return skills. Inspected installed SDK, resource-loader, extension/tool/lifecycle, settings and session-manager declarations/implementations against the linked 0.84.4 runtime. Read installed SDK/extensions/session/settings/configuration/message-format documentation and the SDK model/tool/resource/session/full-control and shutdown/structured-output examples.
+- Inspected each donor diff for `reviewer.ts`, `capture.ts`, `config.ts`, the read-only `taskwarrior.ts` subset and shutdown wiring, plus donor reviewer/capture/SDK tests. No cherry-pick, donor lease/manual engine, proposal UI, task-application code, manifests, lockfiles, dependencies or harness changes.
+- Added `autoCapture: false` independently of `disabled: false`, preserving per-field trusted-project/global precedence. Capture rereads both settings at outgoing shutdown; effective disabled wins. Manual registration/schema/actions/exports/partial finish and non-TUI completion remain unchanged.
+- Shutdown measures its budget at handler entry, releases any abandoned manual batch without coverage, awaits outgoing capture, then closes the database in `finally`. Capture skips non-TUI/unknown modes, unsaved sessions and absent/false/disabled settings.
+- Capture claims the existing `.lock` before `prepareCapture`, reads only the outgoing source and uses its frozen eligibility/defaults. It holds ownership through reviewer cleanup, deadline validation and atomic `finishCapture`, releasing in `finally`. Busy ownership reports failure without retry or takeover. Empty/tool-only/covered evidence calls no reviewer and saves no capture source/coverage changes.
+- Ported the temporary in-memory SDK reviewer with only five fixed tools: frozen evidence, frozen supporting context, fixed read-only task exports, stored proposals and submission. No extensions, skills, AGENTS/context files, prompt files, parent transcript, fallback, retry or compaction. Normal provider/auth startup and the outgoing selected model are retained.
+- Submissions require an explicit array, complete evidence delivery and exact provenance validation, once and alone in the tool batch. Results remain staged until normal reviewer completion, awaited cleanup and a final deadline check. Failure saves neither proposals nor coverage and reports the outgoing session ID; a throwing notifier still releases ownership and closes the shutdown database.
+- Added explicit provider retry suppression, rejection of length-truncated assistant output, cancellation after prompt failure, and awaited disposal/abort settlement through cleanup. Cancellation remains active during cleanup; deadline expiry cannot permit late commit or ownership replacement. Cleanup may remain unbounded.
+
+#### Checks and gate
+
+- Isolation root: `/tmp/pi-remembrancer-phase3`, with HOME=`home`, XDG_STATE_HOME=`state`, XDG_CONFIG_HOME=`config`, PI_CODING_AGENT_DIR=`agent`, TASKRC=`taskrc`, TASKDATA=`taskdata`. Tests use temporary transcript/database/config paths and fake task executors. No personal tasks/settings, real credentials or external provider requests were used.
+- All checks used `structured_return` and the section-5 scopes/flags. Each verification command recorded its real exit status as `TRUE_EXIT_STATUS` in its `.stderr.log`. The table lists `.stdout.log` names under package-local `.pi/structured-returns/`.
+
+| Check                           | Result (real exit status)                     | Stdout artifact                                   |
+| ------------------------------- | --------------------------------------------- | ------------------------------------------------- |
+| Full package tests              | 279 passed, zero failed assertions/suites (0) | `650b2456-3203-4df7-802f-63468dd7a694.stdout.log` |
+| Lint                            | 30 files, zero errors/warnings (0)            | `34cdc2b2-8080-425a-84f2-4ead0b423c90.stdout.log` |
+| Types                           | Zero errors (0)                               | `aec59796-dbb4-461a-9db2-4e2409921dab.stdout.log` |
+| Formatting, expanded plan scope | Passed (0), rechecked after this record       | `a27517be-8acf-4e0c-b594-c053cb19c14d.stdout.log` |
+
+- Independently parsed actual Vitest JSON: `success: true`, zero failed assertions/suites and no suite-load messages. All 169 Phase 2 test-name/status occurrences remain present and passing; 110 cases were added. Focused reviewer/capture/SDK/config/lookup checks passed 125 cases before the final full run.
+- Nine deterministic localhost SDK cases exercised the actual locked runtime: explicit empty/nonempty success, mixed/duplicate/unread/missing submissions, truncated output, invalid task lookup and provider error without retry. They assert the exact tool surface, selected model, absence of resource sentinels and parent transcript preload, outgoing transcript byte preservation, and no data/coverage on failure. Only a synthetic localhost authentication value is configured.
+- Other added cases cover settings reread/precedence, pre-opt-in evidence, source-only eligibility, empty evidence, long continuations, frozen appends/edits, staging/cleanup/storage failures, deadline cancellation/ownership, throwing notifiers, manual abandonment, automatic/manual coverage sharing and pending proposals surviving non-TUI manual finish with capture off.
+- Initial development checks exposed necessary 0.84.4 schema/tool-field type adaptations (`391c2f78-0ea9-4ef2-8ada-86dd1e739654.stdout.log`), one new fixture that omitted manual source enrollment (`4d93bffc-66d2-42de-9ed3-96790b11752d.stdout.log`) and an unsafe-finally lint finding in new cleanup code (`67118d71-6764-474e-a50e-f8e25d99543c.stdout.log`). Corrected new implementation/fixtures; no original assertion was removed or weakened. The existing default-config assertion now includes the additive false flag.
+- Phase 3 gate passed. Final whitespace/scope and post-record formatting checks precede the local commit. Live-provider/live-TUI behavior and recognition quality were not tested; cleanup is intentionally not time-bounded. No push or PR mutation.
+
+#### Phase 4 handoff
+
+- New entry point: `captureOutgoing(ctx, store, deadline)` and `CAPTURE_BUDGET_MS`; shutdown owns database lifetime. `ReviewerInput`/`runReviewer` own isolated SDK setup, cancellation and cleanup, not persistence.
+- `RemembrancerConfig` adds `autoCapture`; manual registration stays independent. `taskwarrior.ts` currently contains only `TaskRecord`, `TaskExecutor`, `executeTask` and `lookupTasks` for fixed read-only exports; phase 4 may add verified application/UI functions against the unchanged Phase 2 proposal store APIs.
+- No changes were needed to `capture-review.ts`, `checkpoints.ts`, proposal schemas or shared paging APIs. Proposal command/completions/startup reminder/application and user-facing documentation remain phases 4–5 work.

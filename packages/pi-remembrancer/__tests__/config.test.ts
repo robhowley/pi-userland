@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -30,11 +30,42 @@ describe.sequential('remembrancer config', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  it.each([true, false])('loads global autoCapture=%s without changing disabled', (autoCapture) => {
+    writeJson(globalSettingsPath(), { 'pi-remembrancer': { autoCapture } });
+    expect(loadRemembrancerConfig(cwd, true)).toEqual({ disabled: false, autoCapture });
+  });
+
+  it.each([true, false])('applies per-field project precedence only when trusted=%s', (trusted) => {
+    writeJson(globalSettingsPath(), { 'pi-remembrancer': { autoCapture: true, disabled: true } });
+    writeJson(projectSettingsPath(), { 'pi-remembrancer': { disabled: false } });
+    expect(loadRemembrancerConfig(cwd, trusted)).toEqual({ disabled: !trusted, autoCapture: true });
+    writeJson(projectSettingsPath(), { 'pi-remembrancer': { autoCapture: false } });
+    expect(loadRemembrancerConfig(cwd, trusted)).toEqual({ disabled: true, autoCapture: !trusted });
+  });
+
+  it.each(['true', 1, null, [], {}])('ignores invalid autoCapture=%j per field', (autoCapture) => {
+    writeJson(globalSettingsPath(), { 'pi-remembrancer': { autoCapture } });
+    expect(loadRemembrancerConfig(cwd, true).autoCapture).toBe(false);
+    writeJson(globalSettingsPath(), { 'pi-remembrancer': { autoCapture: true, disabled: true } });
+    writeJson(projectSettingsPath(), { 'pi-remembrancer': { autoCapture, disabled: false } });
+    expect(loadRemembrancerConfig(cwd, true)).toEqual({ disabled: false, autoCapture: true });
+  });
+
+  it('does not mutate settings files when reading capture configuration', () => {
+    const global = { 'pi-remembrancer': { autoCapture: true } };
+    const project = { 'pi-remembrancer': { disabled: true } };
+    writeJson(globalSettingsPath(), global);
+    writeJson(projectSettingsPath(), project);
+    loadRemembrancerConfig(cwd, true);
+    expect(readFileSync(globalSettingsPath(), 'utf8')).toBe(JSON.stringify(global));
+    expect(readFileSync(projectSettingsPath(), 'utf8')).toBe(JSON.stringify(project));
+  });
+
   const globalSettingsPath = () => join(agentDir, 'settings.json');
   const projectSettingsPath = () => join(cwd, '.pi', 'settings.json');
 
   it('defaults to enabled', () => {
-    expect(loadRemembrancerConfig(cwd, true)).toEqual({ disabled: false });
+    expect(loadRemembrancerConfig(cwd, true)).toEqual({ disabled: false, autoCapture: false });
   });
 
   it.each([true, false])('loads global disabled=%s from the active agent directory', (disabled) => {
