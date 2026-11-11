@@ -356,3 +356,42 @@ The clean-baseline gate passed before Phase 1 changes began.
 - Full and focused Vitest JSON independently checked for `success: true`, assertion counts, failed-suite counts and suite-load messages. No suite errors were hidden by the parser.
 - Initial development check failed with 14 new test failures (43 passed) because the child imported optional IPC methods as named `node:process` exports; three new fixture-schema type errors also appeared. Corrected the child to use the default process object and typed the test schema shape. No production fixes or existing assertion changes were needed. Failed-test artifact: `31aa6629-a2d2-4e65-9e70-170d2088ddbe.stdout.log`; initial type artifact: `ac0883c6-1f89-4bd3-89d0-0437e5f003b0.stdout.log`.
 - Phase 1 gate passed on the locked SDK tree. Scope/whitespace and final plan formatting are checked before the local commit. No personal task/config changes, real-provider/live-TUI checks, push, PR changes, or phases 2–5 work occurred.
+
+### Phase 2: proposal persistence and capture-only completion (2026-11-11)
+
+#### Scope and donor inspection
+
+- Started from Phase 1 commit `a6cb34ac7397c3cbc06820f630dde4f647dffe66`; original base and pinned donor remain unchanged.
+- Read this full plan, `/Users/roberthowley/.pi/subagent-runs/20261111T175515Z-sbnfwmh6/result.md`, the additive rebuild wiki handoff, current production/store/evidence code, package scripts and relevant tests before implementation.
+- Read the same three code/structured-return skills listed in Phase 1. Read full installed `docs/sdk.md`, `docs/extensions.md`, `docs/sessions.md`, `docs/session-format.md`, `docs/message-types.md` and `examples/sdk/01-minimal.ts`, `examples/sdk/11-sessions.ts`, `examples/extensions/structured-output.ts` under `/Users/roberthowley/.pi/pkg/pi-1.5.0/`. Runtime peers remain locked 0.84.4; no SDK session/lifecycle integration was added.
+- Inspected donor additions/differences for `proposals.ts`, `checkpoints.ts`, `review.ts` and `proposals.test.ts`. Reused proposal types/schema/validators, proposal persistence/history/claim/outcome methods, submission persistence and relevant tests. Adapted the schema import to the locked host's `pi-ai` Type export.
+- Rejected donor leases, manual review replacement and donor manual finish changes. Extracted paging/context from the current base, not the donor. No cherry-pick, dependency, manifest, lockfile, harness, configuration, unrelated-package or phases 3–5 changes.
+
+#### APIs and behavior
+
+- `CheckpointStore` retains both manual `finish` overloads and the existing `.lock` ownership protocol. `releaseReview` additionally forgets the in-memory capture; no ownership expiry or database lease was added.
+- Proposal reads: `proposals(state?, offset?, limit?)`, `proposalCount(state?)`, `proposal(id)`. Decisions: `editProposal`, `dismissProposal`, `claimProposal`, `recordProposalResult`, all guarded by revisions; claims and outcomes remain durable and cannot be blindly replayed.
+- Capture caller sequence: `claimReview()` → `prepareCapture({ sessionId, file })` → `CaptureReview.page()`/`context()` → `validateCapture(id, submissions)` for staging → `finishCapture(id, submissions)` after reviewer cleanup/deadline checks → `releaseReview()` in `finally`. Phase 3 owns reviewer staging, deadlines and cleanup; none run in this phase.
+- `CaptureReview` exposes `id`, `hasEvidence`, `incomplete`, copied `warnings`, bounded evidence paging and frozen context. Preparation reads only the selected source, using stored checkpoint/default eligibility. The plan, evidence and delivery cursor stay private; callers cannot submit a coverage plan or mark evidence delivered.
+- Capture completion requires complete source scope, every evidence continuation and an explicit proposal array. Exact quotes, UTF-16 offsets, branch/edit identity and proposal revisions are validated; supporting context cannot create extraction scope. Empty/tool-only/already-covered evidence cannot commit source or coverage changes.
+- A private normalized coverage writer is shared by manual and capture completion. One transaction owner commits proposals and coverage together, rechecking revisions under `BEGIN IMMEDIATE`; failures leave the capture available until the caller releases it. Successful completion invalidates its identity but keeps process ownership until explicit release.
+- `review-pages.ts` mechanically shares the original paging/serialization/context functions. `index.ts` only imports/re-exports those helpers; manual `Batch`, schema/actions, handlers, completion semantics, output shape and limits remain unchanged.
+- Added 31 cases for atomic success/rollback, malformed references/scopes, unread continuations, exact edited selections, stale/duplicate revisions, context exclusion, late appends/edits, seed defaults, empty evidence, ownership, private files, unknown tables, restart/history/drafts/decisions/claims/outcomes and manual/proposal separation.
+- Existing process-lock fixture now registers a test-only TypeScript loader because runtime store imports use emitted `.js` specifiers and constructor parameter properties. It uses existing root TypeScript tooling, preserves all probe actions/assertions and changes no runner configuration or production imports.
+
+#### Checks and gate
+
+- Isolation root: `/tmp/pi-remembrancer-phase2`, with HOME=`home`, XDG_STATE_HOME=`state`, XDG_CONFIG_HOME=`config`, PI_CODING_AGENT_DIR=`agent`, TASKRC=`taskrc`, TASKDATA=`taskdata`. No personal tasks/settings or providers were accessed.
+- Checks used `structured_return`, the section-5 commands/parsers and true exit-status recording. Artifacts below are `.stdout.log` names under package-local `.pi/structured-returns/`; matching `.stderr.log` files contain `TRUE_EXIT_STATUS`.
+
+| Check                           | Result (real exit status)                     | Stdout artifact                                   |
+| ------------------------------- | --------------------------------------------- | ------------------------------------------------- |
+| Focused proposal/store tests    | 39 passed, zero failed assertions/suites (0)  | `f7ba8552-f5aa-4b09-8f40-fc4dcbcd1360.stdout.log` |
+| Full package tests              | 169 passed, zero failed assertions/suites (0) | `f9178396-1840-478b-ae25-4fb0db280c55.stdout.log` |
+| Lint                            | 23 files, zero errors/warnings (0)            | `236f577f-3902-4a61-89a0-7aa343da9206.stdout.log` |
+| Types                           | Zero errors (0)                               | `46a3cd93-a35e-4bba-9fbd-8d9d8f0c4372.stdout.log` |
+| Formatting, expanded plan scope | Passed (0), rechecked after this record       | `24df6579-12d0-49b8-b218-b8c32445b7b6.stdout.log` |
+
+- Independently inspected full Vitest JSON: `success: true`, zero failed assertions/suites, no suite-load messages. Compared test-name/status multisets to Phase 1: all 138 cases retained and passing, 31 added, none missing. No original test assertions were changed.
+- Initial development checks exposed the child import-resolution issue, one exact-optional fixture type error and two missing `URL` imports in the new loader. Fixed only new code/fixture setup; no baseline assertions were removed or weakened. Initial artifacts: tests `36946107-c326-46c7-98fc-924f764eba04.stdout.log`, types `564bc25b-7336-4315-97bc-cb1cd028f3f6.stdout.log`, lint `ed3caf25-d6bb-4258-a278-d4dd9ed1462b.stdout.log`.
+- Phase 2 gate passed. Final whitespace/scope and post-record formatting checks precede the local commit. Capture invocation, isolated reviewer, settings, Taskwarrior application, proposal UI and live-provider/live-TUI validation remain outside this phase. No push or PR mutation.

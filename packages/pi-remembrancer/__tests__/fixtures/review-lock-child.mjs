@@ -1,5 +1,8 @@
 import process from 'node:process';
-import { CheckpointStore } from '../../extensions/remembrancer/checkpoints.ts';
+import { register } from 'node:module';
+
+register('./typescript-loader.mjs', import.meta.url);
+const { CheckpointStore } = await import('../../extensions/remembrancer/checkpoints.ts');
 
 const [, , path, action, sessionId, file] = process.argv;
 if (!path) throw new Error('Missing checkpoint database path');
