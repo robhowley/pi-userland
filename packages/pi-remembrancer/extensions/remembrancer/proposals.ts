@@ -46,11 +46,10 @@ export type ProposalState =
   | 'applying'
   | 'applied'
   | 'already_satisfied'
-  | 'failed'
   | 'uncertain';
 export type ApplicationResult = { actual?: Record<string, unknown> | null } & (
   | { state: 'applied' | 'already_satisfied'; verified: TaskSnapshot; error: null }
-  | { state: 'failed' | 'uncertain'; verified: TaskSnapshot | null; error: string }
+  | { state: 'uncertain'; verified: TaskSnapshot | null; error: string }
 );
 export type Proposal = ProposalDraft & {
   id: string;

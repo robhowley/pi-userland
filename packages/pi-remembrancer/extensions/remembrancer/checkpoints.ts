@@ -175,7 +175,7 @@ export class CheckpointStore {
           claim.length > 0 &&
           (state === 'applying'
             ? result === null
-            : ['applied', 'already_satisfied', 'failed', 'uncertain'].includes(state) &&
+            : ['applied', 'already_satisfied', 'uncertain'].includes(state) &&
               result?.state === state);
     if (!valid) throw new Error('Invalid proposal application state');
     if (expectedRevision === undefined) {
@@ -214,22 +214,15 @@ export class CheckpointStore {
 
   editProposal(id: string, revision: number, draft: ProposalDraft): Proposal {
     validateDraft(draft);
-    const value = this.changedProposal(id, revision, ['pending', 'failed']);
+    const value = this.changedProposal(id, revision, ['pending']);
     value.draft = structuredClone(draft);
-    value.state = 'pending';
-    value.claim = null;
-    value.result = null;
-    delete value.applicationBefore;
     this.saveProposal(value, revision);
     return value;
   }
 
   dismissProposal(id: string, revision: number): Proposal {
-    const value = this.changedProposal(id, revision, ['pending', 'failed']);
+    const value = this.changedProposal(id, revision, ['pending']);
     value.state = 'dismissed';
-    value.claim = null;
-    value.result = null;
-    delete value.applicationBefore;
     this.saveProposal(value, revision);
     return value;
   }
@@ -260,7 +253,7 @@ export class CheckpointStore {
   ): Proposal {
     const value = this.changedProposal(id, revision, ['applying', 'uncertain']);
     if (!claim || value.claim !== claim) throw new Error('Application claim mismatch');
-    if (!['applied', 'already_satisfied', 'failed', 'uncertain'].includes(result.state))
+    if (!['applied', 'already_satisfied', 'uncertain'].includes(result.state))
       throw new Error('Invalid application result');
     if (result.verified !== null) validateSnapshot(result.verified);
     if (result.state === 'applied' || result.state === 'already_satisfied') {

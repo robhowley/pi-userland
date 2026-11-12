@@ -294,6 +294,31 @@ it('leaves appends outside the frozen review and closes extraction after submiss
   const manual = prepareReview([{ sessionId: 'outgoing', file }], db.reviewed());
   expect(manual.evidence.map((item) => item.entryId)).toEqual(['later']);
 });
+it('reads frozen context through the capture tool without consuming evidence', async () => {
+  appendFileSync(file, message('selected', 'promise', 'selected commitment'));
+  runner.mockImplementation(async (input) => {
+    const selected = {
+      sessionId: 'outgoing',
+      branchId: 'selected',
+      entryId: 'selected',
+      editId: null,
+    };
+    appendFileSync(file, message('later', 'selected', 'outside frozen scope'));
+    const result = await call(input, 'context', { selected, offset: 5 });
+    expect(JSON.parse((result.content[0] as { text: string }).text)).toMatchObject({
+      selected,
+      contextOnly: true,
+      groups: [{ entries: [{ entryId: 'promise', offset: 5, text: 'Maya the comparison' }] }],
+      nextOffset: null,
+    });
+    expect(await readAll(input)).toMatchObject({
+      groups: [{ entries: [{ entryId: 'promise' }, { entryId: 'selected' }] }],
+    });
+    await call(input, 'submit', { proposals: [] });
+  });
+  await capture();
+  expect(db.reviewed().map((checkpoint) => checkpoint.entryId)).toEqual(['selected']);
+});
 it('offers only scoped reads, typed task lookups and submission', async () => {
   runner.mockImplementation(async (input) => {
     expect(input.tools.map((tool) => tool.name)).toEqual([

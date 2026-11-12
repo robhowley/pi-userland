@@ -1,4 +1,5 @@
-import type { Evidence } from './evidence.js';
+import { resolve } from 'node:path';
+import { branchEvidence, type Evidence, type PreparedReview } from './evidence.js';
 
 export type Selected = {
   sessionId: string;
@@ -180,6 +181,50 @@ export function boundedEvidencePage(
   const data = buildResponse(entries, cursor);
   serializedResponse(data);
   return { data, cursor };
+}
+
+export function frozenContext(
+  review: Pick<PreparedReview, 'evidence' | 'snapshots'>,
+  batch: string,
+  args: { selected?: Selected; before?: number; offset?: number },
+) {
+  const selected = args.selected;
+  if (!selected) throw new Error('Context requires a selected evidence item.');
+  const selectedEvidence = review.evidence.find(
+    (item) =>
+      item.sessionId === selected.sessionId &&
+      item.branchId === selected.branchId &&
+      item.entryId === selected.entryId &&
+      item.editId === selected.editId,
+  );
+  if (!selectedEvidence) throw new Error('Selected evidence is not in this review batch.');
+  const snapshot = review.snapshots.find(
+    (candidate) =>
+      candidate.source.sessionId === selected.sessionId &&
+      resolve(candidate.source.file) === resolve(selectedEvidence.file),
+  );
+  if (!snapshot) throw new Error('Selected evidence snapshot is unavailable.');
+  const branch = branchEvidence(
+    snapshot.tree,
+    { file: snapshot.source.file, sessionId: selected.sessionId, entryId: selected.branchId },
+    selectedEvidence.reviewedThrough,
+  );
+  const selectedIndex = branch.findIndex(
+    (item) => item.entryId === selected.entryId && item.editId === selected.editId,
+  );
+  if (selectedIndex < 0) throw new Error('Selected evidence is not in the frozen branch.');
+  const before = args.before ?? 1;
+  const offset = args.offset ?? 0;
+  if (!Number.isInteger(before) || before < 1 || before > 40)
+    throw new Error('Context before must be an integer from 1 to 40.');
+  if (!Number.isInteger(offset) || offset < 0)
+    throw new Error('Context offset must be a nonnegative integer.');
+  return contextPage(
+    batch,
+    selected,
+    branch.slice(Math.max(0, selectedIndex - before), selectedIndex),
+    offset,
+  );
 }
 
 export function contextPage(batch: string, selected: Selected, items: Evidence[], offset: number) {

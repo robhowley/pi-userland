@@ -132,64 +132,7 @@ it('persists drafts, decisions and claims across restart; uncertain writes canno
   }
 });
 
-it.each(['edit', 'dismiss'] as const)(
-  'archives failed application evidence on %s and fences the old claimant after restart',
-  (action) => {
-    const dir = mkdtempSync(join(tmpdir(), 'proposal-failed-'));
-    const path = join(dir, 'state.sqlite');
-    let store = new CheckpointStore(path);
-    try {
-      const [first] = store.finishCapture(freeze(store), [submission]);
-      const claim = store.claimProposal(first!.id, first!.revision, null);
-      const failed = store.recordProposalResult(claim.id, claim.revision, claim.claim!, {
-        state: 'failed',
-        verified: snapshot,
-        actual: { uuid: snapshot.uuid, description: 'Partial external write' },
-        error: 'Write partially completed',
-      });
-      store.close();
-      store = new CheckpointStore(path);
-      expect(store.proposal(failed.id)).toEqual(failed);
-      const decision =
-        action === 'edit'
-          ? store.editProposal(failed.id, failed.revision, {
-              change: submission.change,
-              expected: null,
-              question: null,
-            })
-          : store.dismissProposal(failed.id, failed.revision);
-      expect(decision.state).toBe(action === 'edit' ? 'pending' : 'dismissed');
-      expect(decision.claim).toBeNull();
-      expect(decision.result).toBeNull();
-      expect(decision).not.toHaveProperty('applicationBefore');
-      const { history, ...previous } = failed;
-      expect(decision.history).toEqual([...history!, previous]);
-      store.close();
-      store = new CheckpointStore(path);
-      expect(store.proposal(decision.id)).toEqual(decision);
-      const result = { state: 'applied' as const, verified: snapshot, error: null };
-      expect(() =>
-        store.recordProposalResult(decision.id, claim.revision, claim.claim!, result),
-      ).toThrow(/revision/);
-      expect(() =>
-        store.recordProposalResult(decision.id, decision.revision, claim.claim!, result),
-      ).toThrow(/state/);
-      if (action === 'edit') {
-        const next = store.claimProposal(decision.id, decision.revision);
-        expect(next.claim).not.toBe(claim.claim);
-        expect(() =>
-          store.recordProposalResult(next.id, next.revision, claim.claim!, result),
-        ).toThrow(/claim/);
-        expect(store.proposal(next.id)).toEqual(next);
-      }
-    } finally {
-      store.close();
-      rmSync(dir, { recursive: true, force: true });
-    }
-  },
-);
-
-it.each(['applied', 'already_satisfied', 'failed', 'uncertain'] as const)(
+it.each(['applied', 'already_satisfied', 'uncertain'] as const)(
   'persists matching %s outcome and claim, rejecting invalid outcomes without mutation',
   (state) => {
     const dir = mkdtempSync(join(tmpdir(), 'proposal-result-'));
@@ -201,7 +144,7 @@ it.each(['applied', 'already_satisfied', 'failed', 'uncertain'] as const)(
       for (const invalid of [
         { state: 'pending', verified: null, error: null },
         { state: 'applied', verified: null, error: null },
-        { state: 'failed', verified: null, error: '' },
+        { state: 'uncertain', verified: null, error: '' },
       ]) {
         expect(() =>
           store.recordProposalResult(claim.id, claim.revision, claim.claim!, invalid as never),

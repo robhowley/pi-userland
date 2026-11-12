@@ -15,7 +15,6 @@ import {
 } from './render.js';
 import { copyWarnings, warningMessages, type WarningRecord } from './warnings.js';
 import {
-  branchEvidence,
   prepareReview,
   resolveSeedSince,
   ReviewBudget,
@@ -28,7 +27,7 @@ import {
 } from './evidence.js';
 import {
   boundedEvidencePage,
-  contextPage,
+  frozenContext,
   groupEvidencePage,
   serializedResponse,
   type Selected,
@@ -355,47 +354,7 @@ export default function remembrancer(pi: ExtensionAPI) {
   function contextReview(args: ReviewArgs): object {
     if (!batch || args.batch !== batch.token)
       throw new Error('No matching open review in this Pi session.');
-    const selected = args.selected;
-    if (!selected) throw new Error('Context requires a selected evidence item.');
-    const selectedEvidence = batch.evidence.find(
-      (item) =>
-        item.sessionId === selected.sessionId &&
-        item.branchId === selected.branchId &&
-        item.entryId === selected.entryId &&
-        item.editId === selected.editId,
-    );
-    if (!selectedEvidence) throw new Error('Selected evidence is not in this review batch.');
-
-    const snapshot = batch.snapshots.find(
-      (candidate) =>
-        candidate.source.sessionId === selected.sessionId &&
-        resolve(candidate.source.file) === resolve(selectedEvidence.file),
-    );
-    if (!snapshot) throw new Error('Selected evidence snapshot is unavailable.');
-
-    const branch = branchEvidence(
-      snapshot.tree,
-      {
-        file: snapshot.source.file,
-        sessionId: selected.sessionId,
-        entryId: selected.branchId,
-      },
-      selectedEvidence.reviewedThrough,
-    );
-    const selectedIndex = branch.findIndex(
-      (item) => item.entryId === selected.entryId && item.editId === selected.editId,
-    );
-    if (selectedIndex < 0) throw new Error('Selected evidence is not in the frozen branch.');
-
-    const before = args.before ?? 1;
-    const offset = args.offset ?? 0;
-    if (!Number.isInteger(before) || before < 1 || before > 40)
-      throw new Error('Context before must be an integer from 1 to 40.');
-    if (!Number.isInteger(offset) || offset < 0)
-      throw new Error('Context offset must be a nonnegative integer.');
-
-    const items = branch.slice(Math.max(0, selectedIndex - before), selectedIndex);
-    return contextPage(batch.token, selected, items, offset);
+    return frozenContext(batch, batch.token, args);
   }
 
   pi.on('session_start', (_event, ctx) => {
