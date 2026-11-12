@@ -23,9 +23,9 @@ function exact(value: unknown, indent?: number): string {
 function project(proposal: Proposal): string {
   const draft = proposal.draft ?? proposal;
   return (
-    (draft.change.operation !== 'complete' ? draft.change.fields.project : undefined) ??
-    draft.expected?.fields.project ??
-    '(no project)'
+    (draft.change.operation !== 'complete' && draft.change.fields.project !== undefined
+      ? draft.change.fields.project
+      : draft.expected?.fields.project) ?? '(no project)'
   );
 }
 function savedSourceText(source: Proposal['sources'][number]): string {

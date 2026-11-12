@@ -783,6 +783,41 @@ function uiContext(
   return { mode: 'tui', ui: { custom, editor, notify: vi.fn() } } as unknown as ExtensionContext;
 }
 
+it.each([
+  { fields: { project: null }, label: '(no project)', beforeAnchor: true },
+  { fields: {}, label: 'work', beforeAnchor: false },
+  { fields: { project: 'home' }, label: 'home', beforeAnchor: true },
+])('UI labels and groups project $label without falling back on explicit null', async (test) => {
+  for (const edited of [false, true]) {
+    const draft: ProposalDraft = {
+      ...update,
+      change: { operation: 'update', targetUuid: uuid, fields: test.fields, annotations: [] },
+    };
+    const f = setup(edited ? update : draft);
+    if (edited) f.store.editProposal(f.proposal.id, f.proposal.revision, draft);
+    seed(f.store, {
+      change: {
+        operation: 'add',
+        fields: { description: 'Grouping anchor', project: 'review' },
+        annotations: [],
+      },
+      expected: null,
+      question: null,
+    });
+    const ctx = uiContext((component) => {
+      const rendered = component.render(120).join('\n');
+      const updateIndex = rendered.indexOf(`"${test.label}" · update`);
+      const anchorIndex = rendered.indexOf('"review" · add');
+      expect(updateIndex, rendered).toBeGreaterThanOrEqual(0);
+      expect(anchorIndex).toBeGreaterThanOrEqual(0);
+      expect(updateIndex < anchorIndex).toBe(test.beforeAnchor);
+      component.handleInput?.('\u001b');
+    });
+    await openProposals(ctx, f.store, f.execute);
+    expect(f.execute.mock.calls.every(([, input]) => input === undefined)).toBe(true);
+  }
+});
+
 it('only per-item Ctrl+A applies, with no Enter, history, Source or accept-all writes', async () => {
   const f = setup();
   seed(f.store);
@@ -953,9 +988,9 @@ it('quotes terminal controls reversibly in previews, Source, History and the dra
   expect(f.execute).not.toHaveBeenCalled();
 });
 
-it.skipIf(!existsSync('/opt/homebrew/bin/task'))(
-  'isolated Taskwarrior import/export handles literals, clearing, arrays and completion',
-  async () => {
+it.skipIf(!existsSync('/opt/homebrew/bin/task')).each(['due', 'wait', 'scheduled'] as const)(
+  'isolated Taskwarrior import/export clears approved %s and preserves unmentioned fields',
+  async (date) => {
     const dir = mkdtempSync(join(tmpdir(), 'remembrancer-isolated-task-'));
     const taskrc = join(dir, 'taskrc');
     writeFileSync(
@@ -984,12 +1019,44 @@ it.skipIf(!existsSync('/opt/homebrew/bin/task'))(
           description: 'literal rc.hooks=on +tag "quotes" $(touch nope)',
           project: 'work',
           tags: ['one', 'two'],
+          priority: 'H' as const,
+          due: '20300201T000000Z',
+          wait: '20300101T000000Z',
+          scheduled: '20300102T000000Z',
         },
         annotations: ['Quote "literal"'],
       };
       await writeTaskChange(() => 'tui', add, null, uuid, execute);
       let actual = (await lookupTasks({ uuid }, execute)).tasks[0]!;
       expect(actual['description']).toBe(add.fields.description);
+      const before = snapshot(actual);
+      const store = new CheckpointStore(':memory:');
+      stores.push(store);
+      const proposal = seed(store, {
+        change: {
+          operation: 'update',
+          targetUuid: uuid,
+          fields: { [date]: null },
+          annotations: [],
+        },
+        expected: before,
+        question: null,
+      });
+      const result = await applyProposal(
+        store,
+        await previewProposal(store, proposal.id, execute),
+        () => 'tui',
+        execute,
+      );
+      expect(result.result?.error).toBeNull();
+      expect(result.state).toBe('applied');
+      actual = (await lookupTasks({ uuid }, execute)).tasks[0]!;
+      expect(actual).not.toHaveProperty(date);
+      const retainedFields = { ...before.fields };
+      delete retainedFields[date];
+      expect(snapshot(actual)).toEqual({ ...before, fields: retainedFields });
+      expect(result.result?.verified).toEqual(snapshot(actual));
+      expect(result.result?.actual).toEqual(actual);
       await writeTaskChange(
         () => 'tui',
         {

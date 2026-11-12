@@ -167,7 +167,12 @@ export async function writeTaskChange(
   delete record['id'];
   delete record['urgency'];
   if (change.operation === 'complete') record['status'] = 'completed';
-  else for (const [key, value] of Object.entries(change.fields)) record[key] = value ?? '';
+  else
+    for (const [key, value] of Object.entries(change.fields)) {
+      // Replacement imports clear dates by omission; empty date strings are rejected.
+      if (value === null && ['due', 'wait', 'scheduled'].includes(key)) delete record[key];
+      else record[key] = value ?? '';
+    }
   const annotations = current ? snapshot(current).annotations : [];
   record['annotations'] = [
     ...annotations,
