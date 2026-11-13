@@ -107,12 +107,8 @@ Skip this setup if you do not need waiting conditions; other task operations wor
 
 ## Settings
 
-Remembrancer is enabled by default. To turn off saved-session reviews and stop including newly opened or resumed sessions in future reviews, add this to Pi's global settings file, normally `~/.pi/agent/settings.json`:
+Remembrancer is enabled by default. Turn off remembrancer at any by adding this to Pi's global settings file, normally `~/.pi/agent/settings.json`:
 
 ```json
 { "pi-remembrancer": { "disabled": true } }
 ```
-
-A trusted project's `.pi/settings.json` takes precedence over the global value. After changing settings, run `/reload` or start a new session. The skill remains available: direct task requests can still change Taskwarrior tasks.
-
-- `autoCapture` defaults to `false`. Turning it off leaves saved proposals available.
