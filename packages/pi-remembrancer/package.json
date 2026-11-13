@@ -1,6 +1,6 @@
 {
   "name": "@robhowley/pi-remembrancer",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "type": "module",
   "description": "Track and review commitments across Pi sessions to keep your personal Taskwarrior list current.",
   "engines": {

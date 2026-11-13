@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.1](https://github.com/robhowley/pi-userland/compare/pi-remembrancer-v0.5.0...pi-remembrancer-v0.5.1) (2026-11-13)
+
+
+### Bug Fixes
+
+* **pi-remembrancer:** include saved proposals in manual catch-up ([#241](https://github.com/robhowley/pi-userland/issues/241)) ([716853b](https://github.com/robhowley/pi-userland/commit/716853b7b980cd42f5ed379c464019171fccfb27))
+* **pi-remembrancer:** prevent oversized capture task responses ([#239](https://github.com/robhowley/pi-userland/issues/239)) ([f3ef0d8](https://github.com/robhowley/pi-userland/commit/f3ef0d85aef8f2622cc6c2f7a4678e043e8b79e1))
+
 ## [0.5.0](https://github.com/robhowley/pi-userland/compare/pi-remembrancer-v0.4.0...pi-remembrancer-v0.5.0) (2026-11-13)
 
 
