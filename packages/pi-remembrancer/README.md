@@ -47,7 +47,7 @@ Explicit requests to add or change a task are applied directly after the actual 
 | “Wrap up this session.”                                                           | Suggest new tasks, progress notes, and completions from this conversation. |
 | “What changed since my last review?”                                              | Review new activity across saved sessions and suggest changes together.    |
 
-The waiting-condition examples require the [optional field below](#optional-waiting-conditions).
+The waiting-condition examples require the [optional field below](#track-task-blockers).
 
 You can also invoke the skill directly:
 
@@ -95,7 +95,7 @@ Select an item to see its proposed changes, current task, explanation, and saved
 | `h`                 | View the saved proposal and revision history.                          |
 | Esc                 | Return from Source/History to the preview, then close.                 |
 
-## Optional waiting conditions
+## Track task blockers
 
 To record what a task is waiting on, add the `waitingon` field:
 
