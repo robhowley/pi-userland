@@ -45,7 +45,7 @@ Explicit requests to add or change a task are applied directly after the actual 
 | “I’ll send the route after the school confirms pickup. Add that to life.bikebus.” | Add “Send the route” with a waiting condition.                             |
 | “The school confirmed pickup. Update my route todo.”                              | Clear the waiting condition; sending the route stays pending.              |
 | “Wrap up this session.”                                                           | Suggest new tasks, progress notes, and completions from this conversation. |
-| “What changed since my last review?”                                              | Review new activity across saved sessions and suggest changes together.    |
+| “What changed since my last review?”                                              | Review new activity and saved suggestions together.                        |
 
 The waiting-condition examples require the [optional field below](#track-task-blockers).
 
@@ -94,10 +94,6 @@ Select an item to see its proposed changes, current task, explanation, and saved
 | `s`                 | View surrounding source context.                                       |
 | `h`                 | View the saved proposal and revision history.                          |
 | Esc                 | Return from Source/History to the preview, then close.                 |
-
-You can also ask “What changed since my last review?” for a conversational catch-up. It reads all saved proposal pages through the read-only `remembrancer_proposals` tool (`{ offset? }` → `{ proposals, nextOffset }`), even when automatic capture has left no new session evidence. It compares saved drafts, quotes, references, and decisions with new evidence and your actual pending/completed tasks, then presents one deduplicated batch for you to accept, edit, or dismiss before applying and verifying changes. The lookup works outside the terminal queue and with capture off while Remembrancer is enabled.
-
-Saved quotes and references come first; the agent reads referenced source files only if more context is needed, preserving the saved branch/edit identity and reporting missing or stale context. Saved suggestions and historical text are not approval. Chat catch-up does not apply or dismiss entries in the saved queue, even after finishing the review. Resolve those separately with `/remembrancer proposals`; do not reapply a change already made in chat or retry an uncertain write without checking the actual task.
 
 ## Track task blockers
 
