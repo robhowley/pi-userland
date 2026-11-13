@@ -1,6 +1,6 @@
 # pi-remembrancer
 
-Remembrancer is an agent-powered personal task manager built on Taskwarrior. It reads your saved Pi sessions to find what you said you would do and what you have done since. It checks what is already on your list, then suggests new tasks, progress notes, and completions for you to review in one pass.
+Remembrancer is an agent-powered personal task manager built on Taskwarrior. It reviews user and assistant messages from your saved Pi sessions to find what you said you would do and what you have done since. It checks what is already on your list, then suggests new tasks, progress notes, and completions for you to review in one pass.
 
 > **Remembrancer** _(noun)_ - an officer of the medieval English Exchequer who kept the _memoranda rolls_, a record of debts owed to the Crown and other unfinished business to bring back before the court.
 
@@ -104,17 +104,6 @@ task config uda.waitingon.type string
 ```
 
 Skip this setup if you do not need waiting conditions; other task operations work without it.
-
-## What gets reviewed
-
-These are the manual-review rules. Opt-in automatic capture adds only the outgoing-session review described above.
-
-- Regular reviews cover sessions opened or resumed with Remembrancer enabled. An older session included for the first time this way can bring in its full history; use seed to set a starting point instead.
-- Seed also searches Pi's configured session archive, including saved worker sessions. It does not reconstruct which sessions had Remembrancer disabled in the past.
-- A shorter seed duration does not narrow existing review coverage. Repeating a seed skips unchanged text that has already been reviewed.
-- From saved transcripts, only user and assistant text is included, not tool outputs, model thinking, or images.
-- Manual reviews run only when you ask. Activity added during a review waits for the next one.
-- If a session cannot be read, Remembrancer reports it and leaves it for a later review. Cancelling a review leaves review progress unsaved, but it does not undo task changes already applied.
 
 ## Settings
 
