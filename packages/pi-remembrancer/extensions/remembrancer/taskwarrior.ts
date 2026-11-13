@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { isDeepStrictEqual } from 'node:util';
 import type { CheckpointStore } from './checkpoints.js';
+import { fitsResponse, REVIEW_RESPONSE_MAX_BYTES } from './review-pages.js';
 import {
   validateDraft,
   validateSnapshot,
@@ -97,11 +98,21 @@ export async function lookupTasks(
       throw new Error('Invalid Taskwarrior record');
     fullUuid(record.uuid);
   }
-  const tasks = records.slice(offset, offset + 50) as TaskRecord[];
-  return {
-    tasks,
-    nextOffset: offset + tasks.length < records.length ? offset + tasks.length : null,
-  };
+  const tasks: TaskRecord[] = [];
+  let nextOffset: number | null = null;
+  for (const record of records.slice(offset, offset + 50) as TaskRecord[]) {
+    tasks.push(record);
+    nextOffset = offset + tasks.length < records.length ? offset + tasks.length : null;
+    if (fitsResponse({ tasks, nextOffset })) continue;
+    if (tasks.length === 1)
+      throw new Error(
+        `Task ${record['uuid']} cannot fit within the ${REVIEW_RESPONSE_MAX_BYTES}-byte response limit`,
+      );
+    tasks.pop();
+    nextOffset = offset + tasks.length;
+    break;
+  }
+  return { tasks, nextOffset };
 }
 async function readTask(uuid: string, execute: TaskExecutor): Promise<TaskRecord | null> {
   const { tasks } = await lookupTasks({ uuid }, execute);

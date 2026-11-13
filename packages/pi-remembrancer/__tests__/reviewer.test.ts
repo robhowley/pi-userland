@@ -142,6 +142,85 @@ describe('runReviewer', () => {
     },
   );
 
+  it.each(['model', 'tool', 'submission'])(
+    'preserves the initial %s failure when cancellation emits an aborted message',
+    async (failure) => {
+      session.abort.mockImplementation(async () => {
+        await Promise.resolve();
+        session.subscribe.mock.calls[0]![0]({
+          type: 'message_end',
+          message: {
+            role: 'assistant',
+            stopReason: 'aborted',
+            errorMessage: 'This operation was aborted',
+            content: [],
+          },
+        });
+      });
+      session.prompt.mockImplementation(async () => {
+        const listener = session.subscribe.mock.calls[0]![0];
+        if (failure === 'tool') {
+          listener({
+            type: 'tool_execution_end',
+            toolName: 'remembrancer_tasks',
+            isError: true,
+            result: { content: [{ type: 'text', text: 'Expected full task UUID' }], details: {} },
+          });
+        } else {
+          listener({
+            type: 'message_end',
+            message: {
+              role: 'assistant',
+              stopReason: failure === 'model' ? 'error' : 'toolUse',
+              errorMessage: failure === 'model' ? 'provider unavailable' : undefined,
+              content:
+                failure === 'model'
+                  ? []
+                  : [
+                      { type: 'toolCall', name: 'remembrancer_read_evidence' },
+                      { type: 'toolCall', name: 'remembrancer_submit' },
+                    ],
+            },
+          });
+        }
+      });
+      const expected = {
+        model: 'provider unavailable',
+        tool: 'Expected full task UUID',
+        submission: 'Submission must be alone in its tool batch',
+      }[failure]!;
+      await expect(runReviewer(input())).rejects.toThrow(expected);
+      expect(session.abort).toHaveBeenCalledOnce();
+      expect(session.dispose).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('preserves the original thrown tool error and its stack', async () => {
+    const failure = new Error('Task lookup failed');
+    const tool = makeTool('remembrancer_tasks', { execute: vi.fn().mockRejectedValue(failure) });
+    session.prompt.mockImplementation(async () => {
+      const options = sdk.createAgentSession.mock.calls[0]![0] as CreateAgentSessionOptions;
+      await expect(
+        options.customTools![0]!.execute(
+          'id',
+          {},
+          undefined,
+          undefined,
+          {} as Parameters<ToolDefinition['execute']>[4],
+        ),
+      ).rejects.toBe(failure);
+      session.subscribe.mock.calls[0]![0]({
+        type: 'tool_execution_end',
+        toolName: tool.name,
+        isError: true,
+        result: { content: [{ type: 'text', text: failure.message }], details: {} },
+      });
+    });
+    await expect(runReviewer(input({ tools: [tool] }))).rejects.toBe(failure);
+    expect(session.abort).toHaveBeenCalledOnce();
+    expect(session.dispose).toHaveBeenCalledOnce();
+  });
+
   it('blocks every tool in a mixed submission batch before extraction or staging', async () => {
     const evidence = makeTool('remembrancer_read_evidence');
     const submit = makeTool('remembrancer_submit');
@@ -160,7 +239,7 @@ describe('runReviewer', () => {
       });
       const options = sdk.createAgentSession.mock.calls[0]![0] as CreateAgentSessionOptions;
       for (const tool of options.customTools!) {
-        expect(() =>
+        await expect(
           tool.execute(
             'id',
             {},
@@ -168,7 +247,7 @@ describe('runReviewer', () => {
             undefined,
             {} as Parameters<ToolDefinition['execute']>[4],
           ),
-        ).toThrow('alone');
+        ).rejects.toThrow('alone');
       }
     });
     await expect(runReviewer(input({ tools: [evidence, submit] }))).rejects.toThrow('alone');

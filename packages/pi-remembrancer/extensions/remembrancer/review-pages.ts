@@ -36,7 +36,7 @@ export function serializedResponse(data: object): string {
   return text;
 }
 
-function fitsResponse(data: object): boolean {
+export function fitsResponse(data: object): boolean {
   const text = JSON.stringify(data);
   if (text === undefined) throw new Error('Remembrancer response is not JSON serializable.');
   return Buffer.byteLength(text, 'utf8') <= REVIEW_RESPONSE_MAX_BYTES;

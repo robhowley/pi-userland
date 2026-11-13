@@ -678,6 +678,48 @@ it('counts manual abandonment and preparation time against the shutdown-entry bu
   expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining('timed out'), 'warning');
 });
 
+it.each(['capture', 'release', 'close'])(
+  'reports the full stack for shutdown %s failures and still closes the database',
+  async (phase) => {
+    const error = new Error(`${'Failure detail '.repeat(30)}\nAdditional diagnostics`);
+    await handlers.get('session_start')!({}, ctx);
+    const originalClose = CheckpointStore.prototype.close;
+    const close = vi.spyOn(CheckpointStore.prototype, 'close');
+    if (phase === 'capture') runner.mockRejectedValue(error);
+    if (phase === 'release')
+      vi.spyOn(CheckpointStore.prototype, 'releaseReview').mockImplementationOnce(() => {
+        throw error;
+      });
+    if (phase === 'close') {
+      config({ autoCapture: false });
+      close.mockImplementationOnce(function (this: CheckpointStore) {
+        originalClose.call(this);
+        throw error;
+      });
+    }
+    await handlers.get('session_shutdown')!({ reason: 'reload' }, ctx);
+    expect(ctx.ui.notify).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining(error.stack!),
+      'warning',
+    );
+    expect(close).toHaveBeenCalledOnce();
+    expect(db.reviewed()).toEqual([]);
+    expect(db.proposals()).toEqual([]);
+    db.claimReview();
+    db.releaseReview();
+  },
+);
+
+it('reports non-Error capture failures without truncating them', async () => {
+  const failure = `${'Failure detail '.repeat(30)}\nAdditional diagnostics`;
+  runner.mockRejectedValue(failure);
+  await handlers.get('session_shutdown')!({ reason: 'reload' }, ctx);
+  expect(ctx.ui.notify).toHaveBeenCalledExactlyOnceWith(
+    expect.stringContaining(failure),
+    'warning',
+  );
+});
+
 it('closes the shutdown database even when failure notification throws', async () => {
   const close = vi.spyOn(CheckpointStore.prototype, 'close');
   runner.mockRejectedValue(new Error('cleanup failed'));

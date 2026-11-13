@@ -366,15 +366,20 @@ export default function remembrancer(pi: ExtensionAPI) {
       if (count) ctx.ui.notify(`${count} task proposals · /remembrancer proposals`, 'info');
     }
   });
-  pi.on('session_shutdown', async (_event, ctx) => {
-    const deadline = Date.now() + CAPTURE_BUDGET_MS;
+  pi.on('session_shutdown', async (event, ctx) => {
     try {
-      // Abandon manual coverage before capture claims the same process lock.
-      release();
-      await captureOutgoing(ctx, store, deadline);
-    } finally {
-      db?.close();
-      db = undefined;
+      const deadline = Date.now() + CAPTURE_BUDGET_MS;
+      try {
+        // Abandon manual coverage before capture claims the same process lock.
+        release();
+        await captureOutgoing(ctx, store, deadline);
+      } finally {
+        db?.close();
+        db = undefined;
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
+      ctx.ui.notify(`Remembrancer shutdown (${event.reason}) failed:\n${detail}`, 'warning');
     }
   });
 
