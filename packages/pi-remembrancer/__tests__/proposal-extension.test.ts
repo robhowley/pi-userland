@@ -2,7 +2,11 @@ import { execFile } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  ToolDefinition,
+} from '@earendil-works/pi-coding-agent';
 import { afterEach, expect, it, vi } from 'vitest';
 import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
 import * as evidence from '../extensions/remembrancer/evidence.js';
@@ -91,13 +95,14 @@ function setup(autoCapture?: boolean, disabled = false, mode: unknown = 'tui') {
   const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
   let command: { handler: (args: string, ctx: ExtensionContext) => Promise<void> };
   const sendUserMessage = vi.fn();
+  const tools = new Map<string, ToolDefinition>();
   remembrancer({
     on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) =>
       handlers.set(name, handler),
     registerCommand: (_name: string, definition: typeof command) => {
       command = definition;
     },
-    registerTool: vi.fn(),
+    registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
     sendUserMessage,
   } as unknown as ExtensionAPI);
   const notify = vi.fn();
@@ -146,6 +151,7 @@ function setup(autoCapture?: boolean, disabled = false, mode: unknown = 'tui') {
     notify,
     custom,
     sendUserMessage,
+    tools,
   };
 }
 
@@ -234,6 +240,95 @@ it('parses only the exact proposal command and completes it without a model turn
   expect(getRemembrancerArgumentCompletions('proposals ')).toBeNull();
 });
 
+it.each(['rpc', 'json', 'print'] as const)(
+  'reads saved capture proposals in %s with capture off and no manual review lock',
+  async (mode) => {
+    const f = setup(false, false, mode);
+    const db = new CheckpointStore();
+    const original = f.proposals[0]!;
+    db.editProposal(original.id, original.revision, {
+      change: {
+        operation: 'add',
+        fields: { description: 'Send edited comparison' },
+        annotations: [],
+      },
+      expected: null,
+      question: null,
+    });
+    const saved = db.proposals();
+    const coverage = db.reviewed();
+    const sources = db.sources();
+    await f.handlers.get('session_start')!({}, f.ctx);
+    const tool = f.tools.get('remembrancer_proposals')!;
+    const read = async (args = {}) => {
+      const result = await tool.execute('read', args, undefined, undefined, f.ctx);
+      const content = result.content[0]!;
+      if (content.type !== 'text') throw new Error('Expected JSON text');
+      expect(Buffer.byteLength(content.text)).toBeLessThanOrEqual(50 * 1024);
+      return JSON.parse(content.text);
+    };
+    const reads = vi.spyOn(evidence, 'readSession').mockImplementation(() => {
+      throw new Error('Unexpected transcript read');
+    });
+    const scans = vi.spyOn(discovery, 'discoverSources');
+    const models = vi.spyOn(reviewer, 'runReviewer');
+    // Another owner holds the review lock. Proposal reads do not claim it.
+    db.claimReview();
+    try {
+      for (let offset = 0; offset < saved.length; offset++) {
+        expect(await read(offset === 0 ? {} : { offset })).toEqual({
+          proposals: [saved[offset]],
+          nextOffset: offset + 1,
+        });
+      }
+      expect(await read({ offset: saved.length })).toEqual({ proposals: [], nextOffset: null });
+      expect(db.proposals()).toEqual(saved);
+      expect(db.reviewed()).toEqual(coverage);
+      expect(db.sources()).toEqual(sources);
+      expect(reads).not.toHaveBeenCalled();
+      expect(scans).not.toHaveBeenCalled();
+      expect(models).not.toHaveBeenCalled();
+      expect(execFile).not.toHaveBeenCalled();
+      expect(f.custom).not.toHaveBeenCalled();
+    } finally {
+      db.releaseReview();
+      db.close();
+      reads.mockRestore();
+    }
+    // Capture already advanced coverage. Manual begin has no evidence, but saved proposals remain.
+    const review = f.tools.get('remembrancer_review')!;
+    const beginResult = await review.execute(
+      'begin',
+      { action: 'begin' },
+      undefined,
+      undefined,
+      f.ctx,
+    );
+    const content = beginResult.content[0]!;
+    if (content.type !== 'text') throw new Error('Expected JSON text');
+    const begin = JSON.parse(content.text);
+    expect(begin).toMatchObject({ status: 'already-covered', groups: [], hasMore: false });
+    expect(await read()).toEqual({ proposals: [saved[0]], nextOffset: 1 });
+    await review.execute(
+      'finish',
+      { action: 'finish', batch: begin.batch },
+      undefined,
+      undefined,
+      f.ctx,
+    );
+    const after = new CheckpointStore();
+    expect(after.proposals()).toEqual(saved);
+    expect(after.reviewed()).toEqual(coverage);
+    after.close();
+  },
+);
+
+it('does not register proposal reads when disabled', async () => {
+  const f = setup(false, true, 'print');
+  await f.handlers.get('session_start')!({}, f.ctx);
+  expect(f.tools.size).toBe(0);
+});
+
 it('ordinary non-TUI manual finish leaves stored proposal decisions untouched', async () => {
   const f = setup(false);
   const before = new CheckpointStore();
@@ -245,6 +340,7 @@ it('ordinary non-TUI manual finish leaves stored proposal decisions untouched', 
   enroll.enroll('missing', join(f.dir, 'missing.jsonl'));
   enroll.close();
   let tool: {
+    name: string;
     execute: (
       id: string,
       args: unknown,
@@ -259,7 +355,7 @@ it('ordinary non-TUI manual finish leaves stored proposal decisions untouched', 
       handlers.set(name, handler),
     registerCommand() {},
     registerTool: (definition: typeof tool) => {
-      tool = definition;
+      if (definition.name === 'remembrancer_review') tool = definition;
     },
   } as unknown as ExtensionAPI);
   const ctx = { ...f.ctx, mode: 'print' as const };

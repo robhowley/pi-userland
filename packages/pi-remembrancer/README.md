@@ -45,7 +45,7 @@ Explicit requests to add or change a task are applied directly after the actual 
 | “I’ll send the route after the school confirms pickup. Add that to life.bikebus.” | Add “Send the route” with a waiting condition.                             |
 | “The school confirmed pickup. Update my route todo.”                              | Clear the waiting condition; sending the route stays pending.              |
 | “Wrap up this session.”                                                           | Suggest new tasks, progress notes, and completions from this conversation. |
-| “What changed since my last review?”                                              | Review new activity across saved sessions and suggest changes together.    |
+| “What changed since my last review?”                                              | Review new activity and saved suggestions together.                        |
 
 The waiting-condition examples require the [optional field below](#track-task-blockers).
 

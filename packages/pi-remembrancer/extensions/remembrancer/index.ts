@@ -6,6 +6,7 @@ import { CheckpointStore } from './checkpoints.js';
 import { loadRemembrancerConfig } from './config.js';
 import { captureOutgoing, CAPTURE_BUDGET_MS } from './capture.js';
 import { openProposals } from './proposal-ui.js';
+import { proposalReadDescription, proposalReadParameters, readProposals } from './proposal-read.js';
 import { discoverSources } from './discovery.js';
 import {
   renderReviewCall,
@@ -360,6 +361,19 @@ export default function remembrancer(pi: ExtensionAPI) {
   pi.on('session_start', (_event, ctx) => {
     if (loadRemembrancerConfig(ctx.cwd, ctx.isProjectTrusted()).disabled) return;
     registerReviewTool();
+    pi.registerTool({
+      name: 'remembrancer_proposals',
+      label: 'Remembrancer proposals',
+      description: proposalReadDescription,
+      parameters: proposalReadParameters,
+      async execute(_id, args) {
+        const data = readProposals(store(), args);
+        return {
+          content: [{ type: 'text', text: serializedResponse(data) }],
+          details: {},
+        };
+      },
+    });
     enroll(ctx);
     if (ctx.mode === 'tui') {
       const count = store().proposalCount();

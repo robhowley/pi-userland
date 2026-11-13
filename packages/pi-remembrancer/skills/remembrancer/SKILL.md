@@ -87,6 +87,8 @@ Use this procedure for evidence from both the current conversation and a frozen 
 
 ## Full cross-session review
 
+Read all `remembrancer_proposals` pages (`nextOffset` as `offset`, until `null`), even if there is no new evidence. Include saved proposals in reconciliation, using `draft` when present, saved quotes, and decision history.
+
 1. Begin the review with the requested `remembrancer_review` action. For `seed 14d`, add `seed: "14d"`. Read every returned page with `action: "next"` and the same batch token until no pages remain. Later changes are not part of the batch. Read evidence and context entries in `groups[].entries` order, retaining their group's source and branch metadata. Join continued text using `offset` and `continues`.
 2. If a selected item needs interpretation, call `action: "context"` with the same batch token and request only the needed context. For context `selected`, take `sessionId` and `branchId` from the group, and `entryId` and `editId` from the entry. Context supports interpretation, not new proposal evidence, and does not advance pages.
 3. Follow **Reconcile evidence** above. Report unavailable sources from warnings; they remain unreviewed but do not prevent finishing the available batch as a partial result. Unknown-time warnings are informational and do not by themselves make the review partial.

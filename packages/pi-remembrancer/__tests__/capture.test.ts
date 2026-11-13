@@ -33,6 +33,7 @@ let ctx: ExtensionContext;
 let db: CheckpointStore;
 let handlers: Map<string, (event: object, ctx: ExtensionContext) => unknown>;
 let manualTool: ToolDefinition;
+let proposalTool: ToolDefinition;
 const runner = vi.mocked(runReviewer);
 function config(value: object, project = false) {
   writeFileSync(
@@ -107,7 +108,8 @@ beforeEach(() => {
       handlers.set(name, handler),
     registerCommand: vi.fn(),
     registerTool: (tool: ToolDefinition) => {
-      manualTool = tool;
+      if (tool.name === 'remembrancer_review') manualTool = tool;
+      if (tool.name === 'remembrancer_proposals') proposalTool = tool;
     },
   } as unknown as ExtensionAPI);
   runner.mockImplementation(empty);
@@ -487,6 +489,14 @@ it('automatic coverage prevents manual replay and manual finish leaves pending p
   await handlers.get('session_start')!({}, ctx);
   let batch = await manual({ action: 'begin' });
   expect(batch.groups).toEqual([]);
+  const readSaved = async (args: object) => {
+    const result = await proposalTool.execute('proposals', args, undefined, undefined, ctx);
+    const content = result.content[0]!;
+    if (content.type !== 'text') throw new Error('Expected text');
+    return JSON.parse(content.text);
+  };
+  expect(await readSaved({})).toEqual({ proposals: saved, nextOffset: 1 });
+  expect(await readSaved({ offset: 1 })).toEqual({ proposals: [], nextOffset: null });
   expect(await manual({ action: 'finish', batch: batch.batch })).toMatchObject({ finished: true });
   appendFileSync(file, message('later', 'promise', 'A later manual obligation'));
   batch = await manual({ action: 'begin' });
