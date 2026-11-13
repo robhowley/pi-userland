@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0](https://github.com/robhowley/pi-userland/compare/pi-remembrancer-v0.4.0...pi-remembrancer-v0.5.0) (2026-11-13)
+
+
+### Features
+
+* **pi-remembrancer:** add opt-in automatic task proposals ([#236](https://github.com/robhowley/pi-userland/issues/236)) ([2b7fd55](https://github.com/robhowley/pi-userland/commit/2b7fd5580280e0e80ebc86138d5f108a4a3df3a5))
+
+
+### Bug Fixes
+
+* **pi-remembrancer:** clarify capture and proposal workflows ([#238](https://github.com/robhowley/pi-userland/issues/238)) ([d3f1ca0](https://github.com/robhowley/pi-userland/commit/d3f1ca03e5a03fe75c7ea719fb79ab94ea951362))
+
 ## [0.4.0](https://github.com/robhowley/pi-userland/compare/pi-remembrancer-v0.3.0...pi-remembrancer-v0.4.0) (2026-11-10)
 
 
