@@ -55,42 +55,70 @@ You can also invoke the skill directly:
 /skill:remembrancer review commitments across my saved sessions
 ```
 
-## Saved proposals
-
-`/remembrancer proposals` opens the durable local proposal queue in TUI mode. It works with automatic capture off. Startup only reads the local pending count for a reminder such as `3 task proposals · /remembrancer proposals`, with no model call, transcript scan, or Taskwarrior call. An effective `disabled: true` disables the reminder and UI without deleting stored data.
-
-- Inspect the exact proposed changes, actual target task, explanation, saved quotes, and revision history. Arrow keys navigate; Page Up/Down scroll the preview.
-- `e` edits and saves a pending proposal's JSON draft without changing tasks; `d` dismisses one pending proposal. `h` toggles saved proposal/history; `s` toggles Source. Esc returns from Source/history to the preview, then closes. Drafts, history, dismissals, and application outcomes survive closing and reopening.
-- `s` opens Source, reading only referenced local files for bounded context on the saved branch, up to two messages before and after each excerpt within the display limits. Missing or stale files are marked unavailable; exact saved quotes remain visible. Opening the list or preview never reads source files or scans the archive. Source is read-only and never switches sessions.
-- Only deliberate per-item `Ctrl+A` applies the displayed change. Enter, navigation, editing, Source, and closing never apply tasks. There is no accept-all.
-
-Application rechecks the task and proposal against the displayed preview. Changes require approval of a refreshed preview; unresolved questions block application. Remembrancer claims the proposal before writing and verifies the actual Taskwarrior record before recording the outcome.
-
-Taskwarrior and local storage cannot commit atomically. Interrupted or uncertain writes are never replayed automatically. Reopen the item to inspect the actual task; `Ctrl+A` on an unresolved item only verifies and records an already-present result. Otherwise resolve the task manually. Unrelated external task edits can still race the final check.
-
 ## Automatic capture
 
-Automatic capture is off by default. To opt in, add this to Pi's global settings file, normally `~/.pi/agent/settings.json`:
+Save task suggestions when you leave a session, without asking for a review each time. Capture never changes your Taskwarrior tasks; you approve suggestions later in [Saved proposals](#saved-proposals).
+
+Capture is off by default. To enable it, add this to Pi's global settings file, normally `~/.pi/agent/settings.json`:
 
 ```json
 { "pi-remembrancer": { "autoCapture": true } }
 ```
 
-Capture reviews only the outgoing saved TUI session on clean quit, `/reload`, starting a new session, resuming another session, or forking. It does not run at startup or after each turn, scan the archive, or read other enrolled transcripts. Unsaved, RPC, JSON, print, headless, and unknown-mode sessions are skipped. TUI mode does not prove human authorship or identify delegated workers; workers must still return suggestions rather than write personal tasks.
+### What to expect
 
-Settings are re-read at outgoing shutdown. Enabling capture before shutdown includes already-written eligible evidence, not just text after opt-in; disabling it skips capture. Existing checkpoints and seed defaults determine eligibility. Covered evidence is not replayed, and no eligible evidence means no reviewer call or capture coverage change. Capture freezes user/assistant text and branch/edit identity; tool outputs, thinking, and images are excluded. Later appends and edits wait for a later review.
+- **When:** on clean quit, `/reload`, starting a new session, resuming another session, or forking. Only saved interactive terminal sessions qualify, not unsaved or headless sessions. Capture does not run at startup or after each reply.
+- **Scope:** the session you're leaving, not your archive. It skips already-reviewed text; eligible text written before you enabled capture can still be included.
+- **Model:** your session's selected model runs a separate review of user/assistant text, relevant tasks, and saved proposals. Transcript tool outputs, thinking, and images are excluded.
+- **Result:** proposals and review progress are saved together. Open `/remembrancer proposals` to review them.
 
-A temporary in-memory SDK reviewer uses the outgoing selected model and normal provider/auth configuration, without personal extensions, skills, prompt files, AGENTS files, or the parent transcript. It has scoped evidence/context reads, fixed read-only task lookups, stored-proposal reads, and submission only. There is no model fallback, retry, or compaction. Successful capture saves proposals and examined coverage together, never Taskwarrior changes.
+### Delays and failures
 
-The five-minute automatic review/cancellation budget starts at shutdown entry. It is not a hard shutdown deadline: at expiry Remembrancer requests cancellation and awaits cleanup, even beyond five minutes or indefinitely. Only normally completed results that pass the deadline check after cleanup are saved. Late results, detected failures, and oversized reviews save neither proposals nor coverage; there is no detached work, retry, or partial commit. A detected failure reports the outgoing session ID; a crash or forced kill may prevent a notice. Use a manual review to catch up on unreviewed evidence.
+Capture can delay leaving a session. After five minutes it requests cancellation, but cleanup can take longer or stall. Five minutes is not a guaranteed exit deadline.
+
+Failed, late, or oversized reviews save neither proposals nor review progress. A warning identifies the session when possible; a crash or forced exit may prevent it. Ask for a manual review to catch up on unreviewed activity.
+
+## Saved proposals
+
+Review the suggestions saved by automatic capture in Pi's interactive terminal:
+
+```text
+/remembrancer proposals
+```
+
+This opens the saved list without calling a model. It works even after you turn capture off. At startup, a reminder such as `3 task proposals · /remembrancer proposals` shows how many pending items await review.
+
+Select an item to see its proposed changes, current task, explanation, and saved quotes. Drafts, dismissals, and application outcomes survive closing and restarting Pi.
+
+| Key                 | Action                                                                 |
+| ------------------- | ---------------------------------------------------------------------- |
+| ↑ / ↓               | Select a proposal from the preview.                                    |
+| Page Up / Page Down | Scroll details.                                                        |
+| `Ctrl+A`            | Approve and apply the displayed proposal.                              |
+| `e`                 | Edit and save a pending proposal's JSON draft, without changing tasks. |
+| `d`                 | Dismiss a pending proposal.                                            |
+| `s`                 | View surrounding source context.                                       |
+| `h`                 | View the saved proposal and revision history.                          |
+| Esc                 | Return from Source/History to the preview, then close.                 |
+
+Approval is per item: Enter, editing, navigation, and closing never apply changes. There is no accept-all. Apply, Edit, and Dismiss work from the preview, not Source or History.
+
+Source reads only the referenced local session files and never switches sessions. If a file is missing or changed, the saved quotes remain available.
+
+### When an item cannot be applied
+
+- **A question is unresolved:** edit the JSON draft to resolve it and set `"question": null` before approving.
+- **The task or proposal changed:** review the refreshed preview, then press `Ctrl+A` again if it is still correct.
+- **A write was interrupted or its outcome is uncertain:** reopen the item and inspect the actual task. `Ctrl+A` only checks whether the result already exists; it does not retry the write. Otherwise, fix the task manually. Unresolved items cannot be edited or dismissed.
 
 ### Manual review remains separate
 
-With capture off or on, manual review still analyzes available evidence, presents suggestions for acceptance, editing, or dismissal, applies and verifies accepted changes, then finishes coverage. It works without a TUI. Unavailable sources remain unreviewed while healthy sources can finish as a partial result. Human approval waits have no five-minute expiry. Direct task requests retain their existing authorization and never advance review coverage.
+Manual reviews still work with capture on or off, including outside the interactive terminal, from a saved reviewing session. They review unreviewed activity across sessions and wait for your approval without the capture timeout.
 
-Manual finish and automatic capture share coverage, not proposal decisions. Pending automatic proposals remain a separate queue after their evidence is covered, including when capture is turned off. Manual review does not silently consume or bulk-apply that queue, and ordinary manual finish never changes its decisions.
+Capture and manual review share review progress, not approvals:
 
-Recognition and task/proposal matching depend on model judgment, not perfect obligation identity. Handling a task conversationally can leave a related proposal pending. Inspect, edit, or dismiss it separately; an add proposal whose task was created elsewhere is not guaranteed to detect a semantic duplicate. Cross-path decision synchronization and exactly-once semantic deduplication are not guaranteed. Automated checks do not establish live-provider recognition quality.
+- Manual review skips text that capture already reviewed; it does not apply or dismiss the saved proposals.
+- Handling a task in conversation can leave its proposal pending. Inspect, edit, or dismiss it separately to avoid duplicate tasks.
 
 ## Optional waiting conditions
 
@@ -109,8 +137,8 @@ These are the manual-review rules. Opt-in automatic capture adds only the outgoi
 - Regular reviews cover sessions opened or resumed with Remembrancer enabled. An older session included for the first time this way can bring in its full history; use seed to set a starting point instead.
 - Seed also searches Pi's configured session archive, including saved worker sessions. It does not reconstruct which sessions had Remembrancer disabled in the past.
 - A shorter seed duration does not narrow existing review coverage. Repeating a seed skips unchanged text that has already been reviewed.
-- Only user and assistant text is sent to the model in your reviewing session, not tool outputs, model thinking, or images.
-- Reviews run only when you ask. Activity added during a review waits for the next one.
+- From saved transcripts, only user and assistant text is included, not tool outputs, model thinking, or images.
+- Manual reviews run only when you ask. Activity added during a review waits for the next one.
 - If a session cannot be read, Remembrancer reports it and leaves it for a later review. Cancelling a review leaves review progress unsaved, but it does not undo task changes already applied.
 
 ## Settings
@@ -123,4 +151,7 @@ Remembrancer is enabled by default. To turn off saved-session reviews and stop i
 
 A trusted project's `.pi/settings.json` takes precedence over the global value. After changing settings, run `/reload` or start a new session. The skill remains available: direct task requests can still change Taskwarrior tasks.
 
-`autoCapture` defaults to `false` independently of the extension's default `disabled: false`. A trusted project's `.pi/settings.json` overrides each corresponding global field independently; untrusted project settings are ignored. Effective `disabled: true` wins over `autoCapture`. Capture re-reads the applicable settings at outgoing shutdown, so changing `autoCapture` can affect an already-open session. The existing reload/new-session convention for manual-review registration and `disabled` remains unchanged. Turning capture off does not hide or discard pending proposals.
+- `autoCapture` defaults to `false`. Turning it off leaves saved proposals available.
+- Capture checks the latest settings when you leave a session, so changing `autoCapture` can affect the session already open.
+- A trusted project's settings override each global option separately. Untrusted project settings are ignored.
+- `disabled: true` also stops capture and hides the proposal list and reminder, without deleting saved data.
