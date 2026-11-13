@@ -107,7 +107,7 @@ Skip this setup if you do not need waiting conditions; other task operations wor
 
 ## Settings
 
-Remembrancer is enabled by default. Turn off remembrancer at any by adding this to Pi's global settings file, normally `~/.pi/agent/settings.json`:
+Remembrancer is enabled by default. Turn off remembrancer at any time by adding this to Pi's global settings file, normally `~/.pi/agent/settings.json`:
 
 ```json
 { "pi-remembrancer": { "disabled": true } }
