@@ -168,6 +168,11 @@ it.each([
       expect(notify).toHaveBeenCalledTimes(covered ? 0 : 1);
       if (!covered)
         expect(notify).toHaveBeenCalledWith(expect.stringContaining('outgoing'), 'warning');
+      if (outcome === 'tool-error')
+        expect(notify).toHaveBeenCalledWith(
+          expect.stringContaining('Expected full task UUID'),
+          'warning',
+        );
       expect(requests.every((request) => request['model'] === 'fixture')).toBe(true);
       expect(JSON.stringify(requests)).not.toContain(sentinel);
       expect(readFileSync(file, 'utf8')).toBe(transcript);

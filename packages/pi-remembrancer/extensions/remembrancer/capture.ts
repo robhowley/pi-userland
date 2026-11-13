@@ -147,10 +147,8 @@ export async function captureOutgoing(
       throw new Error('Review did not submit a valid final result');
     db.finishCapture(current.id, staged);
   } catch (error) {
-    const detail = (error instanceof Error ? error.message : String(error))
-      .split('\n')[0]!
-      .slice(0, 180);
-    ctx.ui.notify(`Remembrancer capture ${sessionId} failed: ${detail}`, 'warning');
+    const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
+    ctx.ui.notify(`Remembrancer capture ${sessionId} failed:\n${detail}`, 'warning');
   } finally {
     if (timer !== undefined) clearTimeout(timer);
     owned?.releaseReview();

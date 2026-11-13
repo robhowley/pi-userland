@@ -90,9 +90,14 @@ export async function runReviewer({
       tools: toolNames,
       customTools: tools.map((tool) => ({
         ...tool,
-        execute(...args) {
+        async execute(...args) {
           if (runError) throw runError;
-          return tool.execute(...args);
+          try {
+            return await tool.execute(...args);
+          } catch (error) {
+            runError ??= error instanceof Error ? error : new Error(String(error));
+            throw error;
+          }
         },
       })),
     });
@@ -105,13 +110,15 @@ export async function runReviewer({
           message.stopReason === 'aborted' ||
           message.stopReason === 'length'
         )
-          runError = new Error(message.errorMessage || `Reviewer ${message.stopReason}`);
+          runError ??= new Error(message.errorMessage || `Reviewer ${message.stopReason}`);
         const calls = message.content.filter((item) => item.type === 'toolCall');
         if (calls.length > 1 && calls.some((call) => call.name === 'remembrancer_submit'))
-          runError = new Error('Submission must be alone in its tool batch');
+          runError ??= new Error('Submission must be alone in its tool batch');
       }
       if (event.type === 'tool_execution_end' && event.isError)
-        runError ??= new Error('Reviewer tool failed');
+        runError ??= new Error(
+          `Reviewer tool failed (${event.toolName}): ${JSON.stringify(event.result)}`,
+        );
       // Do not let the SDK retry extraction after a failed tool or mixed submission.
       // Request cancellation here, but await it outside the event dispatch.
       if (runError) abortSession();

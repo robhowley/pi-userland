@@ -9,7 +9,10 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
 import type { Evidence } from '../extensions/remembrancer/evidence.js';
 import * as evidenceModule from '../extensions/remembrancer/evidence.js';
-import { REVIEW_RESPONSE_MAX_BYTES } from '../extensions/remembrancer/review-pages.js';
+import {
+  REVIEW_RESPONSE_MAX_BYTES,
+  serializedResponse,
+} from '../extensions/remembrancer/review-pages.js';
 import type { ProposalDraft } from '../extensions/remembrancer/proposals.js';
 import {
   applyProposal,
@@ -547,6 +550,57 @@ it('retains unexpected actual output when verification cannot validate a snapsho
     error: expect.stringContaining('Invalid priority'),
   });
 });
+it.each(['short', 'unicode', 'escaped'])(
+  'paginates %s task records within the byte limit without dropping data',
+  async (kind) => {
+    const description =
+      kind === 'short' ? 'Note' : kind === 'unicode' ? '🙂'.repeat(2000) : '"\\\n'.repeat(1500);
+    const records = Array.from({ length: 53 }, (_, index) => ({
+      ...record,
+      uuid: `00000000-0000-0000-0000-${String(index + 1).padStart(12, '0')}`,
+      annotations: [{ entry: '20261101T000000Z', description }],
+      custom: 'Preserve unknown fields',
+    }));
+    const execute = vi.fn<TaskExecutor>().mockResolvedValue(JSON.stringify(records));
+    const restored: TaskRecord[] = [];
+    let offset: number | null = 0;
+    while (offset !== null) {
+      const page = await lookupTasks({ status: 'pending', offset }, execute);
+      expect(Buffer.byteLength(serializedResponse(page), 'utf8')).toBeLessThanOrEqual(
+        REVIEW_RESPONSE_MAX_BYTES,
+      );
+      expect(page.tasks.length).toBeGreaterThan(0);
+      expect(page.tasks.length).toBeLessThanOrEqual(50);
+      if (offset === 0) {
+        if (kind === 'short') expect(page.tasks).toHaveLength(50);
+        else expect(page.tasks.length).toBeLessThan(50);
+      }
+      restored.push(...page.tasks);
+      expect(page.nextOffset).toBe(restored.length < records.length ? restored.length : null);
+      offset = page.nextOffset;
+    }
+    expect(restored).toEqual(records);
+    expect(execute).toHaveBeenCalledWith(['status:pending', 'export']);
+    expect(await lookupTasks({ offset: records.length }, execute)).toEqual({
+      tasks: [],
+      nextOffset: null,
+    });
+  },
+);
+
+it('identifies a single task that cannot fit rather than truncating or skipping it', async () => {
+  const oversized = {
+    ...record,
+    uuid: '00000000-0000-0000-0000-000000000002',
+    description: 'x'.repeat(REVIEW_RESPONSE_MAX_BYTES),
+  };
+  const execute = vi.fn<TaskExecutor>().mockResolvedValue(JSON.stringify([record, oversized]));
+  expect(await lookupTasks({}, execute)).toEqual({ tasks: [record], nextOffset: 1 });
+  await expect(lookupTasks({ offset: 1 }, execute)).rejects.toThrow(
+    `Task ${oversized.uuid} cannot fit within the ${REVIEW_RESPONSE_MAX_BYTES}-byte response limit`,
+  );
+});
+
 it('fixed read-only lookup rejects command/filter injection', async () => {
   const execute = vi.fn<TaskExecutor>();
   await expect(lookupTasks({ uuid: 'all delete' }, execute)).rejects.toThrow(/UUID/);
