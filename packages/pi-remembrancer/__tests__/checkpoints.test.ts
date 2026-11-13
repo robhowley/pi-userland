@@ -1,8 +1,10 @@
-import { spawnSync } from 'node:child_process';
+import { fork, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
 
@@ -122,6 +124,55 @@ it('rolls back the whole finish on an invalid boundary', () => {
     store.close();
   }
 });
+
+it.each(['release', 'SIGKILL'] as const)(
+  'excludes a manual claimant while a separate process owns the capture-compatible lock, then permits it after %s',
+  async (ending) => {
+    const dir = mkdtempSync(join(tmpdir(), 'remembrancer-process-owner-'));
+    const path = join(dir, 'index.sqlite');
+    const peer = new CheckpointStore(path);
+    const owner = fork(
+      fileURLToPath(new URL('./fixtures/review-lock-child.mjs', import.meta.url)),
+      [path, 'hold'],
+      {
+        execArgv: ['--experimental-strip-types'],
+        stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+      },
+    );
+    let stderr = '';
+    owner.stderr!.on('data', (chunk) => {
+      stderr += String(chunk);
+    });
+    const exited = once(owner, 'exit');
+    try {
+      const [message] = await Promise.race([
+        once(owner, 'message'),
+        exited.then(() => {
+          throw new Error(`Lock owner exited before readiness: ${stderr}`);
+        }),
+      ]);
+      expect(message, stderr).toBe('owned');
+      expect(() => peer.claimReview()).toThrow('already open in another Pi process');
+      peer.enroll(a.sessionId, a.file);
+      expect(peer.sources()).toEqual([{ sessionId: a.sessionId, file: a.file, seedSince: null }]);
+      expect(peer.reviewed()).toEqual([]);
+      // Enrollment on the data database must not drop ownership of the .lock database.
+      expect(() => peer.claimReview()).toThrow('already open in another Pi process');
+      if (ending === 'release') owner.send('release');
+      else owner.kill(ending);
+      expect(await exited, stderr).toEqual(ending === 'release' ? [0, null] : [null, 'SIGKILL']);
+      peer.claimReview();
+      peer.finish([a]);
+      peer.releaseReview();
+      expect(peer.reviewed()).toEqual([{ ...a, since: null }]);
+    } finally {
+      if (owner.exitCode === null && owner.signalCode === null) owner.kill('SIGKILL');
+      await exited;
+      peer.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
 
 it('excludes other processes while allowing enrollment, and releases on close', () => {
   const dir = mkdtempSync(join(tmpdir(), 'remembrancer-lock-'));

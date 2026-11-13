@@ -4,6 +4,8 @@ import { StringEnum, Type } from '@earendil-works/pi-ai';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { CheckpointStore } from './checkpoints.js';
 import { loadRemembrancerConfig } from './config.js';
+import { captureOutgoing, CAPTURE_BUDGET_MS } from './capture.js';
+import { openProposals } from './proposal-ui.js';
 import { discoverSources } from './discovery.js';
 import {
   renderReviewCall,
@@ -13,7 +15,6 @@ import {
 } from './render.js';
 import { copyWarnings, warningMessages, type WarningRecord } from './warnings.js';
 import {
-  branchEvidence,
   prepareReview,
   resolveSeedSince,
   ReviewBudget,
@@ -24,13 +25,21 @@ import {
   type Source,
   type Tip,
 } from './evidence.js';
+import {
+  boundedEvidencePage,
+  frozenContext,
+  groupEvidencePage,
+  serializedResponse,
+  type Selected,
+} from './review-pages.js';
 
-type Selected = {
-  sessionId: string;
-  branchId: string;
-  entryId: string;
-  editId: string | null;
-};
+export {
+  REVIEW_RESPONSE_MAX_BYTES,
+  boundedEvidencePage,
+  groupEvidencePage,
+  type EvidencePageEntry,
+  type PageCursor,
+} from './review-pages.js';
 
 type ReviewArgs = {
   action: 'begin' | 'next' | 'finish' | 'cancel' | 'context';
@@ -60,7 +69,7 @@ type Batch = {
 
 export const REMEMBRANCER_COMMAND_NAME = 'remembrancer';
 export const REMEMBRANCER_COMMAND_USAGE =
-  'Usage: /remembrancer seed <Nd>\n       /remembrancer help';
+  'Usage: /remembrancer seed <Nd>\n       /remembrancer proposals\n       /remembrancer help';
 export const REMEMBRANCER_HELP = [
   REMEMBRANCER_COMMAND_USAGE,
   'Seed saved-session evidence from a bounded historical window, then follow the Remembrancer skill.',
@@ -68,6 +77,7 @@ export const REMEMBRANCER_HELP = [
 ].join('\n');
 
 const REMEMBRANCER_SUBCOMMANDS = [
+  { value: 'proposals', label: 'proposals', description: 'Review stored task proposals locally' },
   {
     value: 'seed ',
     label: 'seed',
@@ -85,6 +95,7 @@ const REMEMBRANCER_SEED_DURATIONS = [
 
 type RemembrancerCommandArgs =
   | { ok: true; mode: 'help' }
+  | { ok: true; mode: 'proposals' }
   | { ok: true; mode: 'seed'; duration: string }
   | { ok: false; message: string };
 
@@ -94,6 +105,7 @@ export function parseRemembrancerCommandArgs(args: string): RemembrancerCommandA
 
   if (tokens.length === 0 || (subcommand === 'help' && tokens.length === 1))
     return { ok: true, mode: 'help' };
+  if (subcommand === 'proposals' && tokens.length === 1) return { ok: true, mode: 'proposals' };
   if (subcommand === 'help')
     return { ok: false, message: `Help does not accept arguments. ${REMEMBRANCER_COMMAND_USAGE}` };
   if (subcommand !== 'seed')
@@ -152,181 +164,6 @@ const selectedParameters = Type.Object({
   editId: Type.Union([Type.String(), Type.Null()]),
 });
 
-export const REVIEW_RESPONSE_MAX_BYTES = 50 * 1024;
-const PAGE_MAX_TEXT_UNITS = 48_000;
-const PAGE_MAX_ENTRIES = 200;
-
-export type EvidencePageEntry = Evidence & { offset: number; continues: boolean };
-type EvidencePageItem = Pick<Evidence, 'entryId' | 'role' | 'text' | 'timestamp' | 'editId'> & {
-  offset: number;
-  continues: boolean;
-};
-type EvidenceGroup = Pick<
-  Evidence,
-  'file' | 'sessionId' | 'cwd' | 'branchId' | 'reviewedThrough'
-> & {
-  entries: EvidencePageItem[];
-};
-export type PageCursor = { index: number; offset: number };
-
-function serializedResponse(data: object): string {
-  const text = JSON.stringify(data);
-  if (text === undefined) throw new Error('Remembrancer response is not JSON serializable.');
-  const bytes = Buffer.byteLength(text, 'utf8');
-  if (bytes > REVIEW_RESPONSE_MAX_BYTES)
-    throw new Error(
-      `Remembrancer response is ${bytes} UTF-8 bytes, over the ${REVIEW_RESPONSE_MAX_BYTES}-byte limit; metadata or envelope cannot fit.`,
-    );
-  return text;
-}
-
-function fitsResponse(data: object): boolean {
-  const text = JSON.stringify(data);
-  if (text === undefined) throw new Error('Remembrancer response is not JSON serializable.');
-  return Buffer.byteLength(text, 'utf8') <= REVIEW_RESPONSE_MAX_BYTES;
-}
-
-function sameGroup(
-  a: Pick<Evidence, 'file' | 'sessionId' | 'cwd' | 'branchId' | 'reviewedThrough'>,
-  b: Pick<Evidence, 'file' | 'sessionId' | 'cwd' | 'branchId' | 'reviewedThrough'>,
-): boolean {
-  return (
-    a.file === b.file &&
-    a.sessionId === b.sessionId &&
-    a.cwd === b.cwd &&
-    a.branchId === b.branchId &&
-    a.reviewedThrough === b.reviewedThrough
-  );
-}
-
-export function groupEvidencePage(entries: readonly EvidencePageEntry[]): EvidenceGroup[] {
-  const groups: EvidenceGroup[] = [];
-  for (const entry of entries) {
-    let group = groups.at(-1);
-    if (!group || !sameGroup(group, entry)) {
-      group = {
-        file: entry.file,
-        sessionId: entry.sessionId,
-        cwd: entry.cwd,
-        branchId: entry.branchId,
-        reviewedThrough: entry.reviewedThrough,
-        entries: [],
-      };
-      groups.push(group);
-    }
-    group.entries.push({
-      entryId: entry.entryId,
-      role: entry.role,
-      text: entry.text,
-      timestamp: entry.timestamp,
-      editId: entry.editId,
-      offset: entry.offset,
-      continues: entry.continues,
-    });
-  }
-  return groups;
-}
-
-function splitsSurrogatePair(text: string, boundary: number): boolean {
-  if (boundary <= 0 || boundary >= text.length) return false;
-  const before = text.charCodeAt(boundary - 1);
-  const after = text.charCodeAt(boundary);
-  return before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff;
-}
-
-function safePrefixLength(text: string, start: number, maxUnits: number): number {
-  let length = Math.min(maxUnits, text.length - start);
-  if (length > 0 && splitsSurrogatePair(text, start + length)) length--;
-  return length;
-}
-
-export function boundedEvidencePage(
-  evidence: readonly Evidence[],
-  initial: PageCursor,
-  buildResponse: (entries: EvidencePageEntry[], cursor: PageCursor) => Record<string, unknown>,
-): { data: Record<string, unknown>; cursor: PageCursor } {
-  let { index, offset } = initial;
-  const entries: EvidencePageEntry[] = [];
-  let remainingText = PAGE_MAX_TEXT_UNITS;
-
-  const candidateFits = (entry: EvidencePageEntry, cursor: PageCursor) =>
-    fitsResponse(buildResponse([...entries, entry], cursor));
-  const append = (item: Evidence, length: number) => {
-    const start = offset;
-    const continues = start + length < item.text.length;
-    const entry: EvidencePageEntry = {
-      ...item,
-      text: item.text.slice(start, start + length),
-      offset: start,
-      continues,
-    };
-    const cursor = continues ? { index, offset: start + length } : { index: index + 1, offset: 0 };
-    if (!candidateFits(entry, cursor)) return false;
-    entries.push(entry);
-    remainingText -= length;
-    ({ index, offset } = cursor);
-    return true;
-  };
-
-  while (entries.length < PAGE_MAX_ENTRIES && remainingText > 0 && index < evidence.length) {
-    const item = evidence[index];
-    if (!item) break;
-    const wanted = safePrefixLength(item.text, offset, remainingText);
-
-    if (item.text.length === offset) {
-      if (!append(item, 0)) {
-        if (entries.length === 0)
-          throw new Error(
-            `Remembrancer response cannot fit a complete evidence entry within the ${REVIEW_RESPONSE_MAX_BYTES}-byte UTF-8 limit; metadata or envelope cannot fit.`,
-          );
-        break;
-      }
-      continue;
-    }
-    if (wanted === 0) break;
-
-    if (append(item, wanted)) {
-      if (entries.at(-1)?.continues || remainingText === 0) break;
-      continue;
-    }
-
-    let low = 0;
-    let high = wanted - 1;
-    while (low < high) {
-      const middle = Math.ceil((low + high) / 2);
-      const length = safePrefixLength(item.text, offset, middle);
-      if (length === 0) {
-        low = middle + 1;
-        continue;
-      }
-      const start = offset;
-      const entry: EvidencePageEntry = {
-        ...item,
-        text: item.text.slice(start, start + length),
-        offset: start,
-        continues: true,
-      };
-      if (candidateFits(entry, { index, offset: start + length })) {
-        low = middle;
-        continue;
-      }
-      high = middle - 1;
-    }
-    const length = safePrefixLength(item.text, offset, low);
-    if (length > 0 && append(item, length)) break;
-    if (entries.length === 0)
-      throw new Error(
-        `Remembrancer response cannot fit a complete evidence entry within the ${REVIEW_RESPONSE_MAX_BYTES}-byte UTF-8 limit; metadata or envelope cannot fit.`,
-      );
-    break;
-  }
-
-  const cursor = { index, offset };
-  const data = buildResponse(entries, cursor);
-  serializedResponse(data);
-  return { data, cursor };
-}
-
 function page(batch: Batch, envelope: Record<string, unknown> = {}) {
   const result = boundedEvidencePage(batch.evidence, batch, (entries, cursor) => ({
     batch: batch.token,
@@ -352,46 +189,6 @@ function usesDefaultSessionDir(ctx: ExtensionContext): boolean {
       'Upgrade Pi to use Remembrancer seed: this version cannot identify session archive storage.',
     );
   return manager.usesDefaultSessionDir();
-}
-
-function contextPage(batch: string, selected: Selected, items: Evidence[], offset: number) {
-  const total = items.reduce((length, item) => length + item.text.length, 0);
-  if (offset > total) throw new Error('Context offset is beyond the requested range');
-
-  let index = 0;
-  let localOffset = 0;
-  let position = 0;
-  while (index < items.length) {
-    const item = items[index]!;
-    if (item.text.length === 0) {
-      if (offset === position) break;
-      index++;
-      continue;
-    }
-    const end = position + item.text.length;
-    if (offset < end) {
-      localOffset = offset - position;
-      if (splitsSurrogatePair(item.text, localOffset))
-        throw new Error('Context offset splits a surrogate pair; use a returned nextOffset.');
-      break;
-    }
-    position = end;
-    index++;
-  }
-
-  const result = boundedEvidencePage(items, { index, offset: localOffset }, (entries, cursor) => {
-    const nextOffset =
-      items.slice(0, cursor.index).reduce((length, item) => length + item.text.length, 0) +
-      cursor.offset;
-    return {
-      batch,
-      selected,
-      contextOnly: true,
-      groups: groupEvidencePage(entries),
-      nextOffset: nextOffset < total ? nextOffset : null,
-    };
-  });
-  return result.data;
 }
 
 export default function remembrancer(pi: ExtensionAPI) {
@@ -435,7 +232,7 @@ export default function remembrancer(pi: ExtensionAPI) {
   }
 
   pi.registerCommand(REMEMBRANCER_COMMAND_NAME, {
-    description: 'Start a bounded historical Remembrancer review',
+    description: 'Review stored task proposals or start a bounded historical review',
     getArgumentCompletions: getRemembrancerArgumentCompletions,
     handler: async (args, ctx) => {
       const parsed = parseRemembrancerCommandArgs(args);
@@ -452,6 +249,11 @@ export default function remembrancer(pi: ExtensionAPI) {
           'Remembrancer is disabled in settings. Set pi-remembrancer.disabled to false to enable it.',
           'warning',
         );
+        return;
+      }
+      if (parsed.mode === 'proposals') {
+        if (ctx.mode !== 'tui') throw new Error('Task proposals require TUI mode');
+        await openProposals(ctx, store());
         return;
       }
       if (!ctx.isIdle()) {
@@ -552,58 +354,28 @@ export default function remembrancer(pi: ExtensionAPI) {
   function contextReview(args: ReviewArgs): object {
     if (!batch || args.batch !== batch.token)
       throw new Error('No matching open review in this Pi session.');
-    const selected = args.selected;
-    if (!selected) throw new Error('Context requires a selected evidence item.');
-    const selectedEvidence = batch.evidence.find(
-      (item) =>
-        item.sessionId === selected.sessionId &&
-        item.branchId === selected.branchId &&
-        item.entryId === selected.entryId &&
-        item.editId === selected.editId,
-    );
-    if (!selectedEvidence) throw new Error('Selected evidence is not in this review batch.');
-
-    const snapshot = batch.snapshots.find(
-      (candidate) =>
-        candidate.source.sessionId === selected.sessionId &&
-        resolve(candidate.source.file) === resolve(selectedEvidence.file),
-    );
-    if (!snapshot) throw new Error('Selected evidence snapshot is unavailable.');
-
-    const branch = branchEvidence(
-      snapshot.tree,
-      {
-        file: snapshot.source.file,
-        sessionId: selected.sessionId,
-        entryId: selected.branchId,
-      },
-      selectedEvidence.reviewedThrough,
-    );
-    const selectedIndex = branch.findIndex(
-      (item) => item.entryId === selected.entryId && item.editId === selected.editId,
-    );
-    if (selectedIndex < 0) throw new Error('Selected evidence is not in the frozen branch.');
-
-    const before = args.before ?? 1;
-    const offset = args.offset ?? 0;
-    if (!Number.isInteger(before) || before < 1 || before > 40)
-      throw new Error('Context before must be an integer from 1 to 40.');
-    if (!Number.isInteger(offset) || offset < 0)
-      throw new Error('Context offset must be a nonnegative integer.');
-
-    const items = branch.slice(Math.max(0, selectedIndex - before), selectedIndex);
-    return contextPage(batch.token, selected, items, offset);
+    return frozenContext(batch, batch.token, args);
   }
 
   pi.on('session_start', (_event, ctx) => {
     if (loadRemembrancerConfig(ctx.cwd, ctx.isProjectTrusted()).disabled) return;
     registerReviewTool();
     enroll(ctx);
+    if (ctx.mode === 'tui') {
+      const count = store().proposalCount();
+      if (count) ctx.ui.notify(`${count} task proposals · /remembrancer proposals`, 'info');
+    }
   });
-  pi.on('session_shutdown', () => {
-    batch = undefined;
-    db?.close();
-    db = undefined;
+  pi.on('session_shutdown', async (_event, ctx) => {
+    const deadline = Date.now() + CAPTURE_BUDGET_MS;
+    try {
+      // Abandon manual coverage before capture claims the same process lock.
+      release();
+      await captureOutgoing(ctx, store, deadline);
+    } finally {
+      db?.close();
+      db = undefined;
+    }
   });
 
   function registerReviewTool() {
