@@ -474,9 +474,16 @@ it('registers the remembrancer lifecycle and review tool after enabled startup',
 
   try {
     await start({}, contextFor(dir));
-    expect(extension.tools).toHaveLength(1);
-    expect(extension.tools[0]?.name).toBe('remembrancer_review');
-    expect(extension.tools[0]?.description).toContain('remembrancer skill');
+    expect(extension.tools.map((tool) => tool.name)).toEqual([
+      'remembrancer_review',
+      'remembrancer_proposals',
+    ]);
+    expect(extension.tools.find((tool) => tool.name === 'remembrancer_review')?.name).toBe(
+      'remembrancer_review',
+    );
+    expect(
+      extension.tools.find((tool) => tool.name === 'remembrancer_review')?.description,
+    ).toContain('remembrancer skill');
   } finally {
     await shutdown({}, contextFor(dir));
     if (previousAgentDir === undefined) delete process.env['PI_CODING_AGENT_DIR'];
@@ -549,7 +556,7 @@ it.each(
         inspector.finish([missing]);
       }
       const before = inspector.reviewed();
-      const tool = extension.tools[0]!;
+      const tool = extension.tools.find((tool) => tool.name === 'remembrancer_review')!;
       expect(Object.keys(tool.parameters.properties)).toEqual([
         'action',
         'batch',
@@ -703,7 +710,7 @@ it.each(['cancel', 'quit', 'reload', 'new', 'resume', 'fork'] as const)(
     const shutdown = extension.handlers.get('session_shutdown')!;
     try {
       await start({}, context);
-      const tool = extension.tools[0]!;
+      const tool = extension.tools.find((tool) => tool.name === 'remembrancer_review')!;
       const first = decode(
         await tool.execute('begin', { action: 'begin' }, undefined, undefined, context),
       );
@@ -731,7 +738,7 @@ it.each(['cancel', 'quit', 'reload', 'new', 'resume', 'fork'] as const)(
       } finally {
         inspector.close();
       }
-      const retryTool = extension.tools.at(-1)!;
+      const retryTool = extension.tools.find((tool) => tool.name === 'remembrancer_review')!;
       const retry = decode(
         await retryTool.execute('retry', { action: 'begin' }, undefined, undefined, context),
       );
@@ -989,7 +996,7 @@ it('rejects a seed while a local review is open', async () => {
 
   try {
     await start({}, context);
-    const tool = extension.tools[0];
+    const tool = extension.tools.find((tool) => tool.name === 'remembrancer_review');
     if (!tool) throw new Error('Extension did not register the review tool');
     const review = decode(
       await tool.execute('begin', { action: 'begin' }, undefined, undefined, context),
@@ -1032,7 +1039,10 @@ it('ignores the legacy disable and depth environment variables', async () => {
 
   try {
     await start({}, contextFor(dir));
-    expect(extension.tools).toHaveLength(1);
+    expect(extension.tools.map((tool) => tool.name)).toEqual([
+      'remembrancer_review',
+      'remembrancer_proposals',
+    ]);
   } finally {
     await shutdown({}, contextFor(dir));
     if (previousAgentDir === undefined) delete process.env['PI_CODING_AGENT_DIR'];
@@ -1093,7 +1103,7 @@ it('releases an open review across a fresh disabled runtime without advancing ch
   let thirdShutdown: Handler | undefined;
   try {
     await firstStart({}, context);
-    const firstTool = firstRuntime.tools[0];
+    const firstTool = firstRuntime.tools.find((tool) => tool.name === 'remembrancer_review');
     if (!firstTool) throw new Error('First runtime did not register the review tool');
     const firstReview = decode(
       await firstTool.execute('call-1', { action: 'begin' }, undefined, undefined, context),
@@ -1130,7 +1140,7 @@ it('releases an open review across a fresh disabled runtime without advancing ch
     if (!thirdStart || !thirdShutdown)
       throw new Error('Third runtime did not register its lifecycle');
     await thirdStart({}, context);
-    const thirdTool = thirdRuntime.tools[0];
+    const thirdTool = thirdRuntime.tools.find((tool) => tool.name === 'remembrancer_review');
     if (!thirdTool) throw new Error('Third runtime did not register the review tool');
     const resumedReview = decode(
       await thirdTool.execute('call-2', { action: 'begin' }, undefined, undefined, context),
@@ -1196,7 +1206,7 @@ it.each(['recordBytes', 'sourceEntries', 'sourceTextBytes', 'sourceBranches'] as
     const original = REVIEW_LIMITS[limit];
     try {
       await extension.handlers.get('session_start')!({}, context);
-      const tool = extension.tools[0]!;
+      const tool = extension.tools.find((tool) => tool.name === 'remembrancer_review')!;
       const call = async (action: string, batch?: string, seed?: string) =>
         decode(await tool.execute('call', { action, batch, seed }, undefined, undefined, context));
       const first = await call('begin');
@@ -1287,7 +1297,7 @@ it.each(['discovery', 'prepare', 'source'] as const)(
     try {
       await start({}, context);
       const before = state();
-      const tool = extension.tools[0]!;
+      const tool = extension.tools.find((tool) => tool.name === 'remembrancer_review')!;
       REVIEW_LIMITS[limit] = 0;
       await expect(
         tool.execute('abort', { action: 'begin', seed: '14d' }, undefined, undefined, context),
@@ -1365,7 +1375,7 @@ it('pages faithfully, cancels without consuming, persists finish and isolates la
     writeFileSync(join(dir, 'unenrolled.jsonl'), 'invalid history, not eligible');
     vi.mocked(readFileSync).mockClear();
     await start({}, context);
-    const tool = extension.tools[0];
+    const tool = extension.tools.find((tool) => tool.name === 'remembrancer_review');
     if (!tool) throw new Error('Extension did not register its review tool');
     expect(readFileSync).not.toHaveBeenCalled();
     const firstPage = decode(
@@ -1513,7 +1523,7 @@ it.each([
   const shutdown = extension.handlers.get('session_shutdown')!;
   try {
     await start({}, context);
-    const tool = extension.tools[0]!;
+    const tool = extension.tools.find((tool) => tool.name === 'remembrancer_review')!;
     const first = decode(
       await tool.execute('size-begin', { action: 'begin' }, undefined, undefined, context),
     );
@@ -1627,7 +1637,7 @@ it('fails oversized group metadata and begin envelopes without changing checkpoi
   try {
     writeSession('\u0000'.repeat(9_000), false);
     await start({}, context);
-    const tool = extension.tools[0]!;
+    const tool = extension.tools.find((tool) => tool.name === 'remembrancer_review')!;
     const before = persisted();
     await expect(
       tool.execute('large-group-metadata', { action: 'begin' }, undefined, undefined, context),
@@ -1711,7 +1721,7 @@ it('keeps structured warnings in frozen details across every successful action w
   const detailsOf = (response: unknown) => (response as ToolResponse).details;
   try {
     await start({}, context);
-    const tool = extension.tools[0];
+    const tool = extension.tools.find((tool) => tool.name === 'remembrancer_review');
     if (!tool) throw new Error('Extension did not register its review tool');
 
     const beginResponse = await tool.execute(
@@ -1906,7 +1916,7 @@ it('renders registered execute results with coverage and branch-tip states', asy
 
   try {
     await start({}, context);
-    const tool = extension.tools[0];
+    const tool = extension.tools.find((tool) => tool.name === 'remembrancer_review');
     if (!tool) throw new Error('Extension did not register the review tool');
 
     const ordinaryBeginResponse = await tool.execute(
@@ -2089,7 +2099,7 @@ it('does not enroll a newly referenced current source after ordinary preparation
 
   try {
     await start({}, startupContext);
-    const tool = extension.tools[0];
+    const tool = extension.tools.find((tool) => tool.name === 'remembrancer_review');
     if (!tool) throw new Error('Extension did not register the review tool');
     const call = async (action: string, batch?: string) =>
       decode(
@@ -2177,7 +2187,7 @@ it('seeds every default Pi archive bucket, stages new sources, and keeps ordinar
 
   try {
     await start({}, context);
-    const tool = extension.tools[0];
+    const tool = extension.tools.find((tool) => tool.name === 'remembrancer_review');
     if (!tool) throw new Error('Extension did not register the review tool');
     const legacyContext = contextFor(dir, current, archive, true);
     Reflect.deleteProperty(legacyContext.sessionManager, 'usesDefaultSessionDir');
@@ -2385,7 +2395,7 @@ it('seeds every default Pi archive bucket, stages new sources, and keeps ordinar
 
     await shutdown({}, context);
     await start({}, context);
-    const retryTool = extension.tools[extension.tools.length - 1]!;
+    const retryTool = extension.tools.find((tool) => tool.name === 'remembrancer_review')!;
     const next = decode(
       await retryTool.execute(
         'next-seed',
@@ -2495,7 +2505,7 @@ it('finishes healthy sources despite blank IDs and leaves an ambiguous source un
 
   try {
     await start({}, context);
-    const firstTool = extension.tools[0];
+    const firstTool = extension.tools.find((tool) => tool.name === 'remembrancer_review');
     if (!firstTool) throw new Error('Extension did not register the review tool');
     const first = decode(
       await firstTool.execute(
@@ -2553,7 +2563,7 @@ it('finishes healthy sources despite blank IDs and leaves an ambiguous source un
     writeSession(join(archive, 'duplicate.jsonl'), 'session', 'duplicate', 'ambiguous copy');
     await shutdown({}, context);
     await start({}, context);
-    const secondTool = extension.tools[extension.tools.length - 1]!;
+    const secondTool = extension.tools.find((tool) => tool.name === 'remembrancer_review')!;
     const second = decode(
       await secondTool.execute(
         'identity-second',
@@ -2637,7 +2647,7 @@ it('finishes healthy seed sources as partial when archive discovery is incomplet
 
   try {
     await start({}, context);
-    const tool = extension.tools[0];
+    const tool = extension.tools.find((tool) => tool.name === 'remembrancer_review');
     if (!tool) throw new Error('Extension did not register the review tool');
     const review = decode(
       await tool.execute(
@@ -2729,7 +2739,7 @@ it('returns frozen selected context on demand without advancing pages or reading
 
   try {
     await start({}, context);
-    const tool = extension.tools[0];
+    const tool = extension.tools.find((tool) => tool.name === 'remembrancer_review');
     if (!tool) throw new Error('Extension did not register the review tool');
     const review = decode(
       await tool.execute('begin', { action: 'begin', seed: '14d' }, undefined, undefined, context),
@@ -2925,7 +2935,7 @@ it('bounds context by frozen visible identity and preserves page and write lifec
   let tool: TestTool | undefined;
   let review: ReviewResult | undefined;
   const begin = async () => {
-    tool = extension.tools[extension.tools.length - 1];
+    tool = extension.tools.find((tool) => tool.name === 'remembrancer_review');
     if (!tool) throw new Error('Extension did not register the review tool');
     review = decode(
       await tool.execute(

@@ -4,6 +4,7 @@ import { CheckpointStore } from './checkpoints.js';
 import { loadRemembrancerConfig } from './config.js';
 import { serializedResponse, type Selected } from './review-pages.js';
 import { proposalParameters, stringEnumSchema, type ProposalSubmission } from './proposals.js';
+import { proposalReadDescription, proposalReadParameters, readProposals } from './proposal-read.js';
 import { runReviewer } from './reviewer.js';
 import { lookupTasks } from './taskwarrior.js';
 
@@ -113,13 +114,9 @@ export async function captureOutgoing(
       ),
       tool(
         'remembrancer_proposals',
-        'Read stored proposals, including drafts, decisions and dismissal history.',
-        Type.Object({ offset: Type.Optional(Type.Integer({ minimum: 0 })) }),
-        (args: { offset?: number }) => {
-          const offset = args.offset ?? 0;
-          const proposals = db.proposals(undefined, offset, 1);
-          return { proposals, nextOffset: proposals.length ? offset + 1 : null };
-        },
+        proposalReadDescription,
+        proposalReadParameters,
+        (args: { offset?: number }) => readProposals(db, args),
       ),
       tool(
         'remembrancer_submit',
