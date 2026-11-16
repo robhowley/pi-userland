@@ -1,5 +1,7 @@
+import { randomUUID } from 'node:crypto';
 import {
   appendFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -7,7 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -16,12 +18,21 @@ import type {
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
 import { prepareReview } from '../extensions/remembrancer/evidence.js';
-import { captureOutgoing, CAPTURE_BUDGET_MS } from '../extensions/remembrancer/capture.js';
+import { preserveHandoff } from '../extensions/remembrancer/capture-handoff.js';
+import {
+  launchCaptureWorker,
+  runCaptureWorker,
+} from '../extensions/remembrancer/capture-worker.js';
+import { captureExecution } from '../extensions/remembrancer/config.js';
 import remembrancer from '../extensions/remembrancer/index.js';
 import { runReviewer, type ReviewerInput } from '../extensions/remembrancer/reviewer.js';
 import { lookupTasks } from '../extensions/remembrancer/taskwarrior.js';
 
 vi.mock('../extensions/remembrancer/reviewer.js', () => ({ runReviewer: vi.fn() }));
+vi.mock('../extensions/remembrancer/capture-worker.js', async (original) => ({
+  ...(await original<typeof import('../extensions/remembrancer/capture-worker.js')>()),
+  launchCaptureWorker: vi.fn().mockResolvedValue(123),
+}));
 vi.mock('../extensions/remembrancer/taskwarrior.js', async (original) => ({
   ...(await original<typeof import('../extensions/remembrancer/taskwarrior.js')>()),
   lookupTasks: vi.fn().mockResolvedValue({ tasks: [], nextOffset: null }),
@@ -77,11 +88,19 @@ async function empty(input: ReviewerInput) {
   await call(input, 'submit', { proposals: [] });
 }
 async function capture() {
-  await captureOutgoing(ctx, () => db, Date.now() + CAPTURE_BUDGET_MS);
+  const inbox = join(dirname(db.file), 'capture-inbox');
+  await preserveHandoff({
+    id: randomUUID(),
+    inbox,
+    source: { file, sessionId: 'outgoing' },
+    execution: captureExecution(ctx),
+  });
+  await runCaptureWorker({ database: db.file, inbox });
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(launchCaptureWorker).mockResolvedValue(123);
   dir = mkdtempSync(join(tmpdir(), 'capture-'));
   mkdirSync(join(dir, 'agent'));
   mkdirSync(join(dir, '.pi'));
@@ -95,7 +114,18 @@ beforeEach(() => {
   ctx = {
     cwd: dir,
     mode: 'tui',
-    model: { id: 'selected', provider: 'offline' },
+    model: {
+      id: 'selected',
+      provider: 'offline',
+      api: 'openai-completions',
+      baseUrl: 'http://127.0.0.1:1/v1',
+      name: 'Selected',
+      reasoning: false,
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 32768,
+      maxTokens: 1024,
+    },
     isProjectTrusted: () => true,
     ui: { notify: vi.fn() },
     sessionManager: { getSessionFile: () => file, getSessionId: () => 'outgoing' },
@@ -114,7 +144,9 @@ beforeEach(() => {
   } as unknown as ExtensionAPI);
   runner.mockImplementation(empty);
 });
-afterEach(() => {
+afterEach(async () => {
+  config({ autoCapture: false });
+  await handlers.get('session_shutdown')!({ reason: 'quit' }, ctx);
   db.close();
   vi.useRealTimers();
   vi.unstubAllEnvs();
@@ -122,58 +154,6 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-it.each(['quit', 'reload', 'new', 'resume', 'fork'])(
-  'awaits %s capture of outgoing identity/model, never the destination',
-  async (reason) => {
-    const transcript = readFileSync(file, 'utf8');
-    await handlers.get('session_start')!({}, ctx);
-    await handlers.get('session_shutdown')!({ reason, targetSessionFile: '/not-the-source' }, ctx);
-    expect(runner).toHaveBeenCalledOnce();
-    expect(runner.mock.calls[0]![0]).toMatchObject({ model: ctx.model, sessionId: 'outgoing' });
-    expect(db.reviewed()).toHaveLength(1);
-    expect(readFileSync(file, 'utf8')).toBe(transcript);
-  },
-);
-it.each(['rpc', 'json', 'print', 'headless', 'unknown', undefined])(
-  'quietly skips mode %s',
-  async (mode) => {
-    ctx = { ...ctx, mode } as ExtensionContext;
-    await capture();
-    expect(runner).not.toHaveBeenCalled();
-    expect(ctx.ui.notify).not.toHaveBeenCalled();
-  },
-);
-it('skips unsaved, off and disabled sessions', async () => {
-  for (const settings of [{}, { autoCapture: false }, { autoCapture: true, disabled: true }]) {
-    config(settings);
-    await capture();
-  }
-  config({ autoCapture: true });
-  ctx = { ...ctx, sessionManager: { ...ctx.sessionManager, getSessionFile: () => undefined } };
-  await capture();
-  expect(runner).not.toHaveBeenCalled();
-  expect(db.reviewed()).toEqual([]);
-});
-it.each([true, false])(
-  're-reads opt-in settings at shutdown, startup enabled=%s',
-  async (enabled) => {
-    config({ autoCapture: enabled, disabled: !enabled });
-    await handlers.get('session_start')!({}, ctx);
-    config({ autoCapture: !enabled, disabled: enabled });
-    await handlers.get('session_shutdown')!({ reason: 'quit' }, ctx);
-    expect(runner).toHaveBeenCalledTimes(enabled ? 0 : 1);
-  },
-);
-it.each([true, false])(
-  'uses current trusted project settings only when trusted=%s',
-  async (trusted) => {
-    config({ autoCapture: false });
-    config({ autoCapture: true }, true);
-    ctx = { ...ctx, isProjectTrusted: () => trusted };
-    await capture();
-    expect(runner).toHaveBeenCalledTimes(trusted ? 1 : 0);
-  },
-);
 it('includes pre-opt-in evidence, excludes covered evidence and other enrolled sources, skips unchanged', async () => {
   db.enroll('other', '/must-not-read');
   await capture();
@@ -249,7 +229,7 @@ it('rejects malformed saved scope without calling the model', async () => {
   await capture();
   expect(runner).not.toHaveBeenCalled();
   expect(db.reviewed()).toEqual([]);
-  expect(ctx.ui.notify).toHaveBeenCalled();
+  expect(existsSync(db.file + '.capture.log')).toBe(true);
 });
 it('stages without persisting, then commits empty coverage only after reviewer cleanup', async () => {
   runner.mockImplementation(async (input) => {
@@ -259,7 +239,7 @@ it('stages without persisting, then commits empty coverage only after reviewer c
   await capture();
   expect(db.reviewed()).toHaveLength(1);
 });
-it.each(['unread', 'partial', 'duplicate', 'invalid', 'model error', 'missing submission', 'late'])(
+it.each(['unread', 'partial', 'duplicate', 'invalid', 'model error', 'missing submission'])(
   'rejects %s without coverage/proposals',
   async (failure) => {
     if (failure === 'partial')
@@ -268,7 +248,6 @@ it.each(['unread', 'partial', 'duplicate', 'invalid', 'model error', 'missing su
       if (failure === 'missing submission') return;
       if (failure === 'partial') await call(input, 'read_evidence');
       else if (failure !== 'unread') await readAll(input);
-      if (failure === 'late') vi.spyOn(Date, 'now').mockReturnValue(Date.now() + CAPTURE_BUDGET_MS);
       await call(input, 'submit', { proposals: failure === 'invalid' ? [{}] : [] });
       if (failure === 'duplicate') {
         try {
@@ -282,7 +261,7 @@ it.each(['unread', 'partial', 'duplicate', 'invalid', 'model error', 'missing su
     await capture();
     expect(db.reviewed()).toEqual([]);
     expect(db.proposals()).toEqual([]);
-    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining('outgoing'), 'warning');
+    expect(existsSync(db.file + '.capture.log')).toBe(true);
   },
 );
 it('leaves appends outside the frozen review and closes extraction after submission', async () => {
@@ -348,78 +327,6 @@ it('reports contention without model calls and cannot release another owner', as
     other.close();
   }
 });
-it('cancels at budget and waits for cleanup beyond it, rejecting late successful output', async () => {
-  vi.useFakeTimers();
-  let cleanup!: () => void;
-  let signal!: AbortSignal;
-  runner.mockImplementation(async (input) => {
-    signal = input.signal!;
-    await empty(input);
-    await new Promise<void>((resolve) => {
-      cleanup = resolve;
-    });
-  });
-  let settled = false;
-  const running = capture().then(() => {
-    settled = true;
-  });
-  await vi.advanceTimersByTimeAsync(0);
-  await vi.advanceTimersByTimeAsync(CAPTURE_BUDGET_MS);
-  expect(signal.aborted).toBe(true);
-  expect(settled).toBe(false);
-  expect(db.reviewed()).toEqual([]);
-  cleanup();
-  await running;
-  expect(db.reviewed()).toEqual([]);
-  expect(db.proposals()).toEqual([]);
-});
-it('holds process ownership past the deadline until cleanup completes', async () => {
-  vi.useFakeTimers();
-  const other = new CheckpointStore();
-  runner.mockImplementation(async (input) => {
-    await empty(input);
-    await vi.advanceTimersByTimeAsync(CAPTURE_BUDGET_MS);
-    expect(() => other.claimReview()).toThrow('already open');
-    other.enroll('other', '/enrollment-remains-possible');
-  });
-  try {
-    await capture();
-    other.claimReview();
-    expect(db.reviewed()).toEqual([]);
-  } finally {
-    other.close();
-  }
-});
-
-it('shutdown closes its database only after awaited reviewer cleanup', async () => {
-  vi.useFakeTimers();
-  const close = vi.spyOn(CheckpointStore.prototype, 'close');
-  let cleanup!: () => void;
-  runner.mockImplementation(async (input) => {
-    await empty(input);
-    await new Promise<void>((resolve) => {
-      cleanup = resolve;
-    });
-  });
-  const running = handlers.get('session_shutdown')!({ reason: 'quit' }, ctx);
-  await vi.advanceTimersByTimeAsync(CAPTURE_BUDGET_MS);
-  expect(close).not.toHaveBeenCalled();
-  cleanup();
-  await running;
-  expect(close).toHaveBeenCalledOnce();
-  expect(db.reviewed()).toEqual([]);
-});
-
-it('releases ownership even when failure notification throws', async () => {
-  runner.mockRejectedValue(new Error('failure'));
-  vi.mocked(ctx.ui.notify).mockImplementation(() => {
-    throw new Error('notice');
-  });
-  await expect(capture()).rejects.toThrow('notice');
-  db.claimReview();
-  db.releaseReview();
-});
-
 type Page = {
   groups: {
     sessionId: string;
@@ -457,24 +364,6 @@ async function manual(args: object) {
   if (block.type !== 'text') throw new Error('Expected text');
   return JSON.parse(block.text);
 }
-
-it('abandons an open manual batch before opt-in capture without saving its coverage', async () => {
-  await handlers.get('session_start')!({}, ctx);
-  const batch = await manual({ action: 'begin' });
-  expect(batch.groups).not.toHaveLength(0);
-  expect(() => db.claimReview()).toThrow('already open');
-  runner.mockImplementation(async (input) => {
-    expect(db.reviewed()).toEqual([]);
-    const page = await readAll(input);
-    expect(page.groups[0].entries[0].text).toBe('Send Maya the comparison');
-    await call(input, 'submit', { proposals: [] });
-  });
-  await handlers.get('session_shutdown')!({ reason: 'reload' }, ctx);
-  expect(runner).toHaveBeenCalledOnce();
-  expect(db.reviewed()).toHaveLength(1);
-  db.claimReview();
-  db.releaseReview();
-});
 
 it('automatic coverage prevents manual replay and manual finish leaves pending proposals unchanged', async () => {
   runner.mockImplementation(async (input) => {
@@ -548,9 +437,8 @@ it('reads only the outgoing file and preserves settings and other enrolled defau
   db.enroll('other', otherFile);
   const sources = db.sources();
   const settings = readFileSync(join(dir, 'agent', 'settings.json'), 'utf8');
-  const prepare = vi.spyOn(db, 'prepareCapture');
   await capture();
-  expect(prepare).toHaveBeenCalledExactlyOnceWith({ sessionId: 'outgoing', file });
+  expect(runner.mock.calls[0]![0].sessionId).toBe('outgoing');
   expect(db.sources().find((source) => source.sessionId === 'other')).toEqual(sources[0]);
   expect(readFileSync(join(dir, 'agent', 'settings.json'), 'utf8')).toBe(settings);
   expect(db.reviewed().every((tip) => tip.sessionId === 'outgoing')).toBe(true);
@@ -620,7 +508,7 @@ it.each(['setup', 'tool', 'cleanup', 'storage'])(
   'leaves no data or coverage after %s failure and releases ownership',
   async (phase) => {
     if (phase === 'storage')
-      vi.spyOn(db, 'finishCapture').mockImplementation(() => {
+      vi.spyOn(CheckpointStore.prototype, 'finishCaptureJob').mockImplementation(() => {
         throw new Error('storage failed');
       });
     runner.mockImplementation(async (input) => {
@@ -641,51 +529,31 @@ it.each(['setup', 'tool', 'cleanup', 'storage'])(
     expect(db.proposals()).toEqual([]);
     expect(db.reviewed()).toEqual([]);
     expect(db.sources()).toEqual([]);
-    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining('outgoing'), 'warning');
+    expect(existsSync(db.file + '.capture.log')).toBe(true);
     db.claimReview();
     db.releaseReview();
   },
 );
 
-it('holds the lock through cleanup and commit, then releases it', async () => {
+it('allows manual ownership through reviewer cleanup and reprepares after that context changes', async () => {
   const peer = new CheckpointStore();
-  const finish = db.finishCapture.bind(db);
-  vi.spyOn(db, 'finishCapture').mockImplementation((...args) => {
-    expect(() => peer.claimReview()).toThrow('already open');
-    return finish(...args);
-  });
+  let changed = false;
   try {
     runner.mockImplementation(async (input) => {
       await empty(input);
-      expect(() => peer.claimReview()).toThrow('already open');
+      if (!changed) {
+        peer.claimReview();
+        peer.releaseReview();
+        changed = true;
+      }
     });
     await capture();
+    expect(runner).toHaveBeenCalledTimes(2);
     expect(db.reviewed()).toHaveLength(1);
     peer.claimReview();
   } finally {
     peer.close();
   }
-});
-
-it('counts manual abandonment and preparation time against the shutdown-entry budget', async () => {
-  vi.useFakeTimers();
-  await handlers.get('session_start')!({}, ctx);
-  await manual({ action: 'begin' });
-  const release = CheckpointStore.prototype.releaseReview;
-  let first = true;
-  vi.spyOn(CheckpointStore.prototype, 'releaseReview').mockImplementation(function (
-    this: CheckpointStore,
-  ) {
-    if (first) {
-      first = false;
-      vi.setSystemTime(Date.now() + CAPTURE_BUDGET_MS);
-    }
-    return release.call(this);
-  });
-  await handlers.get('session_shutdown')!({ reason: 'quit' }, ctx);
-  expect(runner).not.toHaveBeenCalled();
-  expect(db.reviewed()).toEqual([]);
-  expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining('timed out'), 'warning');
 });
 
 it.each(['capture', 'release', 'close'])(
@@ -695,7 +563,7 @@ it.each(['capture', 'release', 'close'])(
     await handlers.get('session_start')!({}, ctx);
     const originalClose = CheckpointStore.prototype.close;
     const close = vi.spyOn(CheckpointStore.prototype, 'close');
-    if (phase === 'capture') runner.mockRejectedValue(error);
+    if (phase === 'capture') vi.mocked(launchCaptureWorker).mockRejectedValue(error);
     if (phase === 'release')
       vi.spyOn(CheckpointStore.prototype, 'releaseReview').mockImplementationOnce(() => {
         throw error;
@@ -722,7 +590,7 @@ it.each(['capture', 'release', 'close'])(
 
 it('reports non-Error capture failures without truncating them', async () => {
   const failure = `${'Failure detail '.repeat(30)}\nAdditional diagnostics`;
-  runner.mockRejectedValue(failure);
+  vi.mocked(launchCaptureWorker).mockRejectedValue(failure);
   await handlers.get('session_shutdown')!({ reason: 'reload' }, ctx);
   expect(ctx.ui.notify).toHaveBeenCalledExactlyOnceWith(
     expect.stringContaining(failure),
@@ -731,8 +599,9 @@ it('reports non-Error capture failures without truncating them', async () => {
 });
 
 it('closes the shutdown database even when failure notification throws', async () => {
+  await handlers.get('session_start')!({}, ctx);
   const close = vi.spyOn(CheckpointStore.prototype, 'close');
-  runner.mockRejectedValue(new Error('cleanup failed'));
+  vi.mocked(launchCaptureWorker).mockRejectedValue(new Error('launch failed'));
   vi.mocked(ctx.ui.notify).mockImplementation(() => {
     throw new Error('notice failed');
   });

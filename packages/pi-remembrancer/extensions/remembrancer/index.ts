@@ -1,10 +1,13 @@
 import { randomUUID } from 'node:crypto';
-import { resolve } from 'node:path';
+import { access } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
 import { StringEnum, Type } from '@earendil-works/pi-ai';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { CheckpointStore } from './checkpoints.js';
-import { loadRemembrancerConfig } from './config.js';
-import { captureOutgoing, CAPTURE_BUDGET_MS } from './capture.js';
+import { CheckpointStore, defaultCheckpointFile } from './checkpoints.js';
+import { captureExecution, captureHost, loadRemembrancerConfig } from './config.js';
+import { preserveHandoff } from './capture-handoff.js';
+import { launchCaptureWorker } from './capture-worker.js';
+import { readProposalNotice } from './capture-notices.js';
 import { openProposals } from './proposal-ui.js';
 import { proposalReadDescription, proposalReadParameters, readProposals } from './proposal-read.js';
 import { discoverSources } from './discovery.js';
@@ -192,10 +195,63 @@ function usesDefaultSessionDir(ctx: ExtensionContext): boolean {
   return manager.usesDefaultSessionDir();
 }
 
+export const CAPTURE_TICK_MS = 2_000;
+export const CAPTURE_RECOVERY_MS = 60_000;
+
 export default function remembrancer(pi: ExtensionAPI) {
   let db: CheckpointStore | undefined;
   let batch: Batch | undefined;
+  let stopLifecycle: (() => void) | undefined;
+  let noticeGeneration = 0;
   const store = () => (db ??= new CheckpointStore());
+
+  function startLifecycle(ctx: ExtensionContext) {
+    stopLifecycle?.();
+    if (ctx.mode !== 'tui') return;
+    const database = defaultCheckpointFile();
+    const inbox = join(dirname(database), 'capture-inbox');
+    const host = captureHost();
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let nextWake = 0;
+    stopLifecycle = () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+    // Recursive scheduling gives one async tick, never overlapping slow reads/launches.
+    async function tick() {
+      try {
+        const notice = await readProposalNotice(database);
+        if (stopped) return;
+        if (notice && notice.generation > noticeGeneration) {
+          noticeGeneration = notice.generation;
+          if (notice.pending)
+            ctx.ui.notify(`${notice.pending} task proposals · /remembrancer proposals`, 'info');
+        }
+      } catch {
+        // A missing/corrupt derived notice cannot suppress recovery of accepted work.
+      }
+      if (stopped) return;
+      if (Date.now() >= nextWake) {
+        nextWake = Date.now() + CAPTURE_RECOVERY_MS;
+        try {
+          await access(database).catch(async (error: NodeJS.ErrnoException) => {
+            if (error.code !== 'ENOENT') throw error;
+            await access(inbox);
+          });
+          if (stopped) return;
+          await launchCaptureWorker(database, inbox, host);
+        } catch {
+          // Failed launch/crash is retried on a later bounded wake, not a chat turn.
+        }
+      }
+      if (!stopped) {
+        timer = setTimeout(() => void tick(), CAPTURE_TICK_MS);
+        timer.unref();
+      }
+    }
+    void tick();
+  }
 
   function currentSource(ctx: ExtensionContext): Source | undefined {
     const sm = ctx.sessionManager;
@@ -359,6 +415,8 @@ export default function remembrancer(pi: ExtensionAPI) {
   }
 
   pi.on('session_start', (_event, ctx) => {
+    // Recovery/notices are independent of authorization for NEW handoffs.
+    startLifecycle(ctx);
     if (loadRemembrancerConfig(ctx.cwd, ctx.isProjectTrusted()).disabled) return;
     registerReviewTool();
     pi.registerTool({
@@ -376,17 +434,30 @@ export default function remembrancer(pi: ExtensionAPI) {
     });
     enroll(ctx);
     if (ctx.mode === 'tui') {
-      const count = store().proposalCount();
-      if (count) ctx.ui.notify(`${count} task proposals · /remembrancer proposals`, 'info');
+      const notice = store().proposalNotice();
+      noticeGeneration = notice.generation;
+      if (notice.pending)
+        ctx.ui.notify(`${notice.pending} task proposals · /remembrancer proposals`, 'info');
     }
   });
   pi.on('session_shutdown', async (event, ctx) => {
+    stopLifecycle?.();
     try {
-      const deadline = Date.now() + CAPTURE_BUDGET_MS;
       try {
-        // Abandon manual coverage before capture claims the same process lock.
+        // Abandon unfinished manual coverage; the worker never inherits that lock.
         release();
-        await captureOutgoing(ctx, store, deadline);
+        const source = ctx.mode === 'tui' ? currentSource(ctx) : undefined;
+        if (source) {
+          const config = loadRemembrancerConfig(ctx.cwd, ctx.isProjectTrusted());
+          if (config.autoCapture && !config.disabled) {
+            const execution = captureExecution(ctx);
+            const database = defaultCheckpointFile();
+            const inbox = join(dirname(database), 'capture-inbox');
+            await preserveHandoff({ id: randomUUID(), inbox, source, execution });
+            // A failed launch leaves the durable ready manifest for the next wake.
+            await launchCaptureWorker(database, inbox, execution.host!);
+          }
+        }
       } finally {
         db?.close();
         db = undefined;

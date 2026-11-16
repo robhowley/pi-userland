@@ -24,6 +24,14 @@ export class CaptureWorkerOwnership {
 
   static claim(filename: string): CaptureWorkerOwnership {
     if (filename === ':memory:') throw Error('Worker ownership requires a durable database');
+    // Admission after disabled startup may have no foreground database yet.
+    // Exclusive synchronous creation cannot drop an existing store's POSIX locks.
+    mkdirSync(dirname(resolve(filename)), { recursive: true, mode: 0o700 });
+    try {
+      closeSync(openSync(filename, 'ax', 0o600));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    }
     const file = realpathSync(resolve(filename));
     // Never open/close a second descriptor for a lock file owned by this process:
     // POSIX would release all of this process's locks on that inode.

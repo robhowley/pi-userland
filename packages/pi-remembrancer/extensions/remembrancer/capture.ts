@@ -1,7 +1,6 @@
 import { Type, type TSchema, type Static } from '@sinclair/typebox';
-import type { ExtensionContext, ToolDefinition } from '@earendil-works/pi-coding-agent';
-import { CheckpointStore } from './checkpoints.js';
-import { loadRemembrancerConfig } from './config.js';
+import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
+import type { CheckpointStore } from './checkpoints.js';
 import { serializedResponse, type Selected } from './review-pages.js';
 import { proposalParameters, stringEnumSchema, type ProposalSubmission } from './proposals.js';
 import { proposalReadDescription, proposalReadParameters, readProposals } from './proposal-read.js';
@@ -10,58 +9,6 @@ import type { CaptureReview } from './capture-review.js';
 import { lookupTasks } from './taskwarrior.js';
 
 export const CAPTURE_BUDGET_MS = 300_000;
-
-/** Own one outgoing review through SDK cleanup. The extension owns the database lifetime. */
-export async function captureOutgoing(
-  ctx: ExtensionContext,
-  store: () => CheckpointStore,
-  deadline: number,
-): Promise<void> {
-  const file = ctx.sessionManager.getSessionFile();
-  if (ctx.mode !== 'tui' || !file) return;
-  let owned: CheckpointStore | undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const sessionId = ctx.sessionManager.getSessionId();
-  try {
-    const config = loadRemembrancerConfig(ctx.cwd, ctx.isProjectTrusted());
-    if (config.disabled || !config.autoCapture) return;
-    const controller = new AbortController();
-    const checkDeadline = () => {
-      if (Date.now() >= deadline) controller.abort(new Error('Review timed out'));
-      controller.signal.throwIfAborted();
-    };
-    checkDeadline();
-    timer = setTimeout(
-      () => controller.abort(new Error('Review timed out')),
-      deadline - Date.now(),
-    );
-    const db = store();
-    db.claimReview();
-    owned = db;
-    const current = db.prepareCapture({ sessionId, file });
-    if (current.incomplete) throw new Error('Cannot capture incomplete evidence');
-    if (!current.hasEvidence) return;
-    const staged = await reviewPreparedCapture(
-      current,
-      db,
-      {
-        cwd: ctx.cwd,
-        model: ctx.model,
-        sessionId,
-        signal: controller.signal,
-      },
-      checkDeadline,
-      (proposals) => db.validateCapture(current.id, proposals),
-    );
-    db.finishCapture(current.id, staged);
-  } catch (error) {
-    const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
-    ctx.ui.notify(`Remembrancer capture ${sessionId} failed:\n${detail}`, 'warning');
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
-    owned?.releaseReview();
-  }
-}
 
 /** Tools stage output only. The caller owns final publication and attempt authority. */
 export async function reviewPreparedCapture(

@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ModelRuntime, type ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { expect, it, vi } from 'vitest';
-import { captureOutgoing, CAPTURE_BUDGET_MS } from '../extensions/remembrancer/capture.js';
+import { preserveHandoff } from '../extensions/remembrancer/capture-handoff.js';
+import { runCaptureWorker } from '../extensions/remembrancer/capture-worker.js';
+import { captureExecution } from '../extensions/remembrancer/config.js';
 import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
 
 // Exercise ordinary SDK startup and its real tool loop against a deterministic local transport.
@@ -84,7 +86,7 @@ it.each([
             ? ['remembrancer_submit']
             : outcome === 'tool-error'
               ? ['remembrancer_tasks']
-              : requests.length === 1
+              : (requests.length - 1) % expectedRequests === 0
                 ? ['remembrancer_read_evidence']
                 : outcome === 'mixed'
                   ? ['remembrancer_read_evidence', 'remembrancer_submit']
@@ -161,18 +163,20 @@ it.each([
         ui: { notify },
         sessionManager: { getSessionFile: () => file, getSessionId: () => 'outgoing' },
       } as unknown as ExtensionContext;
-      await captureOutgoing(ctx, () => db, Date.now() + CAPTURE_BUDGET_MS);
-      expect(requests).toHaveLength(expectedRequests);
+      const inbox = join(dir, 'inbox');
+      await preserveHandoff({
+        id: 'first',
+        inbox,
+        source: { file, sessionId: 'outgoing' },
+        execution: captureExecution(ctx),
+      });
+      await runCaptureWorker({ database: db.file, inbox });
+      // Failed attempts get one bounded retry in this drain.
+      expect(requests).toHaveLength(expectedRequests * (covered ? 1 : 2));
       expect(db.reviewed()).toHaveLength(covered ? 1 : 0);
       expect(db.proposals()).toHaveLength(outcome === 'proposal' ? 1 : 0);
-      expect(notify).toHaveBeenCalledTimes(covered ? 0 : 1);
-      if (!covered)
-        expect(notify).toHaveBeenCalledWith(expect.stringContaining('outgoing'), 'warning');
-      if (outcome === 'tool-error')
-        expect(notify).toHaveBeenCalledWith(
-          expect.stringContaining('Expected full task UUID'),
-          'warning',
-        );
+      expect(notify).not.toHaveBeenCalled();
+      expect(db.captureJob('first')?.state).toBe(covered ? 'completed' : 'failed');
       expect(requests.every((request) => request['model'] === 'fixture')).toBe(true);
       expect(JSON.stringify(requests)).not.toContain(sentinel);
       expect(readFileSync(file, 'utf8')).toBe(transcript);

@@ -25,6 +25,11 @@ import {
 import type { CaptureWorkerOwnership } from '../extensions/remembrancer/capture-jobs.js';
 import type { CaptureReview } from '../extensions/remembrancer/capture-review.js';
 import type { ProposalSubmission } from '../extensions/remembrancer/proposals.js';
+import {
+  publishProposalNotice,
+  readProposalNotice,
+} from '../extensions/remembrancer/capture-notices.js';
+import { runCaptureWorker } from '../extensions/remembrancer/capture-worker.js';
 
 const dirs: string[] = [];
 const stores: CheckpointStore[] = [];
@@ -760,6 +765,68 @@ async function stoppedChild(f: Awaited<ReturnType<typeof fixture>>, point: strin
   children.delete(child);
   expect(probe(f.path)).toBe('owned');
 }
+
+it('delays notices across commit-before-replacement SIGKILL, then repairs from SQLite on recovery', async () => {
+  const f = await fixture();
+  await publishProposalNotice(f.store);
+  expect(await readProposalNotice(f.path)).toEqual({ generation: 0, pending: 0 });
+  await stoppedChild(f, 'completion-commit');
+  expect(f.store.proposalNotice()).toEqual({ generation: 1, pending: 1 });
+  expect(await readProposalNotice(f.path)).toEqual({ generation: 0, pending: 0 });
+  // Completed job, no runtime/model needed: startup repair alone recovers delivery.
+  await runCaptureWorker({ database: f.path, inbox: f.input.inbox });
+  expect(await readProposalNotice(f.path)).toEqual({ generation: 1, pending: 1 });
+  expect(f.store.proposals()).toHaveLength(1);
+});
+
+it('repairs same-count proposal edits on a no-job recovery wake', async () => {
+  const f = await prepared();
+  const [proposal] = f.store.finishCaptureJob(f.owner, f.attempt, [submission()]);
+  await publishProposalNotice(f.store);
+  f.owner.release();
+  f.store.editProposal(proposal!.id, proposal!.revision, {
+    change: proposal!.change,
+    expected: proposal!.expected,
+    question: 'Updated question',
+  });
+  expect(f.store.proposalNotice()).toEqual({ generation: 2, pending: 1 });
+  expect(await readProposalNotice(f.path)).toEqual({ generation: 1, pending: 1 });
+  await runCaptureWorker({ database: f.path, inbox: f.input.inbox });
+  expect(await readProposalNotice(f.path)).toEqual({ generation: 2, pending: 1 });
+});
+
+it('repairs a committed change arriving during startup replacement before clean worker exit', async () => {
+  const f = await prepared();
+  const [proposal] = f.store.finishCaptureJob(f.owner, f.attempt, [submission()]);
+  f.owner.release();
+  const read = CheckpointStore.prototype.proposalNotice;
+  let changed = false;
+  vi.spyOn(CheckpointStore.prototype, 'proposalNotice').mockImplementation(function (
+    this: CheckpointStore,
+  ) {
+    const snapshot = read.call(this);
+    if (!changed) {
+      changed = true;
+      f.store.editProposal(proposal!.id, proposal!.revision, {
+        change: proposal!.change,
+        expected: null,
+        question: 'Changed during sidecar write',
+      });
+    }
+    return snapshot;
+  });
+  try {
+    await runCaptureWorker({
+      database: f.path,
+      inbox: f.input.inbox,
+      afterRelease: async () => {
+        expect(await readProposalNotice(f.path)).toEqual({ generation: 2, pending: 1 });
+      },
+    });
+  } finally {
+    vi.restoreAllMocks();
+  }
+});
 
 it.each([
   'import-insert',

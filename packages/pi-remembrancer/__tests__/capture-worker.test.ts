@@ -21,6 +21,7 @@ import {
   runCaptureWorker,
 } from '../extensions/remembrancer/capture-worker.js';
 import type { reviewPreparedCapture } from '../extensions/remembrancer/capture.js';
+import { readProposalNotice } from '../extensions/remembrancer/capture-notices.js';
 
 const dirs: string[] = [];
 const children = new Set<ChildProcess>();
@@ -181,6 +182,23 @@ function launch(f: Awaited<ReturnType<typeof fixture>>, entry = bootstrap) {
   return child;
 }
 
+it('bootstraps a real detached worker when admission had no foreground database', async () => {
+  const f = await fixture();
+  rmSync(f.database);
+  writeFileSync(
+    f.input.source.file,
+    record({ type: 'session', version: 3, id: 'saved', cwd: f.dir }),
+  );
+  const handoff = await preserveHandoff(f.input);
+  expect(existsSync(f.database)).toBe(false);
+  const child = launch(f);
+  const [code] = await once(child, 'exit');
+  expect(code).toBe(0);
+  expect(job(f.database)?.state).toBe('completed');
+  expect(existsSync(handoff.manifest.snapshot)).toBe(false);
+  expect(await readProposalNotice(f.database)).toEqual({ generation: 0, pending: 0 });
+});
+
 it('drains accepted work without rechecking capture-off, retries at most twice per run, retaining evidence', async () => {
   const f = await fixture();
   const handoff = await preserveHandoff(f.input);
@@ -195,9 +213,16 @@ it('drains accepted work without rechecking capture-off, retries at most twice p
   expect(review).toHaveBeenCalledTimes(2);
   expect(job(f.database)).toMatchObject({ state: 'failed', retryEligible: true });
   expect(existsSync(handoff.manifest.snapshot)).toBe(true);
+  expect(await readProposalNotice(f.database)).toEqual({ generation: 0, pending: 0 });
   await runCaptureWorker({ ...f, review: emptyReview });
   expect(job(f.database)?.state).toBe('completed');
   expect(existsSync(handoff.manifest.snapshot)).toBe(false);
+  expect(await readProposalNotice(f.database)).toEqual({ generation: 0, pending: 0 });
+  // Already-covered work also produces no proposal notice.
+  await preserveHandoff({ ...f.input, id: 'covered' });
+  await runCaptureWorker({ ...f, review });
+  expect(review).toHaveBeenCalledTimes(2);
+  expect(await readProposalNotice(f.database)).toEqual({ generation: 0, pending: 0 });
 });
 
 it('does not own the manual lock through model work or cleanup; contention defers quietly', async () => {

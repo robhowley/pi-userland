@@ -36,7 +36,7 @@ export type FinishPlan = {
   checkpoints?: readonly (Tip | Checkpoint)[];
 };
 
-function defaultFile(): string {
+export function defaultCheckpointFile(): string {
   const state = process.env['XDG_STATE_HOME'];
   return join(
     state && isAbsolute(state) ? state : join(homedir(), '.local', 'state'),
@@ -97,7 +97,7 @@ export class CheckpointStore {
     return this.filename;
   }
 
-  constructor(filename = defaultFile()) {
+  constructor(filename = defaultCheckpointFile()) {
     this.filename = filename;
     this.db = openPrivate(filename);
     if (filename !== ':memory:') this.filename = realpathSync(filename);

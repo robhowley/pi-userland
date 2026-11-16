@@ -38,6 +38,10 @@ export function loadRemembrancerConfig(cwd: string, projectTrusted: boolean): Re
   };
 }
 
+export function captureHost(): NonNullable<HandoffInput['execution']['host']> {
+  return { nodeExecutable: process.execPath, piEntry: join(getPackageDir(), 'dist', 'cli.js') };
+}
+
 /** Capture non-secret execution data from the outgoing context, never from a later waking TUI. */
 export function captureExecution(ctx: ExtensionContext): HandoffInput['execution'] {
   if (!ctx.model) throw Error('Capture requires the outgoing model');
@@ -51,7 +55,7 @@ export function captureExecution(ctx: ExtensionContext): HandoffInput['execution
       : 'originating-context-untrusted',
     model: { provider: model.provider, id: model.id },
     authorization: { autoCapture: true, disabled: false },
-    host: { nodeExecutable: process.execPath, piEntry: join(getPackageDir(), 'dist', 'cli.js') },
+    host: captureHost(),
     runtime: {
       model,
       ...(ctx.model.headers ? { headerNames: Object.keys(ctx.model.headers) } : {}),

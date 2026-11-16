@@ -156,7 +156,7 @@ function setup(autoCapture?: boolean, disabled = false, mode: unknown = 'tui') {
 }
 
 it.each([undefined, false, true])(
-  'startup uses only the pending database count with capture %s',
+  'startup reads committed notice generation/count with capture %s',
   async (flag) => {
     const f = setup(flag);
     const reads = vi.spyOn(evidence, 'readSession').mockImplementation(() => {
@@ -168,7 +168,7 @@ it.each([undefined, false, true])(
     const models = vi.spyOn(reviewer, 'runReviewer').mockImplementation(async () => {
       throw new Error('Unexpected reviewer');
     });
-    const count = vi.spyOn(CheckpointStore.prototype, 'proposalCount');
+    const count = vi.spyOn(CheckpointStore.prototype, 'proposalNotice');
     const rows = vi.spyOn(CheckpointStore.prototype, 'proposals');
     await f.handlers.get('session_start')!({}, f.ctx);
     expect(f.notify).toHaveBeenCalledExactlyOnceWith(

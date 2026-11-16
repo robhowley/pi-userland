@@ -12,6 +12,7 @@ import {
 import { CAPTURE_BUDGET_MS, reviewPreparedCapture } from './capture.js';
 import { ModelRuntime, SettingsManager } from '@earendil-works/pi-coding-agent';
 import type { ProposalSubmission } from './proposals.js';
+import { publishProposalNotice } from './capture-notices.js';
 
 const CLEANUP_GRACE_MS = 5_000;
 const ATTEMPTS_PER_RUN = 2;
@@ -96,6 +97,9 @@ export async function runCaptureWorker(options: WorkerOptions): Promise<void> {
       }
     }
     store = new CheckpointStore(database);
+    owner.assertStore(store.file);
+    // Repair a crash between SQLite commit and sidecar replacement, even with no jobs.
+    await publishProposalNotice(store);
     for (;;) {
       for (const name of await readyFiles()) {
         const job = await importReadyHandoff(store, owner, join(inbox, name));
@@ -106,6 +110,8 @@ export async function runCaptureWorker(options: WorkerOptions): Promise<void> {
         .runnableCaptureJobs(owner)
         .find((item) => !excluded().has(item.manifest.id));
       if (!job) {
+        // Repair before clean exit while still owning sidecar publication.
+        await publishProposalNotice(store);
         // Invalidate BEFORE release. A new owner object is required on reacquisition.
         owner.release();
         owner = undefined;
@@ -200,6 +206,8 @@ export async function runCaptureWorker(options: WorkerOptions): Promise<void> {
         phase = 'Atomic publication';
         store.finishCaptureJob(owner, attempt, submissions);
         active = false;
+        phase = 'Notice publication';
+        await publishProposalNotice(store);
         phase = 'Snapshot cleanup';
         await cleanupCompletedSnapshot(store, owner, id);
       } catch (error) {
