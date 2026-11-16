@@ -2,6 +2,8 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import {
   appendFileSync,
+  copyFileSync,
+  symlinkSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -16,6 +18,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { afterEach, expect, it, vi } from 'vitest';
 import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
+import { captureJob, runtime } from './fixtures/capture-job.js';
+import { CapturePreparationError } from '../extensions/remembrancer/capture-jobs.js';
 import {
   cleanupCompletedSnapshot,
   importReadyHandoff,
@@ -38,9 +42,11 @@ const children = new Set<ChildProcess>();
 afterEach(async () => {
   vi.useRealTimers();
   for (const child of children) {
-    const exited = once(child, 'exit');
-    child.kill('SIGKILL');
-    await exited;
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = once(child, 'exit');
+      child.kill('SIGKILL');
+      await exited;
+    }
   }
   children.clear();
   for (const owner of owners.splice(0)) owner.release();
@@ -56,14 +62,11 @@ const message = (id: string, parentId: string | null) =>
     timestamp: '2026-01-20T00:00:00.000Z',
     message: { role: 'user', content: 'Send Maya the comparison' },
   });
-async function fixture(id = 'first') {
+async function fixture(id = 'first', entries = message('promise', null)) {
   const dir = mkdtempSync(join(tmpdir(), 'capture-jobs-'));
   dirs.push(dir);
   const file = join(dir, 'source.jsonl');
-  writeFileSync(
-    file,
-    record({ type: 'session', id: 'session', cwd: dir }) + message('promise', null),
-  );
+  writeFileSync(file, record({ type: 'session', id: 'session', cwd: dir }) + entries);
   const input: HandoffInput = {
     id,
     inbox: join(dir, 'inbox'),
@@ -71,8 +74,7 @@ async function fixture(id = 'first') {
     execution: {
       cwd: dir,
       agentDir: join(dir, 'agent'),
-      trustBasis: 'explicit-project-trust',
-      model: { provider: 'offline', id: 'selected' },
+      runtime,
       authorization: { autoCapture: true, disabled: false },
     },
   };
@@ -140,13 +142,105 @@ it('imports once, retains completed IDs, and safely repeats a post-commit manife
   f.store.finishCaptureJob(owner, attempt, []);
   writeFileSync(f.handoff.ready, record(f.handoff.manifest));
   expect(await cleanupCompletedSnapshot(f.store, owner, f.input.id)).toBe(false);
-  expect((await importReadyHandoff(f.store, owner, f.handoff.ready)).state).toBe('completed');
+  expect((await importReadyHandoff(f.store, owner, f.handoff.ready)).job.state).toBe('completed');
   expect(await cleanupCompletedSnapshot(f.store, owner, f.input.id)).toBe(true);
   writeFileSync(f.handoff.ready, record(f.handoff.manifest));
-  expect((await importReadyHandoff(f.store, owner, f.handoff.ready)).state).toBe('completed');
+  expect((await importReadyHandoff(f.store, owner, f.handoff.ready)).job.state).toBe('completed');
   expect(f.store.runnableCaptureJobs(owner)).toEqual([]);
   expect(f.store.reviewed()).toHaveLength(1);
   expect(f.store.proposalNotice()).toEqual({ generation: 0, pending: 0 });
+});
+
+it('uses relocated enrollment for live coverage without restoring the accepted path', async () => {
+  const f = await fixture(
+    'first',
+    message('promise', null) + message('left', 'promise') + message('right', 'promise'),
+  );
+  const owner = own(f.store);
+  await importReadyHandoff(f.store, owner, f.handoff.ready);
+  const relocated = join(f.dir, 'relocated.jsonl');
+  copyFileSync(f.input.source.file, relocated);
+  appendFileSync(relocated, message('covered-later', 'left'));
+  f.store.enroll('session', relocated);
+  f.store.finish([{ file: relocated, sessionId: 'session', entryId: 'covered-later' }]);
+  rmSync(f.input.source.file);
+  const attempt = owner.startAttempt('first');
+  const review = f.store.prepareCaptureJob(owner, attempt);
+  const page = review.page() as { groups: { branchId: string }[] };
+  expect(page.groups.map((group) => group.branchId)).toEqual(['right']);
+  const [saved] = f.store.finishCaptureJob(owner, attempt, [submission(null, 'right')]);
+  expect(saved?.sources[0]).toMatchObject({ file: f.input.source.file, branchId: 'right' });
+  expect(f.store.sources()[0]?.file).toBe(relocated);
+});
+
+it('keeps historical proposal references while enrollment moves during model work', async () => {
+  const f = await prepared();
+  const relocated = join(f.dir, 'relocated.jsonl');
+  copyFileSync(f.input.source.file, relocated);
+  const generation = f.store.contextGeneration();
+  f.store.enroll('unrelated', '/unrelated.jsonl');
+  f.store.enroll('unrelated', '/unrelated.jsonl');
+  f.store.enroll('session', f.input.source.file);
+  f.store.enroll('session', relocated);
+  expect(f.store.contextGeneration()).toBe(generation);
+  const [saved] = f.store.finishCaptureJob(f.owner, f.attempt, [submission()]);
+  expect(saved?.sources[0]?.file).toBe(f.input.source.file);
+  expect(f.store.sources().find((source) => source.sessionId === 'session')?.file).toBe(relocated);
+});
+
+it('imports physical inbox aliases without rewriting old manifest bodies', async () => {
+  const f = await fixture();
+  const alias = join(f.dir, 'inbox-alias');
+  symlinkSync(f.input.inbox, alias);
+  const owner = own(f.store);
+  const legacySpelling = structuredClone(f.handoff.manifest);
+  legacySpelling.snapshot = join(alias, 'first.snapshot.jsonl');
+  f.store.importCaptureJob(owner, legacySpelling);
+  const later = await preserveHandoff({ ...f.input, inbox: alias, id: 'later' });
+  f.store.importCaptureJob(owner, later.manifest);
+  expect(f.store.captureJob('first')?.manifest).toEqual(legacySpelling);
+  expect(f.store.runnableCaptureJobs(owner).map((job) => job.manifest.id)).toEqual(['first']);
+});
+
+it('enumerates completed cleanup authority only for the current owner', async () => {
+  const f = await prepared();
+  expect(f.store.completedCaptureJobIds(f.owner)).toEqual([]);
+  f.store.finishCaptureJob(f.owner, f.attempt, []);
+  expect(f.store.completedCaptureJobIds(f.owner)).toEqual(['first']);
+  f.owner.release();
+  expect(() => f.store.completedCaptureJobIds(f.owner)).toThrow('ownership');
+  const next = own(f.store);
+  expect(f.store.completedCaptureJobIds(next)).toEqual(['first']);
+});
+
+it('persists classified immutable preparation failure and abandons its attempt once', async () => {
+  const f = await fixture();
+  const owner = own(f.store);
+  await importReadyHandoff(f.store, owner, f.handoff.ready);
+  writeFileSync(f.handoff.manifest.snapshot, '{bad retained JSON');
+  const attempt = owner.startAttempt('first');
+  const abandon = vi.spyOn(owner, 'abandon');
+  let failure: unknown;
+  try {
+    f.store.prepareCaptureJob(owner, attempt);
+  } catch (error) {
+    failure = error;
+  }
+  expect(failure).toBeInstanceOf(CapturePreparationError);
+  expect(failure).toMatchObject({ category: 'invalid-json', retryEligible: false });
+  expect(abandon).toHaveBeenCalledExactlyOnceWith(attempt);
+  const failed = f.store.captureJob('first');
+  expect(failed).toMatchObject({
+    state: 'failed',
+    retryEligible: false,
+    diagnostic: (failure as Error).message,
+  });
+  expect(() => f.store.failCaptureJob(owner, attempt, 'generic failure', true)).toThrow(
+    'active capture attempt',
+  );
+  expect(f.store.captureJob('first')).toEqual(failed);
+  expect(f.store.runnableCaptureJobs(owner)).toEqual([]);
+  expect(existsSync(f.handoff.manifest.snapshot)).toBe(true);
 });
 
 it('retains the ready manifest and snapshot on an import transaction fault or missing snapshot', async () => {
@@ -168,7 +262,7 @@ it('retains the ready manifest and snapshot on an import transaction fault or mi
   expect(f.store.captureJob('first')).toBeUndefined();
   expect(existsSync(f.handoff.ready)).toBe(true);
   writeFileSync(f.handoff.manifest.snapshot, bytes);
-  expect((await importReadyHandoff(f.store, owner, f.handoff.ready)).state).toBe('queued');
+  expect((await importReadyHandoff(f.store, owner, f.handoff.ready)).job.state).toBe('queued');
 });
 
 it('rejects changed ID metadata and admission without authorization, without altering accepted evidence', async () => {
@@ -176,15 +270,15 @@ it('rejects changed ID metadata and admission without authorization, without alt
   const owner = own(f.store);
   f.store.importCaptureJob(owner, f.handoff.manifest);
   const bad = structuredClone(f.handoff.manifest);
-  bad.execution.model.id = 'another-model';
+  bad.execution.runtime.model.id = 'another-model';
   expect(() => f.store.importCaptureJob(owner, bad)).toThrow('metadata conflict');
   const unauthorized = structuredClone(f.input);
   unauthorized.execution.authorization.autoCapture = false as true;
   await expect(preserveHandoff({ ...unauthorized, id: 'unauthorized' })).rejects.toThrow(
-    'authorization',
+    'validation: invalid-input',
   );
   expect(await readFile(f.handoff.manifest.snapshot, 'utf8')).toContain('Send Maya');
-  expect(f.store.captureJob(f.input.id)?.manifest.execution.model.id).toBe('selected');
+  expect(f.store.captureJob(f.input.id)?.manifest.execution.runtime.model.id).toBe('selected');
 });
 
 it.each([true, false])(
@@ -291,29 +385,28 @@ it('holds no manual lock during frozen pages/context and rejects manual begin th
 it.each([
   'coverage',
   'default',
-  'new proposal',
   'edit',
   'dismiss',
   'application claim',
   'application outcome',
 ] as const)('rejects stale new-ID and empty submissions after %s', async (mutation) => {
   const f = await prepared();
-  // Seed a separate pending proposal through the existing manual capture API.
+  // Seed through another durable job before freezing the attempt under test.
+  f.owner.abandon(f.attempt);
   const other = join(f.dir, 'other.jsonl');
   writeFileSync(
     other,
     record({ type: 'session', id: 'seed', cwd: f.dir }) + message('promise', null),
   );
-  f.store.claimReview();
-  const seed = f.store.prepareCapture({ sessionId: 'seed', file: other });
-  readAll(seed);
-  const existing = f.store.finishCapture(seed.id, [submission(null, 'promise', 'seed')])[0]!;
-  f.store.releaseReview();
+  const seed = captureJob(f.store, { sessionId: 'seed', file: other }, f.owner);
+  readAll(seed.review);
+  const existing = f.store.finishCaptureJob(f.owner, seed.attempt, [
+    submission(null, 'promise', 'seed'),
+  ])[0]!;
   const applying =
     mutation === 'application outcome'
       ? f.store.claimProposal(existing.id, existing.revision, null)
       : undefined;
-  f.owner.abandon(f.attempt);
   const attempt = f.owner.startAttempt('first');
   const review = f.store.prepareCaptureJob(f.owner, attempt);
   readAll(review);
@@ -327,18 +420,6 @@ it.each([
     });
   if (mutation === 'default')
     f.store.finish({ sourceDefaults: [{ sessionId: 'seed', since: '2025-01-01' }] });
-  if (mutation === 'new proposal') {
-    const another = join(f.dir, 'another.jsonl');
-    writeFileSync(
-      another,
-      record({ type: 'session', id: 'another', cwd: f.dir }) + message('promise', null),
-    );
-    f.store.claimReview();
-    const r = f.store.prepareCapture({ sessionId: 'another', file: another });
-    readAll(r);
-    f.store.finishCapture(r.id, [submission(null, 'promise', 'another')]);
-    f.store.releaseReview();
-  }
   if (mutation === 'edit')
     f.store.editProposal(existing.id, existing.revision, {
       change: existing.change,
@@ -377,12 +458,8 @@ it('defers to long-held manual ownership and requires a new attempt after the co
   expect(f.store.captureJob('first')?.state).toBe('completed');
 });
 
-it('commits saved references, coverage, completion and notice together, independent of later capture settings', async () => {
+it('commits saved references, coverage, completion and notice together', async () => {
   const f = await prepared();
-  writeFileSync(
-    join(f.dir, 'settings.json'),
-    record({ 'pi-remembrancer': { autoCapture: false, disabled: true } }),
-  );
   const saved = f.store.finishCaptureJob(f.owner, f.attempt, [submission()]);
   expect(saved).toHaveLength(1);
   expect(saved[0]?.sources[0]).toMatchObject({
@@ -390,6 +467,11 @@ it('commits saved references, coverage, completion and notice together, independ
     sessionId: 'session',
     entryId: 'promise',
     editId: null,
+    branchId: 'promise',
+    quote: 'Send Maya',
+    role: 'user',
+    locator: 'session/promise/promise',
+    offset: 0,
   });
   expect(f.store.reviewed()).toHaveLength(1);
   expect(f.store.captureJob('first')?.state).toBe('completed');
@@ -612,7 +694,7 @@ it('preserves publication FIFO across processes and clock rollback, independent 
   const child = publishInChild({ ...f.input, id: 'child' });
   expect(child.status, child.stderr).toBe(0);
   const ready = join(f.input.inbox, 'child.ready.json');
-  const later = (await importReadyHandoff(f.store, owner, ready)).manifest;
+  const later = (await importReadyHandoff(f.store, owner, ready)).job.manifest;
   expect(later.acceptedAt < f.handoff.manifest.acceptedAt).toBe(true);
   expect(later.admissionOrder > f.handoff.manifest.admissionOrder).toBe(true);
   expect(f.store.runnableCaptureJobs(owner)).toEqual([]);
@@ -625,64 +707,73 @@ it('preserves publication FIFO across processes and clock rollback, independent 
   expect(existsSync(f.handoff.manifest.snapshot)).toBe(true);
 });
 
-it('fails closed on concurrent process publication rather than reversing manifest order', async () => {
-  const f = await fixture();
-  const second = await preserveHandoff(
-    { ...f.input, id: 'second' },
-    {
-      before: (step) => {
-        if (step !== 'manifest-rename') return;
-        const contender = publishInChild({ ...f.input, id: 'contender' });
-        expect(contender.status).toBe(1);
-        expect(contender.stderr).toContain('inbox is locked');
-        expect(existsSync(join(f.input.inbox, 'contender.ready.json'))).toBe(false);
-      },
-    },
+it('completes a frozen attempt once when a later unimported ready file appears', async () => {
+  const f = await prepared();
+  appendFileSync(f.input.source.file, message('later', 'promise'));
+  const later = await preserveHandoff({ ...f.input, id: 'later' });
+  expect(f.store.runnableCaptureJobs(f.owner)).toEqual([]);
+  expect(f.store.finishCaptureJob(f.owner, f.attempt, [submission()])).toHaveLength(1);
+  expect(() => f.store.finishCaptureJob(f.owner, f.attempt, [submission()])).toThrow(
+    'active capture attempt',
   );
-  const child = publishInChild({ ...f.input, id: 'third' });
-  expect(child.status, child.stderr).toBe(0);
-  const owner = own(f.store);
-  const third = await importReadyHandoff(f.store, owner, join(f.input.inbox, 'third.ready.json'));
-  expect(third.manifest.admissionOrder > second.manifest.admissionOrder).toBe(true);
-  expect(f.store.runnableCaptureJobs(owner)).toEqual([]);
-  await importReadyHandoff(f.store, owner, second.ready);
-  expect(f.store.runnableCaptureJobs(owner)).toEqual([]);
-  await importReadyHandoff(f.store, owner, f.handoff.ready);
-  expect(f.store.runnableCaptureJobs(owner).map((job) => job.manifest.id)).toEqual(['first']);
+  expect(f.store.proposals()).toHaveLength(1);
+  await importReadyHandoff(f.store, f.owner, later.ready);
+  const next = f.owner.startAttempt('later');
+  const review = f.store.prepareCaptureJob(f.owner, next);
+  readAll(review);
+  f.store.finishCaptureJob(f.owner, next, []);
+  expect(f.store.captureJob('later')?.state).toBe('completed');
 });
 
-it.each(['missing', 'corrupt'] as const)(
-  'retains accepted evidence when the publication ordering record is %s',
-  async (fault) => {
+it('rejects completion if an actual earlier job is unresolved, without relying on the ready barrier', async () => {
+  const f = await prepared();
+  f.store.finishCaptureJob(f.owner, f.attempt, []);
+  appendFileSync(f.input.source.file, message('later', 'promise'));
+  const later = await preserveHandoff({ ...f.input, id: 'later' });
+  await importReadyHandoff(f.store, f.owner, later.ready);
+  const attempt = f.owner.startAttempt('later');
+  readAll(f.store.prepareCaptureJob(f.owner, attempt));
+  const sql = new DatabaseSync(f.path);
+  sql.exec(
+    "UPDATE capture_jobs SET state = 'failed', retry_eligible = 0, diagnostic = 'unresolved predecessor' WHERE id = 'first'",
+  );
+  sql.close();
+  const before = effects(f.store);
+  expect(() => f.store.finishCaptureJob(f.owner, attempt, [])).toThrow('durable capture job');
+  expect(effects(f.store)).toEqual(before);
+  expect(f.store.captureJob('later')?.state).toBe('queued');
+});
+
+it.each([1, 2, 99, null])(
+  'retains stored unsupported version %s and blocks its session without migration',
+  async (version) => {
     const f = await fixture();
-    const order = join(f.input.inbox, '.publication-order');
-    if (fault === 'missing') await unlink(order);
-    else writeFileSync(order, 'not a counter');
-    await expect(preserveHandoff({ ...f.input, id: 'later' })).rejects.toThrow(/ordering record/);
-    expect(readFileSync(f.handoff.manifest.snapshot, 'utf8')).toContain('Send Maya');
-    expect(existsSync(f.handoff.ready)).toBe(true);
-    expect(existsSync(join(f.input.inbox, 'later.ready.json'))).toBe(false);
+    const owner = own(f.store);
+    await importReadyHandoff(f.store, owner, f.handoff.ready);
+    const sql = new DatabaseSync(f.path);
+    sql
+      .prepare(
+        "UPDATE capture_jobs SET body = json_set(body, '$.version', ?), admission_order = ? WHERE id = ?",
+      )
+      .run(version, '9'.repeat(32), 'first');
+    sql.close();
+    const later = await preserveHandoff({ ...f.input, id: 'later' });
+    f.store.importCaptureJob(owner, later.manifest);
+    expect(f.store.runnableCaptureJobs(owner)).toEqual([]);
+    const blocked = owner.startAttempt('first');
+    expect(() => f.store.prepareCaptureJob(owner, blocked)).toThrow('not runnable');
+    owner.abandon(blocked);
+    const other = await preserveHandoff({
+      ...f.input,
+      id: 'other',
+      source: { ...f.input.source, sessionId: 'other' },
+    });
+    f.store.importCaptureJob(owner, other.manifest);
+    expect(f.store.runnableCaptureJobs(owner).map((job) => job.manifest.id)).toEqual(['other']);
+    expect(f.store.captureJob('first')?.state).toBe('queued');
+    expect(await cleanupCompletedSnapshot(f.store, owner, 'first')).toBe(false);
   },
 );
-
-it('retains legacy clock-ordered jobs and blocks their session without guessing or migrating order', async () => {
-  const f = await fixture();
-  const owner = own(f.store);
-  f.handoff.manifest.version = 1;
-  f.store.importCaptureJob(owner, f.handoff.manifest);
-  const later = await preserveHandoff({ ...f.input, id: 'later' });
-  f.store.importCaptureJob(owner, later.manifest);
-  expect(f.store.runnableCaptureJobs(owner)).toEqual([]);
-  const other = await preserveHandoff({
-    ...f.input,
-    id: 'other',
-    source: { ...f.input.source, sessionId: 'other' },
-  });
-  f.store.importCaptureJob(owner, other.manifest);
-  expect(f.store.runnableCaptureJobs(owner).map((job) => job.manifest.id)).toEqual(['other']);
-  expect(f.store.captureJob('first')?.state).toBe('queued');
-  expect(await cleanupCompletedSnapshot(f.store, owner, 'first')).toBe(false);
-});
 
 function probe(path: string) {
   const result = spawnSync(
@@ -753,18 +844,22 @@ async function stoppedChild(f: Awaited<ReturnType<typeof fixture>>, point: strin
   child.stderr!.on('data', (chunk) => (stderr += String(chunk)));
   const deadline = Date.now() + 8000;
   while (!existsSync(marker)) {
-    if (child.exitCode !== null || Date.now() > deadline)
+    if (child.exitCode !== null || child.signalCode !== null || Date.now() > deadline)
       throw Error(`Child failed at ${point}: ${stderr}`);
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   const exited = once(child, 'exit');
-  expect(probe(f.path)).toBe('busy');
-  expect(() => f.store.claimCaptureWorker()).toThrow();
   child.kill('SIGKILL');
   await exited;
   children.delete(child);
-  expect(probe(f.path)).toBe('owned');
 }
+
+it('surfaces an early child failure without waiting forever in teardown', async () => {
+  const f = await fixture();
+  await expect(stoppedChild(f, 'invalid-boundary')).rejects.toThrow(
+    'Unreached crash boundary: invalid-boundary',
+  );
+});
 
 it('delays notices across commit-before-replacement SIGKILL, then repairs from SQLite on recovery', async () => {
   const f = await fixture();

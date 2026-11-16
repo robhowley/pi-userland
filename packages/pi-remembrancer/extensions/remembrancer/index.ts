@@ -5,7 +5,7 @@ import { StringEnum, Type } from '@earendil-works/pi-ai';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { CheckpointStore, defaultCheckpointFile } from './checkpoints.js';
 import { captureExecution, captureHost, loadRemembrancerConfig } from './config.js';
-import { preserveHandoff } from './capture-handoff.js';
+import { CaptureHandoffError, preserveHandoff } from './capture-handoff.js';
 import { launchCaptureWorker } from './capture-worker.js';
 import { readProposalNotice } from './capture-notices.js';
 import { openProposals } from './proposal-ui.js';
@@ -442,28 +442,53 @@ export default function remembrancer(pi: ExtensionAPI) {
   });
   pi.on('session_shutdown', async (event, ctx) => {
     stopLifecycle?.();
+    let phase = 'manual-release';
+    let artifactId = 'no-handoff';
     try {
       try {
         // Abandon unfinished manual coverage; the worker never inherits that lock.
         release();
         const source = ctx.mode === 'tui' ? currentSource(ctx) : undefined;
         if (source) {
+          phase = 'admission-configuration';
           const config = loadRemembrancerConfig(ctx.cwd, ctx.isProjectTrusted());
           if (config.autoCapture && !config.disabled) {
+            artifactId = randomUUID();
             const execution = captureExecution(ctx);
             const database = defaultCheckpointFile();
             const inbox = join(dirname(database), 'capture-inbox');
-            await preserveHandoff({ id: randomUUID(), inbox, source, execution });
+            phase = 'preservation';
+            const accepted = await preserveHandoff({ id: artifactId, inbox, source, execution });
+            if (accepted.cleanupDiagnostic) {
+              try {
+                ctx.ui.notify(
+                  `Remembrancer accepted capture: ${accepted.cleanupDiagnostic}`,
+                  'warning',
+                );
+              } catch {
+                // Notification failure cannot revoke acceptance or suppress launch.
+              }
+            }
             // A failed launch leaves the durable ready manifest for the next wake.
+            phase = 'worker-launch';
             await launchCaptureWorker(database, inbox, execution.host!);
           }
         }
       } finally {
-        db?.close();
-        db = undefined;
+        try {
+          const previousPhase = phase;
+          phase = 'foreground-close';
+          db?.close();
+          phase = previousPhase;
+        } finally {
+          db = undefined;
+        }
       }
     } catch (error) {
-      const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
+      const detail =
+        error instanceof CaptureHandoffError
+          ? error.message
+          : new CaptureHandoffError(phase, 'shutdown-failed', artifactId, error).message;
       ctx.ui.notify(`Remembrancer shutdown (${event.reason}) failed:\n${detail}`, 'warning');
     }
   });

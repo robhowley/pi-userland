@@ -1,23 +1,23 @@
 import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
 import {
   prepareHistoricalReview,
   prepareReview,
-  readSession,
+  ReviewBudget,
   resolveSeedSince,
   type Checkpoint,
   type PreparedReview,
   type ReviewOptions,
-  type SessionTree,
   type Source,
 } from '../extensions/remembrancer/evidence.js';
 import { frozenContext } from '../extensions/remembrancer/review-pages.js';
 
 const dirs: string[] = [];
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 function directory() {
@@ -59,23 +59,12 @@ const checkpoint = (f: Fixture, entryId: string, since: string | null = null): C
   since,
 });
 
-// Test-local applicability prototype, not a new production API. Parse one captured
-// byte buffer, not a pathname re-read after prefix verification. These scratch
-// files only let the existing parser consume those exact bytes.
-function parseBytes(bytes: Buffer, source: Source): SessionTree {
-  const file = join(directory(), 'coverage-view.jsonl');
-  writeFileSync(file, bytes, { mode: 0o600 });
-  const tree = readSession(file);
-  if (tree.sessionId !== source.sessionId) throw Error('Session identity differs from snapshot');
-  return { ...tree, tips: tree.tips.map((tip) => ({ ...tip, file: source.file })) };
-}
-// The proof now exercises the production applicability adapter.
 type Applicability = ReturnType<typeof prepareHistoricalReview>;
 function historicalReview(f: Fixture, reviewed: readonly Checkpoint[], options?: ReviewOptions) {
   return prepareHistoricalReview(f.source, f.snapshotFile, reviewed, options);
 }
 function prepared(result: Applicability): PreparedReview {
-  expect(result.status, result.diagnostic ?? '').not.toBe('blocked');
+  expect(result.review, result.diagnostic ?? '').not.toBeNull();
   if (!result.review) throw Error(result.diagnostic);
   return result.review;
 }
@@ -95,15 +84,7 @@ describe('historical coverage applicability proof', () => {
       store.finish({ checkpoints: manual.checkpoints });
       const committed = store.reviewed();
       expect(committed).toEqual([checkpoint(f, 'B')]);
-      const oldSnapshot = prepareReview([f.source], committed, undefined, [
-        { source: f.source, tree: parseBytes(readFileSync(f.snapshotFile), f.source) },
-      ]);
-      expect(oldSnapshot.incomplete).toBe(true);
-      expect(oldSnapshot.evidence).toEqual([]);
-      expect(oldSnapshot.warnings[0]?.reason).toContain('Review boundary unavailable: B');
-
       const result = historicalReview(f, committed);
-      expect(result.status).toBe('already-covered');
       const review = prepared(result);
       expect(review.evidence).toEqual([]);
       expect(review.checkpoints).toEqual([]);
@@ -193,12 +174,21 @@ describe('historical coverage applicability proof', () => {
     expect(selections(review)).toEqual([['A', 'root', 'edit-1', 'same']]);
   });
 
-  it('unions comparable checkpoints so later edits do not erase earlier version proof', () => {
+  it('unions two absent checkpoints so later edits do not erase earlier version proof', () => {
     const f = fixture(msg('root', null), msg('A', 'root'));
-    appendFileSync(f.source.file, lines(edit('edit', 'A', 'root', 'changed'), msg('B', 'edit')));
-    const result = historicalReview(f, [checkpoint(f, 'A'), checkpoint(f, 'B')]);
-    expect(prepared(result).evidence).toEqual([]);
-    expect(prepared(result).checkpoints).toEqual([]);
+    appendFileSync(
+      f.source.file,
+      lines(msg('B', 'A'), edit('edit', 'B', 'root', 'changed'), msg('C', 'edit')),
+    );
+    // Neither receipt is in the snapshot. C alone lacks the original root
+    // version, and no local A checkpoint can make the union test pass.
+    expect(selections(prepared(historicalReview(f, [checkpoint(f, 'C')])))).toEqual([
+      ['A', 'root', null, 'root'],
+    ]);
+    const review = prepared(historicalReview(f, [checkpoint(f, 'B'), checkpoint(f, 'C')]));
+    expect(review.evidence).toEqual([]);
+    expect(review.checkpoints).toEqual([]);
+    expect(review.coverageChanged).toBe(false);
   });
 
   it('does not mistake later removal for review of the removed version', () => {
@@ -243,7 +233,6 @@ describe('historical coverage applicability proof', () => {
     );
     appendFileSync(f.source.file, lines(msg('B', 'A')));
     const result = historicalReview(f, [checkpoint(f, 'B', '2026-01-16T00:00:00.000Z')]);
-    expect(result.status).toBe('already-covered');
     expect(prepared(result).evidence).toEqual([]);
   });
 
@@ -252,7 +241,7 @@ describe('historical coverage applicability proof', () => {
     f.source.seedSince = '2026-01-16T00:00:00.000Z';
     appendFileSync(f.source.file, lines(msg('B', 'A')));
     const review = prepared(
-      historicalReview(f, [checkpoint(f, 'B')], { requestedSince: '2026-01-20' }),
+      historicalReview(f, [checkpoint(f, 'B')], { requestedSince: '2019-01-01' }),
     );
     expect(review.evidence).toEqual([]);
     expect(review.sourceDefaults).toEqual([]);
@@ -280,7 +269,7 @@ describe('historical coverage applicability proof', () => {
       const committed = store.reviewed();
       f.source = store.sources()[0]!;
       const result = historicalReview(f, committed);
-      expect(result.status).toBe('already-covered');
+      expect(prepared(result).evidence).toEqual([]);
       expect(prepared(result).coverageChanged).toBe(false);
 
       // A broader, already-resolved absolute seed reveals only the older version.
@@ -364,8 +353,7 @@ describe('historical coverage applicability proof', () => {
             validExtension.toString().replace('historical-session', 'different-session'),
           );
         const result = historicalReview(f, committed);
-        expect(result.status).toBe('blocked');
-        expect(result.review).toBeNull();
+        expect(result).toMatchObject({ review: null, retryEligible: true });
         expect(result.diagnostic).toBeTruthy();
         expect(store.reviewed()).toEqual(committed);
         expect(readFileSync(f.snapshotFile)).toEqual(retained);
@@ -389,9 +377,8 @@ describe('historical coverage applicability proof', () => {
       if (change === 'unknown parent') appendFileSync(f.source.file, lines(msg('C', 'missing')));
       if (change === 'duplicate entry') appendFileSync(f.source.file, lines(msg('B', 'A')));
       const result = historicalReview(f, boundaries);
-      expect(result.status).toBe('blocked');
+      expect(result).toMatchObject({ review: null, retryEligible: true });
       expect(result.diagnostic).toBeTruthy();
-      expect(result.review).toBeNull();
       expect(boundaries.map((cp) => cp.entryId)).toEqual(['root', 'B']);
     },
   );
@@ -405,9 +392,224 @@ describe('historical coverage applicability proof', () => {
     ]);
     f.source.sessionId = 'other-session';
     const result = historicalReview(f, [other]);
-    expect(result.status).toBe('blocked');
+    expect(result).toMatchObject({
+      review: null,
+      category: 'invalid-identity',
+      retryEligible: false,
+    });
     expect(result.diagnostic).toContain('Session identity differs');
-    expect(result.review).toBeNull();
+  });
+
+  it('uses the current live path only for proof and preserves historical references and context', () => {
+    const f = fixture(msg('root', null), msg('A', 'root'));
+    const retained = readFileSync(f.snapshotFile);
+    const current = join(directory(), 'relocated.jsonl');
+    writeFileSync(current, retained);
+    appendFileSync(
+      current,
+      lines(edit('edit-A', 'A', 'A', 'later replacement'), msg('B', 'edit-A')),
+    );
+    rmSync(f.source.file);
+    const review = prepared(
+      prepareHistoricalReview(f.source, f.snapshotFile, [checkpoint(f, 'B')], undefined, current),
+    );
+    expect(selections(review)).toEqual([['A', 'A', null, 'A']]);
+    expect(review.evidence[0]?.file).toBe(f.source.file);
+    expect(review.successfulSources[0]?.file).toBe(f.source.file);
+    expect(review.snapshots[0]?.tree.tips[0]?.file).toBe(f.source.file);
+    const context = frozenContext(review, 'historical', {
+      selected: review.evidence[0]!,
+      before: 40,
+    });
+    expect(context).toMatchObject({ groups: [{ entries: [{ entryId: 'root', text: 'root' }] }] });
+    expect(JSON.stringify({ review, context })).not.toContain('later replacement');
+    expect(readFileSync(f.snapshotFile)).toEqual(retained);
+  });
+
+  it('scales deep sibling coverage with counted ancestry visits, not evidence times ancestry', () => {
+    const measure = (depth: number) => {
+      const trunk = Array.from({ length: depth }, (_, i) =>
+        msg(`trunk-${i}`, i === 0 ? null : `trunk-${i - 1}`),
+      );
+      const deep = Array.from({ length: depth }, (_, i) =>
+        msg(`deep-${i}`, i === 0 ? `trunk-${depth - 1}` : `deep-${i - 1}`),
+      );
+      const siblings = Array.from({ length: 10 }, (_, i) =>
+        msg(`sibling-${i}`, `trunk-${depth - 1}`),
+      );
+      const f = fixture(...trunk, ...deep, ...siblings);
+      const ids = new Set([...trunk, ...deep, ...siblings].map((entry) => entry.id));
+      const budget = new ReviewBudget();
+      const visits = vi.spyOn(budget, 'visit');
+      const gets = vi.spyOn(Map.prototype, 'get');
+      const result = prepareHistoricalReview(
+        f.source,
+        f.snapshotFile,
+        siblings.map((entry) => checkpoint(f, entry.id)),
+        undefined,
+        undefined,
+        budget,
+      );
+      const operations = gets.mock.calls.filter(([key]) => ids.has(key as string)).length;
+      gets.mockRestore();
+      const review = prepared(result);
+      expect(review.evidence.map((item) => item.entryId)).toEqual(
+        [...trunk, ...deep].map((entry) => entry.id),
+      );
+      expect(review.evidence.every((item) => item.branchId === `deep-${depth - 1}`)).toBe(true);
+      expect(visits.mock.calls.length).toBeLessThan(80 * depth);
+      expect(operations).toBeLessThan(150 * depth);
+      return operations;
+    };
+    const small = measure(200);
+    const large = measure(400);
+    expect(large).toBeGreaterThan(small);
+    expect(large).toBeLessThan(small * 2.1);
+  });
+
+  it('supports 20,000 entries and 51 shallow checkpoints without charging whole trees per receipt', () => {
+    const entries = Array.from({ length: 20_000 }, (_, i) =>
+      msg(`entry-${i}`, i === 0 ? null : `entry-${i - 1}`),
+    );
+    const f = fixture(...entries);
+    const budget = new ReviewBudget();
+    const visits = vi.spyOn(budget, 'visit');
+    const review = prepared(
+      prepareHistoricalReview(
+        f.source,
+        f.snapshotFile,
+        entries.slice(0, 51).map((entry) => checkpoint(f, entry.id)),
+        undefined,
+        undefined,
+        budget,
+      ),
+    );
+    expect(review.evidence.map((item) => item.entryId)).toEqual(
+      entries.slice(51).map((entry) => entry.id),
+    );
+    expect(review.evidence).toHaveLength(19_949);
+    expect(review.incomplete).toBe(false);
+    // 1,326 receipt visits plus 40,001 extraction visits. Version membership
+    // rejects every receipt before any branch-comparability walk is needed.
+    expect(visits).toHaveBeenCalledTimes(41_327);
+  });
+
+  it('fails closed when actual receipt ancestry work exceeds the default bounded budget', () => {
+    const entries = Array.from({ length: 4_000 }, (_, i) =>
+      msg(`entry-${i}`, i === 0 ? null : `entry-${i - 1}`),
+    );
+    const f = fixture(...entries);
+    const retained = readFileSync(f.snapshotFile);
+    const budget = new ReviewBudget();
+    const visits = vi.spyOn(budget, 'visit');
+    const result = prepareHistoricalReview(
+      f.source,
+      f.snapshotFile,
+      entries.slice(-51).map((entry) => checkpoint(f, entry.id)),
+      undefined,
+      undefined,
+      budget,
+    );
+    expect(result).toMatchObject({ review: null, category: 'coverage-limit', retryEligible: true });
+    expect(result.diagnostic).toContain('limit exceeded');
+    expect(visits).toHaveBeenCalledTimes(budget.limits.sourceBranchEntries + 1);
+    expect(readFileSync(f.snapshotFile)).toEqual(retained);
+  });
+
+  it('also charges comparability walks after receipts and extraction fit the budget', () => {
+    const entries = Array.from({ length: 100 }, (_, i) =>
+      msg(`entry-${i}`, i === 0 ? null : `entry-${i - 1}`),
+    );
+    const f = fixture(...entries, msg('sibling', 'entry-49'));
+    // The parser's branch bound is 453. Receipts and extraction visit 354
+    // ancestors, but proving this sibling incomparable requires 151 more.
+    const budget = new ReviewBudget({ sourceBranchEntries: 475 });
+    const visits = vi.spyOn(budget, 'visit');
+    const result = prepareHistoricalReview(
+      f.source,
+      f.snapshotFile,
+      [checkpoint(f, 'sibling')],
+      undefined,
+      undefined,
+      budget,
+    );
+    expect(result).toMatchObject({ review: null, category: 'coverage-limit', retryEligible: true });
+    expect(result.diagnostic).toContain('extraction');
+    expect(visits).toHaveBeenCalledTimes(476);
+  });
+
+  it.each(['json', 'header json', 'tree', 'identity', 'limit'] as const)(
+    'classifies invalid immutable %s as non-retryable without leaking retained text',
+    (change) => {
+      const f = fixture(msg('A', null));
+      if (change === 'json') appendFileSync(f.snapshotFile, '{"credential-sentinel"');
+      if (change === 'header json') writeFileSync(f.snapshotFile, '{"credential-sentinel"');
+      if (change === 'tree') appendFileSync(f.snapshotFile, lines(msg('A', null)));
+      if (change === 'identity') f.source.sessionId = 'different-session';
+      const retained = readFileSync(f.snapshotFile);
+      const budget = new ReviewBudget(change === 'limit' ? { sourceEntries: 0 } : {});
+      const result = prepareHistoricalReview(
+        f.source,
+        f.snapshotFile,
+        [],
+        undefined,
+        undefined,
+        budget,
+      );
+      expect(result).toMatchObject({
+        review: null,
+        category:
+          change === 'limit'
+            ? 'retained-limit'
+            : change === 'identity'
+              ? 'invalid-identity'
+              : change === 'tree'
+                ? 'invalid-tree'
+                : 'invalid-json',
+        retryEligible: false,
+      });
+      expect(result.diagnostic).not.toContain('credential-sentinel');
+      expect(readFileSync(f.snapshotFile)).toEqual(retained);
+    },
+  );
+
+  it('keeps a limit in the mutable live extension retryable rather than blaming retained input', () => {
+    const f = fixture(msg('A', null));
+    appendFileSync(f.source.file, lines(msg('B', 'A')));
+    const result = prepareHistoricalReview(
+      f.source,
+      f.snapshotFile,
+      [checkpoint(f, 'B')],
+      undefined,
+      undefined,
+      new ReviewBudget({ sourceEntries: 1 }),
+    );
+    expect(result).toMatchObject({
+      review: null,
+      category: 'live-proof-unavailable',
+      retryEligible: true,
+    });
+    expect(result.diagnostic).toContain('retained-limit');
+    expect(prepared(historicalReview(f, [checkpoint(f, 'B')])).evidence).toEqual([]);
+  });
+
+  it('keeps unavailable retained files and mutable review settings retryable with safe diagnostics', () => {
+    const f = fixture(msg('A', null));
+    const invalidSettings = historicalReview(f, [], { requestedSince: 'credential-sentinel' });
+    expect(invalidSettings).toMatchObject({
+      review: null,
+      category: 'review-context',
+      retryEligible: true,
+    });
+    expect(invalidSettings.diagnostic).not.toContain('credential-sentinel');
+    rmSync(f.snapshotFile);
+    const missing = historicalReview(f, []);
+    expect(missing).toMatchObject({
+      review: null,
+      category: 'snapshot-unavailable',
+      retryEligible: true,
+    });
+    expect(missing.diagnostic).toContain('ENOENT');
   });
 
   it('does not manufacture capture coverage from a seed window containing no evidence', () => {

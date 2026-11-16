@@ -50,10 +50,6 @@ export function captureExecution(ctx: ExtensionContext): HandoffInput['execution
   return {
     cwd: ctx.cwd,
     agentDir: getAgentDir(),
-    trustBasis: ctx.isProjectTrusted()
-      ? 'originating-context-trusted'
-      : 'originating-context-untrusted',
-    model: { provider: model.provider, id: model.id },
     authorization: { autoCapture: true, disabled: false },
     host: captureHost(),
     runtime: {

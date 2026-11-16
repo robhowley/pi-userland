@@ -88,7 +88,7 @@ export async function reviewPreparedCapture(
         status: Type.Optional(stringEnumSchema(['pending', 'completed'] as const)),
         offset: Type.Optional(Type.Integer({ minimum: 0 })),
       }),
-      lookupTasks,
+      (args) => lookupTasks(args, undefined, { cwd: input.cwd, signal: input.signal }),
     ),
     tool(
       'remembrancer_proposals',

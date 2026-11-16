@@ -13,8 +13,13 @@ import { dirname, isAbsolute, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 import { CaptureReview } from './capture-review.js';
-import { CaptureWorkerOwnership, type CaptureAttempt, type CaptureJob } from './capture-jobs.js';
-import { validateReadyManifest, type ReadyManifest } from './capture-handoff.js';
+import {
+  CapturePreparationError,
+  CaptureWorkerOwnership,
+  type CaptureAttempt,
+  type CaptureJob,
+} from './capture-jobs.js';
+import { physicalInbox, validateReadyManifest, type ReadyManifest } from './capture-handoff.js';
 import { prepareHistoricalReview } from './evidence.js';
 import {
   validateDraft,
@@ -82,7 +87,6 @@ export class CheckpointStore {
   private db: DatabaseSync;
   private filename: string;
   private reviewLock: DatabaseSync | undefined;
-  private capture: CaptureReview | undefined;
   private jobCapture:
     | {
         owner: CaptureWorkerOwnership;
@@ -142,8 +146,14 @@ export class CheckpointStore {
       // including existing single-statement manual proposal/application writes.
       for (const table of ['sources', 'reviewed_boundaries', 'proposals']) {
         for (const operation of ['INSERT', 'UPDATE', 'DELETE']) {
-          this.db.exec(`CREATE TRIGGER IF NOT EXISTS context_${table}_${operation}
-            AFTER ${operation} ON ${table} BEGIN
+          this.db.exec(`DROP TRIGGER IF EXISTS context_${table}_${operation}`);
+          let condition = '';
+          if (table === 'sources' && operation === 'INSERT')
+            condition = 'WHEN NEW.seed_since IS NOT NULL';
+          if (table === 'sources' && operation === 'UPDATE')
+            condition = 'WHEN NEW.seed_since IS NOT OLD.seed_since';
+          this.db.exec(`CREATE TRIGGER context_${table}_${operation}
+            AFTER ${operation} ON ${table} ${condition} BEGIN
               UPDATE review_context SET generation = generation + 1
               ${table === 'proposals' ? ', notice_generation = notice_generation + 1' : ''}
               WHERE singleton = 1;
@@ -190,7 +200,6 @@ export class CheckpointStore {
   releaseReview(): void {
     this.reviewLock?.close();
     this.reviewLock = undefined;
-    this.capture = undefined;
   }
 
   proposals(state?: ProposalState, offset = 0, limit = 50): Proposal[] {
@@ -336,32 +345,6 @@ export class CheckpointStore {
     return value;
   }
 
-  // Capture uses the existing process lock. Its identity is memory-only and has
-  // no expiry; the caller releases ownership after reviewer cleanup and commit.
-  prepareCapture(source: Pick<Source, 'sessionId' | 'file'>): CaptureReview {
-    if (!this.reviewLock) throw new Error('Capture requires review ownership');
-    if (this.capture) throw new Error('A capture is already frozen');
-    const enrolled = this.sources().find((item) => item.sessionId === source.sessionId);
-    const review = new CaptureReview(
-      { ...source, seedSince: enrolled?.seedSince ?? null },
-      this.reviewed(),
-      () => {
-        if (!this.reviewLock || this.capture !== review)
-          throw new Error('No matching active capture');
-      },
-    );
-    this.capture = review;
-    return review;
-  }
-
-  private validatedCapture(id: string, submissions: readonly ProposalSubmission[]) {
-    if (!this.reviewLock || !this.capture || this.capture.id !== id)
-      throw new Error('No matching active capture');
-    const frozen = this.capture.completion(submissions);
-    this.validateCaptureRevisions(submissions);
-    return frozen;
-  }
-
   private validateCaptureRevisions(submissions: readonly ProposalSubmission[]): void {
     const ids = new Set<string>();
     for (const submission of submissions) {
@@ -373,24 +356,18 @@ export class CheckpointStore {
     }
   }
 
-  validateCapture(id: string, submissions: readonly ProposalSubmission[]): void {
-    this.validatedCapture(id, submissions);
-  }
-
-  finishCapture(id: string, submissions: readonly ProposalSubmission[]): Proposal[] {
-    const saved = this.transaction(() => {
-      const capture = this.validatedCapture(id, submissions);
-      return this.saveCapture(capture, submissions);
-    });
-    this.capture = undefined;
-    return saved;
-  }
-
   private saveCapture(
     capture: ReturnType<CaptureReview['completion']>,
     submissions: readonly ProposalSubmission[],
   ): Proposal[] {
-    const plan = this.normalizePlan(capture.plan);
+    const enrolled = new Map(this.sources().map((source) => [source.sessionId, source.file]));
+    const plan = this.normalizePlan({
+      ...capture.plan,
+      sources: (capture.plan.sources ?? []).map((source) => ({
+        ...source,
+        file: enrolled.get(source.sessionId) ?? source.file,
+      })),
+    });
     const saved: Proposal[] = [];
     for (const [index, submission] of submissions.entries()) {
       const references = capture.sources[index]!;
@@ -470,6 +447,14 @@ export class CheckpointStore {
     };
   }
 
+  completedCaptureJobIds(owner: CaptureWorkerOwnership): string[] {
+    owner.assertStore(this.filename);
+    return this.db
+      .prepare("SELECT id FROM capture_jobs WHERE state = 'completed' ORDER BY rowid")
+      .all()
+      .map((row) => row['id'] as string);
+  }
+
   unresolvedSnapshot(snapshot: string): boolean {
     return !!this.db
       .prepare("SELECT 1 FROM capture_jobs WHERE snapshot = ? AND state <> 'completed' LIMIT 1")
@@ -495,14 +480,15 @@ export class CheckpointStore {
       // Publication sequences belong to one durable inbox, not the importer or
       // the wall clock. Never compare counters from different inboxes.
       const previous = this.db.prepare('SELECT snapshot FROM capture_jobs LIMIT 1').get();
-      if (previous && dirname(previous['snapshot'] as string) !== dirname(manifest.snapshot))
+      if (
+        previous &&
+        physicalInbox(dirname(previous['snapshot'] as string)) !==
+          physicalInbox(dirname(manifest.snapshot))
+      )
         throw Error('Capture publication order requires one inbox per database');
       if (
-        manifest.version === 2 &&
         this.db
-          .prepare(
-            "SELECT 1 FROM capture_jobs WHERE admission_order = ? AND json_extract(body, '$.version') = 2",
-          )
+          .prepare('SELECT 1 FROM capture_jobs WHERE admission_order = ?')
           .get(manifest.admissionOrder)
       )
         throw Error('Conflicting capture publication order');
@@ -535,8 +521,8 @@ export class CheckpointStore {
     )
       return [];
     // Unsuccessful predecessors block newer evidence in the same session.
-    // Version-1 clocks cannot prove publication order, so retain those jobs and
-    // block their session rather than guessing. Other sessions remain runnable.
+    // Unsupported stored jobs retain their session fence, without guessing
+    // execution metadata or publication order. Other sessions remain runnable.
     return this.runnableCaptureJobIds().map((id) => this.captureJob(id)!);
   }
 
@@ -550,11 +536,11 @@ export class CheckpointStore {
     return this.db
       .prepare(
         `SELECT job.id FROM capture_jobs AS job
-      WHERE json_extract(job.body, '$.version') = 2
+      WHERE json_extract(job.body, '$.version') = 3
       AND (job.state = 'queued' OR (job.state = 'failed' AND job.retry_eligible = 1))
       AND NOT EXISTS (SELECT 1 FROM capture_jobs AS earlier
         WHERE earlier.session_id = job.session_id
-        AND (json_extract(earlier.body, '$.version') <> 2
+        AND (json_extract(earlier.body, '$.version') IS NOT 3
           OR earlier.admission_order < job.admission_order)
         AND earlier.state <> 'completed') ORDER BY job.admission_order`,
       )
@@ -599,6 +585,7 @@ export class CheckpointStore {
             sessionId: job.manifest.source.sessionId,
             seedSince: enrolled?.seedSince ?? null,
           },
+          liveSourceFile: enrolled?.file ?? job.manifest.source.file,
           reviewed: this.reviewed(),
           generation: this.contextGeneration(),
           body: JSON.stringify(job.manifest),
@@ -610,21 +597,18 @@ export class CheckpointStore {
       frozen.source,
       frozen.job.manifest.snapshot,
       frozen.reviewed,
+      undefined,
+      frozen.liveSourceFile,
     );
-    if (!result.review) {
-      this.failCaptureJob(owner, attempt, result.diagnostic, true);
-      throw Error(result.diagnostic);
+    if ('retryEligible' in result) {
+      this.failCaptureJob(owner, attempt, result.diagnostic, result.retryEligible);
+      throw new CapturePreparationError(result.diagnostic, result.category, result.retryEligible);
     }
-    const review = new CaptureReview(
-      frozen.source,
-      frozen.reviewed,
-      () => {
-        owner.assertStore(this.filename);
-        owner.assertAttempt(attempt);
-        if (this.jobCapture?.review !== review) throw Error('No matching frozen capture job');
-      },
-      result.review,
-    );
+    const review = new CaptureReview(result.review, () => {
+      owner.assertStore(this.filename);
+      owner.assertAttempt(attempt);
+      if (this.jobCapture?.review !== review) throw Error('No matching frozen capture job');
+    });
     this.jobCapture = { owner, attempt, review, generation: frozen.generation, body: frozen.body };
     return review;
   }
@@ -668,13 +652,13 @@ export class CheckpointStore {
           !job ||
           job.state !== 'queued' ||
           JSON.stringify(job.manifest) !== active.body ||
-          !this.runnableCaptureJobs(owner).some((item) => item.manifest.id === attempt.jobId)
+          !this.runnableCaptureJobIds().includes(attempt.jobId)
         )
           throw Error('No matching durable capture job');
         validateReadyManifest(job.manifest, dirname(job.manifest.snapshot));
         if (this.contextGeneration() !== active.generation)
           throw Error('Capture review context changed; reprepare');
-        const capture = active.review.completion(submissions, true);
+        const capture = active.review.completion(submissions);
         this.validateCaptureRevisions(submissions);
         const proposals = this.saveCapture(capture, submissions);
         this.db

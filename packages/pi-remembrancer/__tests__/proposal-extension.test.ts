@@ -9,6 +9,7 @@ import type {
 } from '@earendil-works/pi-coding-agent';
 import { afterEach, expect, it, vi } from 'vitest';
 import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
+import { captureJob } from './fixtures/capture-job.js';
 import * as evidence from '../extensions/remembrancer/evidence.js';
 import * as discovery from '../extensions/remembrancer/discovery.js';
 import * as reviewer from '../extensions/remembrancer/reviewer.js';
@@ -64,9 +65,8 @@ function setup(autoCapture?: boolean, disabled = false, mode: unknown = 'tui') {
       .join('\n'),
   );
   const store = new CheckpointStore();
-  store.claimReview();
-  const capture = store.prepareCapture({ file, sessionId: 'session' });
-  capture.page();
+  const { owner, attempt, review } = captureJob(store, { file, sessionId: 'session' });
+  review.page();
   const submission = {
     change: {
       operation: 'add' as const,
@@ -87,8 +87,8 @@ function setup(autoCapture?: boolean, disabled = false, mode: unknown = 'tui') {
       },
     ],
   };
-  const proposals = store.finishCapture(capture.id, [submission, submission, submission]);
-  store.releaseReview();
+  const proposals = store.finishCaptureJob(owner, attempt, [submission, submission, submission]);
+  owner.release();
   store.dismissProposal(proposals[1]!.id, 1);
   store.claimProposal(proposals[2]!.id, 1, null);
   store.close();

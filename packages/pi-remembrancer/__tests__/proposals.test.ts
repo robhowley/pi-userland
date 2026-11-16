@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, expect, it } from 'vitest';
 import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
+import { captureJob } from './fixtures/capture-job.js';
 import type { Evidence } from '../extensions/remembrancer/evidence.js';
 import {
   validateDraft,
@@ -79,12 +80,14 @@ const snapshot: TaskSnapshot = {
   annotations: [],
 };
 function freeze(store: CheckpointStore) {
-  store.claimReview();
-  const review = store.prepareCapture(sourceFile());
-  while (review.page()['hasMore']) {
+  const frozen = captureJob(store, sourceFile());
+  while (frozen.review.page()['hasMore']) {
     /* deliver every continuation */
   }
-  return review.id;
+  return frozen;
+}
+function durableStore() {
+  return new CheckpointStore(join(directory(), 'index.sqlite'));
 }
 
 it('persists drafts, decisions and claims across restart; uncertain writes cannot be retried blindly', () => {
@@ -92,7 +95,9 @@ it('persists drafts, decisions and claims across restart; uncertain writes canno
   const path = join(dir, 'state.sqlite');
   let store = new CheckpointStore(path);
   try {
-    const [first, second] = store.finishCapture(freeze(store), [submission, submission]);
+    const { owner, attempt } = freeze(store);
+    const [first, second] = store.finishCaptureJob(owner, attempt, [submission, submission]);
+    owner.release();
     const edited = store.editProposal(first!.id, 1, {
       change: first!.change,
       expected: null,
@@ -139,7 +144,9 @@ it.each(['applied', 'already_satisfied', 'uncertain'] as const)(
     const path = join(dir, 'state.sqlite');
     let store = new CheckpointStore(path);
     try {
-      const [first] = store.finishCapture(freeze(store), [submission]);
+      const { owner, attempt } = freeze(store);
+      const [first] = store.finishCaptureJob(owner, attempt, [submission]);
+      owner.release();
       const claim = store.claimProposal(first!.id, first!.revision, null);
       for (const invalid of [
         { state: 'pending', verified: null, error: null },
@@ -229,84 +236,6 @@ it('rejects arbitrary locators, wrong branches, edits, offsets, quotes and unsup
   ).toThrow(/fields/);
 });
 
-it('commits proposals with trusted frozen coverage and keeps process ownership until release', () => {
-  const path = join(directory(), 'state', 'index.sqlite');
-  const store = new CheckpointStore(path);
-  const peer = new CheckpointStore(path);
-  const source = sourceFile();
-  try {
-    expect(() => store.prepareCapture(source)).toThrow(/ownership/);
-    store.claimReview();
-    const capture = store.prepareCapture(source);
-    expect(() => store.prepareCapture(source)).toThrow(/already frozen/);
-    expect(() => peer.claimReview()).toThrow(/another Pi process/);
-    peer.enroll('other', '/other.jsonl');
-    expect(capture.page()).toMatchObject({ batch: capture.id, hasMore: false });
-    const [saved] = store.finishCapture(capture.id, [submission]);
-    expect(saved?.sources[0]).toMatchObject({
-      file: source.file,
-      quote: 'Send Maya',
-      role: 'user',
-      locator: 'session/leaf/leaf',
-      offset: 0,
-      branchId: 'leaf',
-      editId: null,
-    });
-    expect(store.reviewed()).toEqual([{ ...source, entryId: 'leaf', since: null }]);
-    expect(() => store.finishCapture(capture.id, [submission])).toThrow(/active capture/);
-    expect(() => capture.page()).toThrow(/active capture/);
-    expect(() => peer.claimReview()).toThrow(/another Pi process/);
-    const edited = store.editProposal(saved!.id, 1, {
-      change: saved!.change,
-      expected: null,
-      question: null,
-    });
-    store.finish([{ ...source, entryId: 'leaf' }]);
-    expect(store.proposal(saved!.id)).toEqual(edited);
-    store.releaseReview();
-    peer.claimReview();
-    const covered = peer.prepareCapture(source);
-    expect(covered.hasEvidence).toBe(false);
-    expect(() => peer.finishCapture(covered.id, [])).toThrow(/without eligible evidence/);
-    expect(peer.proposalCount()).toBe(1);
-    expect(statSync(path).mode & 0o777).toBe(0o600);
-    expect(statSync(path + '.lock').mode & 0o777).toBe(0o600);
-    expect(statSync(join(path, '..')).mode & 0o777).toBe(0o700);
-  } finally {
-    peer.close();
-    store.close();
-  }
-});
-
-it.each(['proposals', 'reviewed_boundaries'] as const)(
-  'rolls back proposals, enrollment and coverage after %s storage failure, retaining the frozen capture',
-  (table) => {
-    const path = join(directory(), 'state.sqlite');
-    const store = new CheckpointStore(path);
-    const fault = new DatabaseSync(path);
-    const source = sourceFile();
-    try {
-      fault.exec(
-        `CREATE TRIGGER fail_capture BEFORE INSERT ON ${table} BEGIN SELECT RAISE(ABORT, 'injected storage failure'); END`,
-      );
-      store.claimReview();
-      const capture = store.prepareCapture(source);
-      capture.page();
-      expect(() => store.finishCapture(capture.id, [submission])).toThrow(/injected storage/);
-      expect(store.proposals()).toEqual([]);
-      expect(store.sources()).toEqual([]);
-      expect(store.reviewed()).toEqual([]);
-      fault.exec('DROP TRIGGER fail_capture');
-      const [saved] = store.finishCapture(capture.id, [submission]);
-      expect(saved?.sources[0]?.file).toBe(source.file);
-      expect(store.reviewed()).toHaveLength(1);
-    } finally {
-      fault.close();
-      store.close();
-    }
-  },
-);
-
 it.each([
   { branchId: 'other' },
   { editId: 'later-edit' },
@@ -319,11 +248,11 @@ it.each([
   { quote: '' },
   { file: '/invented' },
 ])('rejects invalid reference %j without saving any part of capture', (patch) => {
-  const store = new CheckpointStore(':memory:');
+  const store = durableStore();
   try {
-    const id = freeze(store);
+    const { owner, attempt } = freeze(store);
     expect(() =>
-      store.finishCapture(id, [
+      store.finishCaptureJob(owner, attempt, [
         submission,
         {
           ...submission,
@@ -334,7 +263,7 @@ it.each([
     expect(store.proposals()).toEqual([]);
     expect(store.sources()).toEqual([]);
     expect(store.reviewed()).toEqual([]);
-    expect(store.finishCapture(id, [])).toEqual([]);
+    expect(store.finishCaptureJob(owner, attempt, [])).toEqual([]);
     expect(store.reviewed()).toHaveLength(1);
   } finally {
     store.close();
@@ -344,19 +273,26 @@ it.each([
 it.each(['missing', 'mismatched'] as const)(
   'refuses %s source scope without coverage or proposals',
   (kind) => {
-    const store = new CheckpointStore(':memory:');
+    const store = durableStore();
     const source = sourceFile();
     try {
-      store.claimReview();
-      const capture = store.prepareCapture(
-        kind === 'missing'
-          ? { ...source, file: source.file + '.missing' }
-          : { ...source, sessionId: 'wrong' },
-      );
-      expect(capture.incomplete).toBe(true);
-      expect(capture.warnings.length).toBeGreaterThan(0);
-      capture.page();
-      expect(() => store.finishCapture(capture.id, [])).toThrow(/incomplete capture scope/);
+      if (kind === 'missing') {
+        const frozen = captureJob(store, source);
+        frozen.owner.abandon(frozen.attempt);
+        rmSync(frozen.manifest.snapshot);
+        const attempt = frozen.owner.startAttempt(frozen.manifest.id);
+        expect(() => store.prepareCaptureJob(frozen.owner, attempt)).toThrow(
+          'snapshot unavailable',
+        );
+        expect(store.captureJob(frozen.manifest.id)).toMatchObject({
+          state: 'failed',
+          retryEligible: true,
+        });
+      } else {
+        expect(() => captureJob(store, { ...source, sessionId: 'wrong' })).toThrow(
+          'Session identity differs',
+        );
+      }
       expect(store.proposals()).toEqual([]);
       expect(store.sources()).toEqual([]);
       expect(store.reviewed()).toEqual([]);
@@ -367,37 +303,40 @@ it.each(['missing', 'mismatched'] as const)(
 );
 
 it('requires every evidence continuation and an explicit array; context does not deliver evidence', () => {
-  const store = new CheckpointStore(':memory:');
+  const store = durableStore();
   const source = sourceFile([
     message('old', null, 'Supporting history'),
     message('leaf', 'old', 'x'.repeat(60_000)),
   ]);
   try {
     store.finish({ sources: [source], checkpoints: [{ ...source, entryId: 'old' }] });
-    store.claimReview();
-    const capture = store.prepareCapture(source);
+    const { owner, attempt, review: capture } = captureJob(store, source);
     const selected = { sessionId: 'session', branchId: 'leaf', entryId: 'leaf', editId: null };
     expect(capture.context({ batch: capture.id, selected })).toMatchObject({ contextOnly: true });
-    expect(() => store.finishCapture(capture.id, [])).toThrow(/all evidence/);
+    expect(() => store.finishCaptureJob(owner, attempt, [])).toThrow(/all evidence/);
     expect(capture.page()['hasMore']).toBe(true);
-    expect(() => store.finishCapture(capture.id, [])).toThrow(/all evidence/);
+    expect(() => store.finishCaptureJob(owner, attempt, [])).toThrow(/all evidence/);
     expect(store.proposals()).toEqual([]);
     expect(store.reviewed().map((item) => item.entryId)).toEqual(['old']);
     expect(capture.page()['hasMore']).toBe(false);
-    expect(() => store.finishCapture(capture.id, undefined as never)).toThrow(/proposals array/);
-    expect(() => store.finishCapture(capture.id, { sources: [source] } as never)).toThrow(
+    expect(() => store.finishCaptureJob(owner, attempt, undefined as never)).toThrow(
       /proposals array/,
     );
-    expect(() => store.finishCapture('other', [])).toThrow(/active capture/);
+    expect(() => store.finishCaptureJob(owner, attempt, { sources: [source] } as never)).toThrow(
+      /proposals array/,
+    );
+    expect(() => store.finishCaptureJob(owner, { jobId: 'other' }, [])).toThrow(
+      /active capture attempt/,
+    );
     expect(() =>
-      store.finishCapture(capture.id, [
+      store.finishCaptureJob(owner, attempt, [
         {
           ...submission,
           references: [{ ...selected, entryId: 'old', offset: 0, quote: 'Supporting history' }],
         },
       ]),
     ).toThrow(/eligible evidence/);
-    expect(store.finishCapture(capture.id, [])).toEqual([]);
+    expect(store.finishCaptureJob(owner, attempt, [])).toEqual([]);
     expect(store.proposals()).toEqual([]);
     expect(store.reviewed().map((item) => item.entryId)).toEqual(['old', 'leaf']);
   } finally {
@@ -411,17 +350,15 @@ it('rechecks proposal revisions at commit and preserves edited drafts/history on
   const peer = new CheckpointStore(path);
   const source = sourceFile();
   try {
-    store.claimReview();
-    let capture = store.prepareCapture(source);
-    capture.page();
-    const [first] = store.finishCapture(capture.id, [submission]);
-    store.releaseReview();
+    const initial = captureJob(store, source);
+    const { owner } = initial;
+    initial.review.page();
+    const [first] = store.finishCaptureJob(owner, initial.attempt, [submission]);
     appendFileSync(
       source.file,
       JSON.stringify(message('later', 'leaf', 'Send Maya updated comparison')) + '\n',
     );
-    store.claimReview();
-    capture = store.prepareCapture(source);
+    let { attempt, review: capture } = captureJob(store, source, owner);
     capture.page();
     const correction = {
       ...submission,
@@ -429,7 +366,7 @@ it('rechecks proposal revisions at commit and preserves edited drafts/history on
       expectedRevision: 1,
       references: [{ ...submission.references[0]!, entryId: 'later', branchId: 'later' }],
     };
-    store.validateCapture(capture.id, [correction]);
+    capture.completion([correction]);
     const edited = peer.editProposal(first!.id, 1, {
       change: {
         operation: 'add',
@@ -440,20 +377,25 @@ it('rechecks proposal revisions at commit and preserves edited drafts/history on
       question: null,
     });
     expect(() =>
-      store.finishCapture(capture.id, [
+      store.finishCaptureJob(owner, attempt, [
         { ...submission, references: correction.references },
         correction,
       ]),
-    ).toThrow(/revision conflict/);
+    ).toThrow(/context changed/);
+    store.failCaptureJob(owner, attempt, 'Context changed', true);
+    attempt = owner.startAttempt(attempt.jobId);
+    capture = store.prepareCaptureJob(owner, attempt);
+    capture.page();
+    expect(() => store.finishCaptureJob(owner, attempt, [correction])).toThrow(/revision conflict/);
     expect(store.proposals()).toEqual([edited]);
     expect(store.reviewed().map((item) => item.entryId)).toEqual(['leaf']);
     expect(() =>
-      store.finishCapture(capture.id, [
+      store.finishCaptureJob(owner, attempt, [
         { ...correction, expectedRevision: edited.revision },
         { ...correction, expectedRevision: edited.revision },
       ]),
     ).toThrow(/Repeated/);
-    const [corrected] = store.finishCapture(capture.id, [
+    const [corrected] = store.finishCaptureJob(owner, attempt, [
       { ...correction, expectedRevision: edited.revision },
     ]);
     expect(corrected!.draft!.change).toEqual(edited.draft!.change);
@@ -474,15 +416,14 @@ it('rechecks proposal revisions at commit and preserves edited drafts/history on
 });
 
 it('keeps appends and branch-relative edits after freezing eligible for the next review', () => {
-  const store = new CheckpointStore(':memory:');
+  const store = durableStore();
   const source = sourceFile([
     message('root', null, 'Original promise'),
     message('left', 'root', 'Left promise'),
     message('right', 'root', 'Right promise'),
   ]);
   try {
-    store.claimReview();
-    const capture = store.prepareCapture(source);
+    const { owner, attempt, review: capture } = captureJob(store, source);
     appendFileSync(
       source.file,
       [
@@ -515,16 +456,16 @@ it('keeps appends and branch-relative edits after freezing eligible for the next
       quote: 'promise',
     };
     expect(() =>
-      store.finishCapture(capture.id, [
+      store.finishCaptureJob(owner, attempt, [
         { ...submission, references: [{ ...reference, editId: 'edit' }] },
       ]),
     ).toThrow(/eligible evidence/);
-    const [saved] = store.finishCapture(capture.id, [{ ...submission, references: [reference] }]);
+    const [saved] = store.finishCaptureJob(owner, attempt, [
+      { ...submission, references: [reference] },
+    ]);
     expect(saved!.sources[0]).toMatchObject(reference);
     expect(store.reviewed().map((item) => item.entryId)).toEqual(['left', 'right']);
-    store.releaseReview();
-    store.claimReview();
-    const next = store.prepareCapture(source);
+    const { review: next } = captureJob(store, source, owner);
     const later = next.page() as {
       groups: { entries: { entryId: string; editId: string | null; text: string }[] }[];
     };
@@ -540,7 +481,7 @@ it('keeps appends and branch-relative edits after freezing eligible for the next
 });
 
 it('validates and saves the exact frozen edited selection, not the original text', () => {
-  const store = new CheckpointStore(':memory:');
+  const store = durableStore();
   const source = sourceFile([message('root', null, 'Original promise')]);
   appendFileSync(
     source.file,
@@ -554,8 +495,7 @@ it('validates and saves the exact frozen edited selection, not the original text
     }) + '\n',
   );
   try {
-    store.claimReview();
-    const capture = store.prepareCapture(source);
+    const { owner, attempt, review: capture } = captureJob(store, source);
     capture.page();
     const reference = {
       sessionId: 'session',
@@ -572,7 +512,7 @@ it('validates and saves the exact frozen edited selection, not the original text
       { quote: 'Original promise' },
     ]) {
       expect(() =>
-        store.finishCapture(capture.id, [
+        store.finishCaptureJob(owner, attempt, [
           { ...submission, references: [{ ...reference, ...patch }] },
         ]),
       ).toThrow(/eligible evidence/);
@@ -580,7 +520,9 @@ it('validates and saves the exact frozen edited selection, not the original text
       expect(store.sources()).toEqual([]);
       expect(store.reviewed()).toEqual([]);
     }
-    const [saved] = store.finishCapture(capture.id, [{ ...submission, references: [reference] }]);
+    const [saved] = store.finishCaptureJob(owner, attempt, [
+      { ...submission, references: [reference] },
+    ]);
     expect(saved!.sources[0]).toMatchObject({ ...reference, file: source.file });
     expect(store.reviewed()).toEqual([{ ...source, entryId: 'edit', since: null }]);
   } finally {
@@ -589,7 +531,7 @@ it('validates and saves the exact frozen edited selection, not the original text
 });
 
 it('uses enrolled seed defaults and treats frozen context as supporting text only', () => {
-  const store = new CheckpointStore(':memory:');
+  const store = durableStore();
   const source = sourceFile([
     message('old', null, 'Historical promise', '2025-01-01'),
     message('leaf', 'old', 'Eligible promise', '2026-01-01'),
@@ -599,8 +541,7 @@ it('uses enrolled seed defaults and treats frozen context as supporting text onl
       sources: [source],
       sourceDefaults: [{ sessionId: source.sessionId, since: '2025-12-01' }],
     });
-    store.claimReview();
-    const capture = store.prepareCapture({ ...source, seedSince: null } as never);
+    const { owner, attempt, review: capture } = captureJob(store, source);
     const selected = { sessionId: 'session', branchId: 'leaf', entryId: 'leaf', editId: null };
     appendFileSync(
       source.file,
@@ -611,14 +552,14 @@ it('uses enrolled seed defaults and treats frozen context as supporting text onl
     });
     capture.page();
     expect(() =>
-      store.finishCapture(capture.id, [
+      store.finishCaptureJob(owner, attempt, [
         {
           ...submission,
           references: [{ ...selected, entryId: 'old', offset: 0, quote: 'Historical promise' }],
         },
       ]),
     ).toThrow(/eligible evidence/);
-    const [saved] = store.finishCapture(capture.id, [
+    const [saved] = store.finishCaptureJob(owner, attempt, [
       { ...submission, references: [{ ...selected, offset: 0, quote: 'Eligible promise' }] },
     ]);
     expect(saved!.sources[0]?.quote).toBe('Eligible promise');
@@ -634,7 +575,7 @@ it('uses enrolled seed defaults and treats frozen context as supporting text onl
 it.each(['empty', 'tool-only'] as const)(
   'skips %s evidence without enrollment or coverage and fences abandoned capture identities',
   (kind) => {
-    const store = new CheckpointStore(':memory:');
+    const store = durableStore();
     const source = sourceFile([]);
     if (kind === 'tool-only')
       appendFileSync(
@@ -651,20 +592,18 @@ it.each(['empty', 'tool-only'] as const)(
         }) + '\n',
       );
     try {
-      store.claimReview();
-      const empty = store.prepareCapture(source);
+      const { owner, attempt, review: empty } = captureJob(store, source);
       expect(empty.hasEvidence).toBe(false);
       expect(empty.page()['hasMore']).toBe(false);
-      expect(() => store.finishCapture(empty.id, [])).toThrow(/without eligible evidence/);
+      expect(() => store.finishCaptureJob(owner, attempt, [submission])).toThrow(/No evidence/);
+      expect(store.finishCaptureJob(owner, attempt, [])).toEqual([]);
       expect(store.sources()).toEqual([]);
       expect(store.reviewed()).toEqual([]);
-      store.releaseReview();
-      store.claimReview();
-      const next = store.prepareCapture(sourceFile());
-      next.page();
-      expect(() => empty.page()).toThrow(/active capture/);
-      expect(() => store.finishCapture(empty.id, [])).toThrow(/active capture/);
-      store.finishCapture(next.id, []);
+      const next = captureJob(store, sourceFile(), owner);
+      next.review.page();
+      expect(() => empty.page()).toThrow(/active capture attempt/);
+      expect(() => store.finishCaptureJob(owner, attempt, [])).toThrow(/active capture attempt/);
+      store.finishCaptureJob(owner, next.attempt, []);
     } finally {
       store.close();
     }

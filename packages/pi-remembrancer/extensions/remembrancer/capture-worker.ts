@@ -1,16 +1,21 @@
 import { spawn } from 'node:child_process';
 import { appendFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CheckpointStore } from './checkpoints.js';
-import { CaptureWorkerOwnership, type CaptureAttempt } from './capture-jobs.js';
+import {
+  CaptureWorkerOwnership,
+  CapturePreparationError,
+  type CaptureAttempt,
+} from './capture-jobs.js';
 import {
   cleanupCompletedSnapshot,
+  CaptureHandoffError,
   importReadyHandoff,
   type HandoffInput,
 } from './capture-handoff.js';
 import { CAPTURE_BUDGET_MS, reviewPreparedCapture } from './capture.js';
-import { ModelRuntime, SettingsManager } from '@earendil-works/pi-coding-agent';
+import { getPackageDir, ModelRuntime, SettingsManager } from '@earendil-works/pi-coding-agent';
 import type { ProposalSubmission } from './proposals.js';
 import { publishProposalNotice } from './capture-notices.js';
 
@@ -58,7 +63,11 @@ function busy(error: unknown): boolean {
   return (
     (error as { errcode?: number })?.errcode === 5 ||
     (error instanceof Error &&
-      /^A (capture worker already owns|remembrancer review is already open)/.test(error.message))
+      [
+        'A capture worker already owns this database',
+        'A remembrancer review is already open',
+        'A remembrancer review is already open in another Pi process',
+      ].includes(error.message))
   );
 }
 
@@ -69,15 +78,40 @@ export async function runCaptureWorker(options: WorkerOptions): Promise<void> {
   let store: CheckpointStore | undefined;
   const attempts = new Map<string, number>();
   const deferred = new Set<string>();
+  const seenSignals = new Set<string>();
+  const blockedSignals = new Set<string>();
+  const cleaned = new Set<string>();
   const excluded = () =>
     new Set([
       ...deferred,
       ...[...attempts].filter(([, n]) => n >= ATTEMPTS_PER_RUN).map(([id]) => id),
     ]);
   const diagnose = async (message: string) => {
-    await appendFile(database + '.capture.log', `${new Date().toISOString()} ${message}\n`, {
-      mode: 0o600,
-    });
+    try {
+      await appendFile(database + '.capture.log', `${new Date().toISOString()} ${message}\n`, {
+        mode: 0o600,
+      });
+    } catch {
+      /* Failed diagnostics cannot reject committed work. Durable evidence remains. */
+    }
+  };
+  const localFailure = (phase: string, id: string, error: unknown) =>
+    diagnose(new CaptureHandoffError(phase, 'local-failure', id, error).message);
+  const repairCompleted = async () => {
+    try {
+      await publishProposalNotice(store!);
+    } catch (error) {
+      await localFailure('notice-publication', 'store', error);
+    }
+    for (const id of store!.completedCaptureJobIds(owner!)) {
+      if (cleaned.has(id)) continue;
+      cleaned.add(id);
+      try {
+        await cleanupCompletedSnapshot(store!, owner!, id);
+      } catch (error) {
+        await localFailure('snapshot-cleanup', id, error);
+      }
+    }
   };
   const readyFiles = async () => {
     try {
@@ -98,25 +132,41 @@ export async function runCaptureWorker(options: WorkerOptions): Promise<void> {
     }
     store = new CheckpointStore(database);
     owner.assertStore(store.file);
-    // Repair a crash between SQLite commit and sidecar replacement, even with no jobs.
-    await publishProposalNotice(store);
     for (;;) {
       for (const name of await readyFiles()) {
-        const job = await importReadyHandoff(store, owner, join(inbox, name));
-        if (job.state === 'completed')
-          await cleanupCompletedSnapshot(store, owner, job.manifest.id);
+        if (seenSignals.has(name)) continue;
+        seenSignals.add(name);
+        const id = /^[\w-]{1,128}\.ready\.json$/.test(name)
+          ? name.slice(0, -'.ready.json'.length)
+          : 'retained-artifact';
+        try {
+          const imported = await importReadyHandoff(store, owner, join(inbox, name));
+          if (imported.signalCleanupPending)
+            await diagnose(imported.cleanupDiagnostic ?? `Capture signal-cleanup pending [${id}]`);
+        } catch (error) {
+          // Retain unknown evidence. Storage still fences every unimported signal.
+          blockedSignals.add(name);
+          if (error instanceof CaptureHandoffError) await diagnose(error.message);
+          else await localFailure('ready-import', id, error);
+        }
       }
+      // Completed rows, not ready files or model replay, authorize repair on every wake.
+      await repairCompleted();
       const job = store
         .runnableCaptureJobs(owner)
         .find((item) => !excluded().has(item.manifest.id));
       if (!job) {
-        // Repair before clean exit while still owning sidecar publication.
-        await publishProposalNotice(store);
+        // Repair commits arriving during the preceding asynchronous sidecar write.
+        await repairCompleted();
         // Invalidate BEFORE release. A new owner object is required on reacquisition.
         owner.release();
         owner = undefined;
         await options.afterRelease?.();
-        if (!(await readyFiles()).length && !store.captureRecoveryPending(excluded())) break;
+        if (
+          !(await readyFiles()).some((name) => !seenSignals.has(name)) &&
+          (blockedSignals.size > 0 || !store.captureRecoveryPending(excluded()))
+        )
+          break;
         try {
           owner = CaptureWorkerOwnership.claim(database);
         } catch (error) {
@@ -130,18 +180,18 @@ export async function runCaptureWorker(options: WorkerOptions): Promise<void> {
       const attempt = owner.startAttempt(id);
       const currentOwner = owner;
       const controller = new AbortController();
-      let active = true;
+      const expiresAt = performance.now() + (options.budgetMs ?? CAPTURE_BUDGET_MS);
+      const previousCwd = process.cwd();
       let fatalTimer: ReturnType<typeof setTimeout> | undefined;
       const check = () => {
         controller.signal.throwIfAborted();
         currentOwner.assertAttempt(attempt);
-        if (!active) throw Error('Capture attempt ended');
+        if (performance.now() >= expiresAt) throw Error('Capture review timed out');
       };
       const timer = setTimeout(() => {
         // A never-settling setup/prompt/cleanup must not keep the process alive.
         // This timer cannot run during a CPU stall. It is not a watchdog.
         controller.abort(Error('Capture review timed out'));
-        active = false;
         try {
           store!.failCaptureJob(currentOwner, attempt, 'Capture review timed out', true);
         } catch {
@@ -152,19 +202,26 @@ export async function runCaptureWorker(options: WorkerOptions): Promise<void> {
           (options.terminate ?? (() => process.exit(1)))();
         }, options.graceMs ?? CLEANUP_GRACE_MS);
       }, options.budgetMs ?? CAPTURE_BUDGET_MS);
-      let phase = 'Evidence preparation';
+      let phase = 'evidence-preparation';
       try {
+        process.chdir(job.manifest.execution.cwd);
         const current = store.prepareCaptureJob(owner, attempt);
         if (current.incomplete) throw Error('Cannot capture incomplete evidence');
         let submissions: ProposalSubmission[] = [];
         if (current.hasEvidence) {
           const { execution, source } = job.manifest;
-          if (!execution.runtime) throw Error('Capture handoff lacks originating reviewer runtime');
           const { runtime } = execution;
+          phase = 'reviewer-setup-prompt-cleanup';
+          // The SDK caches stored-auth command output process-wide. Clear the
+          // selected host's own cache before resolving another project's auth.
+          const { clearApiKeyCache } = await import(
+            pathToFileURL(join(getPackageDir(), 'dist/core/model-registry.js')).href
+          );
+          clearApiKeyCache();
+          check();
           const settingsManager = SettingsManager.create(execution.cwd, execution.agentDir, {
             projectTrusted: runtime.projectTrusted,
           });
-          phase = 'Reviewer setup/prompt/cleanup';
           // Raw model headers can be credentials. Re-resolve their originating
           // configuration references, without a catalog lookup or storing values.
           let modelRuntime;
@@ -203,40 +260,36 @@ export async function runCaptureWorker(options: WorkerOptions): Promise<void> {
           );
         }
         check();
-        phase = 'Atomic publication';
+        phase = 'atomic-publication';
         store.finishCaptureJob(owner, attempt, submissions);
-        active = false;
-        phase = 'Notice publication';
-        await publishProposalNotice(store);
-        phase = 'Snapshot cleanup';
-        await cleanupCompletedSnapshot(store, owner, id);
+        await repairCompleted();
       } catch (error) {
-        const contended = busy(error);
+        const contended =
+          (phase === 'evidence-preparation' || phase === 'atomic-publication') && busy(error);
         if (contended) deferred.add(id);
-        // prepareHistoricalReview may already have failed/invalidated this identity.
+        // Classified preparation failures have already persisted and abandoned.
+        const diagnostic =
+          error instanceof CapturePreparationError
+            ? new CaptureHandoffError(phase, error.category, id).message
+            : new CaptureHandoffError(phase, 'execution-failure', id, error).message;
         if (isActive(currentOwner, attempt)) {
           store.failCaptureJob(
             currentOwner,
             attempt,
-            contended
-              ? 'Manual review contention; deferred'
-              : `${phase} failed (${error instanceof Error ? error.name : 'unknown error'})`,
+            contended ? 'Manual review contention; deferred' : diagnostic,
             true,
           );
         }
-        if (!contended)
-          await diagnose(
-            `Job ${id}: ${phase} failed (${error instanceof Error ? error.name : 'unknown error'})`,
-          );
+        if (!contended) await diagnose(diagnostic);
       } finally {
-        active = false;
         clearTimeout(timer);
         if (fatalTimer) clearTimeout(fatalTimer);
         if (isActive(currentOwner, attempt)) currentOwner.abandon(attempt);
+        process.chdir(previousCwd);
       }
     }
   } catch (error) {
-    await diagnose(`Worker failed (${error instanceof Error ? error.name : 'unknown error'})`);
+    await localFailure('worker', 'store', error);
     throw error;
   } finally {
     owner?.release();

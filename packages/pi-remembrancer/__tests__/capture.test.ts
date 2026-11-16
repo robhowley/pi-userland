@@ -1,20 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import {
-  appendFileSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
-import { tmpdir } from 'node:os';
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-  ToolDefinition,
-} from '@earendil-works/pi-coding-agent';
+import type { ExtensionContext, ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
 import { prepareReview } from '../extensions/remembrancer/evidence.js';
@@ -24,7 +11,7 @@ import {
   runCaptureWorker,
 } from '../extensions/remembrancer/capture-worker.js';
 import { captureExecution } from '../extensions/remembrancer/config.js';
-import remembrancer from '../extensions/remembrancer/index.js';
+import { captureExtension } from './fixtures/capture-extension.js';
 import { runReviewer, type ReviewerInput } from '../extensions/remembrancer/reviewer.js';
 import { lookupTasks } from '../extensions/remembrancer/taskwarrior.js';
 
@@ -46,12 +33,8 @@ let handlers: Map<string, (event: object, ctx: ExtensionContext) => unknown>;
 let manualTool: ToolDefinition;
 let proposalTool: ToolDefinition;
 const runner = vi.mocked(runReviewer);
-function config(value: object, project = false) {
-  writeFileSync(
-    join(dir, project ? '.pi' : 'agent', 'settings.json'),
-    JSON.stringify({ 'pi-remembrancer': value }),
-  );
-}
+let fixture: ReturnType<typeof captureExtension>;
+let config: ReturnType<typeof captureExtension>['settings'];
 function message(id: string, parentId: string | null, text = 'Send Maya the comparison') {
   return (
     JSON.stringify({
@@ -89,69 +72,27 @@ async function empty(input: ReviewerInput) {
 }
 async function capture() {
   const inbox = join(dirname(db.file), 'capture-inbox');
-  await preserveHandoff({
+  const accepted = await preserveHandoff({
     id: randomUUID(),
     inbox,
     source: { file, sessionId: 'outgoing' },
     execution: captureExecution(ctx),
   });
   await runCaptureWorker({ database: db.file, inbox });
+  return accepted.manifest.id;
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(launchCaptureWorker).mockResolvedValue(123);
-  dir = mkdtempSync(join(tmpdir(), 'capture-'));
-  mkdirSync(join(dir, 'agent'));
-  mkdirSync(join(dir, '.pi'));
-  vi.stubEnv('PI_CODING_AGENT_DIR', join(dir, 'agent'));
-  vi.stubEnv('XDG_STATE_HOME', dir);
-  file = join(dir, 'outgoing.jsonl');
-  writeFileSync(
-    file,
-    JSON.stringify({ type: 'session', id: 'outgoing', cwd: dir }) + '\n' + message('promise', null),
-  );
-  ctx = {
-    cwd: dir,
-    mode: 'tui',
-    model: {
-      id: 'selected',
-      provider: 'offline',
-      api: 'openai-completions',
-      baseUrl: 'http://127.0.0.1:1/v1',
-      name: 'Selected',
-      reasoning: false,
-      input: ['text'],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 32768,
-      maxTokens: 1024,
-    },
-    isProjectTrusted: () => true,
-    ui: { notify: vi.fn() },
-    sessionManager: { getSessionFile: () => file, getSessionId: () => 'outgoing' },
-  } as unknown as ExtensionContext;
-  db = new CheckpointStore();
+  fixture = captureExtension(true);
+  ({ dir, file, ctx, handlers, settings: config } = fixture);
+  db = fixture.db!;
   config({ autoCapture: true });
-  handlers = new Map();
-  remembrancer({
-    on: (name: string, handler: (event: object, ctx: ExtensionContext) => unknown) =>
-      handlers.set(name, handler),
-    registerCommand: vi.fn(),
-    registerTool: (tool: ToolDefinition) => {
-      if (tool.name === 'remembrancer_review') manualTool = tool;
-      if (tool.name === 'remembrancer_proposals') proposalTool = tool;
-    },
-  } as unknown as ExtensionAPI);
   runner.mockImplementation(empty);
 });
 afterEach(async () => {
-  config({ autoCapture: false });
-  await handlers.get('session_shutdown')!({ reason: 'quit' }, ctx);
-  db.close();
-  vi.useRealTimers();
-  vi.unstubAllEnvs();
-  vi.restoreAllMocks();
-  rmSync(dir, { recursive: true, force: true });
+  await fixture.close(ctx);
 });
 
 it('includes pre-opt-in evidence, excludes covered evidence and other enrolled sources, skips unchanged', async () => {
@@ -301,20 +242,29 @@ it('reads frozen context through the capture tool without consuming evidence', a
   expect(db.reviewed().map((checkpoint) => checkpoint.entryId)).toEqual(['selected']);
 });
 it('offers only scoped reads, typed task lookups and submission', async () => {
+  vi.mocked(lookupTasks).mockResolvedValue({ tasks: [], nextOffset: null });
   runner.mockImplementation(async (input) => {
-    expect(input.tools.map((tool) => tool.name)).toEqual([
-      'remembrancer_read_evidence',
-      'remembrancer_context',
-      'remembrancer_tasks',
-      'remembrancer_proposals',
-      'remembrancer_submit',
-    ]);
     await call(input, 'tasks', { status: 'completed' });
-    expect(lookupTasks).toHaveBeenCalledWith({ status: 'completed' });
     await call(input, 'proposals');
     await empty(input);
   });
-  await capture();
+  const id = await capture();
+  expect(runner).toHaveBeenCalledOnce();
+  const input = runner.mock.calls[0]![0];
+  expect(input.tools.map((tool) => tool.name)).toEqual([
+    'remembrancer_read_evidence',
+    'remembrancer_context',
+    'remembrancer_tasks',
+    'remembrancer_proposals',
+    'remembrancer_submit',
+  ]);
+  expect(lookupTasks).toHaveBeenCalledWith({ status: 'completed' }, undefined, {
+    cwd: dir,
+    signal: input.signal,
+  });
+  expect(input.signal).toBeInstanceOf(AbortSignal);
+  expect(vi.mocked(lookupTasks).mock.calls[0]![2]?.signal).toBe(input.signal);
+  expect(db.captureJob(id)?.state).toBe('completed');
 });
 it('reports contention without model calls and cannot release another owner', async () => {
   const other = new CheckpointStore();
@@ -376,6 +326,8 @@ it('automatic coverage prevents manual replay and manual finish leaves pending p
   config({ autoCapture: false });
   ctx = { ...ctx, mode: 'print', hasUI: false };
   await handlers.get('session_start')!({}, ctx);
+  manualTool = fixture.tools.find((tool) => tool.name === 'remembrancer_review')!;
+  proposalTool = fixture.tools.find((tool) => tool.name === 'remembrancer_proposals')!;
   let batch = await manual({ action: 'begin' });
   expect(batch.groups).toEqual([]);
   const readSaved = async (args: object) => {
@@ -420,12 +372,17 @@ it.each(['empty', 'tool-only', 'covered'])(
       db.enroll('outgoing', file);
       db.finish(prepared.tips);
     }
-    const before = { sources: db.sources(), reviewed: db.reviewed() };
-    const finish = vi.spyOn(db, 'finishCapture');
-    await capture();
+    const effects = () => ({
+      sources: db.sources(),
+      reviewed: db.reviewed(),
+      proposals: db.proposals(),
+      notice: db.proposalNotice(),
+    });
+    const before = effects();
+    const id = await capture();
     expect(runner).not.toHaveBeenCalled();
-    expect(finish).not.toHaveBeenCalled();
-    expect({ sources: db.sources(), reviewed: db.reviewed() }).toEqual(before);
+    expect(db.captureJob(id)).toMatchObject({ state: 'completed', retryEligible: false });
+    expect(effects()).toEqual(before);
     db.claimReview();
     db.releaseReview();
   },
@@ -557,9 +514,12 @@ it('allows manual ownership through reviewer cleanup and reprepares after that c
 });
 
 it.each(['capture', 'release', 'close'])(
-  'reports the full stack for shutdown %s failures and still closes the database',
+  'reports safe shutdown %s diagnostics and still closes the database',
   async (phase) => {
-    const error = new Error(`${'Failure detail '.repeat(30)}\nAdditional diagnostics`);
+    const error = Object.assign(new Error('SECRET provider body and !credential-command'), {
+      code: 'EACCES',
+      cause: new Error('SECRET nested credentials'),
+    });
     await handlers.get('session_start')!({}, ctx);
     const originalClose = CheckpointStore.prototype.close;
     const close = vi.spyOn(CheckpointStore.prototype, 'close');
@@ -576,10 +536,17 @@ it.each(['capture', 'release', 'close'])(
       });
     }
     await handlers.get('session_shutdown')!({ reason: 'reload' }, ctx);
+    const expectedPhase = {
+      capture: 'worker-launch',
+      release: 'manual-release',
+      close: 'foreground-close',
+    }[phase];
     expect(ctx.ui.notify).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining(error.stack!),
+      expect.stringContaining(`Capture ${expectedPhase}: shutdown-failed (EACCES)`),
       'warning',
     );
+    const diagnostics = JSON.stringify(vi.mocked(ctx.ui.notify).mock.calls);
+    expect(diagnostics).not.toMatch(/SECRET|provider body|credential-command|contention/);
     expect(close).toHaveBeenCalledOnce();
     expect(db.reviewed()).toEqual([]);
     expect(db.proposals()).toEqual([]);
@@ -588,15 +555,20 @@ it.each(['capture', 'release', 'close'])(
   },
 );
 
-it('reports non-Error capture failures without truncating them', async () => {
-  const failure = `${'Failure detail '.repeat(30)}\nAdditional diagnostics`;
-  vi.mocked(launchCaptureWorker).mockRejectedValue(failure);
-  await handlers.get('session_shutdown')!({ reason: 'reload' }, ctx);
-  expect(ctx.ui.notify).toHaveBeenCalledExactlyOnceWith(
-    expect.stringContaining(failure),
-    'warning',
-  );
-});
+it.each(['SECRET non-Error provider failure', { code: 'ENOSPC', message: 'SECRET command' }])(
+  'does not expose arbitrary rejected values in shutdown diagnostics: %j',
+  async (failure) => {
+    vi.mocked(launchCaptureWorker).mockRejectedValue(failure);
+    await handlers.get('session_shutdown')!({ reason: 'reload' }, ctx);
+    expect(ctx.ui.notify).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining('Capture worker-launch: shutdown-failed'),
+      'warning',
+    );
+    const diagnostics = JSON.stringify(vi.mocked(ctx.ui.notify).mock.calls);
+    expect(diagnostics).not.toMatch(/SECRET|command|contention/);
+    if (typeof failure === 'object') expect(diagnostics).toContain('ENOSPC');
+  },
+);
 
 it('closes the shutdown database even when failure notification throws', async () => {
   await handlers.get('session_start')!({}, ctx);

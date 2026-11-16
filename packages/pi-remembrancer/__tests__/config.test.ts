@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { captureExecution, loadRemembrancerConfig } from '../extensions/remembrancer/config.js';
+import { preserveHandoff, type HandoffInput } from '../extensions/remembrancer/capture-handoff.js';
 
 function writeJson(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true });
@@ -65,7 +66,7 @@ describe.sequential('remembrancer config', () => {
   const globalSettingsPath = () => join(agentDir, 'settings.json');
   const projectSettingsPath = () => join(cwd, '.pi', 'settings.json');
 
-  it('captures outgoing model/settings/trust references without copying credentials or consulting saved trust', () => {
+  it('captures one outgoing model and trust record without copying credentials or consulting saved trust', () => {
     const model = {
       provider: 'local',
       id: 'exact',
@@ -82,17 +83,136 @@ describe.sequential('remembrancer config', () => {
     expect(execution).toMatchObject({
       cwd,
       agentDir,
-      trustBasis: 'originating-context-trusted',
-      model: { provider: 'local', id: 'exact' },
       runtime: { thinkingLevel: 'high', projectTrusted: true, model: { id: 'exact' } },
     });
     expect(JSON.stringify(execution)).not.toContain('private-token');
-    expect(execution.runtime!.model).not.toHaveProperty('headers');
+    expect(execution.runtime.model).not.toHaveProperty('headers');
+    expect(execution).not.toHaveProperty('model');
+    expect(execution).not.toHaveProperty('trustBasis');
+    expect(execution).not.toHaveProperty('settings');
     expect(model.headers.Authorization).toBe('private-token');
     expect(execution.host!.nodeExecutable).toBe(process.execPath);
     expect(execution.host!.piEntry).toMatch(/\/dist\/cli\.js$/);
     expect(existsSync(join(agentDir, 'trust.json'))).toBe(false);
   });
+
+  function handoff(): HandoffInput {
+    const source = join(root, 'source.jsonl');
+    writeFileSync(source, '{"type":"session","id":"session"}\n');
+    return {
+      id: 'admission',
+      inbox: join(root, 'inbox'),
+      source: { file: source, sessionId: 'session' },
+      execution: captureExecution({
+        cwd,
+        thinkingLevel: 'high',
+        isProjectTrusted: () => true,
+        model: {
+          provider: 'local',
+          id: 'exact',
+          name: 'Local model',
+          api: 'openai-completions',
+          baseUrl: 'http://127.0.0.1:1234/v1',
+          reasoning: true,
+          input: ['text'],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 32000,
+          maxTokens: 1024,
+        },
+      } as unknown as ExtensionContext),
+    };
+  }
+
+  it.each([
+    'missing-runtime',
+    'missing-model',
+    'partial-model',
+    'missing-thinking',
+    'missing-trust',
+    'outer-model',
+    'settings-envelope',
+  ])('rejects %s before creating any admission artifact', async (invalid) => {
+    const input = handoff();
+    const execution = input.execution as unknown as Record<string, unknown>;
+    const runtime = input.execution.runtime as unknown as Record<string, unknown>;
+    if (invalid === 'missing-runtime') delete execution['runtime'];
+    if (invalid === 'missing-model') delete runtime['model'];
+    if (invalid === 'partial-model') runtime['model'] = { provider: 'local', id: 'exact' };
+    if (invalid === 'missing-thinking') delete runtime['thinkingLevel'];
+    if (invalid === 'missing-trust') delete runtime['projectTrusted'];
+    if (invalid === 'outer-model') execution['model'] = { provider: 'local', id: 'exact' };
+    if (invalid === 'settings-envelope') execution['settings'] = { userFile: '/old/settings.json' };
+    await expect(preserveHandoff(input)).rejects.toMatchObject({
+      phase: 'validation',
+      category: 'invalid-input',
+    });
+    expect(existsSync(input.inbox)).toBe(false);
+  });
+
+  it('accepts a complete runtime, retaining source extent, selected thinking, host and authorization', async () => {
+    const input = handoff();
+    const accepted = await preserveHandoff(input);
+    expect(accepted.manifest).toMatchObject({
+      version: 3,
+      source: { ...input.source, bytes: Buffer.byteLength(readFileSync(input.source.file)) },
+      execution: { ...input.execution, runtime: { thinkingLevel: 'high', projectTrusted: true } },
+    });
+    expect(accepted.manifest.execution).not.toHaveProperty('model');
+    expect(accepted.manifest.execution).not.toHaveProperty('settings');
+    expect(accepted.manifest.execution.runtime.model.id).toBe('exact');
+  });
+
+  it.each(['absent', 'wrong-model', 'wrong-provider'])(
+    'rejects runtime-only header provenance (%s) before artifacts without resolving commands',
+    async (configuration) => {
+      const input = handoff();
+      input.execution.runtime.headerNames = ['X-Required'];
+      const marker = join(root, 'command-ran');
+      writeJson(join(agentDir, 'models.json'), {
+        providers: {
+          [configuration === 'wrong-provider' ? 'other' : 'local']: {
+            models: [
+              {
+                id: configuration === 'wrong-model' ? 'other' : 'exact',
+                headers: configuration === 'absent' ? {} : { 'X-Required': `!touch ${marker}` },
+              },
+            ],
+          },
+        },
+      });
+      await expect(preserveHandoff(input)).rejects.toMatchObject({
+        phase: 'validation',
+        category: 'unsupported-runtime-headers',
+      });
+      expect(existsSync(input.inbox)).toBe(false);
+      expect(existsSync(marker)).toBe(false);
+    },
+  );
+
+  it.each(['provider', 'model', 'override'])(
+    'admits case-insensitive persistent %s header references without resolving or saving values',
+    async (scope) => {
+      const input = handoff();
+      input.execution.runtime.headerNames = ['X-Required'];
+      const marker = join(root, 'command-ran');
+      const headers = { 'x-required': `!touch ${marker}; printf SENTINEL-SECRET` };
+      writeJson(join(agentDir, 'models.json'), {
+        providers: {
+          local: {
+            ...(scope === 'provider' ? { headers } : {}),
+            ...(scope === 'model' ? { models: [{ id: 'exact', headers }] } : {}),
+            ...(scope === 'override' ? { modelOverrides: { exact: { headers } } } : {}),
+          },
+        },
+      });
+      const accepted = await preserveHandoff(input);
+      const saved = readFileSync(accepted.ready, 'utf8');
+      expect(saved).toContain('X-Required');
+      expect(saved).not.toContain('SENTINEL-SECRET');
+      expect(saved).not.toContain('touch');
+      expect(existsSync(marker)).toBe(false);
+    },
+  );
 
   it('defaults to enabled', () => {
     expect(loadRemembrancerConfig(cwd, true)).toEqual({ disabled: false, autoCapture: false });

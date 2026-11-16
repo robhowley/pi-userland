@@ -19,4 +19,5 @@ const { CaptureWorkerOwnership } = await jiti.import(
 const owner = CaptureWorkerOwnership.claim(database);
 const { runCaptureWorker } = await jiti.import('../../extensions/remembrancer/capture-worker.ts');
 await runCaptureWorker({ database, inbox, owner, budgetMs: 1500, graceMs: 30 });
-throw Error('A hanging operation unexpectedly settled');
+if (!['cooperative', 'task'].includes(process.env.CAPTURE_HANG_STAGE))
+  throw Error('A hanging operation unexpectedly settled');

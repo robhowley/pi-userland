@@ -56,11 +56,11 @@ async function emit(name, event) {
 if (action === 'admit') {
   await emit('session_shutdown', { reason: 'quit' });
   if (notifications.length) throw Error(JSON.stringify(notifications));
-  process.exit(0);
+} else {
+  // Keep the simulated terminal open. The extension tick itself is unreferenced.
+  setTimeout(() => {
+    throw Error('Timed out waiting for committed notice');
+  }, 20_000);
+  await emit('session_start', { reason: 'startup' });
+  writeFileSync(marker + '.started', 'yes');
 }
-// Keep the simulated terminal open. The extension tick itself is unreferenced.
-setTimeout(() => {
-  throw Error('Timed out waiting for committed notice');
-}, 20_000);
-await emit('session_start', { reason: 'startup' });
-writeFileSync(marker + '.started', 'yes');

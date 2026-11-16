@@ -1,24 +1,10 @@
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-  ToolDefinition,
-} from '@earendil-works/pi-coding-agent';
+import { DatabaseSync } from 'node:sqlite';
+import { Worker } from 'node:worker_threads';
+import type { ExtensionContext, ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import remembrancer, {
-  CAPTURE_RECOVERY_MS,
-  CAPTURE_TICK_MS,
-} from '../extensions/remembrancer/index.js';
+import { CAPTURE_RECOVERY_MS, CAPTURE_TICK_MS } from '../extensions/remembrancer/index.js';
 import { CheckpointStore, defaultCheckpointFile } from '../extensions/remembrancer/checkpoints.js';
 import {
   launchCaptureWorker,
@@ -26,6 +12,8 @@ import {
 } from '../extensions/remembrancer/capture-worker.js';
 import * as notices from '../extensions/remembrancer/capture-notices.js';
 import { captureExecution } from '../extensions/remembrancer/config.js';
+import { preserveHandoff } from '../extensions/remembrancer/capture-handoff.js';
+import { captureExtension } from './fixtures/capture-extension.js';
 
 vi.mock('../extensions/remembrancer/capture-worker.js', async (original) => ({
   ...(await original<typeof import('../extensions/remembrancer/capture-worker.js')>()),
@@ -37,24 +25,26 @@ let handlers: Map<string, (event: object, ctx: ExtensionContext) => unknown>;
 let tools: ToolDefinition[];
 let send: ReturnType<typeof vi.fn>;
 const launch = vi.mocked(launchCaptureWorker);
-const settings = (value: object, project = false) =>
-  writeFileSync(
-    join(dir, project ? '.pi' : 'agent', 'settings.json'),
-    JSON.stringify({ 'pi-remembrancer': value }),
-  );
+let fixture: ReturnType<typeof captureExtension>;
+let settings: ReturnType<typeof captureExtension>['settings'];
 const inbox = () => join(dirname(defaultCheckpointFile()), 'capture-inbox');
 const ready = () => readdirSync(inbox()).filter((name) => name.endsWith('.ready.json'));
 function bind() {
-  handlers = new Map();
-  tools = [];
-  send = vi.fn();
-  remembrancer({
-    on: (name: string, handler: (event: object, ctx: ExtensionContext) => unknown) =>
-      handlers.set(name, handler),
-    registerCommand: vi.fn(),
-    registerTool: (tool: ToolDefinition) => tools.push(tool),
-    sendUserMessage: send,
-  } as unknown as ExtensionAPI);
+  ({ handlers, tools, send } = fixture.bind());
+}
+function expectNoCapture() {
+  const artifacts = existsSync(inbox()) ? readdirSync(inbox()) : [];
+  expect(artifacts.filter((name) => name.endsWith('.ready.json'))).toEqual([]);
+  expect(artifacts.filter((name) => name.endsWith('.snapshot.jsonl'))).toEqual([]);
+  // Startup enrollment may create a database, but observing absence must not.
+  if (existsSync(defaultCheckpointFile())) {
+    const db = new DatabaseSync(defaultCheckpointFile(), { readOnly: true });
+    try {
+      expect(db.prepare('SELECT count(*) AS count FROM capture_jobs').get()!['count']).toBe(0);
+    } finally {
+      db.close();
+    }
+  }
 }
 async function start() {
   await handlers.get('session_start')!({}, ctx);
@@ -65,85 +55,38 @@ async function stop(reason = 'quit') {
 beforeEach(() => {
   vi.clearAllMocks();
   launch.mockResolvedValue(123);
-  dir = mkdtempSync(join(tmpdir(), 'capture-lifecycle-'));
-  mkdirSync(join(dir, 'agent'));
-  mkdirSync(join(dir, '.pi'));
-  vi.stubEnv('PI_CODING_AGENT_DIR', join(dir, 'agent'));
-  vi.stubEnv('XDG_STATE_HOME', join(dir, 'state'));
-  const file = join(dir, 'outgoing.jsonl');
-  writeFileSync(
-    file,
-    [
-      { type: 'session', id: 'outgoing', cwd: dir },
-      {
-        type: 'message',
-        id: 'promise',
-        parentId: null,
-        timestamp: '2026-11-01T00:00:00.000Z',
-        message: { role: 'user', content: 'Send Maya the comparison' },
-      },
-    ]
-      .map((row) => JSON.stringify(row))
-      .join('\n') + '\n',
-  );
-  ctx = {
-    cwd: dir,
-    mode: 'tui',
-    thinkingLevel: 'high',
-    isProjectTrusted: () => true,
-    model: {
-      id: 'selected',
-      provider: 'offline',
-      api: 'openai-completions',
-      baseUrl: 'http://127.0.0.1:1/v1',
-      name: 'Selected',
-      reasoning: true,
-      input: ['text'],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 32768,
-      maxTokens: 1024,
-    },
-    ui: { notify: vi.fn() },
-    sessionManager: { getSessionFile: () => file, getSessionId: () => 'outgoing' },
-  } as unknown as ExtensionContext;
-  bind();
+  fixture = captureExtension();
+  ({ dir, ctx, settings, handlers, tools, send } = fixture);
 });
 afterEach(async () => {
-  settings({ autoCapture: false });
-  await stop();
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-  rmSync(dir, { recursive: true, force: true });
+  await fixture.close(ctx);
 });
 
-it.each(['quit', 'reload', 'new', 'resume', 'fork'])(
-  'durably admits the outgoing identity/model/trust on %s without awaiting review or cleanup',
-  async (reason) => {
-    settings({ autoCapture: true });
-    await start();
-    const before = readFileSync(ctx.sessionManager.getSessionFile()!, 'utf8');
-    await stop(reason);
-    const manifest = JSON.parse(readFileSync(join(inbox(), ready()[0]!), 'utf8'));
-    expect(manifest.source).toMatchObject({
-      file: ctx.sessionManager.getSessionFile(),
-      sessionId: 'outgoing',
-      bytes: Buffer.byteLength(before),
-    });
-    expect(readFileSync(manifest.snapshot, 'utf8')).toBe(before);
-    expect(manifest.execution).toEqual(captureExecution(ctx));
-    expect(launch).toHaveBeenCalledWith(defaultCheckpointFile(), inbox(), manifest.execution.host);
-    const db = new CheckpointStore();
-    expect(db.reviewed()).toEqual([]);
-    db.close();
-    expect(send).not.toHaveBeenCalled();
-  },
-);
+it('durably admits the outgoing identity/model/trust, not the resume destination', async () => {
+  settings({ autoCapture: true });
+  await start();
+  const before = readFileSync(ctx.sessionManager.getSessionFile()!, 'utf8');
+  await stop('resume');
+  const manifest = JSON.parse(readFileSync(join(inbox(), ready()[0]!), 'utf8'));
+  expect(manifest.source).toMatchObject({
+    file: ctx.sessionManager.getSessionFile(),
+    sessionId: 'outgoing',
+    bytes: Buffer.byteLength(before),
+  });
+  expect(readFileSync(manifest.snapshot, 'utf8')).toBe(before);
+  expect(manifest.execution).toEqual(captureExecution(ctx));
+  expect(launch).toHaveBeenCalledWith(defaultCheckpointFile(), inbox(), manifest.execution.host);
+  const db = new CheckpointStore();
+  expect(db.reviewed()).toEqual([]);
+  db.close();
+  expect(send).not.toHaveBeenCalled();
+});
 it.each(['rpc', 'print', 'json', undefined])('does not admit non-TUI mode %s', async (mode) => {
   settings({ autoCapture: true });
   ctx = { ...ctx, mode } as ExtensionContext;
   await stop();
   expect(launch).not.toHaveBeenCalled();
+  expectNoCapture();
 });
 it.each([{}, { autoCapture: false }, { autoCapture: true, disabled: true }])(
   'excludes new jobs for settings %j',
@@ -151,6 +94,7 @@ it.each([{}, { autoCapture: false }, { autoCapture: true, disabled: true }])(
     settings(value);
     await stop();
     expect(launch).not.toHaveBeenCalled();
+    expectNoCapture();
   },
 );
 it('excludes unsaved sessions', async () => {
@@ -158,7 +102,19 @@ it('excludes unsaved sessions', async () => {
   ctx = { ...ctx, sessionManager: { ...ctx.sessionManager, getSessionFile: () => undefined } };
   await stop();
   expect(launch).not.toHaveBeenCalled();
+  expectNoCapture();
 });
+it.each([{ autoCapture: false }, { autoCapture: true, disabled: true }])(
+  'admits nothing when enabled startup is followed by shutdown settings %j',
+  async (value) => {
+    settings({ autoCapture: true });
+    await start();
+    expect(existsSync(defaultCheckpointFile())).toBe(true);
+    settings(value);
+    await stop();
+    expectNoCapture();
+  },
+);
 it.each([true, false])(
   'uses outgoing project override only with context trust=%s, never process cwd',
   async (trusted) => {
@@ -172,7 +128,7 @@ it.each([true, false])(
       expect(manifest.execution.cwd).toBe(dir);
       expect(manifest.execution.runtime.projectTrusted).toBe(true);
       expect(manifest.execution.runtime.thinkingLevel).toBe('high');
-    }
+    } else expectNoCapture();
   },
 );
 it('captures current outgoing model/thinking and opt-in changes rather than startup values', async () => {
@@ -192,6 +148,74 @@ it('captures current outgoing model/thinking and opt-in changes rather than star
   expect(manifest.execution.runtime.projectTrusted).toBe(false);
   expect(existsSync(join(dir, 'agent', 'trust.json'))).toBe(false);
 });
+
+it('disabled registered startup schedules accepted-job recovery without tools or a foreground database', async () => {
+  const accepted = await preserveHandoff({
+    id: 'accepted-before-disabled',
+    inbox: inbox(),
+    source: { file: fixture.file, sessionId: 'outgoing' },
+    execution: captureExecution(ctx),
+  });
+  const artifacts = readdirSync(inbox()).sort();
+  const bytes = readFileSync(accepted.ready, 'utf8');
+  settings({ disabled: true });
+  expect(existsSync(defaultCheckpointFile())).toBe(false);
+  await start();
+  await vi.waitFor(() => expect(launch).toHaveBeenCalledOnce());
+  expect(launch).toHaveBeenCalledWith(
+    defaultCheckpointFile(),
+    inbox(),
+    accepted.manifest.execution.host,
+  );
+  expect(tools).toEqual([]);
+  expect(existsSync(defaultCheckpointFile())).toBe(false);
+  expect(readdirSync(inbox()).sort()).toEqual(artifacts);
+  expect(readFileSync(accepted.ready, 'utf8')).toBe(bytes);
+  await stop();
+  expect(existsSync(defaultCheckpointFile())).toBe(false);
+  expect(readdirSync(inbox()).sort()).toEqual(artifacts);
+  expect(send).not.toHaveBeenCalled();
+});
+
+it.each([false, true])(
+  'launches confirmed acceptance despite cleanup diagnostics and failed notification=%s',
+  async (noticeFails) => {
+    settings({ autoCapture: true });
+    const sendMessage = Worker.prototype.postMessage;
+    vi.spyOn(Worker.prototype, 'postMessage').mockImplementation(function (
+      this: Worker,
+      value,
+      ...rest
+    ) {
+      if (value === 'release')
+        throw Object.assign(new Error('SECRET provider body and !credential-command'), {
+          code: 'EIO',
+        });
+      return sendMessage.call(this, value, ...rest);
+    });
+    if (noticeFails)
+      vi.mocked(ctx.ui.notify).mockImplementationOnce(() => {
+        throw new Error('UI unavailable');
+      });
+    await stop();
+    const manifest = JSON.parse(readFileSync(join(inbox(), ready()[0]!), 'utf8'));
+    expect(launch).toHaveBeenCalledExactlyOnceWith(
+      defaultCheckpointFile(),
+      inbox(),
+      manifest.execution.host,
+    );
+    expect(ctx.ui.notify).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining(
+        `Capture publication-lock-release: accepted-cleanup-pending (EIO) [${manifest.id}]`,
+      ),
+      'warning',
+    );
+    expect(JSON.stringify(vi.mocked(ctx.ui.notify).mock.calls)).not.toMatch(
+      /SECRET|provider body|credential-command/,
+    );
+    expect(readFileSync(manifest.snapshot, 'utf8')).toBe(readFileSync(fixture.file, 'utf8'));
+  },
+);
 
 it('re-reads admission settings after disabled startup, without needing a foreground database', async () => {
   settings({ disabled: true });

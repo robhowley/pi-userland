@@ -10,6 +10,19 @@ export type CaptureJob = {
   diagnostic: string | null;
 };
 
+// Preparation has already persisted this classified failure and abandoned its
+// attempt. The worker must not replace it with a generic execution failure.
+export class CapturePreparationError extends Error {
+  constructor(
+    message: string,
+    readonly category: string,
+    readonly retryEligible: boolean,
+  ) {
+    super(message);
+    this.name = 'CapturePreparationError';
+  }
+}
+
 // One object per acquired OS lock, never recycled after release. An attempt is
 // valid only while it is that object's current identity, not merely its job ID.
 export type CaptureAttempt = { readonly jobId: string };

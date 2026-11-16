@@ -32,6 +32,42 @@ it('persists enrollment separately from finished boundaries and updates source p
   }
 });
 
+it('replaces persisted enrollment triggers without resetting rows or generation', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'remembrancer-triggers-'));
+  const path = join(dir, 'index.sqlite');
+  let store = new CheckpointStore(path);
+  store.enroll('a', a.file);
+  store.close();
+  const old = new DatabaseSync(path);
+  for (const operation of ['INSERT', 'UPDATE', 'DELETE']) {
+    old.exec(`DROP TRIGGER context_sources_${operation};
+      CREATE TRIGGER context_sources_${operation} AFTER ${operation} ON sources BEGIN
+        UPDATE review_context SET generation = generation + 1 WHERE singleton = 1;
+      END`);
+  }
+  old.exec('UPDATE review_context SET generation = 42 WHERE singleton = 1');
+  old.close();
+  store = new CheckpointStore(path);
+  try {
+    expect(store.contextGeneration()).toBe(42);
+    expect(store.sources()).toEqual([{ sessionId: 'a', file: a.file, seedSince: null }]);
+    store.enroll('a', a.file);
+    store.enroll('a', '/moved/a.jsonl');
+    store.enroll('unrelated', '/elsewhere.jsonl');
+    expect(store.contextGeneration()).toBe(42);
+    store.finish({ sourceDefaults: [{ sessionId: 'a', since: '2026-01-01' }] });
+    expect(store.contextGeneration()).toBe(43);
+    store.claimReview();
+    store.releaseReview();
+    expect(store.contextGeneration()).toBe(44);
+    store.finish([{ ...a, file: '/moved/a.jsonl' }]);
+    expect(store.contextGeneration()).toBe(45);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 it('migrates legacy rows to unrestricted checkpoints and keeps the migration idempotent', () => {
   const dir = mkdtempSync(join(tmpdir(), 'remembrancer-migration-'));
   const path = join(dir, 'index.sqlite');
@@ -181,6 +217,7 @@ it('excludes other processes while allowing enrollment, and releases on close', 
   const peer = new CheckpointStore(path);
   try {
     owner.claimReview();
+    expect(statSync(path + '.lock').mode & 0o777).toBe(0o600);
     expect(() => peer.claimReview()).toThrow(/already open/);
     peer.enroll(a.sessionId, a.file);
     expect(owner.sources()).toHaveLength(1);

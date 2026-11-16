@@ -7,7 +7,6 @@ import { dirname, join } from 'node:path';
 
 const [piEntry, database, inbox] = process.argv.slice(2);
 let owner;
-let loading = true;
 try {
   const entry = realpathSync(piEntry);
   const host = createRequire(entry);
@@ -29,7 +28,6 @@ try {
   }
   // Singleton is acquired before loading the SDK or importing handoffs.
   const { runCaptureWorker } = await jiti.import('./capture-worker.ts');
-  loading = false;
   await runCaptureWorker({ database, inbox, owner });
   owner = undefined;
   process.exit(0);
@@ -39,7 +37,11 @@ try {
   try {
     appendFileSync(
       database + '.capture.log',
-      `${new Date().toISOString()} Worker bootstrap failed: ${loading ? error.message : error.name}\n`,
+      `${new Date().toISOString()} Worker bootstrap failed${
+        ['EACCES', 'EPERM', 'ENOSPC', 'EIO', 'ENOENT', 'ENOTDIR', 'EROFS'].includes(error?.code)
+          ? ` (${error.code})`
+          : ''
+      }\n`,
       { mode: 0o600 },
     );
   } catch {
