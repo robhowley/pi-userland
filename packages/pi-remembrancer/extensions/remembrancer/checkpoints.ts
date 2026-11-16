@@ -1,5 +1,13 @@
 import { randomUUID } from 'node:crypto';
-import { chmodSync, closeSync, mkdirSync, openSync, realpathSync, statSync } from 'node:fs';
+import {
+  chmodSync,
+  closeSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -484,6 +492,20 @@ export class CheckpointStore {
           throw Error('Handoff ID metadata conflict');
         return existing;
       }
+      // Publication sequences belong to one durable inbox, not the importer or
+      // the wall clock. Never compare counters from different inboxes.
+      const previous = this.db.prepare('SELECT snapshot FROM capture_jobs LIMIT 1').get();
+      if (previous && dirname(previous['snapshot'] as string) !== dirname(manifest.snapshot))
+        throw Error('Capture publication order requires one inbox per database');
+      if (
+        manifest.version === 2 &&
+        this.db
+          .prepare(
+            "SELECT 1 FROM capture_jobs WHERE admission_order = ? AND json_extract(body, '$.version') = 2",
+          )
+          .get(manifest.admissionOrder)
+      )
+        throw Error('Conflicting capture publication order');
       this.db
         .prepare(`INSERT INTO capture_jobs VALUES (?, ?, ?, ?, ?, ?, 'queued', 1, NULL)`)
         .run(
@@ -500,17 +522,31 @@ export class CheckpointStore {
 
   runnableCaptureJobs(owner: CaptureWorkerOwnership): CaptureJob[] {
     owner.assertStore(this.filename);
-    // An unsuccessful older boundary blocks newer evidence in the same session.
-    // Different sessions remain runnable. No snapshot is replaced or coalesced.
+    // A ready predecessor may not have been imported yet. Drain every visible
+    // ready signal before selection, regardless of discovery order. Imported
+    // signals left behind by a crash are harmless.
+    const first = this.db.prepare('SELECT snapshot FROM capture_jobs LIMIT 1').get();
+    if (
+      first &&
+      readdirSync(dirname(first['snapshot'] as string)).some(
+        (name) =>
+          name.endsWith('.ready.json') && !this.captureJob(name.slice(0, -'.ready.json'.length)),
+      )
+    )
+      return [];
+    // Unsuccessful predecessors block newer evidence in the same session.
+    // Version-1 clocks cannot prove publication order, so retain those jobs and
+    // block their session rather than guessing. Other sessions remain runnable.
     return this.db
       .prepare(
         `SELECT job.id FROM capture_jobs AS job
-      WHERE (job.state = 'queued' OR (job.state = 'failed' AND job.retry_eligible = 1))
+      WHERE json_extract(job.body, '$.version') = 2
+      AND (job.state = 'queued' OR (job.state = 'failed' AND job.retry_eligible = 1))
       AND NOT EXISTS (SELECT 1 FROM capture_jobs AS earlier
         WHERE earlier.session_id = job.session_id
-        AND (earlier.accepted_at, earlier.admission_order, earlier.rowid)
-          < (job.accepted_at, job.admission_order, job.rowid)
-        AND earlier.state <> 'completed') ORDER BY job.accepted_at, job.admission_order, job.rowid`,
+        AND (json_extract(earlier.body, '$.version') <> 2
+          OR earlier.admission_order < job.admission_order)
+        AND earlier.state <> 'completed') ORDER BY job.admission_order`,
       )
       .all()
       .map((row) => this.captureJob(row['id'] as string)!);

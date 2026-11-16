@@ -157,12 +157,20 @@ it('orders real asynchronous preservation, syncs, and one atomic ready manifest 
   const result = await pending;
   expect(events).toEqual([...proofSteps, 'acknowledged']);
   expect(result.copyMode).toBe('copy');
-  expect(await readdir(input.inbox)).toEqual(['handoff-a.ready.json', 'handoff-a.snapshot.jsonl']);
+  expect(await readdir(input.inbox)).toEqual([
+    '.publication-order',
+    'handoff-a.ready.json',
+    'handoff-a.snapshot.jsonl',
+  ]);
   expect((await stat(input.inbox)).mode & 0o777).toBe(0o700);
-  for (const path of [result.ready, result.manifest.snapshot])
+  for (const path of [
+    result.ready,
+    result.manifest.snapshot,
+    join(input.inbox, '.publication-order'),
+  ])
     expect((await stat(path)).mode & 0o777).toBe(0o600);
   expect(result.manifest).toMatchObject({
-    version: 1,
+    version: 2,
     id: input.id,
     source: { ...input.source, bytes: Buffer.byteLength(original) },
     execution: input.execution,
@@ -466,6 +474,12 @@ it.each([...proofSteps, 'returned'] as const)(
       expect(await readFile(join(input.inbox, `${input.id}.snapshot.jsonl`), 'utf8')).toBe(
         original,
       );
+    if (stopAt !== 'returned') {
+      await expect(preserveProof({ ...input, id: 'after-crash' })).rejects.toThrow(
+        'inbox is locked',
+      );
+      expect(await readyNames(input)).toEqual(published ? [`${input.id}.ready.json`] : []);
+    }
   },
   12_000,
 );

@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
 import {
   cleanupCompletedSnapshot,
@@ -31,6 +31,7 @@ const stores: CheckpointStore[] = [];
 const owners: CaptureWorkerOwnership[] = [];
 const children = new Set<ChildProcess>();
 afterEach(async () => {
+  vi.useRealTimers();
   for (const child of children) {
     const exited = once(child, 'exit');
     child.kill('SIGKILL');
@@ -223,21 +224,50 @@ it.each([true, false])(
   },
 );
 
-it.each(['different milliseconds', 'same millisecond'] as const)(
-  'orders %s admissions independently of manifest discovery order',
-  async (timing) => {
+it.each([
+  ['clock advances', '2026-01-03T00:00:00.000Z'],
+  ['same millisecond', '2026-01-02T00:00:00.000Z'],
+  ['clock rolls backward', '2026-01-01T00:00:00.000Z'],
+])(
+  'preserves FIFO when %s, including selection between reverse imports',
+  async (_timing, laterTime) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime('2026-01-02T00:00:00.000Z');
     const f = await fixture();
     const owner = own(f.store);
+    vi.setSystemTime(laterTime!);
     const later = await preserveHandoff({ ...f.input, id: 'later' });
-    later.manifest.acceptedAt =
-      timing === 'same millisecond' ? '2026-01-01T00:00:00.000Z' : '2026-01-02T00:00:00.000Z';
-    f.handoff.manifest.acceptedAt = '2026-01-01T00:00:00.000Z';
+    expect(later.manifest.acceptedAt).toBe(laterTime);
     expect(later.manifest.admissionOrder > f.handoff.manifest.admissionOrder).toBe(true);
-    f.store.importCaptureJob(owner, later.manifest);
-    f.store.importCaptureJob(owner, f.handoff.manifest);
+    await importReadyHandoff(f.store, owner, later.ready);
+    expect(f.store.runnableCaptureJobs(owner)).toEqual([]);
+    await importReadyHandoff(f.store, owner, f.handoff.ready);
     expect(f.store.runnableCaptureJobs(owner).map((job) => job.manifest.id)).toEqual(['first']);
+    const attempt = owner.startAttempt('first');
+    readAll(f.store.prepareCaptureJob(owner, attempt));
+    f.store.finishCaptureJob(owner, attempt, []);
+    expect(f.store.runnableCaptureJobs(owner).map((job) => job.manifest.id)).toEqual(['later']);
   },
 );
+
+it('rejects incomparable inboxes and duplicate publication sequences without replacing accepted evidence', async () => {
+  const f = await fixture();
+  const owner = own(f.store);
+  f.store.importCaptureJob(owner, f.handoff.manifest);
+  const later = await preserveHandoff({ ...f.input, id: 'later' });
+  const duplicate = { ...later.manifest, admissionOrder: f.handoff.manifest.admissionOrder };
+  expect(() => f.store.importCaptureJob(owner, duplicate)).toThrow(
+    'Conflicting capture publication order',
+  );
+  expect(f.store.captureJob('later')).toBeUndefined();
+  const other = await fixture('other-inbox');
+  expect(() => f.store.importCaptureJob(owner, other.handoff.manifest)).toThrow(
+    'one inbox per database',
+  );
+  expect(existsSync(other.handoff.ready)).toBe(true);
+  expect(f.store.importCaptureJob(owner, later.manifest).state).toBe('queued');
+  expect(f.store.captureJob('first')?.manifest).toEqual(f.handoff.manifest);
+});
 
 it('holds no manual lock during frozen pages/context and rejects manual begin then cancel, even for empty output', async () => {
   const f = await prepared();
@@ -405,6 +435,7 @@ it.each(['already-covered', 'no-evidence'] as const)(
     if (kind === 'no-evidence') {
       // Create an empty saved tree using a different handoff, not by mutating an
       // accepted snapshot. The first retained boundary remains independently queued.
+      await importReadyHandoff(f.store, owner, f.handoff.ready);
       writeFileSync(f.input.source.file, record({ type: 'session', id: 'empty', cwd: f.dir }));
       const empty = await preserveHandoff({
         ...f.input,
@@ -556,17 +587,96 @@ it('checks all unresolved SQLite snapshot references before completed cleanup', 
   expect(existsSync(other.manifest.snapshot)).toBe(true);
 });
 
-it('uses the same monotonic admission clock across processes on this host', () => {
-  const before = process.hrtime.bigint();
-  const child = spawnSync(
+function publishInChild(input: HandoffInput, acceptedAt = '2020-01-01T00:00:00.000Z') {
+  return spawnSync(
     process.execPath,
-    ['-e', 'console.log(process.hrtime.bigint().toString())'],
-    { encoding: 'utf8', env: { NODE_NO_WARNINGS: '1' } },
+    [
+      '--loader',
+      fileURLToPath(new URL('./fixtures/typescript-loader.mjs', import.meta.url)),
+      fileURLToPath(new URL('./fixtures/capture-publication-child.mjs', import.meta.url)),
+      JSON.stringify(input),
+      acceptedAt,
+    ],
+    { encoding: 'utf8', env: { NODE_NO_WARNINGS: '1' }, timeout: 8000 },
   );
-  const after = process.hrtime.bigint();
+}
+
+it('preserves publication FIFO across processes and clock rollback, independent of reverse import', async () => {
+  const f = await fixture();
+  const owner = own(f.store);
+  const child = publishInChild({ ...f.input, id: 'child' });
   expect(child.status, child.stderr).toBe(0);
-  expect(BigInt(child.stdout.trim())).toBeGreaterThan(before);
-  expect(BigInt(child.stdout.trim())).toBeLessThan(after);
+  const ready = join(f.input.inbox, 'child.ready.json');
+  const later = (await importReadyHandoff(f.store, owner, ready)).manifest;
+  expect(later.acceptedAt < f.handoff.manifest.acceptedAt).toBe(true);
+  expect(later.admissionOrder > f.handoff.manifest.admissionOrder).toBe(true);
+  expect(f.store.runnableCaptureJobs(owner)).toEqual([]);
+  await importReadyHandoff(f.store, owner, f.handoff.ready);
+  expect(f.store.runnableCaptureJobs(owner).map((job) => job.manifest.id)).toEqual(['first']);
+  const attempt = owner.startAttempt('first');
+  f.store.failCaptureJob(owner, attempt, 'Retained failure', false);
+  expect(f.store.runnableCaptureJobs(owner)).toEqual([]);
+  expect(existsSync(later.snapshot)).toBe(true);
+  expect(existsSync(f.handoff.manifest.snapshot)).toBe(true);
+});
+
+it('fails closed on concurrent process publication rather than reversing manifest order', async () => {
+  const f = await fixture();
+  const second = await preserveHandoff(
+    { ...f.input, id: 'second' },
+    {
+      before: (step) => {
+        if (step !== 'manifest-rename') return;
+        const contender = publishInChild({ ...f.input, id: 'contender' });
+        expect(contender.status).toBe(1);
+        expect(contender.stderr).toContain('inbox is locked');
+        expect(existsSync(join(f.input.inbox, 'contender.ready.json'))).toBe(false);
+      },
+    },
+  );
+  const child = publishInChild({ ...f.input, id: 'third' });
+  expect(child.status, child.stderr).toBe(0);
+  const owner = own(f.store);
+  const third = await importReadyHandoff(f.store, owner, join(f.input.inbox, 'third.ready.json'));
+  expect(third.manifest.admissionOrder > second.manifest.admissionOrder).toBe(true);
+  expect(f.store.runnableCaptureJobs(owner)).toEqual([]);
+  await importReadyHandoff(f.store, owner, second.ready);
+  expect(f.store.runnableCaptureJobs(owner)).toEqual([]);
+  await importReadyHandoff(f.store, owner, f.handoff.ready);
+  expect(f.store.runnableCaptureJobs(owner).map((job) => job.manifest.id)).toEqual(['first']);
+});
+
+it.each(['missing', 'corrupt'] as const)(
+  'retains accepted evidence when the publication ordering record is %s',
+  async (fault) => {
+    const f = await fixture();
+    const order = join(f.input.inbox, '.publication-order');
+    if (fault === 'missing') await unlink(order);
+    else writeFileSync(order, 'not a counter');
+    await expect(preserveHandoff({ ...f.input, id: 'later' })).rejects.toThrow(/ordering record/);
+    expect(readFileSync(f.handoff.manifest.snapshot, 'utf8')).toContain('Send Maya');
+    expect(existsSync(f.handoff.ready)).toBe(true);
+    expect(existsSync(join(f.input.inbox, 'later.ready.json'))).toBe(false);
+  },
+);
+
+it('retains legacy clock-ordered jobs and blocks their session without guessing or migrating order', async () => {
+  const f = await fixture();
+  const owner = own(f.store);
+  f.handoff.manifest.version = 1;
+  f.store.importCaptureJob(owner, f.handoff.manifest);
+  const later = await preserveHandoff({ ...f.input, id: 'later' });
+  f.store.importCaptureJob(owner, later.manifest);
+  expect(f.store.runnableCaptureJobs(owner)).toEqual([]);
+  const other = await preserveHandoff({
+    ...f.input,
+    id: 'other',
+    source: { ...f.input.source, sessionId: 'other' },
+  });
+  f.store.importCaptureJob(owner, other.manifest);
+  expect(f.store.runnableCaptureJobs(owner).map((job) => job.manifest.id)).toEqual(['other']);
+  expect(f.store.captureJob('first')?.state).toBe('queued');
+  expect(await cleanupCompletedSnapshot(f.store, owner, 'first')).toBe(false);
 });
 
 function probe(path: string) {

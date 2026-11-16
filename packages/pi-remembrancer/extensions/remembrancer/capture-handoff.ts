@@ -9,6 +9,7 @@ import {
   readFile,
   readdir,
   rename,
+  rmdir,
   stat,
   unlink,
   writeFile,
@@ -41,6 +42,10 @@ export const preservationSteps = [
   'snapshot-chmod',
   'snapshot-sync',
   'snapshot-directory-sync',
+  'publication-order-write',
+  'publication-order-sync',
+  'publication-order-rename',
+  'publication-order-directory-sync',
   'manifest-write',
   'manifest-sync',
   'manifest-rename',
@@ -73,6 +78,38 @@ export async function preserveHandoff(request: HandoffInput, hooks: Hooks = {}) 
       if (directory === dirname(resolve(firstCreated))) break;
     }
   }
+  // Serialize publication across processes, without a lease or stale-lock guess.
+  // Process death leaves this directory behind and subsequent admissions fail
+  // closed. Evidence and the ordering record require deliberate diagnosis.
+  const lock = join(input.inbox, '.publication-lock');
+  try {
+    await mkdir(lock, { mode: 0o700 });
+  } catch (error) {
+    throw Error('Cannot establish capture publication order: inbox is locked', { cause: error });
+  }
+  try {
+    return await preserveOrderedHandoff(input, hooks);
+  } finally {
+    await rmdir(lock);
+    await synchronize(input.inbox);
+  }
+}
+
+async function preserveOrderedHandoff(input: HandoffInput, hooks: Hooks) {
+  const orderFile = join(input.inbox, '.publication-order');
+  let previous = '0'.padStart(32, '0');
+  try {
+    previous = await readFile(orderFile, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    // Never reset ordering around retained evidence, including pre-sequence
+    // handoffs. A fresh inbox is the only safe initialization case.
+    if ((await readdir(input.inbox)).some((name) => name !== '.publication-lock'))
+      throw Error('Cannot establish capture publication order: missing ordering record');
+  }
+  if (!/^\d{32}$/.test(previous)) throw Error('Invalid capture publication ordering record');
+  const admissionOrder = (BigInt(previous) + 1n).toString().padStart(32, '0');
+  if (admissionOrder.length !== 32) throw Error('Capture publication order exhausted');
   const snapshot = join(input.inbox, `${input.id}.snapshot.jsonl`);
   const temporary = join(input.inbox, `.${input.id}.ready.tmp`);
   const ready = join(input.inbox, `${input.id}.ready.json`);
@@ -132,9 +169,19 @@ export async function preserveHandoff(request: HandoffInput, hooks: Hooks = {}) 
   await step('snapshot-sync', () => synchronize(snapshot));
   await step('snapshot-directory-sync', () => synchronize(input.inbox));
 
+  // Persist the high-water mark before publishing. Gaps after failure are safe;
+  // reuse after a restart is not. The lock remains held through ready sync.
+  const orderTemporary = join(input.inbox, '.publication-order.tmp');
+  await step('publication-order-write', () =>
+    writeFile(orderTemporary, admissionOrder, { flag: 'wx', mode: 0o600 }),
+  );
+  await step('publication-order-sync', () => synchronize(orderTemporary));
+  await step('publication-order-rename', () => rename(orderTemporary, orderFile));
+  await step('publication-order-directory-sync', () => synchronize(input.inbox));
+
   // The manifest is the ready signal. Snapshot paths are never source identity.
   const manifest = {
-    version: 1,
+    version: 2 as 1 | 2,
     id: input.id,
     snapshot,
     source: {
@@ -146,9 +193,7 @@ export async function preserveHandoff(request: HandoffInput, hooks: Hooks = {}) 
     },
     execution: structuredClone(input.execution),
     acceptedAt: new Date().toISOString(),
-    // Break same-millisecond admission ties without depending on inbox discovery
-    // order. This process clock is shared by processes on the same host/boot.
-    admissionOrder: process.hrtime.bigint().toString().padStart(32, '0'),
+    admissionOrder,
   };
   await step('manifest-write', () =>
     writeFile(temporary, JSON.stringify(manifest) + '\n', { flag: 'wx', mode: 0o600 }),
@@ -218,7 +263,7 @@ export function validateReadyManifest(value: unknown, inbox: string): ReadyManif
   const manifest = value as ReadyManifest;
   if (
     !manifest ||
-    manifest.version !== 1 ||
+    ![1, 2].includes(manifest.version) ||
     !manifest.source ||
     !manifest.execution ||
     Object.keys(manifest).some(
