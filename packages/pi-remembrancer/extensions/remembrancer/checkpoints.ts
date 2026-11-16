@@ -537,6 +537,16 @@ export class CheckpointStore {
     // Unsuccessful predecessors block newer evidence in the same session.
     // Version-1 clocks cannot prove publication order, so retain those jobs and
     // block their session rather than guessing. Other sessions remain runnable.
+    return this.runnableCaptureJobIds().map((id) => this.captureJob(id)!);
+  }
+
+  // Read-only exit-race check after releasing worker ownership. This grants no
+  // import/attempt/publication authority; a subsequent claim is still required.
+  captureRecoveryPending(excluded: ReadonlySet<string>): boolean {
+    return this.runnableCaptureJobIds().some((id) => !excluded.has(id));
+  }
+
+  private runnableCaptureJobIds(): string[] {
     return this.db
       .prepare(
         `SELECT job.id FROM capture_jobs AS job
@@ -549,7 +559,7 @@ export class CheckpointStore {
         AND earlier.state <> 'completed') ORDER BY job.admission_order`,
       )
       .all()
-      .map((row) => this.captureJob(row['id'] as string)!);
+      .map((row) => row['id'] as string);
   }
 
   private coordinateCapture<T>(owner: CaptureWorkerOwnership, operation: () => T): T {

@@ -1,8 +1,9 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { loadRemembrancerConfig } from '../extensions/remembrancer/config.js';
+import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
+import { captureExecution, loadRemembrancerConfig } from '../extensions/remembrancer/config.js';
 
 function writeJson(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true });
@@ -63,6 +64,35 @@ describe.sequential('remembrancer config', () => {
 
   const globalSettingsPath = () => join(agentDir, 'settings.json');
   const projectSettingsPath = () => join(cwd, '.pi', 'settings.json');
+
+  it('captures outgoing model/settings/trust references without copying credentials or consulting saved trust', () => {
+    const model = {
+      provider: 'local',
+      id: 'exact',
+      api: 'openai-completions',
+      baseUrl: 'http://127.0.0.1:1234/v1',
+      headers: { Authorization: 'private-token' },
+    };
+    const execution = captureExecution({
+      cwd,
+      model,
+      thinkingLevel: 'high',
+      isProjectTrusted: () => true,
+    } as unknown as ExtensionContext);
+    expect(execution).toMatchObject({
+      cwd,
+      agentDir,
+      trustBasis: 'originating-context-trusted',
+      model: { provider: 'local', id: 'exact' },
+      runtime: { thinkingLevel: 'high', projectTrusted: true, model: { id: 'exact' } },
+    });
+    expect(JSON.stringify(execution)).not.toContain('private-token');
+    expect(execution.runtime!.model).not.toHaveProperty('headers');
+    expect(model.headers.Authorization).toBe('private-token');
+    expect(execution.host!.nodeExecutable).toBe(process.execPath);
+    expect(execution.host!.piEntry).toMatch(/\/dist\/cli\.js$/);
+    expect(existsSync(join(agentDir, 'trust.json'))).toBe(false);
+  });
 
   it('defaults to enabled', () => {
     expect(loadRemembrancerConfig(cwd, true)).toEqual({ disabled: false, autoCapture: false });

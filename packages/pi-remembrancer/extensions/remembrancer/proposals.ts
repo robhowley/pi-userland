@@ -1,5 +1,5 @@
 import { resolve } from 'node:path';
-import { Type } from '@earendil-works/pi-ai';
+import { Type } from '@sinclair/typebox';
 import type { Evidence } from './evidence.js';
 
 export type TaskFields = {

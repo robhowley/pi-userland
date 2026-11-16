@@ -15,7 +15,17 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
+import type { CreateAgentSessionOptions } from '@earendil-works/pi-coding-agent';
 import type { CheckpointStore } from './checkpoints.js';
+
+// Headers/auth remain in the originating Pi configuration, never in handoffs.
+export type CaptureModel = Omit<NonNullable<CreateAgentSessionOptions['model']>, 'headers'>;
+export type CaptureRuntime = {
+  model: CaptureModel;
+  thinkingLevel: NonNullable<CreateAgentSessionOptions['thinkingLevel']>;
+  projectTrusted: boolean;
+  headerNames?: string[];
+};
 import type { CaptureJob, CaptureWorkerOwnership } from './capture-jobs.js';
 
 export type HandoffInput = {
@@ -32,6 +42,7 @@ export type HandoffInput = {
     authorization: { autoCapture: true; disabled: false };
     host?: { nodeExecutable: string; piEntry: string };
     settings?: { userFile: string; projectFile: string | null };
+    runtime?: CaptureRuntime;
   };
 };
 
@@ -229,7 +240,16 @@ function validateInput(input: HandoffInput): void {
   )
     throw Error('Handoff requires originating capture authorization');
   // Serialize only the declared non-secret configuration references.
-  const allowed = ['cwd', 'agentDir', 'trustBasis', 'model', 'authorization', 'host', 'settings'];
+  const allowed = [
+    'cwd',
+    'agentDir',
+    'trustBasis',
+    'model',
+    'authorization',
+    'host',
+    'settings',
+    'runtime',
+  ];
   if (
     Object.keys(input.execution).some((key) => !allowed.includes(key)) ||
     Object.keys(input.execution.model).some((key) => !['provider', 'id'].includes(key)) ||
@@ -238,6 +258,50 @@ function validateInput(input: HandoffInput): void {
     )
   )
     throw Error('Unexpected execution metadata');
+  if (input.execution.runtime) {
+    const { runtime } = input.execution;
+    if (
+      Object.keys(runtime).some(
+        (key) => !['model', 'thinkingLevel', 'projectTrusted', 'headerNames'].includes(key),
+      ) ||
+      typeof runtime.projectTrusted !== 'boolean' ||
+      (runtime.headerNames !== undefined &&
+        (!Array.isArray(runtime.headerNames) ||
+          runtime.headerNames.some((name) => typeof name !== 'string' || !name.trim()))) ||
+      !['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(
+        runtime.thinkingLevel,
+      ) ||
+      runtime.model.provider !== input.execution.model.provider ||
+      runtime.model.id !== input.execution.model.id ||
+      'headers' in runtime.model ||
+      Object.keys(runtime.model).some(
+        (key) =>
+          ![
+            'provider',
+            'id',
+            'name',
+            'api',
+            'baseUrl',
+            'reasoning',
+            'input',
+            'cost',
+            'contextWindow',
+            'maxTokens',
+            'thinkingLevelMap',
+            'compat',
+            'samplingParams',
+            'samplingParamsByThinkingLevel',
+            'inputLimits',
+            'promptCache',
+            'type',
+          ].includes(key),
+      )
+    )
+      throw Error('Invalid non-secret reviewer runtime');
+    const url = new URL(runtime.model.baseUrl);
+    if (url.username || url.password || url.search || url.hash)
+      throw Error('Capture model endpoint must not contain credentials or query parameters');
+  }
   if (
     input.execution.host &&
     (Object.keys(input.execution.host).some(

@@ -4,7 +4,7 @@
   "type": "module",
   "description": "Track and review commitments across Pi sessions to keep your personal Taskwarrior list current.",
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.19.0"
   },
   "files": [
     "extensions",
@@ -45,8 +45,9 @@
   "license": "MIT",
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*"
+    "@earendil-works/pi-coding-agent": ">=0.84.4",
+    "@earendil-works/pi-tui": "*",
+    "@sinclair/typebox": "*"
   },
   "devDependencies": {
     "@types/node": "^22.15.17"
