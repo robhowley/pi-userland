@@ -6,7 +6,7 @@ Remembrancer is an agent-powered personal task manager built on Taskwarrior. It 
 
 ## Install
 
-Requires [Taskwarrior 3](https://taskwarrior.org/download/) (`task` on your `PATH`). If you do not already use it, install and initialize it. On macOS:
+Requires Node.js 22.19.0 or newer, a Node-based Pi installation (0.84.4 or newer), and [Taskwarrior 3](https://taskwarrior.org/download/) (`task` on your `PATH`). If you do not already use Taskwarrior, install and initialize it. On macOS:
 
 ```shell
 brew install task
@@ -67,10 +67,25 @@ Capture is off by default. To enable it, add this to Pi's global settings file, 
 
 ### What to expect
 
-- **When:** your interactive session ends.
-- **Scope:** the session you're leaving, but only messages that haven't yet been reviewed.
-- **Model:** your session's selected model
-- **Result:** proposals and review progress are saved together. Open `/remembrancer proposals` to review them.
+- **When:** you leave a saved interactive terminal session by quitting, reloading, starting a new session, resuming another, or forking. Unsaved sessions and non-TUI modes do not start capture.
+- **Scope:** unreviewed messages across the saved tree of the outgoing session. Capture does not scan your archive or run on active turns.
+- **Leaving:** Pi waits to preserve a private session copy and publish the job, not for model work. Copying large sessions can still delay shutdown, especially when filesystem cloning is unavailable.
+- **Review:** an on-demand detached process uses the outgoing model, thinking level, project trust and normal Pi credentials. It can continue after Pi exits and incurs normal model costs. It cannot apply tasks.
+- **Result:** proposals and review progress are saved together. An open terminal checks for saved changes without starting chat turns; open `/remembrancer proposals` to approve individual items.
+
+Turning `autoCapture` off stops **new jobs only**. Already accepted jobs can finish, retry and save proposals, even if Remembrancer is subsequently disabled. Saved proposals and startup reminders remain available with capture off. Trusted project settings can override global settings when admitting a job.
+
+### Recovery and limits
+
+Accepted evidence is retained until successful or already-covered completion. Failed jobs retain their evidence; retries do not silently advance review progress. Manual reviews keep ownership until you finish or cancel them, so background work may defer or repeat preparation after your changes.
+
+An open interactive Pi checks for accepted work at startup and about once a minute, including with capture off. Later launches also wake the worker. No daemon or supervisor runs while Pi is closed: a failed launch or crashed worker can wait until the next wake. If a crash occurs after results commit but before the notice file is replaced, proposals are saved but the reminder waits for successful recovery.
+
+State lives under `$XDG_STATE_HOME/pi-remembrancer` (normally `~/.local/state/pi-remembrancer`). The `capture-inbox` directory holds retained session copies; `checkpoints.sqlite3.capture.log` records worker failures. Keep unresolved evidence when diagnosing failures. Missing originating credentials/settings, incompatible coverage or ambiguous publication artifacts may require attention rather than repeated retries.
+
+The worker loads the published TypeScript through **jiti from the originating Node-based Pi installation**, using that installation's SDK. There is no separate compiled worker or package build step. Keep that installation and its configuration available for accepted jobs. Standalone/Bun-only hosts are not supported by this launch path.
+
+Asynchronous setup, model and cleanup hangs have a timeout and exit grace period. There is no independently scheduled CPU-stall watchdog, and worker exit does not guarantee termination of every child process.
 
 ## Saved proposals
 
@@ -107,7 +122,7 @@ Skip this setup if you do not need waiting conditions; other task operations wor
 
 ## Settings
 
-Remembrancer is enabled by default. Turn off remembrancer at any time by adding this to Pi's global settings file, normally `~/.pi/agent/settings.json`:
+Manual Remembrancer features are enabled by default; automatic capture remains opt-in. Disable foreground features and new capture jobs in Pi's global settings file, normally `~/.pi/agent/settings.json` (accepted jobs still finish or retry):
 
 ```json
 { "pi-remembrancer": { "disabled": true } }

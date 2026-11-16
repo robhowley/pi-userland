@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -25,6 +26,7 @@ import { readProposalNotice } from '../extensions/remembrancer/capture-notices.j
 
 const dirs: string[] = [];
 const children = new Set<ChildProcess>();
+const workerPids = new Set<number>();
 const servers: Server[] = [];
 afterEach(async () => {
   for (const child of children) {
@@ -35,16 +37,14 @@ afterEach(async () => {
     }
   }
   children.clear();
-  for (const dir of dirs) {
-    const pidFile = join(dir, 'worker.pid');
-    if (existsSync(pidFile)) {
-      try {
-        process.kill(Number(readFileSync(pidFile, 'utf8')), 'SIGKILL');
-      } catch {
-        /* already exited */
-      }
+  for (const pid of workerPids) {
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      /* already exited */
     }
   }
+  workerPids.clear();
   for (const server of servers) {
     server.closeAllConnections();
     await new Promise<void>((r) => server.close(() => r()));
@@ -483,12 +483,15 @@ it('retains a handoff after bootstrap failure following successful spawn; a late
 async function provider(f: Awaited<ReturnType<typeof fixture>>) {
   const requests: { body: Record<string, unknown>; headers: Record<string, unknown> }[] = [];
   let block = false;
+  const blocked = new Set<() => void>();
   const server = createServer(async (req, res) => {
     let raw = '';
     for await (const chunk of req) raw += chunk;
     const body = JSON.parse(raw);
     requests.push({ body, headers: req.headers });
-    if (block) return;
+    const pid = Number(req.headers['x-worker-pid']);
+    if (Number.isSafeInteger(pid) && pid > 1) workerPids.add(pid);
+    if (block) await new Promise<void>((r) => blocked.add(r));
     const messages = body.messages as {
       role: string;
       tool_calls?: { function: { name: string } }[];
@@ -551,7 +554,7 @@ async function provider(f: Awaited<ReturnType<typeof fixture>>) {
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   const address = server.address() as { port: number };
   f.input.execution.runtime!.model.baseUrl = `http://127.0.0.1:${address.port}/v1`;
-  f.input.execution.runtime!.headerNames = ['X-Command'];
+  f.input.execution.runtime!.headerNames = ['X-Command', 'X-Worker-Pid'];
   writeFileSync(
     join(f.agentDir, 'models.json'),
     record({
@@ -559,7 +562,7 @@ async function provider(f: Awaited<ReturnType<typeof fixture>>) {
         offline: {
           api: 'openai-completions',
           baseUrl: f.input.execution.runtime!.model.baseUrl,
-          headers: { 'X-Command': '!printf command-header' },
+          headers: { 'X-Command': '!printf command-header', 'X-Worker-Pid': '!printf "$PPID"' },
           models: [],
         },
       },
@@ -603,85 +606,153 @@ async function provider(f: Awaited<ReturnType<typeof fixture>>) {
     block: () => {
       block = true;
     },
+    release: () => {
+      block = false;
+      for (const resume of blocked) resume();
+      blocked.clear();
+    },
   };
 }
 
-it('uses the actual host SDK, supplied absent-catalog model and command credentials, survives immediate parent exit, and runs relocated', async () => {
-  const f = await fixture();
-  const p = await provider(f);
-  await preserveHandoff(f.input);
-  // Real publication file list, unpacked outside the repository without dependencies.
-  const installed = join(f.dir, 'installed');
-  mkdirSync(installed);
-  const packEnv = {
-    ...isolatedEnv(f),
-    PATH: process.env['PATH'],
-    npm_config_cache: join(f.dir, 'npm-cache'),
-  };
-  const packed = JSON.parse(
-    execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', installed], {
-      cwd: resolve('.'),
+it.each(['running', 'crashed'] as const)(
+  'runs relocated lifecycle admission through real detached review, capture-off recovery of %s work and committed TUI notice',
+  async (state) => {
+    const crash = state === 'crashed';
+    const f = await fixture();
+    f.database = join(f.dir, 'state', 'pi-remembrancer', 'checkpoints.sqlite3');
+    f.inbox = f.input.inbox = join(dirname(f.database), 'capture-inbox');
+    const p = await provider(f);
+    p.block();
+    writeFileSync(
+      join(f.agentDir, 'settings.json'),
+      record({ 'pi-remembrancer': { autoCapture: true } }),
+    );
+    // Real publication file list, unpacked outside the repository without dependencies.
+    const installed = join(f.dir, 'installed');
+    mkdirSync(installed);
+    const packEnv = {
+      ...isolatedEnv(f),
+      PATH: process.env['PATH'],
+      npm_config_cache: join(f.dir, 'npm-cache'),
+    };
+    const packed = JSON.parse(
+      execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', installed], {
+        cwd: resolve('.'),
+        env: packEnv,
+        encoding: 'utf8',
+      }),
+    ) as { filename: string }[];
+    execFileSync('tar', ['-xzf', join(installed, packed[0]!.filename), '-C', installed], {
       env: packEnv,
-      encoding: 'utf8',
-    }),
-  ) as { filename: string }[];
-  execFileSync('tar', ['-xzf', join(installed, packed[0]!.filename), '-C', installed], {
-    env: packEnv,
-  });
-  const relocated = join(installed, 'package');
-  expect(existsSync(join(relocated, 'node_modules'))).toBe(false);
-  const entry = join(relocated, 'extensions/remembrancer/capture-worker.ts');
-  // A short-lived parent calls the actual launch API, then exits immediately.
-  const parent = join(f.dir, 'parent.mjs');
-  writeFileSync(
-    parent,
-    `import {createRequire} from 'node:module';
-    import {writeFileSync} from 'node:fs';
-    const host=createRequire(${JSON.stringify(hostEntry)});
-    const {createJiti}=host('jiti');
-    const jiti=createJiti(import.meta.url,{interopDefault:true,alias:{
-      '@earendil-works/pi-coding-agent':${JSON.stringify(join(dirname(hostEntry), 'index.js'))},
-      '@sinclair/typebox':host.resolve('typebox')
-    }});
-    const {launchCaptureWorker}=await jiti.import(${JSON.stringify(entry)});
-    const pid=await launchCaptureWorker(${JSON.stringify(f.database)},${JSON.stringify(f.inbox)},${JSON.stringify(f.input.execution.host)});
-    writeFileSync(${JSON.stringify(join(f.dir, 'worker.pid'))},String(pid));`,
-  );
-  const child = spawn(nodeExecutable, [parent], { env: isolatedEnv(f), stdio: 'ignore' });
-  children.add(child);
-  const [code] = await once(child, 'exit');
-  expect(code).toBe(0);
-  await waitFor(() => job(f.database)?.state === 'completed');
-  const workerPid = Number(readFileSync(join(f.dir, 'worker.pid'), 'utf8'));
-  await waitFor(() => {
-    try {
-      process.kill(workerPid, 0);
-      return false;
-    } catch {
-      return true;
+    });
+    const relocated = join(installed, 'package');
+    expect(existsSync(join(relocated, 'node_modules'))).toBe(false);
+    const inputFile = join(f.dir, 'lifecycle-input.json');
+    writeFileSync(inputFile, JSON.stringify(f.input));
+    const entry = fileURLToPath(new URL('./fixtures/capture-lifecycle-child.mjs', import.meta.url));
+    const noticeFile = join(f.dir, 'notifications.json');
+    const lifecycle = (action: string) => {
+      const child = spawn(
+        nodeExecutable,
+        [entry, hostEntry, relocated, inputFile, action, noticeFile],
+        {
+          env: isolatedEnv(f),
+          cwd: f.dir,
+          stdio: ['ignore', 'ignore', 'pipe'],
+        },
+      );
+      children.add(child);
+      return child;
+    };
+    // Admission acknowledges only preservation/spawn. Its parent exits before the model replies.
+    const child = lifecycle('admit');
+    let stderr = '';
+    child.stderr!.on('data', (chunk) => {
+      stderr += String(chunk);
+    });
+    const [code] = await once(child, 'exit');
+    expect(code, stderr).toBe(0);
+    await waitFor(() => p.requests.length === 1);
+    const workerPid = Number(p.requests[0]!.headers['x-worker-pid']);
+    expect(workerPid).toBeGreaterThan(0);
+    const snapshot = readdirSync(f.inbox).find((name) => name.endsWith('.snapshot.jsonl'))!;
+    const id = snapshot.replace('.snapshot.jsonl', '');
+    expect(job(f.database, id)?.state).toBe('queued');
+    expect(readFileSync(join(f.inbox, snapshot), 'utf8')).toBe(
+      readFileSync(f.input.source.file, 'utf8'),
+    );
+    expect(readFileSync(f.database).includes(Buffer.from('secret-do-not-save'))).toBe(false);
+    const manual = new CheckpointStore(f.database);
+    manual.claimReview();
+    manual.releaseReview();
+    manual.close();
+    writeFileSync(
+      join(f.agentDir, 'settings.json'),
+      record({ 'pi-remembrancer': { autoCapture: false } }),
+    );
+    if (crash) {
+      process.kill(workerPid, 'SIGKILL');
+      await waitFor(() => {
+        try {
+          process.kill(workerPid, 0);
+          return false;
+        } catch {
+          return true;
+        }
+      });
+      expect(job(f.database, id)?.state).toBe('queued');
+      expect(existsSync(join(f.inbox, snapshot))).toBe(true);
     }
-  });
-  expect(p.requests).toHaveLength(4);
-  expect(p.requests[0]!.body['model']).toBe('not-in-catalog');
-  expect(p.requests[0]!.body['reasoning_effort']).toBe('high');
-  expect(p.requests[0]!.headers['authorization']).toBe('Bearer fixture-key');
-  expect(p.requests[0]!.headers['x-command']).toBe('command-header');
-  expect(existsSync(join(f.dir, 'auth-outside-lock'))).toBe(true);
-  expect(existsSync(join(f.dir, 'tasks-outside-lock'))).toBe(true);
-  const tools = p.requests[0]!.body['tools'] as { function: { name: string } }[];
-  expect(tools.map((t) => t.function.name)).toEqual([
-    'remembrancer_read_evidence',
-    'remembrancer_context',
-    'remembrancer_tasks',
-    'remembrancer_proposals',
-    'remembrancer_submit',
-  ]);
-  const store = new CheckpointStore(f.database);
-  expect(store.proposals()).toHaveLength(1);
-  expect(store.reviewed()).toHaveLength(1);
-  store.close();
-  expect(readFileSync(f.database).includes(Buffer.from('fixture-key'))).toBe(false);
-}, 25_000);
+    // A capture-off terminal uses the actual recovery launch and asynchronous notice tick.
+    const observer = lifecycle('observe');
+    observer.stderr!.on('data', (chunk) => {
+      stderr += String(chunk);
+    });
+    const observed = once(observer, 'exit');
+    await waitFor(() => existsSync(noticeFile + '.started'));
+    p.release();
+    const [observerCode] = await observed;
+    expect(observerCode, stderr).toBe(0);
+    expect(JSON.parse(readFileSync(noticeFile, 'utf8'))).toEqual([
+      { message: '1 task proposals · /remembrancer proposals', level: 'info' },
+    ]);
+    expect(job(f.database, id)?.state).toBe('completed');
+    expect(existsSync(join(f.inbox, snapshot))).toBe(false);
+    expect(await readProposalNotice(f.database)).toEqual({ generation: 1, pending: 1 });
+    const finalWorkerPid = Number(p.requests.at(-1)!.headers['x-worker-pid']);
+    await waitFor(() => {
+      try {
+        process.kill(finalWorkerPid, 0);
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    // Manual ownership and observer enrollment change review context. A running
+    // attempt must discard/reprepare; a recovered attempt starts after enrollment.
+    expect(p.requests).toHaveLength(crash ? 5 : 8);
+    expect(p.requests[0]!.body['model']).toBe('not-in-catalog');
+    expect(p.requests[0]!.body['reasoning_effort']).toBe('high');
+    expect(p.requests[0]!.headers['authorization']).toBe('Bearer fixture-key');
+    expect(p.requests[0]!.headers['x-command']).toBe('command-header');
+    expect(existsSync(join(f.dir, 'auth-outside-lock'))).toBe(true);
+    expect(existsSync(join(f.dir, 'tasks-outside-lock'))).toBe(true);
+    const tools = p.requests[0]!.body['tools'] as { function: { name: string } }[];
+    expect(tools.map((t) => t.function.name)).toEqual([
+      'remembrancer_read_evidence',
+      'remembrancer_context',
+      'remembrancer_tasks',
+      'remembrancer_proposals',
+      'remembrancer_submit',
+    ]);
+    const store = new CheckpointStore(f.database);
+    expect(store.proposals()).toHaveLength(1);
+    expect(store.reviewed()).toHaveLength(1);
+    store.close();
+    expect(readFileSync(f.database).includes(Buffer.from('fixture-key'))).toBe(false);
+  },
+  30_000,
+);
 
 it('duplicate launches run only one reviewer; killing an owner leaves queued evidence for recovery', async () => {
   const f = await fixture();
