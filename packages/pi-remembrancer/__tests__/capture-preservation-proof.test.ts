@@ -22,15 +22,15 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, expect, it } from 'vitest';
 import { prepareReview, readSession } from '../extensions/remembrancer/evidence.js';
 import {
-  preserveProof,
-  proofSteps,
-  type ProofInput,
-  type ProofManifest,
-  type ProofStep,
-} from './fixtures/capture-preservation-proof.js';
+  preserveHandoff as preserveProof,
+  preservationSteps as proofSteps,
+  type HandoffInput as ProofInput,
+  type ReadyManifest as ProofManifest,
+  type PreservationStep as ProofStep,
+} from '../extensions/remembrancer/capture-handoff.js';
 
-// These are executable design fixtures, not assertions that production already
-// preserves handoffs. SIGKILL proves process-crash retention, not power-cut or
+// These assertions exercise production preservation. SIGKILL proves
+// process-crash retention, not power-cut or
 // storage-controller durability. Real sync calls + ordering assertions cover
 // the OS durability protocol; no fsync test can prove hardware flush behavior.
 const dirs: string[] = [];
@@ -98,6 +98,7 @@ async function fixture(): Promise<ProofInput> {
       cwd: '/origin-project',
       agentDir: '/origin-agent',
       trustBasis: 'explicit-project-trust',
+      authorization: { autoCapture: true, disabled: false },
       model: { provider: 'offline-fixture', id: 'outgoing-model' },
     },
   };
@@ -166,6 +167,22 @@ it('orders real asynchronous preservation, syncs, and one atomic ready manifest 
     source: { ...input.source, bytes: Buffer.byteLength(original) },
     execution: input.execution,
   });
+});
+
+it('freezes originating metadata before asynchronous preservation starts', async () => {
+  const input = await fixture();
+  const expected = structuredClone(input);
+  const result = await preserveProof(input, {
+    copy: forceCopy,
+    after: (step) => {
+      if (step !== 'snapshot-copy') return;
+      input.source.sessionId = 'destination';
+      input.execution.model.id = 'later-model';
+      input.execution.authorization.autoCapture = false as true;
+    },
+  });
+  expect(result.manifest.source).toMatchObject(expected.source);
+  expect(result.manifest.execution).toEqual(expected.execution);
 });
 
 it.each(['ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EXDEV', 'EINVAL'])(

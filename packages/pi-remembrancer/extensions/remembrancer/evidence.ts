@@ -231,11 +231,30 @@ function visibleText(content: unknown, maxBytes = Number.POSITIVE_INFINITY): str
 }
 
 /** Read only the opening extent. Verify its bytes again without retaining them. */
-function readRecords(file: string, limit: number, consume: (line: string, number: number) => void) {
+function readRecords(
+  file: string,
+  limit: number,
+  consume: (line: string, number: number) => void,
+  prefix?: string,
+) {
   const fd = openSync(file, 'r');
+  let prefixFd: number | undefined;
   try {
+    prefixFd = prefix === undefined ? undefined : openSync(prefix, 'r');
     const initial = fstatSync(fd);
     if (!initial.isFile()) throw Error('Session source is not a regular file');
+    const prefixStat = prefixFd === undefined ? undefined : fstatSync(prefixFd);
+    const comparison = Buffer.allocUnsafe(64 * 1024);
+    if (prefixStat) {
+      const last = Buffer.alloc(1);
+      if (
+        !prefixStat.size ||
+        initial.size < prefixStat.size ||
+        readSync(prefixFd!, last, 0, 1, prefixStat.size - 1) !== 1 ||
+        last[0] !== 10
+      )
+        throw Error('Live source is not an exact extension of the retained prefix');
+    }
     const chunk = Buffer.allocUnsafe(64 * 1024);
     let parts: Buffer[] = [];
     let length = 0;
@@ -250,6 +269,14 @@ function readRecords(file: string, limit: number, consume: (line: string, number
         position,
       );
       if (!count) throw Error('Session source truncated during read');
+      if (prefixStat && position < prefixStat.size) {
+        const length = Math.min(count, prefixStat.size - position);
+        if (
+          readSync(prefixFd!, comparison, 0, length, position) !== length ||
+          !chunk.subarray(0, length).equals(comparison.subarray(0, length))
+        )
+          throw Error('Live source is not an exact extension of the retained prefix');
+      }
       position += count;
       hash.update(chunk.subarray(0, count));
       let start = 0;
@@ -283,6 +310,15 @@ function readRecords(file: string, limit: number, consume: (line: string, number
       verify.update(chunk.subarray(0, count));
       position += count;
     }
+    if (prefixStat) {
+      const finalPrefix = fstatSync(prefixFd!);
+      if (
+        finalPrefix.size !== prefixStat.size ||
+        finalPrefix.mtimeMs !== prefixStat.mtimeMs ||
+        finalPrefix.ctimeMs !== prefixStat.ctimeMs
+      )
+        throw Error('Retained prefix changed during verification');
+    }
     const final = fstatSync(fd);
     const path = statSync(file);
     if (
@@ -295,11 +331,12 @@ function readRecords(file: string, limit: number, consume: (line: string, number
     )
       throw Error('Session source changed during read');
   } finally {
+    if (prefixFd !== undefined) closeSync(prefixFd);
     closeSync(fd);
   }
 }
 
-export function readSession(file: string, limits: ReviewLimits = REVIEW_LIMITS) {
+export function readSession(file: string, limits: ReviewLimits = REVIEW_LIMITS, prefix?: string) {
   let header: { type?: string; id?: unknown; cwd?: unknown } = {};
   const entries = new Map<string, Entry>();
   const leaves = new Set<string>();
@@ -310,66 +347,72 @@ export function readSession(file: string, limits: ReviewLimits = REVIEW_LIMITS) 
     if (Buffer.byteLength(value) > max) throw Error('Session metadata limit exceeded');
     return value;
   };
-  readRecords(file, limits.recordBytes, (line, lineNumber) => {
-    if (lineNumber === 1) {
-      const raw = JSON.parse(line || '{}');
-      header = {
-        type: raw?.type,
-        id: raw?.id,
-        cwd: typeof raw?.cwd === 'string' ? raw.cwd : undefined,
+  readRecords(
+    file,
+    limits.recordBytes,
+    (line, lineNumber) => {
+      if (lineNumber === 1) {
+        const raw = JSON.parse(line || '{}');
+        header = {
+          type: raw?.type,
+          id: raw?.id,
+          cwd: typeof raw?.cwd === 'string' ? raw.cwd : undefined,
+        };
+        if (header?.type !== 'session' || typeof header.id !== 'string' || !header.id.trim())
+          throw Error(`Invalid session header in ${file}`);
+        bounded(header.id);
+        if (typeof header.cwd === 'string') bounded(header.cwd, 16 * 1024);
+        bytes += COMPACT_HEADER_BYTES + stringBytes(header.id) + stringBytes(header.cwd);
+        if (bytes > limits.sourceBytes)
+          throw Error('Session retained text/metadata limit exceeded');
+        return;
+      }
+      if (!line.trim()) return;
+      let e: Entry;
+      try {
+        e = JSON.parse(line) as Entry;
+      } catch (error) {
+        throw Error(`Invalid JSON at ${file}:${lineNumber}`, { cause: error });
+      }
+      if (
+        !e ||
+        typeof e.id !== 'string' ||
+        !e.id ||
+        typeof e.type !== 'string' ||
+        entries.has(e.id) ||
+        !(e.parentId === null || entries.has(e.parentId))
+      )
+        throw Error(`Invalid session tree at ${file}:${lineNumber}`);
+      if (entries.size >= limits.sourceEntries) throw Error('Session entry limit exceeded');
+      const compact: Entry = {
+        id: bounded(e.id),
+        parentId: e.parentId,
+        type: bounded(e.type),
+        timestamp: bounded(timestampText(e.timestamp)),
       };
-      if (header?.type !== 'session' || typeof header.id !== 'string' || !header.id.trim())
-        throw Error(`Invalid session header in ${file}`);
-      bounded(header.id);
-      if (typeof header.cwd === 'string') bounded(header.cwd, 16 * 1024);
-      bytes += COMPACT_HEADER_BYTES + stringBytes(header.id) + stringBytes(header.cwd);
+      const projectText = (content: unknown) => {
+        const text = visibleText(content, limits.sourceTextBytes - textBytes);
+        textBytes += Buffer.byteLength(text);
+        return text;
+      };
+      if (e.type === 'message' && (e.message?.role === 'user' || e.message?.role === 'assistant'))
+        compact.message = { role: e.message.role, content: projectText(e.message.content) };
+      if (e.type === 'context_edit') {
+        if (typeof e.targetId === 'string') compact.targetId = bounded(e.targetId);
+        compact.replacement =
+          e.replacement === null || e.replacement === undefined
+            ? null
+            : { content: projectText(e.replacement.content) };
+      }
+      bytes += compactEntryBytes(compact);
       if (bytes > limits.sourceBytes) throw Error('Session retained text/metadata limit exceeded');
-      return;
-    }
-    if (!line.trim()) return;
-    let e: Entry;
-    try {
-      e = JSON.parse(line) as Entry;
-    } catch (error) {
-      throw Error(`Invalid JSON at ${file}:${lineNumber}`, { cause: error });
-    }
-    if (
-      !e ||
-      typeof e.id !== 'string' ||
-      !e.id ||
-      typeof e.type !== 'string' ||
-      entries.has(e.id) ||
-      !(e.parentId === null || entries.has(e.parentId))
-    )
-      throw Error(`Invalid session tree at ${file}:${lineNumber}`);
-    if (entries.size >= limits.sourceEntries) throw Error('Session entry limit exceeded');
-    const compact: Entry = {
-      id: bounded(e.id),
-      parentId: e.parentId,
-      type: bounded(e.type),
-      timestamp: bounded(timestampText(e.timestamp)),
-    };
-    const projectText = (content: unknown) => {
-      const text = visibleText(content, limits.sourceTextBytes - textBytes);
-      textBytes += Buffer.byteLength(text);
-      return text;
-    };
-    if (e.type === 'message' && (e.message?.role === 'user' || e.message?.role === 'assistant'))
-      compact.message = { role: e.message.role, content: projectText(e.message.content) };
-    if (e.type === 'context_edit') {
-      if (typeof e.targetId === 'string') compact.targetId = bounded(e.targetId);
-      compact.replacement =
-        e.replacement === null || e.replacement === undefined
-          ? null
-          : { content: projectText(e.replacement.content) };
-    }
-    bytes += compactEntryBytes(compact);
-    if (bytes > limits.sourceBytes) throw Error('Session retained text/metadata limit exceeded');
-    entries.set(compact.id, compact);
-    depths.set(compact.id, (compact.parentId === null ? 0 : depths.get(compact.parentId)!) + 1);
-    if (compact.parentId) leaves.delete(compact.parentId);
-    leaves.add(compact.id);
-  });
+      entries.set(compact.id, compact);
+      depths.set(compact.id, (compact.parentId === null ? 0 : depths.get(compact.parentId)!) + 1);
+      if (compact.parentId) leaves.delete(compact.parentId);
+      leaves.add(compact.id);
+    },
+    prefix,
+  );
   if (header?.type !== 'session' || typeof header.id !== 'string' || header.id.trim() === '')
     throw Error(`Invalid session header in ${file}`);
   const branchEntries = [...leaves].reduce((sum, id) => sum + depths.get(id)!, 0);
@@ -590,4 +633,105 @@ export function prepareReview(
     incomplete,
     coverageChanged: checkpoints.length > 0 || sourceDefaults.length > 0,
   };
+}
+
+function ancestor(tree: SessionTree, before: string, after: string): boolean {
+  let id: string | null = after;
+  while (id !== null) {
+    if (id === before) return true;
+    const entry = tree.entries.get(id);
+    if (!entry) throw Error(`Ancestry unavailable: ${id}`);
+    id = entry.parentId;
+  }
+  return false;
+}
+const version = (item: Evidence) => JSON.stringify([item.entryId, item.editId]);
+function eligible(item: Evidence, since: string | null) {
+  const time = Date.parse(item.timestamp);
+  return since === null || !Number.isFinite(time) || time >= Date.parse(since);
+}
+
+type Applicability =
+  | { status: 'blocked'; diagnostic: string; review: null }
+  | {
+      status: 'ready' | 'already-covered' | 'no-evidence';
+      diagnostic: null;
+      review: PreparedReview;
+    };
+export function prepareHistoricalReview(
+  source: Source,
+  snapshotFile: string,
+  reviewed: readonly Checkpoint[],
+  options?: ReviewOptions,
+): Applicability {
+  try {
+    const saved = readSession(snapshotFile);
+    if (saved.sessionId !== source.sessionId) throw Error('Session identity differs from snapshot');
+    const tree = { ...saved, tips: saved.tips.map((tip) => ({ ...tip, file: source.file })) };
+    const boundaries = reviewed.filter((cp) => cp.sessionId === source.sessionId);
+    let coverageTree = tree;
+    if (boundaries.some((cp) => !tree.entries.has(cp.entryId))) {
+      const live = readSession(source.file, REVIEW_LIMITS, snapshotFile);
+      coverageTree = { ...live, tips: live.tips.map((tip) => ({ ...tip, file: source.file })) };
+    }
+
+    // Resolve every checkpoint before selecting anything. Bound the additional
+    // historical walks just as ordinary extraction bounds its branch walks.
+    let coverageVisits = 0;
+    const receipts = boundaries.map((cp) => {
+      coverageVisits += coverageTree.entries.size;
+      if (coverageVisits > REVIEW_LIMITS.totalBranchEntries)
+        throw Error('Historical coverage walk limit exceeded');
+      if (!coverageTree.entries.has(cp.entryId))
+        throw Error(`Committed checkpoint unavailable: ${cp.entryId}`);
+      if (cp.since !== null && !Number.isFinite(Date.parse(cp.since)))
+        throw Error(`Invalid checkpoint date: ${cp.entryId}`);
+      return {
+        checkpoint: cp,
+        versions: new Set(
+          branchEvidence(coverageTree, cp)
+            .filter((item) => eligible(item, cp.since))
+            .map(version),
+        ),
+      };
+    });
+
+    // Reuse current cutoff/default semantics for endpoints inside the preserved
+    // tree. All other endpoints have already been mapped, not silently ignored.
+    const review = prepareReview(
+      [source],
+      boundaries.filter((cp) => tree.entries.has(cp.entryId)),
+      options,
+      [{ source, tree }],
+    );
+    if (review.incomplete) throw Error(review.warnings.map((w) => w.reason).join('; '));
+    const hadEvidence = review.evidence.length > 0;
+    review.evidence = review.evidence.filter(
+      (item) =>
+        !receipts.some(
+          (receipt) =>
+            (ancestor(coverageTree, receipt.checkpoint.entryId, item.branchId) ||
+              ancestor(coverageTree, item.branchId, receipt.checkpoint.entryId)) &&
+            receipt.versions.has(version(item)),
+        ),
+    );
+    if (!review.evidence.length) {
+      // Match automatic capture: no evidence means no manufactured coverage,
+      // including when a manual seed would have staged a default-only change.
+      review.tips = [];
+      review.checkpoints = [];
+      review.sourceDefaults = [];
+      review.successfulSources = [];
+      review.coverageChanged = false;
+    }
+    return {
+      status: review.evidence.length ? 'ready' : hadEvidence ? 'already-covered' : 'no-evidence',
+      diagnostic: null,
+      review,
+    };
+  } catch (error) {
+    // An unresolved job retains the snapshot and this diagnostic. There is no
+    // finish plan at all, even if some other checkpoint was successfully mapped.
+    return { status: 'blocked', diagnostic: String(error), review: null };
+  }
 }

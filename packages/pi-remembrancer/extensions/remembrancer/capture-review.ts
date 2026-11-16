@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { FinishPlan } from './checkpoints.js';
-import { prepareReview, type Checkpoint, type Source } from './evidence.js';
+import { prepareReview, type Checkpoint, type Source, type PreparedReview } from './evidence.js';
 import { validateSubmission, type ProposalSubmission } from './proposals.js';
 import {
   boundedEvidencePage,
@@ -21,8 +21,9 @@ export class CaptureReview {
     source: Source,
     reviewed: readonly Checkpoint[],
     private readonly assertActive: () => void,
+    prepared?: PreparedReview,
   ) {
-    this.review = prepareReview([source], [...reviewed]);
+    this.review = prepared ?? prepareReview([source], [...reviewed]);
   }
 
   get hasEvidence(): boolean {
@@ -55,10 +56,13 @@ export class CaptureReview {
     return frozenContext(this.review, this.id, args);
   }
 
-  completion(submissions: readonly ProposalSubmission[]) {
+  completion(submissions: readonly ProposalSubmission[], allowNoEvidence = false) {
     this.assertActive();
     if (this.incomplete) throw new Error('Cannot finish incomplete capture scope');
-    if (!this.hasEvidence) throw new Error('Cannot finish capture without eligible evidence');
+    if (!this.hasEvidence && !allowNoEvidence)
+      throw new Error('Cannot finish capture without eligible evidence');
+    if (!this.hasEvidence && submissions.length)
+      throw new Error('No evidence for capture proposals');
     if (this.cursor.index !== this.review.evidence.length || this.cursor.offset !== 0)
       throw new Error('Read all evidence pages before finishing');
     if (!Array.isArray(submissions))

@@ -4,12 +4,11 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
 import {
-  branchEvidence,
+  prepareHistoricalReview,
   prepareReview,
   readSession,
   resolveSeedSince,
   type Checkpoint,
-  type Evidence,
   type PreparedReview,
   type ReviewOptions,
   type SessionTree,
@@ -70,100 +69,10 @@ function parseBytes(bytes: Buffer, source: Source): SessionTree {
   if (tree.sessionId !== source.sessionId) throw Error('Session identity differs from snapshot');
   return { ...tree, tips: tree.tips.map((tip) => ({ ...tip, file: source.file })) };
 }
-function ancestor(tree: SessionTree, before: string, after: string): boolean {
-  let id: string | null = after;
-  while (id !== null) {
-    if (id === before) return true;
-    const entry = tree.entries.get(id);
-    if (!entry) throw Error(`Ancestry unavailable: ${id}`);
-    id = entry.parentId;
-  }
-  return false;
-}
-const version = (item: Evidence) => JSON.stringify([item.entryId, item.editId]);
-function eligible(item: Evidence, since: string | null) {
-  const time = Date.parse(item.timestamp);
-  return since === null || !Number.isFinite(time) || time >= Date.parse(since);
-}
-
-type Applicability =
-  | { status: 'blocked'; diagnostic: string; review: null }
-  | {
-      status: 'ready' | 'already-covered' | 'no-evidence';
-      diagnostic: null;
-      review: PreparedReview;
-    };
-function historicalReview(
-  f: Fixture,
-  reviewed: readonly Checkpoint[],
-  options?: ReviewOptions,
-): Applicability {
-  try {
-    const bytes = readFileSync(f.snapshotFile);
-    const tree = parseBytes(bytes, f.source);
-    const boundaries = reviewed.filter((cp) => cp.sessionId === f.source.sessionId);
-    let coverageTree = tree;
-    if (boundaries.some((cp) => !tree.entries.has(cp.entryId))) {
-      const live = readFileSync(f.source.file);
-      if (!bytes.length || bytes.at(-1) !== 10 || !live.subarray(0, bytes.length).equals(bytes))
-        throw Error('Live source is not an exact extension of the retained prefix');
-      coverageTree = parseBytes(live, f.source);
-    }
-
-    // Resolve EVERY checkpoint before selecting anything. Missing endpoints are
-    // translated to exact-version coverage below, never discarded or replayed.
-    const receipts = boundaries.map((cp) => {
-      if (!coverageTree.entries.has(cp.entryId))
-        throw Error(`Committed checkpoint unavailable: ${cp.entryId}`);
-      if (cp.since !== null && !Number.isFinite(Date.parse(cp.since)))
-        throw Error(`Invalid checkpoint date: ${cp.entryId}`);
-      return {
-        checkpoint: cp,
-        versions: new Set(
-          branchEvidence(coverageTree, cp)
-            .filter((item) => eligible(item, cp.since))
-            .map(version),
-        ),
-      };
-    });
-
-    // Reuse current cutoff/default semantics for endpoints inside the preserved
-    // tree. All other endpoints have already been mapped, not silently ignored.
-    const review = prepareReview(
-      [f.source],
-      boundaries.filter((cp) => tree.entries.has(cp.entryId)),
-      options,
-      [{ source: f.source, tree }],
-    );
-    if (review.incomplete) throw Error(review.warnings.map((w) => w.reason).join('; '));
-    const hadEvidence = review.evidence.length > 0;
-    review.evidence = review.evidence.filter(
-      (item) =>
-        !receipts.some(
-          (receipt) =>
-            (ancestor(coverageTree, receipt.checkpoint.entryId, item.branchId) ||
-              ancestor(coverageTree, item.branchId, receipt.checkpoint.entryId)) &&
-            receipt.versions.has(version(item)),
-        ),
-    );
-    if (!review.evidence.length) {
-      // Match automatic capture: no evidence means no manufactured coverage,
-      // including when a manual seed would have staged a default-only change.
-      review.tips = [];
-      review.checkpoints = [];
-      review.sourceDefaults = [];
-      review.coverageChanged = false;
-    }
-    return {
-      status: review.evidence.length ? 'ready' : hadEvidence ? 'already-covered' : 'no-evidence',
-      diagnostic: null,
-      review,
-    };
-  } catch (error) {
-    // An unresolved job retains the snapshot and this diagnostic. There is no
-    // finish plan at all, even if some other checkpoint was successfully mapped.
-    return { status: 'blocked', diagnostic: String(error), review: null };
-  }
+// The proof now exercises the production applicability adapter.
+type Applicability = ReturnType<typeof prepareHistoricalReview>;
+function historicalReview(f: Fixture, reviewed: readonly Checkpoint[], options?: ReviewOptions) {
+  return prepareHistoricalReview(f.source, f.snapshotFile, reviewed, options);
 }
 function prepared(result: Applicability): PreparedReview {
   expect(result.status, result.diagnostic ?? '').not.toBe('blocked');
@@ -173,8 +82,8 @@ function prepared(result: Applicability): PreparedReview {
 const selections = (review: PreparedReview) =>
   review.evidence.map((item) => [item.branchId, item.entryId, item.editId, item.text]);
 
-// No SDK session/model/worker is involved. These are the existing JSONL parser,
-// manual coverage store and frozen-context contracts against a local prototype.
+// No SDK session/model/worker is involved. Production parser, applicability,
+// manual coverage store and frozen-context contracts are exercised directly.
 describe('historical coverage applicability proof', () => {
   it('reproduces the absent descendant B problem and subtracts its proven coverage from tip A', () => {
     const f = fixture(msg('root', null), msg('A', 'root'));

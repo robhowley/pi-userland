@@ -1,8 +1,8 @@
-// Only Node built-ins and the Phase 0A prototype. No host settings or SDK startup.
+// Production preservation with no host settings or SDK session startup.
 import process from 'node:process';
 import { constants } from 'node:fs';
 import { copyFile } from 'node:fs/promises';
-import { preserveProof } from './capture-preservation-proof.ts';
+import { preserveHandoff as preserveProof } from '../../extensions/remembrancer/capture-handoff.ts';
 
 const [encoded, stopAt] = process.argv.slice(2);
 const input = JSON.parse(encoded);
