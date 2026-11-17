@@ -1331,9 +1331,12 @@ it.each(['applying', 'uncertain'] as const)(
         expect(screen.text()).not.toMatch(/d\b[^\n]*dismiss/i);
         await screen.press('d');
         await screen.press('e');
+        const beforeVerification = f.store.proposal(f.proposal.id);
         await screen.press(keys.apply);
         expect(await screen.pages()).toMatch(/uncertain|unresolved/i);
-        expect(f.store.proposal(f.proposal.id)?.state).toBe('uncertain');
+        // A failed read-only resolution preserves the existing claim and durable state.
+        expect(f.store.proposal(f.proposal.id)?.state).toBe(state);
+        expect(f.store.proposal(f.proposal.id)).toEqual(beforeVerification);
         expect(screen.active()).toBe(true);
       },
       { editor },
