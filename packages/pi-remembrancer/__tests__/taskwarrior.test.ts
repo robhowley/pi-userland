@@ -781,17 +781,28 @@ it('preview shows the actual target and changed project, not the old extraction 
     project: 'Current project',
     description: 'Actual description',
     waitingon: 'Actual prerequisite',
-    custom: 'Visible attribute',
+    custom: 'Unchanged custom attribute',
+    annotations: [{ entry: '20260101T000000Z', description: 'Unchanged annotation' }],
   });
-  const text = previewText(await previewProposal(f.store, f.proposal.id, f.execute));
-  for (const value of [
-    'Current project',
-    'Actual description',
-    'waitingon',
-    'Actual prerequisite',
-    'null',
-  ])
-    expect(text).toContain(value);
+  await driveUI(f.store, f.execute, async (screen) => {
+    await screen.press(keys.enter);
+    const text = (await screen.pages()).replace(/[\s│█]/gu, '');
+    for (const line of [
+      'Current description: "Actual description"',
+      'Project: "Current project" (current)',
+      'Saved fallback description (not current): "Before"',
+      'Saved fallback project (not current): "work"',
+      'waitingon: "Actual prerequisite" -> null',
+    ])
+      expect(text).toContain(line.replace(/\s/gu, ''));
+    for (const omitted of [
+      'Unchanged annotation',
+      'Unchanged custom attribute',
+      '"uuid":',
+      '"annotations":',
+    ])
+      expect(text).not.toContain(omitted.replace(/\s/gu, ''));
+  });
 });
 
 const keys = {
@@ -814,7 +825,7 @@ async function driveUI(
   actions: (screen: {
     lines(): string[];
     text(): string;
-    press(key: string): Promise<void>;
+    press(key: string, paint?: boolean): Promise<void>;
     pages(): Promise<string>;
     resize(columns: number, rows: number): void;
     active(): boolean;
@@ -869,9 +880,9 @@ async function driveUI(
     text() {
       return this.lines().join('\n');
     },
-    async press(key: string) {
+    async press(key: string, paint = true) {
       expect(active, 'keys must be delivered only to the active custom component').toBeDefined();
-      active!.render(terminal.columns);
+      if (paint) active!.render(terminal.columns);
       active!.handleInput?.(key);
       await settle();
       active?.render(terminal.columns);
@@ -1031,40 +1042,35 @@ it('focus collapses the previous review, resets paging, and boundary arrows do n
 });
 
 it('Inbox partitions every durable state from decided History and uses two-line collapsed rows', async () => {
-  const f = setup();
+  const draft = (state: string): ProposalDraft => ({
+    change: {
+      operation: 'add',
+      fields: { description: 'TITLE_' + state, project: 'work' },
+      annotations: [],
+    },
+    expected: null,
+    question: null,
+  });
+  const f = setup(draft('pending'));
   const pending = f.proposal;
-  const applying = f.store.claimProposal(seed(f.store).id, 1, null);
-  const uncertain = f.store.claimProposal(seed(f.store).id, 1, null);
+  const applying = f.store.claimProposal(seed(f.store, draft('applying')).id, 1, null);
+  const uncertain = f.store.claimProposal(seed(f.store, draft('uncertain')).id, 1, null);
   f.store.recordProposalResult(uncertain.id, uncertain.revision, uncertain.claim!, {
     state: 'uncertain',
     verified: null,
     actual: null,
     error: 'Saved unresolved failure',
   });
-  const dismissed = seed(f.store);
+  const dismissed = seed(f.store, draft('dismissed'));
   f.store.dismissProposal(dismissed.id, 1);
   for (const state of ['applied', 'already_satisfied'] as const) {
-    const claimed = f.store.claimProposal(seed(f.store).id, 1, null);
+    const claimed = f.store.claimProposal(seed(f.store, draft(state)).id, 1, null);
     f.store.recordProposalResult(claimed.id, claimed.revision, claimed.claim!, {
       state,
       verified: snapshot({ ...record, uuid: claimed.claim! }),
       error: null,
     });
   }
-  // Give each persisted row a distinct saved title, without adding store behavior tests.
-  const list = f.store.proposals().map((p) => ({
-    ...p,
-    change: {
-      operation: 'add' as const,
-      fields: { description: 'TITLE_' + p.state, project: 'work' },
-      annotations: [],
-    },
-  }));
-  vi.spyOn(f.store, 'proposals').mockImplementation((_state, offset = 0, limit = 100) =>
-    list.slice(offset, offset + limit),
-  );
-  const byId = new Map(list.map((p) => [p.id, p]));
-  vi.spyOn(f.store, 'proposal').mockImplementation((id) => byId.get(id));
   await driveUI(f.store, f.execute, async (screen) => {
     const lines = screen.lines();
     for (const state of ['pending', 'applying', 'uncertain']) {
@@ -1347,6 +1353,41 @@ it.each(['applying', 'uncertain'] as const)(
   },
 );
 
+it.each(['completion', 'interrupted update', 'unresolved question'] as const)(
+  'review displays the effect of %s',
+  async (kind) => {
+    const f = setup(
+      kind === 'completion'
+        ? {
+            ...update,
+            change: { operation: 'complete', targetUuid: uuid, annotations: [] },
+          }
+        : { ...update, question: kind === 'unresolved question' ? 'Which delivery date?' : null },
+    );
+    if (kind === 'interrupted update') {
+      f.store.claimProposal(f.proposal.id, 1, snapshot(record));
+      f.set({ ...record, status: 'completed' });
+    }
+    await driveUI(f.store, f.execute, async (screen) => {
+      await screen.press(keys.enter);
+      const review = (await screen.pages()).replace(/[\s│█]/gu, '');
+      expect(review).toContain(
+        (kind === 'completion'
+          ? 'status: "pending" -> "completed"'
+          : kind === 'interrupted update'
+            ? 'status: "completed" -> "pending"'
+            : 'Apply disabled: "Which delivery date?"'
+        ).replace(/\s/gu, ''),
+      );
+      if (kind === 'unresolved question') {
+        await screen.press(keys.apply);
+        expect(f.store.proposal(f.proposal.id)?.state).toBe('pending');
+      }
+    });
+    expect(f.execute.mock.calls.every(([, input]) => input === undefined)).toBe(true);
+  },
+);
+
 it('only explicit per-item Ctrl+A applies, never Enter, History, Source or accept-all', async () => {
   const f = setup();
   seed(f.store);
@@ -1404,6 +1445,86 @@ it.each(['task', 'draft'])(
   },
 );
 
+it.each(['d', keys.apply].flatMap((action) => [false, true].map((last) => ({ action, last }))))(
+  'error reload after $action collapses when the reviewed ID leaves Inbox (last=$last)',
+  async ({ action, last }) => {
+    const f = setup();
+    const next = seed(f.store, {
+      change: {
+        operation: 'add',
+        fields: { description: 'Successor', project: last ? 'a' : 'z' },
+        annotations: [],
+      },
+      expected: null,
+      question: null,
+    });
+    await driveUI(f.store, f.execute, async (screen) => {
+      if (last) await screen.press(keys.down);
+      await screen.press(keys.enter);
+      f.store.dismissProposal(f.proposal.id, 1);
+      await screen.press(action);
+      expect(screen.text()).toContain('Successor');
+      expect(screen.text()).toContain('Enter Expand');
+      await screen.press(keys.apply);
+      expect(f.store.proposal(next.id)?.state).toBe('pending');
+      expect(f.execute).not.toHaveBeenCalled();
+    });
+  },
+);
+
+it('preview refresh supplies the latest revision to History and the editor', async () => {
+  const f = setup();
+  const edited: ProposalDraft = {
+    change: { operation: 'add', fields: { description: 'External revision' }, annotations: [] },
+    expected: null,
+    question: null,
+  };
+  const editor = vi.fn(async (_title: string, initial: string) => {
+    expect(JSON.parse(initial)).toEqual(edited);
+    return initial;
+  });
+  await driveUI(
+    f.store,
+    f.execute,
+    async (screen) => {
+      f.store.editProposal(f.proposal.id, 1, edited);
+      await screen.press(keys.enter);
+      expect(await screen.pages()).toContain('External revision');
+      await screen.press('h');
+      expect(await screen.pages()).toContain('revision 2');
+      await screen.press(keys.escape);
+      await screen.press('e');
+      expect(editor).toHaveBeenCalledOnce();
+      expect(f.store.proposal(f.proposal.id)?.revision).toBe(3);
+      expect(await screen.pages()).toContain('Draft saved.');
+    },
+    { editor },
+  );
+  expect(f.execute).not.toHaveBeenCalled();
+});
+
+it('preview refresh disables edit and dismiss after an external claim', async () => {
+  const f = setup();
+  const editor = vi.fn(async () => undefined);
+  const dismiss = vi.spyOn(f.store, 'dismissProposal');
+  await driveUI(
+    f.store,
+    f.execute,
+    async (screen) => {
+      f.store.claimProposal(f.proposal.id, 1, null);
+      await screen.press(keys.enter);
+      expect(screen.text()).toContain('Verify only (no replay)');
+      expect(screen.text()).not.toMatch(/e Edit|d Dismiss/);
+      await screen.press('e');
+      await screen.press('d');
+      expect(editor).not.toHaveBeenCalled();
+      expect(dismiss).not.toHaveBeenCalled();
+    },
+    { editor },
+  );
+  expect(f.execute.mock.calls.every(([, input]) => input === undefined)).toBe(true);
+});
+
 it('missing target remains in Inbox after deliberate expanded approval', async () => {
   const f = setup(update);
   f.set(null);
@@ -1449,11 +1570,29 @@ it.each(['dismiss', 'preview freshness', 'partial task write'])(
     });
     await driveUI(f.store, execute, async (screen) => {
       if (failure === 'dismiss') {
+        screen.resize(48, 32);
+        const feedback =
+          'INERT_DISMISS_FAILURE ' +
+          'Retained proposal and task unchanged. '.repeat(5) +
+          'FEEDBACK_END';
         vi.spyOn(f.store, 'dismissProposal').mockImplementationOnce(() => {
-          throw new Error('INERT_DISMISS_FAILURE');
+          throw new Error(feedback);
         });
         await screen.press('d');
-        expect(screen.text()).toContain('INERT_DISMISS_FAILURE');
+        const lines = screen.lines();
+        expect(lines.length).toBeLessThanOrEqual(30);
+        expect(lines.every((line) => visibleWidth(line) <= 48)).toBe(true);
+        expect(screen.text()).toContain('Full feedback is in the body.');
+        for (const action of [/ctrl\+a/i, /dismiss/i, /history/i, /esc/i])
+          expect(screen.text()).toMatch(action);
+        const body = lines
+          .filter((line) => /[█│]│$/u.test(line))
+          .map((line) => line.slice(1, -2))
+          .join('')
+          .replace(/\s/gu, '');
+        expect(body).toContain(
+          `Full feedback: ${JSON.stringify('Error: ' + feedback)}`.replace(/\s/gu, ''),
+        );
       } else {
         await screen.press(keys.enter);
         if (failure === 'preview freshness')
@@ -1546,18 +1685,26 @@ it.each([
           await screen.press(keys.pageDown);
           if (screen.text() === text) break;
         }
-        const all = frames.flat().join('\n');
-        const unwrapped = all.replace(/[\s│┃]/gu, '');
-        for (const marker of [
-          ...longNotes.flatMap((_, n) => ['NOTE_' + n + '_START', 'NOTE_' + n + '_FINAL']),
-          'EXACT_URL_FINAL',
-          'EXACT_PREREQUISITE_FINAL',
-          '20300201T000000Z',
-          '20300102T000000Z',
-          '漢字',
-          '👩🏽‍💻',
-        ])
-          expect(unwrapped).toContain(marker);
+        const renderedRows: string[] = [];
+        for (const frame of frames) {
+          const start = Number(frame.join('\n').match(/Rows (\d+)-/)?.[1]) - 1;
+          frame
+            .filter((line) => /[█│]│$/u.test(line))
+            .forEach((line, index) => {
+              renderedRows[start + index] = line.slice(1, -2);
+            });
+        }
+        const unwrapped = renderedRows.join('').replace(/\s/gu, '');
+        for (const [index, note] of longNotes.entries())
+          expect(unwrapped).toContain(`${index + 1}.${JSON.stringify(note)}`.replace(/\s/gu, ''));
+        if (longDraft.change.operation !== 'complete')
+          for (const [field, value] of Object.entries(longDraft.change.fields))
+            expect(unwrapped).toContain(
+              `${field}: ${JSON.stringify(record[field] ?? null)} -> ${JSON.stringify(value)}`.replace(
+                /\s/gu,
+                '',
+              ),
+            );
         expect(frames[0]!.join('\n')).toMatch(/below|more|↓/i);
         expect(screen.text()).toMatch(/end/i);
         expect(frames.flat().some((line) => /[█▓▐▌]/u.test(line))).toBe(true);
@@ -1592,6 +1739,9 @@ it('resize rewraps and clamps a nonzero offset; a tiny terminal blocks apply unt
       expect(await screen.pages()).toMatch(/end/i);
     }
     screen.resize(20, 8);
+    await screen.press(keys.apply, false);
+    expect(f.store.proposal(f.proposal.id)?.state).toBe('pending');
+    expect(f.execute.mock.calls.filter(([, input]) => input)).toHaveLength(0);
     const tiny = screen.lines();
     expect(tiny.length).toBeLessThanOrEqual(8);
     expect(tiny.every((line) => visibleWidth(line) <= 20)).toBe(true);
@@ -1626,7 +1776,7 @@ it('Source return restores the exact review position, and nested Escape does not
 it('History separates selected revisions and decided proposals; inspections and nested Escape are read-only', async () => {
   const f = setup();
   f.store.editProposal(f.proposal.id, 1, {
-    change: { operation: 'add', fields: { description: 'Edited draft' }, annotations: [] },
+    change: { operation: 'add', fields: { description: 'Edited draft' }, annotations: longNotes },
     expected: null,
     question: null,
   });
@@ -1643,7 +1793,10 @@ it('History separates selected revisions and decided proposals; inspections and 
   const readSource = vi.spyOn(evidenceModule, 'readSession');
   await driveUI(f.store, f.execute, async (screen) => {
     await screen.press(keys.enter);
+    const top = screen.text();
+    await screen.press(keys.pageDown);
     const review = screen.text();
+    expect(review).not.toBe(top);
     await screen.press('h');
     const listing = await screen.pages();
     expect(listing).toMatch(/revision/i);

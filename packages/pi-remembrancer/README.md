@@ -84,17 +84,17 @@ At startup, a reminder such as `3 task proposals · /remembrancer proposals` sho
 
 The queue opens in one public custom overlay, with all proposals collapsed. Expand one to review exact proposed changes, the actual target task, explanation, and saved quotes. Source context is optional.
 
-| Key                 | Action |
-| ------------------- | ------ |
-| ↑ / ↓               | Move focus, collapsing the previous proposal and resetting detail scroll. |
-| Enter               | Expand or collapse the focused proposal, without changing tasks. |
-| Page Up / Page Down | Scroll the review body; controls stay fixed. |
-| `Ctrl+A`            | Collapsed: open review only. Expanded pending: approve and apply. Expanded applying/uncertain: verify only, never replay writes. |
-| `e`                 | Edit a pending proposal's validated JSON draft. Save refreshes review; cancel keeps the previous draft. The editor owns input until return. |
-| `d`                 | Dismiss only a pending proposal, leaving tasks unchanged. Shown in both collapsed and expanded views when available. |
-| `s`                 | Lazily load surrounding Source context; return restores the review position. Saved quotes remain available if context is missing. |
+| Key                 | Action                                                                                                                                                 |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| ↑ / ↓               | Move focus, collapsing the previous proposal and resetting detail scroll.                                                                              |
+| Enter               | Expand or collapse the focused proposal, without changing tasks.                                                                                       |
+| Page Up / Page Down | Scroll the review body; controls stay fixed.                                                                                                           |
+| `Ctrl+A`            | Collapsed: open review only. Expanded pending: approve and apply. Expanded applying/uncertain: verify only, never replay writes.                       |
+| `e`                 | Edit a pending proposal's validated JSON draft. Save refreshes review; cancel keeps the previous draft. The editor owns input until return.            |
+| `d`                 | Dismiss only a pending proposal, leaving tasks unchanged. Shown in both collapsed and expanded views when available.                                   |
+| `s`                 | Lazily load surrounding Source context; return restores the review position. Saved quotes remain available if context is missing.                      |
 | `h`                 | Open read-only History: selected-proposal revisions and decided proposals. ↑ / ↓ selects; Enter inspects the saved snapshot/result. No replay or undo. |
-| Esc                 | Leave nested inspection, Source, or History first, then collapse review, then close the collapsed queue. |
+| Esc                 | Leave nested inspection, Source, or History first, then collapse review, then close the collapsed queue.                                               |
 
 Only explicit per-item approval authorizes task writes. There is no read-every-line or scroll-to-end approval gate. Changed previews require renewed approval. Feedback distinguishes applied, already satisfied, dismissed (task unchanged), and unresolved results. Missing targets, errors, and applying/uncertain items remain visible until a decided result is established.
 

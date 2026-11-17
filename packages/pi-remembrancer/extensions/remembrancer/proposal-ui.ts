@@ -171,6 +171,7 @@ export async function openProposals(
   let historyEntries: { section: string; proposal: Proposal }[] = [];
 
   function reload() {
+    const id = inbox()[selected]?.id;
     proposals = [];
     for (let offset = 0; ; offset += 50) {
       const page = store.proposals(undefined, offset, 50);
@@ -183,6 +184,12 @@ export async function openProposals(
         a.createdAt.localeCompare(b.createdAt) ||
         a.id.localeCompare(b.id),
     );
+    const index = inbox().findIndex((item) => item.id === id);
+    if (index >= 0) selected = index;
+    else {
+      selected = Math.max(0, Math.min(selected, inbox().length - 1));
+      collapse();
+    }
   }
   const inbox = () => proposals.filter((proposal) => !decided(proposal));
   function collapse() {
@@ -218,7 +225,13 @@ export async function openProposals(
             requireTui(ctx.mode);
             const loaded = await previewProposal(store, id, execute);
             if (!active || request !== token || !expanded || inbox()[selected]?.id !== id) return;
-            preview = loaded;
+            proposals[proposals.findIndex((item) => item.id === id)] = loaded.proposal;
+            if (decided(loaded.proposal)) {
+              selected = Math.max(0, Math.min(selected, inbox().length - 1));
+              collapse();
+              reveal = true;
+              tui.requestRender();
+            } else preview = loaded;
           } catch (error) {
             if (!active || request !== token || !expanded || inbox()[selected]?.id !== id) return;
             previewError = String(error);
@@ -263,18 +276,8 @@ export async function openProposals(
                 : result.state === 'dismissed'
                   ? 'Dismissed. Task unchanged.'
                   : `Unresolved (${result.state}). No automatic retry; inspect the result.`;
-          const id = result.id;
           reload();
-          if (decided(result)) {
-            selected = Math.max(0, Math.min(selected, inbox().length - 1));
-            collapse();
-            reveal = true;
-          } else {
-            selected = Math.max(
-              0,
-              inbox().findIndex((item) => item.id === id),
-            );
-          }
+          if (!expanded) reveal = true;
         }
         async function authorize() {
           if (!preview || loading || busy) return;
@@ -293,10 +296,8 @@ export async function openProposals(
           } catch (error) {
             message = String(error);
             // A claim may have persisted before an error. Refresh, never replay or discard it.
-            const id = approved.proposal.id;
             reload();
-            const index = inbox().findIndex((item) => item.id === id);
-            if (index >= 0) selected = index;
+            if (!expanded) reveal = true;
           } finally {
             busy = false;
             if (expanded) await loadPreview();
@@ -565,9 +566,8 @@ export async function openProposals(
                   } catch (error) {
                     message = String(error);
                     reload();
-                    const index = inbox().findIndex((item) => item.id === proposal.id);
-                    if (index >= 0) selected = index;
                     if (expanded) void loadPreview();
+                    else reveal = true;
                   }
                 }
               }
