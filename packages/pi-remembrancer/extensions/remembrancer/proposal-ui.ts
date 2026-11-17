@@ -170,13 +170,16 @@ export async function openProposals(
   let historySelected = 0;
   let historyEntries: { section: string; proposal: Proposal }[] = [];
 
-  function reload() {
+  function reload(refreshed?: Proposal) {
     const id = inbox()[selected]?.id;
-    proposals = [];
-    for (let offset = 0; ; offset += 50) {
-      const page = store.proposals(undefined, offset, 50);
-      proposals.push(...page);
-      if (page.length < 50) break;
+    if (refreshed) proposals[proposals.findIndex((item) => item.id === refreshed.id)] = refreshed;
+    else {
+      proposals = [];
+      for (let offset = 0; ; offset += 50) {
+        const page = store.proposals(undefined, offset, 50);
+        proposals.push(...page);
+        if (page.length < 50) break;
+      }
     }
     proposals.sort(
       (a, b) =>
@@ -225,10 +228,8 @@ export async function openProposals(
             requireTui(ctx.mode);
             const loaded = await previewProposal(store, id, execute);
             if (!active || request !== token || !expanded || inbox()[selected]?.id !== id) return;
-            proposals[proposals.findIndex((item) => item.id === id)] = loaded.proposal;
-            if (decided(loaded.proposal)) {
-              selected = Math.max(0, Math.min(selected, inbox().length - 1));
-              collapse();
+            reload(loaded.proposal);
+            if (!expanded) {
               reveal = true;
               tui.requestRender();
             } else preview = loaded;
@@ -607,6 +608,9 @@ export async function openProposals(
       }
     } catch (error) {
       message = String(error);
+      reload();
+      preview = undefined;
+      previewError = '';
     }
   }
 }

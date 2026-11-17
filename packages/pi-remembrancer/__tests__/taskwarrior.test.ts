@@ -1503,6 +1503,118 @@ it('preview refresh supplies the latest revision to History and the editor', asy
   expect(f.execute).not.toHaveBeenCalled();
 });
 
+it('preview refresh reorders changed projects while retaining the focused expanded ID', async () => {
+  const f = setup();
+  const make = (id: string, project: string, createdAt: string): Proposal => ({
+    ...f.proposal,
+    id,
+    createdAt,
+    change: { operation: 'add', fields: { description: 'ROW_' + id, project }, annotations: [] },
+  });
+  const rows = [
+    make('a', 'alpha', '2026-01-01'),
+    make('b', 'alpha', '2026-01-01'),
+    make('c', 'alpha', '2026-01-02'),
+    make('d', 'beta', '2025-01-01'),
+    make('e', 'zeta', '2026-01-01'),
+  ];
+  vi.spyOn(f.store, 'proposals').mockImplementation((_state, offset = 0, limit = 100) =>
+    [...rows].reverse().slice(offset, offset + limit),
+  );
+  vi.spyOn(f.store, 'proposal').mockImplementation((id) => rows.find((item) => item.id === id));
+  await driveUI(f.store, f.execute, async (screen) => {
+    for (let index = 0; index < 4; index++) await screen.press(keys.down);
+    rows[4] = make('e', 'alpha', '2026-01-01');
+    await screen.press(keys.enter);
+    const review = await screen.pages();
+    expect(review).toContain('ROW_e');
+    expect(review).toContain('Proposal ID: "e"');
+    expect(review).toContain('Enter Collapse');
+    await screen.press(keys.escape);
+    const text = screen.text();
+    const order = ['a', 'b', 'e', 'c', 'd'];
+    const positions = order.map((id) => text.indexOf('ROW_' + id));
+    expect(positions.every((position) => position >= 0)).toBe(true);
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
+    expect(text).toContain('> "ROW_e"');
+    await screen.press(keys.down);
+    expect(screen.text()).toContain('> "ROW_c"');
+  });
+  expect(f.execute).not.toHaveBeenCalled();
+});
+
+it.each(['edit', 'claim', 'dismiss'] as const)(
+  'editor save conflict refreshes an external %s made while the editor owns input',
+  async (change) => {
+    const f = setup();
+    const successor = seed(f.store, {
+      change: {
+        operation: 'add',
+        fields: { description: 'Successor', project: 'z' },
+        annotations: [],
+      },
+      expected: null,
+      question: null,
+    });
+    const draft: ProposalDraft = {
+      change: { operation: 'add', fields: { description: 'Latest draft' }, annotations: [] },
+      expected: null,
+      question: null,
+    };
+    let complete!: (text: string) => void;
+    const pending = new Promise<string>((resolve) => {
+      complete = resolve;
+    });
+    const editor = vi.fn(async (_title: string, initial: string) =>
+      editor.mock.calls.length === 1 ? pending : initial,
+    );
+    const dismiss = vi.spyOn(f.store, 'dismissProposal');
+    await driveUI(
+      f.store,
+      f.execute,
+      async (screen) => {
+        await screen.press(keys.enter);
+        await screen.press('e');
+        try {
+          expect(screen.active()).toBe(false);
+          expect(editor).toHaveBeenCalledOnce();
+          if (change === 'edit') f.store.editProposal(f.proposal.id, 1, draft);
+          else if (change === 'claim') f.store.claimProposal(f.proposal.id, 1, null);
+          else f.store.dismissProposal(f.proposal.id, 1);
+        } finally {
+          complete(JSON.stringify(draft));
+        }
+        await vi.waitFor(() => expect(screen.active()).toBe(true));
+        expect(await screen.pages()).toContain('Proposal revision conflict');
+        expect(f.store.proposal(f.proposal.id)?.revision).toBe(2);
+        expect(f.execute.mock.calls.every(([, input]) => input === undefined)).toBe(true);
+        if (change === 'edit') {
+          expect(await screen.pages()).toContain('Latest draft');
+          await screen.press('e');
+          expect(JSON.parse(editor.mock.calls[1]![1])).toEqual(draft);
+          expect(f.store.proposal(f.proposal.id)?.revision).toBe(3);
+          expect(await screen.pages()).toContain('Draft saved.');
+        } else if (change === 'claim') {
+          expect(screen.text()).toContain('Verify only (no replay)');
+          expect(screen.text()).not.toMatch(/e Edit|d Dismiss/);
+          await screen.press('e');
+          await screen.press('d');
+          expect(editor).toHaveBeenCalledOnce();
+          expect(dismiss).not.toHaveBeenCalled();
+        } else {
+          expect(screen.text()).toContain('> "Successor"');
+          expect(screen.text()).toContain('Enter Expand');
+          await screen.press(keys.apply);
+          expect(f.store.proposal(successor.id)?.state).toBe('pending');
+          expect(f.execute).not.toHaveBeenCalled();
+        }
+      },
+      { editor },
+    );
+    expect(f.execute.mock.calls.every(([, input]) => input === undefined)).toBe(true);
+  },
+);
+
 it('preview refresh disables edit and dismiss after an external claim', async () => {
   const f = setup();
   const editor = vi.fn(async () => undefined);
