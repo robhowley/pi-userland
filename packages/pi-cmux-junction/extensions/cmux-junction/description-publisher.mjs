@@ -31,7 +31,7 @@ function dataRecord(value, fields) {
   );
 }
 
-export function validateReservation(value, target) {
+export function validateDescriptionTarget(value, target) {
   try {
     if (!dataRecord(value, ['socketPath', 'windowId', 'workspaceId'])) return null;
     const { socketPath, windowId, workspaceId } = value;
@@ -135,7 +135,7 @@ export function runDescriptionCommand(file, args, env, execute = execFile) {
   });
 }
 
-function readDescription(result, reservation) {
+export function readDescriptionCommandJson(result) {
   if (result?.ok !== true) throw new Error('process');
   const raw = result.stdout;
   if (!Buffer.isBuffer(raw) && typeof raw !== 'string') throw new Error('output');
@@ -143,14 +143,71 @@ function readDescription(result, reservation) {
   const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(
     Buffer.isBuffer(raw) ? raw : Buffer.from(raw),
   );
-  const value = JSON.parse(text);
+  return JSON.parse(text);
+}
+
+// Both calls are explicitly surface-scoped. A workspace fallback or focused
+// identity is not evidence that the producer still belongs to this coordinator.
+export async function resolveDescriptionTarget(target, surfaceId, runCommand) {
+  try {
+    const args = ['--socket', target.socketPath];
+    const resolved = readDescriptionCommandJson(
+      await runCommand([
+        ...args,
+        'rpc',
+        'agent.resolve_delivery_target',
+        JSON.stringify({ surface_id: surfaceId, workspace_id: target.workspaceId }),
+      ]),
+    );
+    if (
+      resolved?.source !== 'surface' ||
+      resolved.surface_id !== surfaceId ||
+      resolved.workspace_id !== target.workspaceId
+    )
+      return null;
+    const identified = readDescriptionCommandJson(
+      await runCommand([
+        ...args,
+        'identify',
+        '--id-format',
+        'both',
+        '--json',
+        '--workspace',
+        target.workspaceId,
+        '--surface',
+        surfaceId,
+      ]),
+    );
+    const caller = identified?.caller;
+    if (
+      caller?.workspace_id !== target.workspaceId ||
+      caller.surface_id !== surfaceId ||
+      caller.surface_type !== 'terminal' ||
+      caller.is_browser_surface !== false
+    )
+      return null;
+    return validateDescriptionTarget(
+      {
+        socketPath: target.socketPath,
+        workspaceId: caller.workspace_id,
+        windowId: caller.window_id,
+      },
+      target.workspaceId,
+    );
+  } catch {
+    return null;
+  }
+}
+
+function readDescription(result, target) {
+  const value = readDescriptionCommandJson(result);
   if (
     !value ||
     Array.isArray(value) ||
     typeof value !== 'object' ||
     typeof value.window_id !== 'string' ||
     !uuid.test(value.window_id) ||
-    value.window_id.toLowerCase() !== reservation.windowId ||
+    value.window_id.toLowerCase() !== target.windowId ||
     !Array.isArray(value.workspaces)
   )
     throw new Error('shape');
@@ -159,7 +216,7 @@ function readDescription(result, reservation) {
       row &&
       typeof row.id === 'string' &&
       uuid.test(row.id) &&
-      row.id.toLowerCase() === reservation.workspaceId,
+      row.id.toLowerCase() === target.workspaceId,
   );
   if (matches.length !== 1 || !Object.hasOwn(matches[0], 'description')) throw new Error('target');
   const description = matches[0].description;
@@ -167,11 +224,10 @@ function readDescription(result, reservation) {
   return description;
 }
 
-/** @param {{ reservation?: unknown, runCommand: (args: string[]) => Promise<unknown>, workspaceId?: string }} options */
-export function createDescriptionPublisher({ reservation: input, runCommand, workspaceId }) {
-  const reservation = validateReservation(input, workspaceId);
-  const disabledReason = input === null || input === undefined ? 'missing' : 'invalid';
-  let ownership = reservation ? 'unclaimed' : 'disabled';
+/** @param {{ target?: unknown, runCommand: (args: string[]) => Promise<unknown>, workspaceId?: string }} options */
+export function createDescriptionPublisher({ target: input, runCommand, workspaceId }) {
+  let target = validateDescriptionTarget(input, workspaceId);
+  let ownership = target ? 'unclaimed' : 'disabled';
   let desired = null;
   let applied = null;
   let dirty = false;
@@ -181,13 +237,11 @@ export function createDescriptionPublisher({ reservation: input, runCommand, wor
   let revision = 0;
   let uncertain = null;
   const bytes = (intent) => (intent.kind === 'set' ? intent.j1 : null);
-  const args = reservation
-    ? ['--socket', reservation.socketPath, '--json', '--id-format', 'both']
-    : [];
+  let args = target ? ['--socket', target.socketPath, '--json', '--id-format', 'both'] : [];
   const read = async () =>
     readDescription(
-      await runCommand([...args, 'workspace', 'list', '--window', reservation.windowId]),
-      reservation,
+      await runCommand([...args, 'workspace', 'list', '--window', target.windowId]),
+      target,
     );
 
   const attempt = async () => {
@@ -204,7 +258,8 @@ export function createDescriptionPublisher({ reservation: input, runCommand, wor
       }
       if (
         observed === bytes(intent) &&
-        (ownership === 'unclaimed' || observed === bytes(applied))
+        ((ownership === 'unclaimed' && observed === null) ||
+          (ownership === 'held' && observed === bytes(applied)))
       ) {
         applied = intent;
         uncertain = null;
@@ -224,11 +279,11 @@ export function createDescriptionPublisher({ reservation: input, runCommand, wor
         ...args,
         'workspace-action',
         '--window',
-        reservation.windowId,
+        target.windowId,
         '--action',
         action,
         '--workspace',
-        reservation.workspaceId,
+        target.workspaceId,
       ];
       if (intent.kind === 'set') command.push('--description', intent.j1);
       uncertain = intent;
@@ -266,6 +321,16 @@ export function createDescriptionPublisher({ reservation: input, runCommand, wor
     return running;
   };
   return {
+    // Bind only once, from a verified live producer, never retarget a coordinator.
+    bindTarget(input) {
+      const resolved = validateDescriptionTarget(input, workspaceId);
+      if (!resolved || stopping) return false;
+      if (target) return Object.keys(resolved).every((key) => resolved[key] === target[key]);
+      target = resolved;
+      args = ['--socket', target.socketPath, '--json', '--id-format', 'both'];
+      ownership = 'unclaimed';
+      return true;
+    },
     setDesired(projection) {
       if (stopping || !validProjection(projection)) return false;
       if (ownership === 'disabled') return true;
@@ -301,9 +366,9 @@ export function createDescriptionPublisher({ reservation: input, runCommand, wor
       ownership !== 'lost',
     diagnostics: () =>
       ownership === 'disabled'
-        ? { reservation: 'disabled', reason: disabledReason }
+        ? { ownership: 'disabled' }
         : {
-            reservation: ownership,
+            ownership,
             desired: desired?.kind ?? 'no-intent',
             applied: applied?.kind ?? 'unknown',
             dirty,

@@ -85,11 +85,31 @@ function plainDataRecord(value, fields) {
 }
 
 function normalizeBlock(value, index) {
-  if (!plainDataRecord(value, BLOCK_FIELDS)) {
+  if (!plainDataRecord(value, BLOCK_FIELDS) && !plainDataRecord(value, [...BLOCK_FIELDS, 'tab'])) {
     return { ok: false, path: `blocks[${index}]` };
   }
   if (typeof value.sourceId !== 'string' || !SOURCE_ID_PATTERN.test(value.sourceId)) {
     return { ok: false, path: `blocks[${index}].sourceId` };
+  }
+  let tab;
+  if (Object.hasOwn(value, 'tab')) {
+    if (
+      !plainDataRecord(value.tab, ['id', 'label']) ||
+      typeof value.tab.id !== 'string' ||
+      !SOURCE_ID_PATTERN.test(value.tab.id) ||
+      (value.tab.label !== null && typeof value.tab.label !== 'string') ||
+      !decodePresentationRequest({
+        ...VALIDATION_MESSAGE,
+        views: [
+          {
+            producer: { key: 'tab', label: value.tab.label ?? 'Unknown tab' },
+            items: [{ key: 'tab', title: 'Tab', rows: [] }],
+          },
+        ],
+      }).ok
+    )
+      return { ok: false, path: `blocks[${index}].tab` };
+    tab = Object.freeze({ ...value.tab });
   }
   const decoded = decodePresentationRequest({
     ...VALIDATION_MESSAGE,
@@ -100,7 +120,12 @@ function normalizeBlock(value, index) {
   if (!view) return { ok: false, path: `blocks[${index}]` };
   return {
     ok: true,
-    value: Object.freeze({ sourceId: value.sourceId, producer: view.producer, items: view.items }),
+    value: Object.freeze({
+      sourceId: value.sourceId,
+      producer: view.producer,
+      items: view.items,
+      tab,
+    }),
   };
 }
 
@@ -142,6 +167,7 @@ function buildPresentationJ1(input) {
 
     const blocks = [];
     const sourceIds = new Set();
+    const sourceTabs = new Map();
     let itemCount = 0;
     let rowCount = 0;
     for (let index = 0; index < input.length; index += 1) {
@@ -150,7 +176,16 @@ function buildPresentationJ1(input) {
         return rejection('invalid-input', normalized.path, 'input', 0, 1, emptyMetrics);
       }
       blocks.push(normalized.value);
-      sourceIds.add(normalized.value.sourceId);
+      const { sourceId, tab } = normalized.value;
+      const previousTab = sourceTabs.get(sourceId);
+      if (
+        sourceIds.has(sourceId) &&
+        (previousTab?.id !== tab?.id || previousTab?.label !== tab?.label)
+      ) {
+        return rejection('invalid-input', `blocks[${index}].tab`, 'input', 0, 1, emptyMetrics);
+      }
+      sourceIds.add(sourceId);
+      sourceTabs.set(sourceId, tab);
       itemCount += normalized.value.items.length;
       for (const item of normalized.value.items) rowCount += item.rows.length;
     }
@@ -169,7 +204,9 @@ function buildPresentationJ1(input) {
     }
 
     const recordCount = 1 + sourceIds.size + blocks.length + itemCount + rowCount;
-    const fieldCount = 2 + sourceIds.size * 3 + blocks.length * 5 + itemCount * 12 + rowCount * 9;
+    const tabFieldCount = [...sourceTabs.values()].filter(Boolean).length * 2;
+    const fieldCount =
+      2 + sourceIds.size * 3 + tabFieldCount + blocks.length * 5 + itemCount * 12 + rowCount * 9;
     let measured = metrics(
       sourceIds.size,
       blocks.length,
@@ -197,7 +234,15 @@ function buildPresentationJ1(input) {
     );
     const records = [];
     for (let index = 0; index < orderedSourceIds.length; index += 1) {
-      records.push(record(['S', index, orderedSourceIds[index]]));
+      const sourceId = orderedSourceIds[index];
+      const tab = sourceTabs.get(sourceId);
+      // Optional S metadata extends J2. New renderers accept legacy three-field
+      // sources; older assets must be updated before publishing five-field S.
+      records.push(
+        record(
+          tab ? ['S', index, sourceId, tab.id, tab.label ?? undefined] : ['S', index, sourceId],
+        ),
+      );
     }
     for (let producerRef = 0; producerRef < blocks.length; producerRef += 1) {
       const block = blocks[producerRef];

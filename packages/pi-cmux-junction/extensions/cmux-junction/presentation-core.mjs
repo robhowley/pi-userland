@@ -293,7 +293,14 @@ export function createPresentationCore(options) {
     connectionClosed,
     maintain,
     blocks: () => blocks,
+    sourceMetadata: () =>
+      Object.freeze(
+        [...sources.values()].map(({ sourceId, surfaceId }) =>
+          Object.freeze({ sourceId, surfaceId }),
+        ),
+      ),
     projection: () => projection,
+    publicationSurfaceId: () => sources.values().next().value?.surfaceId ?? null,
     isQuiescent: () => sources.size === 0,
     diagnostics: () => ({
       sourceCount: sources.size,

@@ -5,28 +5,32 @@ import { execFile, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
-import { dirname, normalize } from 'node:path';
+import { dirname } from 'node:path';
 import process from 'node:process';
 import { clearInterval, setInterval, setTimeout } from 'node:timers';
 import { fileURLToPath } from 'node:url';
 import { classifyExecFileFailure, resolveCmuxExecutable } from './cmux-runtime.mjs';
 import {
   createDescriptionPublisher,
+  readDescriptionCommandJson,
+  resolveDescriptionTarget,
   runDescriptionCommand,
-  validateReservation,
 } from './description-publisher.mjs';
+import {
+  MAX_PRESENTATION_IDENTITY_BYTES,
+  MAX_PRESENTATION_LABEL_BYTES,
+  PRESENTATION_PROTOCOL,
+  createPresentationAck,
+  createPresentationRejection,
+  decodePresentationRequestLine,
+  MAX_PRESENTATION_REQUEST_LINE_BYTES,
+} from './presentation-protocol.mjs';
+import { projectPresentationJ1 } from './presentation-j1.mjs';
 import {
   createPresentationCore,
   PRESENTATION_DISCONNECT_GRACE_MS,
   PRESENTATION_MAINTENANCE_MS,
 } from './presentation-core.mjs';
-import {
-  createPresentationAck,
-  createPresentationRejection,
-  decodePresentationRequestLine,
-  MAX_PRESENTATION_REQUEST_LINE_BYTES,
-  PRESENTATION_PROTOCOL,
-} from './presentation-protocol.mjs';
 import {
   LIFECYCLE_ACK_KIND,
   LIFECYCLE_COMMON_FIELDS,
@@ -38,6 +42,7 @@ import {
   LIFECYCLE_TOOL_NAME_PATTERN,
   MAX_LIFECYCLE_FRAME_BYTES,
 } from './lifecycle-protocol.mjs';
+import { formatLifecycleLabel } from './lifecycle-label.mjs';
 
 export const STATUS_KEY = 'pi-junction';
 export const RECONNECT_GRACE_MS = 5_000;
@@ -81,12 +86,166 @@ const durableOwnerFields = [
 ];
 const durableSnapshotFields = ['state', 'toolName', 'transitionAt', 'lastEventAt', 'compactionAt'];
 
+const MAX_PRESENTATION_LABEL_CHARACTERS = 128;
+const SURFACE_TITLE_SEPARATOR = ' · ';
+
 function hasControl(value) {
   for (const character of value) {
     const code = character.codePointAt(0);
     if (code <= 31 || (code >= 127 && code <= 159)) return true;
   }
   return false;
+}
+
+function hasLoneSurrogate(value) {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      if (index + 1 >= value.length) return true;
+      const next = value.charCodeAt(index + 1);
+      if (next < 0xdc00 || next > 0xdfff) return true;
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function normalizeSurfaceTitle(value) {
+  if (
+    typeof value !== 'string' ||
+    hasLoneSurrogate(value) ||
+    hasControl(value) ||
+    Buffer.byteLength(value, 'utf8') > MAX_PRESENTATION_LABEL_BYTES
+  ) {
+    return null;
+  }
+  const title = value.trim();
+  if (
+    title.length === 0 ||
+    Buffer.byteLength(title, 'utf8') > MAX_PRESENTATION_LABEL_BYTES ||
+    [...title].length > MAX_PRESENTATION_LABEL_CHARACTERS
+  ) {
+    return null;
+  }
+  return title;
+}
+
+function presentationLabelFits(value) {
+  return (
+    typeof value === 'string' &&
+    !hasLoneSurrogate(value) &&
+    !hasControl(value) &&
+    Buffer.byteLength(value, 'utf8') <= MAX_PRESENTATION_LABEL_BYTES &&
+    [...value].length <= MAX_PRESENTATION_LABEL_CHARACTERS
+  );
+}
+
+function boundedTitlePrefix(title, byteLimit, characterLimit) {
+  let bytes = 0;
+  let characters = 0;
+  let prefix = '';
+  for (const character of title) {
+    const characterBytes = Buffer.byteLength(character, 'utf8');
+    if (bytes + characterBytes > byteLimit || characters >= characterLimit) break;
+    prefix += character;
+    bytes += characterBytes;
+    characters += 1;
+  }
+  return prefix.trimEnd();
+}
+
+export function composePresentationProducerLabel(title, producerLabel) {
+  const normalizedTitle = normalizeSurfaceTitle(title);
+  if (normalizedTitle === null) return producerLabel;
+
+  const composite = `${normalizedTitle}${SURFACE_TITLE_SEPARATOR}${producerLabel}`;
+  if (presentationLabelFits(composite)) return composite;
+
+  const titleByteLimit =
+    MAX_PRESENTATION_LABEL_BYTES -
+    Buffer.byteLength(SURFACE_TITLE_SEPARATOR, 'utf8') -
+    Buffer.byteLength(producerLabel, 'utf8');
+  const titleCharacterLimit =
+    MAX_PRESENTATION_LABEL_CHARACTERS -
+    [...SURFACE_TITLE_SEPARATOR].length -
+    [...producerLabel].length;
+  if (titleByteLimit <= 0 || titleCharacterLimit <= 0) return producerLabel;
+
+  const prefix = boundedTitlePrefix(normalizedTitle, titleByteLimit, titleCharacterLimit);
+  if (prefix.length === 0) return producerLabel;
+  const bounded = `${prefix}${SURFACE_TITLE_SEPARATOR}${producerLabel}`;
+  return presentationLabelFits(bounded) ? bounded : producerLabel;
+}
+
+function validSurfaceId(value) {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    !hasLoneSurrogate(value) &&
+    !hasControl(value) &&
+    Buffer.byteLength(value, 'utf8') <= MAX_PRESENTATION_IDENTITY_BYTES
+  );
+}
+
+export async function resolvePresentationSurfaceTitles(target, runCommand) {
+  try {
+    const value = readDescriptionCommandJson(
+      await runCommand([
+        '--socket',
+        target.socketPath,
+        'rpc',
+        'surface.list',
+        JSON.stringify({ workspace_id: target.workspaceId }),
+      ]),
+    );
+    if (
+      !value ||
+      typeof value !== 'object' ||
+      Array.isArray(value) ||
+      value.workspace_id !== target.workspaceId ||
+      !Array.isArray(value.surfaces)
+    ) {
+      return new Map();
+    }
+
+    const titles = new Map();
+    const ambiguous = new Set();
+    for (const surface of value.surfaces) {
+      if (!surface || typeof surface !== 'object' || Array.isArray(surface)) continue;
+      const surfaceId = surface.id;
+      if (!validSurfaceId(surfaceId) || ambiguous.has(surfaceId)) continue;
+      const title = normalizeSurfaceTitle(surface.title);
+      if (title === null || titles.has(surfaceId)) {
+        titles.delete(surfaceId);
+        ambiguous.add(surfaceId);
+        continue;
+      }
+      titles.set(surfaceId, title);
+    }
+    return titles;
+  } catch {
+    return new Map();
+  }
+}
+
+function presentationBlocksWithSurfaceTitles(blocks, sourceMetadata, titles) {
+  const surfaceIds = new Map(
+    sourceMetadata.map(({ sourceId, surfaceId }) => [sourceId, surfaceId]),
+  );
+  return blocks.map((block) => {
+    const surfaceId = surfaceIds.get(block.sourceId);
+    if (!validSurfaceId(surfaceId)) return block;
+    // Display grouping is surface-scoped; lifecycle source hashes remain unchanged.
+    return {
+      ...block,
+      tab: {
+        id: createHash('sha256').update(surfaceId, 'utf8').digest('hex'),
+        label: titles.get(surfaceId) ?? null,
+      },
+    };
+  });
 }
 
 function clone(value) {
@@ -237,27 +396,6 @@ function statusEqual(left, right) {
   return left?.state === right?.state && left?.label === right?.label;
 }
 
-function aggregateLabel(state, toolName = null) {
-  switch (state) {
-    case 'compacting':
-      return 'Compacting';
-    case 'error':
-      return 'Error';
-    case 'awaiting-input':
-      return 'Needs input';
-    case 'tool-running':
-      return toolName ? `Tool running: ${toolName}` : 'Tool running';
-    case 'thinking':
-      return 'Thinking';
-    case 'unknown':
-      return 'Unknown';
-    case 'idle':
-      return 'Idle';
-    default:
-      return null;
-  }
-}
-
 export function probePidStart(pid, expectedStartedAt, dependencies = {}) {
   const signal = dependencies.signal ?? ((candidate) => process.kill(candidate, 0));
   try {
@@ -351,10 +489,10 @@ export function aggregateOwners(owners, now) {
       liveNonIdle[0].state === 'tool-running'
         ? liveNonIdle[0].owner.snapshot.toolName
         : null;
-    return { state: winner, label: aggregateLabel(winner, toolName) };
+    return { state: winner, label: formatLifecycleLabel(winner, toolName) };
   }
-  if (unresolved) return { state: 'unknown', label: aggregateLabel('unknown') };
-  return { state: 'idle', label: aggregateLabel('idle') };
+  if (unresolved) return { state: 'unknown', label: formatLifecycleLabel('unknown') };
+  return { state: 'idle', label: formatLifecycleLabel('idle') };
 }
 
 function emptyLedger(target, now) {
@@ -390,7 +528,7 @@ function validStatus(value) {
       : '';
     return LIFECYCLE_TOOL_NAME_PATTERN.test(toolName);
   }
-  return value.label === aggregateLabel(value.state);
+  return value.label === formatLifecycleLabel(value.state);
 }
 
 function validDurableOwner(owner, target, counters, updatedAt) {
@@ -957,17 +1095,12 @@ export function createAtomicLedgerStore(path, filesystem = {}) {
 export function parseRuntimeArgs(argv) {
   const expected = new Set(['listen', 'ledger', 'cmux-socket', 'workspace']);
   const values = {};
-  if (argv.length !== expected.size * 2 && argv.length !== (expected.size + 1) * 2)
-    throw new Error('invalid coordinator arguments');
+  if (argv.length !== expected.size * 2) throw new Error('invalid coordinator arguments');
   for (let index = 0; index < argv.length; index += 2) {
     const option = argv[index];
     const value = argv[index + 1];
     const name = option?.startsWith('--') ? option.slice(2) : '';
-    if (
-      (!expected.has(name) && name !== 'description-reservation') ||
-      value === undefined ||
-      Object.hasOwn(values, name)
-    ) {
+    if (!expected.has(name) || value === undefined || Object.hasOwn(values, name)) {
       throw new Error('invalid coordinator arguments');
     }
     values[name] = value;
@@ -979,22 +1112,6 @@ export function parseRuntimeArgs(argv) {
   }
   if (!validIdentity(values.workspace)) throw new Error('invalid coordinator target');
   return values;
-}
-
-export function coordinatorDescriptionReservation(args, injected) {
-  try {
-    const value =
-      injected ??
-      (args['description-reservation'] === undefined
-        ? undefined
-        : JSON.parse(args['description-reservation']));
-    const reservation = validateReservation(value, args.workspace);
-    return reservation && reservation.socketPath === normalize(args['cmux-socket'])
-      ? reservation
-      : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 const statusStyles = {
@@ -1082,12 +1199,50 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
   let presentation;
   let pendingPresentationAcks = 0;
   const schedule = runtime.schedule ?? ((callback, delay) => setTimeout(callback, delay).unref());
+  const descriptionCommand = (command) =>
+    serialize(() => runDescriptionCommand(cmuxFile, command, env, runtime.execFile ?? execFile));
   const description = createDescriptionPublisher({
-    reservation: coordinatorDescriptionReservation(args, runtime.descriptionReservation),
     workspaceId: target.workspaceId,
-    runCommand: (command) =>
-      serialize(() => runDescriptionCommand(cmuxFile, command, env, runtime.execFile ?? execFile)),
+    runCommand: descriptionCommand,
   });
+  let descriptionTargetBound = false;
+  let descriptionBinding = null;
+  let presentationPublicationPending = 0;
+  let presentationPublicationTail = Promise.resolve();
+  const publishPresentation = () => {
+    presentationPublicationPending += 1;
+    const task = presentationPublicationTail
+      .then(async () => {
+        if (!descriptionTargetBound) {
+          const surfaceId = presentation.publicationSurfaceId();
+          if (surfaceId === null) return;
+          descriptionBinding ??= resolveDescriptionTarget(target, surfaceId, descriptionCommand);
+          const resolved = await descriptionBinding;
+          descriptionBinding = null;
+          if (stopping || !resolved || !description.bindTarget(resolved)) return;
+          descriptionTargetBound = true;
+        }
+
+        const titles = await resolvePresentationSurfaceTitles(target, descriptionCommand);
+        // Read current source metadata and blocks after the lookup. A removed
+        // source must not be revived by an older title response.
+        const blocks = presentation.blocks();
+        const sourceMetadata = presentation.sourceMetadata();
+        const projected = projectPresentationJ1(
+          presentationBlocksWithSurfaceTitles(blocks, sourceMetadata, titles),
+        );
+        const intent = projected.kind === 'reject' ? presentation.projection() : projected;
+        if (!description.setDesired(intent)) return;
+        resetDescriptionFinalClear();
+        await description.reconcile();
+      })
+      .finally(() => {
+        presentationPublicationPending -= 1;
+        stopIfQuiescent();
+      });
+    presentationPublicationTail = task.catch(() => undefined);
+    return task;
+  };
   let descriptionFinalClearGeneration = 0;
   let descriptionFinalClearAttempts = 0;
   let descriptionFinalClearRetryScheduled = false;
@@ -1104,6 +1259,8 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
       !core.isQuiescent() ||
       !presentation.isQuiescent() ||
       !description.isIdle() ||
+      descriptionBinding !== null ||
+      presentationPublicationPending !== 0 ||
       pendingPresentationAcks !== 0
     )
       return;
@@ -1170,11 +1327,7 @@ export async function runCoordinatorRuntime(argv = process.argv.slice(2), runtim
     probePid: runtime.probePid ?? probePidStart,
     capacity: runtime.presentationCapacity,
     sourceId: runtime.presentationSourceId,
-    onProjection: (projection) => {
-      if (!description.setDesired(projection)) return;
-      resetDescriptionFinalClear();
-      void description.reconcile().finally(stopIfQuiescent);
-    },
+    onProjection: () => publishPresentation().finally(stopIfQuiescent),
   });
 
   const runtimeMkdir = runtime.mkdir ?? mkdir;

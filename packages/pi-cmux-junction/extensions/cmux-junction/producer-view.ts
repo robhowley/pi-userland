@@ -26,7 +26,7 @@ export interface ProducerIdentity {
 
 export interface ProducerItem {
   key: string;
-  title: string;
+  title?: string;
   status?: string;
   summary?: string;
   progress?: ProducerProgress;
@@ -54,7 +54,7 @@ export interface NormalizedProducerView {
 
 export interface NormalizedProducerItem {
   readonly key: string;
-  readonly title: string;
+  readonly title?: string;
   readonly status?: string;
   readonly summary?: string;
   readonly progress?: Readonly<NormalizedProgress>;
@@ -420,12 +420,15 @@ function parseProducer(value: unknown): Parsed<Readonly<ProducerIdentity>> {
 
 function parseItem(value: unknown, index: number): Parsed<NormalizedProducerItem> {
   const path = `items[${index}]`;
-  const record = inspectRecord(value, path, ITEM_FIELDS, ['key', 'title']);
+  const record = inspectRecord(value, path, ITEM_FIELDS, ['key']);
   if (!record.ok) return record;
 
   const key = parseIdentifier(record.value.get('key'), `${path}.key`, MAX_ITEM_KEY_BYTES);
   if (!key.ok) return key;
-  const title = parseText(record.value.get('title'), `${path}.title`, MAX_LABEL_BYTES);
+  if (!record.value.has('title') && !record.value.has('status')) {
+    return failure('required-field', `${path}.title`);
+  }
+  const title = parseOptionalText(record.value, 'title', `${path}.title`, MAX_LABEL_BYTES);
   if (!title.ok) return title;
   const status = parseOptionalText(record.value, 'status', `${path}.status`, MAX_LABEL_BYTES);
   if (!status.ok) return status;
@@ -457,7 +460,7 @@ function parseItem(value: unknown, index: number): Parsed<NormalizedProducerItem
     ok: true,
     value: {
       key: key.value,
-      title: title.value,
+      ...(title.value === undefined ? {} : { title: title.value }),
       ...(status.value === undefined ? {} : { status: status.value }),
       ...(summary.value === undefined ? {} : { summary: summary.value }),
       ...(progress === undefined ? {} : { progress }),

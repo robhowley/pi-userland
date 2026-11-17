@@ -1,23 +1,13 @@
-import { normalize } from 'node:path';
 import { SettingsManager, getAgentDir } from '@earendil-works/pi-coding-agent';
-import { validateReservation } from './description-publisher.mjs';
-
-export interface DescriptionReservation {
-  socketPath: string;
-  windowId: string;
-  workspaceId: string;
-}
 
 export interface JunctionConfig {
   disableStatus: boolean;
   enablePresentation: boolean;
-  descriptionReservations: readonly DescriptionReservation[];
 }
 
 export const DEFAULT_JUNCTION_CONFIG: JunctionConfig = {
   disableStatus: false,
   enablePresentation: false,
-  descriptionReservations: [],
 };
 
 export function loadJunctionConfig(cwd: string, projectTrusted: boolean): JunctionConfig {
@@ -30,29 +20,11 @@ export function loadJunctionConfig(cwd: string, projectTrusted: boolean): Juncti
       : typeof global[key] === 'boolean'
         ? global[key]
         : DEFAULT_JUNCTION_CONFIG[key];
-  const reservations = Array.isArray(global['descriptionReservations'])
-    ? global['descriptionReservations'].map((value) => validateReservation(value, undefined))
-    : [];
   return {
     disableStatus: boolean('disableStatus'),
-    enablePresentation: boolean('enablePresentation'),
-    descriptionReservations: reservations.filter(
-      (value): value is DescriptionReservation => value !== null,
-    ),
+    enablePresentation:
+      global['enablePresentation'] === true && project['enablePresentation'] !== false,
   };
-}
-
-export function matchDescriptionReservation(
-  reservations: readonly DescriptionReservation[],
-  target: { socketPath: string; workspaceId: string },
-): DescriptionReservation | undefined {
-  const matches = reservations.filter(
-    (value) =>
-      normalize(value.socketPath) === normalize(target.socketPath) &&
-      value.workspaceId.toLowerCase() === target.workspaceId.toLowerCase(),
-  );
-  // Ambiguous authority must not select a window by list order.
-  return matches.length === 1 ? matches[0] : undefined;
 }
 
 function junctionSettings(settings: unknown): Record<string, unknown> {

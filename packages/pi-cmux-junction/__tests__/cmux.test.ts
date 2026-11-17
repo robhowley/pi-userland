@@ -17,6 +17,7 @@ import {
   buildWorkspaceCreateArgs,
   launchCmuxTab,
   launchCmuxWorkspace,
+  openJunctionBoard,
   preflightCmux,
   preflightCmuxTab,
   resolveCmuxTarget,
@@ -327,6 +328,75 @@ describe('cmux boundary', () => {
     await expect(preflightCmux('/repo', { env: CALLER_ENV, runner })).resolves.toMatchObject({
       ok: false,
       reason: 'cmux-unavailable',
+    });
+  });
+
+  it('runs the exact fixed right-sidebar argv without focusing or selecting the left sidebar', async () => {
+    const { calls, runner } = successfulRunner();
+
+    await expect(openJunctionBoard('/repo', { env: CALLER_ENV, runner })).resolves.toEqual({
+      ok: true,
+      status: 'board-opened',
+    });
+
+    expect(calls).toEqual([
+      {
+        file: 'cmux',
+        args: [
+          'right-sidebar',
+          'set',
+          'custom',
+          'junction-board',
+          '--window',
+          'window:1',
+          '--no-focus',
+        ],
+        cwd: '/repo',
+      },
+    ]);
+  });
+
+  it.each([
+    {
+      name: 'nonzero exit',
+      result: {
+        outcome: 'exit',
+        stdout: '',
+        stderr: 'right-sidebar unavailable',
+        exitCode: 1,
+      } as const,
+      detail: 'right-sidebar unavailable',
+    },
+    {
+      name: 'timeout',
+      result: {
+        outcome: 'timeout',
+        stdout: '',
+        stderr: '',
+        timeoutMs: 10_000,
+        signal: 'SIGTERM',
+      } as const,
+      detail: 'command timed out',
+    },
+  ])('reports board-open $name through the command error path', async ({ result, detail }) => {
+    const runner: ProcessRunner = async () => result;
+
+    await expect(openJunctionBoard('/repo', { env: CALLER_ENV, runner })).resolves.toEqual({
+      ok: false,
+      status: 'board-open-failed',
+      message: `Could not open Junction board in window:1: ${detail}`,
+    });
+  });
+
+  it('reports a thrown board-open runner as an error result', async () => {
+    const runner: ProcessRunner = async () => {
+      throw new Error('runner failed');
+    };
+
+    await expect(openJunctionBoard('/repo', { env: CALLER_ENV, runner })).resolves.toEqual({
+      ok: false,
+      status: 'board-open-failed',
+      message: 'Could not open Junction board in window:1: runner failed',
     });
   });
 

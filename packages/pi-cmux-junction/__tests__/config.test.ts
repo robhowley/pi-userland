@@ -2,10 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import {
-  loadJunctionConfig,
-  matchDescriptionReservation,
-} from '../extensions/cmux-junction/config.js';
+import { loadJunctionConfig } from '../extensions/cmux-junction/config.js';
 
 function writeJson(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true });
@@ -43,7 +40,6 @@ describe.sequential('junction config', () => {
     expect(loadJunctionConfig(cwd, true)).toEqual({
       disableStatus: false,
       enablePresentation: false,
-      descriptionReservations: [],
     });
   });
 
@@ -117,42 +113,28 @@ describe.sequential('junction config', () => {
     expect(loadJunctionConfig(cwd, true).disableStatus).toBe(false);
   });
 
-  it('uses trusted opt-in precedence but only global multi-workspace reservations', () => {
-    const first = {
-      socketPath: '/tmp/cmux.sock',
-      windowId: '11111111-1111-1111-1111-111111111111',
-      workspaceId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
-    };
-    const second = { ...first, workspaceId: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb' };
-    writeJson(globalSettingsPath(), {
-      'pi-cmux-junction': {
-        disableStatus: true,
-        enablePresentation: true,
-        descriptionReservations: [first, second, { ...first, windowId: 'window:1' }],
-      },
-    });
-    writeJson(projectSettingsPath(), {
-      'pi-cmux-junction': {
-        enablePresentation: false,
-        descriptionReservations: [{ ...first, windowId: '22222222-2222-2222-2222-222222222222' }],
-      },
-    });
-    expect(loadJunctionConfig(cwd, true)).toEqual({
-      disableStatus: true,
-      enablePresentation: false,
-      descriptionReservations: [first, second],
-    });
-    const config = loadJunctionConfig(cwd, false);
-    expect(config.enablePresentation).toBe(true);
-    expect(
-      matchDescriptionReservation(config.descriptionReservations, {
-        ...second,
-        socketPath: '/tmp/./cmux.sock',
-      }),
-    ).toEqual(second);
-    expect(matchDescriptionReservation([first, first], first)).toBeUndefined();
-    expect(
-      matchDescriptionReservation([first], { ...first, socketPath: '/tmp/foreign.sock' }),
-    ).toBeUndefined();
+  it.each([
+    [undefined, true, false],
+    [false, true, false],
+    ['true', true, false],
+    [true, undefined, true],
+    [true, true, true],
+    [true, false, false],
+  ])(
+    'requires positive global permission (%s), project can narrow (%s)',
+    (global, project, expected) => {
+      writeJson(globalSettingsPath(), { 'pi-cmux-junction': { enablePresentation: global } });
+      writeJson(projectSettingsPath(), { 'pi-cmux-junction': { enablePresentation: project } });
+      expect(loadJunctionConfig(cwd, true).enablePresentation).toBe(expected);
+      expect(loadJunctionConfig(cwd, false).enablePresentation).toBe(global === true);
+    },
+  );
+
+  it('reads ordinary setting changes without cached launch authority', () => {
+    expect(loadJunctionConfig(cwd, true).enablePresentation).toBe(false);
+    writeJson(globalSettingsPath(), { 'pi-cmux-junction': { enablePresentation: true } });
+    expect(loadJunctionConfig(cwd, true).enablePresentation).toBe(true);
+    writeJson(globalSettingsPath(), { 'pi-cmux-junction': { enablePresentation: false } });
+    expect(loadJunctionConfig(cwd, true).enablePresentation).toBe(false);
   });
 });
