@@ -369,8 +369,11 @@ function sourceFixture(before = 'Earlier context') {
   return { ...f, file };
 }
 it('Source shows bounded surrounding messages on the saved branch, not a newer edit', () => {
-  const f = sourceFixture();
+  const hostile = 'Earlier context\u001b[31m\u009b31m\u009dtitle\u0007\r\t\b';
+  const f = sourceFixture(hostile);
   const text = sourceText(f.proposal);
+  expect(terminalControls(text)).toEqual([]);
+  expect(text).toContain('Earlier context\\u001b[31m\\u009b31m\\u009dtitle\\u0007\\r\\t\\b');
   for (const value of [
     'Send comparison',
     'Earlier context',
@@ -1844,8 +1847,13 @@ it('resize rewraps and clamps a nonzero offset; a tiny terminal blocks apply unt
       [80, 24],
       [80, 32],
     ]) {
+      const previousStart = Number(screen.text().match(/Rows (\d+)-/)![1]);
+      expect(previousStart).toBeGreaterThan(1);
       screen.resize(columns!, rows!);
       const lines = screen.lines();
+      const range = lines.join('\n').match(/Rows (\d+)-(\d+)\/(\d+)/)!;
+      const [start, end, total] = range.slice(1).map(Number) as [number, number, number];
+      expect(start).toBe(Math.min(previousStart, total - (end - start)));
       expect(lines.length).toBeLessThanOrEqual(rows! - 2);
       expect(lines.every((line) => visibleWidth(line) <= columns!)).toBe(true);
       expect(await screen.pages()).toMatch(/end/i);
@@ -1942,15 +1950,32 @@ it('History separates selected revisions and decided proposals; inspections and 
 it.each(['save', 'cancel'] as const)(
   'editor %s has exclusive input ownership and reopens review without applying',
   async (result) => {
-    const f = setup();
+    const hostile = 'SAVED_\u001b[31m\u009b31m\u009dtitle\u0007\r\t\b';
+    const draft: ProposalDraft = {
+      change: {
+        operation: 'add',
+        fields: { description: 'Send comparison ' + hostile, project: hostile },
+        annotations: [hostile],
+      },
+      expected: null,
+      question: null,
+    };
+    const savedDraft: ProposalDraft = {
+      ...draft,
+      change: {
+        ...draft.change,
+        operation: 'add',
+        fields: { description: 'Saved exclusive draft ' + hostile, project: hostile },
+      },
+    };
+    const f = setup(draft);
     let complete!: (value: string | undefined) => void;
     const pending = new Promise<string | undefined>((resolve) => {
       complete = resolve;
     });
     let isActive = () => true;
-    const editor = vi.fn(async (_title: string, initial: string) => {
+    const editor = vi.fn(async (_title: string, _initial: string) => {
       expect(isActive(), 'overlay must relinquish ownership before opening the editor').toBe(false);
-      expect(JSON.parse(initial).change.fields.description).toBe('Send comparison');
       return pending;
     });
     await driveUI(
@@ -1964,30 +1989,25 @@ it.each(['save', 'cancel'] as const)(
         try {
           await screen.press('e');
           expect(editor).toHaveBeenCalledOnce();
+          const initial = editor.mock.calls[0]![1];
+          expect(terminalControls(initial)).toEqual([]);
+          expect(initial).toContain('SAVED_\\u001b[31m\\u009b31m\\u009dtitle\\u0007\\r\\t\\b');
+          expect(JSON.parse(initial)).toEqual(draft);
           expect(screen.active()).toBe(false);
           expect(screen.custom).toHaveBeenCalledTimes(customCount);
           expect(f.store.proposal(f.proposal.id)?.revision).toBe(1);
           expect(f.execute).not.toHaveBeenCalled();
         } finally {
-          complete(
-            result === 'save'
-              ? JSON.stringify({
-                  change: {
-                    operation: 'add',
-                    fields: { description: 'Saved exclusive draft' },
-                    annotations: [],
-                  },
-                  expected: null,
-                  question: null,
-                })
-              : undefined,
-          );
+          const edited = JSON.parse(editor.mock.calls[0]![1]);
+          edited.change.fields.description = 'Saved exclusive draft ' + hostile;
+          complete(result === 'save' ? JSON.stringify(edited) : undefined);
         }
         await vi.waitFor(() => expect(screen.active()).toBe(true));
         expect(screen.custom.mock.calls.length).toBeGreaterThan(customCount);
         if (result === 'save') {
           expect(await screen.pages()).toContain('Saved exclusive draft');
           expect(f.store.proposal(f.proposal.id)?.revision).toBe(2);
+          expect(f.store.proposal(f.proposal.id)?.draft).toEqual(savedDraft);
         } else {
           expect(screen.text()).toBe(previous);
           expect(f.store.proposal(f.proposal.id)?.revision).toBe(1);
