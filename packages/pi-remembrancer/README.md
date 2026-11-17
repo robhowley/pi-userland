@@ -107,7 +107,7 @@ Skip this setup if you do not need waiting conditions; other task operations wor
 
 ## Settings
 
-Remembrancer is enabled by default. Turn off remembrancer at any time by adding this to Pi's global settings file, normally `~/.pi/agent/settings.json`:
+Manual Remembrancer features are enabled by default; automatic capture remains opt-in. Disable foreground features and new capture jobs in Pi's global settings file, normally `~/.pi/agent/settings.json` (accepted jobs still finish or retry):
 
 ```json
 { "pi-remembrancer": { "disabled": true } }

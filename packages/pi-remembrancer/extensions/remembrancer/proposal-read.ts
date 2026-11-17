@@ -1,4 +1,4 @@
-import { Type } from '@earendil-works/pi-ai';
+import { Type } from '@sinclair/typebox';
 import type { CheckpointStore } from './checkpoints.js';
 
 export const proposalReadDescription =

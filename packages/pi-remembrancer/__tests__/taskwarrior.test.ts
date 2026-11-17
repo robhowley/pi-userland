@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
+import { captureJob } from './fixtures/capture-job.js';
 import type { Evidence } from '../extensions/remembrancer/evidence.js';
 import * as evidenceModule from '../extensions/remembrancer/evidence.js';
 import {
@@ -84,12 +85,11 @@ function seed(
       .map((item) => JSON.stringify(item))
       .join('\n'),
   );
-  store.claimReview();
-  const review = store.prepareCapture({ file, sessionId });
+  const { owner, attempt, review } = captureJob(store, { file, sessionId });
   while (review.page()['hasMore']) {
     /* deliver all evidence */
   }
-  const proposal = store.finishCapture(review.id, [
+  const proposal = store.finishCaptureJob(owner, attempt, [
     {
       ...draft,
       explanation: 'Promised',
@@ -105,12 +105,17 @@ function seed(
       ],
     },
   ])[0]!;
-  store.releaseReview();
+  owner.release();
   rmSync(file);
   return proposal;
 }
+function durableStore() {
+  const dir = mkdtempSync(join(tmpdir(), 'task-proposals-'));
+  sourceDirs.push(dir);
+  return new CheckpointStore(join(dir, 'index.sqlite'));
+}
 function setup(draft?: ProposalDraft) {
-  const store = new CheckpointStore(':memory:');
+  const store = durableStore();
   stores.push(store);
   const proposal = seed(store, draft);
   let actual: TaskRecord | null = draft?.expected ? structuredClone(record) : null;
@@ -1084,7 +1089,7 @@ it.skipIf(!existsSync('/opt/homebrew/bin/task')).each(['due', 'wait', 'scheduled
       let actual = (await lookupTasks({ uuid }, execute)).tasks[0]!;
       expect(actual['description']).toBe(add.fields.description);
       const before = snapshot(actual);
-      const store = new CheckpointStore(':memory:');
+      const store = durableStore();
       stores.push(store);
       const proposal = seed(store, {
         change: {

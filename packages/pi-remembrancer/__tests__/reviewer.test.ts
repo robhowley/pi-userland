@@ -127,6 +127,30 @@ describe('runReviewer', () => {
     expect(session.dispose).toHaveBeenCalledOnce();
   });
 
+  it('uses originating settings, agent directory, supplied model and thinking without model lookup or resource discovery', async () => {
+    const originating = { applyOverrides: vi.fn() } as unknown as NonNullable<
+      Parameters<typeof runReviewer>[0]['settingsManager']
+    >;
+    await runReviewer(
+      input({
+        agentDir: '/private/origin-agent',
+        thinkingLevel: 'high',
+        settingsManager: originating,
+      }),
+    );
+    expect(sdk.inMemorySettings).not.toHaveBeenCalled();
+    expect(originating.applyOverrides).toHaveBeenCalledWith({
+      compaction: { enabled: false },
+      retry: { enabled: false, provider: { maxRetries: 0 } },
+    });
+    expect(sdk.createAgentSession.mock.calls[0]![0]).toMatchObject({
+      model,
+      agentDir: '/private/origin-agent',
+      thinkingLevel: 'high',
+      settingsManager: originating,
+    });
+  });
+
   it.each(['error', 'aborted', 'length'])(
     'rejects resolved prompts with assistant %s outcomes',
     async (stopReason) => {

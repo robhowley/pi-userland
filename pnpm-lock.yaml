@@ -89,11 +89,14 @@ importers:
         specifier: '*'
         version: 0.84.4(ws@8.20.0)(zod@4.3.6)
       '@earendil-works/pi-coding-agent':
-        specifier: '*'
+        specifier: '>=0.84.4'
         version: 0.84.4(ws@8.20.0)(zod@4.3.6)
       '@earendil-works/pi-tui':
         specifier: '*'
         version: 0.84.4
+      '@sinclair/typebox':
+        specifier: '*'
+        version: 0.34.49
     devDependencies:
       '@types/node':
         specifier: ^22.15.17

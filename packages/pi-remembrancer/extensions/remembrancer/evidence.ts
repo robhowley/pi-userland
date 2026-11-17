@@ -149,6 +149,20 @@ export const REVIEW_LIMITS = {
 export type ReviewLimits = typeof REVIEW_LIMITS;
 export class ReviewLimitError extends Error {}
 
+type InvalidSessionCategory =
+  | 'invalid-json'
+  | 'invalid-tree'
+  | 'invalid-identity'
+  | 'retained-limit';
+class InvalidSessionError extends Error {
+  constructor(
+    readonly category: InvalidSessionCategory,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 const COMPACT_HEADER_BYTES = 32;
 const COMPACT_ENTRY_BYTES = 64;
 
@@ -179,6 +193,7 @@ export class ReviewBudget {
   private bytes = 0;
   private textBytes = 0;
   private branches = 0;
+  private sourceVisits = new WeakMap<SessionTree, number>();
   constructor(limits: Partial<ReviewLimits> = {}) {
     this.limits = { ...REVIEW_LIMITS, ...limits };
   }
@@ -202,19 +217,24 @@ export class ReviewBudget {
       throw new ReviewLimitError('Aggregate review snapshot limit exceeded');
     this.trees.add(tree);
   }
-  review(tree: SessionTree) {
-    // Three walks cover ancestor lookup, previous evidence and current evidence.
-    // This also bounds descriptors, selection keys and unknown-time warnings.
-    this.branches += tree.branchEntries * 3;
+  visit(tree: SessionTree) {
+    const visits = (this.sourceVisits.get(tree) ?? 0) + 1;
+    this.sourceVisits.set(tree, visits);
+    this.branches++;
     if (this.branches > this.limits.totalBranchEntries)
       throw new ReviewLimitError('Aggregate review branch/evidence limit exceeded');
+    if (visits > this.limits.sourceBranchEntries)
+      throw new ReviewLimitError('Session ancestry walk limit exceeded');
   }
 }
 
 function visibleText(content: unknown, maxBytes = Number.POSITIVE_INFINITY): string {
   if (typeof content === 'string') {
     if (Buffer.byteLength(content) > maxBytes)
-      throw Error('Session retained text/metadata limit exceeded');
+      throw new InvalidSessionError(
+        'retained-limit',
+        'Session retained text/metadata limit exceeded',
+      );
     return content;
   }
   if (!Array.isArray(content)) return '';
@@ -224,18 +244,41 @@ function visibleText(content: unknown, maxBytes = Number.POSITIVE_INFINITY): str
   for (const block of content) {
     if (block?.type !== 'text' || typeof block.text !== 'string') continue;
     bytes += Buffer.byteLength(block.text) + (texts.length > 0 ? 1 : 0);
-    if (bytes > maxBytes) throw Error('Session retained text/metadata limit exceeded');
+    if (bytes > maxBytes)
+      throw new InvalidSessionError(
+        'retained-limit',
+        'Session retained text/metadata limit exceeded',
+      );
     texts.push(block.text);
   }
   return texts.join('\n');
 }
 
 /** Read only the opening extent. Verify its bytes again without retaining them. */
-function readRecords(file: string, limit: number, consume: (line: string, number: number) => void) {
+function readRecords(
+  file: string,
+  limit: number,
+  consume: (line: string, number: number) => void,
+  prefix?: string,
+) {
   const fd = openSync(file, 'r');
+  let prefixFd: number | undefined;
   try {
+    prefixFd = prefix === undefined ? undefined : openSync(prefix, 'r');
     const initial = fstatSync(fd);
     if (!initial.isFile()) throw Error('Session source is not a regular file');
+    const prefixStat = prefixFd === undefined ? undefined : fstatSync(prefixFd);
+    const comparison = Buffer.allocUnsafe(64 * 1024);
+    if (prefixStat) {
+      const last = Buffer.alloc(1);
+      if (
+        !prefixStat.size ||
+        initial.size < prefixStat.size ||
+        readSync(prefixFd!, last, 0, 1, prefixStat.size - 1) !== 1 ||
+        last[0] !== 10
+      )
+        throw Error('Live source is not an exact extension of the retained prefix');
+    }
     const chunk = Buffer.allocUnsafe(64 * 1024);
     let parts: Buffer[] = [];
     let length = 0;
@@ -250,6 +293,14 @@ function readRecords(file: string, limit: number, consume: (line: string, number
         position,
       );
       if (!count) throw Error('Session source truncated during read');
+      if (prefixStat && position < prefixStat.size) {
+        const length = Math.min(count, prefixStat.size - position);
+        if (
+          readSync(prefixFd!, comparison, 0, length, position) !== length ||
+          !chunk.subarray(0, length).equals(comparison.subarray(0, length))
+        )
+          throw Error('Live source is not an exact extension of the retained prefix');
+      }
       position += count;
       hash.update(chunk.subarray(0, count));
       let start = 0;
@@ -257,7 +308,8 @@ function readRecords(file: string, limit: number, consume: (line: string, number
         const newline = chunk.indexOf(10, start);
         const end = newline < 0 || newline >= count ? count : newline;
         const size = end - start;
-        if (length + size > limit) throw Error('Session raw record limit exceeded');
+        if (length + size > limit)
+          throw new InvalidSessionError('retained-limit', 'Session raw record limit exceeded');
         if (size) parts.push(Buffer.from(chunk.subarray(start, end)));
         length += size;
         if (end < count) {
@@ -283,6 +335,15 @@ function readRecords(file: string, limit: number, consume: (line: string, number
       verify.update(chunk.subarray(0, count));
       position += count;
     }
+    if (prefixStat) {
+      const finalPrefix = fstatSync(prefixFd!);
+      if (
+        finalPrefix.size !== prefixStat.size ||
+        finalPrefix.mtimeMs !== prefixStat.mtimeMs ||
+        finalPrefix.ctimeMs !== prefixStat.ctimeMs
+      )
+        throw Error('Retained prefix changed during verification');
+    }
     const final = fstatSync(fd);
     const path = statSync(file);
     if (
@@ -295,11 +356,12 @@ function readRecords(file: string, limit: number, consume: (line: string, number
     )
       throw Error('Session source changed during read');
   } finally {
+    if (prefixFd !== undefined) closeSync(prefixFd);
     closeSync(fd);
   }
 }
 
-export function readSession(file: string, limits: ReviewLimits = REVIEW_LIMITS) {
+export function readSession(file: string, limits: ReviewLimits = REVIEW_LIMITS, prefix?: string) {
   let header: { type?: string; id?: unknown; cwd?: unknown } = {};
   const entries = new Map<string, Entry>();
   const leaves = new Set<string>();
@@ -307,74 +369,97 @@ export function readSession(file: string, limits: ReviewLimits = REVIEW_LIMITS) 
   let bytes = 0;
   let textBytes = 0;
   const bounded = (value: string, max = 256) => {
-    if (Buffer.byteLength(value) > max) throw Error('Session metadata limit exceeded');
+    if (Buffer.byteLength(value) > max)
+      throw new InvalidSessionError('retained-limit', 'Session metadata limit exceeded');
     return value;
   };
-  readRecords(file, limits.recordBytes, (line, lineNumber) => {
-    if (lineNumber === 1) {
-      const raw = JSON.parse(line || '{}');
-      header = {
-        type: raw?.type,
-        id: raw?.id,
-        cwd: typeof raw?.cwd === 'string' ? raw.cwd : undefined,
+  readRecords(
+    file,
+    limits.recordBytes,
+    (line, lineNumber) => {
+      if (lineNumber === 1) {
+        let raw;
+        try {
+          raw = JSON.parse(line || '{}');
+        } catch {
+          throw new InvalidSessionError('invalid-json', 'Invalid session header JSON');
+        }
+        header = {
+          type: raw?.type,
+          id: raw?.id,
+          cwd: typeof raw?.cwd === 'string' ? raw.cwd : undefined,
+        };
+        if (header?.type !== 'session' || typeof header.id !== 'string' || !header.id.trim())
+          throw new InvalidSessionError('invalid-identity', `Invalid session header in ${file}`);
+        bounded(header.id);
+        if (typeof header.cwd === 'string') bounded(header.cwd, 16 * 1024);
+        bytes += COMPACT_HEADER_BYTES + stringBytes(header.id) + stringBytes(header.cwd);
+        if (bytes > limits.sourceBytes)
+          throw new InvalidSessionError(
+            'retained-limit',
+            'Session retained text/metadata limit exceeded',
+          );
+        return;
+      }
+      if (!line.trim()) return;
+      let e: Entry;
+      try {
+        e = JSON.parse(line) as Entry;
+      } catch {
+        throw new InvalidSessionError('invalid-json', `Invalid JSON at ${file}:${lineNumber}`);
+      }
+      if (
+        !e ||
+        typeof e.id !== 'string' ||
+        !e.id ||
+        typeof e.type !== 'string' ||
+        entries.has(e.id) ||
+        !(e.parentId === null || entries.has(e.parentId))
+      )
+        throw new InvalidSessionError(
+          'invalid-tree',
+          `Invalid session tree at ${file}:${lineNumber}`,
+        );
+      if (entries.size >= limits.sourceEntries)
+        throw new InvalidSessionError('retained-limit', 'Session entry limit exceeded');
+      const compact: Entry = {
+        id: bounded(e.id),
+        parentId: e.parentId,
+        type: bounded(e.type),
+        timestamp: bounded(timestampText(e.timestamp)),
       };
-      if (header?.type !== 'session' || typeof header.id !== 'string' || !header.id.trim())
-        throw Error(`Invalid session header in ${file}`);
-      bounded(header.id);
-      if (typeof header.cwd === 'string') bounded(header.cwd, 16 * 1024);
-      bytes += COMPACT_HEADER_BYTES + stringBytes(header.id) + stringBytes(header.cwd);
-      if (bytes > limits.sourceBytes) throw Error('Session retained text/metadata limit exceeded');
-      return;
-    }
-    if (!line.trim()) return;
-    let e: Entry;
-    try {
-      e = JSON.parse(line) as Entry;
-    } catch (error) {
-      throw Error(`Invalid JSON at ${file}:${lineNumber}`, { cause: error });
-    }
-    if (
-      !e ||
-      typeof e.id !== 'string' ||
-      !e.id ||
-      typeof e.type !== 'string' ||
-      entries.has(e.id) ||
-      !(e.parentId === null || entries.has(e.parentId))
-    )
-      throw Error(`Invalid session tree at ${file}:${lineNumber}`);
-    if (entries.size >= limits.sourceEntries) throw Error('Session entry limit exceeded');
-    const compact: Entry = {
-      id: bounded(e.id),
-      parentId: e.parentId,
-      type: bounded(e.type),
-      timestamp: bounded(timestampText(e.timestamp)),
-    };
-    const projectText = (content: unknown) => {
-      const text = visibleText(content, limits.sourceTextBytes - textBytes);
-      textBytes += Buffer.byteLength(text);
-      return text;
-    };
-    if (e.type === 'message' && (e.message?.role === 'user' || e.message?.role === 'assistant'))
-      compact.message = { role: e.message.role, content: projectText(e.message.content) };
-    if (e.type === 'context_edit') {
-      if (typeof e.targetId === 'string') compact.targetId = bounded(e.targetId);
-      compact.replacement =
-        e.replacement === null || e.replacement === undefined
-          ? null
-          : { content: projectText(e.replacement.content) };
-    }
-    bytes += compactEntryBytes(compact);
-    if (bytes > limits.sourceBytes) throw Error('Session retained text/metadata limit exceeded');
-    entries.set(compact.id, compact);
-    depths.set(compact.id, (compact.parentId === null ? 0 : depths.get(compact.parentId)!) + 1);
-    if (compact.parentId) leaves.delete(compact.parentId);
-    leaves.add(compact.id);
-  });
+      const projectText = (content: unknown) => {
+        const text = visibleText(content, limits.sourceTextBytes - textBytes);
+        textBytes += Buffer.byteLength(text);
+        return text;
+      };
+      if (e.type === 'message' && (e.message?.role === 'user' || e.message?.role === 'assistant'))
+        compact.message = { role: e.message.role, content: projectText(e.message.content) };
+      if (e.type === 'context_edit') {
+        if (typeof e.targetId === 'string') compact.targetId = bounded(e.targetId);
+        compact.replacement =
+          e.replacement === null || e.replacement === undefined
+            ? null
+            : { content: projectText(e.replacement.content) };
+      }
+      bytes += compactEntryBytes(compact);
+      if (bytes > limits.sourceBytes)
+        throw new InvalidSessionError(
+          'retained-limit',
+          'Session retained text/metadata limit exceeded',
+        );
+      entries.set(compact.id, compact);
+      depths.set(compact.id, (compact.parentId === null ? 0 : depths.get(compact.parentId)!) + 1);
+      if (compact.parentId) leaves.delete(compact.parentId);
+      leaves.add(compact.id);
+    },
+    prefix,
+  );
   if (header?.type !== 'session' || typeof header.id !== 'string' || header.id.trim() === '')
-    throw Error(`Invalid session header in ${file}`);
+    throw new InvalidSessionError('invalid-identity', `Invalid session header in ${file}`);
   const branchEntries = [...leaves].reduce((sum, id) => sum + depths.get(id)!, 0);
   if (leaves.size > limits.sourceBranches || branchEntries * 3 > limits.sourceBranchEntries)
-    throw Error('Session branch/evidence limit exceeded');
+    throw new InvalidSessionError('retained-limit', 'Session branch/evidence limit exceeded');
   const tips: Tip[] = [...leaves].map((entryId) => ({
     file: resolve(file),
     sessionId: header.id as string,
@@ -399,6 +484,7 @@ export function branchEvidence(
   tree: SessionTree,
   tip: Tip,
   reviewedThrough: string | null = null,
+  budget?: ReviewBudget,
 ): Evidence[] {
   if (tip.sessionId !== tree.sessionId || !tree.entries.has(tip.entryId))
     throw Error('Unknown review boundary');
@@ -406,6 +492,7 @@ export function branchEvidence(
   const edits = new Map<string, Entry>();
   let id: string | null = tip.entryId;
   while (id !== null) {
+    budget?.visit(tree);
     const e: Entry = tree.entries.get(id)!;
     id = e.parentId;
     if (e.type === 'context_edit' && e.targetId && !edits.has(e.targetId)) edits.set(e.targetId, e);
@@ -504,7 +591,6 @@ export function prepareReview(
         );
         continue;
       }
-      budget.review(tree);
       const boundaries = new Map<string, Checkpoint>();
       for (const tip of reviewed) {
         if (tip.sessionId !== source.sessionId) continue;
@@ -525,6 +611,7 @@ export function prepareReview(
         let ancestorId: string | null = tip.entryId;
         let ancestor: Checkpoint | undefined;
         while (ancestorId !== null) {
+          budget.visit(tree);
           ancestor = boundaries.get(ancestorId);
           if (ancestor) break;
           const entry = tree.entries.get(ancestorId);
@@ -535,13 +622,18 @@ export function prepareReview(
         const effectiveSince = checkpointSince(ancestor, normalizedSource, requestedSince);
         const previous = new Map<string, string | null>();
         if (ancestor) {
-          for (const item of branchEvidence(tree, { ...tip, entryId: ancestor.entryId })) {
+          for (const item of branchEvidence(
+            tree,
+            { ...tip, entryId: ancestor.entryId },
+            null,
+            budget,
+          )) {
             if (timestampMillis(item.timestamp) === null) warnUnknown(source, item);
             if (isEligible(item, ancestor.since)) previous.set(selectionKey(item), item.editId);
           }
         }
 
-        const branch = branchEvidence(tree, tip, ancestor?.entryId ?? null);
+        const branch = branchEvidence(tree, tip, ancestor?.entryId ?? null, budget);
         for (const item of branch) {
           if (timestampMillis(item.timestamp) === null) warnUnknown(source, item);
           if (!isEligible(item, effectiveSince)) continue;
@@ -590,4 +682,158 @@ export function prepareReview(
     incomplete,
     coverageChanged: checkpoints.length > 0 || sourceDefaults.length > 0,
   };
+}
+
+function ancestor(tree: SessionTree, before: string, after: string, budget: ReviewBudget): boolean {
+  let id: string | null = after;
+  while (id !== null) {
+    budget.visit(tree);
+    if (id === before) return true;
+    const entry = tree.entries.get(id);
+    if (!entry) throw Error(`Ancestry unavailable: ${id}`);
+    id = entry.parentId;
+  }
+  return false;
+}
+const version = (item: Evidence) => JSON.stringify([item.entryId, item.editId]);
+
+type HistoricalFailureCategory =
+  | InvalidSessionCategory
+  | 'snapshot-unavailable'
+  | 'live-proof-unavailable'
+  | 'checkpoint-unavailable'
+  | 'invalid-checkpoint-date'
+  | 'coverage-limit'
+  | 'review-context';
+export type HistoricalReviewResult =
+  | {
+      review: null;
+      diagnostic: string;
+      category: HistoricalFailureCategory;
+      retryEligible: boolean;
+    }
+  | { review: PreparedReview; diagnostic: null };
+export function prepareHistoricalReview(
+  source: Source,
+  snapshotFile: string,
+  reviewed: readonly Checkpoint[],
+  options?: ReviewOptions,
+  liveSourceFile = source.file,
+  budget = new ReviewBudget(),
+): HistoricalReviewResult {
+  let phase: 'snapshot' | 'coverage' | 'extraction' = 'snapshot';
+  let category: HistoricalFailureCategory = 'snapshot-unavailable';
+  let diagnostic = 'Historical snapshot unavailable';
+  try {
+    const saved = readSession(snapshotFile, budget.limits);
+    if (saved.sessionId !== source.sessionId)
+      throw new InvalidSessionError('invalid-identity', 'Session identity differs from snapshot');
+    const tree = { ...saved, tips: saved.tips.map((tip) => ({ ...tip, file: source.file })) };
+    budget.retain(tree);
+    const boundaries = reviewed.filter((cp) => cp.sessionId === source.sessionId);
+    let coverageTree = tree;
+    phase = 'coverage';
+    category = 'live-proof-unavailable';
+    diagnostic = 'Historical live coverage proof unavailable';
+    if (boundaries.some((cp) => !tree.entries.has(cp.entryId))) {
+      // The current enrollment proves coverage only. Evidence and references keep
+      // the accepted historical pathname and the immutable saved text.
+      coverageTree = readSession(liveSourceFile, budget.limits, snapshotFile);
+      budget.retain(coverageTree);
+      if (coverageTree.sessionId !== source.sessionId)
+        throw Error('Live coverage identity differs');
+    }
+
+    // Resolve all receipts before selection, charging each visited ancestor,
+    // not the size of a tree that a shallow checkpoint never traverses.
+    const receipts = boundaries.map((cp) => {
+      category = 'checkpoint-unavailable';
+      diagnostic = 'Historical committed checkpoint unavailable';
+      if (!coverageTree.entries.has(cp.entryId)) throw Error(diagnostic);
+      category = 'invalid-checkpoint-date';
+      diagnostic = 'Historical checkpoint date invalid';
+      if (cp.since !== null && !Number.isFinite(Date.parse(cp.since))) throw Error(diagnostic);
+      return {
+        checkpoint: cp,
+        versions: new Set(
+          branchEvidence(coverageTree, cp, null, budget)
+            .filter((item) => isEligible(item, cp.since))
+            .map(version),
+        ),
+      };
+    });
+
+    // Reuse current cutoff/default semantics for endpoints inside the preserved
+    // tree. All other endpoints have already been mapped, not silently ignored.
+    phase = 'extraction';
+    category = 'review-context';
+    diagnostic = 'Historical review context unavailable';
+    const review = prepareReview(
+      [source],
+      boundaries.filter((cp) => tree.entries.has(cp.entryId)),
+      options,
+      [{ source, tree }],
+      budget,
+    );
+    if (review.incomplete) throw Error(diagnostic);
+    const remaining = new Map<string, Set<string>>();
+    for (const item of review.evidence) {
+      let versions = remaining.get(item.branchId);
+      if (!versions) remaining.set(item.branchId, (versions = new Set()));
+      versions.add(version(item));
+    }
+    for (const [branchId, versions] of remaining) {
+      for (const receipt of receipts) {
+        // Compare a checkpoint/branch pair once, and only if the receipt has
+        // a selected version. Shallow receipts must not trigger deep walks.
+        let matches = false;
+        for (const candidate of receipt.versions) {
+          if (versions.has(candidate)) {
+            matches = true;
+            break;
+          }
+        }
+        if (!matches) continue;
+        if (
+          ancestor(coverageTree, receipt.checkpoint.entryId, branchId, budget) ||
+          ancestor(coverageTree, branchId, receipt.checkpoint.entryId, budget)
+        ) {
+          for (const covered of receipt.versions) versions.delete(covered);
+        }
+      }
+    }
+    review.evidence = review.evidence.filter((item) =>
+      remaining.get(item.branchId)!.has(version(item)),
+    );
+    if (!review.evidence.length) {
+      // Match automatic capture: no evidence means no manufactured coverage,
+      // including when a manual seed would have staged a default-only change.
+      review.tips = [];
+      review.checkpoints = [];
+      review.sourceDefaults = [];
+      review.successfulSources = [];
+      review.coverageChanged = false;
+    }
+    return { diagnostic: null, review };
+  } catch (error) {
+    // Only recognized defects in immutable retained input are terminal. A bad
+    // mutable live extension or unavailable coverage proof can be repaired.
+    let retryEligible = true;
+    if (phase === 'snapshot' && error instanceof InvalidSessionError) {
+      category = error.category;
+      diagnostic = `Historical snapshot ${category}`;
+      if (category === 'invalid-identity') diagnostic += ': Session identity differs from snapshot';
+      retryEligible = false;
+    } else if (phase === 'coverage' && error instanceof InvalidSessionError) {
+      category = 'live-proof-unavailable';
+      diagnostic = `Historical live coverage proof ${error.category}`;
+    } else if (error instanceof ReviewLimitError) {
+      category = phase === 'snapshot' ? 'retained-limit' : 'coverage-limit';
+      diagnostic = `Historical ${phase} ancestry/snapshot limit exceeded`;
+      retryEligible = phase !== 'snapshot';
+    }
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    if (typeof code === 'string' && /^E[A-Z0-9]{1,24}$/.test(code)) diagnostic += ` (${code})`;
+    return { review: null, diagnostic, category, retryEligible };
+  }
 }

@@ -14,6 +14,10 @@ export interface ReviewerInput {
   sessionId: string;
   tools: readonly ToolDefinition[];
   signal?: AbortSignal;
+  agentDir?: string;
+  thinkingLevel?: CreateAgentSessionOptions['thinkingLevel'];
+  settingsManager?: SettingsManager;
+  modelRuntime?: CreateAgentSessionOptions['modelRuntime'];
 }
 
 const REVIEWER_SYSTEM_PROMPT =
@@ -40,14 +44,20 @@ export async function runReviewer({
   sessionId,
   tools,
   signal,
+  agentDir,
+  thinkingLevel,
+  settingsManager: originatingSettings,
+  modelRuntime,
 }: ReviewerInput): Promise<void> {
   if (!model) throw new Error('Remembrancer reviewer requires the outgoing model');
 
   const toolNames = getToolNames(tools);
-  const settingsManager = SettingsManager.inMemory({
+  const restrictions = {
     compaction: { enabled: false },
     retry: { enabled: false, provider: { maxRetries: 0 } },
-  });
+  };
+  const settingsManager = originatingSettings ?? SettingsManager.inMemory(restrictions);
+  if (originatingSettings) settingsManager.applyOverrides(restrictions);
   const resourceLoader = createReviewerResourceLoader();
 
   let session: Awaited<ReturnType<typeof createAgentSession>>['session'] | undefined;
@@ -83,6 +93,9 @@ export async function runReviewer({
     const result = await createAgentSession({
       cwd,
       model,
+      ...(agentDir ? { agentDir } : {}),
+      ...(modelRuntime ? { modelRuntime } : {}),
+      ...(thinkingLevel ? { thinkingLevel } : {}),
       sessionManager: SessionManager.inMemory(cwd),
       settingsManager,
       resourceLoader,

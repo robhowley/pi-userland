@@ -1,4 +1,11 @@
-import { getAgentDir, SettingsManager } from '@earendil-works/pi-coding-agent';
+import { join } from 'node:path';
+import {
+  getAgentDir,
+  getPackageDir,
+  SettingsManager,
+  type ExtensionContext,
+} from '@earendil-works/pi-coding-agent';
+import type { HandoffInput } from './capture-handoff.js';
 
 export interface RemembrancerConfig {
   disabled: boolean;
@@ -28,6 +35,29 @@ export function loadRemembrancerConfig(cwd: string, projectTrusted: boolean): Re
       booleanSetting(project, 'autoCapture') ??
       booleanSetting(global, 'autoCapture') ??
       DEFAULT_REMEMBRANCER_CONFIG.autoCapture,
+  };
+}
+
+export function captureHost(): NonNullable<HandoffInput['execution']['host']> {
+  return { nodeExecutable: process.execPath, piEntry: join(getPackageDir(), 'dist', 'cli.js') };
+}
+
+/** Capture non-secret execution data from the outgoing context, never from a later waking TUI. */
+export function captureExecution(ctx: ExtensionContext): HandoffInput['execution'] {
+  if (!ctx.model) throw Error('Capture requires the outgoing model');
+  const model = structuredClone(ctx.model);
+  delete model.headers;
+  return {
+    cwd: ctx.cwd,
+    agentDir: getAgentDir(),
+    authorization: { autoCapture: true, disabled: false },
+    host: captureHost(),
+    runtime: {
+      model,
+      ...(ctx.model.headers ? { headerNames: Object.keys(ctx.model.headers) } : {}),
+      thinkingLevel: ctx.thinkingLevel ?? 'medium',
+      projectTrusted: ctx.isProjectTrusted(),
+    },
   };
 }
 

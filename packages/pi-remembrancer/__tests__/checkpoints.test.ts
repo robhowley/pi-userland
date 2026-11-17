@@ -1,7 +1,7 @@
 import { fork, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdtempSync, rmSync, statSync } from 'node:fs';
+import { chmodSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,6 +19,7 @@ it('persists enrollment separately from finished boundaries and updates source p
     expect(store.reviewed()).toEqual([]);
     store.finish([a]);
     store.close();
+    chmodSync(path, 0o644);
     store = new CheckpointStore(path);
     expect(store.sources()).toEqual([{ sessionId: 'a', file: a.file, seedSince: null }]);
     expect(store.reviewed()).toEqual([{ ...a, since: null }]);
@@ -26,6 +27,42 @@ it('persists enrollment separately from finished boundaries and updates source p
     expect(store.reviewed()).toEqual([{ ...a, file: '/moved/a.jsonl', since: null }]);
     expect(statSync(path).mode & 0o777).toBe(0o600);
     expect(statSync(join(dir, 'state')).mode & 0o777).toBe(0o700);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it('replaces persisted enrollment triggers without resetting rows or generation', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'remembrancer-triggers-'));
+  const path = join(dir, 'index.sqlite');
+  let store = new CheckpointStore(path);
+  store.enroll('a', a.file);
+  store.close();
+  const old = new DatabaseSync(path);
+  for (const operation of ['INSERT', 'UPDATE', 'DELETE']) {
+    old.exec(`DROP TRIGGER context_sources_${operation};
+      CREATE TRIGGER context_sources_${operation} AFTER ${operation} ON sources BEGIN
+        UPDATE review_context SET generation = generation + 1 WHERE singleton = 1;
+      END`);
+  }
+  old.exec('UPDATE review_context SET generation = 42 WHERE singleton = 1');
+  old.close();
+  store = new CheckpointStore(path);
+  try {
+    expect(store.contextGeneration()).toBe(42);
+    expect(store.sources()).toEqual([{ sessionId: 'a', file: a.file, seedSince: null }]);
+    store.enroll('a', a.file);
+    store.enroll('a', '/moved/a.jsonl');
+    store.enroll('unrelated', '/elsewhere.jsonl');
+    expect(store.contextGeneration()).toBe(42);
+    store.finish({ sourceDefaults: [{ sessionId: 'a', since: '2026-01-01' }] });
+    expect(store.contextGeneration()).toBe(43);
+    store.claimReview();
+    store.releaseReview();
+    expect(store.contextGeneration()).toBe(44);
+    store.finish([{ ...a, file: '/moved/a.jsonl' }]);
+    expect(store.contextGeneration()).toBe(45);
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });
@@ -181,7 +218,10 @@ it('excludes other processes while allowing enrollment, and releases on close', 
   const peer = new CheckpointStore(path);
   try {
     owner.claimReview();
+    expect(statSync(path + '.lock').mode & 0o777).toBe(0o600);
+    chmodSync(path + '.lock', 0o644);
     expect(() => peer.claimReview()).toThrow(/already open/);
+    expect(statSync(path + '.lock').mode & 0o777).toBe(0o600);
     peer.enroll(a.sessionId, a.file);
     expect(owner.sources()).toHaveLength(1);
     const claim = `import { DatabaseSync } from 'node:sqlite';

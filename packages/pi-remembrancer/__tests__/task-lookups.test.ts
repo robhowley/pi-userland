@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { lookupTasks } from '../extensions/remembrancer/taskwarrior.js';
+import { executeTask, lookupTasks } from '../extensions/remembrancer/taskwarrior.js';
 
 const uuid = '11111111-1111-4111-8111-111111111111';
 
@@ -48,4 +48,20 @@ it('pages read-only results without interpreting task content as arguments', asy
     nextOffset: null,
   });
   expect(execute.mock.calls).toEqual([[['export']], [['export']]]);
+});
+
+it('forwards originating cwd and the attempt signal without changing read-only arguments', async () => {
+  const execute = vi.fn().mockResolvedValue('[]');
+  const options = { cwd: '/originating/project', signal: new AbortController().signal };
+  await lookupTasks({}, execute, options);
+  expect(execute).toHaveBeenCalledExactlyOnceWith(['export'], undefined, options);
+});
+
+it('rejects an already-aborted task execution before launching a child', async () => {
+  const controller = new AbortController();
+  const reason = Error('already cancelled');
+  controller.abort(reason);
+  await expect(
+    executeTask(['export'], undefined, { cwd: '/missing', signal: controller.signal }),
+  ).rejects.toBe(reason);
 });

@@ -9,6 +9,7 @@ import type {
 } from '@earendil-works/pi-coding-agent';
 import { afterEach, expect, it, vi } from 'vitest';
 import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
+import { captureJob } from './fixtures/capture-job.js';
 import * as evidence from '../extensions/remembrancer/evidence.js';
 import * as discovery from '../extensions/remembrancer/discovery.js';
 import * as reviewer from '../extensions/remembrancer/reviewer.js';
@@ -64,9 +65,8 @@ function setup(autoCapture?: boolean, disabled = false, mode: unknown = 'tui') {
       .join('\n'),
   );
   const store = new CheckpointStore();
-  store.claimReview();
-  const capture = store.prepareCapture({ file, sessionId: 'session' });
-  capture.page();
+  const { owner, attempt, review } = captureJob(store, { file, sessionId: 'session' });
+  review.page();
   const submission = {
     change: {
       operation: 'add' as const,
@@ -87,8 +87,8 @@ function setup(autoCapture?: boolean, disabled = false, mode: unknown = 'tui') {
       },
     ],
   };
-  const proposals = store.finishCapture(capture.id, [submission, submission, submission]);
-  store.releaseReview();
+  const proposals = store.finishCaptureJob(owner, attempt, [submission, submission, submission]);
+  owner.release();
   store.dismissProposal(proposals[1]!.id, 1);
   store.claimProposal(proposals[2]!.id, 1, null);
   store.close();
@@ -156,7 +156,7 @@ function setup(autoCapture?: boolean, disabled = false, mode: unknown = 'tui') {
 }
 
 it.each([undefined, false, true])(
-  'startup uses only the pending database count with capture %s',
+  'startup reads committed notice generation/count with capture %s',
   async (flag) => {
     const f = setup(flag);
     const reads = vi.spyOn(evidence, 'readSession').mockImplementation(() => {
@@ -168,7 +168,7 @@ it.each([undefined, false, true])(
     const models = vi.spyOn(reviewer, 'runReviewer').mockImplementation(async () => {
       throw new Error('Unexpected reviewer');
     });
-    const count = vi.spyOn(CheckpointStore.prototype, 'proposalCount');
+    const count = vi.spyOn(CheckpointStore.prototype, 'proposalNotice');
     const rows = vi.spyOn(CheckpointStore.prototype, 'proposals');
     await f.handlers.get('session_start')!({}, f.ctx);
     expect(f.notify).toHaveBeenCalledExactlyOnceWith(

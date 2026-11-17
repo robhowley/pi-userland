@@ -12,7 +12,12 @@ import {
   type TaskSnapshot,
 } from './proposals.js';
 export type TaskRecord = Record<string, unknown>;
-export type TaskExecutor = (args: readonly string[], input?: string) => Promise<string>;
+export type TaskExecutionOptions = { cwd?: string; signal?: AbortSignal | undefined };
+export type TaskExecutor = (
+  args: readonly string[],
+  input?: string,
+  execution?: TaskExecutionOptions,
+) => Promise<string>;
 const options = [
   'rc.confirmation=off',
   'rc.context=',
@@ -21,17 +26,38 @@ const options = [
   'rc.json.array=on',
   'rc.verbose=nothing',
 ];
-export const executeTask: TaskExecutor = (args, input) =>
+export const executeTask: TaskExecutor = (args, input, execution) =>
   new Promise((resolve, reject) => {
+    execution?.signal?.throwIfAborted();
+    let failure: Error | null = null;
+    let output = '';
     const child = execFile(
       'task',
       [...options, ...args],
-      { encoding: 'utf8', timeout: 10000, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024 },
+      {
+        ...execution,
+        encoding: 'utf8',
+        timeout: 10000,
+        killSignal: 'SIGKILL',
+        maxBuffer: 1024 * 1024,
+      },
       (error, stdout, stderr) => {
-        if (error) reject(new Error(`${error.message}\n${stderr}\n${stdout}`));
-        else resolve(stdout);
+        if (error) failure = new Error(`${error.message}\n${stderr}\n${stdout}`);
+        output = stdout;
       },
     );
+    // Node22 execFile forwards signal to spawn but not killSignal. Its abort
+    // sends SIGTERM; explicitly kill our direct child and await actual closure.
+    const cancel = () => {
+      child.kill('SIGKILL');
+    };
+    execution?.signal?.addEventListener('abort', cancel, { once: true });
+    if (execution?.signal?.aborted) cancel();
+    child.once('close', () => {
+      execution?.signal?.removeEventListener('abort', cancel);
+      if (failure) reject(failure);
+      else resolve(output);
+    });
     child.stdin?.on('error', () => {
       /* execFile callback reports process failure. */
     });
@@ -75,6 +101,7 @@ export function snapshot(record: TaskRecord): TaskSnapshot {
 export async function lookupTasks(
   query: { uuid?: string; status?: 'pending' | 'completed'; offset?: number } = {},
   execute: TaskExecutor = executeTask,
+  execution?: TaskExecutionOptions,
 ): Promise<{ tasks: TaskRecord[]; nextOffset: number | null }> {
   if (query.uuid !== undefined) fullUuid(query.uuid);
   if (query.status !== undefined && !['pending', 'completed'].includes(query.status))
@@ -86,7 +113,9 @@ export async function lookupTasks(
     : query.status
       ? [`status:${query.status}`, 'export']
       : ['export'];
-  const records: unknown = JSON.parse(await execute(args));
+  const records: unknown = JSON.parse(
+    await (execution ? execute(args, undefined, execution) : execute(args)),
+  );
   if (!Array.isArray(records)) throw new Error('Invalid Taskwarrior export');
   for (const record of records) {
     if (

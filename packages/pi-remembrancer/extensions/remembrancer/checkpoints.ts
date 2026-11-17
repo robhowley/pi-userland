@@ -1,10 +1,19 @@
 import { randomUUID } from 'node:crypto';
-import { chmodSync, closeSync, mkdirSync, openSync } from 'node:fs';
+import { mkdirSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import type { DatabaseSync } from 'node:sqlite';
 
+import { openPrivateSqlite } from './private-sqlite.mjs';
 import { CaptureReview } from './capture-review.js';
+import {
+  CapturePreparationError,
+  CaptureWorkerOwnership,
+  type CaptureAttempt,
+  type CaptureJob,
+} from './capture-jobs.js';
+import { physicalInbox, validateReadyManifest, type ReadyManifest } from './capture-handoff.js';
+import { prepareHistoricalReview } from './evidence.js';
 import {
   validateDraft,
   validateSnapshot,
@@ -25,7 +34,7 @@ export type FinishPlan = {
   checkpoints?: readonly (Tip | Checkpoint)[];
 };
 
-function defaultFile(): string {
+export function defaultCheckpointFile(): string {
   const state = process.env['XDG_STATE_HOME'];
   return join(
     state && isAbsolute(state) ? state : join(homedir(), '.local', 'state'),
@@ -35,18 +44,8 @@ function defaultFile(): string {
 }
 
 function openPrivate(filename: string): DatabaseSync {
-  if (filename !== ':memory:') {
-    mkdirSync(dirname(filename), { recursive: true, mode: 0o700 });
-    // Closing a second descriptor for an existing SQLite file can drop this
-    // process's POSIX locks, even those held by another DatabaseSync instance.
-    try {
-      closeSync(openSync(filename, 'ax', 0o600));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      chmodSync(filename, 0o600);
-    }
-  }
-  return new DatabaseSync(filename);
+  if (filename !== ':memory:') mkdirSync(dirname(filename), { recursive: true, mode: 0o700 });
+  return openPrivateSqlite(filename);
 }
 
 function absoluteTimestamp(value: string | null | undefined): string | null {
@@ -71,11 +70,24 @@ export class CheckpointStore {
   private db: DatabaseSync;
   private filename: string;
   private reviewLock: DatabaseSync | undefined;
-  private capture: CaptureReview | undefined;
+  private jobCapture:
+    | {
+        owner: CaptureWorkerOwnership;
+        attempt: CaptureAttempt;
+        review: CaptureReview;
+        generation: number;
+        body: string;
+      }
+    | undefined;
 
-  constructor(filename = defaultFile()) {
+  get file(): string {
+    return this.filename;
+  }
+
+  constructor(filename = defaultCheckpointFile()) {
     this.filename = filename;
     this.db = openPrivate(filename);
+    if (filename !== ':memory:') this.filename = realpathSync(filename);
     try {
       this.db.exec('PRAGMA busy_timeout = 5000; BEGIN IMMEDIATE;');
       this.db.exec(`
@@ -98,6 +110,39 @@ export class CheckpointStore {
         id TEXT PRIMARY KEY, revision INTEGER NOT NULL, state TEXT NOT NULL,
         body TEXT NOT NULL
       )`);
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS review_context (
+          singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+          generation INTEGER NOT NULL, notice_generation INTEGER NOT NULL
+        );
+        INSERT OR IGNORE INTO review_context VALUES (1, 0, 0);
+        CREATE TABLE IF NOT EXISTS capture_jobs (
+          id TEXT PRIMARY KEY, session_id TEXT NOT NULL, snapshot TEXT NOT NULL,
+          accepted_at TEXT NOT NULL, admission_order TEXT NOT NULL, body TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('queued', 'completed', 'failed')),
+          retry_eligible INTEGER NOT NULL CHECK(retry_eligible IN (0, 1)), diagnostic TEXT,
+          CHECK ((state = 'queued' AND retry_eligible = 1 AND diagnostic IS NULL)
+            OR (state = 'completed' AND retry_eligible = 0 AND diagnostic IS NULL)
+            OR (state = 'failed' AND diagnostic IS NOT NULL AND length(trim(diagnostic)) > 0))
+        );
+      `);
+      // Triggers keep each mutation and its generation in the same transaction,
+      // including existing single-statement manual proposal/application writes.
+      for (const table of ['sources', 'reviewed_boundaries', 'proposals']) {
+        for (const operation of ['INSERT', 'UPDATE', 'DELETE']) {
+          this.db.exec(`DROP TRIGGER IF EXISTS context_${table}_${operation}`);
+          let condition = '';
+          if (table === 'sources' && operation === 'INSERT')
+            condition = 'WHEN NEW.seed_since IS NOT NULL';
+          if (table === 'sources' && operation === 'UPDATE')
+            condition = 'WHEN NEW.seed_since IS NOT OLD.seed_since';
+          this.db.exec(`CREATE TRIGGER context_${table}_${operation}
+            AFTER ${operation} ON ${table} ${condition} BEGIN
+              UPDATE review_context SET generation = generation + 1
+              ${table === 'proposals' ? ', notice_generation = notice_generation + 1' : ''}
+              WHERE singleton = 1;
+            END`);
+        }
+      }
       this.db.exec('COMMIT');
     } catch (error) {
       try {
@@ -112,6 +157,16 @@ export class CheckpointStore {
   // A separate lock file lets other Pi sessions enroll during an interactive review.
   // SQLite releases this transaction's OS lock on close, including process death.
   claimReview(): void {
+    this.claimReviewLock();
+    try {
+      this.db.exec('UPDATE review_context SET generation = generation + 1 WHERE singleton = 1');
+    } catch (error) {
+      this.releaseReview();
+      throw error;
+    }
+  }
+
+  private claimReviewLock(): void {
     if (this.reviewLock) throw new Error('A remembrancer review is already open');
     const lock = openPrivate(this.filename === ':memory:' ? ':memory:' : this.filename + '.lock');
     try {
@@ -128,7 +183,6 @@ export class CheckpointStore {
   releaseReview(): void {
     this.reviewLock?.close();
     this.reviewLock = undefined;
-    this.capture = undefined;
   }
 
   proposals(state?: ProposalState, offset = 0, limit = 50): Proposal[] {
@@ -274,90 +328,323 @@ export class CheckpointStore {
     return value;
   }
 
-  // Capture uses the existing process lock. Its identity is memory-only and has
-  // no expiry; the caller releases ownership after reviewer cleanup and commit.
-  prepareCapture(source: Pick<Source, 'sessionId' | 'file'>): CaptureReview {
-    if (!this.reviewLock) throw new Error('Capture requires review ownership');
-    if (this.capture) throw new Error('A capture is already frozen');
-    const enrolled = this.sources().find((item) => item.sessionId === source.sessionId);
-    const review = new CaptureReview(
-      { ...source, seedSince: enrolled?.seedSince ?? null },
-      this.reviewed(),
-      () => {
-        if (!this.reviewLock || this.capture !== review)
-          throw new Error('No matching active capture');
-      },
-    );
-    this.capture = review;
-    return review;
-  }
-
-  private validatedCapture(id: string, submissions: readonly ProposalSubmission[]) {
-    if (!this.reviewLock || !this.capture || this.capture.id !== id)
-      throw new Error('No matching active capture');
-    const frozen = this.capture.completion(submissions);
+  private saveCapture(
+    capture: ReturnType<CaptureReview['completion']>,
+    submissions: readonly ProposalSubmission[],
+  ): Proposal[] {
+    const enrolled = new Map(this.sources().map((source) => [source.sessionId, source.file]));
+    const plan = this.normalizePlan({
+      ...capture.plan,
+      sources: (capture.plan.sources ?? []).map((source) => ({
+        ...source,
+        file: enrolled.get(source.sessionId) ?? source.file,
+      })),
+    });
+    const saved: Proposal[] = [];
     const ids = new Set<string>();
-    for (const submission of submissions) {
+    for (const [index, submission] of submissions.entries()) {
+      const references = capture.sources[index]!;
+      const now = new Date().toISOString();
+      let proposal: Proposal;
       if (submission.id !== undefined) {
         if (ids.has(submission.id)) throw new Error('Repeated proposal revision');
         ids.add(submission.id);
-        this.changedProposal(submission.id, submission.expectedRevision!, ['pending']);
+        proposal = this.changedProposal(submission.id, submission.expectedRevision!, ['pending']);
+        proposal = {
+          ...proposal,
+          change: submission.change,
+          expected: submission.expected,
+          question: proposal.draft
+            ? 'New evidence conflicts with an edited draft. Review both before applying.'
+            : submission.question,
+          explanation: submission.explanation,
+          sources: [...proposal.sources, ...references],
+        };
+        if (proposal.draft) proposal.draft = { ...proposal.draft, question: proposal.question };
+      } else {
+        proposal = {
+          id: randomUUID(),
+          revision: 1,
+          change: submission.change,
+          expected: submission.expected,
+          question: submission.question,
+          draft: null,
+          explanation: submission.explanation,
+          sources: references,
+          state: 'pending',
+          claim: null,
+          result: null,
+          createdAt: now,
+          updatedAt: now,
+        };
       }
+      this.saveProposal(proposal, submission.expectedRevision);
+      saved.push(proposal);
     }
-    return frozen;
+
+    this.writeCoverage(plan);
+    return saved;
   }
 
-  validateCapture(id: string, submissions: readonly ProposalSubmission[]): void {
-    this.validatedCapture(id, submissions);
+  contextGeneration(): number {
+    return Number(
+      this.db.prepare('SELECT generation FROM review_context WHERE singleton = 1').get()![
+        'generation'
+      ],
+    );
   }
 
-  finishCapture(id: string, submissions: readonly ProposalSubmission[]): Proposal[] {
-    const saved = this.transaction(() => {
-      const capture = this.validatedCapture(id, submissions);
-      const plan = this.normalizePlan(capture.plan);
-      const saved: Proposal[] = [];
-      for (const [index, submission] of submissions.entries()) {
-        const references = capture.sources[index]!;
-        const now = new Date().toISOString();
-        let proposal: Proposal;
-        if (submission.id !== undefined) {
-          proposal = this.changedProposal(submission.id, submission.expectedRevision!, ['pending']);
-          proposal = {
-            ...proposal,
-            change: submission.change,
-            expected: submission.expected,
-            question: proposal.draft
-              ? 'New evidence conflicts with an edited draft. Review both before applying.'
-              : submission.question,
-            explanation: submission.explanation,
-            sources: [...proposal.sources, ...references],
-          };
-          if (proposal.draft) proposal.draft = { ...proposal.draft, question: proposal.question };
-        } else {
-          proposal = {
-            id: randomUUID(),
-            revision: 1,
-            change: submission.change,
-            expected: submission.expected,
-            question: submission.question,
-            draft: null,
-            explanation: submission.explanation,
-            sources: references,
-            state: 'pending',
-            claim: null,
-            result: null,
-            createdAt: now,
-            updatedAt: now,
-          };
-        }
-        this.saveProposal(proposal, submission.expectedRevision);
-        saved.push(proposal);
+  proposalNotice(): { generation: number; pending: number } {
+    const row = this.db
+      .prepare(
+        `SELECT notice_generation AS generation,
+      (SELECT count(*) FROM proposals WHERE state = 'pending') AS pending
+      FROM review_context WHERE singleton = 1`,
+      )
+      .get()!;
+    return { generation: Number(row['generation']), pending: Number(row['pending']) };
+  }
+
+  claimCaptureWorker(): CaptureWorkerOwnership {
+    return CaptureWorkerOwnership.claim(this.filename);
+  }
+
+  captureJob(id: string): CaptureJob | undefined {
+    const row = this.db
+      .prepare('SELECT body, state, retry_eligible, diagnostic FROM capture_jobs WHERE id = ?')
+      .get(id);
+    if (!row) return undefined;
+    return {
+      manifest: JSON.parse(row['body'] as string) as ReadyManifest,
+      state: row['state'] as CaptureJob['state'],
+      retryEligible: Boolean(row['retry_eligible']),
+      diagnostic: row['diagnostic'] as string | null,
+    };
+  }
+
+  completedCaptureJobIds(owner: CaptureWorkerOwnership): string[] {
+    owner.assertStore(this.filename);
+    return this.db
+      .prepare("SELECT id FROM capture_jobs WHERE state = 'completed' ORDER BY rowid")
+      .all()
+      .map((row) => row['id'] as string);
+  }
+
+  unresolvedSnapshot(snapshot: string): boolean {
+    return !!this.db
+      .prepare("SELECT 1 FROM capture_jobs WHERE snapshot = ? AND state <> 'completed' LIMIT 1")
+      .get(snapshot);
+  }
+
+  importCaptureJob(owner: CaptureWorkerOwnership, value: ReadyManifest): CaptureJob {
+    owner.assertStore(this.filename);
+    const manifest = validateReadyManifest(value, dirname(value.snapshot));
+    return this.transaction(() => {
+      owner.assertStore(this.filename);
+      const existing = this.captureJob(manifest.id);
+      if (!existing || existing.state !== 'completed') {
+        const snapshot = statSync(manifest.snapshot);
+        if (!snapshot.isFile() || snapshot.size !== manifest.source.bytes)
+          throw Error('Retained snapshot extent differs from handoff');
       }
-
-      this.writeCoverage(plan);
-      return saved;
+      if (existing) {
+        if (JSON.stringify(existing.manifest) !== JSON.stringify(manifest))
+          throw Error('Handoff ID metadata conflict');
+        return existing;
+      }
+      // Publication sequences belong to one durable inbox, not the importer or
+      // the wall clock. Never compare counters from different inboxes.
+      const previous = this.db.prepare('SELECT snapshot FROM capture_jobs LIMIT 1').get();
+      if (
+        previous &&
+        physicalInbox(dirname(previous['snapshot'] as string)) !==
+          physicalInbox(dirname(manifest.snapshot))
+      )
+        throw Error('Capture publication order requires one inbox per database');
+      if (
+        this.db
+          .prepare('SELECT 1 FROM capture_jobs WHERE admission_order = ?')
+          .get(manifest.admissionOrder)
+      )
+        throw Error('Conflicting capture publication order');
+      this.db
+        .prepare(`INSERT INTO capture_jobs VALUES (?, ?, ?, ?, ?, ?, 'queued', 1, NULL)`)
+        .run(
+          manifest.id,
+          manifest.source.sessionId,
+          manifest.snapshot,
+          manifest.acceptedAt,
+          manifest.admissionOrder,
+          JSON.stringify(manifest),
+        );
+      return this.captureJob(manifest.id)!;
     });
-    this.capture = undefined;
+  }
+
+  runnableCaptureJobs(owner: CaptureWorkerOwnership): CaptureJob[] {
+    owner.assertStore(this.filename);
+    // A ready predecessor may not have been imported yet. Drain every visible
+    // ready signal before selection, regardless of discovery order. Imported
+    // signals left behind by a crash are harmless.
+    const first = this.db.prepare('SELECT snapshot FROM capture_jobs LIMIT 1').get();
+    if (
+      first &&
+      readdirSync(dirname(first['snapshot'] as string)).some(
+        (name) =>
+          name.endsWith('.ready.json') && !this.captureJob(name.slice(0, -'.ready.json'.length)),
+      )
+    )
+      return [];
+    // Unsuccessful predecessors block newer evidence in the same session.
+    // Unsupported stored jobs retain their session fence, without guessing
+    // execution metadata or publication order. Other sessions remain runnable.
+    return this.runnableCaptureJobIds().map((id) => this.captureJob(id)!);
+  }
+
+  // Read-only exit-race check after releasing worker ownership. This grants no
+  // import/attempt/publication authority; a subsequent claim is still required.
+  captureRecoveryPending(excluded: ReadonlySet<string>): boolean {
+    return this.runnableCaptureJobIds().some((id) => !excluded.has(id));
+  }
+
+  private runnableCaptureJobIds(): string[] {
+    return this.db
+      .prepare(
+        `SELECT job.id FROM capture_jobs AS job
+      WHERE json_extract(job.body, '$.version') = 3
+      AND (job.state = 'queued' OR (job.state = 'failed' AND job.retry_eligible = 1))
+      AND NOT EXISTS (SELECT 1 FROM capture_jobs AS earlier
+        WHERE earlier.session_id = job.session_id
+        AND (json_extract(earlier.body, '$.version') IS NOT 3
+          OR earlier.admission_order < job.admission_order)
+        AND earlier.state <> 'completed') ORDER BY job.admission_order`,
+      )
+      .all()
+      .map((row) => row['id'] as string);
+  }
+
+  private coordinateCapture<T>(owner: CaptureWorkerOwnership, operation: () => T): T {
+    owner.assertStore(this.filename);
+    this.claimReviewLock();
+    try {
+      return operation();
+    } finally {
+      this.releaseReview();
+    }
+  }
+
+  prepareCaptureJob(owner: CaptureWorkerOwnership, attempt: CaptureAttempt): CaptureReview {
+    if (this.jobCapture?.attempt === attempt) throw Error('Attempt already has a frozen capture');
+    const frozen = this.coordinateCapture(owner, () =>
+      this.transaction(() => {
+        owner.assertAttempt(attempt);
+        const job = this.captureJob(attempt.jobId);
+        if (
+          !job ||
+          !this.runnableCaptureJobs(owner).some((item) => item.manifest.id === attempt.jobId)
+        )
+          throw Error('Capture job is not runnable');
+        // A crash during execution leaves queued work for the next owner.
+        this.db
+          .prepare(
+            "UPDATE capture_jobs SET state = 'queued', retry_eligible = 1, diagnostic = NULL WHERE id = ?",
+          )
+          .run(attempt.jobId);
+        const enrolled = this.sources().find(
+          (source) => source.sessionId === job.manifest.source.sessionId,
+        );
+        return {
+          job,
+          source: {
+            file: job.manifest.source.file,
+            sessionId: job.manifest.source.sessionId,
+            seedSince: enrolled?.seedSince ?? null,
+          },
+          liveSourceFile: enrolled?.file ?? job.manifest.source.file,
+          reviewed: this.reviewed(),
+          generation: this.contextGeneration(),
+          body: JSON.stringify(job.manifest),
+        };
+      }),
+    );
+    // Parsing and historical applicability are deliberately outside manual ownership.
+    const result = prepareHistoricalReview(
+      frozen.source,
+      frozen.job.manifest.snapshot,
+      frozen.reviewed,
+      undefined,
+      frozen.liveSourceFile,
+    );
+    if ('retryEligible' in result) {
+      this.failCaptureJob(owner, attempt, result.diagnostic, result.retryEligible);
+      throw new CapturePreparationError(result.diagnostic, result.category, result.retryEligible);
+    }
+    const review = new CaptureReview(result.review, () => {
+      owner.assertStore(this.filename);
+      owner.assertAttempt(attempt);
+      if (this.jobCapture?.review !== review) throw Error('No matching frozen capture job');
+    });
+    this.jobCapture = { owner, attempt, review, generation: frozen.generation, body: frozen.body };
+    return review;
+  }
+
+  failCaptureJob(
+    owner: CaptureWorkerOwnership,
+    attempt: CaptureAttempt,
+    diagnostic: string,
+    retryEligible: boolean,
+  ): void {
+    owner.assertStore(this.filename);
+    owner.assertAttempt(attempt);
+    if (!diagnostic.trim()) throw Error('Capture failure requires a diagnostic');
+    this.transaction(() => {
+      const job = this.captureJob(attempt.jobId);
+      if (!job || job.state === 'completed') throw Error('Capture job is not unresolved');
+      this.db
+        .prepare(
+          "UPDATE capture_jobs SET state = 'failed', retry_eligible = ?, diagnostic = ? WHERE id = ?",
+        )
+        .run(Number(retryEligible), diagnostic, attempt.jobId);
+    });
+    this.jobCapture = undefined;
+    owner.abandon(attempt);
+  }
+
+  finishCaptureJob(
+    owner: CaptureWorkerOwnership,
+    attempt: CaptureAttempt,
+    submissions: readonly ProposalSubmission[],
+  ): Proposal[] {
+    const saved = this.coordinateCapture(owner, () =>
+      this.transaction(() => {
+        owner.assertAttempt(attempt);
+        const active = this.jobCapture;
+        const job = this.captureJob(attempt.jobId);
+        if (
+          !active ||
+          active.owner !== owner ||
+          active.attempt !== attempt ||
+          !job ||
+          job.state !== 'queued' ||
+          JSON.stringify(job.manifest) !== active.body ||
+          !this.runnableCaptureJobIds().includes(attempt.jobId)
+        )
+          throw Error('No matching durable capture job');
+        validateReadyManifest(job.manifest, dirname(job.manifest.snapshot));
+        if (this.contextGeneration() !== active.generation)
+          throw Error('Capture review context changed; reprepare');
+        const capture = active.review.completion(submissions);
+        const proposals = this.saveCapture(capture, submissions);
+        this.db
+          .prepare(
+            "UPDATE capture_jobs SET state = 'completed', retry_eligible = 0, diagnostic = NULL WHERE id = ?",
+          )
+          .run(attempt.jobId);
+        return proposals;
+      }),
+    );
+    this.jobCapture = undefined;
+    owner.abandon(attempt);
     return saved;
   }
 
@@ -493,6 +780,14 @@ export class CheckpointStore {
 
   close(): void {
     this.releaseReview();
+    if (this.jobCapture) {
+      try {
+        this.jobCapture.owner.abandon(this.jobCapture.attempt);
+      } catch {
+        /* Ownership release already invalidated the attempt. */
+      }
+      this.jobCapture = undefined;
+    }
     this.db.close();
   }
 }
