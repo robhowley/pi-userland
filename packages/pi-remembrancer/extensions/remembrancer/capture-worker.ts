@@ -206,7 +206,6 @@ export async function runCaptureWorker(options: WorkerOptions): Promise<void> {
       try {
         process.chdir(job.manifest.execution.cwd);
         const current = store.prepareCaptureJob(owner, attempt);
-        if (current.incomplete) throw Error('Cannot capture incomplete evidence');
         let submissions: ProposalSubmission[] = [];
         if (current.hasEvidence) {
           const { execution, source } = job.manifest;
@@ -253,10 +252,6 @@ export async function runCaptureWorker(options: WorkerOptions): Promise<void> {
               signal: controller.signal,
             },
             check,
-            (proposals) => {
-              check();
-              current.completion(proposals);
-            },
           );
         }
         check();

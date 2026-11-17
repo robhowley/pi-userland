@@ -1,6 +1,7 @@
-import { chmodSync, closeSync, mkdirSync, openSync, realpathSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, realpathSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import type { DatabaseSync } from 'node:sqlite';
+import { openPrivateSqlite } from './private-sqlite.mjs';
 import type { ReadyManifest } from './capture-handoff.js';
 
 export type CaptureJob = {
@@ -51,13 +52,7 @@ export class CaptureWorkerOwnership {
     if (owners.has(file)) throw Error('A capture worker already owns this database');
     const lockFile = file + '.worker-lock';
     mkdirSync(dirname(lockFile), { recursive: true, mode: 0o700 });
-    try {
-      closeSync(openSync(lockFile, 'ax', 0o600));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      chmodSync(lockFile, 0o600);
-    }
-    const lock = new DatabaseSync(lockFile);
+    const lock = openPrivateSqlite(lockFile);
     try {
       lock.exec('BEGIN IMMEDIATE');
     } catch (error) {

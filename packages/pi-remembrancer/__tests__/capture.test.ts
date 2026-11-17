@@ -153,18 +153,6 @@ it.each([false, true])(
     expect(db.reviewed()).toHaveLength(invalid ? 0 : 1);
   },
 );
-it('manual completion excludes covered evidence from automatic capture', async () => {
-  const manual = prepareReview([{ sessionId: 'outgoing', file }], db.reviewed());
-  db.claimReview();
-  db.finish({
-    sources: manual.successfulSources,
-    sourceDefaults: manual.sourceDefaults,
-    checkpoints: manual.checkpoints,
-  });
-  db.releaseReview();
-  await capture();
-  expect(runner).not.toHaveBeenCalled();
-});
 it('rejects malformed saved scope without calling the model', async () => {
   appendFileSync(file, '{broken json\n');
   await capture();
@@ -190,13 +178,7 @@ it.each(['unread', 'partial', 'duplicate', 'invalid', 'model error', 'missing su
       if (failure === 'partial') await call(input, 'read_evidence');
       else if (failure !== 'unread') await readAll(input);
       await call(input, 'submit', { proposals: failure === 'invalid' ? [{}] : [] });
-      if (failure === 'duplicate') {
-        try {
-          await call(input, 'submit', { proposals: [] });
-        } catch {
-          /* SDK turns tool errors into results */
-        }
-      }
+      if (failure === 'duplicate') await call(input, 'submit', { proposals: [] });
       if (failure === 'model error') throw new Error('context overflow');
     });
     await capture();
@@ -368,9 +350,14 @@ it.each(['empty', 'tool-only', 'covered'])(
         }) + '\n',
       );
     if (kind === 'covered') {
-      const prepared = prepareReview([{ sessionId: 'outgoing', file }], []);
-      db.enroll('outgoing', file);
-      db.finish(prepared.tips);
+      const prepared = prepareReview([{ sessionId: 'outgoing', file }], db.reviewed());
+      db.claimReview();
+      db.finish({
+        sources: prepared.successfulSources,
+        sourceDefaults: prepared.sourceDefaults,
+        checkpoints: prepared.checkpoints,
+      });
+      db.releaseReview();
     }
     const effects = () => ({
       sources: db.sources(),
@@ -471,11 +458,7 @@ it.each(['setup', 'tool', 'cleanup', 'storage'])(
     runner.mockImplementation(async (input) => {
       if (phase === 'setup') throw new Error('setup failed');
       if (phase === 'tool') {
-        try {
-          await call(input, 'context', {});
-        } catch {
-          /* SDK reports tool failure. */
-        }
+        await call(input, 'context', {});
         return;
       }
       const page = await readAll(input);

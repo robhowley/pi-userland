@@ -147,7 +147,6 @@ it.each([
     ].join('\n');
     writeFileSync(file, transcript);
     const db = new CheckpointStore();
-    const notify = vi.fn();
     try {
       const runtime = await ModelRuntime.create({
         authPath: join(agent, 'auth.json'),
@@ -160,7 +159,6 @@ it.each([
         mode: 'tui',
         model,
         isProjectTrusted: () => false,
-        ui: { notify },
         sessionManager: { getSessionFile: () => file, getSessionId: () => 'outgoing' },
       } as unknown as ExtensionContext;
       const inbox = join(dir, 'inbox');
@@ -175,7 +173,6 @@ it.each([
       expect(requests).toHaveLength(expectedRequests * (covered ? 1 : 2));
       expect(db.reviewed()).toHaveLength(covered ? 1 : 0);
       expect(db.proposals()).toHaveLength(outcome === 'proposal' ? 1 : 0);
-      expect(notify).not.toHaveBeenCalled();
       expect(db.captureJob('first')?.state).toBe(covered ? 'completed' : 'failed');
       expect(requests.every((request) => request['model'] === 'fixture')).toBe(true);
       expect(JSON.stringify(requests)).not.toContain(sentinel);

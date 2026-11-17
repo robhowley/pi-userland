@@ -1,19 +1,12 @@
 // SQLite waits off the TUI thread. The transaction is released by close or
 // process death, never by deleting the lock file or guessing whether a PID lives.
-import { chmodSync, closeSync, openSync } from 'node:fs';
-import { DatabaseSync } from 'node:sqlite';
 import { setTimeout } from 'node:timers/promises';
 import { parentPort, workerData } from 'node:worker_threads';
+import { openPrivateSqlite } from './private-sqlite.mjs';
 
 let database;
 try {
-  try {
-    closeSync(openSync(workerData, 'ax', 0o600));
-  } catch (error) {
-    if (error.code !== 'EEXIST') throw error;
-    chmodSync(workerData, 0o600);
-  }
-  database = new DatabaseSync(workerData);
+  database = openPrivateSqlite(workerData);
   database.exec('PRAGMA busy_timeout = 1000');
   for (;;) {
     try {

@@ -1,7 +1,7 @@
 import { fork, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdtempSync, rmSync, statSync } from 'node:fs';
+import { chmodSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,6 +19,7 @@ it('persists enrollment separately from finished boundaries and updates source p
     expect(store.reviewed()).toEqual([]);
     store.finish([a]);
     store.close();
+    chmodSync(path, 0o644);
     store = new CheckpointStore(path);
     expect(store.sources()).toEqual([{ sessionId: 'a', file: a.file, seedSince: null }]);
     expect(store.reviewed()).toEqual([{ ...a, since: null }]);
@@ -218,7 +219,9 @@ it('excludes other processes while allowing enrollment, and releases on close', 
   try {
     owner.claimReview();
     expect(statSync(path + '.lock').mode & 0o777).toBe(0o600);
+    chmodSync(path + '.lock', 0o644);
     expect(() => peer.claimReview()).toThrow(/already open/);
+    expect(statSync(path + '.lock').mode & 0o777).toBe(0o600);
     peer.enroll(a.sessionId, a.file);
     expect(owner.sources()).toHaveLength(1);
     const claim = `import { DatabaseSync } from 'node:sqlite';

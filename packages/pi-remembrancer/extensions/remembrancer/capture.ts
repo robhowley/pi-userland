@@ -16,10 +16,8 @@ export async function reviewPreparedCapture(
   db: CheckpointStore,
   input: Omit<ReviewerInput, 'tools'>,
   checkDeadline: () => void,
-  validate: (proposals: readonly ProposalSubmission[]) => void,
 ): Promise<ProposalSubmission[]> {
   let staged: ProposalSubmission[] | undefined;
-  let failed = false;
   const tool = <T extends TSchema>(
     name: string,
     description: string,
@@ -33,28 +31,22 @@ export async function reviewPreparedCapture(
     parameters: parameters as unknown as ToolDefinition['parameters'],
     executionMode: 'sequential',
     async execute(_id, args) {
-      try {
-        checkDeadline();
-        if (failed) throw new Error('Review failed');
-        if (staged !== undefined) {
-          if (submission) throw new Error('Duplicate submission');
-          return {
-            content: [{ type: 'text', text: 'Review closed.' }],
-            details: {},
-            terminate: true,
-          };
-        }
-        const data = await execute(args as Static<T>);
-        checkDeadline();
+      checkDeadline();
+      if (staged !== undefined) {
+        if (submission) throw new Error('Duplicate submission');
         return {
-          content: [{ type: 'text', text: serializedResponse(data) }],
+          content: [{ type: 'text', text: 'Review closed.' }],
           details: {},
-          terminate: staged !== undefined,
+          terminate: true,
         };
-      } catch (error) {
-        failed = true;
-        throw error;
       }
+      const data = await execute(args as Static<T>);
+      checkDeadline();
+      return {
+        content: [{ type: 'text', text: serializedResponse(data) }],
+        details: {},
+        terminate: staged !== undefined,
+      };
     },
   });
   const tools = [
@@ -101,7 +93,7 @@ export async function reviewPreparedCapture(
       'Submit final proposals once, alone in its tool batch. Empty is valid. Does not approve or apply tasks.',
       Type.Object({ proposals: Type.Array(proposalParameters) }),
       (args: { proposals: ProposalSubmission[] }) => {
-        validate(args.proposals);
+        current.completion(args.proposals);
         staged = structuredClone(args.proposals);
         return { submitted: true };
       },
@@ -112,6 +104,6 @@ export async function reviewPreparedCapture(
   await runReviewer({ ...input, tools });
   // runReviewer has awaited prompt/abort settlement and disposed the temporary session.
   checkDeadline();
-  if (failed || staged === undefined) throw new Error('Review did not submit a valid final result');
+  if (staged === undefined) throw new Error('Review did not submit a valid final result');
   return staged;
 }

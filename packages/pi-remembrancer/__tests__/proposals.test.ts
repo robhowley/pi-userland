@@ -205,7 +205,10 @@ it('rejects arbitrary locators, wrong branches, edits, offsets, quotes and unsup
     { entryId: 'other' },
     { sessionId: 'other' },
     { offset: 1 },
+    { offset: -1 },
+    { offset: 0.5 },
     { quote: 'invented' },
+    { quote: '' },
     { file: '/invented' },
   ]) {
     expect(() =>
@@ -236,33 +239,25 @@ it('rejects arbitrary locators, wrong branches, edits, offsets, quotes and unsup
   ).toThrow(/fields/);
 });
 
-it.each([
-  { branchId: 'other' },
-  { editId: 'later-edit' },
-  { entryId: 'other' },
-  { sessionId: 'other' },
-  { offset: 1 },
-  { offset: -1 },
-  { offset: 0.5 },
-  { quote: 'invented' },
-  { quote: '' },
-  { file: '/invented' },
-])('rejects invalid reference %j without saving any part of capture', (patch) => {
+it('rejects a valid-plus-invalid submission atomically and permits same-attempt recovery', () => {
   const store = durableStore();
   try {
     const { owner, attempt } = freeze(store);
+    const notice = store.proposalNotice();
     expect(() =>
       store.finishCaptureJob(owner, attempt, [
         submission,
         {
           ...submission,
-          references: [{ ...submission.references[0]!, ...patch }],
+          references: [{ ...submission.references[0]!, quote: 'fabricated' }],
         },
       ]),
-    ).toThrow();
+    ).toThrow('Reference does not match frozen eligible evidence');
     expect(store.proposals()).toEqual([]);
     expect(store.sources()).toEqual([]);
     expect(store.reviewed()).toEqual([]);
+    expect(store.proposalNotice()).toEqual(notice);
+    expect(store.captureJob(attempt.jobId)?.state).toBe('queued');
     expect(store.finishCaptureJob(owner, attempt, [])).toEqual([]);
     expect(store.reviewed()).toHaveLength(1);
   } finally {
@@ -376,17 +371,32 @@ it('rechecks proposal revisions at commit and preserves edited drafts/history on
       expected: null,
       question: null,
     });
+    const effects = () => ({
+      proposals: store.proposals(),
+      sources: store.sources(),
+      reviewed: store.reviewed(),
+      context: store.contextGeneration(),
+      notice: store.proposalNotice(),
+    });
+    const before = effects();
     expect(() =>
       store.finishCaptureJob(owner, attempt, [
         { ...submission, references: correction.references },
         correction,
       ]),
     ).toThrow(/context changed/);
+    expect(effects()).toEqual(before);
     store.failCaptureJob(owner, attempt, 'Context changed', true);
     attempt = owner.startAttempt(attempt.jobId);
     capture = store.prepareCaptureJob(owner, attempt);
     capture.page();
-    expect(() => store.finishCaptureJob(owner, attempt, [correction])).toThrow(/revision conflict/);
+    expect(() =>
+      store.finishCaptureJob(owner, attempt, [
+        { ...submission, references: correction.references },
+        correction,
+      ]),
+    ).toThrow(/revision conflict/);
+    expect(effects()).toEqual(before);
     expect(store.proposals()).toEqual([edited]);
     expect(store.reviewed().map((item) => item.entryId)).toEqual(['leaf']);
     expect(() =>
@@ -395,9 +405,11 @@ it('rechecks proposal revisions at commit and preserves edited drafts/history on
         { ...correction, expectedRevision: edited.revision },
       ]),
     ).toThrow(/Repeated/);
+    expect(effects()).toEqual(before);
     const [corrected] = store.finishCaptureJob(owner, attempt, [
       { ...correction, expectedRevision: edited.revision },
     ]);
+    expect(corrected!.revision).toBe(edited.revision + 1);
     expect(corrected!.draft!.change).toEqual(edited.draft!.change);
     expect(corrected!.draft!.question).toMatch(/conflicts/);
     expect(corrected!.history?.at(-1)).toMatchObject({

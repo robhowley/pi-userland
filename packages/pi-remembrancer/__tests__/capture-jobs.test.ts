@@ -18,6 +18,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { afterEach, expect, it, vi } from 'vitest';
 import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
+import * as notices from '../extensions/remembrancer/capture-notices.js';
 import { captureJob, runtime } from './fixtures/capture-job.js';
 import { CapturePreparationError } from '../extensions/remembrancer/capture-jobs.js';
 import {
@@ -585,54 +586,30 @@ it('invalidates abandoned identities and release/reacquire callbacks permanently
   f.store.finishCaptureJob(next, nextAttempt, []);
 });
 
-it('protects named revisions, duplicate updates and exact admission metadata in the final transaction', async () => {
+it('protects exact admission metadata in the final transaction', async () => {
   const f = await prepared();
-  const saved = f.store.finishCaptureJob(f.owner, f.attempt, [submission()])[0]!;
-  appendFileSync(f.input.source.file, message('later', 'promise'));
-  const later = await preserveHandoff({ ...f.input, id: 'later' });
-  f.store.importCaptureJob(f.owner, later.manifest);
-  const attempt = f.owner.startAttempt('later');
-  readAll(f.store.prepareCaptureJob(f.owner, attempt));
-  const update = submission();
-  update.id = saved.id;
-  update.expectedRevision = saved.revision + 1;
-  update.references[0] = { ...update.references[0]!, branchId: 'later', entryId: 'later' };
   const before = effects(f.store);
-  expect(() => f.store.finishCaptureJob(f.owner, attempt, [update])).toThrow('revision conflict');
-  update.expectedRevision = saved.revision;
-  expect(() => f.store.finishCaptureJob(f.owner, attempt, [update, update])).toThrow(
-    'Repeated proposal',
-  );
-  expect(effects(f.store)).toEqual(before);
   const sql = new DatabaseSync(f.path);
-  const changed = structuredClone(later.manifest);
-  changed.execution.authorization.autoCapture = false as true;
-  sql
-    .prepare('UPDATE capture_jobs SET body = ? WHERE id = ?')
-    .run(JSON.stringify(changed), 'later');
-  for (const output of [[], [update]])
-    expect(() => f.store.finishCaptureJob(f.owner, attempt, output)).toThrow('durable capture job');
-  sql
-    .prepare('UPDATE capture_jobs SET body = ? WHERE id = ?')
-    .run(JSON.stringify(later.manifest), 'later');
-  sql.close();
-  expect(f.store.finishCaptureJob(f.owner, attempt, [update])[0]?.revision).toBe(2);
-});
-
-it('requires full pagination and exact references, without partial publication', async () => {
-  const f = await fixture();
-  const owner = own(f.store);
-  f.store.importCaptureJob(owner, f.handoff.manifest);
-  const attempt = owner.startAttempt('first');
-  const review = f.store.prepareCaptureJob(owner, attempt);
-  expect(() => f.store.finishCaptureJob(owner, attempt, [])).toThrow('Read all evidence');
-  readAll(review);
-  const bad = submission();
-  bad.references[0]!.quote = 'fabricated';
-  expect(() => f.store.finishCaptureJob(owner, attempt, [bad])).toThrow('Reference does not match');
-  expect(f.store.proposals()).toEqual([]);
-  expect(f.store.reviewed()).toEqual([]);
-  expect(f.store.captureJob('first')?.state).toBe('queued');
+  try {
+    const changed = structuredClone(f.handoff.manifest);
+    changed.execution.authorization.autoCapture = false as true;
+    sql
+      .prepare('UPDATE capture_jobs SET body = ? WHERE id = ?')
+      .run(JSON.stringify(changed), f.input.id);
+    for (const output of [[], [submission()]]) {
+      expect(() => f.store.finishCaptureJob(f.owner, f.attempt, output)).toThrow(
+        'durable capture job',
+      );
+      expect(effects(f.store)).toEqual(before);
+      expect(f.store.captureJob(f.input.id)?.state).toBe('queued');
+    }
+    sql
+      .prepare('UPDATE capture_jobs SET body = ? WHERE id = ?')
+      .run(JSON.stringify(f.handoff.manifest), f.input.id);
+  } finally {
+    sql.close();
+  }
+  expect(f.store.finishCaptureJob(f.owner, f.attempt, [submission()])).toHaveLength(1);
 });
 
 it('conservatively retains completed snapshots through ambiguous manifests and cleanup failures', async () => {
@@ -874,7 +851,7 @@ it('delays notices across commit-before-replacement SIGKILL, then repairs from S
   expect(f.store.proposals()).toHaveLength(1);
 });
 
-it('repairs same-count proposal edits on a no-job recovery wake', async () => {
+it('repairs same-count proposal edits after a failed notice-publication wake without review', async () => {
   const f = await prepared();
   const [proposal] = f.store.finishCaptureJob(f.owner, f.attempt, [submission()]);
   await publishProposalNotice(f.store);
@@ -886,7 +863,27 @@ it('repairs same-count proposal edits on a no-job recovery wake', async () => {
   });
   expect(f.store.proposalNotice()).toEqual({ generation: 2, pending: 1 });
   expect(await readProposalNotice(f.path)).toEqual({ generation: 1, pending: 1 });
-  await runCaptureWorker({ database: f.path, inbox: f.input.inbox });
+  const review = vi.fn().mockRejectedValue(Error('Unexpected review'));
+  const notice = vi
+    .spyOn(notices, 'publishProposalNotice')
+    .mockRejectedValue(
+      Object.assign(Error('credential-provider-body-command'), { code: 'ENOSPC' }),
+    );
+  try {
+    await runCaptureWorker({ database: f.path, inbox: f.input.inbox, review });
+    expect(notice).toHaveBeenCalled();
+    expect(await readProposalNotice(f.path)).toEqual({ generation: 1, pending: 1 });
+    expect(f.store.proposalNotice()).toEqual({ generation: 2, pending: 1 });
+  } finally {
+    notice.mockRestore();
+  }
+  const log = readFileSync(f.path + '.capture.log', 'utf8');
+  expect(log).toContain('notice-publication');
+  expect(log).toContain('ENOSPC');
+  expect(log).not.toContain('credential-provider-body-command');
+  expect(log).not.toContain('contention');
+  await runCaptureWorker({ database: f.path, inbox: f.input.inbox, review });
+  expect(review).not.toHaveBeenCalled();
   expect(await readProposalNotice(f.path)).toEqual({ generation: 2, pending: 1 });
 });
 

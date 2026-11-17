@@ -110,12 +110,6 @@ async function fixture(): Promise<ProofInput> {
   await mkdir(inbox, { mode: 0o700 });
   const file = join(dir, 'outgoing.jsonl');
   await writeFile(file, original, { mode: 0o644 });
-  // Inbox provisioning is outside admission. Persist its directory entry first.
-  for (const path of [dir, tmpdir()]) {
-    const handle = await open(path, 'r');
-    await handle.sync();
-    await handle.close();
-  }
   return {
     id: 'handoff-a',
     inbox,

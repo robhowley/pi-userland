@@ -17,7 +17,6 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, expect, it, vi } from 'vitest';
 import * as handoffs from '../extensions/remembrancer/capture-handoff.js';
-import * as notices from '../extensions/remembrancer/capture-notices.js';
 import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
 import { preserveHandoff, type HandoffInput } from '../extensions/remembrancer/capture-handoff.js';
 import {
@@ -30,6 +29,7 @@ import { readProposalNotice } from '../extensions/remembrancer/capture-notices.j
 const dirs: string[] = [];
 const children = new Set<ChildProcess>();
 const workerPids = new Set<number>();
+const taskPidFiles = new Set<string>();
 const servers: Server[] = [];
 let relocatedPackage: string | undefined;
 let packageDir: string | undefined;
@@ -52,8 +52,36 @@ afterEach(async () => {
     } catch {
       /* already exited */
     }
+    await waitFor(() => {
+      try {
+        process.kill(pid, 0);
+        return false;
+      } catch {
+        return true;
+      }
+    });
   }
   workerPids.clear();
+  for (const file of taskPidFiles) {
+    if (!existsSync(file)) continue;
+    for (const pid of readFileSync(file, 'utf8').trim().split('\n').map(Number)) {
+      if (!Number.isSafeInteger(pid) || pid <= 1) continue;
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        /* already exited */
+      }
+      await waitFor(() => {
+        try {
+          process.kill(pid, 0);
+          return false;
+        } catch {
+          return true;
+        }
+      });
+    }
+  }
+  taskPidFiles.clear();
   for (const server of servers) {
     server.closeAllConnections();
     await new Promise<void>((r) => server.close(() => r()));
@@ -129,16 +157,10 @@ function readAll(current: Parameters<typeof reviewPreparedCapture>[0]) {
     page = current.page() as { hasMore: boolean };
   } while (page.hasMore);
 }
-const emptyReview: typeof reviewPreparedCapture = async (
-  current,
-  _store,
-  _input,
-  check,
-  validate,
-) => {
+const emptyReview: typeof reviewPreparedCapture = async (current, _store, _input, check) => {
   readAll(current);
   check();
-  validate([]);
+  current.completion([]);
   return [];
 };
 function job(database: string, id = 'first') {
@@ -777,7 +799,7 @@ it('rejects synchronous reviewer output after absolute expiry before timers can 
   await runCaptureWorker({
     ...f,
     budgetMs: 25,
-    review: async (current, _db, input, check, validate) => {
+    review: async (current, _db, input, check) => {
       readAll(current);
       const until = performance.now() + 60;
       while (performance.now() < until) {
@@ -790,7 +812,8 @@ it('rejects synchronous reviewer output after absolute expiry before timers can 
         deadlineRejections++;
       }
       try {
-        validate([]);
+        check();
+        current.completion([]);
       } catch {
         validationRejections++;
       }
@@ -872,48 +895,38 @@ it('persists immutable preparation failure once, retains evidence and blocks its
   prepare.mockRestore();
 });
 
-it.each(['notice', 'snapshot'] as const)(
-  'repairs completed rows after %s failure without ready signals or reviewer replay',
-  async (failure) => {
-    const f = await fixture();
-    const saved = await preserveHandoff(f.input);
-    const cleanup = vi.spyOn(handoffs, 'cleanupCompletedSnapshot');
-    const notice = vi.spyOn(notices, 'publishProposalNotice');
-    // Fail all cleanup in the first drain, not the database completion.
-    cleanup.mockRejectedValue(
-      Object.assign(Error('credential-provider-body-command'), { code: 'EACCES' }),
-    );
-    if (failure === 'notice')
-      notice.mockRejectedValue(
-        Object.assign(Error('credential-provider-body-command'), { code: 'ENOSPC' }),
-      );
-    const review = vi.fn(emptyReview);
-    const cwd = process.cwd();
-    await runCaptureWorker({ ...f, review });
-    expect(process.cwd()).toBe(cwd);
-    expect(job(f.database)?.state).toBe('completed');
-    expect(existsSync(saved.ready)).toBe(false);
-    expect(existsSync(saved.manifest.snapshot)).toBe(true);
-    const db = new CheckpointStore(f.database);
-    const reviewed = db.reviewed();
-    db.close();
-    cleanup.mockRestore();
-    notice.mockRestore();
-    await runCaptureWorker({ ...f, review });
-    expect(review).toHaveBeenCalledTimes(1);
-    expect(existsSync(saved.manifest.snapshot)).toBe(false);
-    const reopened = new CheckpointStore(f.database);
-    expect(reopened.reviewed()).toEqual(reviewed);
-    expect(reopened.proposals()).toEqual([]);
-    reopened.close();
-    const log = readFileSync(f.database + '.capture.log', 'utf8');
-    expect(log).toContain('snapshot-cleanup');
-    expect(log).toContain('EACCES');
-    if (failure === 'notice') expect(log).toContain('ENOSPC');
-    expect(log).not.toContain('credential-provider-body-command');
-    expect(log).not.toContain('contention');
-  },
-);
+it('repairs completed rows after snapshot cleanup failure without ready signals or reviewer replay', async () => {
+  const f = await fixture();
+  const saved = await preserveHandoff(f.input);
+  const cleanup = vi.spyOn(handoffs, 'cleanupCompletedSnapshot');
+  // Fail all cleanup in the first drain, not the database completion.
+  cleanup.mockRejectedValue(
+    Object.assign(Error('credential-provider-body-command'), { code: 'EACCES' }),
+  );
+  const review = vi.fn(emptyReview);
+  const cwd = process.cwd();
+  await runCaptureWorker({ ...f, review });
+  expect(process.cwd()).toBe(cwd);
+  expect(job(f.database)?.state).toBe('completed');
+  expect(existsSync(saved.ready)).toBe(false);
+  expect(existsSync(saved.manifest.snapshot)).toBe(true);
+  const db = new CheckpointStore(f.database);
+  const reviewed = db.reviewed();
+  db.close();
+  cleanup.mockRestore();
+  await runCaptureWorker({ ...f, review });
+  expect(review).toHaveBeenCalledTimes(1);
+  expect(existsSync(saved.manifest.snapshot)).toBe(false);
+  const reopened = new CheckpointStore(f.database);
+  expect(reopened.reviewed()).toEqual(reviewed);
+  expect(reopened.proposals()).toEqual([]);
+  reopened.close();
+  const log = readFileSync(f.database + '.capture.log', 'utf8');
+  expect(log).toContain('snapshot-cleanup');
+  expect(log).toContain('EACCES');
+  expect(log).not.toContain('credential-provider-body-command');
+  expect(log).not.toContain('contention');
+});
 
 it('executes committed imports despite pending signal cleanup, exits once, and retries next wake', async () => {
   const f = await fixture();
@@ -996,6 +1009,7 @@ it('kills its owned blocking task child on attempt abort before the worker exits
   await provider(f);
   const saved = await preserveHandoff(f.input);
   const pidFile = join(f.dir, 'task-pids');
+  taskPidFiles.add(pidFile);
   writeFileSync(
     join(f.dir, 'bin/task'),
     `#!${nodeExecutable}\nimport {appendFileSync} from 'node:fs';\nappendFileSync(${JSON.stringify(pidFile)}, process.pid + '\\n');\nprocess.on('SIGTERM',()=>{}); setInterval(()=>{},1000);`,

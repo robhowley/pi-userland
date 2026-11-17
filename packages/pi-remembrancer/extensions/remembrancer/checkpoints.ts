@@ -1,17 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import {
-  chmodSync,
-  closeSync,
-  mkdirSync,
-  openSync,
-  readdirSync,
-  realpathSync,
-  statSync,
-} from 'node:fs';
+import { mkdirSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import type { DatabaseSync } from 'node:sqlite';
 
+import { openPrivateSqlite } from './private-sqlite.mjs';
 import { CaptureReview } from './capture-review.js';
 import {
   CapturePreparationError,
@@ -51,18 +44,8 @@ export function defaultCheckpointFile(): string {
 }
 
 function openPrivate(filename: string): DatabaseSync {
-  if (filename !== ':memory:') {
-    mkdirSync(dirname(filename), { recursive: true, mode: 0o700 });
-    // Closing a second descriptor for an existing SQLite file can drop this
-    // process's POSIX locks, even those held by another DatabaseSync instance.
-    try {
-      closeSync(openSync(filename, 'ax', 0o600));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      chmodSync(filename, 0o600);
-    }
-  }
-  return new DatabaseSync(filename);
+  if (filename !== ':memory:') mkdirSync(dirname(filename), { recursive: true, mode: 0o700 });
+  return openPrivateSqlite(filename);
 }
 
 function absoluteTimestamp(value: string | null | undefined): string | null {
@@ -345,17 +328,6 @@ export class CheckpointStore {
     return value;
   }
 
-  private validateCaptureRevisions(submissions: readonly ProposalSubmission[]): void {
-    const ids = new Set<string>();
-    for (const submission of submissions) {
-      if (submission.id !== undefined) {
-        if (ids.has(submission.id)) throw new Error('Repeated proposal revision');
-        ids.add(submission.id);
-        this.changedProposal(submission.id, submission.expectedRevision!, ['pending']);
-      }
-    }
-  }
-
   private saveCapture(
     capture: ReturnType<CaptureReview['completion']>,
     submissions: readonly ProposalSubmission[],
@@ -369,11 +341,14 @@ export class CheckpointStore {
       })),
     });
     const saved: Proposal[] = [];
+    const ids = new Set<string>();
     for (const [index, submission] of submissions.entries()) {
       const references = capture.sources[index]!;
       const now = new Date().toISOString();
       let proposal: Proposal;
       if (submission.id !== undefined) {
+        if (ids.has(submission.id)) throw new Error('Repeated proposal revision');
+        ids.add(submission.id);
         proposal = this.changedProposal(submission.id, submission.expectedRevision!, ['pending']);
         proposal = {
           ...proposal,
@@ -659,7 +634,6 @@ export class CheckpointStore {
         if (this.contextGeneration() !== active.generation)
           throw Error('Capture review context changed; reprepare');
         const capture = active.review.completion(submissions);
-        this.validateCaptureRevisions(submissions);
         const proposals = this.saveCapture(capture, submissions);
         this.db
           .prepare(

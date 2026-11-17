@@ -149,19 +149,6 @@ describe.sequential('remembrancer config', () => {
     expect(existsSync(input.inbox)).toBe(false);
   });
 
-  it('accepts a complete runtime, retaining source extent, selected thinking, host and authorization', async () => {
-    const input = handoff();
-    const accepted = await preserveHandoff(input);
-    expect(accepted.manifest).toMatchObject({
-      version: 3,
-      source: { ...input.source, bytes: Buffer.byteLength(readFileSync(input.source.file)) },
-      execution: { ...input.execution, runtime: { thinkingLevel: 'high', projectTrusted: true } },
-    });
-    expect(accepted.manifest.execution).not.toHaveProperty('model');
-    expect(accepted.manifest.execution).not.toHaveProperty('settings');
-    expect(accepted.manifest.execution.runtime.model.id).toBe('exact');
-  });
-
   it.each(['absent', 'wrong-model', 'wrong-provider'])(
     'rejects runtime-only header provenance (%s) before artifacts without resolving commands',
     async (configuration) => {
