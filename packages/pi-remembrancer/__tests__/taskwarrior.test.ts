@@ -1,5 +1,5 @@
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { getKeybindings } from '@earendil-works/pi-tui';
+import { getKeybindings, type Terminal, TuiMainScreen, visibleWidth } from '@earendil-works/pi-tui';
 import { openProposals, previewText, sourceText } from '../extensions/remembrancer/proposal-ui.js';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -14,7 +14,7 @@ import {
   REVIEW_RESPONSE_MAX_BYTES,
   serializedResponse,
 } from '../extensions/remembrancer/review-pages.js';
-import type { ProposalDraft } from '../extensions/remembrancer/proposals.js';
+import type { Proposal, ProposalDraft } from '../extensions/remembrancer/proposals.js';
 import {
   applyProposal,
   lookupTasks,
@@ -65,6 +65,7 @@ function seed(
     expected: null,
     question: null,
   },
+  saved: { explanation?: string; quote?: string } = {},
 ) {
   const dir = mkdtempSync(join(tmpdir(), 'remembrancer-task-proposal-'));
   sourceDirs.push(dir);
@@ -79,7 +80,7 @@ function seed(
         id: 'leaf',
         parentId: null,
         timestamp: evidence.timestamp,
-        message: { role: 'user', content: evidence.text },
+        message: { role: 'user', content: saved.quote ?? evidence.text },
       },
     ]
       .map((item) => JSON.stringify(item))
@@ -92,7 +93,7 @@ function seed(
   const proposal = store.finishCaptureJob(owner, attempt, [
     {
       ...draft,
-      explanation: 'Promised',
+      explanation: saved.explanation ?? 'Promised',
       references: [
         {
           sessionId,
@@ -100,7 +101,7 @@ function seed(
           entryId: 'leaf',
           editId: null,
           offset: 0,
-          quote: 'Send comparison',
+          quote: saved.quote ?? 'Send comparison',
         },
       ],
     },
@@ -368,8 +369,11 @@ function sourceFixture(before = 'Earlier context') {
   return { ...f, file };
 }
 it('Source shows bounded surrounding messages on the saved branch, not a newer edit', () => {
-  const f = sourceFixture();
+  const hostile = 'Earlier context\u001b[31m\u009b31m\u009dtitle\u0007\r\t\b';
+  const f = sourceFixture(hostile);
   const text = sourceText(f.proposal);
+  expect(terminalControls(text)).toEqual([]);
+  expect(text).toContain('Earlier context\\u001b[31m\\u009b31m\\u009dtitle\\u0007\\r\\t\\b');
   for (const value of [
     'Send comparison',
     'Earlier context',
@@ -446,12 +450,10 @@ it('Source accepts the exact saved edit but rejects an edit from another branch'
   f.proposal.sources[0]!.branchId = 'boundary';
   expect(sourceText(f.proposal)).toContain('Extra file context is unavailable');
 });
-it('Enter, Source, paging, edit, navigation and closing do not write tasks; draft persists', async () => {
+it('Enter, Source, paging, edit, navigation and closing never authorize task writes', async () => {
   const f = setup();
   seed(f.store);
-  let calls = 0;
   const readSource = vi.spyOn(evidenceModule, 'readSession');
-  const switchSession = vi.fn();
   const editor = vi.fn(async () =>
     JSON.stringify({
       change: { operation: 'add', fields: { description: 'Edited' }, annotations: ['Link'] },
@@ -459,45 +461,26 @@ it('Enter, Source, paging, edit, navigation and closing do not write tasks; draf
       question: null,
     }),
   );
-  type Factory = Parameters<ExtensionContext['ui']['custom']>[0];
-  const custom = vi.fn(async (factory: Factory) => {
-    let result: unknown;
-    const theme = { fg: (_color: string, text: string) => text } as Parameters<Factory>[1];
-    const component = await factory(
-      { requestRender() {} } as Parameters<Factory>[0],
-      theme,
-      getKeybindings() as Parameters<Factory>[2],
-      (value) => {
-        result = value;
-      },
-    );
-    component.render(80);
-    if (calls++ === 0) {
+  await driveUI(
+    f.store,
+    f.execute,
+    async (screen) => {
       expect(readSource).not.toHaveBeenCalled();
-      component.handleInput?.('\r');
+      await screen.press(keys.enter);
       expect(readSource).not.toHaveBeenCalled();
-      component.handleInput?.('s');
+      await screen.press('s');
       expect(readSource).toHaveBeenCalledOnce();
-      for (const key of ['\u001b[6~', '\u001b[5~', '\u001b[B']) {
-        component.handleInput?.(key);
-        component.render(80);
-        expect(result).toBeUndefined();
-      }
+      await screen.press(keys.pageDown);
+      await screen.press(keys.pageUp);
+      await screen.press(keys.escape);
+      await screen.press('e');
+      expect(editor).toHaveBeenCalledOnce();
+      await screen.press(keys.down);
+      await screen.press(keys.enter);
       expect(readSource).toHaveBeenCalledOnce();
-      for (const key of ['s', 'e']) component.handleInput?.(key);
-    } else if (calls === 2) component.handleInput?.('\u001b[B');
-    else component.handleInput?.('\u001b');
-    return result;
-  });
-  const ctx = {
-    mode: 'tui',
-    ui: { custom, editor, notify: vi.fn() },
-    switchSession,
-  } as unknown as ExtensionContext;
-  await openProposals(ctx, f.store, f.execute);
-  expect(editor).toHaveBeenCalledOnce();
-  expect(readSource).toHaveBeenCalledOnce();
-  expect(switchSession).not.toHaveBeenCalled();
+    },
+    { editor },
+  );
   expect(
     f.store
       .proposals()
@@ -508,31 +491,27 @@ it('Enter, Source, paging, edit, navigation and closing do not write tasks; draf
   ).toBe(true);
   expect(f.execute).not.toHaveBeenCalled();
 });
-it('a failed task preview still shows the saved quote without reading source files', async () => {
+
+it('a failed task preview retains saved rationale and quotes without reading sources', async () => {
   const f = setup(update);
   const readSource = vi.spyOn(evidenceModule, 'readSession');
-  type Factory = Parameters<ExtensionContext['ui']['custom']>[0];
-  const ctx = {
-    mode: 'tui',
-    ui: {
-      custom: async (factory: Factory) => {
-        const component = await factory(
-          { requestRender() {} } as Parameters<Factory>[0],
-          { fg: (_color: string, text: string) => text } as Parameters<Factory>[1],
-          getKeybindings() as Parameters<Factory>[2],
-          () => {},
-        );
-        expect(component.render(120).join('\n')).toContain('Send comparison');
-        expect(readSource).not.toHaveBeenCalled();
-        return 'close';
-      },
-    },
-  } as unknown as ExtensionContext;
-  await openProposals(ctx, f.store, async () => {
+  const execute = vi.fn<TaskExecutor>(async () => {
     throw new Error('Task unavailable');
   });
+  await driveUI(f.store, execute, async (screen) => {
+    await screen.press(keys.enter);
+    const text = await screen.pages();
+    for (const value of ['Task unavailable', 'Send comparison', 'Promised'])
+      expect(text).toContain(value);
+    expect(readSource).not.toHaveBeenCalled();
+    await screen.press(keys.apply);
+    expect(await screen.pages()).toContain('Task unavailable');
+    expect(f.store.proposal(f.proposal.id)?.state).toBe('pending');
+  });
+  expect(execute.mock.calls.every(([, input]) => input === undefined)).toBe(true);
   expect(readSource).not.toHaveBeenCalled();
 });
+
 it('retains unexpected actual output when verification cannot validate a snapshot', async () => {
   const f = setup(update);
   const execute: TaskExecutor = async (args, input) => {
@@ -805,48 +784,172 @@ it('preview shows the actual target and changed project, not the old extraction 
     project: 'Current project',
     description: 'Actual description',
     waitingon: 'Actual prerequisite',
-    custom: 'Visible attribute',
+    custom: 'Unchanged custom attribute',
+    annotations: [{ entry: '20260101T000000Z', description: 'Unchanged annotation' }],
   });
-  const text = previewText(await previewProposal(f.store, f.proposal.id, f.execute));
-  expect(text).toContain('Project: "Current project"');
-  expect(text).toContain('Actual description');
-  expect(text).toContain('waitingon: "Actual prerequisite" -> null');
-  expect(text).toContain('Visible attribute');
+  await driveUI(f.store, f.execute, async (screen) => {
+    await screen.press(keys.enter);
+    const text = (await screen.pages()).replace(/[\s│█]/gu, '');
+    for (const line of [
+      'Current description: "Actual description"',
+      'Project: "Current project" (current)',
+      'Saved fallback description (not current): "Before"',
+      'Saved fallback project (not current): "work"',
+      'waitingon: "Actual prerequisite" -> null',
+    ])
+      expect(text).toContain(line.replace(/\s/gu, ''));
+    for (const omitted of [
+      'Unchanged annotation',
+      'Unchanged custom attribute',
+      '"uuid":',
+      '"annotations":',
+    ])
+      expect(text).not.toContain(omitted.replace(/\s/gu, ''));
+  });
 });
 
-// Drive the actual component input handler with fake terminal and Taskwarrior effects.
-function uiContext(
-  actions: (
-    component: Awaited<ReturnType<Parameters<ExtensionContext['ui']['custom']>[0]>>,
-    index: number,
-  ) => void,
-  editor = vi.fn(),
+const keys = {
+  enter: '\r',
+  escape: '\u001b',
+  up: '\u001b[A',
+  down: '\u001b[B',
+  pageDown: '\u001b[6~',
+  pageUp: '\u001b[5~',
+  apply: '\u0001',
+};
+type UIFactory = Parameters<ExtensionContext['ui']['custom']>[0];
+type UIComponent = Awaited<ReturnType<UIFactory>>;
+
+// Model custom() ownership, including done -> editor -> a fresh custom instance.
+// Use Pi's overlay layout with a no-op terminal, never a Taskwarrior process or personal store.
+async function driveUI(
+  store: CheckpointStore,
+  execute: TaskExecutor,
+  actions: (screen: {
+    lines(): string[];
+    text(): string;
+    press(key: string, paint?: boolean): Promise<void>;
+    pages(): Promise<string>;
+    resize(columns: number, rows: number): void;
+    active(): boolean;
+    custom: ReturnType<typeof vi.fn>;
+  }) => Promise<void>,
+  options: {
+    columns?: number;
+    rows?: number;
+    editor?: (title: string, initial: string) => Promise<string | undefined>;
+  } = {},
 ) {
-  type Factory = Parameters<ExtensionContext['ui']['custom']>[0];
-  let index = 0;
-  const custom = vi.fn(async (factory: Factory) => {
-    let result: unknown;
-    const component = await factory(
-      { requestRender() {} } as Parameters<Factory>[0],
-      { fg: (_color: string, text: string) => text } as Parameters<Factory>[1],
-      getKeybindings() as Parameters<Factory>[2],
-      (value) => {
-        result = value;
-      },
-    );
-    component.render(120);
-    actions(component, index++);
-    if (result === undefined) throw new Error('Test must deliberately close or navigate the UI');
-    return result;
+  const terminal = {
+    columns: options.columns ?? 80,
+    rows: options.rows ?? 32,
+    write() {},
+    hideCursor() {},
+  };
+  const tui = new TuiMainScreen(terminal as unknown as Terminal);
+  vi.spyOn(tui, 'requestRender').mockImplementation(() => {});
+  let rendered: string[] = [];
+  let active: UIComponent | undefined;
+  let finished = false;
+  const custom = vi.fn(
+    async (factory: UIFactory, _options?: Parameters<ExtensionContext['ui']['custom']>[1]) => {
+      let complete!: (value: unknown) => void;
+      const result = new Promise((resolve) => {
+        complete = resolve;
+      });
+      active = await factory(
+        tui,
+        {
+          fg: (_color: string, text: string) => text,
+          bg: (_color: string, text: string) => text,
+          bold: (text: string) => text,
+        } as Parameters<UIFactory>[1],
+        getKeybindings() as Parameters<UIFactory>[2],
+        (value) => {
+          handle.hide();
+          active = undefined;
+          complete(value);
+        },
+      );
+      const component = active;
+      const handle = tui.showOverlay(
+        {
+          render(width) {
+            rendered = component.render(width);
+            return rendered;
+          },
+          invalidate: () => component.invalidate(),
+        },
+        typeof _options?.overlayOptions === 'function'
+          ? _options.overlayOptions()
+          : _options?.overlayOptions,
+      );
+      return result;
+    },
+  );
+  const ctx = {
+    mode: 'tui',
+    ui: { custom, editor: options.editor ?? vi.fn(async () => undefined), notify: vi.fn() },
+  } as unknown as ExtensionContext;
+  const running = openProposals(ctx, store, execute).finally(() => {
+    finished = true;
   });
-  return { mode: 'tui', ui: { custom, editor, notify: vi.fn() } } as unknown as ExtensionContext;
+  // Attach immediately so a failed asynchronous service does not become unhandled.
+  void running.catch(() => {});
+  const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+  const screen = {
+    lines() {
+      expect(active, 'an overlay must own input').toBeDefined();
+      tui.renderNow();
+      return rendered;
+    },
+    text() {
+      return this.lines().join('\n');
+    },
+    async press(key: string, paint = true) {
+      expect(active, 'keys must be delivered only to the active custom component').toBeDefined();
+      if (paint) tui.renderNow();
+      active!.handleInput?.(key);
+      await settle();
+      if (active) tui.renderNow();
+    },
+    async pages() {
+      const pages = [this.text()];
+      // Stop at the observable lower endpoint, not at a guessed content length.
+      for (let page = 0; page < 200; page++) {
+        await this.press(keys.pageDown);
+        const next = this.text();
+        if (next === pages.at(-1)) return pages.join('\n');
+        pages.push(next);
+      }
+      throw new Error('Paging did not reach a stable lower endpoint');
+    },
+    resize(columns: number, rows: number) {
+      Object.assign(terminal, { columns, rows });
+      active?.invalidate();
+    },
+    active: () => active !== undefined,
+    custom,
+  };
+  await settle();
+  try {
+    await actions(screen);
+  } finally {
+    // Escape unwinds inspection, Source/History and expansion before closing Inbox.
+    for (let level = 0; level < 8 && !finished; level++) {
+      if (active) await screen.press(keys.escape);
+      else await settle();
+    }
+    await vi.waitFor(() => expect(finished, 'all custom interactions must close').toBe(true));
+    await running;
+  }
 }
 
 it.each([
   { fields: { project: null }, label: '(no project)', beforeAnchor: true },
   { fields: {}, label: 'work', beforeAnchor: false },
   { fields: { project: 'home' }, label: 'home', beforeAnchor: true },
-])('UI labels and groups project $label without falling back on explicit null', async (test) => {
+])('Inbox groups project $label without falling back on explicit null', async (test) => {
   for (const edited of [false, true]) {
     const draft: ProposalDraft = {
       ...update,
@@ -863,127 +966,826 @@ it.each([
       expected: null,
       question: null,
     });
-    const ctx = uiContext((component) => {
-      const rendered = component.render(120).join('\n');
-      const updateIndex = rendered.indexOf(`"${test.label}" · update`);
-      const anchorIndex = rendered.indexOf('"review" · add');
-      expect(updateIndex, rendered).toBeGreaterThanOrEqual(0);
-      expect(anchorIndex).toBeGreaterThanOrEqual(0);
+    await driveUI(f.store, f.execute, async (screen) => {
+      const text = screen.text();
+      const updateIndex = text.indexOf(test.label);
+      const anchorIndex = text.indexOf('review');
+      expect(updateIndex, text).toBeGreaterThanOrEqual(0);
+      expect(anchorIndex, text).toBeGreaterThanOrEqual(0);
       expect(updateIndex < anchorIndex).toBe(test.beforeAnchor);
-      component.handleInput?.('\u001b');
     });
-    await openProposals(ctx, f.store, f.execute);
-    expect(f.execute.mock.calls.every(([, input]) => input === undefined)).toBe(true);
+    expect(f.execute).not.toHaveBeenCalled();
   }
 });
 
-it('only per-item Ctrl+A applies, with no Enter, history, Source or accept-all writes', async () => {
-  const f = setup();
-  seed(f.store);
-  const reads = vi.spyOn(evidenceModule, 'readSession');
-  const ctx = uiContext((component, index) => {
-    if (index === 0) {
-      component.handleInput?.('\r');
-      component.handleInput?.('a');
-      component.handleInput?.('h');
-      expect(component.render(120).join('\n')).toContain('Saved proposal and revision history');
-      component.handleInput?.('\u0001');
-      expect(f.execute).not.toHaveBeenCalled();
-      component.handleInput?.('s');
-      component.handleInput?.('\u0001');
-      component.handleInput?.('\r');
-      expect(f.execute).not.toHaveBeenCalled();
-      component.handleInput?.('\u001b');
-      component.handleInput?.('\u0001');
-    } else component.handleInput?.('\u001b');
+it('empty Inbox still opens an overlay with History and Close', async () => {
+  const store = durableStore();
+  stores.push(store);
+  const execute = vi.fn<TaskExecutor>();
+  await driveUI(store, execute, async (screen) => {
+    expect(screen.custom.mock.calls[0]?.[1]).toMatchObject({ overlay: true });
+    expect(screen.text()).toMatch(/inbox/i);
+    expect(screen.text()).toMatch(/history/i);
+    expect(screen.text()).toMatch(/close/i);
+    await screen.press('h');
+    expect(screen.text()).toMatch(/history/i);
+    await screen.press(keys.escape);
+    expect(screen.active()).toBe(true);
   });
-  await openProposals(ctx, f.store, f.execute);
-  expect(f.execute.mock.calls.filter(([, input]) => input)).toHaveLength(1);
-  expect(f.store.proposals('applied')).toHaveLength(1);
-  expect(f.store.proposals('pending')).toHaveLength(1);
-  expect(reads).toHaveBeenCalledOnce();
+  expect(execute).not.toHaveBeenCalled();
 });
 
-it('UI stale task approval refreshes the exact preview and requires another Ctrl+A', async () => {
+it('one item opens collapsed; collapsed Ctrl+A reviews and only another Ctrl+A authorizes', async () => {
   const f = setup(update);
-  const ctx = uiContext((component, index) => {
-    if (index === 0) {
-      f.set({ ...record, description: 'Changed outside Pi' });
-      component.handleInput?.('\u0001');
-    } else if (index === 1) {
-      // Scroll to the footer-independent full rendered preview across detail pages.
-      const pages = [component.render(120).join('\n')];
-      component.handleInput?.('\u001b[6~');
-      pages.push(component.render(120).join('\n'));
-      expect(pages.join('\n')).toContain('Changed outside Pi');
-      expect(pages.join('\n')).toContain('Preview changed');
-      expect(f.execute.mock.calls.every(([, input]) => input === undefined)).toBe(true);
-      component.handleInput?.('\u0001');
-    } else component.handleInput?.('\u001b');
+  await driveUI(f.store, f.execute, async (screen) => {
+    expect(screen.custom.mock.calls[0]?.[1]).toMatchObject({ overlay: true });
+    expect(f.execute).not.toHaveBeenCalled();
+    expect(screen.text()).not.toContain(uuid);
+    await screen.press(keys.up);
+    await screen.press(keys.down);
+    expect(f.execute).not.toHaveBeenCalled();
+    await screen.press(keys.apply);
+    expect(await screen.pages()).toContain(uuid);
+    expect(f.execute.mock.calls.filter(([, input]) => input)).toHaveLength(0);
+    // Reopen the review and approve at its top. Scrolling is not authorization.
+    await screen.press(keys.escape);
+    await screen.press(keys.enter);
+    await screen.press(keys.apply);
+    expect(f.store.proposal(f.proposal.id)?.state).toBe('applied');
+    expect(screen.text()).toMatch(/applied/i);
+    expect(screen.text()).toMatch(/history/i);
+    expect(screen.text()).toMatch(/close/i);
   });
-  await openProposals(ctx, f.store, f.execute);
-  expect(f.store.proposal(f.proposal.id)?.state).toBe('applied');
   expect(f.execute.mock.calls.filter(([, input]) => input)).toHaveLength(1);
 });
 
-it('Dismiss changes just the displayed proposal; edit cancellation and history never apply', async () => {
-  const f = setup();
-  seed(f.store);
-  let dismissedId: string | undefined;
-  const editor = vi.fn(async () => undefined);
-  const ctx = uiContext((component, index) => {
-    if (index === 0) component.handleInput?.('e');
-    else if (index === 1) {
-      component.handleInput?.('h');
-      component.handleInput?.('\u0001');
-      component.handleInput?.('\u001b');
-      component.handleInput?.('d');
-    } else {
-      dismissedId = f.store.proposals('dismissed')[0]?.id;
-      component.handleInput?.('\u001b');
-    }
-  }, editor);
-  await openProposals(ctx, f.store, f.execute);
-  expect(editor).toHaveBeenCalledOnce();
-  expect(dismissedId).toBeTruthy();
-  expect(f.store.proposals('dismissed')).toHaveLength(1);
-  expect(f.store.proposals('pending')).toHaveLength(1);
-  expect(f.execute).not.toHaveBeenCalled();
+it('focus collapses the previous review, resets paging, and boundary arrows do nothing', async () => {
+  const f = setup({
+    ...update,
+    change: {
+      ...update.change,
+      operation: 'update',
+      targetUuid: uuid,
+      fields: { description: 'First', project: 'a' },
+    },
+  });
+  seed(f.store, {
+    ...update,
+    change: {
+      operation: 'update',
+      targetUuid: uuid,
+      fields: { description: 'Second', project: 'b' },
+      annotations: [],
+    },
+  });
+  await driveUI(f.store, f.execute, async (screen) => {
+    await screen.press(keys.enter);
+    const first = screen.text();
+    const reads = f.execute.mock.calls.length;
+    await screen.press(keys.up);
+    expect(screen.text()).toBe(first);
+    expect(f.execute).toHaveBeenCalledTimes(reads);
+    await screen.press(keys.pageDown);
+    await screen.press(keys.down);
+    expect(screen.text()).not.toContain(uuid);
+    expect(f.execute).toHaveBeenCalledTimes(reads);
+    await screen.press(keys.enter);
+    const second = screen.text();
+    expect(await screen.pages()).toContain('Second');
+    // Return to the top without changing focus, then test the lower boundary.
+    for (let n = 0; n < 20; n++) await screen.press(keys.pageUp);
+    expect(screen.text()).toBe(second);
+    const secondReads = f.execute.mock.calls.length;
+    await screen.press(keys.down);
+    expect(screen.text()).toBe(second);
+    expect(f.execute).toHaveBeenCalledTimes(secondReads);
+    await screen.press(keys.up);
+    expect(screen.text()).not.toContain(uuid);
+    await screen.press(keys.enter);
+    expect(screen.text()).toBe(first);
+  });
+  expect(f.execute.mock.calls.filter(([, input]) => input)).toHaveLength(0);
 });
 
-it('History exposes saved and edited revisions with quotes, without source or task writes', async () => {
-  const f = setup();
-  f.store.editProposal(f.proposal.id, 1, {
-    change: { operation: 'add', fields: { description: 'Edited draft' }, annotations: [] },
+it('Inbox partitions every durable state from decided History and uses two-line collapsed rows', async () => {
+  const draft = (state: string): ProposalDraft => ({
+    change: {
+      operation: 'add',
+      fields: { description: 'TITLE_' + state, project: 'work' },
+      annotations: [],
+    },
     expected: null,
     question: null,
   });
-  const readSource = vi.spyOn(evidenceModule, 'readSession');
-  const ctx = uiContext((component) => {
-    component.handleInput?.('h');
-    const pages: string[] = [];
-    for (let page = 0; page < 30; page++) {
-      pages.push(component.render(100).join('\n'));
-      component.handleInput?.('\u001b[6~');
-    }
-    const text = pages.join('\n');
-    expect(text).toContain('Edited draft');
-    expect(text).toContain('Send comparison');
-    expect(text).toContain('"revision": 1');
-    expect(text).toContain('"revision": 2');
-    expect(text).toContain('Promised');
-    component.handleInput?.('\r');
-    component.handleInput?.('\u0001');
-    component.handleInput?.('\u001b');
-    component.handleInput?.('\u001b');
+  const f = setup(draft('pending'));
+  const pending = f.proposal;
+  const applying = f.store.claimProposal(seed(f.store, draft('applying')).id, 1, null);
+  const uncertain = f.store.claimProposal(seed(f.store, draft('uncertain')).id, 1, null);
+  f.store.recordProposalResult(uncertain.id, uncertain.revision, uncertain.claim!, {
+    state: 'uncertain',
+    verified: null,
+    actual: null,
+    error: 'Saved unresolved failure',
   });
-  await openProposals(ctx, f.store, f.execute);
-  expect(readSource).not.toHaveBeenCalled();
+  const dismissed = seed(f.store, draft('dismissed'));
+  f.store.dismissProposal(dismissed.id, 1);
+  for (const state of ['applied', 'already_satisfied'] as const) {
+    const claimed = f.store.claimProposal(seed(f.store, draft(state)).id, 1, null);
+    f.store.recordProposalResult(claimed.id, claimed.revision, claimed.claim!, {
+      state,
+      verified: snapshot({ ...record, uuid: claimed.claim! }),
+      error: null,
+    });
+  }
+  await driveUI(f.store, f.execute, async (screen) => {
+    const lines = screen.lines();
+    for (const state of ['pending', 'applying', 'uncertain']) {
+      const row = lines.findIndex((line) => line.includes('TITLE_' + state));
+      expect(row, lines.join('\n')).toBeGreaterThanOrEqual(0);
+      expect(lines[row + 1]).toContain('work');
+      expect(lines[row + 1]).toMatch(/add|create/i);
+    }
+    for (const state of ['dismissed', 'applied', 'already_satisfied'])
+      expect(screen.text()).not.toContain('TITLE_' + state);
+    await screen.press('h');
+    const history = await screen.pages();
+    expect(history).toMatch(/decided/i);
+    for (const state of ['dismissed', 'applied', 'already_satisfied'])
+      expect(history).toContain('TITLE_' + state);
+  });
   expect(f.execute).not.toHaveBeenCalled();
-  expect(f.store.proposal(f.proposal.id)?.state).toBe('pending');
+  expect(pending.state).toBe('pending');
+  expect(applying.state).toBe('applying');
 });
 
-it('Ctrl+A on an unresolved claim only verifies an already-present task result', async () => {
+it('collapsed ordering is project, creation time, then ID, independent of provider order', async () => {
+  const f = setup();
+  const make = (id: string, project: string, createdAt: string): Proposal => ({
+    ...f.proposal,
+    id,
+    createdAt,
+    change: { operation: 'add', fields: { description: 'ROW_' + id, project }, annotations: [] },
+  });
+  const ordered = [
+    make('a', 'alpha', '2026-01-01'),
+    make('b', 'alpha', '2026-01-01'),
+    make('c', 'alpha', '2026-01-02'),
+    make('d', 'beta', '2025-01-01'),
+  ];
+  vi.spyOn(f.store, 'proposals').mockImplementation((_state, offset = 0, limit = 100) =>
+    [...ordered].reverse().slice(offset, offset + limit),
+  );
+  await driveUI(f.store, f.execute, async (screen) => {
+    const text = screen.text();
+    const positions = ordered.map((p) => text.indexOf('ROW_' + p.id));
+    expect(positions.every((position) => position >= 0)).toBe(true);
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
+    for (let i = 0; i < 10; i++) await screen.press(keys.down);
+    for (let i = 0; i < 10; i++) await screen.press(keys.up);
+  });
+  expect(f.execute).not.toHaveBeenCalled();
+});
+
+it('collapsed navigation reveals the focused row in a queue taller than the overlay', async () => {
+  const f = setup(update);
+  const proposals: Proposal[] = Array.from({ length: 24 }, (_, index) => ({
+    ...f.proposal,
+    id: 'queue-' + index.toString().padStart(2, '0'),
+    change: {
+      operation: 'update',
+      targetUuid: uuid,
+      fields: {
+        description: 'QUEUE_' + index.toString().padStart(2, '0'),
+        project: 'work',
+      },
+      annotations: [],
+    },
+  }));
+  vi.spyOn(f.store, 'proposals').mockImplementation((_state, offset = 0, limit = 100) =>
+    proposals.slice(offset, offset + limit),
+  );
+  await driveUI(
+    f.store,
+    f.execute,
+    async (screen) => {
+      for (let index = 0; index < proposals.length; index++) {
+        const lines = screen.lines();
+        expect(lines.join('\n')).toContain('QUEUE_' + index.toString().padStart(2, '0'));
+        expect(lines.length).toBeLessThanOrEqual(22);
+        expect(lines.every((line) => visibleWidth(line) <= 48)).toBe(true);
+        expect(lines.join('\n')).toMatch(/history/i);
+        if (index < proposals.length - 1) await screen.press(keys.down);
+      }
+      const last = screen.text();
+      await screen.press(keys.down);
+      expect(screen.text()).toBe(last);
+      for (let index = 1; index < proposals.length; index++) await screen.press(keys.up);
+      expect(screen.text()).toContain('QUEUE_00');
+    },
+    { columns: 48, rows: 24 },
+  );
+  expect(f.execute).not.toHaveBeenCalled();
+});
+
+it.each([
+  {
+    position: 'above viewport',
+    columns: 48,
+    selectedIndex: 0,
+    page: keys.pageDown,
+    resize: null,
+    reveal: true,
+  },
+  {
+    position: 'below viewport',
+    columns: 48,
+    selectedIndex: 23,
+    page: keys.pageUp,
+    resize: null,
+    reveal: true,
+  },
+  {
+    position: 'hidden by resize',
+    columns: 48,
+    selectedIndex: 6,
+    page: null,
+    resize: { columns: 40, rows: 20 },
+    reveal: true,
+  },
+  {
+    position: 'visible after resize',
+    columns: 48,
+    selectedIndex: 0,
+    page: keys.pageDown,
+    resize: { columns: 48, rows: 80 },
+    reveal: false,
+  },
+  {
+    position: 'visible after widening',
+    columns: 40,
+    selectedIndex: 6,
+    page: keys.pageUp,
+    resize: { columns: 100, rows: 24 },
+    reveal: false,
+  },
+])('collapsed d uses current visibility for selection $position', async (test) => {
+  const draft = (index: number): ProposalDraft => ({
+    ...update,
+    change: {
+      operation: 'update',
+      targetUuid: uuid,
+      fields: {
+        description: 'Q' + index.toString().padStart(2, '0'),
+        project: 'queue-' + index.toString().padStart(2, '0'),
+      },
+      annotations: [],
+    },
+  });
+  const f = setup(draft(0));
+  const proposals = [
+    f.proposal,
+    ...Array.from({ length: 23 }, (_, index) => seed(f.store, draft(index + 1))),
+  ];
+  const selected = proposals[test.selectedIndex]!;
+  const before = f.store.proposals();
+  const title = 'Q' + test.selectedIndex.toString().padStart(2, '0');
+  const dismiss = vi.spyOn(f.store, 'dismissProposal');
+  await driveUI(
+    f.store,
+    f.execute,
+    async (screen) => {
+      for (let index = 0; index < test.selectedIndex; index++) await screen.press(keys.down);
+      expect(screen.text()).toContain(title);
+      if (test.page) {
+        await screen.press(test.page);
+        expect(screen.text()).not.toContain(title);
+      }
+      if (test.resize) screen.resize(test.resize.columns, test.resize.rows);
+      expect(f.execute).not.toHaveBeenCalled();
+
+      // A resize may reach input before the next paint.
+      await screen.press('d', false);
+      if (test.reveal) {
+        expect(dismiss, 'first d must only reveal the offscreen selection').not.toHaveBeenCalled();
+        expect(f.store.proposals()).toEqual(before);
+        const lines = screen.lines();
+        const row = lines.findIndex((line) => line.includes(title));
+        expect(row).toBeGreaterThanOrEqual(0);
+        expect(lines[row + 1]).toMatch(/[█│]│$/u);
+        expect(f.store.proposal(selected.id)?.state).toBe('pending');
+        expect(f.execute).not.toHaveBeenCalled();
+
+        await screen.press('d');
+      }
+      expect(dismiss.mock.calls).toEqual([[selected.id, selected.revision]]);
+      expect(f.store.proposals('dismissed').map((proposal) => proposal.id)).toEqual([selected.id]);
+      expect(f.store.proposals('pending')).toHaveLength(proposals.length - 1);
+      expect(f.execute).not.toHaveBeenCalled();
+    },
+    { columns: test.columns, rows: 24 },
+  );
+});
+
+it.each(['different item', 'same item, newer expansion'])(
+  'ignores an obsolete asynchronous preview for %s',
+  async (target) => {
+    const f = setup({
+      ...update,
+      change: {
+        operation: 'update',
+        targetUuid: uuid,
+        fields: { description: 'First', project: 'a' },
+        annotations: [],
+      },
+    });
+    seed(f.store, {
+      ...update,
+      change: {
+        operation: 'update',
+        targetUuid: uuid,
+        fields: { description: 'Second', project: 'b' },
+        annotations: [],
+      },
+    });
+    let release!: (value: string) => void;
+    const late = new Promise<string>((resolve) => {
+      release = resolve;
+    });
+    const execute = vi
+      .fn<TaskExecutor>()
+      .mockImplementationOnce(() => late)
+      .mockResolvedValue(JSON.stringify([{ ...record, description: 'FRESH_CURRENT_TASK' }]));
+    await driveUI(f.store, execute, async (screen) => {
+      try {
+        await screen.press(keys.enter);
+        expect(execute).toHaveBeenCalledOnce();
+        if (target === 'different item') await screen.press(keys.down);
+        else await screen.press(keys.escape);
+        await screen.press(keys.enter);
+        expect(await screen.pages()).toContain('FRESH_CURRENT_TASK');
+      } finally {
+        release(JSON.stringify([{ ...record, description: 'OBSOLETE_CURRENT_TASK' }]));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      for (let i = 0; i < 20; i++) await screen.press(keys.pageUp);
+      const current = await screen.pages();
+      expect(current).not.toContain('OBSOLETE_CURRENT_TASK');
+      expect(current).toContain('FRESH_CURRENT_TASK');
+    });
+    expect(execute.mock.calls.every(([, input]) => input === undefined)).toBe(true);
+  },
+);
+
+it('saved rationale and exact quotes are reachable before Source, even with missing files', async () => {
+  const f = setup(update);
+  const readSource = vi.spyOn(evidenceModule, 'readSession');
+  await driveUI(f.store, f.execute, async (screen) => {
+    await screen.press(keys.enter);
+    const review = await screen.pages();
+    expect(review).toContain('Promised');
+    expect(review).toContain('Send comparison');
+    expect(readSource).not.toHaveBeenCalled();
+    await screen.press('s');
+    const source = await screen.pages();
+    expect(source).toContain('Send comparison');
+    expect(source).toMatch(/unavailable/i);
+    expect(readSource).toHaveBeenCalledOnce();
+  });
+});
+
+it.each([false, true])(
+  'pending dismissal (expanded=%s) changes no task and selects a collapsed successor',
+  async (expanded) => {
+    const f = setup({
+      change: { operation: 'add', fields: { description: 'First', project: 'a' }, annotations: [] },
+      expected: null,
+      question: null,
+    });
+    const next = seed(f.store, {
+      change: {
+        operation: 'add',
+        fields: { description: 'Successor', project: 'b' },
+        annotations: [],
+      },
+      expected: null,
+      question: null,
+    });
+    const dismiss = vi.spyOn(f.store, 'dismissProposal');
+    await driveUI(f.store, f.execute, async (screen) => {
+      if (expanded) {
+        screen.resize(80, 24);
+        await screen.press(keys.enter);
+        const headerRow = screen.lines().findIndex((line) => line.includes('First'));
+        const before = screen.text();
+        await screen.press(keys.pageDown);
+        expect(screen.text()).not.toBe(before);
+        expect(screen.lines()[headerRow]).toContain('First');
+      }
+      expect(screen.text()).toMatch(/d\b[^\n]*dismiss/i);
+      await screen.press('d');
+      expect(dismiss).toHaveBeenCalledWith(f.proposal.id, f.proposal.revision);
+      expect(f.store.proposal(f.proposal.id)?.state).toBe('dismissed');
+      expect(screen.text()).toMatch(/dismissed/i);
+      expect(screen.text()).toMatch(/unchanged|no task/i);
+      expect(f.execute).not.toHaveBeenCalled();
+      await screen.press(keys.apply);
+      expect(f.store.proposal(next.id)?.state).toBe('pending');
+      expect(f.execute).not.toHaveBeenCalled();
+      await screen.press(keys.apply);
+      expect(f.store.proposal(next.id)?.state).toBe('applied');
+      expect(f.store.proposals('pending')).toHaveLength(0);
+    });
+    expect(f.execute.mock.calls.filter(([, input]) => input)).toHaveLength(1);
+  },
+);
+
+it.each([1, 2])(
+  'dismissal of the final row in a %i-item queue keeps feedback and chooses the preceding row when present',
+  async (count) => {
+    const f = setup({
+      change: {
+        operation: 'add',
+        fields: { description: 'Predecessor', project: 'a' },
+        annotations: [],
+      },
+      expected: null,
+      question: null,
+    });
+    const last =
+      count === 2
+        ? seed(f.store, {
+            change: {
+              operation: 'add',
+              fields: { description: 'Final item', project: 'b' },
+              annotations: [],
+            },
+            expected: null,
+            question: null,
+          })
+        : f.proposal;
+    await driveUI(f.store, f.execute, async (screen) => {
+      if (count === 2) await screen.press(keys.down);
+      await screen.press('d');
+      expect(f.store.proposal(last.id)?.state).toBe('dismissed');
+      expect(screen.text()).toMatch(/dismissed/i);
+      expect(screen.text()).toMatch(/unchanged|no task/i);
+      expect(screen.text()).toMatch(/history/i);
+      expect(screen.text()).toMatch(/close/i);
+      if (count === 2) {
+        await screen.press(keys.apply);
+        expect(f.store.proposal(f.proposal.id)?.state).toBe('pending');
+        expect(f.execute).not.toHaveBeenCalled();
+        expect(await screen.pages()).toContain('Predecessor');
+      } else {
+        await screen.press('h');
+        expect(await screen.pages()).toMatch(/dismissed/i);
+      }
+    });
+    expect(f.execute).not.toHaveBeenCalled();
+  },
+);
+
+it.each(['applying', 'uncertain'] as const)(
+  'unresolved %s has no dismissal or editing and Ctrl+A is verification only',
+  async (state) => {
+    const f = setup();
+    const claim = f.store.claimProposal(f.proposal.id, 1, null);
+    if (state === 'uncertain')
+      f.store.recordProposalResult(claim.id, claim.revision, claim.claim!, {
+        state: 'uncertain',
+        verified: null,
+        actual: null,
+        error: 'Still unresolved',
+      });
+    const dismiss = vi.spyOn(f.store, 'dismissProposal');
+    const editor = vi.fn(async () => undefined);
+    await driveUI(
+      f.store,
+      f.execute,
+      async (screen) => {
+        await screen.press('d');
+        await screen.press('e');
+        await screen.press(keys.enter);
+        expect(screen.text()).toMatch(/verif/i);
+        expect(screen.text()).not.toMatch(/d\b[^\n]*dismiss/i);
+        await screen.press('d');
+        await screen.press('e');
+        const beforeVerification = f.store.proposal(f.proposal.id);
+        await screen.press(keys.apply);
+        expect(await screen.pages()).toMatch(/uncertain|unresolved/i);
+        // A failed read-only resolution preserves the existing claim and durable state.
+        expect(f.store.proposal(f.proposal.id)?.state).toBe(state);
+        expect(f.store.proposal(f.proposal.id)).toEqual(beforeVerification);
+        expect(screen.active()).toBe(true);
+      },
+      { editor },
+    );
+    expect(editor).not.toHaveBeenCalled();
+    expect(dismiss).not.toHaveBeenCalled();
+    expect(f.execute.mock.calls.every(([, input]) => input === undefined)).toBe(true);
+  },
+);
+
+it.each(['completion', 'interrupted update', 'unresolved question'] as const)(
+  'review displays the effect of %s',
+  async (kind) => {
+    const f = setup(
+      kind === 'completion'
+        ? {
+            ...update,
+            change: { operation: 'complete', targetUuid: uuid, annotations: [] },
+          }
+        : { ...update, question: kind === 'unresolved question' ? 'Which delivery date?' : null },
+    );
+    if (kind === 'interrupted update') {
+      f.store.claimProposal(f.proposal.id, 1, snapshot(record));
+      f.set({ ...record, status: 'completed' });
+    }
+    await driveUI(f.store, f.execute, async (screen) => {
+      await screen.press(keys.enter);
+      const review = (await screen.pages()).replace(/[\s│█]/gu, '');
+      expect(review).toContain(
+        (kind === 'completion'
+          ? 'status: "pending" -> "completed"'
+          : kind === 'interrupted update'
+            ? 'status: "completed" -> "pending"'
+            : 'Apply disabled: "Which delivery date?"'
+        ).replace(/\s/gu, ''),
+      );
+      if (kind === 'unresolved question') {
+        await screen.press(keys.apply);
+        expect(f.store.proposal(f.proposal.id)?.state).toBe('pending');
+      }
+    });
+    expect(f.execute.mock.calls.every(([, input]) => input === undefined)).toBe(true);
+  },
+);
+
+it('only explicit per-item Ctrl+A applies, never Enter, History, Source or accept-all', async () => {
+  const f = setup();
+  seed(f.store);
+  const reads = vi.spyOn(evidenceModule, 'readSession');
+  await driveUI(f.store, f.execute, async (screen) => {
+    await screen.press(keys.enter);
+    await screen.press('a');
+    await screen.press('h');
+    await screen.press(keys.apply);
+    await screen.press(keys.enter);
+    await screen.press(keys.apply);
+    await screen.press(keys.escape);
+    await screen.press(keys.escape);
+    await screen.press('s');
+    await screen.press(keys.apply);
+    await screen.press(keys.enter);
+    expect(f.execute).not.toHaveBeenCalled();
+    await screen.press(keys.escape);
+    await screen.press(keys.apply);
+    expect(f.store.proposals('applied')).toHaveLength(1);
+    expect(f.store.proposals('pending')).toHaveLength(1);
+    expect(screen.text()).not.toContain('Target:');
+  });
+  expect(f.execute.mock.calls.filter(([, input]) => input)).toHaveLength(1);
+  expect(reads).toHaveBeenCalledOnce();
+});
+
+it.each(['task', 'draft'])(
+  'stale %s approval refreshes the preview and requires another Ctrl+A',
+  async (changed) => {
+    const f = setup(update);
+    await driveUI(f.store, f.execute, async (screen) => {
+      await screen.press(keys.enter);
+      if (changed === 'task') f.set({ ...record, description: 'Changed outside Pi' });
+      else
+        f.store.editProposal(f.proposal.id, f.proposal.revision, {
+          ...update,
+          change: {
+            operation: 'update',
+            targetUuid: uuid,
+            fields: { description: 'Changed outside Pi' },
+            annotations: [],
+          },
+        });
+      await screen.press(keys.apply);
+      const refreshed = await screen.pages();
+      expect(refreshed).toContain('Changed outside Pi');
+      expect(refreshed).toMatch(/preview changed|review.*again|renewed|fresh.*approval/i);
+      expect(f.execute.mock.calls.every(([, input]) => input === undefined)).toBe(true);
+      expect(f.store.proposal(f.proposal.id)?.state).toBe('pending');
+      await screen.press(keys.apply);
+      expect(f.store.proposal(f.proposal.id)?.state).toBe('applied');
+    });
+    expect(f.execute.mock.calls.filter(([, input]) => input)).toHaveLength(1);
+  },
+);
+
+it.each(['d', keys.apply].flatMap((action) => [false, true].map((last) => ({ action, last }))))(
+  'error reload after $action collapses when the reviewed ID leaves Inbox (last=$last)',
+  async ({ action, last }) => {
+    const f = setup();
+    const next = seed(f.store, {
+      change: {
+        operation: 'add',
+        fields: { description: 'Successor', project: last ? 'a' : 'z' },
+        annotations: [],
+      },
+      expected: null,
+      question: null,
+    });
+    await driveUI(f.store, f.execute, async (screen) => {
+      if (last) await screen.press(keys.down);
+      await screen.press(keys.enter);
+      f.store.dismissProposal(f.proposal.id, 1);
+      await screen.press(action);
+      expect(screen.text()).toContain('Successor');
+      expect(screen.text()).toContain('Enter Expand');
+      await screen.press(keys.apply);
+      expect(f.store.proposal(next.id)?.state).toBe('pending');
+      expect(f.execute).not.toHaveBeenCalled();
+    });
+  },
+);
+
+it('preview refresh supplies the latest revision to History and the editor', async () => {
+  const f = setup();
+  const edited: ProposalDraft = {
+    change: { operation: 'add', fields: { description: 'External revision' }, annotations: [] },
+    expected: null,
+    question: null,
+  };
+  const editor = vi.fn(async (_title: string, initial: string) => {
+    expect(JSON.parse(initial)).toEqual(edited);
+    return initial;
+  });
+  await driveUI(
+    f.store,
+    f.execute,
+    async (screen) => {
+      f.store.editProposal(f.proposal.id, 1, edited);
+      await screen.press(keys.enter);
+      expect(await screen.pages()).toContain('External revision');
+      await screen.press('h');
+      expect(await screen.pages()).toContain('revision 2');
+      await screen.press(keys.escape);
+      await screen.press('e');
+      expect(editor).toHaveBeenCalledOnce();
+      expect(f.store.proposal(f.proposal.id)?.revision).toBe(3);
+      expect(await screen.pages()).toContain('Draft saved.');
+    },
+    { editor },
+  );
+  expect(f.execute).not.toHaveBeenCalled();
+});
+
+it('preview refresh reorders changed projects while retaining the focused expanded ID', async () => {
+  const f = setup();
+  const make = (id: string, project: string, createdAt: string): Proposal => ({
+    ...f.proposal,
+    id,
+    createdAt,
+    change: { operation: 'add', fields: { description: 'ROW_' + id, project }, annotations: [] },
+  });
+  const rows = [
+    make('a', 'alpha', '2026-01-01'),
+    make('b', 'alpha', '2026-01-01'),
+    make('c', 'alpha', '2026-01-02'),
+    make('d', 'beta', '2025-01-01'),
+    make('e', 'zeta', '2026-01-01'),
+  ];
+  vi.spyOn(f.store, 'proposals').mockImplementation((_state, offset = 0, limit = 100) =>
+    [...rows].reverse().slice(offset, offset + limit),
+  );
+  vi.spyOn(f.store, 'proposal').mockImplementation((id) => rows.find((item) => item.id === id));
+  await driveUI(f.store, f.execute, async (screen) => {
+    for (let index = 0; index < 4; index++) await screen.press(keys.down);
+    rows[4] = make('e', 'alpha', '2026-01-01');
+    await screen.press(keys.enter);
+    const review = await screen.pages();
+    expect(review).toContain('ROW_e');
+    expect(review).toContain('Proposal ID: "e"');
+    expect(review).toContain('Enter Collapse');
+    await screen.press(keys.escape);
+    const text = screen.text();
+    const order = ['a', 'b', 'e', 'c', 'd'];
+    const positions = order.map((id) => text.indexOf('ROW_' + id));
+    expect(positions.every((position) => position >= 0)).toBe(true);
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
+    expect(text).toContain('> "ROW_e"');
+    await screen.press(keys.down);
+    expect(screen.text()).toContain('> "ROW_c"');
+  });
+  expect(f.execute).not.toHaveBeenCalled();
+});
+
+it.each(['edit', 'claim', 'dismiss'] as const)(
+  'editor save conflict refreshes an external %s made while the editor owns input',
+  async (change) => {
+    const f = setup();
+    const successor = seed(f.store, {
+      change: {
+        operation: 'add',
+        fields: { description: 'Successor', project: 'z' },
+        annotations: [],
+      },
+      expected: null,
+      question: null,
+    });
+    const draft: ProposalDraft = {
+      change: { operation: 'add', fields: { description: 'Latest draft' }, annotations: [] },
+      expected: null,
+      question: null,
+    };
+    let complete!: (text: string) => void;
+    const pending = new Promise<string>((resolve) => {
+      complete = resolve;
+    });
+    const editor = vi.fn(async (_title: string, initial: string) =>
+      editor.mock.calls.length === 1 ? pending : initial,
+    );
+    const dismiss = vi.spyOn(f.store, 'dismissProposal');
+    await driveUI(
+      f.store,
+      f.execute,
+      async (screen) => {
+        await screen.press(keys.enter);
+        await screen.press('e');
+        try {
+          expect(screen.active()).toBe(false);
+          expect(editor).toHaveBeenCalledOnce();
+          if (change === 'edit') f.store.editProposal(f.proposal.id, 1, draft);
+          else if (change === 'claim') f.store.claimProposal(f.proposal.id, 1, null);
+          else f.store.dismissProposal(f.proposal.id, 1);
+        } finally {
+          complete(JSON.stringify(draft));
+        }
+        await vi.waitFor(() => expect(screen.active()).toBe(true));
+        expect(await screen.pages()).toContain('Proposal revision conflict');
+        expect(f.store.proposal(f.proposal.id)?.revision).toBe(2);
+        expect(f.execute.mock.calls.every(([, input]) => input === undefined)).toBe(true);
+        if (change === 'edit') {
+          expect(await screen.pages()).toContain('Latest draft');
+          await screen.press('e');
+          expect(JSON.parse(editor.mock.calls[1]![1])).toEqual(draft);
+          expect(f.store.proposal(f.proposal.id)?.revision).toBe(3);
+          expect(await screen.pages()).toContain('Draft saved.');
+        } else if (change === 'claim') {
+          expect(screen.text()).toContain('Verify only (no replay)');
+          expect(screen.text()).not.toMatch(/e Edit|d Dismiss/);
+          await screen.press('e');
+          await screen.press('d');
+          expect(editor).toHaveBeenCalledOnce();
+          expect(dismiss).not.toHaveBeenCalled();
+        } else {
+          expect(screen.text()).toContain('> "Successor"');
+          expect(screen.text()).toContain('Enter Expand');
+          await screen.press(keys.apply);
+          expect(f.store.proposal(successor.id)?.state).toBe('pending');
+          expect(f.execute).not.toHaveBeenCalled();
+        }
+      },
+      { editor },
+    );
+    expect(f.execute.mock.calls.every(([, input]) => input === undefined)).toBe(true);
+  },
+);
+
+it('preview refresh disables edit and dismiss after an external claim', async () => {
+  const f = setup();
+  const editor = vi.fn(async () => undefined);
+  const dismiss = vi.spyOn(f.store, 'dismissProposal');
+  await driveUI(
+    f.store,
+    f.execute,
+    async (screen) => {
+      f.store.claimProposal(f.proposal.id, 1, null);
+      await screen.press(keys.enter);
+      expect(screen.text()).toContain('Verify only (no replay)');
+      expect(screen.text()).not.toMatch(/e Edit|d Dismiss/);
+      await screen.press('e');
+      await screen.press('d');
+      expect(editor).not.toHaveBeenCalled();
+      expect(dismiss).not.toHaveBeenCalled();
+    },
+    { editor },
+  );
+  expect(f.execute.mock.calls.every(([, input]) => input === undefined)).toBe(true);
+});
+
+it('missing target remains in Inbox after deliberate expanded approval', async () => {
+  const f = setup(update);
+  f.set(null);
+  await driveUI(f.store, f.execute, async (screen) => {
+    await screen.press(keys.enter);
+    expect(await screen.pages()).toMatch(/target missing|missing target/i);
+    await screen.press(keys.apply);
+    expect(f.store.proposal(f.proposal.id)?.state).toBe('pending');
+    expect(await screen.pages()).toMatch(/missing/i);
+    await screen.press(keys.escape);
+    expect(screen.text()).toContain('After');
+  });
+  expect(f.execute.mock.calls.every(([, input]) => input === undefined)).toBe(true);
+});
+
+it('Ctrl+A on an unresolved claim verifies an already-present result without replay', async () => {
   const f = setup();
   const claim = f.store.claimProposal(f.proposal.id, 1, null);
   f.set({
@@ -993,58 +1795,465 @@ it('Ctrl+A on an unresolved claim only verifies an already-present task result',
     project: 'work',
     annotations: [{ entry: '20260101T000000Z', description: 'Saved context' }],
   });
-  const ctx = uiContext((component, index) => {
-    component.handleInput?.(index === 0 ? '\u0001' : '\u001b');
+  await driveUI(f.store, f.execute, async (screen) => {
+    await screen.press(keys.enter);
+    await screen.press(keys.apply);
+    expect(f.store.proposal(f.proposal.id)?.state).toBe('already_satisfied');
+    expect(screen.text()).toMatch(/already.satisfied/i);
+    expect(screen.text()).toMatch(/history/i);
   });
-  await openProposals(ctx, f.store, f.execute);
-  expect(f.store.proposal(f.proposal.id)?.state).toBe('already_satisfied');
   expect(f.execute.mock.calls.every(([, input]) => input === undefined)).toBe(true);
 });
 
-it('missing target cannot be claimed or applied even after deliberate approval', async () => {
-  const f = setup(update);
-  f.set(null);
-  const preview = await previewProposal(f.store, f.proposal.id, f.execute);
-  expect(previewText(preview)).toContain('Apply disabled: target missing');
-  await expect(applyProposal(f.store, preview, () => 'tui', f.execute)).rejects.toThrow(/missing/);
-  expect(f.store.proposal(f.proposal.id)?.state).toBe('pending');
-  expect(f.execute.mock.calls.every(([, input]) => input === undefined)).toBe(true);
+it.each(['dismiss', 'preview freshness', 'partial task write'])(
+  'truthful %s failure keeps the Inbox item',
+  async (failure) => {
+    const f = setup(update);
+    const execute = vi.fn<TaskExecutor>(async (args, input) => {
+      if (input) throw new Error('INERT_WRITE_FAILURE');
+      return f.execute(args);
+    });
+    await driveUI(f.store, execute, async (screen) => {
+      if (failure === 'dismiss') {
+        screen.resize(48, 32);
+        const feedback =
+          'INERT_DISMISS_FAILURE ' +
+          'Retained proposal and task unchanged. '.repeat(5) +
+          'FEEDBACK_END';
+        vi.spyOn(f.store, 'dismissProposal').mockImplementationOnce(() => {
+          throw new Error(feedback);
+        });
+        await screen.press('d');
+        const lines = screen.lines();
+        expect(lines.length).toBeLessThanOrEqual(30);
+        expect(lines.every((line) => visibleWidth(line) <= 48)).toBe(true);
+        expect(screen.text()).toContain('Full feedback is in the body.');
+        for (const action of [/ctrl\+a/i, /dismiss/i, /history/i, /esc/i])
+          expect(screen.text()).toMatch(action);
+        const body = lines
+          .filter((line) => /[█│]│$/u.test(line))
+          .map((line) => line.slice(1, -2))
+          .join('')
+          .replace(/\s/gu, '');
+        expect(body).toContain(
+          `Full feedback: ${JSON.stringify('Error: ' + feedback)}`.replace(/\s/gu, ''),
+        );
+      } else {
+        await screen.press(keys.enter);
+        if (failure === 'preview freshness')
+          execute.mockRejectedValueOnce(new Error('INERT_REFRESH_FAILURE'));
+        await screen.press(keys.apply);
+        expect(await screen.pages()).toContain(
+          failure === 'partial task write' ? 'INERT_WRITE_FAILURE' : 'INERT_REFRESH_FAILURE',
+        );
+      }
+      expect(f.store.proposal(f.proposal.id)?.state).toBe(
+        failure === 'partial task write' ? 'uncertain' : 'pending',
+      );
+      if (failure !== 'dismiss') await screen.press(keys.escape);
+      expect(screen.text()).toContain('After');
+      expect(screen.text()).not.toMatch(/successfully applied/i);
+    });
+  },
+);
+
+const longNotes = Array.from(
+  { length: 4 },
+  (_, note) =>
+    'NOTE_' +
+    note +
+    '_START ' +
+    Array.from(
+      { length: 24 },
+      (_, word) => 'n' + note + 'w' + word.toString().padStart(2, '0'),
+    ).join(' ') +
+    ' NOTE_' +
+    note +
+    '_FINAL',
+);
+const longUrl = 'https://example.invalid/' + 'long-path/'.repeat(28) + 'EXACT_URL_FINAL';
+const longDraft: ProposalDraft = {
+  change: {
+    operation: 'update',
+    targetUuid: uuid,
+    fields: {
+      description: '漢字 👩🏽‍💻 ' + longUrl,
+      project: null,
+      due: '20300201T000000Z',
+      wait: null,
+      scheduled: '20300102T000000Z',
+      priority: 'H',
+      waitingon: 'EXACT_PREREQUISITE_FINAL',
+      tags: ['漢字', '🚀'],
+      depends: [uuid],
+    },
+    annotations: longNotes,
+  },
+  expected: snapshot(record),
+  question: null,
+};
+
+it.each([
+  [80, 32],
+  [48, 32],
+  [80, 24],
+])(
+  'review at %ix%i bounds every physical line, preserves exact values and keeps actions visible',
+  async (columns, rows) => {
+    const f = setup(longDraft);
+    const exact = previewText(await previewProposal(f.store, f.proposal.id, f.execute));
+    for (const value of [
+      ...longNotes,
+      longUrl,
+      '20300201T000000Z',
+      '20300102T000000Z',
+      'EXACT_PREREQUISITE_FINAL',
+      uuid,
+    ])
+      expect(exact).toContain(value);
+    f.execute.mockClear();
+    await driveUI(
+      f.store,
+      f.execute,
+      async (screen) => {
+        await screen.press(keys.enter);
+        const frames: string[][] = [];
+        for (let page = 0; page < 100; page++) {
+          const lines = screen.lines();
+          frames.push(lines);
+          expect(lines.length).toBeLessThanOrEqual(rows - 2);
+          for (const line of lines) expect(visibleWidth(line), line).toBeLessThanOrEqual(columns);
+          const text = lines.join('\n');
+          for (const action of [/ctrl\+a/i, /dismiss/i, /source/i, /history/i, /esc/i])
+            expect(text).toMatch(action);
+          expect(text).toMatch(/\d+\s*[-–]\s*\d+\s*\/\s*\d+/);
+          await screen.press(keys.pageDown);
+          if (screen.text() === text) break;
+        }
+        const renderedRows: string[] = [];
+        for (const frame of frames) {
+          const start = Number(frame.join('\n').match(/Rows (\d+)-/)?.[1]) - 1;
+          frame
+            .filter((line) => /[█│]│$/u.test(line))
+            .forEach((line, index) => {
+              renderedRows[start + index] = line.slice(1, -2);
+            });
+        }
+        const unwrapped = renderedRows.join('').replace(/\s/gu, '');
+        for (const [index, note] of longNotes.entries())
+          expect(unwrapped).toContain(`${index + 1}.${JSON.stringify(note)}`.replace(/\s/gu, ''));
+        if (longDraft.change.operation !== 'complete')
+          for (const [field, value] of Object.entries(longDraft.change.fields))
+            expect(unwrapped).toContain(
+              `${field}: ${JSON.stringify(record[field] ?? null)} -> ${JSON.stringify(value)}`.replace(
+                /\s/gu,
+                '',
+              ),
+            );
+        expect(frames[0]!.join('\n')).toMatch(/below|more|↓/i);
+        expect(screen.text()).toMatch(/end/i);
+        expect(frames.flat().some((line) => /[█▓▐▌]/u.test(line))).toBe(true);
+        const end = screen.text();
+        await screen.press(keys.pageDown);
+        expect(screen.text()).toBe(end);
+        for (let n = 0; n < 100; n++) await screen.press(keys.pageUp);
+        expect(screen.text()).toBe(frames[0]!.join('\n'));
+        await screen.press(keys.pageUp);
+        expect(screen.text()).toBe(frames[0]!.join('\n'));
+      },
+      { columns, rows },
+    );
+    expect(f.execute.mock.calls.filter(([, input]) => input)).toHaveLength(0);
+  },
+);
+
+it('resize rewraps and clamps a nonzero offset; a tiny terminal blocks apply until restored', async () => {
+  const f = setup(longDraft);
+  await driveUI(f.store, f.execute, async (screen) => {
+    await screen.press(keys.enter);
+    await screen.pages();
+    for (const [columns, rows] of [
+      [48, 32],
+      [80, 24],
+      [80, 32],
+    ]) {
+      const previousStart = Number(screen.text().match(/Rows (\d+)-/)![1]);
+      expect(previousStart).toBeGreaterThan(1);
+      screen.resize(columns!, rows!);
+      const lines = screen.lines();
+      const range = lines.join('\n').match(/Rows (\d+)-(\d+)\/(\d+)/)!;
+      const [start, end, total] = range.slice(1).map(Number) as [number, number, number];
+      expect(start).toBe(Math.min(previousStart, total - (end - start)));
+      expect(lines.length).toBeLessThanOrEqual(rows! - 2);
+      expect(lines.every((line) => visibleWidth(line) <= columns!)).toBe(true);
+      expect(await screen.pages()).toMatch(/end/i);
+    }
+    screen.resize(20, 8);
+    await screen.press(keys.apply, false);
+    expect(f.store.proposal(f.proposal.id)?.state).toBe('pending');
+    expect(f.execute.mock.calls.filter(([, input]) => input)).toHaveLength(0);
+    const tiny = screen.lines();
+    expect(tiny.length).toBeLessThanOrEqual(8);
+    expect(tiny.every((line) => visibleWidth(line) <= 20)).toBe(true);
+    expect(tiny.join('\n')).toMatch(/resize|larger|small/i);
+    await screen.press(keys.apply);
+    expect(f.store.proposal(f.proposal.id)?.state).toBe('pending');
+    expect(f.execute.mock.calls.filter(([, input]) => input)).toHaveLength(0);
+    screen.resize(80, 32);
+    await screen.press(keys.apply);
+    expect(f.store.proposal(f.proposal.id)?.state).toBe('applied');
+  });
 });
 
-it('quotes terminal controls reversibly in previews, Source, History and the draft editor', async () => {
-  const f = sourceFixture('Context \u009b31m');
-  const hostile = 'Quoted \u001b[31m and \u009b31m';
+it('Source return restores the exact review position, and nested Escape does not close Inbox', async () => {
+  const f = setup(longDraft);
+  const reads = vi.spyOn(evidenceModule, 'readSession');
+  await driveUI(f.store, f.execute, async (screen) => {
+    await screen.press(keys.enter);
+    await screen.press(keys.pageDown);
+    const before = screen.text();
+    await screen.press('s');
+    expect(await screen.pages()).toContain('Send comparison');
+    await screen.press(keys.escape);
+    expect(screen.text()).toBe(before);
+    expect(reads).toHaveBeenCalledOnce();
+    await screen.press(keys.escape);
+    expect(screen.active()).toBe(true);
+    expect(screen.text()).not.toContain(uuid);
+  });
+});
+
+it('History separates selected revisions and decided proposals; inspections and nested Escape are read-only', async () => {
+  const f = setup();
   f.store.editProposal(f.proposal.id, 1, {
-    change: { operation: 'add', fields: { description: hostile }, annotations: [] },
+    change: { operation: 'add', fields: { description: 'Edited draft' }, annotations: longNotes },
     expected: null,
     question: null,
   });
-  const text = previewText(await previewProposal(f.store, f.proposal.id, f.execute));
-  expect(text).toContain('\\u001b[31m');
-  expect(text).toContain('\\u009b31m');
-  expect(text).not.toContain('\u001b');
-  expect(text).not.toContain('\u009b');
-  const context = sourceText(f.proposal);
-  expect(context).toContain('Context \\u009b31m');
-  expect(context).not.toContain('\u009b');
-  const editor = vi.fn(async (_title: string, initial: string) => {
-    expect(JSON.parse(initial).change.fields.description).toBe(hostile);
-    expect(initial).not.toContain('\u009b');
-    return undefined;
+  const decided = seed(f.store, {
+    change: {
+      operation: 'add',
+      fields: { description: 'Decided saved task', project: 'z' },
+      annotations: [],
+    },
+    expected: null,
+    question: null,
   });
-  const ctx = uiContext((component, index) => {
-    if (index === 0) {
-      component.handleInput?.('h');
-      const history = component.render(120).join('\n');
-      expect(history).not.toContain('\u001b');
-      expect(history).not.toContain('\u009b');
-      component.handleInput?.('\u001b');
-      component.handleInput?.('e');
-    } else component.handleInput?.('\u001b');
-  }, editor);
-  await openProposals(ctx, f.store, f.execute);
-  expect(editor).toHaveBeenCalledOnce();
+  f.store.dismissProposal(decided.id, 1);
+  const readSource = vi.spyOn(evidenceModule, 'readSession');
+  await driveUI(f.store, f.execute, async (screen) => {
+    await screen.press(keys.enter);
+    const top = screen.text();
+    await screen.press(keys.pageDown);
+    const review = screen.text();
+    expect(review).not.toBe(top);
+    await screen.press('h');
+    const listing = await screen.pages();
+    expect(listing).toMatch(/revision/i);
+    expect(listing).toMatch(/decided/i);
+    expect(listing).toContain('Decided saved task');
+    const inspections: string[] = [];
+    for (let selection = 0; selection < 4; selection++) {
+      await screen.press(keys.enter);
+      inspections.push(await screen.pages());
+      await screen.press(keys.apply);
+      await screen.press('d');
+      await screen.press('e');
+      await screen.press(keys.escape);
+      expect(screen.text()).toMatch(/history/i);
+      await screen.press(keys.down);
+    }
+    const text = inspections.join('\n');
+    for (const value of ['Edited draft', 'Send comparison', 'Promised', 'dismissed'])
+      expect(text).toContain(value);
+    expect(text).toMatch(/revision["\s:]+1/i);
+    expect(text).toMatch(/revision["\s:]+2/i);
+    await screen.press(keys.escape);
+    expect(screen.text()).toBe(review);
+    expect(screen.active()).toBe(true);
+  });
+  expect(readSource).not.toHaveBeenCalled();
   expect(f.execute).not.toHaveBeenCalled();
+  expect(f.store.proposal(f.proposal.id)?.state).toBe('pending');
+});
+
+it.each(['save', 'cancel'] as const)(
+  'editor %s has exclusive input ownership and reopens review without applying',
+  async (result) => {
+    const hostile = 'SAVED_\u001b[31m\u009b31m\u009dtitle\u0007\r\t\b';
+    const draft: ProposalDraft = {
+      change: {
+        operation: 'add',
+        fields: { description: 'Send comparison ' + hostile, project: hostile },
+        annotations: [hostile],
+      },
+      expected: null,
+      question: null,
+    };
+    const savedDraft: ProposalDraft = {
+      ...draft,
+      change: {
+        ...draft.change,
+        operation: 'add',
+        fields: { description: 'Saved exclusive draft ' + hostile, project: hostile },
+      },
+    };
+    const f = setup(draft);
+    let complete!: (value: string | undefined) => void;
+    const pending = new Promise<string | undefined>((resolve) => {
+      complete = resolve;
+    });
+    let isActive = () => true;
+    const editor = vi.fn(async (_title: string, _initial: string) => {
+      expect(isActive(), 'overlay must relinquish ownership before opening the editor').toBe(false);
+      return pending;
+    });
+    await driveUI(
+      f.store,
+      f.execute,
+      async (screen) => {
+        isActive = screen.active;
+        await screen.press(keys.enter);
+        const previous = screen.text();
+        const customCount = screen.custom.mock.calls.length;
+        try {
+          await screen.press('e');
+          expect(editor).toHaveBeenCalledOnce();
+          const initial = editor.mock.calls[0]![1];
+          expect(terminalControls(initial)).toEqual([]);
+          expect(initial).toContain('SAVED_\\u001b[31m\\u009b31m\\u009dtitle\\u0007\\r\\t\\b');
+          expect(JSON.parse(initial)).toEqual(draft);
+          expect(screen.active()).toBe(false);
+          expect(screen.custom).toHaveBeenCalledTimes(customCount);
+          expect(f.store.proposal(f.proposal.id)?.revision).toBe(1);
+          expect(f.execute).not.toHaveBeenCalled();
+        } finally {
+          const edited = JSON.parse(editor.mock.calls[0]![1]);
+          edited.change.fields.description = 'Saved exclusive draft ' + hostile;
+          complete(result === 'save' ? JSON.stringify(edited) : undefined);
+        }
+        await vi.waitFor(() => expect(screen.active()).toBe(true));
+        expect(screen.custom.mock.calls.length).toBeGreaterThan(customCount);
+        if (result === 'save') {
+          expect(await screen.pages()).toContain('Saved exclusive draft');
+          expect(f.store.proposal(f.proposal.id)?.revision).toBe(2);
+          expect(f.store.proposal(f.proposal.id)?.draft).toEqual(savedDraft);
+        } else {
+          expect(screen.text()).toBe(previous);
+          expect(f.store.proposal(f.proposal.id)?.revision).toBe(1);
+        }
+      },
+      { editor },
+    );
+    expect(f.execute).not.toHaveBeenCalled();
+  },
+);
+
+function terminalControls(text: string) {
+  // Text may insert its own SGR reset while wrapping. The inert theme emits no colors.
+  return Array.from(text.split('\u001b[0m').join(''))
+    .filter((character) => {
+      const code = character.charCodeAt(0);
+      return (code < 32 && code !== 10) || (code >= 0x7f && code <= 0x9f);
+    })
+    .map((character) => character.charCodeAt(0));
+}
+
+it('all saved strings are terminal-control-safe in review, Source, revisions, snapshots and results', async () => {
+  const hostile = 'SAVED_\u001b[31m\u009b31m\u009dtitle\u0007\r\t\b';
+  const f = setup();
+  const original = seed(
+    f.store,
+    {
+      change: {
+        operation: 'update',
+        targetUuid: uuid,
+        fields: { description: hostile, project: hostile, waitingon: hostile, tags: [hostile] },
+        annotations: [hostile],
+      },
+      expected: snapshot({ ...record, description: hostile }),
+      question: hostile,
+    },
+    { explanation: hostile, quote: hostile },
+  );
+  f.store.editProposal(original.id, 1, {
+    change: {
+      operation: 'update',
+      targetUuid: uuid,
+      fields: { description: hostile },
+      annotations: [hostile],
+    },
+    expected: snapshot({ ...record, description: hostile }),
+    question: null,
+  });
+  const claim = f.store.claimProposal(original.id, 2, snapshot(record));
+  f.store.recordProposalResult(original.id, claim.revision, claim.claim!, {
+    state: 'uncertain',
+    verified: snapshot({ ...record, description: hostile }),
+    actual: { ...record, custom: hostile, [hostile]: hostile },
+    error: hostile,
+  });
+  f.set({
+    ...record,
+    description: hostile,
+    annotations: [{ entry: '20260101T000000Z', description: hostile }],
+  });
+  // Keep just the hostile fixture focused. Saved data is read through the same store API.
+  const saved = f.store.proposal(original.id)!;
+  const hostileSources = (proposal: Omit<Proposal, 'history'>) => ({
+    ...proposal,
+    sources: proposal.sources.map((source) => ({
+      ...source,
+      role: hostile,
+      file: hostile,
+      sessionId: hostile,
+      branchId: hostile,
+      entryId: hostile,
+      editId: hostile,
+      timestamp: hostile,
+      locator: hostile,
+    })),
+  });
+  const proposals: Proposal[] = [
+    {
+      ...hostileSources(saved),
+      history: (saved.history ?? []).map(hostileSources),
+    },
+  ];
+  vi.spyOn(f.store, 'proposals').mockImplementation((_state, offset = 0, limit = 100) =>
+    proposals.slice(offset, offset + limit),
+  );
+  vi.spyOn(f.store, 'proposal').mockImplementation((id) => proposals.find((p) => p.id === id));
+  const safe = (text: string) => {
+    expect(terminalControls(text)).toEqual([]);
+    expect(text.replace(/\s/g, '')).toContain('\\u001b[31m');
+    expect(text.replace(/\s/g, '')).toContain('\\u009b31m');
+  };
+  safe(previewText(await previewProposal(f.store, original.id, f.execute)));
+  safe(sourceText(f.store.proposal(original.id)!));
+  await driveUI(f.store, f.execute, async (screen) => {
+    safe(screen.text());
+    await screen.press(keys.enter);
+    safe(await screen.pages());
+    await screen.press('s');
+    safe(await screen.pages());
+    await screen.press(keys.escape);
+    await screen.press('h');
+    const listing = await screen.pages();
+    expect(terminalControls(listing)).toEqual([]);
+    const inspected: string[] = [];
+    for (let n = 0; n < 5; n++) {
+      await screen.press(keys.enter);
+      const text = await screen.pages();
+      safe(text);
+      inspected.push(text);
+      await screen.press(keys.escape);
+      await screen.press(keys.down);
+    }
+    expect(inspected.join('\n')).toMatch(/actual|verified/i);
+    expect(inspected.join('\n')).toContain('custom');
+  });
+  expect(f.execute.mock.calls.every(([, input]) => input === undefined)).toBe(true);
 });
 
 it.skipIf(!existsSync('/opt/homebrew/bin/task')).each(['due', 'wait', 'scheduled'] as const)(

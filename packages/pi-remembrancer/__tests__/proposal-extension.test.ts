@@ -109,7 +109,7 @@ function setup(autoCapture?: boolean, disabled = false, mode: unknown = 'tui') {
   type Factory = Parameters<ExtensionContext['ui']['custom']>[0];
   const custom = vi.fn(async (factory: Factory) => {
     const component = await factory(
-      { requestRender() {} } as Parameters<Factory>[0],
+      { terminal: { columns: 100, rows: 30 }, requestRender() {} } as Parameters<Factory>[0],
       { fg: (_color: string, text: string) => text } as Parameters<Factory>[1],
       {
         matches: (data: string, key: string) => key === 'tui.select.cancel' && data === '\u001b',
