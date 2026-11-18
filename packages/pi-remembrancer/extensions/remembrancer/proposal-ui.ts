@@ -212,6 +212,7 @@ export async function openProposals(
         let busy = false;
         let pageSize = 1;
         let lastWidth = 1;
+        let lastColumns = 0;
         let viable = false;
         let reveal = true;
 
@@ -311,6 +312,7 @@ export async function openProposals(
         const component = {
           render(width: number): string[] {
             lastWidth = width;
+            lastColumns = tui.terminal.columns;
             const height = Math.max(1, tui.terminal.rows - 2);
             const inner = Math.max(1, width - 2);
             const bodyWidth = Math.max(1, inner - 1);
@@ -514,8 +516,9 @@ export async function openProposals(
                 return;
               }
             } else {
-              // Re-budget even if input arrives between a terminal resize and its next paint.
-              component.render(Math.max(1, Math.min(lastWidth, tui.terminal.columns - 2)));
+              // Let Pi resolve the overlay width after a resize, then re-budget for this input.
+              if (lastColumns !== tui.terminal.columns) tui.renderNow();
+              component.render(lastWidth);
               if (!viable) return;
               if (matchesKey(data, 'pageDown')) offsets[view] += pageSize;
               else if (matchesKey(data, 'pageUp')) offsets[view] -= pageSize;
@@ -561,6 +564,15 @@ export async function openProposals(
                   done('edit');
                   return;
                 } else if (data === 'd' && proposal?.state === 'pending') {
+                  const focusLine = selected * 2;
+                  if (
+                    !expanded &&
+                    (focusLine < offsets.inbox || focusLine + 2 > offsets.inbox + pageSize)
+                  ) {
+                    reveal = true;
+                    tui.requestRender();
+                    return;
+                  }
                   try {
                     requireTui(ctx.mode);
                     outcome(store.dismissProposal(proposal.id, proposal.revision));

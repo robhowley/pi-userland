@@ -1,5 +1,5 @@
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { getKeybindings, visibleWidth } from '@earendil-works/pi-tui';
+import { getKeybindings, type Terminal, TuiMainScreen, visibleWidth } from '@earendil-works/pi-tui';
 import { openProposals, previewText, sourceText } from '../extensions/remembrancer/proposal-ui.js';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -821,7 +821,7 @@ type UIFactory = Parameters<ExtensionContext['ui']['custom']>[0];
 type UIComponent = Awaited<ReturnType<UIFactory>>;
 
 // Model custom() ownership, including done -> editor -> a fresh custom instance.
-// No Taskwarrior process, personal store, terminal renderer, or settings are used.
+// Use Pi's overlay layout with a no-op terminal, never a Taskwarrior process or personal store.
 async function driveUI(
   store: CheckpointStore,
   execute: TaskExecutor,
@@ -840,7 +840,15 @@ async function driveUI(
     editor?: (title: string, initial: string) => Promise<string | undefined>;
   } = {},
 ) {
-  const terminal = { columns: options.columns ?? 80, rows: options.rows ?? 32 };
+  const terminal = {
+    columns: options.columns ?? 80,
+    rows: options.rows ?? 32,
+    write() {},
+    hideCursor() {},
+  };
+  const tui = new TuiMainScreen(terminal as unknown as Terminal);
+  vi.spyOn(tui, 'requestRender').mockImplementation(() => {});
+  let rendered: string[] = [];
   let active: UIComponent | undefined;
   let finished = false;
   const custom = vi.fn(
@@ -850,7 +858,7 @@ async function driveUI(
         complete = resolve;
       });
       active = await factory(
-        { terminal, requestRender() {} } as Parameters<UIFactory>[0],
+        tui,
         {
           fg: (_color: string, text: string) => text,
           bg: (_color: string, text: string) => text,
@@ -858,9 +866,23 @@ async function driveUI(
         } as Parameters<UIFactory>[1],
         getKeybindings() as Parameters<UIFactory>[2],
         (value) => {
+          handle.hide();
           active = undefined;
           complete(value);
         },
+      );
+      const component = active;
+      const handle = tui.showOverlay(
+        {
+          render(width) {
+            rendered = component.render(width);
+            return rendered;
+          },
+          invalidate: () => component.invalidate(),
+        },
+        typeof _options?.overlayOptions === 'function'
+          ? _options.overlayOptions()
+          : _options?.overlayOptions,
       );
       return result;
     },
@@ -878,17 +900,18 @@ async function driveUI(
   const screen = {
     lines() {
       expect(active, 'an overlay must own input').toBeDefined();
-      return active!.render(terminal.columns);
+      tui.renderNow();
+      return rendered;
     },
     text() {
       return this.lines().join('\n');
     },
     async press(key: string, paint = true) {
       expect(active, 'keys must be delivered only to the active custom component').toBeDefined();
-      if (paint) active!.render(terminal.columns);
+      if (paint) tui.renderNow();
       active!.handleInput?.(key);
       await settle();
-      active?.render(terminal.columns);
+      if (active) tui.renderNow();
     },
     async pages() {
       const pages = [this.text()];
@@ -1164,6 +1187,105 @@ it('collapsed navigation reveals the focused row in a queue taller than the over
   expect(f.execute).not.toHaveBeenCalled();
 });
 
+it.each([
+  {
+    position: 'above viewport',
+    columns: 48,
+    selectedIndex: 0,
+    page: keys.pageDown,
+    resize: null,
+    reveal: true,
+  },
+  {
+    position: 'below viewport',
+    columns: 48,
+    selectedIndex: 23,
+    page: keys.pageUp,
+    resize: null,
+    reveal: true,
+  },
+  {
+    position: 'hidden by resize',
+    columns: 48,
+    selectedIndex: 6,
+    page: null,
+    resize: { columns: 40, rows: 20 },
+    reveal: true,
+  },
+  {
+    position: 'visible after resize',
+    columns: 48,
+    selectedIndex: 0,
+    page: keys.pageDown,
+    resize: { columns: 48, rows: 80 },
+    reveal: false,
+  },
+  {
+    position: 'visible after widening',
+    columns: 40,
+    selectedIndex: 6,
+    page: keys.pageUp,
+    resize: { columns: 100, rows: 24 },
+    reveal: false,
+  },
+])('collapsed d uses current visibility for selection $position', async (test) => {
+  const draft = (index: number): ProposalDraft => ({
+    ...update,
+    change: {
+      operation: 'update',
+      targetUuid: uuid,
+      fields: {
+        description: 'Q' + index.toString().padStart(2, '0'),
+        project: 'queue-' + index.toString().padStart(2, '0'),
+      },
+      annotations: [],
+    },
+  });
+  const f = setup(draft(0));
+  const proposals = [
+    f.proposal,
+    ...Array.from({ length: 23 }, (_, index) => seed(f.store, draft(index + 1))),
+  ];
+  const selected = proposals[test.selectedIndex]!;
+  const before = f.store.proposals();
+  const title = 'Q' + test.selectedIndex.toString().padStart(2, '0');
+  const dismiss = vi.spyOn(f.store, 'dismissProposal');
+  await driveUI(
+    f.store,
+    f.execute,
+    async (screen) => {
+      for (let index = 0; index < test.selectedIndex; index++) await screen.press(keys.down);
+      expect(screen.text()).toContain(title);
+      if (test.page) {
+        await screen.press(test.page);
+        expect(screen.text()).not.toContain(title);
+      }
+      if (test.resize) screen.resize(test.resize.columns, test.resize.rows);
+      expect(f.execute).not.toHaveBeenCalled();
+
+      // A resize may reach input before the next paint.
+      await screen.press('d', false);
+      if (test.reveal) {
+        expect(dismiss, 'first d must only reveal the offscreen selection').not.toHaveBeenCalled();
+        expect(f.store.proposals()).toEqual(before);
+        const lines = screen.lines();
+        const row = lines.findIndex((line) => line.includes(title));
+        expect(row).toBeGreaterThanOrEqual(0);
+        expect(lines[row + 1]).toMatch(/[█│]│$/u);
+        expect(f.store.proposal(selected.id)?.state).toBe('pending');
+        expect(f.execute).not.toHaveBeenCalled();
+
+        await screen.press('d');
+      }
+      expect(dismiss.mock.calls).toEqual([[selected.id, selected.revision]]);
+      expect(f.store.proposals('dismissed').map((proposal) => proposal.id)).toEqual([selected.id]);
+      expect(f.store.proposals('pending')).toHaveLength(proposals.length - 1);
+      expect(f.execute).not.toHaveBeenCalled();
+    },
+    { columns: test.columns, rows: 24 },
+  );
+});
+
 it.each(['different item', 'same item, newer expansion'])(
   'ignores an obsolete asynchronous preview for %s',
   async (target) => {
@@ -1250,7 +1372,15 @@ it.each([false, true])(
     });
     const dismiss = vi.spyOn(f.store, 'dismissProposal');
     await driveUI(f.store, f.execute, async (screen) => {
-      if (expanded) await screen.press(keys.enter);
+      if (expanded) {
+        screen.resize(80, 24);
+        await screen.press(keys.enter);
+        const headerRow = screen.lines().findIndex((line) => line.includes('First'));
+        const before = screen.text();
+        await screen.press(keys.pageDown);
+        expect(screen.text()).not.toBe(before);
+        expect(screen.lines()[headerRow]).toContain('First');
+      }
       expect(screen.text()).toMatch(/d\b[^\n]*dismiss/i);
       await screen.press('d');
       expect(dismiss).toHaveBeenCalledWith(f.proposal.id, f.proposal.revision);
