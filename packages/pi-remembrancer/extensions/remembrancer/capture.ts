@@ -82,11 +82,8 @@ export async function reviewPreparedCapture(
       }),
       (args) => lookupTasks(args, undefined, { cwd: input.cwd, signal: input.signal }),
     ),
-    tool(
-      'remembrancer_proposals',
-      proposalReadDescription,
-      proposalReadParameters,
-      (args: { offset?: number }) => readProposals(db, args),
+    tool('remembrancer_proposals', proposalReadDescription, proposalReadParameters, (args) =>
+      readProposals(db, args),
     ),
     tool(
       'remembrancer_submit',

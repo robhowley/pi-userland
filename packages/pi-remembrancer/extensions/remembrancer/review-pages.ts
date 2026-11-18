@@ -90,7 +90,7 @@ function splitsSurrogatePair(text: string, boundary: number): boolean {
   return before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff;
 }
 
-function safePrefixLength(text: string, start: number, maxUnits: number): number {
+export function safePrefixLength(text: string, start: number, maxUnits: number): number {
   let length = Math.min(maxUnits, text.length - start);
   if (length > 0 && splitsSurrogatePair(text, start + length)) length--;
   return length;
