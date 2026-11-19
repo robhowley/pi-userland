@@ -375,8 +375,7 @@ export class CheckpointStore {
           ...previous,
           change: submission.change,
           expected: submission.expected,
-          question:
-            previous.draft && previous.question === conflict ? conflict : submission.question,
+          question: submission.question,
           explanation: submission.explanation,
           sources: unionProposalSources(previous.sources, references),
         };
@@ -387,7 +386,6 @@ export class CheckpointStore {
             sources: unionProposalSources(previous.sources),
           })
         ) {
-          proposal.question = conflict;
           proposal.draft = { ...proposal.draft, question: conflict };
         }
       } else {

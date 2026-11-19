@@ -18,6 +18,7 @@ import remembrancer, {
   parseRemembrancerCommandArgs,
 } from '../extensions/remembrancer/index.js';
 import type { Proposal } from '../extensions/remembrancer/proposals.js';
+import { sourceText } from '../extensions/remembrancer/proposal-ui.js';
 
 vi.mock('node:child_process', async (original) => ({
   ...(await original<typeof import('node:child_process')>()),
@@ -40,6 +41,7 @@ function setup(
   disabled = false,
   mode: unknown = 'tui',
   sourceText = 'Send comparison',
+  excerpt = { offset: 0, quote: sourceText },
 ) {
   const dir = mkdtempSync(join(tmpdir(), 'remembrancer-proposal-command-'));
   directories.push(dir);
@@ -89,8 +91,7 @@ function setup(
         branchId: 'leaf',
         entryId: 'leaf',
         editId: null,
-        offset: 0,
-        quote: sourceText,
+        ...excerpt,
       },
     ],
   };
@@ -161,6 +162,48 @@ function setup(
     tools,
   };
 }
+
+it.each([
+  { prefix: '', quote: 'Send comparison' },
+  { prefix: 'DISTANT_PREFIX' + '😀'.repeat(50_000), quote: 'Send comparison' + 'x'.repeat(4096) },
+])(
+  'Source shows same-message qualifiers around a bounded saved excerpt ($quote.length units)',
+  ({ prefix, quote }) => {
+    const before = 'Only after approval: ';
+    const after = ', and only to the approved recipients.';
+    const transcript = prefix + before + quote + after + '😀'.repeat(50_000) + 'DISTANT_SUFFIX';
+    const f = setup(false, false, 'tui', transcript, {
+      offset: prefix.length + before.length,
+      quote,
+    });
+    const proposal = f.proposals[0]!;
+    const lastPage = Math.ceil(quote.length / 2048) - 1;
+    for (const page of new Set([0, lastPage])) {
+      const text = sourceText(proposal, 0, page);
+      const context = JSON.parse(text.split('saved branch):\n')[1]!.split('\n')[0]!);
+      const selected = context.selected;
+      expect(selected.text).toBe(
+        transcript.slice(selected.offset, selected.offset + selected.text.length),
+      );
+      expect(selected.text.length).toBeLessThanOrEqual(2049 + 512);
+      expect(selected.text.charCodeAt(0) >= 0xdc00 && selected.text.charCodeAt(0) <= 0xdfff).toBe(
+        false,
+      );
+      const last = selected.text.charCodeAt(selected.text.length - 1);
+      expect(last >= 0xd800 && last <= 0xdbff).toBe(false);
+      if (page === 0) expect(selected.text).toContain(before);
+      if (page === lastPage) expect(selected.text).toContain(after);
+      const saved = JSON.parse(
+        text.split('Saved quote fragment (JSON, exact):\n')[1]!.split('\n')[0]!,
+      );
+      expect(saved).toBe(quote.slice(page * 2048, (page + 1) * 2048));
+      expect(text).not.toContain('DISTANT_PREFIX');
+      expect(text).not.toContain('DISTANT_SUFFIX');
+      expect(text.length).toBeLessThan(10_000);
+    }
+    expect(execFile).not.toHaveBeenCalled();
+  },
+);
 
 it.each([undefined, false, true])(
   'startup reads committed notice generation/count with capture %s',

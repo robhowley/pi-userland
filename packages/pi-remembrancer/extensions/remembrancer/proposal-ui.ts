@@ -8,7 +8,7 @@ import {
 } from '@earendil-works/pi-tui';
 import type { CheckpointStore } from './checkpoints.js';
 import { branchEvidence, readSession } from './evidence.js';
-import { boundedEvidencePage } from './review-pages.js';
+import { boundedEvidencePage, safePrefixLength } from './review-pages.js';
 import { type Proposal, type ProposalDraft, validateDraft } from './proposals.js';
 import {
   applyProposal,
@@ -46,18 +46,13 @@ function decided(proposal: Proposal): boolean {
   return ['applied', 'already_satisfied', 'dismissed'].includes(proposal.state);
 }
 const SOURCE_QUOTE_UNITS = 2048;
-// UTF-16 positions match saved excerpt offsets, without splitting a surrogate pair.
-function quoteBoundary(text: string, position: number): number {
-  const end = Math.max(0, Math.min(position, text.length));
-  return (text.codePointAt(end - 1) ?? 0) > 0xffff ? end - 1 : end;
-}
 // One saved reference and quote fragment, independent of the optional original transcript.
 // Called only by deliberate Source navigation, never while rendering a preview.
 export function sourceText(proposal: Proposal, index = 0, page = 0): string {
   const source = proposal.sources[index];
   if (!source) return 'No saved sources.';
-  const start = quoteBoundary(source.quote, page * SOURCE_QUOTE_UNITS);
-  const end = quoteBoundary(source.quote, (page + 1) * SOURCE_QUOTE_UNITS);
+  const start = safePrefixLength(source.quote, 0, Math.max(0, page * SOURCE_QUOTE_UNITS));
+  const end = safePrefixLength(source.quote, 0, Math.max(0, (page + 1) * SOURCE_QUOTE_UNITS));
   const saved = `Evidence ${index + 1}/${proposal.sources.length} · quote units ${start}-${end}/${source.quote.length} (UTF-16)\n${exact(source.role)} ${exact(source.timestamp)} ${exact(source.locator)}\nSaved quote fragment (JSON, exact):\n${exact(source.quote.slice(start, end))}\nFile: ${exact(source.file)}\nSession: ${exact(source.sessionId)}\nBranch: ${exact(source.branchId)}\nEntry: ${exact(source.entryId)}\nEdit: ${exact(source.editId)}\nExcerpt offset: ${source.offset}`;
   try {
     const tree = readSession(source.file);
@@ -80,17 +75,29 @@ export function sourceText(proposal: Proposal, index = 0, page = 0): string {
     const surrounding = branch
       .slice(Math.max(0, index - 2), index + 3)
       .filter((item) => item !== selected);
+    const contextStart = safePrefixLength(
+      selected.text,
+      0,
+      Math.max(0, source.offset + start - 256),
+    );
+    const contextEnd = safePrefixLength(selected.text, 0, source.offset + end + 256);
     const page = boundedEvidencePage(surrounding, { index: 0, offset: 0 }, (entries) => ({
+      selected: {
+        ...selected,
+        text: selected.text.slice(contextStart, contextEnd),
+        offset: contextStart,
+        continues: contextEnd < selected.text.length,
+      },
       entries,
     }));
-    return `${saved}\n\nLocal context (up to two messages before and after, saved branch):\n${exact(page.data)}${page.cursor.index < surrounding.length ? '\nAdditional context omitted at the display limit.' : ''}`;
+    return `${saved}\n\nLocal context (selected message window and up to two messages before and after, saved branch):\n${exact(page.data)}${page.cursor.index < surrounding.length ? '\nAdditional context omitted at the display limit.' : ''}`;
   } catch {
     return `${saved}\n\nExtra file context is unavailable: source missing, unreadable, over limits, or saved reference no longer matches.`;
   }
 }
 function savedReviewText(proposal: Proposal): string {
   const quote = proposal.sources[0]?.quote;
-  const end = quote === undefined ? 0 : quoteBoundary(quote, 240);
+  const end = quote === undefined ? 0 : safePrefixLength(quote, 0, 240);
   return [
     `Saved title (not live verification): ${exact(title(proposal))}`,
     `Why: ${exact(proposal.explanation)}`,

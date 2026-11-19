@@ -191,7 +191,6 @@ it.each(['pending', 'edited', 'conflict-marked'] as const)(
         kind === 'pending'
           ? null
           : { change: draft.change, expected: draft.expected, question: draft.question },
-      question: kind === 'conflict-marked' ? conflict : null,
     };
     insert(f.sql, initial);
     const before = raw(f.sql);
@@ -312,8 +311,86 @@ it.each(['change', 'explanation', 'question'] as const)(
       expect(saved!.revision).toBe(initial.revision + 1);
       expect(saved!.sources).toEqual(initial.sources);
       expect(saved!.draft!.change).toEqual(draft.change);
-      expect(saved!.question).toMatch(/conflicts/);
-      expect(saved!.draft!.question).toBe(saved!.question);
+      expect(saved!.question).toBe(field === 'question' ? 'A new question' : null);
+      expect(saved!.draft!.question).toMatch(/conflicts/);
+    } finally {
+      owner.release();
+      f.sql.close();
+      f.store.close();
+    }
+  },
+);
+
+it.each([null, 'An earlier question'])(
+  'blocks a changed question after resolving a draft conflict (previous question: %s)',
+  (previousQuestion) => {
+    const f = fixture();
+    insert(f.sql, { ...proposal, sources: [{ ...source, file: f.file }] });
+    const draft: ProposalDraft = {
+      change: { operation: 'add', fields: { description: 'My edit' }, annotations: [] },
+      expected: null,
+      question: null,
+    };
+    const owner = f.store.claimCaptureWorker();
+    const save = (revision: number, question: string | null) => {
+      f.sql.exec('DELETE FROM reviewed_boundaries');
+      const capture = captureJob(f.store, { sessionId: 'session', file: f.file }, owner);
+      capture.review.page();
+      return f.store.finishCaptureJob(owner, capture.attempt, [
+        {
+          ...submission,
+          id: proposal.id,
+          expectedRevision: revision,
+          explanation: 'A different interpretation',
+          question,
+        },
+      ])[0]!;
+    };
+    try {
+      const edited = f.store.editProposal(proposal.id, proposal.revision, draft);
+      const conflicted = save(edited.revision, previousQuestion);
+      expect(conflicted.draft).toEqual({ ...draft, question: expect.stringMatching(/conflicts/) });
+      expect(() => f.store.claimProposal(conflicted.id, conflicted.revision)).toThrow(
+        'Resolve proposal question',
+      );
+      const resolved = f.store.editProposal(conflicted.id, conflicted.revision, draft);
+      const resolvedBytes = raw(f.sql);
+      const resolvedNotice = f.store.proposalNotice();
+      expect(save(resolved.revision, previousQuestion)).toEqual(resolved);
+      expect(raw(f.sql)).toEqual(resolvedBytes);
+      expect(f.store.proposalNotice()).toEqual(resolvedNotice);
+
+      const question = 'Is the revised timing acceptable?';
+      const changed = save(resolved.revision, question);
+      expect(changed.question).toBe(question);
+      expect(changed.revision).toBe(resolved.revision + 1);
+      expect(changed.sources).toEqual(resolved.sources);
+      expect(changed.draft).toEqual({ ...draft, question: expect.stringMatching(/conflicts/) });
+      expect(f.store.proposalNotice().generation).toBe(resolvedNotice.generation + 1);
+      expect(() => f.store.editProposal(changed.id, resolved.revision, draft)).toThrow('revision');
+      expect(() => f.store.claimProposal(changed.id, resolved.revision)).toThrow('revision');
+      expect(() => f.store.claimProposal(changed.id, changed.revision)).toThrow(
+        'Resolve proposal question',
+      );
+
+      const changedBytes = raw(f.sql);
+      const changedNotice = f.store.proposalNotice();
+      expect(save(changed.revision, question)).toEqual(changed);
+      expect(raw(f.sql)).toEqual(changedBytes);
+      expect(f.store.proposalNotice()).toEqual(changedNotice);
+      expect(() => f.store.claimProposal(changed.id, changed.revision)).toThrow(
+        'Resolve proposal question',
+      );
+
+      const resolvedAgain = f.store.editProposal(changed.id, changed.revision, draft);
+      const resolvedAgainBytes = raw(f.sql);
+      const resolvedAgainNotice = f.store.proposalNotice();
+      expect(save(resolvedAgain.revision, question)).toEqual(resolvedAgain);
+      expect(raw(f.sql)).toEqual(resolvedAgainBytes);
+      expect(f.store.proposalNotice()).toEqual(resolvedAgainNotice);
+      expect(f.store.claimProposal(resolvedAgain.id, resolvedAgain.revision).state).toBe(
+        'applying',
+      );
     } finally {
       owner.release();
       f.sql.close();
@@ -437,8 +514,8 @@ it('repairs existing duplicates plus one novel passage with one new entry and re
     ]);
     expect(saved!.revision).toBe(initial.revision + 1);
     expect(saved!.draft!.change).toEqual(draft.change);
-    expect(saved!.question).toMatch(/conflicts/);
-    expect(saved!.draft!.question).toBe(saved!.question);
+    expect(saved!.question).toBeNull();
+    expect(saved!.draft!.question).toMatch(/conflicts/);
     expect(saved).not.toHaveProperty('history');
   } finally {
     owner.release();
