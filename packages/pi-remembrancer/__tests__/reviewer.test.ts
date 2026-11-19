@@ -20,6 +20,11 @@ vi.mock('@earendil-works/pi-coding-agent', () => ({
 }));
 
 import { runReviewer } from '../extensions/remembrancer/reviewer.js';
+import { reviewPreparedCapture } from '../extensions/remembrancer/capture.js';
+import { CaptureReview } from '../extensions/remembrancer/capture-review.js';
+import type { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
+import type { PreparedReview } from '../extensions/remembrancer/evidence.js';
+import type { Proposal } from '../extensions/remembrancer/proposals.js';
 
 const cwd = '/workspace/project';
 const model = { provider: 'test-provider', id: 'test-model' } as NonNullable<
@@ -124,6 +129,9 @@ describe('runReviewer', () => {
     expect(prompt).toContain('Only returned frozen evidence is in extraction scope');
     expect(prompt).not.toContain(cwd);
     expect(prompt).toContain('alone in its tool batch');
+    expect(prompt).toContain('Compact summaries are discovery only');
+    expect(prompt).toContain('Never restart or retry inside this review');
+    expect(prompt).not.toMatch(/nextContinuation|proposalChunk|restart the proposal list/);
     expect(session.dispose).toHaveBeenCalledOnce();
   });
 
@@ -244,6 +252,120 @@ describe('runReviewer', () => {
     expect(session.abort).toHaveBeenCalledOnce();
     expect(session.dispose).toHaveBeenCalledOnce();
   });
+
+  it.each(
+    (['detail', 'evidence'] as const).flatMap((action) =>
+      (['stale', 'missing'] as const).flatMap((change) =>
+        (['first', 'next'] as const).map((when) => ({ action, change, when })),
+      ),
+    ),
+  )(
+    'propagates actual $action $change $when callback failure without in-review retries',
+    async ({ action, change, when }) => {
+      const proposal: Proposal = {
+        id: 'saved',
+        revision: 1,
+        state: 'pending',
+        change: { operation: 'add', fields: { description: 'Send comparison' }, annotations: [] },
+        expected: null,
+        question: null,
+        draft: null,
+        explanation: '😀\\"\\n'.repeat(30_000),
+        claim: null,
+        result: null,
+        createdAt: '2026-11-01',
+        updatedAt: '2026-11-01',
+        sources: [
+          {
+            file: '/disposable/source.jsonl',
+            sessionId: 'session',
+            branchId: 'branch',
+            entryId: 'entry',
+            editId: null,
+            offset: 13,
+            quote: '😀\\"\\n'.repeat(30_000),
+            role: 'user',
+            timestamp: '2026-11-01',
+            locator: 'session/branch/entry',
+          },
+        ],
+      };
+      let exists = true;
+      const db = {
+        proposals: () => [proposal, { ...proposal, id: 'second' }],
+        proposal: () => (exists ? proposal : undefined),
+      } as unknown as CheckpointStore;
+      const prepared = {
+        evidence: [],
+        incomplete: false,
+        warnings: [],
+        successfulSources: [],
+        sourceDefaults: [],
+        checkpoints: [],
+      } as unknown as PreparedReview;
+      const review = new CaptureReview(prepared, () => {});
+      const completion = vi.spyOn(review, 'completion');
+      let failure: unknown;
+      session.prompt.mockImplementation(async () => {
+        const options = sdk.createAgentSession.mock.calls[0]![0] as CreateAgentSessionOptions;
+        const call = async (name: string, args: object) => {
+          const tool = options.customTools!.find((tool) => tool.name === name)!;
+          return tool.execute(
+            'id',
+            args,
+            undefined,
+            undefined,
+            {} as Parameters<ToolDefinition['execute']>[4],
+          );
+        };
+        const read = async (args: object) => {
+          const result = await call('remembrancer_proposals', args);
+          const block = result.content[0]!;
+          if (block.type !== 'text') throw new Error('Expected JSON');
+          expect(Buffer.byteLength(block.text)).toBeLessThanOrEqual(51_200);
+          return JSON.parse(block.text);
+        };
+        expect((await read({})).proposals).toHaveLength(2);
+        await call('remembrancer_read_evidence', {});
+        let request = { action, id: 'saved', revision: 1 };
+        if (when === 'next') {
+          const first = await read(request);
+          expect(first.next).not.toBeNull();
+          request = first.next;
+          let restored = '';
+          for (let page = first; page; page = page.next ? await read(page.next) : null) {
+            restored +=
+              action === 'detail'
+                ? page.json
+                : page.entries.map((entry: { quote: string }) => entry.quote).join('');
+          }
+          if (action === 'detail')
+            expect(JSON.parse(restored).explanation).toBe(proposal.explanation);
+          else expect(restored).toBe(proposal.sources[0]!.quote);
+        }
+        if (change === 'stale') proposal.revision++;
+        else exists = false;
+        try {
+          await read(request);
+        } catch (error) {
+          failure = error;
+        }
+        expect(failure).toBeInstanceOf(Error);
+        exists = false;
+        // The SDK may catch tool errors and keep going. The reviewer still rejects
+        // further calls and never stages a submission or refreshes within this run.
+        await expect(call('remembrancer_submit', { proposals: [] })).rejects.toBe(failure);
+      });
+      await expect(
+        reviewPreparedCapture(review, db, { cwd, model, sessionId }, () => {}),
+      ).rejects.toThrow(change === 'stale' ? /Stale proposal/ : /Missing proposal/);
+      expect(completion).not.toHaveBeenCalled();
+      expect(session.abort).toHaveBeenCalledOnce();
+      expect(session.prompt).toHaveBeenCalledOnce();
+      expect(sdk.createAgentSession).toHaveBeenCalledOnce();
+      expect(session.dispose).toHaveBeenCalledOnce();
+    },
+  );
 
   it('blocks every tool in a mixed submission batch before extraction or staging', async () => {
     const evidence = makeTool('remembrancer_read_evidence');
