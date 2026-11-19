@@ -323,6 +323,78 @@ it.each(['rpc', 'json', 'print'] as const)(
   },
 );
 
+it('reconstructs oversized proposal history through the registered manual tool without writes', async () => {
+  const f = setup(false, false, 'print');
+  const db = new CheckpointStore();
+  const peer = new CheckpointStore();
+  try {
+    let oversized = db.proposals()[0]!;
+    for (let edit = 0; edit < 24; edit++)
+      oversized = db.editProposal(oversized.id, oversized.revision, {
+        change: {
+          operation: 'add',
+          fields: { description: `${edit}: ${'é😀"\\\n'.repeat(500)}` },
+          annotations: [],
+        },
+        expected: null,
+        question: null,
+      });
+    const saved = db.proposals();
+    const before = { coverage: db.reviewed(), sources: db.sources(), notice: db.proposalNotice() };
+    expect(Buffer.byteLength(JSON.stringify(oversized.history))).toBeGreaterThan(51_200);
+    await f.handlers.get('session_start')!({}, f.ctx);
+    const tool = f.tools.get('remembrancer_proposals')!;
+    const read = async (args: object) => {
+      const result = await tool.execute('read', args, undefined, undefined, f.ctx);
+      const block = result.content[0]!;
+      if (block.type !== 'text') throw new Error('Expected JSON text');
+      expect(Buffer.byteLength(block.text, 'utf8')).toBeLessThanOrEqual(51_200);
+      expect(db.proposals()).toEqual(saved);
+      expect({
+        coverage: db.reviewed(),
+        sources: db.sources(),
+        notice: db.proposalNotice(),
+      }).toEqual(before);
+      expect(() => peer.claimReview()).toThrow('already open');
+      return JSON.parse(block.text);
+    };
+    db.claimReview();
+    let page = await read({});
+    let restored = '';
+    let chunks = 0;
+    do {
+      expect(page.proposals).toEqual([]);
+      expect(page.nextOffset).toBe(1);
+      expect(page.proposalChunk).toMatchObject({
+        id: oversized.id,
+        revision: oversized.revision,
+        position: restored.length,
+      });
+      expect(page.proposalChunk.text.length).toBeGreaterThan(0);
+      restored += page.proposalChunk.text;
+      expect(++chunks).toBeLessThan(100);
+      if (page.nextContinuation === null) break;
+      page = await read({ continuation: page.nextContinuation });
+    } while (chunks < 100);
+    expect(chunks).toBeGreaterThan(1);
+    expect(restored).toBe(JSON.stringify(oversized));
+    expect(JSON.parse(restored)).toEqual(saved[0]);
+    for (let offset = page.nextOffset; offset < saved.length; offset++)
+      expect(await read({ offset })).toEqual({
+        proposals: [saved[offset]],
+        nextOffset: offset + 1,
+      });
+    expect(await read({ offset: saved.length })).toEqual({ proposals: [], nextOffset: null });
+    db.releaseReview();
+    peer.claimReview();
+    peer.releaseReview();
+    expect(execFile).not.toHaveBeenCalled();
+  } finally {
+    peer.close();
+    db.close();
+  }
+});
+
 it('does not register proposal reads when disabled', async () => {
   const f = setup(false, true, 'print');
   await f.handlers.get('session_start')!({}, f.ctx);
