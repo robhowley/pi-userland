@@ -138,10 +138,15 @@ it('budgets the final null list cursor before packing the last summary', () => {
 });
 
 it.each(['😀漢字"\\\n\t\u0000', '\ud800', 'x'])(
-  'losslessly chunks huge current detail fields: %j',
+  'losslessly chunks oversized current detail fields: %j',
   (pattern) => {
     const row = proposal();
-    const text = pattern.repeat(70_000);
+    // Exceed one response per field without inflating escape-heavy fixtures to megabytes.
+    const patternBytes = Buffer.byteLength(JSON.stringify(pattern), 'utf8') - 2;
+    const text = pattern.repeat(Math.ceil(REVIEW_RESPONSE_MAX_BYTES / patternBytes));
+    expect(Buffer.byteLength(JSON.stringify(text), 'utf8')).toBeGreaterThan(
+      REVIEW_RESPONSE_MAX_BYTES,
+    );
     row.explanation = text;
     row.draft = {
       change: { operation: 'add', fields: { description: text }, annotations: [text] },
