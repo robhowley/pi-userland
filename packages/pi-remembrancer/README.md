@@ -57,7 +57,7 @@ You can also invoke the skill directly:
 
 ## Automatic TODO suggestions
 
-Save task suggestions when you leave a session, without asking for a review each time. Capture never changes your Taskwarrior tasks; you approve suggestions later in [Saved proposals](#saved-proposals).
+Save task suggestions when you leave an interactive session. Capture never changes Taskwarrior; you approve suggestions later in [Saved proposals](#saved-proposals).
 
 Capture is off by default. To enable it, add this to Pi's global settings file, normally `~/.pi/agent/settings.json`:
 
@@ -67,29 +67,33 @@ Capture is off by default. To enable it, add this to Pi's global settings file, 
 
 ### Capture controls
 
-These commands remain available even with `disabled: true` or automatic capture off:
+Available even when automatic capture or the extension is disabled:
 
-```text
-/remembrancer capture status
-/remembrancer capture pause
-/remembrancer capture resume
-/remembrancer capture retry <full-job-id>
-```
+| Command                                     | Use                                                                          |
+| ------------------------------------------- | ---------------------------------------------------------------------------- |
+| `/remembrancer capture status`              | See job IDs, attempts used/remaining, failures, retry times and blockers.    |
+| `/remembrancer capture pause`               | Pause queued reviews and cancel running ones. Cancellation may take time.    |
+| `/remembrancer capture resume`              | Resume paused work without resetting attempts or retry delays.               |
+| `/remembrancer capture retry <full-job-id>` | Confirm two fresh attempts for one stopped job in Pi's interactive terminal. |
 
-- **Status** shows each unresolved job's full ID, attempts used and remaining, failure reason, next retry time, and any earlier job blocking it.
-- Each job gets **two review attempts**, with up to five minutes per attempt. Restarting Pi does not reset them. Temporary failures wait at least 60 seconds before another attempt; permanent or unknown failures stop.
-- **Pause** prevents accepted jobs from starting and requests cancellation of running reviews. Cancellation is not instantaneous. Pause persists across restarts; new evidence may still queue, and attempts already used still count.
-- **Resume** allows eligible jobs to run again. It does not reset used attempts or retry delays.
-- **Retry** asks for confirmation in Pi's interactive terminal and grants one stopped job two fresh attempts. Use the full job ID from status. Retry does not resume paused capture or skip earlier work for the same session.
+- Turning capture off prevents new jobs. Use **pause** to stop queued or running reviews.
+- Pause survives restarts; new evidence may still queue.
+- For **retry**, copy the full job ID from status.
+- Retry does not unpause capture or skip earlier jobs from that session.
 
-Pi checks for accepted work at startup, periodically while running, and after resume or retry. Without a live Pi session, delayed work waits for the next session. Disabling new capture does not stop previously accepted work; use pause for that.
+**Attempt limits:**
+
+- Each job gets **two attempts**, up to five minutes each.
+- Temporary failures wait at least **60 seconds** before retrying; permanent or unknown failures stop.
+- Restarting Pi does not reset used attempts.
+- Delayed retries wait until Pi is running.
 
 ### What to expect
 
-- **When:** your interactive session ends.
-- **Scope:** the session you're leaving, but only messages that haven't yet been reviewed.
-- **Model:** your session's selected model
-- **Result:** proposals and review progress are saved together. Open `/remembrancer proposals` to review them.
+- **When:** you leave an interactive session.
+- **Scope:** unreviewed messages from that session.
+- **Model:** your session's selected model.
+- **Result:** suggestions waiting in `/remembrancer proposals`.
 
 ## Saved proposals
 
