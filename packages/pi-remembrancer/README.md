@@ -21,20 +21,6 @@ pi install npm:@robhowley/pi-remembrancer
 
 Run `/reload` in Pi or start a new session.
 
-## Upgrade warning: HARD CUTOVER
-
-This upgrade changes proposal storage, the `remembrancer_proposals` response shape and capture retry state without legacy compatibility. Do not mix old and upgraded processes.
-
-Before the first upgraded database open:
-
-1. Stop old Pi processes and detached capture workers.
-2. Take a SQLite-consistent backup of the checkpoint database (normally `~/.local/state/pi-remembrancer/checkpoints.sqlite3`, or under `$XDG_STATE_HOME`). Use SQLite's backup facility, not a bare copy of an active database.
-3. Start only upgraded processes. The first open atomically adds durable capture controls and stops existing unresolved jobs because their historical attempt counts are unknown. Inspect their status and deliberately retry individual jobs if wanted. Completed jobs, proposals, coverage and immutable evidence are preserved; reopening does not reset allowances. Migration failure rolls back its schema, state and version together.
-
-The proposal repair also removes embedded revision snapshots and deduplicates current evidence, preserving current drafts, application state, claims, results and timestamps. Changed proposals advance revision once and invalidate prepared reviews. Failure rolls back the repair and its one-time marker.
-
-The repair shrinks logical proposal payloads, not necessarily the SQLite file. It does not run `VACUUM`, erase deleted bytes, replay uncertain writes, or reset retry state. Resolved-proposal deletion and removal of the temporary History view remain separate work, not an archive feature.
-
 ## First review
 
 Optionally, build your initial todo list from your recent Pi sessions:
@@ -90,13 +76,13 @@ These commands remain available even with `disabled: true` or automatic capture 
 /remembrancer capture retry <full-job-id>
 ```
 
-- Status lists unresolved jobs with full IDs, current allowance used/remaining (not lifetime history), stopped reasons, retry due times and blocking predecessor IDs.
-- Each job gets **two whole-review attempts**, persisted before preparation. Restarts, competing sessions and repeated wakes do not replenish them. Recognized temporary failures wait at least 60 seconds before a later wake; permanent, unknown and exhausted failures stop. Each attempt retains its five-minute deadline.
-- Pause persists across restarts and revokes active attempts without refunding their counts. Workers observe cancellation; provider-side cancellation is not instantaneous. New evidence may queue while paused.
-- Resume only clears pause and wakes recovery. It does not reset allowances, remove delays, revive revoked attempts or bypass predecessors.
-- Retry accepts one exact full job ID, never a prefix or batch. It requires explicit UI confirmation of the displayed reason and current allowance, replacing unused permission with two fresh attempts. Changed or double confirmations fail. Headless retry cannot authorize work. Retry wakes recovery but never unpauses capture or bypasses predecessors.
+- **Status** shows each unresolved job's full ID, attempts used and remaining, failure reason, next retry time, and any earlier job blocking it.
+- Each job gets **two review attempts**, with up to five minutes per attempt. Restarting Pi does not reset them. Temporary failures wait at least 60 seconds before another attempt; permanent or unknown failures stop.
+- **Pause** prevents accepted jobs from starting and requests cancellation of running reviews. Cancellation is not instantaneous. Pause persists across restarts; new evidence may still queue, and attempts already used still count.
+- **Resume** allows eligible jobs to run again. It does not reset used attempts or retry delays.
+- **Retry** asks for confirmation in Pi's interactive terminal and grants one stopped job two fresh attempts. Use the full job ID from status. Retry does not resume paused capture or skip earlier work for the same session.
 
-Recovery uses startup, periodic and command wakes, not a daemon or a sleep-until-due loop. Without a live Pi session, delayed work waits for another wake. Disabling new capture does not stop previously accepted work; use pause for that.
+Pi checks for accepted work at startup, periodically while running, and after resume or retry. Without a live Pi session, delayed work waits for the next session. Disabling new capture does not stop previously accepted work; use pause for that.
 
 ### What to expect
 
@@ -115,7 +101,7 @@ Review the suggestions saved by automatic capture in Pi's interactive terminal:
 
 At startup, a reminder such as `3 task proposals · /remembrancer proposals` shows how many pending items await review.
 
-The queue opens in one public custom overlay, with all proposals collapsed. Expand one to review exact proposed changes, the actual target task, explanation, evidence count, and a shortened supporting quote. Source shows full saved quotes in pages; transcript context is optional.
+The queue opens with all proposals collapsed. Expand one to review the proposed changes, target task, explanation, evidence count, and a shortened supporting quote. Source shows full saved quotes in pages; transcript context is optional.
 
 | Key                 | Action                                                                                                                                             |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -126,21 +112,13 @@ The queue opens in one public custom overlay, with all proposals collapsed. Expa
 | `e`                 | Edit a pending proposal's validated JSON draft. Save refreshes review; cancel keeps the previous draft. The editor owns input until return.        |
 | `d`                 | Dismiss only a pending proposal, leaving tasks unchanged. Shown in both collapsed and expanded views when available.                               |
 | `s`                 | Open paged Source. ← / → pages quotes; ↑ / ↓ selects references. Saved quotes remain available without transcript context. Return restores review. |
-| `i`                 | Inspect the current saved proposal and edited draft, read-only. No revision snapshots.                                                             |
-| `h`                 | Open temporary read-only History of decided proposals. ↑ / ↓ selects; Enter inspects the current saved proposal/result. No replay or undo.         |
+| `i`                 | Inspect the saved proposal and edited draft without changing it.                                                                                   |
+| `h`                 | Open read-only History of decided proposals. ↑ / ↓ selects; Enter inspects the saved proposal/result. No replay or undo.                           |
 | Esc                 | Leave nested inspection, Source, or History first, then collapse review, then close the collapsed queue.                                           |
 
 Only explicit per-item approval authorizes task writes. There is no read-every-line or scroll-to-end approval gate. Changed previews require renewed approval. Feedback distinguishes applied, already satisfied, dismissed (task unchanged), and unresolved results. Missing targets, errors, and applying/uncertain items remain visible until a decided result is established.
 
 If the terminal is too small to show review content and controls safely, the overlay asks you to resize and prevents application until enough space is restored.
-
-### Proposal API reads
-
-`remembrancer_proposals` defaults to a compact, multi-summary list. Follow `nextOffset` as `offset` until `null`. Summaries include revision, state, operation/target, shortened labels and draft/question/evidence indicators, not complete changes or quotes.
-
-Before revising or deciding a candidate, read `action: "detail"` with its `id` and discovered `revision`. Follow `next` until `null`, join `json` fragments by `position`, then parse the joined JSON for the lossless current proposal (including its draft, without sources). Read needed saved quotes separately with `action: "evidence"` and the same ID/revision. Follow `next`, joining quotes by `index` and `quotePosition`; source `offset` remains the original passage offset. Returned cursors use UTF-16 positions. Each complete response is at most 51,200 UTF-8 bytes, even for a huge detail or quote.
-
-Every detail/evidence page checks revision. Manual readers discard partial reads on missing/stale proposals, refresh the list/current detail and seek fresh approval if the write changed. Automatic reviewers abort that attempt without proposals or coverage commits; only the existing controller may prepare a fresh attempt, charged to the same persisted two-attempt allowance.
 
 ## Track task blockers
 
