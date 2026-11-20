@@ -273,15 +273,15 @@ it.each(['missing', 'mismatched'] as const)(
     try {
       if (kind === 'missing') {
         const frozen = captureJob(store, source);
-        frozen.owner.abandon(frozen.attempt);
+        store.failCaptureJob(frozen.owner, frozen.attempt, 'Refreeze missing snapshot', true, 0);
         rmSync(frozen.manifest.snapshot);
-        const attempt = frozen.owner.startAttempt(frozen.manifest.id);
+        const attempt = store.claimCaptureAttempt(frozen.owner, frozen.manifest.id)!;
         expect(() => store.prepareCaptureJob(frozen.owner, attempt)).toThrow(
           'snapshot unavailable',
         );
         expect(store.captureJob(frozen.manifest.id)).toMatchObject({
           state: 'failed',
-          retryEligible: true,
+          retryEligible: false,
         });
       } else {
         expect(() => captureJob(store, { ...source, sessionId: 'wrong' })).toThrow(
@@ -320,7 +320,7 @@ it('requires every evidence continuation and an explicit array; context does not
     expect(() => store.finishCaptureJob(owner, attempt, { sources: [source] } as never)).toThrow(
       /proposals array/,
     );
-    expect(() => store.finishCaptureJob(owner, { jobId: 'other' }, [])).toThrow(
+    expect(() => store.finishCaptureJob(owner, { jobId: 'other', id: 'unclaimed' }, [])).toThrow(
       /active capture attempt/,
     );
     expect(() =>
@@ -386,8 +386,8 @@ it('rechecks proposal revisions at commit and preserves edited drafts on new evi
       ]),
     ).toThrow(/context changed/);
     expect(effects()).toEqual(before);
-    store.failCaptureJob(owner, attempt, 'Context changed', true);
-    attempt = owner.startAttempt(attempt.jobId);
+    store.failCaptureJob(owner, attempt, 'Context changed', true, 0);
+    attempt = store.claimCaptureAttempt(owner, attempt.jobId)!;
     capture = store.prepareCaptureJob(owner, attempt);
     capture.page();
     expect(() =>

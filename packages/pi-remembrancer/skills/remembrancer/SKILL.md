@@ -91,53 +91,53 @@ Enumerate `remembrancer_proposals` list pages (default `action: "list"`, `nextOf
 
 Before revising or deciding a candidate, fetch `action: "detail"` with its `id` and discovered `revision`, including on the first page. Follow each returned `next` request until `null`, join `json` fragments in `position` order, then parse the joined JSON. This is the complete current proposal without sources or revision history; use `draft` when present. Fetch needed saved evidence with `action: "evidence"`, the same `id`/`revision`, and follow `next` until `null`. Join exact quote fragments by reference `index` and `quotePosition`, retaining source metadata. `offset` is the original passage offset, not a quote-fragment cursor. Positions count UTF-16 units; use returned cursors rather than inventing them. Every complete encoded response is at most 51,200 UTF-8 bytes.
 
-On a missing/stale proposal error, discard all partial detail/evidence for that proposal, refresh the list/current detail, and reconcile again. Obtain fresh approval if the proposed write changed; never apply a stale or partially read proposal. Lists are live, not frozen snapshots. Existing decided rows are temporary, not a durable archive; revision history is neither available nor required.
+On a missing/stale proposal error, discard all partial detail/evidence for that proposal, refresh the list/current detail, and reconcile again. Obtain fresh approval if the proposed write changed; never apply a stale or partially read proposal.
 
 1. Begin the review with the requested `remembrancer_review` action. For `seed 14d`, add `seed: "14d"`. Read every returned page with `action: "next"` and the same batch token until no pages remain. Later changes are not part of the batch. Read evidence and context entries in `groups[].entries` order, retaining their group's source and branch metadata. Join continued text using `offset` and `continues`.
 2. If a selected item needs interpretation, call `action: "context"` with the same batch token and request only the needed context. For context `selected`, take `sessionId` and `branchId` from the group, and `entryId` and `editId` from the entry. Context supports interpretation, not new proposal evidence, and does not advance pages.
 3. Follow **Reconcile evidence** above. Report unavailable sources from warnings; they remain unreviewed but do not prevent finishing the available batch as a partial result. Unknown-time warnings are informational and do not by themselves make the review partial.
 4. After every available page is read, every proposal decided, and every accepted change applied and verified, call `remembrancer_review` with `action: "finish"` and the same batch token. An empty batch can finish. Do not finish while a proposal is undecided. If the user abandons the review, or a failure prevents resolving the available evidence or applying and verifying accepted changes, report it and call `action: "cancel"`. Later changes remain eligible.
 
-## Additive automatic capture and saved proposals
+## Automatic capture and saved proposals
 
-**HARD CUTOVER:** the proposal reader/storage has no legacy compatibility. Before the first upgraded open, stop old Pi processes and detached workers and take a SQLite-consistent backup. Startup repair removes snapshots and deduplicates current evidence transactionally, preserving current drafts, claims, results, states and timestamps. Changed rows advance revision once; jobs and coverage stay unchanged. This is logical shrink, not `VACUUM` or secure erasure.
+- Review user and assistant messages, not tool outputs, thinking or images.
+- If capture stalls, check status. Offer manual catch-up if needed.
+- To stop accepted work, pause capture. Disabling it is not enough.
 
-**DURABLE RETRY FIX REQUIRED BEFORE ROLLOUT:** this evidence change does not persist the attempt budget across worker restarts or recovery wakes. The separate retry fix must keep permanent/exhausted jobs stopped and charge fresh stale-read attempts to the same finite budget. Keep the PR draft pending that prerequisite. Queue deletion and History removal remain separate; do not invest in a durable archive.
+### Capture controls
 
-Automatic capture is a separate opt-in: `"pi-remembrancer": { "autoCapture": true }` in the applicable Pi `settings.json`. The flag defaults to `false`; the extension still defaults to `disabled: false`. Trusted-project settings override corresponding global fields independently; untrusted project settings are ignored. Effective `disabled: true` prevents new capture and manual tool/UI access, but does not cancel accepted work or suppress its TUI notices. Manual registration keeps its existing reload/new-session convention.
+Available even when capture or the extension is disabled:
 
-- Shutdown re-reads settings and awaits immutable snapshot preservation, confirmed acceptance, and worker spawn acknowledgement, not import, review, or worker completion. Admission covers only the saved outgoing TUI session on clean quit, reload, new session, resume, or fork, including eligible text written before opt-in. It skips unsaved, RPC, JSON, print, headless, and unknown modes. TUI mode does not establish human authorship or worker identity. Delegated workers still never write personal tasks.
-- Accepted review runs detached from the outgoing session. There is no per-turn capture, archive discovery, or review of other enrolled transcripts. Existing checkpoints/defaults determine eligibility, including seed cutoffs. No eligible evidence means no reviewer call or capture coverage/source change, though the durable job can complete. The immutable copy retains saved bytes and branch/edit identity; later appends/edits wait. Tool outputs, thinking, and images are not extraction evidence.
-- Only v3 handoffs with complete originating runtime metadata are executable. Older or unsupported manifests are rejected before import, with their artifacts retained for diagnosis. Previously stored unsupported jobs remain blocked; nothing is migrated or deleted to make them executable.
-- The isolated SDK reviewer uses the originating cwd, agent configuration, selected model and thinking level, without personal extensions, skills, prompt files, AGENTS files, or parent transcript. Credential/header commands and task reads run in that job's cwd; cached credential-command results are cleared before each review. Credentials and header values are not saved in the handoff; persistent configuration references are resolved by the worker. Required headers without persistent references prevent admission; shutdown never runs credential commands. Its tools only read scoped evidence/context, fixed task records and stored proposals, and submit results. Historical evidence never grants authorization. There is no model fallback or in-session automatic retry/compaction. Proposal read failures, including changed/missing revisions on first or continuation pages, abort the attempt and discard partial reads and submissions without proposals or coverage commits. Only the separate retry controller may prepare a fresh review under the durable job attempt budget, never the reviewer itself.
-- Each worker attempt has an absolute five-minute deadline covering preparation, setup, review and cleanup, not shutdown or human approval. Expired output cannot publish even if the timer has not run. The cancellation timer aborts the attempt, allows five seconds for cooperative cleanup, then terminates an unresponsive worker. Cancellation kills the worker's direct Taskwarrior child and waits for closure. These limits are not a general CPU watchdog or a promise to terminate arbitrary descendants. Successful review atomically saves proposals, examined coverage and job completion after reviewer cleanup and final validation. It never writes Taskwarrior.
-- Retryable failures retain accepted evidence and bounded local diagnostics for later recovery, with at most two attempts per job in one worker run. Invalid immutable input is blocked without repeated model work; failed predecessors block later jobs in that session. A failed wake waits for a later recovery opportunity, not an immediate retry loop. A later successful recovery wake retries notice publication and guarded snapshot cleanup for completed jobs, without rerunning review or changing committed results. Offer manual catch-up for unreviewed evidence.
-- TUI startup and periodic wakes schedule accepted-job recovery and read proposal notices even with capture off or `disabled: true`. Startup can therefore launch model work already authorized at admission. No accepted work means no archive scan or Taskwarrior operation. Notices and cleanup may be delayed until another successful wake. `/remembrancer proposals` remains a model-free TUI queue with capture off, unless the extension is disabled.
-- Retained bytes remain reviewable if the original transcript moves or disappears. Subtracting later historical coverage still requires available, valid live branch/edit proof at the session's enrolled location; without that proof, preparation fails closed and retains the job. An immutable copy alone cannot establish later coverage.
+| Command                                     | Use                                                                |
+| ------------------------------------------- | ------------------------------------------------------------------ |
+| `/remembrancer capture status`              | Check job ID, reason, attempts remaining, retry time and blockers. |
+| `/remembrancer capture pause`               | Stop capture work. Cancellation may take time.                     |
+| `/remembrancer capture resume`              | Resume paused work, not stopped jobs.                              |
+| `/remembrancer capture retry <full-job-id>` | Give one stopped job two fresh attempts, with user confirmation.   |
 
-### Proposal UI authorization
+**Retry rules:**
 
-The proposal UI is separate from the manual conversation flow:
+- Use one full job ID, never a prefix or batch.
+- Require UI confirmation of the reason and allowance; no headless approval.
+- If the job changes, recheck status and get fresh approval.
+- Retry does not resume capture, skip blockers or approve task changes.
 
-- Use one public custom overlay, opening with every proposal collapsed. ↑/↓ moves focus, collapses the previous proposal, and resets detail scroll; Enter expands/collapses without task writes. Load the actual preview only on expansion, not collapsed navigation. Show exact proposed changes, the actual target task, explanation, evidence count and a clearly shortened supporting quote without reading source files.
-- Page Up/Page Down scrolls the review body while controls stay fixed. If content and controls cannot fit safely, show resize guidance and prevent application until sufficient space returns. Do not require reading every line or scrolling to the end before approval.
-- Collapsed `Ctrl+A` opens review only. Only deliberate per-item `Ctrl+A` in expanded pending review applies the displayed change. Expanded applying/uncertain review makes `Ctrl+A` verification-only, never a write replay. Enter, navigation, editing, Source, History, and closing never authorize writes; there is no accept-all. Recheck task and proposal against the preview, require refreshed approval after changes, and block unresolved questions. Claim before writing, use typed JSON for Taskwarrior, export and verify the actual record, then record the outcome.
-- `e` opens the pending-only validated JSON editor, which owns input until return. Saving refreshes expanded review; cancellation preserves the previous draft. Keep `d` visible and available for pending proposals in both collapsed and expanded views, dismissing only that proposal with tasks unchanged. Current draft edits, dismissals and outcomes persist across reopening, without revision snapshots.
-- `i` inspects the current saved proposal and edited draft read-only, without revision snapshots.
-- `s` pages full exact saved quotes through Source, including oversized quotes. ←/→ pages quotes; ↑/↓ selects references. Load optional bounded transcript context only for the displayed page from referenced local files on the saved branch. Preserve quotes when files are missing/stale, mark unavailable context, and never scan the archive or switch sessions. Returning restores the review position; Source is optional.
-- Any remaining read-only History view lists temporary decided rows only, not selected-proposal revisions or a durable archive. No replay or undo. Escape leaves nested inspection, Source, or History first, then collapses review, then closes the collapsed queue.
-- Distinguish applied, already satisfied, dismissed/task unchanged, and unresolved outcomes. Remove an Inbox item only after the service/store establishes a decided result; select its successor (or preceding last item), collapsed. Missing targets, errors, and applying/uncertain items remain visible with truthful feedback. An empty Inbox retains feedback, History, and Close.
-- Taskwarrior and local storage are not one transaction. Never replay interrupted or uncertain writes. Explicit resolution only verifies an already-present result; otherwise ask the user to resolve the task manually. External task edits can still race the final check.
+### Review saved proposals
 
-### Preserve the manual workflow
+- **In the UI:** ask the user to expand a pending item in `/remembrancer proposals` and approve with `Ctrl+A`.
+- **In conversation:** follow **Full cross-session review**. Get approval in chat, not the UI.
+- Opening, editing or navigation is not approval. Changed previews need fresh approval.
+- Missing transcript context: use saved quotes and report the gap.
+- For applying or uncertain proposals, check whether the task change already happened. Never replay the write.
+- If you cannot verify the result, ask the user to resolve the task manually.
+- Report applied, already satisfied, dismissed (task unchanged), or unresolved. Errors and missing targets are not success.
 
-The **Full cross-session review** sequence above is unchanged with capture off or on. Keep `begin`, `next`, `context`, `finish`, and `cancel` and their existing arguments. `{ "action": "finish", "batch": "..." }` remains sufficient, with no proposal array, approval token, new flag, or TUI requirement. Manual review remains available outside TUI mode.
+### Manual review alongside capture
 
-Read all available evidence continuations, decide every inferred proposal with the user, apply and verify accepted changes, then finish. Unavailable sources remain unreviewed but healthy-source scope can finish with warnings and `status: "partial"`. Human approval waits have no new five-minute expiry; ownership lasts until finish, cancel, shutdown, or process death. Cancelling or abandoning review does not save coverage or undo applied task changes. Direct task requests retain the authorization above and never advance coverage.
-
-Manual finish and automatic capture share coverage so unchanged evidence is not replayed. They do not share approval decisions: pending automatic proposals remain a separate queue after coverage advances, including when capture is off. Ordinary manual finish does not consume that queue or change stored decisions. Do not route manual approval through the proposal UI or treat capture as permission to apply inferred tasks.
-
-Recognition and task/proposal matching remain model judgments, not perfect semantic deduplication. A conversationally handled task may leave a related proposal pending. Suggest inspecting, editing, or dismissing it separately. An add proposal whose task was created elsewhere is not guaranteed to detect that duplicate; do not promise cross-path decision synchronization or exactly-once obligation handling. Automated checks do not establish live-provider recognition quality.
+- Cancel unfinished reviews with `action: "cancel"`; report task changes already applied.
+- Cancellation does not undo writes or mark evidence reviewed.
+- Decide saved proposals separately; finishing a manual review does not decide them.
+- Offer to inspect, edit or dismiss related pending proposals. Do not assume automatic matching.
 
 ## Historical evidence safety
 

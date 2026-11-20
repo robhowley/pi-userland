@@ -68,7 +68,7 @@ export function captureJob(
     admissionOrder,
   };
   store.importCaptureJob(owner, manifest);
-  const attempt = owner.startAttempt(id);
+  const attempt = store.claimCaptureAttempt(owner, id)!;
   const review = store.prepareCaptureJob(owner, attempt);
   return { owner, attempt, review, manifest };
 }

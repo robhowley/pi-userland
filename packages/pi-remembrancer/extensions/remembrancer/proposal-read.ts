@@ -1,4 +1,5 @@
 import { Type, type Static } from '@sinclair/typebox';
+import { CaptureRetryableError } from './capture-jobs.js';
 import type { CheckpointStore } from './checkpoints.js';
 import type { Proposal, ProposalSource } from './proposals.js';
 import {
@@ -125,9 +126,14 @@ export function readProposals(db: CheckpointStore, args: ProposalReadArgs) {
   if (typeof args.id !== 'string' || !args.id.trim()) throw new Error('Invalid proposal ID.');
   integer(args.revision, 'revision', 1);
   const proposal = db.proposal(args.id);
-  if (!proposal) throw new Error('Missing proposal; discard partial reads and refresh the list.');
+  if (!proposal)
+    throw new CaptureRetryableError(
+      'Missing proposal; discard partial reads and refresh the list.',
+    );
   if (proposal.revision !== args.revision)
-    throw new Error('Stale proposal; discard partial reads and refresh the list/current detail.');
+    throw new CaptureRetryableError(
+      'Stale proposal; discard partial reads and refresh the list/current detail.',
+    );
   const identity = { id: proposal.id, revision: proposal.revision };
   if (action === 'detail') {
     const text = JSON.stringify(

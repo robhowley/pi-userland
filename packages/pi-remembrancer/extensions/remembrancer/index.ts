@@ -7,6 +7,7 @@ import { CheckpointStore, defaultCheckpointFile } from './checkpoints.js';
 import { captureExecution, captureHost, loadRemembrancerConfig } from './config.js';
 import { CaptureHandoffError, preserveHandoff } from './capture-handoff.js';
 import { launchCaptureWorker } from './capture-worker.js';
+import { CAPTURE_MAX_ATTEMPTS, type CaptureStatus } from './capture-jobs.js';
 import { readProposalNotice } from './capture-notices.js';
 import { openProposals } from './proposal-ui.js';
 import { proposalReadDescription, proposalReadParameters, readProposals } from './proposal-read.js';
@@ -73,14 +74,17 @@ type Batch = {
 
 export const REMEMBRANCER_COMMAND_NAME = 'remembrancer';
 export const REMEMBRANCER_COMMAND_USAGE =
-  'Usage: /remembrancer seed <Nd>\n       /remembrancer proposals\n       /remembrancer help';
+  'Usage: /remembrancer seed <Nd>\n       /remembrancer proposals\n       /remembrancer capture status|pause|resume\n       /remembrancer capture retry <full-job-id>\n       /remembrancer help';
 export const REMEMBRANCER_HELP = [
   REMEMBRANCER_COMMAND_USAGE,
   'Seed saved-session evidence from a bounded historical window, then follow the Remembrancer skill.',
+  'Capture controls remain available when Remembrancer is disabled. Retry requires explicit UI confirmation.',
   'Natural-language review requests remain supported.',
 ].join('\n');
 
+const CAPTURE_COMMANDS = ['status', 'pause', 'resume', 'retry'] as const;
 const REMEMBRANCER_SUBCOMMANDS = [
+  { value: 'capture ', label: 'capture', description: 'Inspect or control accepted capture jobs' },
   { value: 'proposals', label: 'proposals', description: 'Review stored task proposals locally' },
   {
     value: 'seed ',
@@ -101,6 +105,10 @@ type RemembrancerCommandArgs =
   | { ok: true; mode: 'help' }
   | { ok: true; mode: 'proposals' }
   | { ok: true; mode: 'seed'; duration: string }
+  | { ok: true; mode: 'capture'; action: 'status' }
+  | { ok: true; mode: 'capture'; action: 'pause' }
+  | { ok: true; mode: 'capture'; action: 'resume' }
+  | { ok: true; mode: 'capture'; action: 'retry'; jobId: string }
   | { ok: false; message: string };
 
 export function parseRemembrancerCommandArgs(args: string): RemembrancerCommandArgs {
@@ -110,6 +118,14 @@ export function parseRemembrancerCommandArgs(args: string): RemembrancerCommandA
   if (tokens.length === 0 || (subcommand === 'help' && tokens.length === 1))
     return { ok: true, mode: 'help' };
   if (subcommand === 'proposals' && tokens.length === 1) return { ok: true, mode: 'proposals' };
+  if (subcommand === 'capture') {
+    const action = tokens[1];
+    if ((action === 'status' || action === 'pause' || action === 'resume') && tokens.length === 2)
+      return { ok: true, mode: 'capture', action };
+    if (action === 'retry' && tokens.length === 3)
+      return { ok: true, mode: 'capture', action, jobId: tokens[2]! };
+    return { ok: false, message: `Invalid capture command. ${REMEMBRANCER_COMMAND_USAGE}` };
+  }
   if (subcommand === 'help')
     return { ok: false, message: `Help does not accept arguments. ${REMEMBRANCER_COMMAND_USAGE}` };
   if (subcommand !== 'seed')
@@ -142,6 +158,17 @@ export function getRemembrancerArgumentCompletions(prefix: string) {
   const tokens = input.trim().length === 0 ? [] : input.trim().split(/\s+/u);
 
   if (tokens.length === 0) return REMEMBRANCER_SUBCOMMANDS;
+  if (tokens[0] === 'capture' && (tokens.length === 2 || trailingWhitespace)) {
+    if (tokens.length > 2 || (tokens.length === 2 && trailingWhitespace)) return null;
+    const partial = tokens.length === 2 ? tokens[1]! : '';
+    const matches = CAPTURE_COMMANDS.filter((action) => action.startsWith(partial)).map(
+      (action) => ({
+        value: `capture ${action}${action === 'retry' ? ' ' : ''}`,
+        label: action,
+      }),
+    );
+    return matches.length > 0 ? matches : null;
+  }
   if (tokens.length === 1) {
     const token = tokens[0]!;
     if (trailingWhitespace) {
@@ -159,6 +186,18 @@ export function getRemembrancerArgumentCompletions(prefix: string) {
   return matches.length > 0
     ? matches.map((item) => ({ ...item, value: `seed ${item.value}` }))
     : null;
+}
+
+function captureJobStatus(job: CaptureStatus['jobs'][number]): string {
+  return [
+    job.manifest.id,
+    `State: ${job.state}${job.activeAttemptId ? ' (active)' : ''}`,
+    `Current allowance: ${job.attemptCount}/${CAPTURE_MAX_ATTEMPTS} attempts used, ${Math.max(0, CAPTURE_MAX_ATTEMPTS - job.attemptCount)} remaining (not lifetime history)`,
+    `Stopped reason: ${!job.retryEligible && !job.activeAttemptId ? (job.diagnostic ?? 'none recorded') : 'not stopped'}`,
+    `Diagnostic: ${job.diagnostic ?? 'none'}`,
+    `Next attempt due: ${job.nextAttemptAt === null ? 'none' : new Date(job.nextAttemptAt).toISOString()}`,
+    `Blocked by predecessor: ${job.blockedBy ?? 'none'}`,
+  ].join('\n');
 }
 
 const selectedParameters = Type.Object({
@@ -253,6 +292,76 @@ export default function remembrancer(pi: ExtensionAPI) {
     void tick();
   }
 
+  async function wakeCapture(ctx: ExtensionContext) {
+    const database = defaultCheckpointFile();
+    try {
+      await launchCaptureWorker(database, join(dirname(database), 'capture-inbox'), captureHost());
+    } catch {
+      ctx.ui.notify(
+        'Capture state saved; worker launch failed. A later wake can recover it.',
+        'warning',
+      );
+    }
+  }
+
+  async function controlCapture(
+    parsed: Extract<RemembrancerCommandArgs, { mode: 'capture' }>,
+    ctx: ExtensionContext,
+  ) {
+    try {
+      if (parsed.action === 'status') {
+        const status = store().captureStatus();
+        ctx.ui.notify(
+          [
+            `Capture: ${status.paused ? 'paused' : 'running permitted'}`,
+            ...(status.jobs.length ? status.jobs.map(captureJobStatus) : ['No unresolved jobs.']),
+          ].join('\n\n'),
+          'info',
+        );
+        return;
+      }
+      if (parsed.action === 'pause' || parsed.action === 'resume') {
+        store().setCapturePaused(parsed.action === 'pause');
+        ctx.ui.notify(
+          parsed.action === 'pause'
+            ? 'Capture paused. Active attempts revoked; cancellation is observed by the worker.'
+            : 'Capture resumed. Existing allowances, delays and predecessor ordering are unchanged.',
+          'info',
+        );
+        if (parsed.action === 'resume') await wakeCapture(ctx);
+        return;
+      }
+      if (ctx.mode !== 'tui' || !ctx.hasUI)
+        throw new Error(
+          'Capture retry requires explicit UI confirmation. No retry was authorized.',
+        );
+      const status = store().captureStatus();
+      const job = status.jobs.find((job) => job.manifest.id === parsed.jobId);
+      if (!job) throw new Error('No unresolved capture job with that exact full ID.');
+      if (job.state !== 'failed' || job.retryEligible || job.activeAttemptId)
+        throw new Error('Only stopped, inactive capture jobs can be deliberately retried.');
+      const confirmed = await ctx.ui.confirm(
+        'Retry capture job?',
+        `${captureJobStatus(job)}\n\nReplace the current allowance with ${CAPTURE_MAX_ATTEMPTS} fresh whole-review attempts? Capture ${status.paused ? 'is paused and stays paused' : 'pause state is unchanged'}. Predecessors still block this job.`,
+      );
+      if (!confirmed) {
+        ctx.ui.notify('Capture retry cancelled. No allowance changed.', 'info');
+        return;
+      }
+      store().retryCaptureJob(parsed.jobId, job.revision);
+      ctx.ui.notify(
+        `Capture retry queued: ${parsed.jobId}. Pause and predecessor ordering are unchanged.`,
+        'info',
+      );
+      await wakeCapture(ctx);
+    } catch (error) {
+      ctx.ui.notify(
+        `Capture control failed: ${error instanceof Error ? error.message : String(error)}`,
+        'error',
+      );
+    }
+  }
+
   function currentSource(ctx: ExtensionContext): Source | undefined {
     const sm = ctx.sessionManager;
     const file = sm.getSessionFile();
@@ -289,7 +398,7 @@ export default function remembrancer(pi: ExtensionAPI) {
   }
 
   pi.registerCommand(REMEMBRANCER_COMMAND_NAME, {
-    description: 'Review stored task proposals or start a bounded historical review',
+    description: 'Review stored proposals, seed history or control accepted capture jobs',
     getArgumentCompletions: getRemembrancerArgumentCompletions,
     handler: async (args, ctx) => {
       const parsed = parseRemembrancerCommandArgs(args);
@@ -299,6 +408,10 @@ export default function remembrancer(pi: ExtensionAPI) {
       }
       if (parsed.mode === 'help') {
         ctx.ui.notify(REMEMBRANCER_HELP, 'info');
+        return;
+      }
+      if (parsed.mode === 'capture') {
+        await controlCapture(parsed, ctx);
         return;
       }
       if (loadRemembrancerConfig(ctx.cwd, ctx.isProjectTrusted()).disabled) {

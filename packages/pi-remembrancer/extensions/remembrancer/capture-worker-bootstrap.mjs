@@ -4,6 +4,7 @@ import process from 'node:process';
 import { createRequire } from 'node:module';
 import { appendFileSync, realpathSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const [piEntry, database, inbox] = process.argv.slice(2);
 let owner;
@@ -15,6 +16,7 @@ try {
     interopDefault: true,
     alias: {
       '@earendil-works/pi-coding-agent': join(dirname(entry), 'index.js'),
+      '@earendil-works/pi-ai': fileURLToPath(createJiti(entry).esmResolve('@earendil-works/pi-ai')),
       '@sinclair/typebox': host.resolve('typebox'),
     },
   });

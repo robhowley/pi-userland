@@ -169,8 +169,12 @@ it.each([
         execution: captureExecution(ctx),
       });
       await runCaptureWorker({ database: db.file, inbox });
-      // Failed attempts get one bounded retry in this drain.
-      expect(requests).toHaveLength(expectedRequests * (covered ? 1 : 2));
+      // Only a later, due wake may consume another whole-review attempt.
+      expect(requests).toHaveLength(expectedRequests);
+      expect(db.captureJob('first')).toMatchObject({
+        attemptCount: 1,
+        retryEligible: outcome === 'provider-error',
+      });
       expect(db.reviewed()).toHaveLength(covered ? 1 : 0);
       expect(db.proposals()).toHaveLength(outcome === 'proposal' ? 1 : 0);
       expect(db.captureJob('first')?.state).toBe(covered ? 'completed' : 'failed');

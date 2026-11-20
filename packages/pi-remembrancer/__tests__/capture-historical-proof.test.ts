@@ -347,7 +347,7 @@ describe('historical coverage applicability proof', () => {
         validExtension.toString().replace('historical-session', 'different-session'),
       );
     const result = historicalReview(f, committed);
-    expect(result).toMatchObject({ review: null, retryEligible: true });
+    expect(result).toMatchObject({ review: null, retryEligible: false });
     expect(result.diagnostic).toBeTruthy();
     expect(readFileSync(f.snapshotFile)).toEqual(retained);
     // Restore the verified extension and retry the SAME retained job. No
@@ -366,7 +366,7 @@ describe('historical coverage applicability proof', () => {
       if (change === 'unknown parent') appendFileSync(f.source.file, lines(msg('C', 'missing')));
       if (change === 'duplicate entry') appendFileSync(f.source.file, lines(msg('B', 'A')));
       const result = historicalReview(f, boundaries);
-      expect(result).toMatchObject({ review: null, retryEligible: true });
+      expect(result).toMatchObject({ review: null, retryEligible: false });
       expect(result.diagnostic).toBeTruthy();
       expect(boundaries.map((cp) => cp.entryId)).toEqual(['root', 'B']);
     },
@@ -498,7 +498,11 @@ describe('historical coverage applicability proof', () => {
       undefined,
       budget,
     );
-    expect(result).toMatchObject({ review: null, category: 'coverage-limit', retryEligible: true });
+    expect(result).toMatchObject({
+      review: null,
+      category: 'coverage-limit',
+      retryEligible: false,
+    });
     expect(result.diagnostic).toContain('limit exceeded');
     expect(visits).toHaveBeenCalledTimes(budget.limits.sourceBranchEntries + 1);
     expect(readFileSync(f.snapshotFile)).toEqual(retained);
@@ -521,7 +525,11 @@ describe('historical coverage applicability proof', () => {
       undefined,
       budget,
     );
-    expect(result).toMatchObject({ review: null, category: 'coverage-limit', retryEligible: true });
+    expect(result).toMatchObject({
+      review: null,
+      category: 'coverage-limit',
+      retryEligible: false,
+    });
     expect(result.diagnostic).toContain('extraction');
     expect(visits).toHaveBeenCalledTimes(476);
   });
@@ -561,7 +569,7 @@ describe('historical coverage applicability proof', () => {
     },
   );
 
-  it('keeps a limit in the mutable live extension retryable rather than blaming retained input', () => {
+  it('stops on a limit in the mutable live extension without blaming retained input', () => {
     const f = fixture(msg('A', null));
     appendFileSync(f.source.file, lines(msg('B', 'A')));
     const result = prepareHistoricalReview(
@@ -575,19 +583,19 @@ describe('historical coverage applicability proof', () => {
     expect(result).toMatchObject({
       review: null,
       category: 'live-proof-unavailable',
-      retryEligible: true,
+      retryEligible: false,
     });
     expect(result.diagnostic).toContain('retained-limit');
     expect(prepared(historicalReview(f, [checkpoint(f, 'B')])).evidence).toEqual([]);
   });
 
-  it('keeps unavailable retained files and mutable review settings retryable with safe diagnostics', () => {
+  it('stops unavailable retained files and invalid review settings with safe diagnostics', () => {
     const f = fixture(msg('A', null));
     const invalidSettings = historicalReview(f, [], { requestedSince: 'credential-sentinel' });
     expect(invalidSettings).toMatchObject({
       review: null,
       category: 'review-context',
-      retryEligible: true,
+      retryEligible: false,
     });
     expect(invalidSettings.diagnostic).not.toContain('credential-sentinel');
     rmSync(f.snapshotFile);
@@ -595,7 +603,7 @@ describe('historical coverage applicability proof', () => {
     expect(missing).toMatchObject({
       review: null,
       category: 'snapshot-unavailable',
-      retryEligible: true,
+      retryEligible: false,
     });
     expect(missing.diagnostic).toContain('ENOENT');
   });
