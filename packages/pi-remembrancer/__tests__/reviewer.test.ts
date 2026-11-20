@@ -32,23 +32,33 @@ vi.mock('@earendil-works/pi-coding-agent', () => ({
 }));
 
 import { CaptureRetryableError } from '../extensions/remembrancer/capture-jobs.js';
-import { runReviewer } from '../extensions/remembrancer/reviewer.js';
-import { reviewPreparedCapture } from '../extensions/remembrancer/capture.js';
+import {
+  estimateReviewerTokens,
+  getReviewerBudget,
+  ReviewerBudgetError,
+  runReviewer,
+  runReviewerStep,
+} from '../extensions/remembrancer/reviewer.js';
+import { readProposals, type ProposalReadArgs } from '../extensions/remembrancer/proposal-read.js';
 import { CaptureReview } from '../extensions/remembrancer/capture-review.js';
 import type { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
 import type { PreparedReview } from '../extensions/remembrancer/evidence.js';
 import type { Proposal } from '../extensions/remembrancer/proposals.js';
 
 const cwd = '/workspace/project';
-const model = { provider: 'test-provider', id: 'test-model' } as NonNullable<
-  CreateAgentSessionOptions['model']
->;
+const model = {
+  provider: 'test-provider',
+  id: 'test-model',
+  contextWindow: 4_000_000,
+  maxTokens: 1024,
+} as NonNullable<CreateAgentSessionOptions['model']>;
 const sessionId = 'saved-session-123';
 const sessionManager = { kind: 'in-memory-session-manager' };
 const settingsManager = { kind: 'in-memory-settings-manager' };
 const extensionRuntime = { kind: 'empty-extension-runtime' };
 
 type MockSession = {
+  agent: { onPayload?: (payload: unknown, requestModel: typeof model) => Promise<unknown> };
   prompt: ReturnType<typeof vi.fn>;
   abort: ReturnType<typeof vi.fn>;
   dispose: ReturnType<typeof vi.fn>;
@@ -82,6 +92,7 @@ describe('runReviewer', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     session = {
+      agent: {},
       prompt: vi.fn().mockResolvedValue(undefined),
       abort: vi.fn().mockResolvedValue(undefined),
       dispose: vi.fn(),
@@ -552,7 +563,25 @@ describe('runReviewer', () => {
         // further calls and never stages a submission or refreshes within this run.
         await expect(call('remembrancer_submit', { proposals: [] })).rejects.toBe(failure);
       });
-      const running = reviewPreparedCapture(review, db, { cwd, model, sessionId }, () => {});
+      const scoped = (name: string, execute: (args: object) => object) =>
+        makeTool(name, {
+          async execute(_id: string, args: object) {
+            return {
+              content: [{ type: 'text', text: JSON.stringify(execute(args)) }],
+              details: {},
+            };
+          },
+        });
+      const running = runReviewer({
+        cwd,
+        model,
+        sessionId,
+        tools: [
+          scoped('remembrancer_proposals', (args) => readProposals(db, args as ProposalReadArgs)),
+          scoped('remembrancer_read_evidence', () => review.page()),
+          scoped('remembrancer_submit', () => review.completion([])),
+        ],
+      });
       await expect(running).rejects.toThrow(
         change === 'stale' ? /Stale proposal/ : /Missing proposal/,
       );
@@ -804,6 +833,279 @@ describe('runReviewer', () => {
     });
     await expect(runReviewer(input())).rejects.toThrow('Reviewer tool failed');
     expect(session.abort).toHaveBeenCalledOnce();
+    expect(session.dispose).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { contextWindow: 0, maxTokens: 100 },
+    { contextWindow: Number.NaN, maxTokens: 100 },
+    { contextWindow: 8192, maxTokens: 0 },
+    { contextWindow: 8192, maxTokens: 8192 },
+  ])('rejects unusable model budget $contextWindow/$maxTokens before setup', async (limits) => {
+    await expect(runReviewer(input({ model: { ...model, ...limits } }))).rejects.toBeInstanceOf(
+      ReviewerBudgetError,
+    );
+    expect(sdk.createAgentSession).not.toHaveBeenCalled();
+  });
+
+  it.each(['instruction', 'schema'])(
+    'rejects an indivisible oversized %s before setup',
+    async (kind) => {
+      const small = { ...model, contextWindow: 8192 };
+      await expect(
+        runReviewerStep({
+          ...input({
+            model: small,
+            tools:
+              kind === 'schema'
+                ? [makeTool('lookup', { parameters: { description: 'x'.repeat(8192) } })]
+                : [],
+          }),
+          instruction: kind === 'instruction' ? '😀'.repeat(3000) : 'Read this piece',
+        }),
+      ).rejects.toBeInstanceOf(ReviewerBudgetError);
+      expect(sdk.createAgentSession).not.toHaveBeenCalled();
+    },
+  );
+
+  it('reserves the full model response ceiling, thinking and framing, not bytes divided by four', () => {
+    const budget = getReviewerBudget({ ...model, contextWindow: 8192, maxTokens: 2048 });
+    expect(budget).toEqual({
+      contextWindow: 8192,
+      responseReserve: 2048,
+      framingReserve: 1024,
+      maxInputTokens: 5120,
+    });
+    const value = { text: '😀\\"\n' };
+    expect(estimateReviewerTokens(value)).toBe(Buffer.byteLength(JSON.stringify(value)));
+  });
+
+  it.each(['system', 'schema', 'assistant', 'tool', 'thinking'])(
+    'checks full serialized provider %s before dispatch',
+    async (kind) => {
+      session.prompt.mockImplementation(async () => {
+        const payload = {
+          messages: [{ role: 'user', content: 'short evidence' }],
+          [kind]: '😀'.repeat(2200),
+        };
+        await session.agent.onPayload!(payload, { ...model, contextWindow: 8192 });
+        throw new Error('must not dispatch');
+      });
+      await expect(
+        runReviewerStep({ ...input(), instruction: 'Read one piece' }),
+      ).rejects.toBeInstanceOf(ReviewerBudgetError);
+      expect(session.abort).toHaveBeenCalledOnce();
+      expect(session.dispose).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('budgets the final payload after the SDK hook and uses the request model metadata', async () => {
+    const original = vi.fn(async () => ({ expandedSystem: 'x'.repeat(10_000) }));
+    session.agent.onPayload = original;
+    session.prompt.mockImplementation(async () => {
+      await session.agent.onPayload!({ tiny: true }, { ...model, contextWindow: 8192 });
+    });
+    await expect(runReviewer(input())).rejects.toBeInstanceOf(ReviewerBudgetError);
+    expect(original).toHaveBeenCalledWith(
+      { tiny: true },
+      expect.objectContaining({ contextWindow: 8192 }),
+    );
+  });
+
+  it.each(['final', 'streamed', 'caught-streamed'])(
+    'rejects an oversized %s tool result instead of truncating evidence',
+    async (kind) => {
+      const large = { content: [{ type: 'text', text: '😀'.repeat(2200) }], details: {} };
+      const update = vi.fn();
+      const tool = makeTool('lookup', {
+        execute: vi.fn(async (_id, _params, _signal, onUpdate) => {
+          if (kind === 'streamed') onUpdate(large);
+          if (kind === 'caught-streamed') {
+            try {
+              onUpdate(large);
+            } catch {
+              return { content: [{ type: 'text', text: 'small replacement' }], details: {} };
+            }
+          }
+          return large;
+        }),
+      });
+      session.prompt.mockImplementation(async () => {
+        const options = sdk.createAgentSession.mock.calls[0]![0] as CreateAgentSessionOptions;
+        await options.customTools![0]!.execute(
+          'lookup-id',
+          {},
+          undefined,
+          update,
+          {} as Parameters<ToolDefinition['execute']>[4],
+        );
+      });
+      await expect(
+        runReviewerStep({
+          ...input({ model: { ...model, contextWindow: 8192 }, tools: [tool] }),
+          instruction: 'Lookup this piece',
+        }),
+      ).rejects.toBeInstanceOf(ReviewerBudgetError);
+      expect(update).not.toHaveBeenCalled();
+      expect(session.abort).toHaveBeenCalledOnce();
+      expect(session.dispose).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('bounds accumulated tool history, including separate calls in one batch', async () => {
+    const tool = makeTool('lookup', {
+      execute: vi.fn(async () => ({
+        content: [{ type: 'text', text: 'x'.repeat(2000) }],
+        details: {},
+      })),
+    });
+    let accepted = 0;
+    session.prompt.mockImplementation(async () => {
+      const options = sdk.createAgentSession.mock.calls[0]![0] as CreateAgentSessionOptions;
+      for (let i = 0; i < 10; i++) {
+        await options.customTools![0]!.execute(
+          String(i),
+          {},
+          undefined,
+          undefined,
+          {} as Parameters<ToolDefinition['execute']>[4],
+        );
+        accepted++;
+      }
+    });
+    await expect(
+      runReviewerStep({
+        ...input({ model: { ...model, contextWindow: 8192 }, tools: [tool] }),
+        instruction: 'Lookup this piece',
+      }),
+    ).rejects.toBeInstanceOf(ReviewerBudgetError);
+    expect(accepted).toBeGreaterThan(0);
+    expect(accepted).toBeLessThan(4);
+  });
+
+  it('ends a step after its scoped tool batch and leaves continuation state with the host', async () => {
+    const hostState: string[] = [];
+    const tool = makeTool('lookup', {
+      execute: vi.fn(async () => {
+        hostState.push('accepted');
+        return { content: [{ type: 'text', text: 'only needed context' }], details: {} };
+      }),
+    });
+    session.prompt.mockImplementation(async () => {
+      const listener = session.subscribe.mock.calls.at(-1)![0];
+      listener({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          stopReason: 'toolUse',
+          content: [{ type: 'toolCall', name: 'lookup', id: 'id', arguments: {} }],
+        },
+      });
+      const options = sdk.createAgentSession.mock.calls.at(-1)![0] as CreateAgentSessionOptions;
+      const result = await options.customTools![0]!.execute(
+        'id',
+        {},
+        undefined,
+        undefined,
+        {} as Parameters<ToolDefinition['execute']>[4],
+      );
+      expect(result.terminate).toBe(true);
+    });
+    const first = await runReviewerStep({
+      ...input({ tools: [tool] }),
+      instruction: 'Read evidence range 1',
+    });
+    const second = await runReviewerStep({
+      ...input({ tools: [tool] }),
+      instruction: 'Read evidence range 2. Working state: accepted',
+    });
+    expect(first.status).toBe('handoff');
+    expect(second.status).toBe('handoff');
+    expect(hostState).toEqual(['accepted', 'accepted']);
+    expect(sdk.inMemorySession).toHaveBeenCalledTimes(2);
+    expect(session.prompt.mock.calls[0]![0]).toContain('Read evidence range 1');
+    expect(session.prompt.mock.calls[1]![0]).not.toContain('range 1');
+    expect(session.prompt.mock.calls[0]![0]).not.toContain('remembrancer_submit');
+    expect(session.dispose).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns a completed text step without claiming whole-review completion', async () => {
+    session.prompt.mockImplementation(async () => {
+      session.subscribe.mock.calls[0]![0]({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          stopReason: 'stop',
+          content: [{ type: 'text', text: 'One observation' }],
+        },
+      });
+    });
+    const result = await runReviewerStep({
+      ...input({ tools: [] }),
+      instruction: 'Read one piece',
+    });
+    expect(result).toMatchObject({
+      status: 'complete',
+      message: { content: [{ text: 'One observation' }] },
+    });
+  });
+
+  it('keeps one host cancellation signal across fresh steps without renewing the attempt', async () => {
+    const controller = new AbortController();
+    session.prompt.mockImplementation(async () => {
+      session.subscribe.mock.calls[0]![0]({
+        type: 'message_end',
+        message: { role: 'assistant', stopReason: 'stop', content: [] },
+      });
+    });
+    const step = { ...input({ signal: controller.signal }), instruction: 'Read one piece' };
+    await runReviewerStep(step);
+    controller.abort(new Error('overall attempt deadline'));
+    await expect(runReviewerStep(step)).rejects.toThrow('overall attempt deadline');
+    expect(sdk.createAgentSession).toHaveBeenCalledOnce();
+    expect(session.dispose).toHaveBeenCalledOnce();
+  });
+
+  it('rejects retained thinking signatures before executing the tool batch', async () => {
+    session.prompt.mockImplementation(async () => {
+      session.subscribe.mock.calls[0]![0]({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          stopReason: 'toolUse',
+          content: [
+            { type: 'thinking', thinking: 'small', thinkingSignature: 'x'.repeat(8192) },
+            { type: 'toolCall', name: 'lookup', id: 'id', arguments: {} },
+          ],
+        },
+      });
+      const options = sdk.createAgentSession.mock.calls[0]![0] as CreateAgentSessionOptions;
+      await expect(
+        options.customTools![0]!.execute(
+          'id',
+          {},
+          undefined,
+          undefined,
+          {} as Parameters<ToolDefinition['execute']>[4],
+        ),
+      ).rejects.toBeInstanceOf(ReviewerBudgetError);
+    });
+    const tool = makeTool('lookup');
+    await expect(
+      runReviewerStep({
+        ...input({ model: { ...model, contextWindow: 8192 }, tools: [tool] }),
+        instruction: 'Read one piece',
+      }),
+    ).rejects.toBeInstanceOf(ReviewerBudgetError);
+    expect(tool.execute).not.toHaveBeenCalled();
+    expect(session.abort).toHaveBeenCalledOnce();
+    expect(session.dispose).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a step with no assistant response', async () => {
+    await expect(runReviewerStep({ ...input(), instruction: 'Read one piece' })).rejects.toThrow(
+      'no assistant message',
+    );
     expect(session.dispose).toHaveBeenCalledOnce();
   });
 

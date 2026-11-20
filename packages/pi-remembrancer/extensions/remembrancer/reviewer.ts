@@ -1,4 +1,5 @@
 import {
+  type AssistantMessage,
   getOverflowPatterns,
   isContextOverflow,
   isRetryableAssistantError,
@@ -13,6 +14,17 @@ import {
   type ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
 import { CaptureRetryableError } from './capture-jobs.js';
+import {
+  assertReviewerFits,
+  estimateReviewerTokens,
+  getReviewerBudget,
+} from './reviewer-budget.js';
+
+export {
+  estimateReviewerTokens,
+  getReviewerBudget,
+  ReviewerBudgetError,
+} from './reviewer-budget.js';
 
 export interface ReviewerInput {
   cwd: string;
@@ -24,6 +36,38 @@ export interface ReviewerInput {
   thinkingLevel?: CreateAgentSessionOptions['thinkingLevel'];
   settingsManager?: SettingsManager;
   modelRuntime?: CreateAgentSessionOptions['modelRuntime'];
+}
+
+export interface ReviewerStepInput extends ReviewerInput {
+  /** Complete bounded instruction, including only this step's evidence and working state. */
+  instruction: string;
+}
+
+export interface ReviewerStepResult {
+  /** A tool batch hands control back to the host, not to another model turn. */
+  status: 'complete' | 'handoff';
+  message: AssistantMessage;
+}
+
+/**
+ * One model turn and its scoped tool batch. Tools retain working state in the host.
+ * The caller validates that state and supplies only what is needed to a fresh step.
+ * Neither status claims whole-review completion. No transcript is replayed automatically.
+ */
+export async function runReviewerStep(input: ReviewerStepInput): Promise<ReviewerStepResult> {
+  const message = await runIsolatedReviewer(
+    input,
+    'This is one bounded reviewer step. Use only the supplied tools. ' +
+      'A tool batch ends this step and hands control back to the host. ' +
+      'Do not claim whole-review completion.\n\n' +
+      input.instruction,
+    true,
+  );
+  if (!message) throw new Error('Reviewer step returned no assistant message');
+  return {
+    status: message.content.some((item) => item.type === 'toolCall') ? 'handoff' : 'complete',
+    message,
+  };
 }
 
 const REVIEWER_SYSTEM_PROMPT =
@@ -49,21 +93,38 @@ const FORBIDDEN_TOOL_NAMES = new Set([
   'write',
 ]);
 
-/** Run one isolated review. The caller owns tool scope, staging, validation, and persistence. */
-export async function runReviewer({
-  cwd,
-  model,
-  sessionId,
-  tools,
-  signal,
-  agentDir,
-  thinkingLevel,
-  settingsManager: originatingSettings,
-  modelRuntime,
-}: ReviewerInput): Promise<void> {
+/** Existing callers keep their completion protocol; budget exhaustion rejects, never succeeds. */
+export async function runReviewer(input: ReviewerInput): Promise<void> {
+  await runIsolatedReviewer(input, buildOpeningPrompt(input.sessionId), false);
+}
+
+async function runIsolatedReviewer(
+  {
+    cwd,
+    model,
+    tools,
+    signal,
+    agentDir,
+    thinkingLevel,
+    settingsManager: originatingSettings,
+    modelRuntime,
+  }: ReviewerInput,
+  instruction: string,
+  endAfterToolBatch: boolean,
+): Promise<AssistantMessage | undefined> {
   if (!model) throw new Error('Remembrancer reviewer requires the outgoing model');
 
   const toolNames = getToolNames(tools);
+  let budget = getReviewerBudget(model);
+  // Minimum known input is checked before SDK setup. The provider hook below
+  // checks the actual complete request, including Pi's generated prompt sections.
+  let retainedTokens = estimateReviewerTokens({
+    system: REVIEWER_SYSTEM_PROMPT,
+    instruction,
+    tools: tools.map(({ name, description, parameters }) => ({ name, description, parameters })),
+  });
+  assertReviewerFits(budget, retainedTokens, 'step instruction and tool schemas');
+  let lastAssistant: AssistantMessage | undefined;
   const restrictions = {
     compaction: { enabled: false },
     retry: { enabled: false, provider: { maxRetries: 0 } },
@@ -118,7 +179,41 @@ export async function runReviewer({
         async execute(...args) {
           if (runError) throw runError;
           try {
-            return await tool.execute(...args);
+            const [id, params, toolSignal, onUpdate, ctx] = args;
+            const checkResult = (result: Awaited<ReturnType<ToolDefinition['execute']>>) => {
+              if (result.content.some((item) => item.type !== 'text'))
+                throw new Error('Reviewer tools must return text-only results');
+              const tokens = estimateReviewerTokens({
+                toolCallId: id,
+                toolName: tool.name,
+                result,
+              });
+              assertReviewerFits(budget, retainedTokens + tokens, `tool result (${tool.name})`);
+              return tokens;
+            };
+            const result = await tool.execute(
+              id,
+              params,
+              toolSignal,
+              onUpdate
+                ? (update) => {
+                    try {
+                      checkResult(update);
+                      onUpdate(update);
+                    } catch (error) {
+                      runError ??= error instanceof Error ? error : new Error(String(error));
+                      abortSession();
+                      throw error;
+                    }
+                  }
+                : undefined,
+              ctx,
+            );
+            if (runError) throw runError;
+            retainedTokens += checkResult(result);
+            // Every tool in the batch terminates, so no automatic next request
+            // can grow this step. Working state belongs to the supplied handlers.
+            return endAfterToolBatch ? { ...result, terminate: true } : result;
           } catch (error) {
             runError ??= error instanceof Error ? error : new Error(String(error));
             abortSession();
@@ -128,6 +223,20 @@ export async function runReviewer({
       })),
     });
     session = result.session;
+    const onPayload = session.agent.onPayload;
+    session.agent.onPayload = async (payload, requestModel) => {
+      if (runError) throw runError;
+      try {
+        const replacement = await onPayload?.(payload, requestModel);
+        budget = getReviewerBudget(requestModel);
+        retainedTokens = estimateReviewerTokens(replacement ?? payload);
+        assertReviewerFits(budget, retainedTokens, 'complete provider request');
+        return replacement;
+      } catch (error) {
+        runError ??= error instanceof Error ? error : new Error(String(error));
+        throw error;
+      }
+    };
     unsubscribe = session.subscribe((event) => {
       if (event.type === 'message_end' && event.message.role === 'assistant') {
         const message = event.message;
@@ -154,6 +263,15 @@ export async function runReviewer({
               ? new CaptureRetryableError(reason)
               : new Error(reason);
         }
+        if (!runError) {
+          try {
+            retainedTokens += estimateReviewerTokens(message);
+            assertReviewerFits(budget, retainedTokens, 'assistant and retained turn history');
+            lastAssistant = message;
+          } catch (error) {
+            runError = error instanceof Error ? error : new Error(String(error));
+          }
+        }
         const calls = message.content.filter((item) => item.type === 'toolCall');
         if (calls.length > 1 && calls.some((call) => call.name === 'remembrancer_submit'))
           runError ??= new Error('Submission must be alone in its tool batch');
@@ -177,7 +295,7 @@ export async function runReviewer({
     let promptFailed = false;
     let promptError: unknown;
     try {
-      await session.prompt(buildOpeningPrompt(sessionId));
+      await session.prompt(instruction);
     } catch (error) {
       promptFailed = true;
       promptError = error;
@@ -206,6 +324,7 @@ export async function runReviewer({
   }
   if (abortFailed) throw abortError;
   if (signal?.aborted) signal.throwIfAborted();
+  return lastAssistant;
 }
 
 function getToolNames(tools: readonly ToolDefinition[]): string[] {

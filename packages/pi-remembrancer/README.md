@@ -95,6 +95,10 @@ Available even when automatic capture or the extension is disabled:
 - **Model:** your session's selected model.
 - **Result:** suggestions waiting in `/remembrancer proposals`.
 
+Automatic review uses frozen evidence in bounded, sequential model calls. Shared ancestor messages within that session are extracted once; branch edits remain separate. Findings are matched and combined before suggestions are saved, with conflicting interpretations left as questions.
+
+All eligible ranges, findings and final dispositions must be processed before the existing atomic save. A failed pass, insufficient model context, cancellation or timeout saves no suggestions or review coverage. The five-minute limit covers the whole attempt, not each call. Splitting does not guarantee that every review can finish within that limit.
+
 ## Saved proposals
 
 Review the suggestions saved by automatic capture in Pi's interactive terminal:

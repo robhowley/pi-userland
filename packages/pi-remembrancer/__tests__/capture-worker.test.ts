@@ -17,6 +17,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, expect, it, vi } from 'vitest';
+import { captureAnswer, providerInstruction } from './fixtures/capture-steps.js';
 import * as handoffs from '../extensions/remembrancer/capture-handoff.js';
 import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
 import { preserveHandoff, type HandoffInput } from '../extensions/remembrancer/capture-handoff.js';
@@ -800,47 +801,10 @@ async function provider(f: Awaited<ReturnType<typeof fixture>>, empty = false) {
       res.end(`data: ${JSON.stringify({ error: { message: failure } })}\n\n`);
       return;
     }
-    const messages = body.messages as {
-      role: string;
-      tool_calls?: { function: { name: string } }[];
-    }[];
-    const names = messages.flatMap((m) => m.tool_calls?.map((c) => c.function.name) ?? []);
-    const name = !names.includes('remembrancer_read_evidence')
-      ? 'remembrancer_read_evidence'
-      : !names.includes('remembrancer_tasks')
-        ? 'remembrancer_tasks'
-        : !names.includes('remembrancer_proposals')
-          ? 'remembrancer_proposals'
-          : 'remembrancer_submit';
-    const args =
-      name === 'remembrancer_submit'
-        ? {
-            proposals: empty
-              ? []
-              : [
-                  {
-                    change: {
-                      operation: 'add',
-                      fields: { description: 'Send comparison' },
-                      annotations: [],
-                    },
-                    expected: null,
-                    question: null,
-                    explanation: 'Explicit promise',
-                    references: [
-                      {
-                        sessionId: 'saved',
-                        branchId: 'promise',
-                        entryId: 'promise',
-                        editId: null,
-                        offset: 0,
-                        quote: 'Send Maya',
-                      },
-                    ],
-                  },
-                ],
-          }
-        : {};
+    const messages = body.messages as { role: string; content?: string }[];
+    const instruction = providerInstruction(messages);
+    const name = 'remembrancer_step';
+    const args = { result: { answer: captureAnswer(instruction, empty) } };
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     const chunk = (delta: unknown, finish_reason: string | null = null) =>
       `data: ${JSON.stringify({ id: 'response', object: 'chat.completion.chunk', created: 1, model: 'not-in-catalog', choices: [{ index: 0, delta, finish_reason }] })}\n\n`;
@@ -1057,7 +1021,7 @@ it.each(['running', 'crashed'] as const)(
     });
     // Manual ownership and observer enrollment change review context. A running
     // attempt must discard/reprepare; a recovered attempt starts after enrollment.
-    expect(p.requests).toHaveLength(crash ? 5 : 8);
+    expect(p.requests).toHaveLength(crash ? 4 : 6);
     expect(p.requests[0]!.body['model']).toBe('not-in-catalog');
     expect(p.requests[0]!.body['reasoning_effort']).toBe('high');
     expect(p.requests[0]!.headers['authorization']).toBe('Bearer fixture-key');
@@ -1065,13 +1029,7 @@ it.each(['running', 'crashed'] as const)(
     expect(existsSync(join(f.dir, 'auth-outside-lock'))).toBe(true);
     expect(existsSync(join(f.dir, 'tasks-outside-lock'))).toBe(true);
     const tools = p.requests[0]!.body['tools'] as { function: { name: string } }[];
-    expect(tools.map((t) => t.function.name)).toEqual([
-      'remembrancer_read_evidence',
-      'remembrancer_context',
-      'remembrancer_tasks',
-      'remembrancer_proposals',
-      'remembrancer_submit',
-    ]);
+    expect(tools.map((t) => t.function.name)).toEqual(['remembrancer_step']);
     const store = new CheckpointStore(f.database);
     expect(store.proposals()).toHaveLength(1);
     expect(store.reviewed()).toHaveLength(1);
@@ -1413,7 +1371,7 @@ it('drains two projects from a third cwd with identical stored-auth commands and
     ['B', b],
     ['C', c],
   ] as const) {
-    providers.push(await provider(f, true));
+    providers.push(await provider(f));
     for (const kind of ['credential', 'header', 'model-header', 'override-header']) {
       writeFileSync(
         join(f.dir, kind),
@@ -1470,7 +1428,7 @@ it('drains two projects from a third cwd with identical stored-auth commands and
     [1, 'C', c],
   ] as const) {
     const requests = providers[index]!.requests;
-    expect(requests).toHaveLength(4);
+    expect(requests).toHaveLength(index === 0 ? 3 : 4);
     for (const { headers } of requests) {
       expect(headers['authorization']).toBe(`Bearer credential-${label}`);
       expect(headers['x-command']).toBe(`header-${label}`);
