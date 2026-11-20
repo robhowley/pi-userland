@@ -100,37 +100,44 @@ On a missing/stale proposal error, discard all partial detail/evidence for that 
 
 ## Automatic capture and saved proposals
 
-- Use user and assistant messages as review evidence, not tool outputs, thinking or images.
-- When capture is stopped or delayed, inspect `/remembrancer capture status` for the reason, retry time and blocking job. Offer manual catch-up for unreviewed evidence rather than promising automatic recovery.
-- To stop accepted capture work, use `/remembrancer capture pause`; disabling capture does not cancel it.
+- Review user and assistant messages, not tool outputs, thinking or images.
+- If capture stalls, check status. Offer manual catch-up if needed.
+- To stop accepted work, pause capture. Disabling it is not enough.
 
 ### Capture controls
 
-Use these controls even when capture or the extension is disabled:
+Available even when capture or the extension is disabled:
 
-| Command                                     | Use                                                                                                                                                                   |
-| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/remembrancer capture status`              | Inspect the job's full ID, reason, remaining attempts, retry time and blocking job before suggesting a next action.                                                   |
-| `/remembrancer capture pause`               | Stop capture work; warn that cancelling an active request may take time.                                                                                              |
-| `/remembrancer capture resume`              | Continue paused work. Do not use it to retry stopped jobs.                                                                                                            |
-| `/remembrancer capture retry <full-job-id>` | Use one exact full ID, not a prefix or batch. Have the user confirm the displayed reason and allowance in the interactive UI; confirmation grants two fresh attempts. |
+| Command                                     | Use                                                                |
+| ------------------------------------------- | ------------------------------------------------------------------ |
+| `/remembrancer capture status`              | Check job ID, reason, attempts remaining, retry time and blockers. |
+| `/remembrancer capture pause`               | Stop capture work. Cancellation may take time.                     |
+| `/remembrancer capture resume`              | Resume paused work, not stopped jobs.                              |
+| `/remembrancer capture retry <full-job-id>` | Give one stopped job two fresh attempts, with user confirmation.   |
 
-Do not authorize retry headlessly. If the job changes during confirmation, inspect its status again and obtain fresh approval. Retry does not resume paused capture or skip blocking jobs; address those separately with the user. Never treat retry as approval to change Taskwarrior.
+**Retry rules:**
+
+- Use one full job ID, never a prefix or batch.
+- Require UI confirmation of the reason and allowance; no headless approval.
+- If the job changes, recheck status and get fresh approval.
+- Retry does not resume capture, skip blockers or approve task changes.
 
 ### Review saved proposals
 
-For interactive review, direct the user to `/remembrancer proposals`. For conversational review, use the proposal list/detail/evidence reads in **Full cross-session review**; do not require the user to approve conversational suggestions through the UI.
-
-- For UI approval, have the user expand a pending proposal and press `Ctrl+A`. Opening, editing or navigating proposals does not authorize writes. Changed previews require fresh approval.
-- Use saved quotes when transcript context is unavailable, and report that limitation.
-- For applying or uncertain items, verify whether the intended result already exists. Never replay an interrupted or uncertain write; ask the user to resolve the task manually if the result cannot be verified.
-- Report outcomes as applied, already satisfied, dismissed (task unchanged), or unresolved. Do not report missing targets, errors or uncertain outcomes as success.
+- **In the UI:** ask the user to expand a pending item in `/remembrancer proposals` and approve with `Ctrl+A`.
+- **In conversation:** follow **Full cross-session review**. Get approval in chat, not the UI.
+- Opening, editing or navigation is not approval. Changed previews need fresh approval.
+- Missing transcript context: use saved quotes and report the gap.
+- For applying or uncertain proposals, check whether the task change already happened. Never replay the write.
+- If you cannot verify the result, ask the user to resolve the task manually.
+- Report applied, already satisfied, dismissed (task unchanged), or unresolved. Errors and missing targets are not success.
 
 ### Manual review alongside capture
 
-- Cancel unfinished reviews with `action: "cancel"`. Report any task changes already applied; cancellation neither undoes them nor marks evidence reviewed.
-- Do not treat finishing a manual review as approving or dismissing saved proposals. Handle those decisions separately with the user.
-- If a related proposal remains after handling a task in conversation, offer to inspect, edit or dismiss it separately. Do not promise automatic duplicate detection or synchronized decisions.
+- Cancel unfinished reviews with `action: "cancel"`; report task changes already applied.
+- Cancellation does not undo writes or mark evidence reviewed.
+- Decide saved proposals separately; finishing a manual review does not decide them.
+- Offer to inspect, edit or dismiss related pending proposals. Do not assume automatic matching.
 
 ## Historical evidence safety
 
