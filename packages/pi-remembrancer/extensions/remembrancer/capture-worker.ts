@@ -6,6 +6,7 @@ import { CheckpointStore } from './checkpoints.js';
 import {
   CaptureWorkerOwnership,
   CapturePreparationError,
+  CaptureRetryableError,
   type CaptureAttempt,
 } from './capture-jobs.js';
 import {
@@ -20,7 +21,6 @@ import type { ProposalSubmission } from './proposals.js';
 import { publishProposalNotice } from './capture-notices.js';
 
 const CLEANUP_GRACE_MS = 5_000;
-const ATTEMPTS_PER_RUN = 2;
 
 /** A launch acknowledgement means spawned, not imported or completed. Recovery retries later. */
 export function launchCaptureWorker(
@@ -76,16 +76,9 @@ export async function runCaptureWorker(options: WorkerOptions): Promise<void> {
   const { database, inbox } = options;
   let owner: CaptureWorkerOwnership | undefined = options.owner;
   let store: CheckpointStore | undefined;
-  const attempts = new Map<string, number>();
-  const deferred = new Set<string>();
   const seenSignals = new Set<string>();
   const blockedSignals = new Set<string>();
   const cleaned = new Set<string>();
-  const excluded = () =>
-    new Set([
-      ...deferred,
-      ...[...attempts].filter(([, n]) => n >= ATTEMPTS_PER_RUN).map(([id]) => id),
-    ]);
   const diagnose = async (message: string) => {
     try {
       await appendFile(database + '.capture.log', `${new Date().toISOString()} ${message}\n`, {
@@ -132,6 +125,7 @@ export async function runCaptureWorker(options: WorkerOptions): Promise<void> {
     }
     store = new CheckpointStore(database);
     owner.assertStore(store.file);
+    store.recoverInterruptedCaptureAttempts(owner);
     for (;;) {
       for (const name of await readyFiles()) {
         if (seenSignals.has(name)) continue;
@@ -152,9 +146,7 @@ export async function runCaptureWorker(options: WorkerOptions): Promise<void> {
       }
       // Completed rows, not ready files or model replay, authorize repair on every wake.
       await repairCompleted();
-      const job = store
-        .runnableCaptureJobs(owner)
-        .find((item) => !excluded().has(item.manifest.id));
+      const job = store.runnableCaptureJobs(owner)[0];
       if (!job) {
         // Repair commits arriving during the preceding asynchronous sidecar write.
         await repairCompleted();
@@ -164,11 +156,12 @@ export async function runCaptureWorker(options: WorkerOptions): Promise<void> {
         await options.afterRelease?.();
         if (
           !(await readyFiles()).some((name) => !seenSignals.has(name)) &&
-          (blockedSignals.size > 0 || !store.captureRecoveryPending(excluded()))
+          (blockedSignals.size > 0 || !store.captureRecoveryPending())
         )
           break;
         try {
           owner = CaptureWorkerOwnership.claim(database);
+          store.recoverInterruptedCaptureAttempts(owner);
         } catch (error) {
           if (busy(error)) break;
           throw error;
@@ -176,34 +169,70 @@ export async function runCaptureWorker(options: WorkerOptions): Promise<void> {
         continue;
       }
       const id = job.manifest.id;
-      attempts.set(id, (attempts.get(id) ?? 0) + 1);
-      const attempt = owner.startAttempt(id);
+      let attempt: CaptureAttempt | undefined;
+      try {
+        attempt = store.claimCaptureAttempt(owner, id);
+      } catch (error) {
+        // Initial coordination contention is uncounted. Defer this drain, not a spin.
+        if (busy(error)) break;
+        throw error;
+      }
+      if (!attempt) continue;
       const currentOwner = owner;
       const controller = new AbortController();
       const expiresAt = performance.now() + (options.budgetMs ?? CAPTURE_BUDGET_MS);
       const previousCwd = process.cwd();
       let fatalTimer: ReturnType<typeof setTimeout> | undefined;
-      const check = () => {
-        controller.signal.throwIfAborted();
-        currentOwner.assertAttempt(attempt);
-        if (performance.now() >= expiresAt) throw Error('Capture review timed out');
-      };
-      const timer = setTimeout(() => {
-        // A never-settling setup/prompt/cleanup must not keep the process alive.
-        // This timer cannot run during a CPU stall. It is not a watchdog.
-        controller.abort(Error('Capture review timed out'));
-        try {
-          store!.failCaptureJob(currentOwner, attempt, 'Capture review timed out', true);
-        } catch {
-          /* A completed or invalidated attempt cannot publish again. */
-        }
+      const admitted = attempt;
+      const revoke = (error: unknown) => {
+        if (controller.signal.aborted) return;
+        controller.abort(error);
+        // Keep ownership through cooperative cleanup, but never wait forever.
         fatalTimer = setTimeout(() => {
           currentOwner.release();
           (options.terminate ?? (() => process.exit(1)))();
         }, options.graceMs ?? CLEANUP_GRACE_MS);
-      }, options.budgetMs ?? CAPTURE_BUDGET_MS);
+        try {
+          store!.failCaptureJob(
+            currentOwner,
+            admitted,
+            error instanceof CaptureRetryableError ? error.message : 'Capture authority revoked',
+            error instanceof CaptureRetryableError,
+          );
+        } catch {
+          /* Store failures still abort execution. Durable recovery handles any leftover claim. */
+        }
+      };
+      const check = () => {
+        try {
+          controller.signal.throwIfAborted();
+          store!.assertCaptureAttempt(currentOwner, admitted);
+          if (performance.now() >= expiresAt)
+            throw new CaptureRetryableError('Capture review timed out');
+        } catch (error) {
+          revoke(error);
+          throw error;
+        }
+      };
+      const timer = setTimeout(
+        () => revoke(new CaptureRetryableError('Capture review timed out')),
+        options.budgetMs ?? CAPTURE_BUDGET_MS,
+      );
+      const authorityPoll = setInterval(() => {
+        try {
+          check();
+        } catch {
+          // check() has aborted the controller and started the cleanup grace.
+        }
+      }, 250);
+      const stopPolling = () => {
+        clearTimeout(timer);
+        clearInterval(authorityPoll);
+        if (fatalTimer) clearTimeout(fatalTimer);
+      };
       let phase = 'evidence-preparation';
       try {
+        check();
         process.chdir(job.manifest.execution.cwd);
         const current = store.prepareCaptureJob(owner, attempt);
         let submissions: ProposalSubmission[] = [];
@@ -231,13 +260,16 @@ export async function runCaptureWorker(options: WorkerOptions): Promise<void> {
               refreshOnCreate: false,
               signal: controller.signal,
             });
+            check();
             const auth = await modelRuntime.getAuth(runtime.model, { signal: controller.signal });
+            check();
             const available = new Set(
               Object.keys(auth?.auth.headers ?? {}).map((name) => name.toLowerCase()),
             );
             if (runtime.headerNames.some((name) => !available.has(name.toLowerCase())))
               throw Error('Originating model headers are unavailable from Pi configuration');
           }
+          check();
           submissions = await (options.review ?? reviewPreparedCapture)(
             current,
             store,
@@ -257,11 +289,12 @@ export async function runCaptureWorker(options: WorkerOptions): Promise<void> {
         check();
         phase = 'atomic-publication';
         store.finishCaptureJob(owner, attempt, submissions);
+        // Completion revokes the UUID. Sidecar repair is not attempt execution.
+        stopPolling();
         await repairCompleted();
       } catch (error) {
         const contended =
           (phase === 'evidence-preparation' || phase === 'atomic-publication') && busy(error);
-        if (contended) deferred.add(id);
         // Classified preparation failures have already persisted and abandoned.
         const diagnostic =
           error instanceof CapturePreparationError
@@ -272,13 +305,12 @@ export async function runCaptureWorker(options: WorkerOptions): Promise<void> {
             currentOwner,
             attempt,
             contended ? 'Manual review contention; deferred' : diagnostic,
-            true,
+            contended || error instanceof CaptureRetryableError,
           );
         }
         if (!contended) await diagnose(diagnostic);
       } finally {
-        clearTimeout(timer);
-        if (fatalTimer) clearTimeout(fatalTimer);
+        stopPolling();
         if (isActive(currentOwner, attempt)) currentOwner.abandon(attempt);
         process.chdir(previousCwd);
       }

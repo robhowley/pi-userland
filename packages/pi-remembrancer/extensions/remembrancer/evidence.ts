@@ -816,23 +816,21 @@ export function prepareHistoricalReview(
     }
     return { diagnostic: null, review };
   } catch (error) {
-    // Only recognized defects in immutable retained input are terminal. A bad
-    // mutable live extension or unavailable coverage proof can be repaired.
-    let retryEligible = true;
+    // Invalid input, limits and unknown failures require deliberate retry.
+    // Only recognized temporary filesystem interruptions can recover automatically.
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    const retryEligible = ['EAGAIN', 'EBUSY', 'EINTR', 'ETIMEDOUT'].includes(code ?? '');
     if (phase === 'snapshot' && error instanceof InvalidSessionError) {
       category = error.category;
       diagnostic = `Historical snapshot ${category}`;
       if (category === 'invalid-identity') diagnostic += ': Session identity differs from snapshot';
-      retryEligible = false;
     } else if (phase === 'coverage' && error instanceof InvalidSessionError) {
       category = 'live-proof-unavailable';
       diagnostic = `Historical live coverage proof ${error.category}`;
     } else if (error instanceof ReviewLimitError) {
       category = phase === 'snapshot' ? 'retained-limit' : 'coverage-limit';
       diagnostic = `Historical ${phase} ancestry/snapshot limit exceeded`;
-      retryEligible = phase !== 'snapshot';
     }
-    const code = (error as NodeJS.ErrnoException | null)?.code;
     if (typeof code === 'string' && /^E[A-Z0-9]{1,24}$/.test(code)) diagnostic += ` (${code})`;
     return { review: null, diagnostic, category, retryEligible };
   }

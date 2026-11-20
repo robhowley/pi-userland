@@ -1,15 +1,30 @@
+import { randomUUID } from 'node:crypto';
 import { closeSync, mkdirSync, openSync, realpathSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { openPrivateSqlite } from './private-sqlite.mjs';
 import type { ReadyManifest } from './capture-handoff.js';
 
+export const CAPTURE_MAX_ATTEMPTS = 2;
+export const CAPTURE_RETRY_DELAY_MS = 60_000;
+
 export type CaptureJob = {
   manifest: ReadyManifest;
   state: 'queued' | 'completed' | 'failed';
   retryEligible: boolean;
   diagnostic: string | null;
+  attemptCount: number;
+  activeAttemptId: string | null;
+  nextAttemptAt: number | null;
+  revision: number;
 };
+
+export type CaptureStatus = {
+  paused: boolean;
+  jobs: Array<CaptureJob & { blockedBy: string | null }>;
+};
+
+export class CaptureRetryableError extends Error {}
 
 // Preparation has already persisted this classified failure and abandoned its
 // attempt. The worker must not replace it with a generic execution failure.
@@ -26,7 +41,7 @@ export class CapturePreparationError extends Error {
 
 // One object per acquired OS lock, never recycled after release. An attempt is
 // valid only while it is that object's current identity, not merely its job ID.
-export type CaptureAttempt = { readonly jobId: string };
+export type CaptureAttempt = { readonly jobId: string; readonly id: string };
 const owners = new Map<string, CaptureWorkerOwnership>();
 
 export class CaptureWorkerOwnership {
@@ -72,7 +87,7 @@ export class CaptureWorkerOwnership {
   startAttempt(jobId: string): CaptureAttempt {
     if (owners.get(this.file) !== this) throw Error('Capture worker ownership was released');
     if (this.active) throw Error('A capture attempt is already active');
-    this.active = Object.freeze({ jobId });
+    this.active = Object.freeze({ jobId, id: randomUUID() });
     return this.active;
   }
 

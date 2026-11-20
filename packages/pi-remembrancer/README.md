@@ -23,15 +23,15 @@ Run `/reload` in Pi or start a new session.
 
 ## Upgrade warning: HARD CUTOVER
 
-This upgrade changes proposal storage and the `remembrancer_proposals` response shape without legacy compatibility. Do not mix old and upgraded writers.
-
-**DURABLE RETRY FIX REQUIRED BEFORE ROLLOUT.** This change does not make rollout safe on its own. The separate retry fix must persist the job attempt budget across worker restarts and recovery wakes, and keep permanent/exhausted failures stopped. Current retry limits are per worker run. Keep the evidence-growth PR in draft until that prerequisite is implemented and verified.
+This upgrade changes proposal storage, the `remembrancer_proposals` response shape and capture retry state without legacy compatibility. Do not mix old and upgraded processes.
 
 Before the first upgraded database open:
 
 1. Stop old Pi processes and detached capture workers.
 2. Take a SQLite-consistent backup of the checkpoint database (normally `~/.local/state/pi-remembrancer/checkpoints.sqlite3`, or under `$XDG_STATE_HOME`). Use SQLite's backup facility, not a bare copy of an active database.
-3. Start only upgraded processes. The first open transaction removes embedded revision snapshots and deduplicates current evidence, preserving current drafts, application state, claims, results and timestamps. Changed rows advance revision once and invalidate prepared reviews; jobs and coverage are unchanged. Failure rolls back the repair and its one-time marker.
+3. Start only upgraded processes. The first open atomically adds durable capture controls and stops existing unresolved jobs because their historical attempt counts are unknown. Inspect their status and deliberately retry individual jobs if wanted. Completed jobs, proposals, coverage and immutable evidence are preserved; reopening does not reset allowances. Migration failure rolls back its schema, state and version together.
+
+The proposal repair also removes embedded revision snapshots and deduplicates current evidence, preserving current drafts, application state, claims, results and timestamps. Changed proposals advance revision once and invalidate prepared reviews. Failure rolls back the repair and its one-time marker.
 
 The repair shrinks logical proposal payloads, not necessarily the SQLite file. It does not run `VACUUM`, erase deleted bytes, replay uncertain writes, or reset retry state. Resolved-proposal deletion and removal of the temporary History view remain separate work, not an archive feature.
 
@@ -79,6 +79,25 @@ Capture is off by default. To enable it, add this to Pi's global settings file, 
 { "pi-remembrancer": { "autoCapture": true } }
 ```
 
+### Capture controls
+
+These commands remain available even with `disabled: true` or automatic capture off:
+
+```text
+/remembrancer capture status
+/remembrancer capture pause
+/remembrancer capture resume
+/remembrancer capture retry <full-job-id>
+```
+
+- Status lists unresolved jobs with full IDs, current allowance used/remaining (not lifetime history), stopped reasons, retry due times and blocking predecessor IDs.
+- Each job gets **two whole-review attempts**, persisted before preparation. Restarts, competing sessions and repeated wakes do not replenish them. Recognized temporary failures wait at least 60 seconds before a later wake; permanent, unknown and exhausted failures stop. Each attempt retains its five-minute deadline.
+- Pause persists across restarts and revokes active attempts without refunding their counts. Workers observe cancellation; provider-side cancellation is not instantaneous. New evidence may queue while paused.
+- Resume only clears pause and wakes recovery. It does not reset allowances, remove delays, revive revoked attempts or bypass predecessors.
+- Retry accepts one exact full job ID, never a prefix or batch. It requires explicit UI confirmation of the displayed reason and current allowance, replacing unused permission with two fresh attempts. Changed or double confirmations fail. Headless retry cannot authorize work. Retry wakes recovery but never unpauses capture or bypasses predecessors.
+
+Recovery uses startup, periodic and command wakes, not a daemon or a sleep-until-due loop. Without a live Pi session, delayed work waits for another wake. Disabling new capture does not stop previously accepted work; use pause for that.
+
 ### What to expect
 
 - **When:** your interactive session ends.
@@ -121,7 +140,7 @@ If the terminal is too small to show review content and controls safely, the ove
 
 Before revising or deciding a candidate, read `action: "detail"` with its `id` and discovered `revision`. Follow `next` until `null`, join `json` fragments by `position`, then parse the joined JSON for the lossless current proposal (including its draft, without sources). Read needed saved quotes separately with `action: "evidence"` and the same ID/revision. Follow `next`, joining quotes by `index` and `quotePosition`; source `offset` remains the original passage offset. Returned cursors use UTF-16 positions. Each complete response is at most 51,200 UTF-8 bytes, even for a huge detail or quote.
 
-Every detail/evidence page checks revision. Manual readers discard partial reads on missing/stale proposals, refresh the list/current detail and seek fresh approval if the write changed. Automatic reviewers abort that attempt without proposals or coverage commits; only the existing controller may prepare a fresh attempt. Durable retry budgeting remains the rollout prerequisite above.
+Every detail/evidence page checks revision. Manual readers discard partial reads on missing/stale proposals, refresh the list/current detail and seek fresh approval if the write changed. Automatic reviewers abort that attempt without proposals or coverage commits; only the existing controller may prepare a fresh attempt, charged to the same persisted two-attempt allowance.
 
 ## Track task blockers
 
@@ -135,7 +154,7 @@ Skip this setup if you do not need waiting conditions; other task operations wor
 
 ## Settings
 
-Manual Remembrancer features are enabled by default; automatic capture remains opt-in. Disable foreground features and new capture jobs in Pi's global settings file, normally `~/.pi/agent/settings.json` (accepted jobs still finish or retry):
+Manual Remembrancer features are enabled by default; automatic capture remains opt-in. Disable foreground features and new capture jobs in Pi's global settings file, normally `~/.pi/agent/settings.json` (accepted jobs still run within their persisted allowance unless paused):
 
 ```json
 { "pi-remembrancer": { "disabled": true } }

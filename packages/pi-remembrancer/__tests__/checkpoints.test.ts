@@ -67,13 +67,27 @@ function legacyProposal(id: string, state: ProposalState): Proposal {
   };
 }
 
-it('repairs only changed legacy proposals once in every state, preserving all other current fields and tables', () => {
+function restoreLegacyCaptureSchema(sql: DatabaseSync) {
+  sql.exec(`DROP TABLE capture_jobs; DROP TABLE capture_control;
+    CREATE TABLE capture_jobs (
+      id TEXT PRIMARY KEY, session_id TEXT NOT NULL, snapshot TEXT NOT NULL,
+      accepted_at TEXT NOT NULL, admission_order TEXT NOT NULL, body TEXT NOT NULL,
+      state TEXT NOT NULL CHECK(state IN ('queued', 'completed', 'failed')),
+      retry_eligible INTEGER NOT NULL CHECK(retry_eligible IN (0, 1)), diagnostic TEXT,
+      CHECK ((state = 'queued' AND retry_eligible = 1 AND diagnostic IS NULL)
+        OR (state = 'completed' AND retry_eligible = 0 AND diagnostic IS NULL)
+        OR (state = 'failed' AND diagnostic IS NOT NULL AND length(trim(diagnostic)) > 0))
+    );`);
+}
+
+it('repairs only changed legacy proposals once in every state, preserving all other current fields and evidence', () => {
   const dir = mkdtempSync(join(tmpdir(), 'remembrancer-current-only-'));
   const path = join(dir, 'index.sqlite');
   let store = new CheckpointStore(path);
   store.finish({ sources: [{ ...a, seedSince: '2026-01-01' }], checkpoints: [a] });
   store.close();
   const sql = new DatabaseSync(path);
+  restoreLegacyCaptureSchema(sql);
   const rows: { value: Proposal; body: string; changed: boolean }[] = [];
   const states: ProposalState[] = [
     'pending',
@@ -110,7 +124,7 @@ it('repairs only changed legacy proposals once in every state, preserving all ot
     UPDATE review_context SET generation = 100, notice_generation = 200;
     PRAGMA user_version = 0;`);
   const untouched = () =>
-    ['sources', 'reviewed_boundaries', 'capture_jobs', 'unrelated_tasks'].map((table) =>
+    ['sources', 'reviewed_boundaries', 'unrelated_tasks'].map((table) =>
       sql.prepare(`SELECT * FROM ${table}`).all(),
     );
   const before = untouched();
@@ -136,9 +150,16 @@ it('repairs only changed legacy proposals once in every state, preserving all ot
       expect(current).not.toHaveProperty('history');
     }
     expect(untouched()).toEqual(before);
+    expect(store.captureJob('stopped')).toMatchObject({
+      manifest: { version: 3, attempts: 4, attemptLimit: 4 },
+      state: 'failed',
+      retryEligible: false,
+      attemptCount: 0,
+      diagnostic: 'exhausted; Historical attempts unknown; explicit retry required',
+    });
     expect(store.contextGeneration()).toBe(100 + changed);
     expect(store.proposalNotice()).toEqual({ generation: 200 + changed, pending: 4 });
-    expect(sql.prepare('PRAGMA user_version').get()!['user_version']).toBe(1);
+    expect(sql.prepare('PRAGMA user_version').get()!['user_version']).toBe(2);
     const repaired = sql.prepare('SELECT * FROM proposals ORDER BY rowid').all();
     store.close();
     store = new CheckpointStore(path);
@@ -164,6 +185,7 @@ it('rolls back repairs, generations, trigger replacement and migration marker on
   const store = new CheckpointStore(path);
   store.close();
   const sql = new DatabaseSync(path);
+  restoreLegacyCaptureSchema(sql);
   for (const id of ['first', 'second']) {
     const value = {
       ...legacyProposal(id, 'pending'),
@@ -197,7 +219,7 @@ it('rolls back repairs, generations, trigger replacement and migration marker on
     const repaired = new CheckpointStore(path);
     expect(repaired.proposals().map((value) => value.revision)).toEqual([8, 8]);
     expect(repaired.contextGeneration()).toBe(Number(context[0]!['generation']) + 2);
-    expect(sql.prepare('PRAGMA user_version').get()!['user_version']).toBe(1);
+    expect(sql.prepare('PRAGMA user_version').get()!['user_version']).toBe(2);
     const finalRows = sql.prepare('SELECT * FROM proposals ORDER BY rowid').all();
     repaired.close();
     const reopened = new CheckpointStore(path);

@@ -326,6 +326,9 @@ it.each(['first', 'next'] as const)(
       await call(input, 'submit', { proposals: [] });
     });
     await runCaptureWorker({ database: db.file, inbox: join(dirname(db.file), 'capture-inbox') });
+    expect(runner).toHaveBeenCalledTimes(previousCalls);
+    vi.spyOn(Date, 'now').mockReturnValue(db.captureJob(failedId)!.nextAttemptAt!);
+    await runCaptureWorker({ database: db.file, inbox: join(dirname(db.file), 'capture-inbox') });
     expect(runner).toHaveBeenCalledTimes(previousCalls + 1);
     expect(db.captureJob(failedId)?.state).toBe('completed');
     expect(db.proposals()).toEqual(current);
@@ -587,8 +590,13 @@ it('allows manual ownership through reviewer cleanup and reprepares after that c
         changed = true;
       }
     });
-    await capture();
+    const id = await capture();
+    expect(runner).toHaveBeenCalledTimes(1);
+    expect(db.reviewed()).toHaveLength(0);
+    vi.spyOn(Date, 'now').mockReturnValue(db.captureJob(id)!.nextAttemptAt!);
+    await runCaptureWorker({ database: db.file, inbox: join(dirname(db.file), 'capture-inbox') });
     expect(runner).toHaveBeenCalledTimes(2);
+    expect(db.captureJob(id)?.attemptCount).toBe(2);
     expect(db.reviewed()).toHaveLength(1);
     peer.claimReview();
   } finally {

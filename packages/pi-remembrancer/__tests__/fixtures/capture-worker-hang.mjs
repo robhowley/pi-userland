@@ -10,6 +10,7 @@ const jiti = createJiti(import.meta.url, {
     '@earendil-works/pi-coding-agent': fileURLToPath(
       new URL('./capture-worker-hang-sdk.mjs', import.meta.url),
     ),
+    '@earendil-works/pi-ai': fileURLToPath(createJiti(piEntry).esmResolve('@earendil-works/pi-ai')),
     '@sinclair/typebox': host.resolve('typebox'),
   },
 });
@@ -18,6 +19,12 @@ const { CaptureWorkerOwnership } = await jiti.import(
 );
 const owner = CaptureWorkerOwnership.claim(database);
 const { runCaptureWorker } = await jiti.import('../../extensions/remembrancer/capture-worker.ts');
-await runCaptureWorker({ database, inbox, owner, budgetMs: 1500, graceMs: 30 });
+await runCaptureWorker({
+  database,
+  inbox,
+  owner,
+  budgetMs: process.env.CAPTURE_PAUSE_TEST ? 30_000 : 1500,
+  graceMs: process.env.CAPTURE_PAUSE_TEST ? 200 : 30,
+});
 if (!['cooperative', 'task'].includes(process.env.CAPTURE_HANG_STAGE))
   throw Error('A hanging operation unexpectedly settled');

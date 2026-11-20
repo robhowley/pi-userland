@@ -115,7 +115,7 @@ async function prepared() {
   const f = await fixture();
   const owner = own(f.store);
   await importReadyHandoff(f.store, owner, f.handoff.ready);
-  const attempt = owner.startAttempt(f.input.id);
+  const attempt = f.store.claimCaptureAttempt(owner, f.input.id)!;
   const review = f.store.prepareCaptureJob(owner, attempt);
   readAll(review);
   return { ...f, owner, attempt, review };
@@ -138,7 +138,7 @@ it('imports once, retains completed IDs, and safely repeats a post-commit manife
   expect(f.store.importCaptureJob(owner, f.handoff.manifest)).toEqual(first);
   await importReadyHandoff(f.store, owner, f.handoff.ready);
   expect(existsSync(f.handoff.ready)).toBe(false);
-  const attempt = owner.startAttempt(f.input.id);
+  const attempt = f.store.claimCaptureAttempt(owner, f.input.id)!;
   readAll(f.store.prepareCaptureJob(owner, attempt));
   f.store.finishCaptureJob(owner, attempt, []);
   writeFileSync(f.handoff.ready, record(f.handoff.manifest));
@@ -165,7 +165,7 @@ it('uses relocated enrollment for live coverage without restoring the accepted p
   f.store.enroll('session', relocated);
   f.store.finish([{ file: relocated, sessionId: 'session', entryId: 'covered-later' }]);
   rmSync(f.input.source.file);
-  const attempt = owner.startAttempt('first');
+  const attempt = f.store.claimCaptureAttempt(owner, 'first')!;
   const review = f.store.prepareCaptureJob(owner, attempt);
   const page = review.page() as { groups: { branchId: string }[] };
   expect(page.groups.map((group) => group.branchId)).toEqual(['right']);
@@ -219,7 +219,7 @@ it('persists classified immutable preparation failure and abandons its attempt o
   const owner = own(f.store);
   await importReadyHandoff(f.store, owner, f.handoff.ready);
   writeFileSync(f.handoff.manifest.snapshot, '{bad retained JSON');
-  const attempt = owner.startAttempt('first');
+  const attempt = f.store.claimCaptureAttempt(owner, 'first')!;
   const abandon = vi.spyOn(owner, 'abandon');
   let failure: unknown;
   try {
@@ -236,9 +236,7 @@ it('persists classified immutable preparation failure and abandons its attempt o
     retryEligible: false,
     diagnostic: (failure as Error).message,
   });
-  expect(() => f.store.failCaptureJob(owner, attempt, 'generic failure', true)).toThrow(
-    'active capture attempt',
-  );
+  expect(f.store.failCaptureJob(owner, attempt, 'generic failure', true)).toBe(false);
   expect(f.store.captureJob('first')).toEqual(failed);
   expect(f.store.runnableCaptureJobs(owner)).toEqual([]);
   expect(existsSync(f.handoff.manifest.snapshot)).toBe(true);
@@ -286,7 +284,7 @@ it.each([true, false])(
   'retains failures and explicit retry eligibility=%s, blocking newer edits in the same session',
   async (retryEligible) => {
     const f = await prepared();
-    f.store.failCaptureJob(f.owner, f.attempt, 'Historical coverage unavailable', retryEligible);
+    f.store.failCaptureJob(f.owner, f.attempt, 'Historical coverage unavailable', retryEligible, 0);
     expect(f.store.captureJob(f.input.id)).toMatchObject({
       state: 'failed',
       retryEligible,
@@ -311,10 +309,10 @@ it.each([true, false])(
     expect(readFileSync(f.handoff.manifest.snapshot, 'utf8')).not.toContain('edited');
     expect(readFileSync(second.manifest.snapshot, 'utf8')).toContain('edited');
     if (retryEligible) {
-      const retry = f.owner.startAttempt('first');
+      const retry = f.store.claimCaptureAttempt(f.owner, 'first')!;
       readAll(f.store.prepareCaptureJob(f.owner, retry));
       f.store.finishCaptureJob(f.owner, retry, []);
-      const next = f.owner.startAttempt('second');
+      const next = f.store.claimCaptureAttempt(f.owner, 'second')!;
       const review = f.store.prepareCaptureJob(f.owner, next);
       readAll(review);
       const saved = f.store.finishCaptureJob(f.owner, next, [submission('edit', 'edit')]);
@@ -343,7 +341,7 @@ it.each([
     expect(f.store.runnableCaptureJobs(owner)).toEqual([]);
     await importReadyHandoff(f.store, owner, f.handoff.ready);
     expect(f.store.runnableCaptureJobs(owner).map((job) => job.manifest.id)).toEqual(['first']);
-    const attempt = owner.startAttempt('first');
+    const attempt = f.store.claimCaptureAttempt(owner, 'first')!;
     readAll(f.store.prepareCaptureJob(owner, attempt));
     f.store.finishCaptureJob(owner, attempt, []);
     expect(f.store.runnableCaptureJobs(owner).map((job) => job.manifest.id)).toEqual(['later']);
@@ -393,7 +391,7 @@ it.each([
 ] as const)('rejects stale new-ID and empty submissions after %s', async (mutation) => {
   const f = await prepared();
   // Seed through another durable job before freezing the attempt under test.
-  f.owner.abandon(f.attempt);
+  f.store.failCaptureJob(f.owner, f.attempt, 'Reprepare after seeding', true, 0);
   const other = join(f.dir, 'other.jsonl');
   writeFileSync(
     other,
@@ -408,7 +406,7 @@ it.each([
     mutation === 'application outcome'
       ? f.store.claimProposal(existing.id, existing.revision, null)
       : undefined;
-  const attempt = f.owner.startAttempt('first');
+  const attempt = f.store.claimCaptureAttempt(f.owner, 'first')!;
   const review = f.store.prepareCaptureJob(f.owner, attempt);
   readAll(review);
   // Eligible evidence remains. Even new-ID and empty results must validate
@@ -452,8 +450,8 @@ it('defers to long-held manual ownership and requires a new attempt after the co
   expect(f.store.captureJob('first')?.state).toBe('queued');
   peer.releaseReview();
   expect(() => f.store.finishCaptureJob(f.owner, f.attempt, [])).toThrow('context changed');
-  f.store.failCaptureJob(f.owner, f.attempt, 'Context conflict; reprepare', true);
-  const retry = f.owner.startAttempt('first');
+  f.store.failCaptureJob(f.owner, f.attempt, 'Context conflict; reprepare', true, 0);
+  const retry = f.store.claimCaptureAttempt(f.owner, 'first')!;
   readAll(f.store.prepareCaptureJob(f.owner, retry));
   f.store.finishCaptureJob(f.owner, retry, []);
   expect(f.store.captureJob('first')?.state).toBe('completed');
@@ -538,7 +536,7 @@ it.each(['already-covered', 'no-evidence'] as const)(
     }
     const before = effects(f.store);
     const id = kind === 'no-evidence' ? 'empty' : 'first';
-    const attempt = owner.startAttempt(id);
+    const attempt = f.store.claimCaptureAttempt(owner, id)!;
     const review = f.store.prepareCaptureJob(owner, attempt);
     expect(review.hasEvidence).toBe(false);
     f.store.finishCaptureJob(owner, attempt, []);
@@ -554,11 +552,11 @@ it('fails closed with retained evidence/diagnostic when historical coverage cann
   f.store.enroll('session', f.input.source.file);
   f.store.finish([{ file: f.input.source.file, sessionId: 'session', entryId: 'absent' }]);
   const before = effects(f.store);
-  const attempt = owner.startAttempt('first');
+  const attempt = f.store.claimCaptureAttempt(owner, 'first')!;
   expect(() => f.store.prepareCaptureJob(owner, attempt)).toThrow('checkpoint unavailable');
   expect(f.store.captureJob('first')).toMatchObject({
     state: 'failed',
-    retryEligible: true,
+    retryEligible: false,
     diagnostic: expect.stringContaining('checkpoint unavailable'),
   });
   expect(effects(f.store)).toEqual(before);
@@ -566,18 +564,21 @@ it('fails closed with retained evidence/diagnostic when historical coverage cann
   expect(existsSync(f.handoff.manifest.snapshot)).toBe(true);
 });
 
-it('invalidates abandoned identities and release/reacquire callbacks permanently', async () => {
+it('invalidates failed identities and release/reacquire callbacks permanently', async () => {
   const f = await prepared();
   expect(() => f.store.prepareCaptureJob(f.owner, f.attempt)).toThrow('already has a frozen');
-  f.owner.abandon(f.attempt);
-  const retry = f.owner.startAttempt('first');
+  f.store.failCaptureJob(f.owner, f.attempt, 'Interrupted', true, 0);
+  const retry = f.store.claimCaptureAttempt(f.owner, 'first')!;
   const review = f.store.prepareCaptureJob(f.owner, retry);
   readAll(review);
   expect(() => f.review.page()).toThrow('active capture attempt');
   expect(() => f.store.finishCaptureJob(f.owner, f.attempt, [])).toThrow('active capture attempt');
   f.owner.release();
   const next = own(f.store);
-  const nextAttempt = next.startAttempt('first');
+  f.store.recoverInterruptedCaptureAttempts(next, 0);
+  expect(f.store.captureJob('first')).toMatchObject({ attemptCount: 2, retryEligible: false });
+  f.store.retryCaptureJob('first', f.store.captureJob('first')!.revision);
+  const nextAttempt = f.store.claimCaptureAttempt(next, 'first')!;
   readAll(f.store.prepareCaptureJob(next, nextAttempt));
   f.owner.release(); // A late old release must not close the new owner's lock.
   expect(() => review.page()).toThrow();
@@ -677,7 +678,7 @@ it('preserves publication FIFO across processes and clock rollback, independent 
   expect(f.store.runnableCaptureJobs(owner)).toEqual([]);
   await importReadyHandoff(f.store, owner, f.handoff.ready);
   expect(f.store.runnableCaptureJobs(owner).map((job) => job.manifest.id)).toEqual(['first']);
-  const attempt = owner.startAttempt('first');
+  const attempt = f.store.claimCaptureAttempt(owner, 'first')!;
   f.store.failCaptureJob(owner, attempt, 'Retained failure', false);
   expect(f.store.runnableCaptureJobs(owner)).toEqual([]);
   expect(existsSync(later.snapshot)).toBe(true);
@@ -695,7 +696,7 @@ it('completes a frozen attempt once when a later unimported ready file appears',
   );
   expect(f.store.proposals()).toHaveLength(1);
   await importReadyHandoff(f.store, f.owner, later.ready);
-  const next = f.owner.startAttempt('later');
+  const next = f.store.claimCaptureAttempt(f.owner, 'later')!;
   const review = f.store.prepareCaptureJob(f.owner, next);
   readAll(review);
   f.store.finishCaptureJob(f.owner, next, []);
@@ -708,7 +709,7 @@ it('rejects completion if an actual earlier job is unresolved, without relying o
   appendFileSync(f.input.source.file, message('later', 'promise'));
   const later = await preserveHandoff({ ...f.input, id: 'later' });
   await importReadyHandoff(f.store, f.owner, later.ready);
-  const attempt = f.owner.startAttempt('later');
+  const attempt = f.store.claimCaptureAttempt(f.owner, 'later')!;
   readAll(f.store.prepareCaptureJob(f.owner, attempt));
   const sql = new DatabaseSync(f.path);
   sql.exec(
@@ -737,9 +738,7 @@ it.each([1, 2, 99, null])(
     const later = await preserveHandoff({ ...f.input, id: 'later' });
     f.store.importCaptureJob(owner, later.manifest);
     expect(f.store.runnableCaptureJobs(owner)).toEqual([]);
-    const blocked = owner.startAttempt('first');
-    expect(() => f.store.prepareCaptureJob(owner, blocked)).toThrow('not runnable');
-    owner.abandon(blocked);
+    expect(f.store.claimCaptureAttempt(owner, 'first')).toBeUndefined();
     const other = await preserveHandoff({
       ...f.input,
       id: 'other',
@@ -924,6 +923,7 @@ it.each([
   'import-insert',
   'import-commit',
   'manifest-removed',
+  'attempt-commit',
   'prepared',
   'proposal',
   'coverage',
@@ -946,14 +946,19 @@ it.each([
       pending: committed ? 1 : 0,
     });
     expect(existsSync(f.handoff.manifest.snapshot)).toBe(point !== 'cleanup');
+    const claimed = !['import-insert', 'import-commit', 'manifest-removed'].includes(point);
+    if (point !== 'import-insert')
+      expect(f.store.captureJob('first')?.attemptCount).toBe(Number(claimed));
     const owner = own(f.store);
     if (existsSync(f.handoff.ready)) await importReadyHandoff(f.store, owner, f.handoff.ready);
     if (!committed) {
-      const attempt = owner.startAttempt('first');
+      f.store.recoverInterruptedCaptureAttempts(owner, 0);
+      const attempt = f.store.claimCaptureAttempt(owner, 'first')!;
       readAll(f.store.prepareCaptureJob(owner, attempt));
       f.store.finishCaptureJob(owner, attempt, [submission()]);
     }
     expect(f.store.proposals()).toHaveLength(1);
+    expect(f.store.captureJob('first')?.attemptCount).toBe(committed ? 1 : claimed ? 2 : 1);
   },
   12000,
 );

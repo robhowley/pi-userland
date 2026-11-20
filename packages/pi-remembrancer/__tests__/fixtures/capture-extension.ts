@@ -36,6 +36,7 @@ export function captureExtension(database = false) {
   const ctx = {
     cwd: dir,
     mode: 'tui',
+    hasUI: true,
     thinkingLevel: 'high',
     isProjectTrusted: () => true,
     model: {
@@ -50,7 +51,7 @@ export function captureExtension(database = false) {
       contextWindow: 32768,
       maxTokens: 1024,
     },
-    ui: { notify: vi.fn() },
+    ui: { notify: vi.fn(), confirm: vi.fn().mockResolvedValue(false) },
     sessionManager: { getSessionFile: () => file, getSessionId: () => 'outgoing' },
   } as unknown as ExtensionContext;
   const db = database ? new CheckpointStore() : undefined;
@@ -62,15 +63,22 @@ export function captureExtension(database = false) {
   function register() {
     const handlers = new Map<string, (event: object, ctx: ExtensionContext) => unknown>();
     const tools: ToolDefinition[] = [];
+    const commands = new Map<
+      string,
+      { handler: (args: string, ctx: ExtensionContext) => unknown }
+    >();
     const send = vi.fn();
     remembrancer({
       on: (name: string, handler: (event: object, ctx: ExtensionContext) => unknown) =>
         handlers.set(name, handler),
-      registerCommand: vi.fn(),
+      registerCommand: (
+        name: string,
+        command: { handler: (args: string, ctx: ExtensionContext) => unknown },
+      ) => commands.set(name, command),
       registerTool: (tool: ToolDefinition) => tools.push(tool),
       sendUserMessage: send,
     } as unknown as ExtensionAPI);
-    return { handlers, tools, send };
+    return { handlers, tools, commands, send };
   }
   let registered = register();
   return {

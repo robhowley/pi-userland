@@ -1,4 +1,5 @@
 import { expect, it } from 'vitest';
+import { CaptureRetryableError } from '../extensions/remembrancer/capture-jobs.js';
 import type { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
 import { readProposals, type ProposalReadArgs } from '../extensions/remembrancer/proposal-read.js';
 import type { Proposal, ProposalSource } from '../extensions/remembrancer/proposals.js';
@@ -221,15 +222,19 @@ it.each(['detail', 'evidence'] as const)(
     const rows = [row];
     const { read } = fixture(rows);
     const args = { action, id: row.id, revision: row.revision };
+    expect(() => read({ ...args, revision: 2 })).toThrow(CaptureRetryableError);
     expect(() => read({ ...args, revision: 2 })).toThrow(/Stale proposal/);
+    expect(() => read({ ...args, id: 'absent' })).toThrow(CaptureRetryableError);
     expect(() => read({ ...args, id: 'absent' })).toThrow(/Missing proposal/);
     const first = read(args);
     if (first.action === 'list' || first.next === null) throw new Error('Expected continuation');
     row.revision++;
     const before = JSON.stringify(row);
+    expect(() => read(first.next!)).toThrow(CaptureRetryableError);
     expect(() => read(first.next!)).toThrow(/Stale proposal/);
     expect(JSON.stringify(row)).toBe(before);
     rows.pop();
+    expect(() => read(first.next!)).toThrow(CaptureRetryableError);
     expect(() => read(first.next!)).toThrow(/Missing proposal/);
   },
 );
@@ -296,7 +301,12 @@ it('rejects missing identity and action-specific cursor fields at the shared rea
     { action: 'detail', id: 'proposal', revision: 3, offset: 0 },
     { action: 'evidence', id: 'proposal', revision: 3, position: 0 },
   ])
-    expect(() => read(args)).toThrow(/Invalid proposal/);
+    expect(() => read(args)).toThrow(
+      expect.objectContaining({
+        constructor: Error,
+        message: expect.stringMatching(/Invalid proposal/),
+      }),
+    );
 });
 
 it('keeps a stored conflict question discoverable when an edited draft has no question', () => {

@@ -13,6 +13,7 @@ import {
 } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
+import { DatabaseSync } from 'node:sqlite';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, expect, it, vi } from 'vitest';
@@ -24,6 +25,7 @@ import {
   runCaptureWorker,
 } from '../extensions/remembrancer/capture-worker.js';
 import type { reviewPreparedCapture } from '../extensions/remembrancer/capture.js';
+import { CaptureRetryableError } from '../extensions/remembrancer/capture-jobs.js';
 import { readProposalNotice } from '../extensions/remembrancer/capture-notices.js';
 
 const dirs: string[] = [];
@@ -171,6 +173,17 @@ function job(database: string, id = 'first') {
     store.close();
   }
 }
+// Advance only the disposable retry timestamp, never sleep for the production delay.
+function makeDue(database: string, id = 'first') {
+  expect(job(database, id)?.nextAttemptAt).toBeGreaterThan(Date.now());
+  const sql = new DatabaseSync(database);
+  try {
+    sql.exec('PRAGMA busy_timeout = 5000');
+    sql.prepare('UPDATE capture_jobs SET next_attempt_at = ? WHERE id = ?').run(Date.now(), id);
+  } finally {
+    sql.close();
+  }
+}
 async function waitFor(predicate: () => boolean, ms = 15_000) {
   const end = Date.now() + ms;
   while (!predicate()) {
@@ -179,9 +192,10 @@ async function waitFor(predicate: () => boolean, ms = 15_000) {
         'Timed out waiting for worker: ' +
           dirs
             .map((dir) =>
-              existsSync(join(dir, 'db.sqlite.capture.log'))
-                ? readFileSync(join(dir, 'db.sqlite.capture.log'), 'utf8')
-                : '',
+              readdirSync(dir, { recursive: true })
+                .filter((name) => String(name).endsWith('.capture.log'))
+                .map((name) => readFileSync(join(dir, String(name)), 'utf8'))
+                .join('\n'),
             )
             .join('\n'),
       );
@@ -212,6 +226,271 @@ function launch(f: Awaited<ReturnType<typeof fixture>>, entry = bootstrap) {
   return child;
 }
 
+function control(f: Awaited<ReturnType<typeof fixture>>, action: 'pause' | 'resume') {
+  execFileSync(
+    nodeExecutable,
+    [
+      '--loader',
+      fileURLToPath(new URL('./fixtures/typescript-loader.mjs', import.meta.url)),
+      fileURLToPath(new URL('./fixtures/capture-jobs-child.mjs', import.meta.url)),
+      f.database,
+      'first',
+      `control-${action}`,
+      String(Date.now()),
+    ],
+    { env: isolatedEnv(f), stdio: 'pipe' },
+  );
+}
+
+it('commits before preparation and never starts work when the durable claim write fails', async () => {
+  const f = await fixture();
+  await preserveHandoff(f.input);
+  const sql = new DatabaseSync(f.database);
+  const prepare = vi.spyOn(CheckpointStore.prototype, 'prepareCaptureJob');
+  const review = vi.fn(emptyReview);
+  try {
+    sql.exec(`CREATE TRIGGER claim_fault BEFORE UPDATE OF attempt_count ON capture_jobs
+      BEGIN SELECT RAISE(ABORT, 'claim write fault'); END`);
+    await expect(runCaptureWorker({ ...f, review })).rejects.toThrow('claim write fault');
+    expect(prepare).not.toHaveBeenCalled();
+    expect(review).not.toHaveBeenCalled();
+    expect(job(f.database)).toMatchObject({ attemptCount: 0, activeAttemptId: null });
+    sql.exec('DROP TRIGGER claim_fault');
+    prepare.mockRestore();
+    const implementation = CheckpointStore.prototype.prepareCaptureJob;
+    vi.spyOn(CheckpointStore.prototype, 'prepareCaptureJob').mockImplementation(function (
+      this: CheckpointStore,
+      owner,
+      attempt,
+    ) {
+      expect(job(f.database)).toMatchObject({ attemptCount: 1, activeAttemptId: attempt.id });
+      return implementation.call(this, owner, attempt);
+    });
+    await runCaptureWorker({ ...f, review });
+    expect(review).toHaveBeenCalledOnce();
+    expect(job(f.database)).toMatchObject({ state: 'completed', attemptCount: 1 });
+  } finally {
+    sql.close();
+  }
+});
+
+it.each([false, true])(
+  'never restarts permanent or exhausted jobs on repeated wakes (temporary=%s)',
+  async (temporary) => {
+    const f = await fixture();
+    const saved = await preserveHandoff(f.input);
+    const review = vi
+      .fn<typeof reviewPreparedCapture>()
+      .mockRejectedValue(
+        temporary ? new CaptureRetryableError('temporarily unavailable') : Error('unknown failure'),
+      );
+    await runCaptureWorker({ ...f, review });
+    if (temporary) {
+      makeDue(f.database);
+      await runCaptureWorker({ ...f, review });
+    }
+    const stopped = job(f.database);
+    expect(stopped).toMatchObject({
+      retryEligible: false,
+      nextAttemptAt: null,
+      attemptCount: temporary ? 2 : 1,
+    });
+    for (let wake = 0; wake < 3; wake++) await runCaptureWorker({ ...f, review });
+    expect(review).toHaveBeenCalledTimes(temporary ? 2 : 1);
+    expect(job(f.database)).toEqual(stopped);
+    expect(existsSync(saved.manifest.snapshot)).toBe(true);
+  },
+);
+
+it.each([
+  ...[
+    'Provider returned error',
+    'Provider returned error: unknown upstream failure',
+    'Provider returned error: PermissionDenied',
+    'Provider returned error: 402 Payment Required',
+    'Provider returned error: unsupported model',
+    'Provider returned error: output limit exceeded',
+    'Provider returned error: 500 prompt is too long',
+    'Provider returned error: 503 response truncated',
+    'Service unavailable: prompt is too long',
+    'Provider returned an error: prompt is too long; rate limit',
+    'Provider returned an error',
+    'The upstream provider returned an error: unknown upstream failure',
+    'Provider returned an error: PermissionDenied; The service is temporarily unavailable',
+    'Provider returned an error: 402 Payment Required; The service is temporarily unavailable',
+    ...['Provider returned error', 'Provider returned an error'].flatMap((wrapper) =>
+      [
+        'PermissionDenied',
+        '402 Payment Required',
+        'The requested model is not supported',
+        'output limit exceeded',
+        'invalid_request_error',
+        'Configuration error: request timeout must be positive',
+        'prompt is too long',
+      ].map((reason) => `${wrapper}: ${reason}; 503 service is temporarily unavailable`),
+    ),
+  ].map((errorMessage) => ({ errorMessage, retryable: false })),
+  ...[
+    'Provider returned error: 503 service unavailable',
+    'Provider returned error: 429 rate_limit_error',
+    'Throttling error: Too many tokens, please retry your request',
+    'Provider returned error: Connection error: socket hang up',
+    'Provider returned error: Provider overloaded',
+    'The upstream provider returned an error: 503 service is temporarily unavailable',
+  ].map((errorMessage) => ({ errorMessage, retryable: true })),
+])(
+  'persists local provider retry classification across wakes ($errorMessage, retryable=$retryable)',
+  async ({ errorMessage, retryable }) => {
+    const f = await fixture();
+    const p = await provider(f);
+    p.fail(errorMessage);
+    const saved = await preserveHandoff(f.input);
+    const first = launch(f);
+    expect((await once(first, 'exit'))[0]).toBe(0);
+    expect(job(f.database)).toMatchObject({
+      state: 'failed',
+      attemptCount: 1,
+      activeAttemptId: null,
+      retryEligible: retryable,
+    });
+    expect(p.requests).toHaveLength(1);
+    if (retryable) {
+      const delayed = job(f.database);
+      const early = launch(f);
+      expect((await once(early, 'exit'))[0]).toBe(0);
+      expect(job(f.database)).toEqual(delayed);
+      expect(p.requests).toHaveLength(1);
+      makeDue(f.database);
+      const retry = launch(f);
+      expect((await once(retry, 'exit'))[0]).toBe(0);
+    }
+    const stopped = job(f.database);
+    expect(stopped).toMatchObject({
+      state: 'failed',
+      attemptCount: retryable ? 2 : 1,
+      activeAttemptId: null,
+      retryEligible: false,
+      nextAttemptAt: null,
+    });
+    const review = vi.fn(emptyReview);
+    for (let wake = 0; wake < 3; wake++) await runCaptureWorker({ ...f, review });
+    const restarted = launch(f);
+    expect((await once(restarted, 'exit'))[0]).toBe(0);
+    expect(review).not.toHaveBeenCalled();
+    expect(p.requests).toHaveLength(retryable ? 2 : 1);
+    expect(job(f.database)).toEqual(stopped);
+    expect(existsSync(saved.manifest.snapshot)).toBe(true);
+  },
+  30_000,
+);
+
+it('synchronously fences quick pause/resume and stale callbacks without replacing the pause failure', async () => {
+  const f = await fixture();
+  await preserveHandoff(f.input);
+  let late: (() => unknown) | undefined;
+  let paused: ReturnType<typeof job>;
+  await runCaptureWorker({
+    ...f,
+    review: async (current, _store, _input, check) => {
+      readAll(current);
+      late = () => current.completion([]);
+      control(f, 'pause');
+      paused = job(f.database);
+      control(f, 'resume');
+      expect(check).toThrow('durable capture attempt');
+      expect(late).toThrow('durable capture attempt');
+      return [];
+    },
+  });
+  expect(late).toThrow();
+  expect(job(f.database)).toEqual(paused!);
+  expect(job(f.database)).toMatchObject({
+    attemptCount: 1,
+    activeAttemptId: null,
+    retryEligible: true,
+  });
+  await runCaptureWorker({ ...f, review: emptyReview });
+  expect(job(f.database)).toEqual(paused!);
+});
+
+it('cross-process pause aborts a blocked local provider, persists through wakes and never starts queued jobs', async () => {
+  const f = await fixture();
+  const p = await provider(f);
+  p.block();
+  const saved = await preserveHandoff(f.input);
+  await preserveHandoff({ ...f.input, id: 'successor' });
+  const child = launch(f);
+  const exited = once(child, 'exit');
+  await waitFor(() => p.requests.length === 1);
+  expect(job(f.database)).toMatchObject({ attemptCount: 1 });
+  control(f, 'pause');
+  const [code] = await exited;
+  expect(code).toBe(0);
+  // The provider response is still blocked. Worker cancellation does not wait for it.
+  expect(p.requests).toHaveLength(1);
+  const paused = job(f.database);
+  const review = vi.fn(emptyReview);
+  await runCaptureWorker({ ...f, review });
+  const wake = launch(f);
+  expect((await once(wake, 'exit'))[0]).toBe(0);
+  expect(review).not.toHaveBeenCalled();
+  expect(job(f.database)).toEqual(paused);
+  expect(job(f.database, 'successor')).toMatchObject({ state: 'queued', attemptCount: 0 });
+  expect(existsSync(saved.manifest.snapshot)).toBe(true);
+  control(f, 'resume');
+  await runCaptureWorker({ ...f, review });
+  expect(review).not.toHaveBeenCalled();
+  expect(job(f.database)).toEqual(paused);
+  p.release();
+});
+
+it.each(['setup', 'cooperative', 'cleanup'])(
+  'polls authority during asynchronous %s and forces stuck cleanup to exit after revocation',
+  async (stage) => {
+    const f = await fixture();
+    await provider(f);
+    await preserveHandoff(f.input);
+    const marker = join(f.dir, 'pause-marker');
+    const child = spawn(
+      nodeExecutable,
+      [
+        fileURLToPath(new URL('./fixtures/capture-worker-hang.mjs', import.meta.url)),
+        hostEntry,
+        f.database,
+        f.inbox,
+      ],
+      {
+        env: {
+          ...isolatedEnv(f),
+          CAPTURE_HANG_STAGE: stage,
+          CAPTURE_HANG_MARKER: marker,
+          CAPTURE_PAUSE_TEST: '1',
+        },
+        stdio: ['ignore', 'ignore', 'pipe'],
+      },
+    );
+    children.add(child);
+    let stderr = '';
+    child.stderr!.on('data', (chunk) => {
+      stderr += String(chunk);
+    });
+    const exited = once(child, 'exit');
+    await waitFor(() => existsSync(marker));
+    control(f, 'pause');
+    const paused = job(f.database);
+    control(f, 'resume');
+    const [code] = await exited;
+    expect(code, stderr).toBe(stage === 'cooperative' ? 0 : 1);
+    if (stage === 'cooperative') {
+      expect(readFileSync(marker + '.aborted', 'utf8')).toBe('yes');
+      expect(readFileSync(marker + '.cleaned', 'utf8')).toBe('yes');
+    }
+    expect(job(f.database)).toEqual(paused);
+    expect(job(f.database)).toMatchObject({ attemptCount: 1, activeAttemptId: null });
+  },
+  15_000,
+);
+
 it('bootstraps a real detached worker when admission had no foreground database', async () => {
   const f = await fixture();
   rmSync(f.database);
@@ -229,7 +508,7 @@ it('bootstraps a real detached worker when admission had no foreground database'
   expect(await readProposalNotice(f.database)).toEqual({ generation: 0, pending: 0 });
 });
 
-it('drains accepted work without rechecking capture-off, retries at most twice per run, retaining evidence', async () => {
+it('honors capture-off admission, delays repeated wakes and publishes the final durable attempt', async () => {
   const f = await fixture();
   const handoff = await preserveHandoff(f.input);
   writeFileSync(
@@ -238,20 +517,27 @@ it('drains accepted work without rechecking capture-off, retries at most twice p
   );
   const review = vi
     .fn<typeof reviewPreparedCapture>()
-    .mockRejectedValue(Error('provider unavailable'));
-  await runCaptureWorker({ ...f, review });
-  expect(review).toHaveBeenCalledTimes(2);
-  expect(job(f.database)).toMatchObject({ state: 'failed', retryEligible: true });
+    .mockRejectedValue(new CaptureRetryableError('provider unavailable'));
+  const released = vi.fn(async () => {});
+  await runCaptureWorker({ ...f, review, afterRelease: released });
+  expect(review).toHaveBeenCalledTimes(1);
+  expect(released).toHaveBeenCalledTimes(1);
+  const failed = job(f.database);
+  expect(failed).toMatchObject({ state: 'failed', retryEligible: true, attemptCount: 1 });
+  for (let wake = 0; wake < 3; wake++) await runCaptureWorker({ ...f, review });
+  expect(review).toHaveBeenCalledTimes(1);
+  expect(job(f.database)).toEqual(failed);
   expect(existsSync(handoff.manifest.snapshot)).toBe(true);
   expect(await readProposalNotice(f.database)).toEqual({ generation: 0, pending: 0 });
+  makeDue(f.database);
   await runCaptureWorker({ ...f, review: emptyReview });
-  expect(job(f.database)?.state).toBe('completed');
+  expect(job(f.database)).toMatchObject({ state: 'completed', attemptCount: 2 });
   expect(existsSync(handoff.manifest.snapshot)).toBe(false);
   expect(await readProposalNotice(f.database)).toEqual({ generation: 0, pending: 0 });
   // Already-covered work also produces no proposal notice.
   await preserveHandoff({ ...f.input, id: 'covered' });
   await runCaptureWorker({ ...f, review });
-  expect(review).toHaveBeenCalledTimes(2);
+  expect(review).toHaveBeenCalledTimes(1);
   expect(await readProposalNotice(f.database)).toEqual({ generation: 0, pending: 0 });
 });
 
@@ -264,6 +550,7 @@ it('does not own the manual lock through model work or cleanup; contention defer
   await runCaptureWorker({ ...f, review });
   expect(review).not.toHaveBeenCalled();
   expect(existsSync(f.database + '.capture.log')).toBe(false);
+  expect(job(f.database)).toMatchObject({ attemptCount: 0, activeAttemptId: null });
   manual.releaseReview();
   let checked = false;
   await runCaptureWorker({
@@ -277,7 +564,10 @@ it('does not own the manual lock through model work or cleanup; contention defer
       return emptyReview(...args);
     },
   });
-  expect(job(f.database)?.state).toBe('completed');
+  expect(job(f.database)).toMatchObject({ state: 'failed', attemptCount: 1 });
+  makeDue(f.database);
+  await runCaptureWorker({ ...f, review: emptyReview });
+  expect(job(f.database)).toMatchObject({ state: 'completed', attemptCount: 2 });
   manual.close();
 });
 
@@ -399,7 +689,7 @@ it('invalidates timed-out output even if it returns before cleanup grace expires
       return [];
     },
   });
-  expect(attempts).toHaveLength(2);
+  expect(attempts).toHaveLength(1);
   for (const attempt of attempts) {
     expect(attempt.aborted).toBe(true);
     expect(attempt.signal.aborted).toBe(true);
@@ -447,6 +737,7 @@ it.each(['setup', 'prompt', 'cleanup'])(
       diagnostic: 'Capture review timed out',
     });
     expect(existsSync(saved.manifest.snapshot)).toBe(true);
+    makeDue(f.database);
     await runCaptureWorker({ ...f, review: emptyReview });
     expect(job(f.database)?.state).toBe('completed');
   },
@@ -486,6 +777,7 @@ it('retains a handoff after bootstrap failure following successful spawn; a late
 async function provider(f: Awaited<ReturnType<typeof fixture>>, empty = false) {
   const requests: { body: Record<string, unknown>; headers: Record<string, unknown> }[] = [];
   let block = false;
+  let failure: string | undefined;
   const blocked = new Set<() => void>();
   const server = createServer(async (req, res) => {
     let raw = '';
@@ -495,6 +787,11 @@ async function provider(f: Awaited<ReturnType<typeof fixture>>, empty = false) {
     const pid = Number(req.headers['x-worker-pid']);
     if (Number.isSafeInteger(pid) && pid > 1) workerPids.add(pid);
     if (block) await new Promise<void>((r) => blocked.add(r));
+    if (failure) {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end(`data: ${JSON.stringify({ error: { message: failure } })}\n\n`);
+      return;
+    }
     const messages = body.messages as {
       role: string;
       tool_calls?: { function: { name: string } }[];
@@ -608,6 +905,9 @@ async function provider(f: Awaited<ReturnType<typeof fixture>>, empty = false) {
   );
   return {
     requests,
+    fail: (message: string) => {
+      failure = message;
+    },
     block: () => {
       block = true;
     },
@@ -715,6 +1015,13 @@ it.each(['running', 'crashed'] as const)(
       expect(job(f.database, id)?.state).toBe('queued');
       expect(existsSync(join(f.inbox, snapshot))).toBe(true);
     }
+    // Interrupted work is recovered once and delayed. Context races also delay,
+    // rather than launching another whole review immediately.
+    p.release();
+    if (crash) await runCaptureWorker({ ...f, review: emptyReview });
+    else await waitFor(() => job(f.database, id)?.state === 'failed');
+    expect(job(f.database, id)).toMatchObject({ attemptCount: 1, retryEligible: true });
+    makeDue(f.database, id);
     // A capture-off terminal uses the actual recovery launch and asynchronous notice tick.
     const observer = lifecycle('observe');
     observer.stderr!.on('data', (chunk) => {
@@ -787,7 +1094,49 @@ it('duplicate launches run only one reviewer; killing an owner leaves queued evi
   await ended;
   expect(existsSync(saved.manifest.snapshot)).toBe(true);
   await runCaptureWorker({ ...f, review: emptyReview });
-  expect(job(f.database)?.state).toBe('completed');
+  expect(job(f.database)).toMatchObject({ state: 'failed', attemptCount: 1 });
+  makeDue(f.database);
+  await runCaptureWorker({ ...f, review: emptyReview });
+  expect(job(f.database)).toMatchObject({ state: 'completed', attemptCount: 2 });
+}, 25_000);
+
+it('persists two actual worker deaths across competing launches and repeated restart wakes', async () => {
+  const f = await fixture();
+  const p = await provider(f);
+  p.block();
+  const saved = await preserveHandoff(f.input);
+  const review = vi.fn(emptyReview);
+  for (let count = 1; count <= 2; count++) {
+    const child = launch(f);
+    await waitFor(() => p.requests.length === count);
+    const active = job(f.database);
+    expect(active).toMatchObject({ state: 'queued', attemptCount: count });
+    expect(active!.activeAttemptId).toEqual(expect.any(String));
+    const contender = launch(f);
+    expect((await once(contender, 'exit'))[0]).toBe(0);
+    expect(job(f.database)).toEqual(active);
+    const exited = once(child, 'exit');
+    child.kill('SIGKILL');
+    await exited;
+    await runCaptureWorker({ ...f, review });
+    expect(review).not.toHaveBeenCalled();
+    expect(job(f.database)).toMatchObject({
+      state: 'failed',
+      attemptCount: count,
+      activeAttemptId: null,
+      retryEligible: count < 2,
+    });
+    for (let wake = 0; wake < 2; wake++) await runCaptureWorker({ ...f, review });
+    expect(p.requests).toHaveLength(count);
+    if (count < 2) makeDue(f.database);
+  }
+  const stopped = job(f.database);
+  const wake = launch(f);
+  expect((await once(wake, 'exit'))[0]).toBe(0);
+  expect(job(f.database)).toEqual(stopped);
+  expect(p.requests).toHaveLength(2);
+  expect(existsSync(saved.manifest.snapshot)).toBe(true);
+  p.release();
 }, 25_000);
 
 it('rejects synchronous reviewer output after absolute expiry before timers can run', async () => {
@@ -821,8 +1170,8 @@ it('rejects synchronous reviewer output after absolute expiry before timers can 
     },
   });
   expect(earlyAborts).toBe(0);
-  expect(deadlineRejections).toBe(2);
-  expect(validationRejections).toBe(2);
+  expect(deadlineRejections).toBe(1);
+  expect(validationRejections).toBe(1);
   expect(job(f.database)).toMatchObject({ state: 'failed', retryEligible: true });
   const db = new CheckpointStore(f.database);
   expect(db.reviewed()).toEqual([]);
@@ -849,7 +1198,7 @@ it('scopes cwd through awaited reviewer cleanup, restores it on failure and omit
     },
   });
   expect(process.cwd()).toBe(original);
-  expect(cleanupCwds).toEqual([realpathSync(f.dir), realpathSync(f.dir)]);
+  expect(cleanupCwds).toEqual([realpathSync(f.dir)]);
   const diagnostic = job(f.database)!.diagnostic!;
   expect(diagnostic).toContain('reviewer-setup-prompt-cleanup');
   expect(diagnostic).toContain('first');
@@ -1034,6 +1383,7 @@ it('kills its owned blocking task child on attempt abort before the worker exits
   }
   expect(job(f.database)).toMatchObject({ state: 'failed', retryEligible: true });
   expect(existsSync(saved.manifest.snapshot)).toBe(true);
+  makeDue(f.database);
   await runCaptureWorker({ ...f, review: emptyReview });
   expect(job(f.database)?.state).toBe('completed');
 }, 15_000);

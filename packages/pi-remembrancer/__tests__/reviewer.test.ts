@@ -1,3 +1,5 @@
+import { realpathSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import type {
   CreateAgentSessionOptions,
   ResourceLoader,
@@ -12,6 +14,16 @@ const sdk = vi.hoisted(() => ({
   inMemorySettings: vi.fn(),
 }));
 
+// Keep event delivery controlled, but use the originating installation's real
+// classifier when exercising the host entry, just like the detached bootstrap.
+vi.mock('@earendil-works/pi-ai', async (importOriginal) => {
+  const entry = process.env['PI_REMEMBRANCER_TEST_PI_ENTRY'];
+  if (!entry) return importOriginal();
+  const resolved = realpathSync(entry);
+  const { createJiti } = createRequire(resolved)('jiti');
+  return import(createJiti(resolved).esmResolve('@earendil-works/pi-ai'));
+});
+
 vi.mock('@earendil-works/pi-coding-agent', () => ({
   createAgentSession: sdk.createAgentSession,
   createExtensionRuntime: sdk.createExtensionRuntime,
@@ -19,6 +31,7 @@ vi.mock('@earendil-works/pi-coding-agent', () => ({
   SettingsManager: { inMemory: sdk.inMemorySettings },
 }));
 
+import { CaptureRetryableError } from '../extensions/remembrancer/capture-jobs.js';
 import { runReviewer } from '../extensions/remembrancer/reviewer.js';
 import { reviewPreparedCapture } from '../extensions/remembrancer/capture.js';
 import { CaptureReview } from '../extensions/remembrancer/capture-review.js';
@@ -174,6 +187,148 @@ describe('runReviewer', () => {
     },
   );
 
+  it.each([
+    { stopReason: 'error', errorMessage: '503 service unavailable', retryable: true },
+    { stopReason: 'error', errorMessage: '429 too many requests', retryable: true },
+    { stopReason: 'error', errorMessage: 'Provider overloaded', retryable: true },
+    { stopReason: 'error', errorMessage: 'Connection error: socket hang up', retryable: true },
+    { stopReason: 'error', errorMessage: 'Request timed out', retryable: true },
+    {
+      stopReason: 'error',
+      errorMessage: 'Throttling error: Too many tokens, please retry your request',
+      retryable: true,
+    },
+    {
+      stopReason: 'error',
+      errorMessage: 'Service unavailable: prompt is too long',
+      retryable: false,
+    },
+    ...[
+      '500 internal server error',
+      '502 bad gateway',
+      '504 gateway timeout',
+      '524 timeout',
+      '429 rate_limit_error',
+      '503 service unavailable',
+      'Provider overloaded',
+      'Connection error: socket hang up',
+      'Request timed out',
+      'fetch failed',
+      'ECONNRESET: connection lost',
+      'Stream ended before message_stop',
+    ].flatMap((reason) =>
+      ['Provider returned error', 'The upstream provider returned an error'].map((wrapper) => ({
+        stopReason: 'error',
+        errorMessage: `${wrapper}: ${reason}`,
+        retryable: true,
+      })),
+    ),
+    ...[
+      'PermissionDenied',
+      '402 Payment Required',
+      'unsupported model',
+      'output limit exceeded',
+      'Unrecognized provider failure',
+    ].flatMap((errorMessage) =>
+      [errorMessage, `Provider returned error: ${errorMessage}`].map((errorMessage) => ({
+        stopReason: 'error',
+        errorMessage,
+        retryable: false,
+      })),
+    ),
+    ...['Provider returned error', 'Provider returned an error'].flatMap((wrapper) =>
+      [
+        '',
+        ': unknown upstream failure',
+        ': PermissionDenied; The service is temporarily unavailable',
+        ': 402 Payment Required; The service is temporarily unavailable',
+        ...[
+          'PermissionDenied',
+          '402 Payment Required',
+          'unsupported model',
+          'model not found',
+          'The requested model is not supported',
+          'InvalidArgument',
+          'Unauthenticated',
+          'output limit exceeded',
+          'invalid_request_error',
+          'Configuration error: request timeout must be positive',
+          'missing credentials',
+          '401 AuthenticationError',
+          '403 access denied',
+          'prompt is too long',
+          'prompt is too long; rate limit',
+          'Input length 100 exceeds maximum allowed input length of 10 tokens; too many requests',
+          'response truncated',
+          '429 insufficient_quota',
+        ].map((reason) => `: ${reason}; 503 service is temporarily unavailable`),
+      ].map((suffix) => ({
+        stopReason: 'error',
+        errorMessage: wrapper + suffix,
+        retryable: false,
+      })),
+    ),
+    {
+      stopReason: 'error',
+      errorMessage: '500 provider error: prompt is too long',
+      retryable: false,
+    },
+    {
+      stopReason: 'error',
+      errorMessage: 'Provider returned error: 401 invalid_api_key',
+      retryable: false,
+    },
+    {
+      stopReason: 'error',
+      errorMessage: 'Provider returned error: authentication failed',
+      retryable: false,
+    },
+    {
+      stopReason: 'error',
+      errorMessage: 'Provider returned error: invalid_request_error',
+      retryable: false,
+    },
+    {
+      stopReason: 'error',
+      errorMessage: 'Provider returned error: missing credentials',
+      retryable: false,
+    },
+    {
+      stopReason: 'error',
+      errorMessage: 'Configuration error: request timeout must be positive',
+      retryable: false,
+    },
+    { stopReason: 'error', errorMessage: '429 insufficient_quota', retryable: false },
+    {
+      stopReason: 'error',
+      errorMessage: 'Server error: response truncated',
+      retryable: false,
+    },
+    { stopReason: 'length', errorMessage: '503 service unavailable', retryable: false },
+    { stopReason: 'aborted', errorMessage: '503 service unavailable', retryable: false },
+    { stopReason: 'error', errorMessage: 'Unrecognized provider failure', retryable: false },
+    { stopReason: 'error', errorMessage: undefined, retryable: false },
+  ])(
+    'classifies $stopReason ($errorMessage), retryable=$retryable',
+    async ({ stopReason, errorMessage, retryable }) => {
+      session.prompt.mockImplementation(async () => {
+        session.subscribe.mock.calls[0]![0]({
+          type: 'message_end',
+          message: { role: 'assistant', stopReason, errorMessage, content: [] },
+        });
+      });
+      const failure = await runReviewer(input()).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).toBe(errorMessage || 'Reviewer error');
+      if (retryable) expect(failure).toBeInstanceOf(CaptureRetryableError);
+      else expect((failure as Error).constructor).toBe(Error);
+      expect(session.prompt).toHaveBeenCalledOnce();
+      expect(sdk.createAgentSession).toHaveBeenCalledOnce();
+      expect(session.abort).toHaveBeenCalledOnce();
+      expect(session.dispose).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each(['model', 'tool', 'submission'])(
     'preserves the initial %s failure when cancellation emits an aborted message',
     async (failure) => {
@@ -227,31 +382,42 @@ describe('runReviewer', () => {
     },
   );
 
-  it('preserves the original thrown tool error and its stack', async () => {
-    const failure = new Error('Task lookup failed');
-    const tool = makeTool('remembrancer_tasks', { execute: vi.fn().mockRejectedValue(failure) });
-    session.prompt.mockImplementation(async () => {
-      const options = sdk.createAgentSession.mock.calls[0]![0] as CreateAgentSessionOptions;
-      await expect(
-        options.customTools![0]!.execute(
-          'id',
-          {},
-          undefined,
-          undefined,
-          {} as Parameters<ToolDefinition['execute']>[4],
-        ),
-      ).rejects.toBe(failure);
-      session.subscribe.mock.calls[0]![0]({
-        type: 'tool_execution_end',
-        toolName: tool.name,
-        isError: true,
-        result: { content: [{ type: 'text', text: failure.message }], details: {} },
+  it.each([
+    { retryable: false, promptFails: false },
+    { retryable: true, promptFails: false },
+    { retryable: false, promptFails: true },
+    { retryable: true, promptFails: true },
+  ])(
+    'preserves the original tool error ($retryable, prompt failure=$promptFails)',
+    async ({ retryable, promptFails }) => {
+      const failure = retryable
+        ? new CaptureRetryableError('Task lookup failed')
+        : new Error('Task lookup failed');
+      const tool = makeTool('remembrancer_tasks', { execute: vi.fn().mockRejectedValue(failure) });
+      session.prompt.mockImplementation(async () => {
+        const options = sdk.createAgentSession.mock.calls[0]![0] as CreateAgentSessionOptions;
+        await expect(
+          options.customTools![0]!.execute(
+            'id',
+            {},
+            undefined,
+            undefined,
+            {} as Parameters<ToolDefinition['execute']>[4],
+          ),
+        ).rejects.toBe(failure);
+        session.subscribe.mock.calls[0]![0]({
+          type: 'tool_execution_end',
+          toolName: tool.name,
+          isError: true,
+          result: { content: [{ type: 'text', text: failure.message }], details: {} },
+        });
+        if (promptFails) throw new Error('Prompt stopped after tool failure');
       });
-    });
-    await expect(runReviewer(input({ tools: [tool] }))).rejects.toBe(failure);
-    expect(session.abort).toHaveBeenCalledOnce();
-    expect(session.dispose).toHaveBeenCalledOnce();
-  });
+      await expect(runReviewer(input({ tools: [tool] }))).rejects.toBe(failure);
+      expect(session.abort).toHaveBeenCalledOnce();
+      expect(session.dispose).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each(
     (['detail', 'evidence'] as const).flatMap((action) =>
@@ -350,15 +516,17 @@ describe('runReviewer', () => {
         } catch (error) {
           failure = error;
         }
-        expect(failure).toBeInstanceOf(Error);
+        expect(failure).toBeInstanceOf(CaptureRetryableError);
         exists = false;
         // The SDK may catch tool errors and keep going. The reviewer still rejects
         // further calls and never stages a submission or refreshes within this run.
         await expect(call('remembrancer_submit', { proposals: [] })).rejects.toBe(failure);
       });
-      await expect(
-        reviewPreparedCapture(review, db, { cwd, model, sessionId }, () => {}),
-      ).rejects.toThrow(change === 'stale' ? /Stale proposal/ : /Missing proposal/);
+      const running = reviewPreparedCapture(review, db, { cwd, model, sessionId }, () => {});
+      await expect(running).rejects.toThrow(
+        change === 'stale' ? /Stale proposal/ : /Missing proposal/,
+      );
+      await expect(running).rejects.toBe(failure);
       expect(completion).not.toHaveBeenCalled();
       expect(session.abort).toHaveBeenCalledOnce();
       expect(session.prompt).toHaveBeenCalledOnce();
