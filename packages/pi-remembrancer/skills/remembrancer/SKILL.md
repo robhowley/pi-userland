@@ -91,7 +91,7 @@ Enumerate `remembrancer_proposals` list pages (default `action: "list"`, `nextOf
 
 Before revising or deciding a candidate, fetch `action: "detail"` with its `id` and discovered `revision`, including on the first page. Follow each returned `next` request until `null`, join `json` fragments in `position` order, then parse the joined JSON. This is the complete current proposal without sources or revision history; use `draft` when present. Fetch needed saved evidence with `action: "evidence"`, the same `id`/`revision`, and follow `next` until `null`. Join exact quote fragments by reference `index` and `quotePosition`, retaining source metadata. `offset` is the original passage offset, not a quote-fragment cursor. Positions count UTF-16 units; use returned cursors rather than inventing them. Every complete encoded response is at most 51,200 UTF-8 bytes.
 
-On a missing/stale proposal error, discard all partial detail/evidence for that proposal, refresh the list/current detail, and reconcile again. Obtain fresh approval if the proposed write changed; never apply a stale or partially read proposal. Lists are live, not frozen snapshots. Do not use decided proposals as a durable archive; proposal revision history is not available.
+On a missing/stale proposal error, discard all partial detail/evidence for that proposal, refresh the list/current detail, and reconcile again. Obtain fresh approval if the proposed write changed; never apply a stale or partially read proposal.
 
 1. Begin the review with the requested `remembrancer_review` action. For `seed 14d`, add `seed: "14d"`. Read every returned page with `action: "next"` and the same batch token until no pages remain. Later changes are not part of the batch. Read evidence and context entries in `groups[].entries` order, retaining their group's source and branch metadata. Join continued text using `offset` and `continues`.
 2. If a selected item needs interpretation, call `action: "context"` with the same batch token and request only the needed context. For context `selected`, take `sessionId` and `branchId` from the group, and `entryId` and `editId` from the entry. Context supports interpretation, not new proposal evidence, and does not advance pages.
@@ -106,36 +106,31 @@ On a missing/stale proposal error, discard all partial detail/evidence for that 
 
 ### Capture controls
 
-These commands are available even with capture off or `disabled: true`:
+Use these controls even when capture or the extension is disabled:
 
-| Command                                     | Use                                                                                                                                                                                           |
-| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/remembrancer capture status`              | Read full job IDs, attempts used/remaining, stopped reasons, retry times and blocking job IDs. Counts describe the current allowance, not lifetime attempts.                                  |
-| `/remembrancer capture pause`               | Stop new attempts and request cancellation of running reviews. Pause persists across restarts; evidence may still queue and used attempts still count. Cancellation is not instantaneous.     |
-| `/remembrancer capture resume`              | Allow eligible work to run. It does not reset counts or delays, restore cancelled reviews, or bypass earlier jobs.                                                                            |
-| `/remembrancer capture retry <full-job-id>` | Ask the user to confirm a stopped job's reason and allowance in the interactive UI, then grant that job two fresh attempts and clear its delay. Use one exact full ID, not a prefix or batch. |
+| Command                                     | Use                                                                                                                                                                   |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/remembrancer capture status`              | Inspect the job's full ID, reason, remaining attempts, retry time and blocking job before suggesting a next action.                                                   |
+| `/remembrancer capture pause`               | Stop capture work; warn that cancelling an active request may take time.                                                                                              |
+| `/remembrancer capture resume`              | Continue paused work. Do not use it to retry stopped jobs.                                                                                                            |
+| `/remembrancer capture retry <full-job-id>` | Use one exact full ID, not a prefix or batch. Have the user confirm the displayed reason and allowance in the interactive UI; confirmation grants two fresh attempts. |
 
-Retry cannot be authorized headlessly. If the job changes during confirmation, inspect its status again instead of reusing approval. Retry does not unpause capture, bypass earlier jobs, or authorize Taskwarrior changes.
+Do not authorize retry headlessly. If the job changes during confirmation, inspect its status again and obtain fresh approval. Retry does not resume paused capture or skip blocking jobs; address those separately with the user. Never treat retry as approval to change Taskwarrior.
 
 ### Review saved proposals
 
-Direct the user to `/remembrancer proposals` for the model-free interactive queue. It works with capture off, unless the extension is disabled. For conversational review, use the proposal list/detail/evidence reads described in **Full cross-session review**.
+For interactive review, direct the user to `/remembrancer proposals`. For conversational review, use the proposal list/detail/evidence reads in **Full cross-session review**; do not require the user to approve conversational suggestions through the UI.
 
-- The queue opens with proposals collapsed. Enter expands one for review; `Ctrl+A` on a collapsed item only opens review. Only `Ctrl+A` on an expanded pending item approves its displayed change. Changed previews require fresh approval.
-- `e` edits a pending draft; `d` dismisses a pending proposal without changing tasks. Neither editing nor navigation grants permission to apply it.
-- `s` opens saved source quotes; optional transcript context may be unavailable without losing the saved quote. `i` inspects the proposal and draft. `h` shows decided proposals without replay or undo.
-- Applying or uncertain items are verification-only. Never replay an interrupted or uncertain write. Verify whether the intended result already exists; otherwise ask the user to resolve the task manually.
-- Distinguish applied, already satisfied, dismissed (task unchanged), and unresolved results. Missing targets, errors and uncertain outcomes need resolution, not a claim of success.
+- For UI approval, have the user expand a pending proposal and press `Ctrl+A`. Opening, editing or navigating proposals does not authorize writes. Changed previews require fresh approval.
+- Use saved quotes when transcript context is unavailable, and report that limitation.
+- For applying or uncertain items, verify whether the intended result already exists. Never replay an interrupted or uncertain write; ask the user to resolve the task manually if the result cannot be verified.
+- Report outcomes as applied, already satisfied, dismissed (task unchanged), or unresolved. Do not report missing targets, errors or uncertain outcomes as success.
 
 ### Manual review alongside capture
 
-Use **Full cross-session review** with capture off or on, including outside the interactive terminal. Finish with `{ "action": "finish", "batch": "..." }` only after reading all available evidence and resolving and verifying the accepted changes. Unavailable sources stay unreviewed; the available scope can finish with warnings and `status: "partial"`.
-
-The capture deadline does not apply to human approval during manual review. Review ownership lasts until finish, cancel, shutdown or process death. Cancelling does not save coverage or undo task changes already applied. Direct task requests never advance review coverage.
-
-Manual review and automatic capture share coverage, not approval decisions. Finishing a manual review does not consume pending automatic proposals or change their decisions. Do not route conversational approval through the proposal UI or treat capture as permission to apply inferred tasks.
-
-Task and proposal matching is a model judgment. A task handled in conversation may still have a related pending proposal. Suggest inspecting, editing or dismissing it separately; do not promise automatic duplicate detection or synchronized decisions.
+- Cancel unfinished reviews with `action: "cancel"`. Report any task changes already applied; cancellation neither undoes them nor marks evidence reviewed.
+- Do not treat finishing a manual review as approving or dismissing saved proposals. Handle those decisions separately with the user.
+- If a related proposal remains after handling a task in conversation, offer to inspect, edit or dismiss it separately. Do not promise automatic duplicate detection or synchronized decisions.
 
 ## Historical evidence safety
 
