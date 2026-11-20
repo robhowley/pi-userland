@@ -8,7 +8,7 @@ import {
 } from '@earendil-works/pi-tui';
 import type { CheckpointStore } from './checkpoints.js';
 import { branchEvidence, readSession } from './evidence.js';
-import { boundedEvidencePage } from './review-pages.js';
+import { boundedEvidencePage, safePrefixLength } from './review-pages.js';
 import { type Proposal, type ProposalDraft, validateDraft } from './proposals.js';
 import {
   applyProposal,
@@ -45,52 +45,68 @@ function title(proposal: Proposal): string {
 function decided(proposal: Proposal): boolean {
   return ['applied', 'already_satisfied', 'dismissed'].includes(proposal.state);
 }
-function savedSourceText(source: Proposal['sources'][number]): string {
-  return `${exact(source.role)} ${exact(source.timestamp)} ${exact(source.locator)}\n${exact(source.quote)}\nFile: ${exact(source.file)}\nSession: ${exact(source.sessionId)}\nBranch: ${exact(source.branchId)}\nEntry: ${exact(source.entryId)}\nEdit: ${exact(source.editId)}\nExcerpt offset: ${source.offset}`;
-}
-// Called only by the deliberate Source action, never while rendering a preview.
-export function sourceText(proposal: Proposal): string {
-  return proposal.sources
-    .map((source) => {
-      const saved = savedSourceText(source);
-      try {
-        const tree = readSession(source.file);
-        const branch = branchEvidence(tree, {
-          file: source.file,
-          sessionId: source.sessionId,
-          entryId: source.branchId,
-        });
-        const index = branch.findIndex(
-          (item) => item.entryId === source.entryId && item.editId === source.editId,
-        );
-        const selected = branch[index];
-        if (
-          !selected ||
-          selected.role !== source.role ||
-          selected.timestamp !== source.timestamp ||
-          selected.text.slice(source.offset, source.offset + source.quote.length) !== source.quote
-        )
-          throw new Error('Saved reference no longer matches');
-        const surrounding = branch.slice(Math.max(0, index - 2), index + 3);
-        const page = boundedEvidencePage(surrounding, { index: 0, offset: 0 }, (entries) => ({
-          entries,
-        }));
-        return `${saved}\n\nLocal context (up to two messages before and after, saved branch):\n${exact(page.data)}${page.cursor.index < surrounding.length ? '\nAdditional context omitted at the display limit.' : ''}`;
-      } catch {
-        return `${saved}\n\nExtra file context is unavailable: source missing, unreadable, over limits, or saved reference no longer matches.`;
-      }
-    })
-    .join('\n\n');
+const SOURCE_QUOTE_UNITS = 2048;
+// One saved reference and quote fragment, independent of the optional original transcript.
+// Called only by deliberate Source navigation, never while rendering a preview.
+export function sourceText(proposal: Proposal, index = 0, page = 0): string {
+  const source = proposal.sources[index];
+  if (!source) return 'No saved sources.';
+  const start = safePrefixLength(source.quote, 0, Math.max(0, page * SOURCE_QUOTE_UNITS));
+  const end = safePrefixLength(source.quote, 0, Math.max(0, (page + 1) * SOURCE_QUOTE_UNITS));
+  const saved = `Evidence ${index + 1}/${proposal.sources.length} · quote units ${start}-${end}/${source.quote.length} (UTF-16)\n${exact(source.role)} ${exact(source.timestamp)} ${exact(source.locator)}\nSaved quote fragment (JSON, exact):\n${exact(source.quote.slice(start, end))}\nFile: ${exact(source.file)}\nSession: ${exact(source.sessionId)}\nBranch: ${exact(source.branchId)}\nEntry: ${exact(source.entryId)}\nEdit: ${exact(source.editId)}\nExcerpt offset: ${source.offset}`;
+  try {
+    const tree = readSession(source.file);
+    const branch = branchEvidence(tree, {
+      file: source.file,
+      sessionId: source.sessionId,
+      entryId: source.branchId,
+    });
+    const index = branch.findIndex(
+      (item) => item.entryId === source.entryId && item.editId === source.editId,
+    );
+    const selected = branch[index];
+    if (
+      !selected ||
+      selected.role !== source.role ||
+      selected.timestamp !== source.timestamp ||
+      selected.text.slice(source.offset, source.offset + source.quote.length) !== source.quote
+    )
+      throw new Error('Saved reference no longer matches');
+    const surrounding = branch
+      .slice(Math.max(0, index - 2), index + 3)
+      .filter((item) => item !== selected);
+    const contextStart = safePrefixLength(
+      selected.text,
+      0,
+      Math.max(0, source.offset + start - 256),
+    );
+    const contextEnd = safePrefixLength(selected.text, 0, source.offset + end + 256);
+    const page = boundedEvidencePage(surrounding, { index: 0, offset: 0 }, (entries) => ({
+      selected: {
+        ...selected,
+        text: selected.text.slice(contextStart, contextEnd),
+        offset: contextStart,
+        continues: contextEnd < selected.text.length,
+      },
+      entries,
+    }));
+    return `${saved}\n\nLocal context (selected message window and up to two messages before and after, saved branch):\n${exact(page.data)}${page.cursor.index < surrounding.length ? '\nAdditional context omitted at the display limit.' : ''}`;
+  } catch {
+    return `${saved}\n\nExtra file context is unavailable: source missing, unreadable, over limits, or saved reference no longer matches.`;
+  }
 }
 function savedReviewText(proposal: Proposal): string {
+  const quote = proposal.sources[0]?.quote;
+  const end = quote === undefined ? 0 : safePrefixLength(quote, 0, 240);
   return [
     `Saved title (not live verification): ${exact(title(proposal))}`,
     `Why: ${exact(proposal.explanation)}`,
-    'Saved quotes:',
-    ...proposal.sources.map(
-      (source) =>
-        `${exact(source.role)} ${exact(source.timestamp)} ${exact(source.locator)}: ${exact(source.quote)}`,
-    ),
+    `Evidence: ${proposal.sources.length} saved reference(s). Press s for full saved quotes.`,
+    ...(quote === undefined
+      ? []
+      : [
+          `Supporting quote${end < quote.length ? ' (shortened)' : ''}: ${exact(quote.slice(0, end))}${end < quote.length ? '…' : ''}`,
+        ]),
   ].join('\n');
 }
 export function previewText(preview: TaskPreview): string {
@@ -137,7 +153,7 @@ export function previewText(preview: TaskPreview): string {
   if (draft.question) lines.push(`Apply disabled: ${exact(draft.question)}`);
   lines.push(savedReviewText(proposal));
   if (proposal.draft)
-    lines.push('Edited draft. Press h for the saved proposal and revision history.');
+    lines.push('Edited draft. Press i to inspect the saved proposal and current draft.');
   if (proposal.result) {
     lines.push(`Result: ${exact(proposal.result.state)}`);
     if (proposal.result.error) lines.push(`Result error: ${exact(proposal.result.error)}`);
@@ -167,8 +183,12 @@ export async function openProposals(
   let view: View = 'inbox';
   const offsets: Record<View, number> = { inbox: 0, source: 0, history: 0, inspection: 0 };
   let sourceBody = '';
+  let sourceIndex = 0;
+  let sourcePage = 0;
   let historySelected = 0;
-  let historyEntries: { section: string; proposal: Proposal }[] = [];
+  let historyEntries: Proposal[] = [];
+  let inspectionProposal: Proposal | undefined;
+  let inspectionReturn: 'inbox' | 'history' = 'inbox';
 
   function reload(refreshed?: Proposal) {
     const id = inbox()[selected]?.id;
@@ -250,23 +270,49 @@ export async function openProposals(
           void loadPreview();
         }
         function openHistory() {
-          const proposal = inbox()[selected];
-          historyEntries = [
-            ...(proposal
-              ? [...(proposal.history ?? []), proposal].map((revision) => ({
-                  section: 'Selected-proposal revisions',
-                  proposal: revision,
-                }))
-              : []),
-            ...proposals.filter(decided).map((item) => ({
-              section: 'Decided proposals',
-              proposal: item,
-            })),
-          ];
+          historyEntries = proposals.filter(decided);
           historySelected = 0;
           offsets.history = 0;
           view = 'history';
           reveal = true;
+        }
+        function showSource() {
+          const proposal = inbox()[selected];
+          if (!proposal) return;
+          sourceBody = sourceText(proposal, sourceIndex, sourcePage);
+          offsets.source = 0;
+          view = 'source';
+        }
+        function moveSource(direction: number, referenceOnly: boolean) {
+          const proposal = inbox()[selected];
+          const source = proposal?.sources[sourceIndex];
+          if (!proposal || !source) return;
+          const lastPage = Math.max(0, Math.ceil(source.quote.length / SOURCE_QUOTE_UNITS) - 1);
+          if (referenceOnly) {
+            const next = Math.max(
+              0,
+              Math.min(proposal.sources.length - 1, sourceIndex + direction),
+            );
+            if (next === sourceIndex) return;
+            sourceIndex = next;
+            sourcePage = 0;
+          } else if (sourcePage + direction >= 0 && sourcePage + direction <= lastPage)
+            sourcePage += direction;
+          else {
+            const next = sourceIndex + direction;
+            if (next < 0 || next >= proposal.sources.length) return;
+            sourceIndex = next;
+            const quote = proposal.sources[next]!.quote;
+            sourcePage =
+              direction > 0 ? 0 : Math.max(0, Math.ceil(quote.length / SOURCE_QUOTE_UNITS) - 1);
+          }
+          showSource();
+        }
+        function inspect(proposal: Proposal, back: 'inbox' | 'history') {
+          inspectionProposal = proposal;
+          inspectionReturn = back;
+          offsets.inspection = 0;
+          view = 'inspection';
         }
         // Only service/store results establish a decided outcome. An unresolved item stays here.
         function outcome(result: Proposal) {
@@ -340,21 +386,30 @@ export async function openProposals(
               ];
             };
             const header = wrap(
-              `Task proposals · ${view === 'inbox' ? 'Inbox' : view === 'source' ? 'Source' : view === 'history' ? 'History' : 'History inspection'} · ${queue.length} Inbox · ${proposals.filter(decided).length} decided`,
+              `Task proposals · ${view === 'inbox' ? 'Inbox' : view === 'source' ? 'Source' : view === 'history' ? 'History' : 'Proposal inspection'} · ${queue.length} Inbox · ${proposals.filter(decided).length} decided`,
             );
             if (view === 'inbox' && expanded && proposal) header.push(...summary(proposal, true));
+            if (view === 'source' && proposal?.sources[sourceIndex])
+              header.push(
+                ...wrap(
+                  `Evidence ${sourceIndex + 1}/${proposal.sources.length} · quote page ${sourcePage + 1}/${Math.max(1, Math.ceil(proposal.sources[sourceIndex]!.quote.length / SOURCE_QUOTE_UNITS))}`,
+                ),
+              );
             let controls: string;
             if (view === 'history')
               controls =
                 '↑/↓ Select · Enter Inspect · PgUp/PgDn Scroll · Esc Back\nRead-only. No task writes.';
-            else if (view === 'source' || view === 'inspection')
+            else if (view === 'source')
+              controls =
+                '←/→ Quote page · ↑/↓ Reference · PgUp/PgDn Scroll · Esc Back\nRead-only. No task writes.';
+            else if (view === 'inspection')
               controls = 'PgUp/PgDn Scroll · Esc Back\nRead-only. No task writes.';
             else {
               controls = queue.length
                 ? `↑/↓ Focus · Enter ${expanded ? 'Collapse' : 'Expand'} · PgUp/PgDn Scroll\nCtrl+A ${!expanded ? 'Review' : loading ? 'Loading review' : !preview ? 'Preview unavailable' : ['applying', 'uncertain'].includes(preview.proposal.state) ? 'Verify only (no replay)' : 'Apply'}`
                 : 'Inbox empty.';
               if (proposal?.state === 'pending') controls += ' · e Edit · d Dismiss';
-              if (proposal) controls += ' · s Source';
+              if (proposal) controls += ' · s Source · i Inspect';
               controls += ` · h History · Esc ${expanded ? 'Back' : 'Close'}\nEnter never applies.`;
             }
             const footer = wrap(controls);
@@ -368,10 +423,10 @@ export async function openProposals(
             if (view === 'source')
               body = wrapTextWithAnsi(sourceBody || 'No saved sources.', bodyWidth);
             else if (view === 'inspection') {
-              const saved = historyEntries[historySelected]?.proposal;
+              const saved = inspectionProposal;
               body = wrapTextWithAnsi(
                 saved
-                  ? `Saved snapshot and result (read-only):\n${exact(
+                  ? `Saved proposal and current draft (read-only):\n${exact(
                       {
                         id: saved.id,
                         revision: saved.revision,
@@ -381,29 +436,24 @@ export async function openProposals(
                         question: saved.question,
                         draft: saved.draft,
                         explanation: saved.explanation,
-                        sources: saved.sources,
                         result: saved.result,
                       },
                       2,
-                    )}`
-                  : 'No saved snapshot.',
+                    )}\nEvidence: ${saved.sources.length} saved reference(s).`
+                  : 'No saved proposal.',
                 bodyWidth,
               );
             } else if (view === 'history') {
-              for (const section of ['Selected-proposal revisions', 'Decided proposals']) {
-                body.push(...wrapTextWithAnsi(section, bodyWidth));
-                const entries = historyEntries.filter((entry) => entry.section === section);
-                if (!entries.length) body.push('(none)');
-                for (const entry of entries) {
-                  const index = historyEntries.indexOf(entry);
-                  if (index === historySelected) focusLine = body.length;
-                  body.push(
-                    ...wrapTextWithAnsi(
-                      `${index === historySelected ? '>' : ' '} revision ${entry.proposal.revision} · ${exact(entry.proposal.state)} · ${exact(title(entry.proposal))}`,
-                      bodyWidth,
-                    ),
-                  );
-                }
+              body.push('Decided proposals');
+              if (!historyEntries.length) body.push('(none)');
+              for (const [index, entry] of historyEntries.entries()) {
+                if (index === historySelected) focusLine = body.length;
+                body.push(
+                  truncateToWidth(
+                    `${index === historySelected ? '>' : ' '} revision ${entry.revision} · ${exact(entry.state)} · ${exact(title(entry))}`,
+                    bodyWidth,
+                  ),
+                );
               }
             } else if (expanded && proposal) {
               body = wrapTextWithAnsi(
@@ -504,7 +554,7 @@ export async function openProposals(
             const queue = inbox();
             const proposal = queue[selected];
             if (kb.matches(data, 'tui.select.cancel')) {
-              if (view === 'inspection') view = 'history';
+              if (view === 'inspection') view = inspectionReturn;
               else if (view !== 'inbox') view = 'inbox';
               else if (expanded) {
                 collapse();
@@ -522,6 +572,8 @@ export async function openProposals(
               if (!viable) return;
               if (matchesKey(data, 'pageDown')) offsets[view] += pageSize;
               else if (matchesKey(data, 'pageUp')) offsets[view] -= pageSize;
+              else if (view === 'source' && (matchesKey(data, 'left') || matchesKey(data, 'right')))
+                moveSource(matchesKey(data, 'left') ? -1 : 1, false);
               else if (kb.matches(data, 'tui.select.up') || kb.matches(data, 'tui.select.down')) {
                 const direction = kb.matches(data, 'tui.select.up') ? -1 : 1;
                 if (view === 'inbox') {
@@ -531,7 +583,8 @@ export async function openProposals(
                     collapse();
                     reveal = true;
                   }
-                } else if (view === 'history') {
+                } else if (view === 'source') moveSource(direction, true);
+                else if (view === 'history') {
                   historySelected = Math.max(
                     0,
                     Math.min(historyEntries.length - 1, historySelected + direction),
@@ -540,8 +593,7 @@ export async function openProposals(
                 }
               } else if (kb.matches(data, 'tui.select.confirm')) {
                 if (view === 'history' && historyEntries.length) {
-                  view = 'inspection';
-                  offsets.inspection = 0;
+                  inspect(historyEntries[historySelected]!, 'history');
                 } else if (view === 'inbox' && proposal) {
                   if (expanded) {
                     collapse();
@@ -553,10 +605,11 @@ export async function openProposals(
                   if (!expanded) expand();
                   else if (preview && !loading) void authorize();
                 } else if (data === 's' && proposal) {
-                  sourceBody = sourceText(proposal);
-                  offsets.source = 0;
-                  view = 'source';
-                } else if (data === 'h') openHistory();
+                  sourceIndex = 0;
+                  sourcePage = 0;
+                  showSource();
+                } else if (data === 'i' && proposal) inspect(proposal, 'inbox');
+                else if (data === 'h') openHistory();
                 else if (data === 'e' && proposal?.state === 'pending') {
                   active = false;
                   request++;

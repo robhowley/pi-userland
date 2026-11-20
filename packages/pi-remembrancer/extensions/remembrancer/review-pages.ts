@@ -83,7 +83,7 @@ export function groupEvidencePage(entries: readonly EvidencePageEntry[]): Eviden
   return groups;
 }
 
-function splitsSurrogatePair(text: string, boundary: number): boolean {
+export function splitsSurrogatePair(text: string, boundary: number): boolean {
   if (boundary <= 0 || boundary >= text.length) return false;
   const before = text.charCodeAt(boundary - 1);
   const after = text.charCodeAt(boundary);

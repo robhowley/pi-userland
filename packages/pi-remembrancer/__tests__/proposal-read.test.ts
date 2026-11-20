@@ -1,238 +1,324 @@
 import { expect, it } from 'vitest';
-import { readProposals } from '../extensions/remembrancer/proposal-read.js';
-import type { Proposal } from '../extensions/remembrancer/proposals.js';
-import {
-  REVIEW_RESPONSE_MAX_BYTES,
-  serializedResponse,
-} from '../extensions/remembrancer/review-pages.js';
+import type { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
+import { readProposals, type ProposalReadArgs } from '../extensions/remembrancer/proposal-read.js';
+import type { Proposal, ProposalSource } from '../extensions/remembrancer/proposals.js';
+import { REVIEW_RESPONSE_MAX_BYTES } from '../extensions/remembrancer/review-pages.js';
 
-function proposal(): Proposal {
+function source(quote = 'Accepted promise', index = 0): ProposalSource {
   return {
-    id: 'proposal-1',
-    revision: 2,
+    file: '/disposable/session.jsonl',
+    sessionId: 'session',
+    branchId: 'branch',
+    entryId: `entry-${index}`,
+    editId: null,
+    role: 'user',
+    timestamp: '2026-11-01',
+    locator: `session/branch/entry-${index}`,
+    offset: 17,
+    quote,
+  };
+}
+function proposal(id = 'proposal'): Proposal {
+  return {
+    id,
+    revision: 3,
+    state: 'pending',
     change: { operation: 'add', fields: { description: 'Send comparison' }, annotations: [] },
+    draft: null,
     expected: null,
     question: null,
-    draft: null,
-    explanation: 'Accepted obligation',
-    sources: [],
-    state: 'pending',
-    claim: null,
+    explanation: 'Accepted promise',
+    sources: [source()],
     result: null,
-    createdAt: '2026-11-18',
-    updatedAt: '2026-11-18',
+    claim: null,
+    createdAt: '2026-11-01',
+    updatedAt: '2026-11-01',
   };
 }
-
-function store(rows: Proposal[]) {
-  return {
-    proposals: (_state: unknown, offset = 0, limit = 50) => rows.slice(offset, offset + limit),
+function fixture(rows: Proposal[]) {
+  const db = {
+    proposals: (_state: unknown, offset: number, limit: number) =>
+      rows.slice(offset, offset + limit),
     proposal: (id: string) => rows.find((row) => row.id === id),
-  };
-}
-
-function reassemble(db: ReturnType<typeof store>, page: ReturnType<typeof readProposals>) {
-  let text = '';
-  let chunks = 0;
-  const nextOffset = page.nextOffset;
-  for (;;) {
-    const encoded = serializedResponse(page);
-    expect(Buffer.byteLength(encoded, 'utf8')).toBeLessThanOrEqual(REVIEW_RESPONSE_MAX_BYTES);
-    expect(JSON.parse(encoded)).toEqual(page);
-    if (!('proposalChunk' in page)) throw new Error('Expected a proposal chunk');
-    expect(page.proposals).toEqual([]);
-    expect(page.nextOffset).toBe(nextOffset);
-    expect(page.proposalChunk.position).toBe(text.length);
-    expect(page.proposalChunk.text.length).toBeGreaterThan(0);
-    expect(page.proposalChunk.text).not.toMatch(/^[\uDC00-\uDFFF]|[\uD800-\uDBFF]$/u);
-    text += page.proposalChunk.text;
-    expect(++chunks).toBeLessThan(1000);
-    if (page.nextContinuation === null) break;
-    expect(page.nextContinuation).toEqual({
-      id: page.proposalChunk.id,
-      revision: page.proposalChunk.revision,
-      offset: nextOffset! - 1,
-      position: text.length,
-    });
-    page = readProposals(db, { continuation: page.nextContinuation });
-  }
-  return { proposal: JSON.parse(text) as Proposal, nextOffset, chunks };
-}
-
-it('serializes and reconstructs an oversized synthetic history', () => {
-  const saved = proposal();
-  saved.history = Array.from({ length: 100 }, () => ({
-    ...proposal(),
-    explanation: 'Historical explanation '.repeat(50),
-  }));
-  const db = store([saved]);
-  const response = readProposals(db, {});
-  expect(() => serializedResponse(response)).not.toThrow();
-  const result = reassemble(db, response);
-  expect(result.proposal).toEqual(saved);
-  expect(result.chunks).toBeGreaterThan(1);
-});
-
-it('preserves exact small and empty response shapes, including the terminal empty read', () => {
-  const saved = proposal();
-  const next = { ...proposal(), id: 'proposal-2' };
-  const db = store([saved, next]);
-  expect(readProposals(db, {})).toEqual({ proposals: [saved], nextOffset: 1 });
-  expect(readProposals(db, { offset: 1 })).toEqual({ proposals: [next], nextOffset: 2 });
-  expect(readProposals(db, { offset: 2 })).toEqual({ proposals: [], nextOffset: null });
-  expect(readProposals(store([]), {})).toEqual({ proposals: [], nextOffset: null });
-});
-
-it.each([0, 1])('handles a response at the byte limit plus %i bytes', (extra) => {
-  const saved = { ...proposal(), explanation: '' };
-  const baseBytes = Buffer.byteLength(JSON.stringify({ proposals: [saved], nextOffset: 1 }));
-  saved.explanation = 'x'.repeat(REVIEW_RESPONSE_MAX_BYTES - baseBytes + extra);
-  const db = store([saved]);
-  const page = readProposals(db, {});
-  if (extra === 0) {
-    expect(page).toEqual({ proposals: [saved], nextOffset: 1 });
-    expect(Buffer.byteLength(serializedResponse(page))).toBe(REVIEW_RESPONSE_MAX_BYTES);
-  } else {
-    expect(reassemble(db, page).proposal).toEqual(saved);
-  }
-});
-
-it.each(['current', 'draft', 'quote', 'result', 'history entry'])(
-  'losslessly chunks a single oversized %s field',
-  (field) => {
-    const saved = proposal();
-    const text = 'Synthetic content '.repeat(7000);
-    switch (field) {
-      case 'current':
-        saved.change = { operation: 'add', fields: { description: text }, annotations: [] };
-        break;
-      case 'draft':
-        saved.draft = { change: saved.change, expected: null, question: text };
-        break;
-      case 'quote':
-        saved.sources = [
-          {
-            sessionId: 'session',
-            branchId: 'branch',
-            entryId: 'entry',
-            editId: null,
-            offset: 0,
-            quote: text,
-            file: '/synthetic/session.jsonl',
-            role: 'user',
-            timestamp: '2026-11-18',
-            locator: 'synthetic',
-          },
-        ];
-        break;
-      case 'result':
-        saved.result = { state: 'uncertain', verified: null, error: text, actual: { text } };
-        break;
-      case 'history entry':
-        saved.history = [{ ...proposal(), explanation: text }];
-        break;
-    }
-    const db = store([saved]);
-    expect(reassemble(db, readProposals(db, {})).proposal).toEqual(saved);
-  },
-);
-
-it.each(['é', '漢', '😀', '"\\\n\t', '\uD800', '\uDC00', '😀"\\\n漢\uD800'])(
-  'makes bounded, lossless progress with Unicode and escaping (%j)',
-  (text) => {
-    const saved = { ...proposal(), explanation: text.repeat(REVIEW_RESPONSE_MAX_BYTES) };
-    const db = store([saved]);
-    expect(reassemble(db, readProposals(db, {})).proposal).toEqual(saved);
-  },
-);
-
-it.each(['revision changed', 'missing'])(
-  'rejects a continuation whose proposal is %s',
-  (change) => {
-    const saved = { ...proposal(), explanation: 'x'.repeat(100_000) };
-    const rows = [saved];
-    const db = store(rows);
-    const page = readProposals(db, {});
-    if (!('nextContinuation' in page) || !page.nextContinuation)
-      throw new Error('Expected a continuation');
-    const continuation = page.nextContinuation;
-    if (change === 'missing') rows.pop();
-    else saved.revision++;
-    expect(() => readProposals(db, { continuation })).toThrow(
-      /missing or its revision changed.*restart at offset zero/u,
+  } as CheckpointStore;
+  const read = (args: ProposalReadArgs = {}) => {
+    const page = readProposals(db, args);
+    expect(Buffer.byteLength(JSON.stringify(page), 'utf8')).toBeLessThanOrEqual(
+      REVIEW_RESPONSE_MAX_BYTES,
     );
-  },
-);
+    return page;
+  };
+  return { db, read };
+}
 
-it.each([
-  { offset: -1 },
-  { offset: 0.5 },
-  { offset: Number.MAX_SAFE_INTEGER },
-  { offset: NaN },
-  { offset: Infinity },
-  { offset: null },
-  { continuation: null },
-  { continuation: {} },
-  ...[
-    { id: '' },
-    { revision: 0 },
-    { revision: 1.5 },
-    { revision: Number.MAX_SAFE_INTEGER + 1 },
-    { offset: -1 },
-    { offset: 0.5 },
-    { offset: Number.MAX_SAFE_INTEGER },
-    { position: -1 },
-    { position: 0.5 },
-    { position: Number.MAX_SAFE_INTEGER + 1 },
-    { position: 1_000_000 },
-  ].map((invalid) => ({
-    continuation: { id: 'proposal-1', revision: 2, offset: 0, position: 1, ...invalid },
-  })),
-  { offset: 0, continuation: { id: 'proposal-1', revision: 2, offset: 0, position: 1 } },
-])('rejects invalid read arguments %j', (args) => {
-  expect(() =>
-    readProposals(store([proposal()]), args as unknown as Parameters<typeof readProposals>[1]),
-  ).toThrow(/Invalid proposal|either proposal offset or continuation/u);
-});
-
-it('rejects positions at the end of the text or inside a surrogate pair', () => {
-  const saved = { ...proposal(), explanation: '😀'.repeat(30_000) };
-  const text = JSON.stringify(saved);
-  for (const position of [text.length, text.indexOf('😀') + 1]) {
-    expect(() =>
-      readProposals(store([saved]), {
-        continuation: { id: saved.id, revision: saved.revision, offset: 0, position },
-      }),
-    ).toThrow(/Invalid proposal continuation position/u);
-  }
-});
-
-it('resolves continuations by stable ID after the live list moves', () => {
-  const saved = { ...proposal(), explanation: 'x'.repeat(100_000) };
-  const rows = [saved];
-  const db = store(rows);
-  const page = readProposals(db, {});
-  rows.unshift({ ...proposal(), id: 'inserted-before' });
-  expect(reassemble(db, page).proposal).toEqual(saved);
-});
-
-it('returns the next proposal once after all chunks, followed by the terminal empty read', () => {
-  const saved = { ...proposal(), explanation: 'x'.repeat(100_000) };
-  const next = { ...proposal(), id: 'proposal-2' };
-  const db = store([saved, next]);
-  const result = reassemble(db, readProposals(db, {}));
-  expect(result.proposal).toEqual(saved);
-  const page = readProposals(db, { offset: result.nextOffset! });
-  expect(page).toEqual({ proposals: [next], nextOffset: 2 });
-  expect(readProposals(db, { offset: page.nextOffset! })).toEqual({
+it('batches compact summaries and enumerates an unchanged list without skips or duplicates', () => {
+  const rows = Array.from({ length: 47 }, (_, index) => proposal(`id-${index}`));
+  rows[0]!.draft = {
+    change: {
+      operation: 'add',
+      fields: { description: 'x'.repeat(159) + '😀'.repeat(1000) },
+      annotations: [],
+    },
+    expected: null,
+    question: 'Needs approval',
+  };
+  const { read } = fixture(rows);
+  let offset = 0;
+  const ids: string[] = [];
+  do {
+    const page = read({ offset });
+    if (page.action !== 'list') throw new Error('Expected list');
+    expect(page.proposals.length).toBeGreaterThan(1);
+    expect(page.proposals.length).toBeLessThanOrEqual(20);
+    const first = page.proposals[0]!;
+    if (offset === 0) {
+      expect(first).toMatchObject({
+        label: 'x'.repeat(159),
+        labelTruncated: true,
+        hasDraft: true,
+        hasQuestion: true,
+        evidenceCount: 1,
+      });
+      expect(first).not.toHaveProperty('sources');
+      expect(first).not.toHaveProperty('expected');
+      expect(first).not.toHaveProperty('result');
+      expect(first).not.toHaveProperty('draft');
+      expect(first).not.toHaveProperty('history');
+      expect(first).not.toHaveProperty('explanation');
+    }
+    ids.push(...page.proposals.map((row) => row.id));
+    if (page.nextOffset === null) break;
+    expect(page.nextOffset).toBe(offset + page.proposals.length);
+    offset = page.nextOffset;
+  } while (ids.length < rows.length);
+  expect(ids).toEqual(rows.map((row) => row.id));
+  expect(read({ offset: rows.length })).toEqual({
+    action: 'list',
     proposals: [],
     nextOffset: null,
   });
 });
 
-it('fails clearly instead of returning a non-progressing chunk when metadata cannot fit', () => {
-  const saved = { ...proposal(), id: 'x'.repeat(REVIEW_RESPONSE_MAX_BYTES) };
-  expect(() => readProposals(store([saved]), {})).toThrow(
-    /cannot fit proposal text.*metadata or envelope cannot fit/u,
+it('uses the full encoded byte budget for list batches and advances only by returned count', () => {
+  const rows = Array.from({ length: 20 }, (_, index) =>
+    proposal(`${index}-` + '\u0000'.repeat(500)),
   );
+  for (const row of rows)
+    row.change = {
+      operation: 'add',
+      fields: { description: '\u0000'.repeat(200) },
+      annotations: [],
+    };
+  const { read } = fixture(rows);
+  const page = read();
+  if (page.action !== 'list') throw new Error('Expected list');
+  expect(page.proposals.length).toBeGreaterThan(1);
+  expect(page.proposals.length).toBeLessThan(rows.length);
+  expect(page.nextOffset).toBe(page.proposals.length);
+  const next = read({ offset: page.nextOffset! });
+  if (next.action !== 'list') throw new Error('Expected list');
+  expect(next.proposals[0]!.id).toBe(rows[page.proposals.length]!.id);
+});
+
+it('budgets the final null list cursor before packing the last summary', () => {
+  const rows = [proposal('first'), proposal('last')];
+  const { read } = fixture(rows);
+  const initial = read();
+  rows[1]!.id += 'x'.repeat(
+    REVIEW_RESPONSE_MAX_BYTES - Buffer.byteLength(JSON.stringify(initial)) + 1,
+  );
+  const first = read();
+  if (first.action !== 'list') throw new Error('Expected list');
+  expect(first.proposals.map((item) => item.id)).toEqual(['first']);
+  expect(first.nextOffset).toBe(1);
+  const last = read({ offset: first.nextOffset! });
+  if (last.action !== 'list') throw new Error('Expected list');
+  expect(last.proposals.map((item) => item.id)).toEqual([rows[1]!.id]);
+  expect(last.nextOffset).toBeNull();
+});
+
+it.each(['😀漢字"\\\n\t\u0000', '\ud800', 'x'])(
+  'losslessly chunks oversized current detail fields: %j',
+  (pattern) => {
+    const row = proposal();
+    // Exceed one response per field without inflating escape-heavy fixtures to megabytes.
+    const patternBytes = Buffer.byteLength(JSON.stringify(pattern), 'utf8') - 2;
+    const text = pattern.repeat(Math.ceil(REVIEW_RESPONSE_MAX_BYTES / patternBytes));
+    expect(Buffer.byteLength(JSON.stringify(text), 'utf8')).toBeGreaterThan(
+      REVIEW_RESPONSE_MAX_BYTES,
+    );
+    row.explanation = text;
+    row.draft = {
+      change: { operation: 'add', fields: { description: text }, annotations: [text] },
+      expected: null,
+      question: text,
+    };
+    row.result = { state: 'uncertain', verified: null, error: text, actual: { raw: text } };
+    const before = JSON.stringify(row);
+    const { read } = fixture([row]);
+    let args: ProposalReadArgs = { action: 'detail', id: row.id, revision: row.revision };
+    let restored = '';
+    let pages = 0;
+    let page;
+    do {
+      page = read(args);
+      if (page.action !== 'detail') throw new Error('Expected detail');
+      expect(page.position).toBe(restored.length);
+      expect(page.json.length).toBeGreaterThan(0);
+      restored += page.json;
+      pages++;
+      if (!page.next) break;
+      expect(page.next.position).toBe(restored.length);
+      args = page.next;
+    } while (page.next);
+    expect(pages).toBeGreaterThan(1);
+    const current = Object.fromEntries(Object.entries(row).filter(([key]) => key !== 'sources'));
+    expect(JSON.parse(restored)).toEqual(current);
+    expect(JSON.stringify(row)).toBe(before);
+  },
+);
+
+it('reconstructs huge exact quotes and many references with separate source offsets and safe positions', () => {
+  const row = proposal();
+  row.sources = [
+    source('😀漢"\\\n\u0000'.repeat(35_000)),
+    ...Array.from({ length: 241 }, (_, index) => source(`Exact quote ${index}`, index + 1)),
+  ];
+  const before = JSON.stringify(row);
+  const { read } = fixture([row]);
+  let args: ProposalReadArgs = { action: 'evidence', id: row.id, revision: row.revision };
+  const quotes: string[] = [];
+  let pages = 0;
+  let page;
+  do {
+    page = read(args);
+    if (page.action !== 'evidence') throw new Error('Expected evidence');
+    expect(page.entries.length).toBeGreaterThan(0);
+    for (const entry of page.entries) {
+      const text = quotes[entry.index] ?? '';
+      expect(entry.quotePosition).toBe(text.length);
+      expect(entry.offset).toBe(17);
+      expect(entry.file).toBe('/disposable/session.jsonl');
+      expect(entry.entryId).toBe(`entry-${entry.index}`);
+      quotes[entry.index] = text + entry.quote;
+      if (entry.continues) expect(quotes[entry.index]).not.toMatch(/[\ud800-\udbff]$/u);
+    }
+    pages++;
+    if (!page.next) break;
+    args = page.next;
+  } while (page.next);
+  expect(pages).toBeGreaterThan(4);
+  expect(quotes).toEqual(row.sources.map((entry) => entry.quote));
+  expect(JSON.stringify(row)).toBe(before);
+});
+
+it.each(['detail', 'evidence'] as const)(
+  'rejects stale/missing %s first and continuation reads without mutations',
+  (action) => {
+    const row = proposal();
+    row.explanation = 'x'.repeat(90_000);
+    row.sources = [source('x'.repeat(90_000))];
+    const rows = [row];
+    const { read } = fixture(rows);
+    const args = { action, id: row.id, revision: row.revision };
+    expect(() => read({ ...args, revision: 2 })).toThrow(/Stale proposal/);
+    expect(() => read({ ...args, id: 'absent' })).toThrow(/Missing proposal/);
+    const first = read(args);
+    if (first.action === 'list' || first.next === null) throw new Error('Expected continuation');
+    row.revision++;
+    const before = JSON.stringify(row);
+    expect(() => read(first.next!)).toThrow(/Stale proposal/);
+    expect(JSON.stringify(row)).toBe(before);
+    rows.pop();
+    expect(() => read(first.next!)).toThrow(/Missing proposal/);
+  },
+);
+
+it.each([NaN, Infinity, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+  'rejects invalid numeric cursors %s',
+  (bad) => {
+    const row = proposal();
+    const { read } = fixture([row]);
+    expect(() => read({ offset: bad })).toThrow(/Invalid proposal/);
+    expect(() => read({ action: 'detail', id: row.id, revision: 3, position: bad })).toThrow(
+      /Invalid proposal/,
+    );
+    expect(() => read({ action: 'evidence', id: row.id, revision: 3, index: bad })).toThrow(
+      /Invalid proposal/,
+    );
+    expect(() => read({ action: 'evidence', id: row.id, revision: 3, quotePosition: bad })).toThrow(
+      /Invalid proposal/,
+    );
+    expect(() => read({ action: 'detail', id: row.id, revision: bad })).toThrow(/Invalid proposal/);
+  },
+);
+
+it('rejects split surrogates, out-of-range and nonprogressing cursors, and impossible metadata', () => {
+  const row = proposal();
+  row.explanation = '😀';
+  row.sources = [source('😀')];
+  const { read } = fixture([row]);
+  const detail = read({ action: 'detail', id: row.id, revision: 3 });
+  if (detail.action !== 'detail') throw new Error('Expected detail');
+  expect(() =>
+    read({ action: 'detail', id: row.id, revision: 3, position: detail.json.indexOf('😀') + 1 }),
+  ).toThrow(/surrogate/);
+  expect(() => read({ action: 'detail', id: row.id, revision: 3, position: 99999 })).toThrow(
+    /beyond/,
+  );
+  for (const cursor of [
+    { index: 0, quotePosition: 1 },
+    { index: 2 },
+    { index: 1, quotePosition: 1 },
+    { index: 0, quotePosition: 2 },
+  ])
+    expect(() => read({ action: 'evidence', id: row.id, revision: 3, ...cursor })).toThrow(
+      /Invalid proposal/,
+    );
+  row.sources[0]!.file = 'x'.repeat(60_000);
+  expect(() => read({ action: 'evidence', id: row.id, revision: 3 })).toThrow(
+    /metadata or envelope cannot fit/,
+  );
+  row.id = 'x'.repeat(60_000);
+  expect(() => read({ action: 'detail', id: row.id, revision: 3 })).toThrow(
+    /metadata or envelope cannot fit/,
+  );
+  expect(() => read()).toThrow(/metadata or envelope cannot fit/);
+});
+
+it('rejects missing identity and action-specific cursor fields at the shared reader boundary', () => {
+  const { read } = fixture([proposal()]);
+  for (const args of [
+    { action: 'unknown' },
+    { id: 'proposal', revision: 3 },
+    { action: 'detail', revision: 3 },
+    { action: 'detail', id: 'proposal' },
+    { action: 'detail', id: 'proposal', revision: 3, offset: 0 },
+    { action: 'evidence', id: 'proposal', revision: 3, position: 0 },
+  ])
+    expect(() => read(args)).toThrow(/Invalid proposal/);
+});
+
+it('keeps a stored conflict question discoverable when an edited draft has no question', () => {
+  const row = proposal();
+  row.question = 'New evidence conflicts with this draft';
+  row.draft = { change: row.change, expected: null, question: null };
+  const page = fixture([row]).read();
+  if (page.action !== 'list') throw new Error('Expected list');
+  expect(page.proposals[0]).toMatchObject({ hasDraft: true, hasQuestion: true });
+});
+
+it('handles empty evidence and explicit terminal detail/evidence cursors', () => {
+  const row = proposal();
+  row.sources = [];
+  const { read } = fixture([row]);
+  expect(read({ action: 'evidence', id: row.id, revision: 3 })).toMatchObject({
+    entries: [],
+    next: null,
+  });
+  const page = read({ action: 'detail', id: row.id, revision: 3 });
+  if (page.action !== 'detail') throw new Error('Expected detail');
+  expect(
+    read({ action: 'detail', id: row.id, revision: 3, position: page.json.length }),
+  ).toMatchObject({ json: '', next: null });
 });

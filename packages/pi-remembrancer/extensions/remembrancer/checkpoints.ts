@@ -3,6 +3,7 @@ import { mkdirSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
+import { isDeepStrictEqual } from 'node:util';
 
 import { openPrivateSqlite } from './private-sqlite.mjs';
 import { CaptureReview } from './capture-review.js';
@@ -17,6 +18,7 @@ import { prepareHistoricalReview } from './evidence.js';
 import {
   validateDraft,
   validateSnapshot,
+  unionProposalSources,
   type Proposal,
   type ProposalDraft,
   type ProposalSubmission,
@@ -143,6 +145,20 @@ export class CheckpointStore {
             END`);
         }
       }
+      if (Number(this.db.prepare('PRAGMA user_version').get()!['user_version']) < 1) {
+        const update = this.db.prepare('UPDATE proposals SET revision = ?, body = ? WHERE id = ?');
+        for (const row of this.db.prepare('SELECT id, revision, body FROM proposals').iterate()) {
+          const proposal = JSON.parse(row['body'] as string) as Proposal & { history?: unknown };
+          const sources = unionProposalSources(proposal.sources);
+          if (!Object.hasOwn(proposal, 'history') && sources.length === proposal.sources.length)
+            continue;
+          delete proposal.history;
+          proposal.sources = sources;
+          proposal.revision = Number(row['revision']) + 1;
+          update.run(proposal.revision, JSON.stringify(proposal), row['id'] as string);
+        }
+        this.db.exec('PRAGMA user_version = 1');
+      }
       this.db.exec('COMMIT');
     } catch (error) {
       try {
@@ -218,9 +234,8 @@ export class CheckpointStore {
     return row ? (JSON.parse(row['body'] as string) as Proposal) : undefined;
   }
 
-  private saveProposal(proposal: Proposal, expectedRevision?: number): void {
-    // Draft decisions have no active application. Outcomes retain the claim and
-    // snapshot they describe; previous applications live only in history.
+  private saveProposal(proposal: Proposal, expectedRevision?: number): Proposal {
+    // Draft decisions have no active application. Outcomes retain their claim and snapshot.
     const { state, claim, result, applicationBefore } = proposal;
     const valid =
       state === 'pending' || state === 'dismissed'
@@ -232,6 +247,17 @@ export class CheckpointStore {
             : ['applied', 'already_satisfied', 'uncertain'].includes(state) &&
               result?.state === state);
     if (!valid) throw new Error('Invalid proposal application state');
+    if (expectedRevision !== undefined) {
+      const row = this.db
+        .prepare('SELECT revision, body FROM proposals WHERE id = ?')
+        .get(proposal.id);
+      if (!row || row['revision'] !== expectedRevision)
+        throw new Error('Proposal revision conflict');
+      const previous = JSON.parse(row['body'] as string) as Proposal;
+      if (isDeepStrictEqual(proposal, previous)) return previous;
+      proposal.revision = expectedRevision + 1;
+      proposal.updatedAt = new Date().toISOString();
+    }
     if (expectedRevision === undefined) {
       this.db
         .prepare('INSERT INTO proposals VALUES (?, ?, ?, ?)')
@@ -251,39 +277,32 @@ export class CheckpointStore {
     ) {
       throw new Error('Proposal revision conflict');
     }
+    return proposal;
   }
 
-  private changedProposal(id: string, revision: number, states: ProposalState[]): Proposal {
+  private checkedProposal(id: string, revision: number, states: ProposalState[]): Proposal {
     const value = this.proposal(id);
     if (!value || value.revision !== revision) throw new Error('Proposal revision conflict');
     if (!states.includes(value.state)) throw new Error('Illegal proposal state transition');
-    const { history = [], ...previous } = value;
-    return {
-      ...value,
-      history: [...history, previous],
-      revision: revision + 1,
-      updatedAt: new Date().toISOString(),
-    };
+    return value;
   }
 
   editProposal(id: string, revision: number, draft: ProposalDraft): Proposal {
     validateDraft(draft);
-    const value = this.changedProposal(id, revision, ['pending']);
+    const value = this.checkedProposal(id, revision, ['pending']);
     value.draft = structuredClone(draft);
-    this.saveProposal(value, revision);
-    return value;
+    return this.saveProposal(value, revision);
   }
 
   dismissProposal(id: string, revision: number): Proposal {
-    const value = this.changedProposal(id, revision, ['pending']);
+    const value = this.checkedProposal(id, revision, ['pending']);
     value.state = 'dismissed';
-    this.saveProposal(value, revision);
-    return value;
+    return this.saveProposal(value, revision);
   }
 
   claimProposal(id: string, revision: number, before?: TaskSnapshot | null): Proposal {
     if (before) validateSnapshot(before);
-    const value = this.changedProposal(id, revision, ['pending']);
+    const value = this.checkedProposal(id, revision, ['pending']);
     if ((value.draft ?? value).question !== null)
       throw new Error('Resolve proposal question before applying');
     const change = (value.draft ?? value).change;
@@ -295,8 +314,7 @@ export class CheckpointStore {
     value.state = 'applying';
     value.claim = randomUUID();
     value.result = null;
-    this.saveProposal(value, revision);
-    return value;
+    return this.saveProposal(value, revision);
   }
 
   recordProposalResult(
@@ -305,7 +323,7 @@ export class CheckpointStore {
     claim: string,
     result: ApplicationResult,
   ): Proposal {
-    const value = this.changedProposal(id, revision, ['applying', 'uncertain']);
+    const value = this.checkedProposal(id, revision, ['applying', 'uncertain']);
     if (!claim || value.claim !== claim) throw new Error('Application claim mismatch');
     if (!['applied', 'already_satisfied', 'uncertain'].includes(result.state))
       throw new Error('Invalid application result');
@@ -324,8 +342,7 @@ export class CheckpointStore {
       throw new Error('Verified task does not match target');
     value.state = result.state;
     value.result = structuredClone(result);
-    this.saveProposal(value, revision);
-    return value;
+    return this.saveProposal(value, revision);
   }
 
   private saveCapture(
@@ -349,18 +366,28 @@ export class CheckpointStore {
       if (submission.id !== undefined) {
         if (ids.has(submission.id)) throw new Error('Repeated proposal revision');
         ids.add(submission.id);
-        proposal = this.changedProposal(submission.id, submission.expectedRevision!, ['pending']);
+        const previous = this.checkedProposal(submission.id, submission.expectedRevision!, [
+          'pending',
+        ]);
+        const conflict =
+          'New evidence conflicts with an edited draft. Review both before applying.';
         proposal = {
-          ...proposal,
+          ...previous,
           change: submission.change,
           expected: submission.expected,
-          question: proposal.draft
-            ? 'New evidence conflicts with an edited draft. Review both before applying.'
-            : submission.question,
+          question: submission.question,
           explanation: submission.explanation,
-          sources: [...proposal.sources, ...references],
+          sources: unionProposalSources(previous.sources, references),
         };
-        if (proposal.draft) proposal.draft = { ...proposal.draft, question: proposal.question };
+        if (
+          proposal.draft &&
+          !isDeepStrictEqual(proposal, {
+            ...previous,
+            sources: unionProposalSources(previous.sources),
+          })
+        ) {
+          proposal.draft = { ...proposal.draft, question: conflict };
+        }
       } else {
         proposal = {
           id: randomUUID(),
@@ -378,8 +405,7 @@ export class CheckpointStore {
           updatedAt: now,
         };
       }
-      this.saveProposal(proposal, submission.expectedRevision);
-      saved.push(proposal);
+      saved.push(this.saveProposal(proposal, submission.expectedRevision));
     }
 
     this.writeCoverage(plan);

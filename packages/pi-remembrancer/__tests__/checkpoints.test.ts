@@ -7,8 +7,207 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
+import type {
+  Proposal,
+  ProposalSource,
+  ProposalState,
+} from '../extensions/remembrancer/proposals.js';
 
 const a = { file: '/custom/a.jsonl', sessionId: 'a', entryId: 'first' };
+
+const legacySource: ProposalSource = {
+  file: '/missing/transcript.jsonl',
+  sessionId: 'a',
+  branchId: 'branch',
+  entryId: 'entry',
+  editId: null,
+  offset: 4,
+  quote: 'A promise',
+  locator: 'a/branch/entry',
+  role: 'user',
+  timestamp: '2026-01-01',
+};
+function legacyProposal(id: string, state: ProposalState): Proposal {
+  const change = {
+    operation: 'add' as const,
+    fields: { description: 'Current promise' },
+    annotations: ['Keep this'],
+  };
+  const snapshot = {
+    uuid: '00000000-0000-0000-0000-000000000001',
+    status: 'pending' as const,
+    fields: { description: 'Current promise' },
+    annotations: [],
+  };
+  const active = state !== 'pending' && state !== 'dismissed';
+  return {
+    id,
+    revision: 7,
+    state,
+    change,
+    expected: null,
+    question: 'Current question',
+    explanation: 'Current explanation',
+    draft: {
+      change: { ...change, fields: { description: 'Edited promise' } },
+      expected: null,
+      question: 'Edited question',
+    },
+    sources: [legacySource],
+    claim: active ? 'preserved-claim' : null,
+    ...(active ? { applicationBefore: snapshot } : {}),
+    result:
+      state === 'pending' || state === 'dismissed' || state === 'applying'
+        ? null
+        : state === 'uncertain'
+          ? { state, verified: snapshot, error: 'Unknown write', actual: { exact: ['write', 42] } }
+          : { state, verified: snapshot, error: null, actual: { exact: ['write', 42] } },
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-02-01T00:00:00.000Z',
+  };
+}
+
+it('repairs only changed legacy proposals once in every state, preserving all other current fields and tables', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'remembrancer-current-only-'));
+  const path = join(dir, 'index.sqlite');
+  let store = new CheckpointStore(path);
+  store.finish({ sources: [{ ...a, seedSince: '2026-01-01' }], checkpoints: [a] });
+  store.close();
+  const sql = new DatabaseSync(path);
+  const rows: { value: Proposal; body: string; changed: boolean }[] = [];
+  const states: ProposalState[] = [
+    'pending',
+    'dismissed',
+    'applying',
+    'applied',
+    'already_satisfied',
+    'uncertain',
+  ];
+  for (const state of states) {
+    for (const repair of ['none', 'history', 'duplicates', 'both']) {
+      const value = {
+        ...legacyProposal(`${state}-${repair}`, state),
+        customCurrentField: { preserve: true },
+        ...(repair === 'history' || repair === 'both'
+          ? { history: [{ obsolete: 'large snapshot' }] }
+          : {}),
+      };
+      if (repair === 'duplicates' || repair === 'both')
+        value.sources = [
+          legacySource,
+          { ...legacySource, file: '/new-path', locator: 'new-metadata' },
+        ];
+      const body = JSON.stringify(value, null, 2);
+      sql
+        .prepare('INSERT INTO proposals VALUES (?, ?, ?, ?)')
+        .run(value.id, value.revision, state, body);
+      rows.push({ value, body, changed: repair !== 'none' });
+    }
+  }
+  sql.exec(`CREATE TABLE unrelated_tasks (body TEXT); INSERT INTO unrelated_tasks VALUES ('untouched');
+    INSERT INTO capture_jobs VALUES ('stopped', 'a', '/retained/snapshot', '2026-01-01', '0001',
+      '{"version":3,"attempts":4,"attemptLimit":4}', 'failed', 0, 'exhausted');
+    UPDATE review_context SET generation = 100, notice_generation = 200;
+    PRAGMA user_version = 0;`);
+  const untouched = () =>
+    ['sources', 'reviewed_boundaries', 'capture_jobs', 'unrelated_tasks'].map((table) =>
+      sql.prepare(`SELECT * FROM ${table}`).all(),
+    );
+  const before = untouched();
+  const changed = rows.filter((row) => row.changed).length;
+  try {
+    store = new CheckpointStore(path);
+    for (const row of rows) {
+      const current = store.proposal(row.value.id)!;
+      const expected: Proposal & { history?: unknown } = { ...row.value };
+      delete expected.history;
+      expect(current).toEqual({
+        ...expected,
+        sources: [legacySource],
+        revision: row.value.revision + Number(row.changed),
+      });
+      expect(
+        sql.prepare('SELECT revision FROM proposals WHERE id = ?').get(current.id)!['revision'],
+      ).toBe(current.revision);
+      if (!row.changed)
+        expect(
+          sql.prepare('SELECT body FROM proposals WHERE id = ?').get(current.id)!['body'],
+        ).toBe(row.body);
+      expect(current).not.toHaveProperty('history');
+    }
+    expect(untouched()).toEqual(before);
+    expect(store.contextGeneration()).toBe(100 + changed);
+    expect(store.proposalNotice()).toEqual({ generation: 200 + changed, pending: 4 });
+    expect(sql.prepare('PRAGMA user_version').get()!['user_version']).toBe(1);
+    const repaired = sql.prepare('SELECT * FROM proposals ORDER BY rowid').all();
+    store.close();
+    store = new CheckpointStore(path);
+    expect(sql.prepare('SELECT * FROM proposals ORDER BY rowid').all()).toEqual(repaired);
+    expect(store.contextGeneration()).toBe(100 + changed);
+    expect(store.proposalNotice()).toEqual({ generation: 200 + changed, pending: 4 });
+    expect(untouched()).toEqual(before);
+    // Recreated triggers continue to invalidate previews and prepared captures.
+    const clean = store.proposal('pending-none')!;
+    store.dismissProposal(clean.id, clean.revision);
+    expect(store.contextGeneration()).toBe(101 + changed);
+    expect(store.proposalNotice()).toEqual({ generation: 201 + changed, pending: 3 });
+  } finally {
+    store.close();
+    sql.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it('rolls back repairs, generations, trigger replacement and migration marker on failure, then reopens safely', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'remembrancer-repair-rollback-'));
+  const path = join(dir, 'index.sqlite');
+  const store = new CheckpointStore(path);
+  store.close();
+  const sql = new DatabaseSync(path);
+  for (const id of ['first', 'second']) {
+    const value = {
+      ...legacyProposal(id, 'pending'),
+      history: [],
+      sources: [legacySource, legacySource],
+    };
+    sql
+      .prepare('INSERT INTO proposals VALUES (?, ?, ?, ?)')
+      .run(id, value.revision, value.state, JSON.stringify(value));
+  }
+  sql.exec(`PRAGMA user_version = 0;
+    DROP TRIGGER context_proposals_UPDATE;
+    CREATE TRIGGER context_proposals_UPDATE AFTER UPDATE ON proposals BEGIN
+      UPDATE review_context SET generation = generation + 50 WHERE singleton = 1;
+    END;
+    CREATE TRIGGER fail_repair BEFORE UPDATE ON proposals WHEN NEW.id = 'second' BEGIN
+      SELECT RAISE(ABORT, 'injected repair failure');
+    END;`);
+  const before = sql.prepare('SELECT * FROM proposals ORDER BY rowid').all();
+  const context = sql.prepare('SELECT * FROM review_context').all();
+  const triggers = () =>
+    sql.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' ORDER BY name").all();
+  const oldTriggers = triggers();
+  try {
+    expect(() => new CheckpointStore(path)).toThrow('injected repair failure');
+    expect(sql.prepare('SELECT * FROM proposals ORDER BY rowid').all()).toEqual(before);
+    expect(sql.prepare('SELECT * FROM review_context').all()).toEqual(context);
+    expect(sql.prepare('PRAGMA user_version').get()!['user_version']).toBe(0);
+    expect(triggers()).toEqual(oldTriggers);
+    sql.exec('DROP TRIGGER fail_repair');
+    const repaired = new CheckpointStore(path);
+    expect(repaired.proposals().map((value) => value.revision)).toEqual([8, 8]);
+    expect(repaired.contextGeneration()).toBe(Number(context[0]!['generation']) + 2);
+    expect(sql.prepare('PRAGMA user_version').get()!['user_version']).toBe(1);
+    const finalRows = sql.prepare('SELECT * FROM proposals ORDER BY rowid').all();
+    repaired.close();
+    const reopened = new CheckpointStore(path);
+    expect(sql.prepare('SELECT * FROM proposals ORDER BY rowid').all()).toEqual(finalRows);
+    reopened.close();
+  } finally {
+    sql.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 it('persists enrollment separately from finished boundaries and updates source paths', () => {
   const dir = mkdtempSync(join(tmpdir(), 'remembrancer-store-'));

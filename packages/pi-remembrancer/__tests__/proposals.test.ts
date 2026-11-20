@@ -185,7 +185,7 @@ it.each(['applied', 'already_satisfied', 'uncertain'] as const)(
         store.close();
         store = new CheckpointStore(path);
         expect(store.proposal(saved.id)).toEqual(resolved);
-        expect(resolved.history?.at(-1)?.result).toEqual(result);
+        expect(resolved).not.toHaveProperty('history');
       } else {
         expect(() =>
           store.recordProposalResult(saved.id, saved.revision, claim.claim!, result),
@@ -339,7 +339,7 @@ it('requires every evidence continuation and an explicit array; context does not
   }
 });
 
-it('rechecks proposal revisions at commit and preserves edited drafts/history on new evidence', () => {
+it('rechecks proposal revisions at commit and preserves edited drafts on new evidence', () => {
   const path = join(directory(), 'state.sqlite');
   let store = new CheckpointStore(path);
   const peer = new CheckpointStore(path);
@@ -412,10 +412,7 @@ it('rechecks proposal revisions at commit and preserves edited drafts/history on
     expect(corrected!.revision).toBe(edited.revision + 1);
     expect(corrected!.draft!.change).toEqual(edited.draft!.change);
     expect(corrected!.draft!.question).toMatch(/conflicts/);
-    expect(corrected!.history?.at(-1)).toMatchObject({
-      revision: edited.revision,
-      draft: edited.draft,
-    });
+    expect(corrected).not.toHaveProperty('history');
     expect(() => store.claimProposal(corrected!.id, corrected!.revision)).toThrow(/question/);
     expect(store.reviewed().map((item) => item.entryId)).toEqual(['leaf', 'later']);
     store.close();

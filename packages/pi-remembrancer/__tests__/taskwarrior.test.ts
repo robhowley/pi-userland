@@ -198,7 +198,6 @@ it('writes typed JSON only and verifies full actual record', async () => {
   expect(result.state).toBe('applied');
   expect(result.result?.actual).toMatchObject({ description: 'After', project: '' });
   expect(f.execute.mock.calls.filter(([args]) => args[0] === 'import')).toHaveLength(1);
-  expect(result.history?.map((p) => p.state)).toEqual(['pending', 'applying']);
 });
 it('requires fresh approval for changed task or draft', async () => {
   const f = setup(update);
@@ -323,7 +322,63 @@ it('complete preview and missing-source view preserve all exact values', async (
   expect(sourceText(f.proposal)).toContain('Send comparison');
   expect(sourceText(f.proposal)).toContain('Extra file context is unavailable');
 });
-function sourceFixture(before = 'Earlier context') {
+it('expanded evidence stays bounded with many huge sources while proposed writes remain exact', async () => {
+  const f = setup(update);
+  const readSource = vi.spyOn(evidenceModule, 'readSession');
+  const preview = await previewProposal(f.store, f.proposal.id, f.execute);
+  const original = previewText(preview);
+  const supportingQuote = 'Supporting passage '.repeat(20_000);
+  const laterQuote = 'HIDDEN_LATER_QUOTE'.repeat(20_000);
+  const sources = Array.from({ length: 10_000 }, (_, index) => ({
+    ...f.proposal.sources[0]!,
+    entryId: `entry-${index}`,
+    quote: index === 0 ? supportingQuote : laterQuote,
+  }));
+  const text = previewText({ ...preview, proposal: { ...preview.proposal, sources } });
+  expect(text).toContain('Evidence: 10000 saved reference(s)');
+  expect(text).toContain('Supporting quote (shortened)');
+  expect(text).toContain('…');
+  expect(text).not.toContain('HIDDEN_LATER_QUOTE');
+  expect(text.length).toBeLessThan(original.length + 500);
+  expect(text.split('Evidence:')[0]).toBe(original.split('Evidence:')[0]);
+  expect(readSource).not.toHaveBeenCalled();
+});
+
+it('saved huge quote fragments reconstruct exact Unicode and controls without the original transcript', () => {
+  const f = setup();
+  const quote = 'x'.repeat(2047) + '😀' + '中é\n"\\\u0000\u001b\u009b'.repeat(12_000);
+  const proposal = {
+    ...f.proposal,
+    sources: [{ ...f.proposal.sources[0]!, offset: 17, quote }],
+  };
+  const fragments: string[] = [];
+  let end = 0;
+  for (let page = 0; end < quote.length; page++) {
+    const text = sourceText(proposal, 0, page);
+    expect(terminalControls(text)).toEqual([]);
+    expect(text).toContain('Extra file context is unavailable');
+    expect(text).toContain('Excerpt offset: 17');
+    const range = text.match(/quote units (\d+)-(\d+)\//)!;
+    expect(Number(range[1])).toBe(end);
+    end = Number(range[2]);
+    const fragment = JSON.parse(
+      text.split('Saved quote fragment (JSON, exact):\n')[1]!.split('\n')[0]!,
+    ) as string;
+    expect(fragment.length).toBeLessThanOrEqual(2049);
+    expect(fragment.charCodeAt(0) >= 0xdc00 && fragment.charCodeAt(0) <= 0xdfff).toBe(false);
+    expect(
+      fragment.charCodeAt(fragment.length - 1) >= 0xd800 &&
+        fragment.charCodeAt(fragment.length - 1) <= 0xdbff,
+    ).toBe(false);
+    expect(fragment).toBe(quote.slice(Number(range[1]), end));
+    fragments.push(fragment);
+    expect(text.length).toBeLessThan(15_000);
+  }
+  expect(fragments.join('')).toBe(quote);
+  expect(f.execute).not.toHaveBeenCalled();
+});
+
+function sourceFixture(before = 'Earlier context', quote = evidence.text) {
   const f = setup();
   const dir = mkdtempSync(join(tmpdir(), 'remembrancer-source-'));
   sourceDirs.push(dir);
@@ -334,7 +389,7 @@ function sourceFixture(before = 'Earlier context') {
     ['outside-before', 'Outside preceding window'],
     ['before', before],
     ['reply', 'Supporting reply'],
-    ['leaf', evidence.text],
+    ['leaf', quote],
     ['after', 'Following context'],
     ['boundary', 'Saved branch boundary'],
     ['outside-after', 'Outside saved branch'],
@@ -365,7 +420,7 @@ function sourceFixture(before = 'Earlier context') {
     },
   );
   writeFileSync(file, records.map((record) => JSON.stringify(record)).join('\n'));
-  Object.assign(f.proposal.sources[0]!, { file, branchId: 'boundary' });
+  Object.assign(f.proposal.sources[0]!, { file, branchId: 'boundary', quote });
   return { ...f, file };
 }
 it('Source shows bounded surrounding messages on the saved branch, not a newer edit', () => {
@@ -397,6 +452,18 @@ it('Source shows bounded surrounding messages on the saved branch, not a newer e
     expect(text).not.toContain(value);
   expect(f.execute).not.toHaveBeenCalled();
 });
+it('optional transcript context includes only the displayed fragment of a huge saved quote', () => {
+  const quote = 'FIRST_PAGE' + 'x'.repeat(2048 - 'FIRST_PAGE'.length) + 'SECOND_PAGE';
+  const f = sourceFixture('Earlier context', quote);
+  const reads = vi.spyOn(evidenceModule, 'readSession');
+  const text = sourceText(f.proposal, 0, 1);
+  expect(text).toContain('SECOND_PAGE');
+  expect(text).not.toContain('FIRST_PAGE');
+  expect(text).toContain('Earlier context');
+  expect(text).toContain('Local context');
+  expect(reads).toHaveBeenCalledOnce();
+});
+
 it('Source caps additional context while always retaining the saved exact quote', () => {
   const f = sourceFixture('x'.repeat(100_000));
   const text = sourceText(f.proposal);
@@ -815,6 +882,8 @@ const keys = {
   down: '\u001b[B',
   pageDown: '\u001b[6~',
   pageUp: '\u001b[5~',
+  left: '\u001b[D',
+  right: '\u001b[C',
   apply: '\u0001',
 };
 type UIFactory = Parameters<ExtensionContext['ui']['custom']>[0];
@@ -1530,9 +1599,11 @@ it('only explicit per-item Ctrl+A applies, never Enter, History, Source or accep
     await screen.press('a');
     await screen.press('h');
     await screen.press(keys.apply);
+    await screen.press(keys.escape);
+    await screen.press('i');
+    await screen.press(keys.apply);
     await screen.press(keys.enter);
     await screen.press(keys.apply);
-    await screen.press(keys.escape);
     await screen.press(keys.escape);
     await screen.press('s');
     await screen.press(keys.apply);
@@ -1605,7 +1676,7 @@ it.each(['d', keys.apply].flatMap((action) => [false, true].map((last) => ({ act
   },
 );
 
-it('preview refresh supplies the latest revision to History and the editor', async () => {
+it('preview refresh supplies the latest revision to inspection and the editor', async () => {
   const f = setup();
   const edited: ProposalDraft = {
     change: { operation: 'add', fields: { description: 'External revision' }, annotations: [] },
@@ -1623,12 +1694,12 @@ it('preview refresh supplies the latest revision to History and the editor', asy
       f.store.editProposal(f.proposal.id, 1, edited);
       await screen.press(keys.enter);
       expect(await screen.pages()).toContain('External revision');
-      await screen.press('h');
-      expect(await screen.pages()).toContain('revision 2');
+      await screen.press('i');
+      expect((await screen.pages()).replace(/[\s│█]/gu, '')).toContain('"revision":2');
       await screen.press(keys.escape);
       await screen.press('e');
       expect(editor).toHaveBeenCalledOnce();
-      expect(f.store.proposal(f.proposal.id)?.revision).toBe(3);
+      expect(f.store.proposal(f.proposal.id)?.draft).toEqual(edited);
       expect(await screen.pages()).toContain('Draft saved.');
     },
     { editor },
@@ -1725,7 +1796,7 @@ it.each(['edit', 'claim', 'dismiss'] as const)(
           expect(await screen.pages()).toContain('Latest draft');
           await screen.press('e');
           expect(JSON.parse(editor.mock.calls[1]![1])).toEqual(draft);
-          expect(f.store.proposal(f.proposal.id)?.revision).toBe(3);
+          expect(f.store.proposal(f.proposal.id)?.revision).toBe(2);
           expect(await screen.pages()).toContain('Draft saved.');
         } else if (change === 'claim') {
           expect(screen.text()).toContain('Verify only (no replay)');
@@ -2005,6 +2076,83 @@ it('resize rewraps and clamps a nonzero offset; a tiny terminal blocks apply unt
   });
 });
 
+it('Source navigates references and huge quote pages with pinned controls, lazy context and no writes', async () => {
+  const f = setup();
+  const huge =
+    ['FIRST_PAGE', 'SECOND_PAGE', 'THIRD_PAGE']
+      .map((label) => label + 'x'.repeat(2048 - label.length))
+      .join('') + 'FINAL_PAGE';
+  const proposal: Proposal = {
+    ...f.proposal,
+    sources: Array.from({ length: 120 }, (_, index) => ({
+      ...f.proposal.sources[0]!,
+      file: `${f.proposal.sources[0]!.file}.${index}`,
+      entryId: `entry-${index}`,
+      quote: index === 0 ? huge : `REFERENCE_${index + 1}`,
+    })),
+  };
+  vi.spyOn(f.store, 'proposals').mockImplementation((_state, offset = 0, limit = 100) =>
+    [proposal].slice(offset, offset + limit),
+  );
+  vi.spyOn(f.store, 'proposal').mockReturnValue(proposal);
+  const reads = vi.spyOn(evidenceModule, 'readSession');
+  await driveUI(f.store, f.execute, async (screen) => {
+    await screen.press(keys.enter);
+    await screen.press(keys.pageDown);
+    const review = screen.text();
+    expect(reads).not.toHaveBeenCalled();
+    await screen.press('s');
+    expect(reads).toHaveBeenCalledOnce();
+    expect(screen.text()).toContain('Evidence 1/120');
+    expect(screen.text()).toContain('quote page 1/4');
+    const first = await screen.pages();
+    expect(first).toContain('FIRST_PAGE');
+    expect(first).not.toContain('SECOND_PAGE');
+    expect(screen.text()).toContain('Evidence 1/120');
+    expect(screen.text()).toContain('Quote page');
+    expect(screen.text()).toContain('PgUp/PgDn');
+    expect(reads).toHaveBeenCalledOnce();
+    for (const [index, label] of ['SECOND_PAGE', 'THIRD_PAGE', 'FINAL_PAGE'].entries()) {
+      await screen.press(keys.right);
+      expect(screen.text()).toContain(`quote page ${index + 2}/4`);
+      expect(await screen.pages()).toContain(label);
+    }
+    await screen.press(keys.right);
+    expect(screen.text()).toContain('Evidence 2/120');
+    expect(screen.text()).toContain('quote page 1/1');
+    await screen.press(keys.left);
+    expect(screen.text()).toContain('Evidence 1/120');
+    expect(screen.text()).toContain('quote page 4/4');
+    expect(await screen.pages()).toContain('FINAL_PAGE');
+    await screen.press(keys.up);
+    expect(screen.text()).toContain('quote page 4/4');
+    for (let index = 1; index < 120; index++) {
+      await screen.press(keys.down);
+      expect(screen.text()).toContain(`Evidence ${index + 1}/120`);
+    }
+    const last = screen.text();
+    const count = reads.mock.calls.length;
+    await screen.press(keys.down);
+    await screen.press(keys.right);
+    expect(screen.text()).toBe(last);
+    expect(reads).toHaveBeenCalledTimes(count);
+    screen.resize(40, 24);
+    const narrow = screen.lines();
+    expect(narrow.length).toBeLessThanOrEqual(22);
+    expect(narrow.every((line) => visibleWidth(line) <= 38)).toBe(true);
+    expect(screen.text()).toContain('Evidence 120/120');
+    expect(screen.text()).toContain('PgUp/PgDn');
+    expect(reads).toHaveBeenCalledTimes(count);
+    screen.resize(80, 32);
+    for (const key of [keys.apply, keys.enter, 'e', 'd']) await screen.press(key);
+    expect(f.execute).not.toHaveBeenCalled();
+    await screen.press(keys.escape);
+    expect(screen.text()).toBe(review);
+  });
+  expect(f.store.proposal(f.proposal.id)?.state).toBe('pending');
+  expect(f.execute).not.toHaveBeenCalled();
+});
+
 it('Source return restores the exact review position, and nested Escape does not close Inbox', async () => {
   const f = setup(longDraft);
   const reads = vi.spyOn(evidenceModule, 'readSession');
@@ -2023,51 +2171,29 @@ it('Source return restores the exact review position, and nested Escape does not
   });
 });
 
-it('History separates selected revisions and decided proposals; inspections and nested Escape are read-only', async () => {
+it('current saved proposal and edited draft remain inspectable without revision history or writes', async () => {
   const f = setup();
   f.store.editProposal(f.proposal.id, 1, {
     change: { operation: 'add', fields: { description: 'Edited draft' }, annotations: longNotes },
     expected: null,
     question: null,
   });
-  const decided = seed(f.store, {
-    change: {
-      operation: 'add',
-      fields: { description: 'Decided saved task', project: 'z' },
-      annotations: [],
-    },
-    expected: null,
-    question: null,
-  });
-  f.store.dismissProposal(decided.id, 1);
   const readSource = vi.spyOn(evidenceModule, 'readSession');
   await driveUI(f.store, f.execute, async (screen) => {
     await screen.press(keys.enter);
-    const top = screen.text();
     await screen.press(keys.pageDown);
     const review = screen.text();
-    expect(review).not.toBe(top);
+    await screen.press('i');
+    const inspected = await screen.pages();
+    for (const value of ['Edited draft', 'Send comparison', 'Promised', '"change"', '"draft"'])
+      expect(inspected).toContain(value);
+    await screen.press(keys.apply);
+    await screen.press('d');
+    await screen.press('e');
+    await screen.press(keys.escape);
+    expect(screen.text()).toBe(review);
     await screen.press('h');
-    const listing = await screen.pages();
-    expect(listing).toMatch(/revision/i);
-    expect(listing).toMatch(/decided/i);
-    expect(listing).toContain('Decided saved task');
-    const inspections: string[] = [];
-    for (let selection = 0; selection < 4; selection++) {
-      await screen.press(keys.enter);
-      inspections.push(await screen.pages());
-      await screen.press(keys.apply);
-      await screen.press('d');
-      await screen.press('e');
-      await screen.press(keys.escape);
-      expect(screen.text()).toMatch(/history/i);
-      await screen.press(keys.down);
-    }
-    const text = inspections.join('\n');
-    for (const value of ['Edited draft', 'Send comparison', 'Promised', 'dismissed'])
-      expect(text).toContain(value);
-    expect(text).toMatch(/revision["\s:]+1/i);
-    expect(text).toMatch(/revision["\s:]+2/i);
+    expect(await screen.pages()).not.toContain('Selected-proposal revisions');
     await screen.press(keys.escape);
     expect(screen.text()).toBe(review);
     expect(screen.active()).toBe(true);
@@ -2159,7 +2285,7 @@ function terminalControls(text: string) {
     .map((character) => character.charCodeAt(0));
 }
 
-it('all saved strings are terminal-control-safe in review, Source, revisions, snapshots and results', async () => {
+it('all saved strings are terminal-control-safe in review, Source, current proposal, draft and results', async () => {
   const hostile = 'SAVED_\u001b[31m\u009b31m\u009dtitle\u0007\r\t\b';
   const f = setup();
   const original = seed(
@@ -2200,7 +2326,7 @@ it('all saved strings are terminal-control-safe in review, Source, revisions, sn
   });
   // Keep just the hostile fixture focused. Saved data is read through the same store API.
   const saved = f.store.proposal(original.id)!;
-  const hostileSources = (proposal: Omit<Proposal, 'history'>) => ({
+  const hostileSources = (proposal: Proposal) => ({
     ...proposal,
     sources: proposal.sources.map((source) => ({
       ...source,
@@ -2214,12 +2340,7 @@ it('all saved strings are terminal-control-safe in review, Source, revisions, sn
       locator: hostile,
     })),
   });
-  const proposals: Proposal[] = [
-    {
-      ...hostileSources(saved),
-      history: (saved.history ?? []).map(hostileSources),
-    },
-  ];
+  const proposals: Proposal[] = [hostileSources(saved)];
   vi.spyOn(f.store, 'proposals').mockImplementation((_state, offset = 0, limit = 100) =>
     proposals.slice(offset, offset + limit),
   );
@@ -2238,20 +2359,11 @@ it('all saved strings are terminal-control-safe in review, Source, revisions, sn
     await screen.press('s');
     safe(await screen.pages());
     await screen.press(keys.escape);
-    await screen.press('h');
-    const listing = await screen.pages();
-    expect(terminalControls(listing)).toEqual([]);
-    const inspected: string[] = [];
-    for (let n = 0; n < 5; n++) {
-      await screen.press(keys.enter);
-      const text = await screen.pages();
-      safe(text);
-      inspected.push(text);
-      await screen.press(keys.escape);
-      await screen.press(keys.down);
-    }
-    expect(inspected.join('\n')).toMatch(/actual|verified/i);
-    expect(inspected.join('\n')).toContain('custom');
+    await screen.press('i');
+    const inspected = await screen.pages();
+    safe(inspected);
+    expect(inspected).toMatch(/actual|verified/i);
+    expect(inspected).toContain('custom');
   });
   expect(f.execute.mock.calls.every(([, input]) => input === undefined)).toBe(true);
 });

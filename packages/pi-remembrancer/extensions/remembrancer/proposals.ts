@@ -63,7 +63,6 @@ export type Proposal = ProposalDraft & {
   result: ApplicationResult | null;
   createdAt: string;
   updatedAt: string;
-  history?: Omit<Proposal, 'history'>[];
 };
 
 export function stringEnumSchema<const Values extends readonly string[]>(values: Values) {
@@ -262,7 +261,7 @@ export function validateSubmission(
   }
   if (!Array.isArray(value.references) || !value.references.length)
     throw new Error('Proposal requires eligible evidence');
-  return value.references.map((ref) => {
+  const sources = value.references.map((ref) => {
     object(ref, ['sessionId', 'branchId', 'entryId', 'editId', 'offset', 'quote']);
     text(ref.quote);
     const item = evidence.find(
@@ -286,5 +285,25 @@ export function validateSubmission(
       timestamp: item.timestamp,
       locator: `${item.sessionId}/${item.branchId}/${item.entryId}`,
     };
+  });
+  return unionProposalSources(sources);
+}
+
+export function unionProposalSources(
+  ...groups: readonly (readonly ProposalSource[])[]
+): ProposalSource[] {
+  const seen = new Set<string>();
+  return groups.flat().filter((source) => {
+    const key = JSON.stringify([
+      source.sessionId,
+      source.branchId,
+      source.entryId,
+      source.editId,
+      source.offset,
+      source.quote,
+    ]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
   });
 }

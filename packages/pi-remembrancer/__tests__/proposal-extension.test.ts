@@ -18,6 +18,7 @@ import remembrancer, {
   parseRemembrancerCommandArgs,
 } from '../extensions/remembrancer/index.js';
 import type { Proposal } from '../extensions/remembrancer/proposals.js';
+import { sourceText } from '../extensions/remembrancer/proposal-ui.js';
 
 vi.mock('node:child_process', async (original) => ({
   ...(await original<typeof import('node:child_process')>()),
@@ -35,7 +36,13 @@ afterEach(async () => {
   directories.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true }));
   vi.mocked(execFile).mockClear();
 });
-function setup(autoCapture?: boolean, disabled = false, mode: unknown = 'tui') {
+function setup(
+  autoCapture?: boolean,
+  disabled = false,
+  mode: unknown = 'tui',
+  sourceText = 'Send comparison',
+  excerpt = { offset: 0, quote: sourceText },
+) {
   const dir = mkdtempSync(join(tmpdir(), 'remembrancer-proposal-command-'));
   directories.push(dir);
   const agent = join(dir, 'agent');
@@ -58,7 +65,7 @@ function setup(autoCapture?: boolean, disabled = false, mode: unknown = 'tui') {
         id: 'leaf',
         parentId: null,
         timestamp: '2026-01-01',
-        message: { role: 'user', content: 'Send comparison' },
+        message: { role: 'user', content: sourceText },
       },
     ]
       .map((item) => JSON.stringify(item))
@@ -66,7 +73,9 @@ function setup(autoCapture?: boolean, disabled = false, mode: unknown = 'tui') {
   );
   const store = new CheckpointStore();
   const { owner, attempt, review } = captureJob(store, { file, sessionId: 'session' });
-  review.page();
+  while (review.page()['hasMore']) {
+    // Consume every frozen page before seeding the disposable proposal rows.
+  }
   const submission = {
     change: {
       operation: 'add' as const,
@@ -82,8 +91,7 @@ function setup(autoCapture?: boolean, disabled = false, mode: unknown = 'tui') {
         branchId: 'leaf',
         entryId: 'leaf',
         editId: null,
-        offset: 0,
-        quote: 'Send comparison',
+        ...excerpt,
       },
     ],
   };
@@ -154,6 +162,48 @@ function setup(autoCapture?: boolean, disabled = false, mode: unknown = 'tui') {
     tools,
   };
 }
+
+it.each([
+  { prefix: '', quote: 'Send comparison' },
+  { prefix: 'DISTANT_PREFIX' + '😀'.repeat(50_000), quote: 'Send comparison' + 'x'.repeat(4096) },
+])(
+  'Source shows same-message qualifiers around a bounded saved excerpt ($quote.length units)',
+  ({ prefix, quote }) => {
+    const before = 'Only after approval: ';
+    const after = ', and only to the approved recipients.';
+    const transcript = prefix + before + quote + after + '😀'.repeat(50_000) + 'DISTANT_SUFFIX';
+    const f = setup(false, false, 'tui', transcript, {
+      offset: prefix.length + before.length,
+      quote,
+    });
+    const proposal = f.proposals[0]!;
+    const lastPage = Math.ceil(quote.length / 2048) - 1;
+    for (const page of new Set([0, lastPage])) {
+      const text = sourceText(proposal, 0, page);
+      const context = JSON.parse(text.split('saved branch):\n')[1]!.split('\n')[0]!);
+      const selected = context.selected;
+      expect(selected.text).toBe(
+        transcript.slice(selected.offset, selected.offset + selected.text.length),
+      );
+      expect(selected.text.length).toBeLessThanOrEqual(2049 + 512);
+      expect(selected.text.charCodeAt(0) >= 0xdc00 && selected.text.charCodeAt(0) <= 0xdfff).toBe(
+        false,
+      );
+      const last = selected.text.charCodeAt(selected.text.length - 1);
+      expect(last >= 0xd800 && last <= 0xdbff).toBe(false);
+      if (page === 0) expect(selected.text).toContain(before);
+      if (page === lastPage) expect(selected.text).toContain(after);
+      const saved = JSON.parse(
+        text.split('Saved quote fragment (JSON, exact):\n')[1]!.split('\n')[0]!,
+      );
+      expect(saved).toBe(quote.slice(page * 2048, (page + 1) * 2048));
+      expect(text).not.toContain('DISTANT_PREFIX');
+      expect(text).not.toContain('DISTANT_SUFFIX');
+      expect(text.length).toBeLessThan(10_000);
+    }
+    expect(execFile).not.toHaveBeenCalled();
+  },
+);
 
 it.each([undefined, false, true])(
   'startup reads committed notice generation/count with capture %s',
@@ -275,13 +325,35 @@ it.each(['rpc', 'json', 'print'] as const)(
     // Another owner holds the review lock. Proposal reads do not claim it.
     db.claimReview();
     try {
-      for (let offset = 0; offset < saved.length; offset++) {
-        expect(await read(offset === 0 ? {} : { offset })).toEqual({
-          proposals: [saved[offset]],
-          nextOffset: offset + 1,
+      const listed = await read();
+      expect(listed.proposals.map((item: { id: string }) => item.id)).toEqual(
+        saved.map((item) => item.id),
+      );
+      expect(listed.nextOffset).toBeNull();
+      for (const proposal of saved) {
+        const detail = await read({
+          action: 'detail',
+          id: proposal.id,
+          revision: proposal.revision,
         });
+        expect(JSON.parse(detail.json)).toEqual(
+          Object.fromEntries(Object.entries(proposal).filter(([key]) => key !== 'sources')),
+        );
+        expect(detail.next).toBeNull();
+        const evidence = await read({
+          action: 'evidence',
+          id: proposal.id,
+          revision: proposal.revision,
+        });
+        expect(evidence.entries.map((entry: { quote: string }) => entry.quote)).toEqual(
+          proposal.sources.map((item) => item.quote),
+        );
       }
-      expect(await read({ offset: saved.length })).toEqual({ proposals: [], nextOffset: null });
+      expect(await read({ offset: saved.length })).toEqual({
+        action: 'list',
+        proposals: [],
+        nextOffset: null,
+      });
       expect(db.proposals()).toEqual(saved);
       expect(db.reviewed()).toEqual(coverage);
       expect(db.sources()).toEqual(sources);
@@ -308,7 +380,9 @@ it.each(['rpc', 'json', 'print'] as const)(
     if (content.type !== 'text') throw new Error('Expected JSON text');
     const begin = JSON.parse(content.text);
     expect(begin).toMatchObject({ status: 'already-covered', groups: [], hasMore: false });
-    expect(await read()).toEqual({ proposals: [saved[0]], nextOffset: 1 });
+    expect((await read()).proposals.map((item: { id: string }) => item.id)).toEqual(
+      saved.map((item) => item.id),
+    );
     await review.execute(
       'finish',
       { action: 'finish', batch: begin.batch },
@@ -323,77 +397,76 @@ it.each(['rpc', 'json', 'print'] as const)(
   },
 );
 
-it('reconstructs oversized proposal history through the registered manual tool without writes', async () => {
-  const f = setup(false, false, 'print');
-  const db = new CheckpointStore();
-  const peer = new CheckpointStore();
-  try {
-    let oversized = db.proposals()[0]!;
-    for (let edit = 0; edit < 24; edit++)
-      oversized = db.editProposal(oversized.id, oversized.revision, {
-        change: {
-          operation: 'add',
-          fields: { description: `${edit}: ${'é😀"\\\n'.repeat(500)}` },
-          annotations: [],
-        },
-        expected: null,
-        question: null,
-      });
-    const saved = db.proposals();
-    const before = { coverage: db.reviewed(), sources: db.sources(), notice: db.proposalNotice() };
-    expect(Buffer.byteLength(JSON.stringify(oversized.history))).toBeGreaterThan(51_200);
+it.each(['detail', 'evidence'] as const)(
+  'manual %s errors discard partial reads and allow a fresh list/current read without writes',
+  async (action) => {
+    const huge = '😀\\"\\n'.repeat(30_000);
+    const f = setup(false, false, 'print', huge);
+    const db = new CheckpointStore();
+    const original = f.proposals[0]!;
+    const draft = {
+      change: { operation: 'add' as const, fields: { description: huge }, annotations: [] },
+      expected: null,
+      question: null,
+    };
+    db.editProposal(original.id, original.revision, draft);
+    const current = db.proposal(original.id)!;
     await f.handlers.get('session_start')!({}, f.ctx);
     const tool = f.tools.get('remembrancer_proposals')!;
     const read = async (args: object) => {
       const result = await tool.execute('read', args, undefined, undefined, f.ctx);
       const block = result.content[0]!;
-      if (block.type !== 'text') throw new Error('Expected JSON text');
-      expect(Buffer.byteLength(block.text, 'utf8')).toBeLessThanOrEqual(51_200);
-      expect(db.proposals()).toEqual(saved);
-      expect({
-        coverage: db.reviewed(),
-        sources: db.sources(),
-        notice: db.proposalNotice(),
-      }).toEqual(before);
-      expect(() => peer.claimReview()).toThrow('already open');
+      if (block.type !== 'text') throw new Error('Expected text');
+      expect(Buffer.byteLength(block.text)).toBeLessThanOrEqual(51_200);
       return JSON.parse(block.text);
     };
-    db.claimReview();
-    let page = await read({});
+    const snapshot = () => ({
+      proposals: db.proposals(),
+      coverage: db.reviewed(),
+      notice: db.proposalNotice(),
+    });
+    const before = snapshot();
+    const args = { action, id: current.id, revision: current.revision };
+    const first = await read(args);
+    expect(first.next).not.toBeNull();
     let restored = '';
-    let chunks = 0;
-    do {
-      expect(page.proposals).toEqual([]);
-      expect(page.nextOffset).toBe(1);
-      expect(page.proposalChunk).toMatchObject({
-        id: oversized.id,
-        revision: oversized.revision,
-        position: restored.length,
-      });
-      expect(page.proposalChunk.text.length).toBeGreaterThan(0);
-      restored += page.proposalChunk.text;
-      expect(++chunks).toBeLessThan(100);
-      if (page.nextContinuation === null) break;
-      page = await read({ continuation: page.nextContinuation });
-    } while (chunks < 100);
-    expect(chunks).toBeGreaterThan(1);
-    expect(restored).toBe(JSON.stringify(oversized));
-    expect(JSON.parse(restored)).toEqual(saved[0]);
-    for (let offset = page.nextOffset; offset < saved.length; offset++)
-      expect(await read({ offset })).toEqual({
-        proposals: [saved[offset]],
-        nextOffset: offset + 1,
-      });
-    expect(await read({ offset: saved.length })).toEqual({ proposals: [], nextOffset: null });
-    db.releaseReview();
-    peer.claimReview();
-    peer.releaseReview();
-    expect(execFile).not.toHaveBeenCalled();
-  } finally {
-    peer.close();
+    for (let page = first; page; page = page.next ? await read(page.next) : null) {
+      if (action === 'detail') {
+        expect(page.position).toBe(restored.length);
+        restored += page.json;
+      } else {
+        for (const entry of page.entries) {
+          expect(entry.quotePosition).toBe(restored.length);
+          restored += entry.quote;
+        }
+      }
+    }
+    if (action === 'detail')
+      expect(JSON.parse(restored).draft.change.fields.description).toBe(huge);
+    else expect(restored).toBe(huge);
+    expect(snapshot()).toEqual(before);
+    db.editProposal(current.id, current.revision, { ...draft, question: 'Clarify this' });
+    const afterEdit = snapshot();
+    const freshRevision = db.proposal(current.id)!.revision;
+    await expect(read(args)).rejects.toThrow(/Stale proposal/);
+    await expect(read(first.next)).rejects.toThrow(/Stale proposal/);
+    const refreshedList = await read({});
+    expect(refreshedList.proposals).toHaveLength(3);
+    expect(
+      refreshedList.proposals.find((item: { id: string }) => item.id === current.id).revision,
+    ).toBe(freshRevision);
+    const refreshed = await read({ ...args, revision: freshRevision });
+    expect(refreshed.revision).toBe(freshRevision);
+    const lookup = vi
+      .spyOn(CheckpointStore.prototype, 'proposal')
+      .mockImplementation(() => undefined);
+    await expect(read(refreshed.next)).rejects.toThrow(/Missing proposal/);
+    await expect(read({ ...args, revision: freshRevision })).rejects.toThrow(/Missing proposal/);
+    expect(snapshot()).toEqual(afterEdit);
+    lookup.mockRestore();
     db.close();
-  }
-});
+  },
+);
 
 it('does not register proposal reads when disabled', async () => {
   const f = setup(false, true, 'print');

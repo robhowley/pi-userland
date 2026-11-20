@@ -248,77 +248,90 @@ it('offers only scoped reads, typed task lookups and submission', async () => {
   expect(vi.mocked(lookupTasks).mock.calls[0]![2]?.signal).toBe(input.signal);
   expect(db.captureJob(id)?.state).toBe('completed');
 });
-it('reconstructs oversized proposal history through the configured capture tool without read writes', async () => {
-  runner.mockImplementation(async (input) => {
-    const page = await readAll(input);
-    await call(input, 'submit', { proposals: [proposal(page), proposal(page)] });
-  });
-  await capture();
-  let oversized = db.proposals()[0]!;
-  for (let edit = 0; edit < 24; edit++)
-    oversized = db.editProposal(oversized.id, oversized.revision, {
-      change: {
-        operation: 'add',
-        fields: { description: `${edit}: ${'é😀"\\\n'.repeat(500)}` },
-        annotations: [],
-      },
-      expected: null,
-      question: null,
+it.each(['first', 'next'] as const)(
+  'proposal stale %s-page failures do not commit; controller recovery prepares current state',
+  async (when) => {
+    runner.mockImplementation(async (input) => {
+      const page = await readAll(input);
+      const submission = proposal(page);
+      submission.explanation = '😀\\"\\n'.repeat(30_000);
+      await call(input, 'submit', { proposals: [submission, submission, submission] });
     });
-  const saved = db.proposals();
-  expect(saved).toHaveLength(2);
-  expect(Buffer.byteLength(JSON.stringify(oversized.history))).toBeGreaterThan(51_200);
-  appendFileSync(file, message('later', 'promise'));
-  runner.mockImplementation(async (input) => {
-    const tool = input.tools.find((tool) => tool.name === 'remembrancer_proposals')!;
-    expect(tool).toBeDefined();
-    const before = { coverage: db.reviewed(), sources: db.sources(), notice: db.proposalNotice() };
-    const read = async (args: object) => {
-      const result = await tool.execute('read', args, undefined, undefined, ctx);
-      const block = result.content[0]!;
-      if (block.type !== 'text') throw new Error('Expected JSON text');
-      expect(Buffer.byteLength(block.text, 'utf8')).toBeLessThanOrEqual(51_200);
-      expect(db.proposals()).toEqual(saved);
-      expect({
-        coverage: db.reviewed(),
-        sources: db.sources(),
-        notice: db.proposalNotice(),
-      }).toEqual(before);
-      return JSON.parse(block.text);
+    await capture();
+    const before = {
+      proposals: db.proposals(),
+      coverage: db.reviewed(),
+      notice: db.proposalNotice(),
     };
-    let page = await read({});
-    let restored = '';
-    let chunks = 0;
-    do {
-      expect(page.proposals).toEqual([]);
-      expect(page.nextOffset).toBe(1);
-      expect(page.proposalChunk).toMatchObject({
-        id: oversized.id,
-        revision: oversized.revision,
-        position: restored.length,
+    appendFileSync(file, message('later', 'promise', 'New accepted obligation'));
+    const originalLookup = CheckpointStore.prototype.proposal;
+    let changed = false;
+    const lookup = vi.spyOn(CheckpointStore.prototype, 'proposal').mockImplementation(function (
+      this: CheckpointStore,
+      id: string,
+    ) {
+      const saved = originalLookup.call(this, id);
+      return saved && changed ? { ...saved, revision: saved.revision + 1 } : saved;
+    });
+    runner.mockImplementation(async (input) => {
+      changed = false;
+      await readAll(input);
+      const listed = await call(input, 'proposals');
+      const block = listed.content[0]!;
+      if (block.type !== 'text') throw new Error('Expected text');
+      const list = JSON.parse(block.text);
+      expect(list.proposals).toHaveLength(3);
+      const candidate = list.proposals[0];
+      let request = { action: 'detail', id: candidate.id, revision: candidate.revision };
+      if (when === 'next') {
+        const result = await call(input, 'proposals', request);
+        const block = result.content[0]!;
+        if (block.type !== 'text') throw new Error('Expected text');
+        request = JSON.parse(block.text).next;
+        expect(request).not.toBeNull();
+      }
+      changed = true;
+      await call(input, 'proposals', request);
+      throw new Error('Stale read unexpectedly returned');
+    });
+    const failedId = await capture();
+    await expect(runner.mock.results.at(-1)!.value).rejects.toThrow('Stale proposal');
+    lookup.mockRestore();
+    expect({
+      proposals: db.proposals(),
+      coverage: db.reviewed(),
+      notice: db.proposalNotice(),
+    }).toEqual(before);
+    expect(db.captureJob(failedId)?.state).toBe('failed');
+    const saved = before.proposals[0]!;
+    const edited = db.editProposal(saved.id, saved.revision, {
+      change: saved.change,
+      expected: saved.expected,
+      question: 'Fresh state for recovery',
+    });
+    const current = db.proposals();
+    const previousCalls = runner.mock.calls.length;
+    runner.mockImplementation(async (input) => {
+      await readAll(input);
+      const result = await call(input, 'proposals', {
+        action: 'detail',
+        id: edited.id,
+        revision: edited.revision,
       });
-      expect(page.proposalChunk.text.length).toBeGreaterThan(0);
-      restored += page.proposalChunk.text;
-      expect(++chunks).toBeLessThan(100);
-      if (page.nextContinuation === null) break;
-      page = await read({ continuation: page.nextContinuation });
-    } while (chunks < 100);
-    expect(chunks).toBeGreaterThan(1);
-    expect(restored).toBe(JSON.stringify(oversized));
-    expect(JSON.parse(restored)).toEqual(saved[0]);
-    page = await read({ offset: page.nextOffset });
-    expect(page).toEqual({ proposals: [saved[1]], nextOffset: 2 });
-    expect(await read({ offset: page.nextOffset })).toEqual({ proposals: [], nextOffset: null });
-    await empty(input);
-  });
-  const id = await capture();
-  // Worker failures are persisted rather than thrown. Surface the actual callback failure here.
-  await runner.mock.results.at(-1)!.value;
-  // Successful publication also proves the reads did not change the review generation.
-  expect(db.captureJob(id)?.state).toBe('completed');
-  expect(db.proposals()).toEqual(saved);
-  expect(db.reviewed().map((checkpoint) => checkpoint.entryId)).toEqual(['promise', 'later']);
-});
+      const block = result.content[0]!;
+      if (block.type !== 'text') throw new Error('Expected text');
+      const first = JSON.parse(block.text);
+      expect(first.position).toBe(0);
+      expect(first.revision).toBe(edited.revision);
+      await call(input, 'submit', { proposals: [] });
+    });
+    await runCaptureWorker({ database: db.file, inbox: join(dirname(db.file), 'capture-inbox') });
+    expect(runner).toHaveBeenCalledTimes(previousCalls + 1);
+    expect(db.captureJob(failedId)?.state).toBe('completed');
+    expect(db.proposals()).toEqual(current);
+    expect(db.reviewed().map((item) => item.entryId)).toEqual(['promise', 'later']);
+  },
+);
 
 it('reports contention without model calls and cannot release another owner', async () => {
   const other = new CheckpointStore();
@@ -390,8 +403,23 @@ it('automatic coverage prevents manual replay and manual finish leaves pending p
     if (content.type !== 'text') throw new Error('Expected text');
     return JSON.parse(content.text);
   };
-  expect(await readSaved({})).toEqual({ proposals: saved, nextOffset: 1 });
-  expect(await readSaved({ offset: 1 })).toEqual({ proposals: [], nextOffset: null });
+  expect(await readSaved({})).toMatchObject({
+    action: 'list',
+    proposals: [{ id: saved[0]!.id, evidenceCount: 1 }],
+    nextOffset: null,
+  });
+  expect(await readSaved({ offset: 1 })).toEqual({
+    action: 'list',
+    proposals: [],
+    nextOffset: null,
+  });
+  const detail = await readSaved({
+    action: 'detail',
+    id: saved[0]!.id,
+    revision: saved[0]!.revision,
+  });
+  expect(JSON.parse(detail.json)).toMatchObject({ change: saved[0]!.change });
+  expect(JSON.parse(detail.json)).not.toHaveProperty('sources');
   expect(await manual({ action: 'finish', batch: batch.batch })).toMatchObject({ finished: true });
   appendFileSync(file, message('later', 'promise', 'A later manual obligation'));
   batch = await manual({ action: 'begin' });
