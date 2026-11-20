@@ -100,8 +100,6 @@ On a missing/stale proposal error, discard all partial detail/evidence for that 
 
 ## Automatic capture and saved proposals
 
-Automatic capture saves suggestions for later approval; it never writes Taskwarrior. Enable it with `"pi-remembrancer": { "autoCapture": true }` in Pi's `settings.json`. It defaults to `false`; the extension defaults to `disabled: false`. Trusted-project settings override corresponding global fields; untrusted project settings are ignored.
-
 - Capture reviews eligible user and assistant messages from the saved interactive session the user is leaving, using that session's selected model. It runs in the background, not on every turn or across all saved sessions. Tool outputs, thinking, and images are not evidence.
 - Each job gets two whole-review attempts, with a five-minute deadline per attempt. Attempts count before preparation and are not refunded after setup failure, process death or restart. Temporary failures wait at least 60 seconds before another attempt. Invalid input, overflow/truncation, configuration/authentication defects, unknown failures and exhaustion stop automatic retry.
 - A stopped job blocks later jobs from the same session, not other sessions. Inspect status to explain the failure or delay. Offer manual catch-up for unreviewed evidence rather than promising automatic recovery.
