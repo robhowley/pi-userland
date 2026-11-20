@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.6.0](https://github.com/robhowley/pi-userland/compare/pi-remembrancer-v0.5.1...pi-remembrancer-v0.6.0) (2026-11-20)
+
+
+### Features
+
+* **pi-remembrancer:** add collapsed-first proposal review overlay ([#244](https://github.com/robhowley/pi-userland/issues/244)) ([615a374](https://github.com/robhowley/pi-userland/commit/615a374d524139d3591525072ca0733ec66dc5f2))
+* **pi-remembrancer:** detach automatic capture from session shutdown ([#242](https://github.com/robhowley/pi-userland/issues/242)) ([54225d7](https://github.com/robhowley/pi-userland/commit/54225d77192fc83f101f4d0e03a82658ea74348f))
+
+
+### Bug Fixes
+
+* **pi-remembrancer:** bound proposal evidence growth ([#246](https://github.com/robhowley/pi-userland/issues/246)) ([71629ba](https://github.com/robhowley/pi-userland/commit/71629ba814cb023e3bbce9eed996fdd05ae2623a))
+* **pi-remembrancer:** paginate oversized proposal responses ([#245](https://github.com/robhowley/pi-userland/issues/245)) ([d311f00](https://github.com/robhowley/pi-userland/commit/d311f00f8f8ab0773e85d2ab77e8f7c2cbf977ea))
+* **pi-remembrancer:** persist capture attempt limits and pause state ([#247](https://github.com/robhowley/pi-userland/issues/247)) ([75df0f4](https://github.com/robhowley/pi-userland/commit/75df0f47591aa3fa0313d50a0a9c885901d15d90))
+
 ## [0.5.1](https://github.com/robhowley/pi-userland/compare/pi-remembrancer-v0.5.0...pi-remembrancer-v0.5.1) (2026-11-13)
 
 
