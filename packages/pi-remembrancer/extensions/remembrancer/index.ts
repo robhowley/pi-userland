@@ -331,7 +331,7 @@ export default function remembrancer(pi: ExtensionAPI) {
         if (parsed.action === 'resume') await wakeCapture(ctx);
         return;
       }
-      if (!ctx.hasUI)
+      if (ctx.mode !== 'tui' || !ctx.hasUI)
         throw new Error(
           'Capture retry requires explicit UI confirmation. No retry was authorized.',
         );

@@ -182,15 +182,19 @@ it.each([false, undefined])(
   },
 );
 
-it.each(['print', 'json'] as const)(
-  'rejects %s retry even if a confirm implementation would approve',
-  async (mode) => {
+it.each([
+  { mode: 'print', hasUI: false },
+  { mode: 'json', hasUI: false },
+  { mode: 'rpc', hasUI: true },
+] as const)(
+  'rejects $mode retry even if a confirm implementation would approve',
+  async ({ mode, hasUI }) => {
     const id = await fail();
     const before = fixture.db!.captureJob(id);
     vi.mocked(fixture.ctx.ui.confirm).mockResolvedValue(true);
     await fixture.commands
       .get('remembrancer')!
-      .handler(`capture retry ${id}`, { ...fixture.ctx, hasUI: false, mode });
+      .handler(`capture retry ${id}`, { ...fixture.ctx, hasUI, mode });
     expect(fixture.ctx.ui.confirm).not.toHaveBeenCalled();
     expect(fixture.db!.captureJob(id)).toEqual(before);
     expect(launch).not.toHaveBeenCalled();

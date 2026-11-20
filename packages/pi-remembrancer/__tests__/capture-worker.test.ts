@@ -578,8 +578,10 @@ it('releases and rechecks handoffs, reacquires fresh authority, and fences old c
   let latePage: (() => unknown) | undefined;
   let released = false;
   const calls: string[] = [];
+  const graceMs = 50;
   await runCaptureWorker({
     ...f,
+    graceMs,
     review: async (...args) => {
       calls.push(args[2].sessionId);
       if (!oldCheck) {
@@ -588,6 +590,10 @@ it('releases and rechecks handoffs, reacquires fresh authority, and fences old c
       } else {
         expect(oldCheck).toThrow();
         expect(latePage).toThrow();
+        // A completed attempt cannot arm termination or revoke this attempt.
+        await new Promise((resolve) => setTimeout(resolve, graceMs * 2));
+        expect(args[2].signal!.aborted).toBe(false);
+        expect(args[3]).not.toThrow();
       }
       return emptyReview(...args);
     },
@@ -607,6 +613,8 @@ it('releases and rechecks handoffs, reacquires fresh authority, and fences old c
   expect(job(f.database, 'second')?.state).toBe('completed');
   expect(calls).toEqual(['saved', 'other']);
   expect(oldCheck).toThrow();
+  // The stale check still throws after worker shutdown, without an orphan timer.
+  await new Promise((resolve) => setTimeout(resolve, graceMs * 2));
 });
 
 it.each([true, false])(

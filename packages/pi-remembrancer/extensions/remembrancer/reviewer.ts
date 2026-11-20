@@ -31,8 +31,9 @@ const REVIEWER_SYSTEM_PROMPT =
 
 // These defects must stop even when a provider wrapper also says "server error"
 // or suggests retrying. Pi's transient classifier deliberately matches broadly.
+// Numeric codes need status context, not a rate-limit quantity in the body.
 const PERMANENT_PROVIDER_ERROR =
-  /\b(?:400|401|402|403|404|413|422)\b|\b(?:truncat(?:ed|ion)|invalid(?:[_ -]|argument)|auth(?:entication|orization)?(?:[_ -]|error)|unauthenticated|unauthori[sz]ed|forbidden|permission[_ -]?denied|access[_ -]denied|config(?:uration)?[_ -]|no api[_ -]?key|missing[_ -](?:api[_ -]?key|credentials?)|unsupported[_ -]model|unknown[_ -](?:model|provider)|(?:model|provider)[_ -](?:(?:is[_ -])?not[_ -](?:found|supported)|does[_ -]not[_ -]exist)|output[_ -](?:limit|length))/i;
+  /(?:^\s*|\bprovider.?returned.?(?:an.?)?error\s*:\s*|\bHTTP(?:\/\d(?:\.\d)?)?\s+|\bstatus(?:[_ -]?code)?["']?\s*[:=]?\s*|["']code["']\s*:\s*|\bAPI error\s*\()(?:400|401|402|403|404|413|422)\b|\b(?:truncat(?:ed|ion)|invalid(?:[_ -]|argument)|auth(?:entication|orization)?(?:[_ -]|error)|unauthenticated|unauthori[sz]ed|forbidden|permission[_ -]?denied|access[_ -]denied|config(?:uration)?[_ -]|no api[_ -]?key|missing[_ -](?:api[_ -]?key|credentials?)|unsupported[_ -]model|unknown[_ -](?:model|provider)|(?:model|provider)[_ -](?:(?:is[_ -])?not[_ -](?:found|supported)|does[_ -]not[_ -]exist)|output[_ -](?:limit|length))/i;
 
 const FORBIDDEN_TOOL_NAMES = new Set([
   'bash',

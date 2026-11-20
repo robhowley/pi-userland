@@ -183,9 +183,10 @@ export async function runCaptureWorker(options: WorkerOptions): Promise<void> {
       const expiresAt = performance.now() + (options.budgetMs ?? CAPTURE_BUDGET_MS);
       const previousCwd = process.cwd();
       let fatalTimer: ReturnType<typeof setTimeout> | undefined;
+      let executionFinished = false;
       const admitted = attempt;
       const revoke = (error: unknown) => {
-        if (controller.signal.aborted) return;
+        if (executionFinished || controller.signal.aborted) return;
         controller.abort(error);
         // Keep ownership through cooperative cleanup, but never wait forever.
         fatalTimer = setTimeout(() => {
@@ -226,6 +227,7 @@ export async function runCaptureWorker(options: WorkerOptions): Promise<void> {
         }
       }, 250);
       const stopPolling = () => {
+        executionFinished = true;
         clearTimeout(timer);
         clearInterval(authorityPoll);
         if (fatalTimer) clearTimeout(fatalTimer);

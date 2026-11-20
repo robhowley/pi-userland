@@ -203,6 +203,36 @@ describe('runReviewer', () => {
       errorMessage: 'Service unavailable: prompt is too long',
       retryable: false,
     },
+    ...['400', '401', '402', '403', '404', '413', '422'].flatMap((code) =>
+      ['', 'Provider returned error: ', 'The upstream provider returned an error: '].flatMap(
+        (prefix) => [
+          {
+            stopReason: 'error',
+            errorMessage: `${prefix}429 rate_limit_error: limit ${code} requests/minute`,
+            retryable: true,
+          },
+          {
+            stopReason: 'error',
+            errorMessage: `${prefix}${code} upstream failure; service temporarily unavailable`,
+            retryable: false,
+          },
+        ],
+      ),
+    ),
+    ...[
+      'HTTP 400',
+      'HTTP/1.1 401',
+      'status: 402',
+      'status code 403',
+      'OpenAI API error (404)',
+      'Azure OpenAI API error (413)',
+      '429 {"error":{"code":422,"message":"Provider returned error"}}',
+      '{"status":400}',
+    ].map((reason) => ({
+      stopReason: 'error',
+      errorMessage: `${reason}: service temporarily unavailable`,
+      retryable: false,
+    })),
     ...[
       '500 internal server error',
       '502 bad gateway',
