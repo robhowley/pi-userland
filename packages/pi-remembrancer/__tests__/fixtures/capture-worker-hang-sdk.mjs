@@ -38,12 +38,6 @@ export async function createAgentSession(options) {
       settle();
     };
   }
-  if (stage === 'task') {
-    result.session.prompt = async () => {
-      const tool = options.customTools.find((tool) => tool.name === 'remembrancer_tasks');
-      await tool.execute('lookup', {});
-    };
-  }
   if (stage === 'cleanup')
     result.session.dispose = () => {
       writeFileSync(process.env.CAPTURE_HANG_MARKER, stage);

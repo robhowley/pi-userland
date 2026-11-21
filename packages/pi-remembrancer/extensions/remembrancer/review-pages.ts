@@ -190,6 +190,25 @@ export function frozenContext(
 ) {
   const selected = args.selected;
   if (!selected) throw new Error('Context requires a selected evidence item.');
+  const { branch, selectedIndex } = frozenBranch(review, selected);
+  const before = args.before ?? 1;
+  const offset = args.offset ?? 0;
+  if (!Number.isInteger(before) || before < 1 || before > 40)
+    throw new Error('Context before must be an integer from 1 to 40.');
+  if (!Number.isInteger(offset) || offset < 0)
+    throw new Error('Context offset must be a nonnegative integer.');
+  return contextPage(
+    batch,
+    selected,
+    branch.slice(Math.max(0, selectedIndex - before), selectedIndex),
+    offset,
+  );
+}
+
+export function frozenBranch(
+  review: Pick<PreparedReview, 'evidence' | 'snapshots'>,
+  selected: Selected,
+) {
   const selectedEvidence = review.evidence.find(
     (item) =>
       item.sessionId === selected.sessionId &&
@@ -213,21 +232,16 @@ export function frozenContext(
     (item) => item.entryId === selected.entryId && item.editId === selected.editId,
   );
   if (selectedIndex < 0) throw new Error('Selected evidence is not in the frozen branch.');
-  const before = args.before ?? 1;
-  const offset = args.offset ?? 0;
-  if (!Number.isInteger(before) || before < 1 || before > 40)
-    throw new Error('Context before must be an integer from 1 to 40.');
-  if (!Number.isInteger(offset) || offset < 0)
-    throw new Error('Context offset must be a nonnegative integer.');
-  return contextPage(
-    batch,
-    selected,
-    branch.slice(Math.max(0, selectedIndex - before), selectedIndex),
-    offset,
-  );
+  return { branch, selectedIndex };
 }
 
-export function contextPage(batch: string, selected: Selected, items: Evidence[], offset: number) {
+export function contextPage(
+  batch: string,
+  selected: Selected,
+  items: Evidence[],
+  offset: number,
+  envelope: Record<string, unknown> = {},
+) {
   const total = items.reduce((length, item) => length + item.text.length, 0);
   if (offset > total) throw new Error('Context offset is beyond the requested range');
 
@@ -257,6 +271,7 @@ export function contextPage(batch: string, selected: Selected, items: Evidence[]
       items.slice(0, cursor.index).reduce((length, item) => length + item.text.length, 0) +
       cursor.offset;
     return {
+      ...envelope,
       batch,
       selected,
       contextOnly: true,
