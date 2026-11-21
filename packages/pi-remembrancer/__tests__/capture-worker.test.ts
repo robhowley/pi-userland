@@ -1428,7 +1428,7 @@ it('drains two projects from a third cwd with identical stored-auth commands and
     [1, 'C', c],
   ] as const) {
     const requests = providers[index]!.requests;
-    expect(requests).toHaveLength(index === 0 ? 3 : 4);
+    expect(requests).toHaveLength(index === 0 ? 3 : 4); // Second job discovers the saved effective identity without full-detail passes.
     for (const { headers } of requests) {
       expect(headers['authorization']).toBe(`Bearer credential-${label}`);
       expect(headers['x-command']).toBe(`header-${label}`);

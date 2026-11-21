@@ -97,6 +97,8 @@ Available even when automatic capture or the extension is disabled:
 
 Automatic review uses frozen evidence in bounded, sequential model calls. Shared ancestor messages within that session are extracted once; branch edits remain separate. Findings are matched and combined before suggestions are saved, with conflicting interpretations left as questions.
 
+Branch aliases and growing draft/task details stay host-side and can be read in bounded pages. Dense messages can return several observation pages before their text range is acknowledged. Discovery pages fit both input and candidate-ID response capacity. Task and saved-proposal discovery includes current fields, effective drafts and saved evidence, not just labels. Large identity values retain exact handles and remain uncertain candidates; plausible or uncertain matches get exact detail, rather than reading every full detail for every obligation.
+
 All eligible ranges, findings and final dispositions must be processed before the existing atomic save. A failed pass, insufficient model context, cancellation or timeout saves no suggestions or review coverage. The five-minute limit covers the whole attempt, not each call. Splitting does not guarantee that every review can finish within that limit.
 
 ## Saved proposals

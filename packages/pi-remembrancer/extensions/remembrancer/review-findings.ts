@@ -45,12 +45,20 @@ export function folded(value: unknown): FoldedFinding {
   if (data['draft'] !== null) validateDraft(data['draft'] as ProposalDraft);
   return data as FoldedFinding;
 }
+/** Full aliases remain host-side for coverage, ordering and final quote references. */
+export function workingRange(range: PlannedRange) {
+  return {
+    ...range,
+    occurrences: range.occurrences.slice(0, 1),
+    occurrenceCount: range.occurrences.length,
+  };
+}
 export function exactFinding(finding: Finding) {
   return {
     id: finding.id,
     label: finding.label,
     kind: finding.kind,
-    range: finding.range,
+    range: workingRange(finding.range),
     start: finding.start,
     end: finding.end,
   };

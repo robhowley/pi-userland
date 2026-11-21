@@ -11,10 +11,18 @@ export function providerInstruction(
 type Observation = {
   label: string;
   kind: string;
-  range: { text: string; offset: number; end: number; occurrences: { entryId: string }[] };
+  range: {
+    text: string;
+    offset: number;
+    end: number;
+    occurrenceCount: number;
+    occurrences: { entryId: string }[];
+  };
 };
 type Work = {
   range?: Observation['range'];
+  observationOffset?: number;
+  maxObservations?: number;
   catalogue?: { handle?: string; id: string; label: string }[];
   observation?: Observation;
   candidate?: { first: Observation };
@@ -62,6 +70,9 @@ export function captureAnswer(instruction: string, empty = false): unknown {
         )
         .map((item) => item.id),
     };
+  if (instruction.includes('All exact candidate fields'))
+    return { match: 'different', state: work.state };
+  if ('page' in work) return { notes: 'Exact candidate field inspected' };
   if (work.candidate)
     return {
       match:
@@ -71,7 +82,11 @@ export function captureAnswer(instruction: string, empty = false): unknown {
     };
   if (work.observation) {
     const observation = work.observation;
-    const description = observation.range.text.split('|')[1] ?? observation.label;
+    const exact = observation as Observation & { start: number; end: number };
+    const description =
+      observation.range.text
+        .slice(exact.start - observation.range.offset, exact.end - observation.range.offset)
+        .split('|')[1] ?? observation.label;
     return {
       summary:
         observation.label === 'it' ? (work.previous?.summary ?? 'comparison') : observation.label,

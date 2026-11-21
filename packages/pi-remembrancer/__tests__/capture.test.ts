@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -17,6 +17,7 @@ import { runReviewerStep } from '../extensions/remembrancer/reviewer.js';
 import { answerCapture, captureAnswer, stepWork } from './fixtures/capture-steps.js';
 import { lookupTasks } from '../extensions/remembrancer/taskwarrior.js';
 import { detailPages } from '../extensions/remembrancer/review-findings.js';
+import * as proposalReads from '../extensions/remembrancer/proposal-read.js';
 
 vi.mock('../extensions/remembrancer/reviewer.js', () => ({ runReviewerStep: vi.fn() }));
 vi.mock('../extensions/remembrancer/capture-worker.js', async (original) => ({
@@ -79,12 +80,17 @@ afterEach(async () => fixture.close(ctx));
 
 it('captures only the outgoing frozen session and skips covered evidence', async () => {
   db.enroll('other', '/must-not-read');
+  const enrolled = db.sources();
+  const settings = readFileSync(join(dir, 'agent', 'settings.json'), 'utf8');
   await capture();
   const calls = runner.mock.calls.length;
   await capture();
   expect(runner).toHaveBeenCalledTimes(calls);
   expect(db.reviewed().map((item) => item.sessionId)).toEqual(['outgoing']);
   expect(db.proposals()).toHaveLength(1);
+  expect(db.sources().find((source) => source.sessionId === 'other')).toEqual(enrolled[0]);
+  expect(readFileSync(join(dir, 'agent', 'settings.json'), 'utf8')).toBe(settings);
+  expect(runner.mock.calls.every(([input]) => input.sessionId === 'outgoing')).toBe(true);
   expect(
     runner.mock.calls.every(
       ([input]) => input.tools.map((tool) => tool.name).join() === 'remembrancer_step',
@@ -95,6 +101,175 @@ it('captures only the outgoing frozen session and skips covered evidence', async
     signal: expect.any(AbortSignal),
   });
 });
+it('rejects malformed saved scope before model work and preserves other enrolled defaults/settings', async () => {
+  const otherFile = join(dir, 'unread-other.jsonl');
+  writeFileSync(otherFile, 'broken archive\n');
+  db.enroll('other', otherFile);
+  const other = db.sources();
+  const settings = readFileSync(join(dir, 'agent', 'settings.json'), 'utf8');
+  appendFileSync(file, '{broken json\n');
+  const id = await capture();
+  expect(runner).not.toHaveBeenCalled();
+  expect(db.reviewed()).toEqual([]);
+  expect(db.proposals()).toEqual([]);
+  expect(db.sources()).toEqual(other);
+  expect(readFileSync(join(dir, 'agent', 'settings.json'), 'utf8')).toBe(settings);
+  expect(db.captureJob(id)?.state).toBe('failed');
+});
+
+it.each(['first', 'continuation'])(
+  'retains all published state on a stale %s detail and retries the whole attempt with fresh state',
+  async (when) => {
+    await capture();
+    const original = db.proposals()[0]!;
+    db.editProposal(original.id, original.revision, {
+      change: {
+        operation: 'add',
+        fields: { description: 'Long saved draft '.repeat(10000) },
+        annotations: [],
+      },
+      expected: null,
+      question: 'Keep saved draft?',
+    });
+    const before = {
+      proposals: db.proposals(),
+      coverage: db.reviewed(),
+      notice: db.proposalNotice(),
+    };
+    appendFileSync(file, message('later', 'promise', 'I will send a later comparison.'));
+    const read = proposalReads.readProposals;
+    const originalLookup = CheckpointStore.prototype.proposal;
+    const lookup = vi.spyOn(CheckpointStore.prototype, 'proposal');
+    let changed = false;
+    lookup.mockImplementation(function (this: CheckpointStore, id: string) {
+      const saved = originalLookup.call(this, id);
+      return saved && changed ? { ...saved, revision: saved.revision + 1 } : saved;
+    });
+    const reads = vi.spyOn(proposalReads, 'readProposals').mockImplementation((store, args) => {
+      if (args.action === 'detail' && (when === 'first' || (args.position ?? 0) > 0))
+        changed = true;
+      return read(store, args);
+    });
+    const id = await capture();
+    expect(db.captureJob(id)).toMatchObject({
+      state: 'failed',
+      attemptCount: 1,
+      retryEligible: true,
+    });
+    lookup.mockRestore();
+    reads.mockRestore();
+    expect({
+      proposals: db.proposals(),
+      coverage: db.reviewed(),
+      notice: db.proposalNotice(),
+    }).toEqual(before);
+    const saved = db.proposals()[0]!;
+    const edited = db.editProposal(saved.id, saved.revision, {
+      ...saved.draft!,
+      question: 'Fresh state for whole retry',
+    });
+    const proposals = db.proposals();
+    let sawFresh = false;
+    runner.mockImplementation((input) => {
+      const work = JSON.parse(
+        input.instruction.slice(input.instruction.lastIndexOf('\n') + 1),
+      ).work;
+      if (JSON.stringify(work).includes('Fresh state for whole retry')) sawFresh = true;
+      return answerCapture(
+        input,
+        input.instruction.includes('Materialize')
+          ? { reason: 'No change after exact review', submission: null }
+          : captureAnswer(input.instruction),
+      );
+    });
+    const calls = runner.mock.calls.length;
+    const inbox = join(dirname(db.file), 'capture-inbox');
+    await runCaptureWorker({ database: db.file, inbox });
+    expect(runner).toHaveBeenCalledTimes(calls);
+    vi.spyOn(Date, 'now').mockReturnValue(db.captureJob(id)!.nextAttemptAt!);
+    await runCaptureWorker({ database: db.file, inbox });
+    expect(sawFresh).toBe(true);
+    expect(db.proposal(edited.id)?.revision).toBe(edited.revision);
+    expect(db.captureJob(id)).toMatchObject({ state: 'completed', attemptCount: 2 });
+    expect(db.proposals()).toEqual(proposals);
+    expect(db.reviewed().map((row) => row.entryId)).toEqual(['promise', 'later']);
+  },
+);
+
+it('revises a differently labelled saved proposal from its exact edited draft, without duplicating it', async () => {
+  await capture();
+  const first = db.proposals()[0]!;
+  const edited = db.editProposal(first.id, first.revision, {
+    change: {
+      operation: 'add',
+      fields: { description: 'Send the deployment report' },
+      annotations: [],
+    },
+    expected: null,
+    question: 'Keep my edited wording?',
+  });
+  appendFileSync(
+    file,
+    message('deployment', 'promise', 'accepted:deployment|Send the deployment report'),
+  );
+  let readExact = false;
+  runner.mockImplementation((input) => {
+    const work = JSON.parse(input.instruction.slice(input.instruction.lastIndexOf('\n') + 1)).work;
+    let answer = captureAnswer(input.instruction);
+    if (work.catalogue?.[0]?.handle) {
+      expect(JSON.stringify(work.catalogue)).toContain('Send the deployment report');
+      answer = { candidates: work.catalogue.map((item: { handle: string }) => item.handle) };
+    }
+    if (work.page) {
+      const identity =
+        work.page.path.join('.') === 'effective.change.fields.description' &&
+        work.page.text?.includes('deployment');
+      readExact ||= identity;
+      answer = {
+        notes:
+          identity || work.notes === 'same deployment' ? 'same deployment' : 'identity unresolved',
+      };
+    }
+    if (input.instruction.includes('All exact candidate fields')) {
+      readExact ||=
+        work.candidate.effective.change.fields.description === 'Send the deployment report';
+      answer = {
+        match: readExact ? 'same' : 'different',
+        state: { ...work.state, draft: work.candidate.effective },
+      };
+    }
+    return answerCapture(input, answer);
+  });
+  await capture();
+  expect(readExact).toBe(true);
+  expect(db.proposals()).toHaveLength(1);
+  expect(db.proposals()[0]).toMatchObject({
+    id: edited.id,
+    revision: edited.revision + 1,
+    change: edited.draft!.change,
+  });
+  expect(db.proposals()[0]!.sources.map((source) => source.entryId)).toEqual([
+    'promise',
+    'deployment',
+  ]);
+});
+
+it('moves every finding and removes absorbed dispositions before closing a merged record', () => {
+  const current = new CaptureReview(prepareReview([{ file, sessionId: 'outgoing' }], []), () => {});
+  const range = current.nextExtraction()!;
+  current.acceptExtraction(range, ['f1', 'f2', 'f3']);
+  current.reconcileFinding('f1', 'r1');
+  current.reconcileFinding('f2', 'r2');
+  current.mergeRecords('r1', ['r2']);
+  expect(() => current.disposeRecord('r2', null)).toThrow('Unknown');
+  expect(() => current.finishReconciliation()).toThrow('every');
+  current.reconcileFinding('f3', 'r1');
+  current.disposeRecord('r1', null);
+  expect(() => current.mergeRecords('r1', ['r2'])).toThrow();
+  expect(current.finishReconciliation()).toEqual([]);
+  expect(() => current.completion([])).not.toThrow();
+});
+
 it('keeps extraction acknowledgement separate from complete reconciliation/dispositions', () => {
   const current = new CaptureReview(prepareReview([{ file, sessionId: 'outgoing' }], []), () => {});
   const range = current.nextExtraction()!;
@@ -182,8 +357,8 @@ it('resolves an earlier pronoun against later intent and retains ambiguous sibli
     .filter((range): range is NonNullable<typeof range> => range !== undefined);
   expect(extraction.filter((range) => range.occurrences[0]!.entryId === 'intent')).toHaveLength(1);
   expect(
-    extraction.find((range) => range.occurrences[0]!.entryId === 'intent')!.occurrences,
-  ).toHaveLength(2);
+    extraction.find((range) => range.occurrences[0]!.entryId === 'intent')!.occurrenceCount,
+  ).toBe(2);
   expect(new Set(db.proposals()[0]!.sources.map((source) => source.branchId))).toEqual(
     new Set(['left', 'right']),
   );
@@ -240,6 +415,7 @@ it.each(['early extraction', 'reconciliation', 'cleanup', 'pre-publication'])(
       ['a', null, 'accepted:alpha|Send alpha'],
       ['b', 'a', 'accepted:beta|Send beta'],
     ]);
+    const before = { sources: db.sources(), notice: db.proposalNotice() };
     let calls = 0;
     runner.mockImplementation(async (input) => {
       calls++;
@@ -262,6 +438,7 @@ it.each(['early extraction', 'reconciliation', 'cleanup', 'pre-publication'])(
     expect(db.captureJob(id)?.state).toBe('failed');
     expect(db.reviewed()).toEqual([]);
     expect(db.proposals()).toEqual([]);
+    expect({ sources: db.sources(), notice: db.proposalNotice() }).toEqual(before);
     db.claimReview();
     db.releaseReview();
   },

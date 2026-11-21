@@ -90,6 +90,20 @@ export class CaptureReview {
     if (!this.dispositions.has(recordId)) this.dispositions.set(recordId, undefined);
   }
 
+  mergeRecords(target: string, absorbed: readonly string[]): void {
+    this.assertActive();
+    const ids = new Set([target, ...absorbed]);
+    if (
+      this.reconciled ||
+      ids.size !== absorbed.length + 1 ||
+      [...ids].some((id) => !this.dispositions.has(id) || this.dispositions.get(id) !== undefined)
+    )
+      throw new Error('Unknown or disposed capture merge record');
+    for (const [finding, record] of this.findings)
+      if (record !== null && ids.has(record)) this.findings.set(finding, target);
+    absorbed.forEach((id) => this.dispositions.delete(id));
+  }
+
   disposeRecord(id: string, submission: ProposalSubmission | null): void {
     this.assertActive();
     if (this.reconciled || !this.dispositions.has(id) || this.dispositions.get(id) !== undefined)

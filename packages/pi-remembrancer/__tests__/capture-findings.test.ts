@@ -99,61 +99,81 @@ function saved(): Proposal {
   };
 }
 
-it('reconstructs oversized saved detail/evidence on host and uses the effective draft before revising', async () => {
-  rows = [saved()];
-  const seen: { path: string[]; text?: string }[] = [];
-  let effectiveDraft: ProposalDraft | undefined;
-  runner.mockImplementation(async (input) => {
-    const work = JSON.parse(input.instruction.slice(input.instruction.lastIndexOf('\n') + 1)).work;
-    let answer: unknown;
-    if (work.catalogue?.[0]?.handle)
-      answer = { candidates: work.catalogue.map((item: { handle: string }) => item.handle) };
-    else if (work.page) {
-      seen.push(work.page);
-      answer = { notes: 'Effective edited draft, exact saved evidence read' };
-    } else if (input.instruction.includes('All exact candidate fields')) {
-      effectiveDraft = rows[0]!.draft!;
-      answer = {
-        match: 'same',
-        state: { summary: 'comparison', status: 'active', draft: effectiveDraft },
-      };
-    } else answer = captureAnswer(input.instruction);
-    return answerCapture(input, answer);
-  });
-  const submissions = await run();
-  expect(submissions).toHaveLength(1);
-  expect(submissions[0]).toMatchObject({
-    id: 'saved',
-    expectedRevision: 3,
-    change: rows[0]!.draft!.change,
-    question: 'Keep my draft?',
-  });
-  expect(
-    seen
-      .filter((page) => page.path.join('.') === 'explanation')
-      .map((page) => page.text)
-      .join(''),
-  ).toBe(rows[0]!.explanation);
-  expect(
-    seen
-      .filter((page) => page.path.join('.') === 'sources.0.quote')
-      .map((page) => page.text)
-      .join(''),
-  ).toBe(rows[0]!.sources[0]!.quote);
-  expect(
-    seen.some(
-      (page) =>
-        page.path.join('.') === 'effective.change.fields.description' &&
-        page.text === 'Effective edited draft',
-    ),
-  ).toBe(true);
-  expect(seen.some((page) => page.text === 'Old automatic interpretation')).toBe(false);
-  expect(
-    runner.mock.calls.every(
-      ([input]) => Buffer.byteLength(input.instruction) < model.contextWindow - model.maxTokens,
-    ),
-  ).toBe(true);
-});
+it.each(['plausible', 'uncertain'])(
+  'reads exact renamed effective drafts and evidence for %s identity',
+  async (identity) => {
+    rows = [saved()];
+    rows[0]!.draft!.change = {
+      operation: 'add',
+      fields: {
+        description: 'Send the comparison' + (identity === 'uncertain' ? ' '.repeat(3000) : ''),
+      },
+      annotations: [],
+    };
+    const seen: { path: string[]; text?: string }[] = [];
+    let effectiveDraft: ProposalDraft | undefined;
+    runner.mockImplementation(async (input) => {
+      const work = JSON.parse(
+        input.instruction.slice(input.instruction.lastIndexOf('\n') + 1),
+      ).work;
+      let answer: unknown;
+      if (work.catalogue?.[0]?.handle) {
+        expect(work.catalogue[0].identity.effective.change.fields.description).toEqual(
+          identity === 'uncertain' ? { valueHandle: expect.any(String) } : 'Send the comparison',
+        );
+        answer = { candidates: identity === 'plausible' ? [work.catalogue[0].handle] : [] };
+      } else if (work.page) {
+        seen.push(work.page);
+        answer = {
+          notes:
+            work.page.text?.includes('comparison') || work.notes?.includes('same comparison')
+              ? 'same comparison'
+              : 'identity unresolved',
+        };
+      } else if (input.instruction.includes('All exact candidate fields')) {
+        effectiveDraft = work.candidate.effective;
+        answer = {
+          match: work.notes === 'same comparison' ? 'same' : 'different',
+          state: { summary: 'comparison', status: 'active', draft: effectiveDraft },
+        };
+      } else answer = captureAnswer(input.instruction);
+      return answerCapture(input, answer);
+    });
+    const submissions = await run();
+    expect(submissions).toHaveLength(1);
+    expect(submissions[0]).toMatchObject({
+      id: 'saved',
+      expectedRevision: 3,
+      change: rows[0]!.draft!.change,
+      question: 'Keep my draft?',
+    });
+    expect(
+      seen
+        .filter((page) => page.path.join('.') === 'explanation')
+        .map((page) => page.text)
+        .join(''),
+    ).toBe(rows[0]!.explanation);
+    expect(
+      seen
+        .filter((page) => page.path.join('.') === 'sources.0.quote')
+        .map((page) => page.text)
+        .join(''),
+    ).toBe(rows[0]!.sources[0]!.quote);
+    expect(
+      seen.some(
+        (page) =>
+          page.path.join('.') === 'effective.change.fields.description' &&
+          page.text?.startsWith('Send the comparison'),
+      ),
+    ).toBe(true);
+    expect(seen.some((page) => page.text === 'Old automatic interpretation')).toBe(false);
+    expect(
+      runner.mock.calls.every(
+        ([input]) => Buffer.byteLength(input.instruction) < model.contextWindow - model.maxTokens,
+      ),
+    ).toBe(true);
+  },
+);
 
 it('examines every saved-proposal discovery page before declaring no existing match', async () => {
   rows = Array.from({ length: 45 }, (_, index) => ({
@@ -302,6 +322,115 @@ it.each([
   expect(() => current.completion([])).toThrow();
 });
 
+it.each(['correction', 'completion', 'ambiguous'])(
+  'accounts for two earlier records after a later %s bridge',
+  async (outcome) => {
+    const file = join(dir, 'bridge.jsonl');
+    const messages = [
+      'accepted:alpha|Send the comparison Friday',
+      'accepted:beta|Send Maya the report Friday',
+      'accepted:bridge|Those are the same delivery',
+      `correction:bridge|Send Maya the comparison Monday`,
+      ...(outcome === 'completion' ? ['completion:bridge|Sent it'] : []),
+    ];
+    writeFileSync(
+      file,
+      [
+        { type: 'session', id: 'session', cwd: dir },
+        ...messages.map((content, index) => ({
+          type: 'message',
+          id: `m${index}`,
+          parentId: index ? `m${index - 1}` : null,
+          message: { role: 'user', content },
+        })),
+        ...['left', 'right'].map((id) => ({
+          type: 'message',
+          id,
+          parentId: `m${messages.length - 1}`,
+          message: { role: 'assistant', content: 'Context only' },
+        })),
+      ]
+        .map((item) => JSON.stringify(item))
+        .join('\n') + '\n',
+    );
+    current = new CaptureReview(prepareReview([{ file, sessionId: 'session' }], []), () => {});
+    const merged = vi.spyOn(current, 'mergeRecords');
+    const disposed = vi.spyOn(current, 'disposeRecord');
+    const folded: string[] = [];
+    let inspectedMergedHistory = false;
+    runner.mockImplementation(async (input) => {
+      const { work, detail } = JSON.parse(
+        input.instruction.slice(input.instruction.lastIndexOf('\n') + 1),
+      );
+      if (outcome !== 'ambiguous' && work.candidate?.historyCount === 3 && !detail) {
+        const tool = input.tools[0]!;
+        await tool.execute(
+          'merged-history',
+          {
+            result: {
+              inspect: { kind: 'history', recordId: work.candidate.id, index: 1 },
+              memory: 'Read the absorbed record evidence',
+            },
+          },
+          undefined,
+          undefined,
+          {} as Parameters<typeof tool.execute>[4],
+        );
+        return { status: 'handoff', message: {} } as Awaited<ReturnType<typeof runReviewerStep>>;
+      }
+      if (detail) {
+        expect(detail.finding.label).toBe('beta');
+        expect(detail.finding.range.occurrenceCount).toBe(2);
+        inspectedMergedHistory = true;
+      }
+      let answer = captureAnswer(input.instruction);
+      if (work.catalogue && work.observation?.label === 'bridge')
+        answer = { candidates: work.catalogue.map((item: { id: string }) => item.id) };
+      if (work.candidate && work.observation?.label === 'bridge')
+        answer = { match: outcome === 'ambiguous' ? 'ambiguous' : 'same' };
+      if (work.observation && !work.catalogue && !work.candidate)
+        folded.push(work.observation.range.occurrences[0]!.entryId);
+      return answerCapture(input, answer);
+    });
+    const submissions = await run();
+    expect(() => current.completion(submissions)).not.toThrow();
+    if (outcome === 'ambiguous') {
+      expect(merged).not.toHaveBeenCalled();
+      expect(submissions.every((submission) => Boolean(submission.question))).toBe(true);
+      expect(disposed).toHaveBeenCalledTimes(4);
+    } else {
+      expect(merged).toHaveBeenCalledExactlyOnceWith('r1', ['r2']);
+      expect(inspectedMergedHistory).toBe(true);
+      expect(disposed).toHaveBeenCalledTimes(1);
+      const history = messages.map((_item, index) => `m${index}`);
+      expect(folded).toEqual([...history, ...history]);
+      if (outcome === 'completion') {
+        expect(submissions).toEqual([]);
+        expect(disposed).toHaveBeenCalledWith('r1', null);
+      } else {
+        expect(submissions).toHaveLength(1);
+        expect(submissions[0]!.question).toBeNull();
+        expect(submissions[0]!.change).toMatchObject({
+          fields: { description: 'Send Maya the comparison Monday' },
+        });
+        expect(submissions[0]!.references.map((reference) => reference.entryId)).toEqual([
+          'm0',
+          'm0',
+          'm1',
+          'm1',
+          'm2',
+          'm2',
+          'm3',
+          'm3',
+        ]);
+        expect(
+          new Set(submissions[0]!.references.map((reference) => reference.branchId)).size,
+        ).toBe(2);
+      }
+    }
+  },
+);
+
 it('reads extra exact history only by a bounded validated handle, not all pairs', async () => {
   const file = join(dir, 'history.jsonl');
   writeFileSync(
@@ -365,6 +494,69 @@ it('reads extra exact history only by a bounded validated handle, not all pairs'
   expect(read).toBe(true);
   expect(submissions).toHaveLength(1);
   expect(submissions[0]!.references).toHaveLength(3);
+});
+
+it.each([
+  'skipped cursor',
+  'empty continuation',
+  'replayed observation',
+  'invented value',
+  'invalid alias',
+  'failure after page',
+])('does not acknowledge a dense range after %s', async (failure) => {
+  let calls = 0;
+  runner.mockImplementation(async (input) => {
+    calls++;
+    const work = stepWork(input.instruction);
+    if (failure === 'invented value' || failure === 'invalid alias') {
+      const tool = input.tools[0]!;
+      await tool.execute(
+        'inspect',
+        {
+          result: {
+            inspect:
+              failure === 'invented value'
+                ? { kind: 'value', valueHandle: 'invented', index: 0 }
+                : {
+                    kind: 'occurrences',
+                    rangeId: (work.range as unknown as { id: string }).id,
+                    index: 100,
+                  },
+            memory: 'Read exact detail',
+          },
+        },
+        undefined,
+        undefined,
+        {} as Parameters<typeof tool.execute>[4],
+      );
+      return { status: 'handoff', message: {} } as Awaited<ReturnType<typeof runReviewerStep>>;
+    }
+    if (calls === 2 && failure === 'failure after page')
+      throw new Error('Provider failure after page');
+    const range = work.range!;
+    return answerCapture(input, {
+      complete: calls > 1,
+      observations:
+        failure === 'empty continuation'
+          ? []
+          : [{ kind: 'accepted', label: 'comparison', start: range.offset, end: range.end }],
+      nextObservationOffset:
+        calls > 1
+          ? null
+          : failure === 'skipped cursor'
+            ? 2
+            : failure === 'empty continuation'
+              ? 0
+              : 1,
+      memory: 'Continue the observations',
+    });
+  });
+  await expect(run()).rejects.toThrow();
+  expect(current.nextExtraction()!.offset).toBe(0);
+  expect(() => current.completion([])).toThrow('every original evidence range');
+  expect(runner.mock.calls.some(([input]) => input.instruction.includes('Materialize'))).toBe(
+    false,
+  );
 });
 
 it('services distant frozen context in fresh bounded field passes, not a tool conversation', async () => {
