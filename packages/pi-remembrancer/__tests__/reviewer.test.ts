@@ -423,14 +423,16 @@ describe('runReviewer', () => {
     },
   );
 
-  it.each([
-    { retryable: false, promptFails: false },
-    { retryable: true, promptFails: false },
-    { retryable: false, promptFails: true },
-    { retryable: true, promptFails: true },
-  ])(
-    'preserves the original tool error ($retryable, prompt failure=$promptFails)',
-    async ({ retryable, promptFails }) => {
+  it.each(
+    [
+      { retryable: false, promptFails: false },
+      { retryable: true, promptFails: false },
+      { retryable: false, promptFails: true },
+      { retryable: true, promptFails: true },
+    ].flatMap((test) => [false, true].map((step) => ({ ...test, step }))),
+  )(
+    'preserves the original tool error (step=$step, retryable=$retryable, prompt failure=$promptFails)',
+    async ({ retryable, promptFails, step }) => {
       const failure = retryable
         ? new CaptureRetryableError('Task lookup failed')
         : new Error('Task lookup failed');
@@ -454,7 +456,12 @@ describe('runReviewer', () => {
         });
         if (promptFails) throw new Error('Prompt stopped after tool failure');
       });
-      await expect(runReviewer(input({ tools: [tool] }))).rejects.toBe(failure);
+      const reviewerInput = input({ tools: [tool] });
+      await expect(
+        step
+          ? runReviewerStep({ ...reviewerInput, instruction: 'Lookup this piece' })
+          : runReviewer(reviewerInput),
+      ).rejects.toBe(failure);
       expect(session.abort).toHaveBeenCalledOnce();
       expect(session.dispose).toHaveBeenCalledOnce();
     },
@@ -974,10 +981,7 @@ describe('runReviewer', () => {
       }
     });
     await expect(
-      runReviewerStep({
-        ...input({ model: { ...model, contextWindow: 8192 }, tools: [tool] }),
-        instruction: 'Lookup this piece',
-      }),
+      runReviewer(input({ model: { ...model, contextWindow: 8192 }, tools: [tool] })),
     ).rejects.toBeInstanceOf(ReviewerBudgetError);
     expect(accepted).toBeGreaterThan(0);
     expect(accepted).toBeLessThan(4);
@@ -1066,7 +1070,7 @@ describe('runReviewer', () => {
     expect(session.dispose).toHaveBeenCalledOnce();
   });
 
-  it('rejects retained thinking signatures before executing the tool batch', async () => {
+  it('rejects nonterminal retained thinking signatures before executing the tool batch', async () => {
     session.prompt.mockImplementation(async () => {
       session.subscribe.mock.calls[0]![0]({
         type: 'message_end',
@@ -1092,10 +1096,7 @@ describe('runReviewer', () => {
     });
     const tool = makeTool('lookup');
     await expect(
-      runReviewerStep({
-        ...input({ model: { ...model, contextWindow: 8192 }, tools: [tool] }),
-        instruction: 'Read one piece',
-      }),
+      runReviewer(input({ model: { ...model, contextWindow: 8192 }, tools: [tool] })),
     ).rejects.toBeInstanceOf(ReviewerBudgetError);
     expect(tool.execute).not.toHaveBeenCalled();
     expect(session.abort).toHaveBeenCalledOnce();

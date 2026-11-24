@@ -15,7 +15,7 @@ import { captureExecution } from '../extensions/remembrancer/config.js';
 import { captureExtension } from './fixtures/capture-extension.js';
 import { runReviewerStep } from '../extensions/remembrancer/reviewer.js';
 import { answerCapture, captureAnswer, stepWork } from './fixtures/capture-steps.js';
-import { lookupTasks } from '../extensions/remembrancer/taskwarrior.js';
+import { readTaskCatalog } from '../extensions/remembrancer/taskwarrior.js';
 import { detailPages } from '../extensions/remembrancer/review-findings.js';
 import * as proposalReads from '../extensions/remembrancer/proposal-read.js';
 
@@ -26,7 +26,7 @@ vi.mock('../extensions/remembrancer/capture-worker.js', async (original) => ({
 }));
 vi.mock('../extensions/remembrancer/taskwarrior.js', async (original) => ({
   ...(await original<typeof import('../extensions/remembrancer/taskwarrior.js')>()),
-  lookupTasks: vi.fn().mockResolvedValue({ tasks: [], nextOffset: null }),
+  readTaskCatalog: vi.fn().mockResolvedValue([]),
 }));
 let dir: string;
 let file: string;
@@ -73,7 +73,7 @@ beforeEach(() => {
   db = fixture.db!;
   config({ autoCapture: true });
   runner.mockImplementation((input) => answerCapture(input));
-  vi.mocked(lookupTasks).mockResolvedValue({ tasks: [], nextOffset: null });
+  vi.mocked(readTaskCatalog).mockResolvedValue([]);
   vi.mocked(launchCaptureWorker).mockResolvedValue(123);
 });
 afterEach(async () => fixture.close(ctx));
@@ -96,7 +96,7 @@ it('captures only the outgoing frozen session and skips covered evidence', async
       ([input]) => input.tools.map((tool) => tool.name).join() === 'remembrancer_step',
     ),
   ).toBe(true);
-  expect(lookupTasks).toHaveBeenCalledWith({ offset: 0 }, undefined, {
+  expect(readTaskCatalog).toHaveBeenCalledWith(undefined, {
     cwd: dir,
     signal: expect.any(AbortSignal),
   });
@@ -117,8 +117,8 @@ it('rejects malformed saved scope before model work and preserves other enrolled
   expect(db.captureJob(id)?.state).toBe('failed');
 });
 
-it.each(['first', 'continuation'])(
-  'retains all published state on a stale %s detail and retries the whole attempt with fresh state',
+it.each(['catalogue', 'cached candidate'])(
+  'retains all published state on a stale typed %s and retries the whole attempt with fresh state',
   async (when) => {
     await capture();
     const original = db.proposals()[0]!;
@@ -136,8 +136,12 @@ it.each(['first', 'continuation'])(
       coverage: db.reviewed(),
       notice: db.proposalNotice(),
     };
-    appendFileSync(file, message('later', 'promise', 'I will send a later comparison.'));
-    const read = proposalReads.readProposals;
+    appendFileSync(
+      file,
+      message('later', 'promise', 'completion:other|I sent the unrelated later comparison.'),
+    );
+    const reads = vi.spyOn(proposalReads, 'readProposals');
+    const typedReads = vi.spyOn(proposalReads, 'readProposal');
     const originalLookup = CheckpointStore.prototype.proposal;
     const lookup = vi.spyOn(CheckpointStore.prototype, 'proposal');
     let changed = false;
@@ -145,10 +149,28 @@ it.each(['first', 'continuation'])(
       const saved = originalLookup.call(this, id);
       return saved && changed ? { ...saved, revision: saved.revision + 1 } : saved;
     });
-    const reads = vi.spyOn(proposalReads, 'readProposals').mockImplementation((store, args) => {
-      if (args.action === 'detail' && (when === 'first' || (args.position ?? 0) > 0))
+    const originalGeneration = CheckpointStore.prototype.contextGeneration;
+    const generation = vi
+      .spyOn(CheckpointStore.prototype, 'contextGeneration')
+      .mockImplementation(function (this: CheckpointStore) {
+        return originalGeneration.call(this) + Number(changed);
+      });
+    const originalList = CheckpointStore.prototype.proposals;
+    const list = vi.spyOn(CheckpointStore.prototype, 'proposals').mockImplementation(function (
+      this: CheckpointStore,
+      ...args
+    ) {
+      const page = originalList.apply(this, args);
+      if (when === 'catalogue') changed = true;
+      return page;
+    });
+    runner.mockImplementation((input) => {
+      const work = stepWork(input.instruction);
+      if (when === 'cached candidate' && work.catalogue?.[0]?.handle) {
         changed = true;
-      return read(store, args);
+        return answerCapture(input, { candidates: work.catalogue.map((item) => item.handle) });
+      }
+      return answerCapture(input);
     });
     const id = await capture();
     expect(db.captureJob(id)).toMatchObject({
@@ -156,8 +178,22 @@ it.each(['first', 'continuation'])(
       attemptCount: 1,
       retryEligible: true,
     });
+    expect(changed).toBe(true);
+    if (when === 'cached candidate') {
+      expect(typedReads.mock.results.at(-1)).toMatchObject({
+        type: 'throw',
+        value: expect.objectContaining({ message: expect.stringContaining('Stale proposal') }),
+      });
+    } else {
+      expect(typedReads).not.toHaveBeenCalled();
+      expect(new Set(generation.mock.results.map((result) => result.value)).size).toBe(2);
+    }
+    expect(reads).not.toHaveBeenCalled();
     lookup.mockRestore();
+    generation.mockRestore();
+    list.mockRestore();
     reads.mockRestore();
+    typedReads.mockRestore();
     expect({
       proposals: db.proposals(),
       coverage: db.reviewed(),
@@ -175,12 +211,7 @@ it.each(['first', 'continuation'])(
         input.instruction.slice(input.instruction.lastIndexOf('\n') + 1),
       ).work;
       if (JSON.stringify(work).includes('Fresh state for whole retry')) sawFresh = true;
-      return answerCapture(
-        input,
-        input.instruction.includes('Materialize')
-          ? { reason: 'No change after exact review', submission: null }
-          : captureAnswer(input.instruction),
-      );
+      return answerCapture(input);
     });
     const calls = runner.mock.calls.length;
     const inbox = join(dirname(db.file), 'capture-inbox');

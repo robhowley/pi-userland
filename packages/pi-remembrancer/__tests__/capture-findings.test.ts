@@ -8,19 +8,21 @@ import { prepareReview } from '../extensions/remembrancer/evidence.js';
 import { reviewPreparedCapture } from '../extensions/remembrancer/capture.js';
 import { runReviewerStep, type ReviewerStepInput } from '../extensions/remembrancer/reviewer.js';
 import * as proposalReads from '../extensions/remembrancer/proposal-read.js';
-import { lookupTasks, snapshot } from '../extensions/remembrancer/taskwarrior.js';
+import { CaptureRetryableError } from '../extensions/remembrancer/capture-jobs.js';
+import { readTaskCatalog, snapshot } from '../extensions/remembrancer/taskwarrior.js';
 import type { Proposal, ProposalDraft } from '../extensions/remembrancer/proposals.js';
 import { answerCapture, captureAnswer, stepWork } from './fixtures/capture-steps.js';
 
 vi.mock('../extensions/remembrancer/reviewer.js', () => ({ runReviewerStep: vi.fn() }));
 vi.mock('../extensions/remembrancer/taskwarrior.js', async (original) => ({
   ...(await original<typeof import('../extensions/remembrancer/taskwarrior.js')>()),
-  lookupTasks: vi.fn(),
+  readTaskCatalog: vi.fn(),
 }));
 let dir: string;
 let current: CaptureReview;
 let db: CheckpointStore;
 let rows: Proposal[];
+let generation: number;
 const runner = vi.mocked(runReviewerStep);
 const model = { contextWindow: 32768, maxTokens: 2048 } as NonNullable<ReviewerStepInput['model']>;
 const run = () =>
@@ -44,13 +46,15 @@ beforeEach(() => {
   );
   current = new CaptureReview(prepareReview([{ file, sessionId: 'session' }], []), () => {});
   rows = [];
+  generation = 0;
   db = {
+    contextGeneration: () => generation,
     proposals: (_state: unknown, offset: number, limit: number) =>
       rows.slice(offset, offset + limit),
     proposal: (id: string) => rows.find((row) => row.id === id),
   } as CheckpointStore;
   runner.mockReset().mockImplementation((input) => answerCapture(input));
-  vi.mocked(lookupTasks).mockReset().mockResolvedValue({ tasks: [], nextOffset: null });
+  vi.mocked(readTaskCatalog).mockReset().mockResolvedValue([]);
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -99,6 +103,120 @@ function saved(): Proposal {
   };
 }
 
+it('does not force an unrelated task match for retained metadata or annotations', async () => {
+  vi.mocked(readTaskCatalog).mockResolvedValue([
+    {
+      uuid: '12345678-1234-1234-1234-123456789abc',
+      status: 'pending',
+      description: 'Unrelated maintenance',
+      custom: 'metadata '.repeat(20000),
+      annotations: [{ entry: '20260101T000000Z', description: 'Supporting detail '.repeat(2000) }],
+    },
+  ]);
+  runner.mockImplementation(async (input) => {
+    const work = JSON.parse(input.instruction.slice(input.instruction.lastIndexOf('\n') + 1)).work;
+    if (work.catalogue?.[0]?.handle) {
+      expect(work.catalogue[0].identity.description).toBe('Unrelated maintenance');
+      expect(work.catalogue[0].identity.detail.custom).toEqual({ valueHandle: expect.any(String) });
+      expect(work.catalogue[0].identity.annotations[0].description).toEqual({
+        valueHandle: expect.any(String),
+      });
+      expect(work.catalogue[0].uncertainIdentity).toBe(false);
+      return answerCapture(input, { candidates: [] });
+    }
+    return answerCapture(input);
+  });
+  expect(await run()).toHaveLength(1);
+  expect(
+    runner.mock.calls.some(([input]) => input.instruction.includes('All exact candidate fields')),
+  ).toBe(false);
+});
+
+it('exposes a verified UUID and old source clues to match an applied add after a task rename', async () => {
+  const task = {
+    uuid: '12345678-1234-1234-1234-123456789abc',
+    status: 'pending',
+    description: 'Renamed deliverable',
+  };
+  const old = saved();
+  rows = [
+    {
+      ...old,
+      draft: null,
+      state: 'applied',
+      claim: task.uuid,
+      result: { state: 'applied', verified: snapshot(task), error: null },
+      sources: [
+        { ...old.sources[0]!, quote: 'I will send the comparison. ' + 'support '.repeat(1500) },
+      ],
+    },
+  ];
+  vi.mocked(readTaskCatalog).mockResolvedValue([task]);
+  const exact = new Set<string>();
+  runner.mockImplementation(async (input) => {
+    const work = JSON.parse(input.instruction.slice(input.instruction.lastIndexOf('\n') + 1)).work;
+    if (work.catalogue?.[0]?.handle) {
+      for (const item of work.catalogue) {
+        if (item.handle === 'proposal:saved') {
+          expect(item.identity.verifiedUuid).toBe(task.uuid);
+          expect(item.identity.effectiveClue.description.text).toBe('Old automatic interpretation');
+          expect(item.identity.sourceClues[0].quote).toMatchObject({
+            text: expect.stringContaining('I will send the comparison.'),
+            truncated: true,
+          });
+          expect(item.identity.sources[0].quote).toEqual({ valueHandle: expect.any(String) });
+        }
+      }
+      return answerCapture(input, {
+        candidates: work.catalogue.map((item: { handle: string }) => item.handle),
+      });
+    }
+    if (input.instruction.includes('All exact candidate fields')) {
+      exact.add(work.handle);
+      expect(work.candidate.verifiedUuid ?? work.candidate.uuid).toBe(task.uuid);
+      return answerCapture(input, { match: 'same' });
+    }
+    if (input.instruction.includes('Materialize')) {
+      return answerCapture(input, {
+        reason: 'Matched the verified renamed task',
+        submission: {
+          explanation: 'Matched the verified renamed task',
+          change: {
+            operation: 'update',
+            targetUuid: work.targetUuid,
+            fields: { priority: 'H' },
+            annotations: [],
+          },
+          question: null,
+        },
+      });
+    }
+    return answerCapture(input);
+  });
+  const submissions = await run();
+  expect(exact).toEqual(new Set(['task:0', 'proposal:saved']));
+  expect(submissions).toHaveLength(1);
+  expect(submissions[0]).toMatchObject({
+    change: { operation: 'update', targetUuid: task.uuid },
+    expected: snapshot(task),
+  });
+  expect(submissions[0]).not.toHaveProperty('id');
+});
+
+it('rechecks catalogue generation even when discovery selects no proposal', async () => {
+  rows = [saved()];
+  runner.mockImplementation(async (input) => {
+    const work = stepWork(input.instruction);
+    if (work.catalogue?.[0]?.handle) {
+      generation++;
+      return answerCapture(input, { candidates: [] });
+    }
+    return answerCapture(input);
+  });
+  await expect(run()).rejects.toBeInstanceOf(CaptureRetryableError);
+  expect(() => current.completion([])).toThrow('reconciliation');
+});
+
 it.each(['plausible', 'uncertain'])(
   'reads exact renamed effective drafts and evidence for %s identity',
   async (identity) => {
@@ -134,7 +252,11 @@ it.each(['plausible', 'uncertain'])(
         effectiveDraft = work.candidate.effective;
         answer = {
           match: work.notes === 'same comparison' ? 'same' : 'different',
-          state: { summary: 'comparison', status: 'active', draft: effectiveDraft },
+        };
+      } else if (input.instruction.includes('Materialize')) {
+        answer = {
+          reason: 'Preserve edited matched draft',
+          submission: { ...effectiveDraft, explanation: 'Exact saved draft' },
         };
       } else answer = captureAnswer(input.instruction);
       return answerCapture(input, answer);
@@ -195,32 +317,31 @@ it('examines every saved-proposal discovery page before declaring no existing ma
   });
   expect(await run()).toHaveLength(1);
   expect(examined.size).toBe(45);
-  expect(list.mock.calls.map((args) => args[1])).toEqual([0, 20, 40]);
+  expect(list.mock.calls).toEqual([[undefined, 0, 100]]);
 });
 
-it.each(['detail', 'evidence'])(
-  'aborts stale saved %s continuation without materializing or publishing',
-  async (phase) => {
+it.each(['missing', 'stale', 'other proposal'])(
+  'aborts a %s typed candidate change without materializing or publishing',
+  async (change) => {
     rows = [saved()];
-    const original = proposalReads.readProposals;
-    vi.spyOn(proposalReads, 'readProposals').mockImplementation((store, args) => {
-      if (
-        args.action === phase &&
-        (phase === 'detail' ? (args.position ?? 0) > 0 : (args.quotePosition ?? 0) > 0)
-      )
-        rows[0]!.revision++;
-      return original(store, args);
-    });
+    const original = rows[0]!;
     runner.mockImplementation(async (input) => {
       const work = stepWork(input.instruction);
-      return answerCapture(
-        input,
-        work.catalogue?.[0]?.handle
-          ? { candidates: work.catalogue.map((item) => item.handle) }
-          : captureAnswer(input.instruction),
-      );
+      if (work.catalogue?.[0]?.handle) {
+        generation++;
+        if (change === 'missing') rows = [];
+        else if (change === 'stale') rows = [{ ...original, revision: original.revision + 1 }];
+        return answerCapture(input, { candidates: work.catalogue.map((item) => item.handle) });
+      }
+      return answerCapture(input);
     });
-    await expect(run()).rejects.toThrow('Stale proposal');
+    await expect(run()).rejects.toThrow(
+      change === 'missing'
+        ? 'Missing proposal'
+        : change === 'stale'
+          ? 'Stale proposal'
+          : 'context changed',
+    );
     expect(runner.mock.calls.some(([input]) => input.instruction.includes('Materialize'))).toBe(
       false,
     );
@@ -228,17 +349,59 @@ it.each(['detail', 'evidence'])(
   },
 );
 
-it('matches completed tasks from exhaustive pages and host-validates the exact target', async () => {
+it('aborts changes during typed store enumeration rather than accepting a drifting page', async () => {
+  const original = { ...saved(), explanation: 'short', sources: [] };
+  rows = Array.from({ length: 205 }, (_, index) => ({ ...original, id: `saved-${index}` }));
+  const list = db.proposals;
+  vi.spyOn(db, 'proposals').mockImplementation((state, offset, limit) => {
+    if (offset === 100) {
+      rows = rows.slice(1);
+      generation++;
+    }
+    return list(state, offset, limit);
+  });
+  await expect(run()).rejects.toBeInstanceOf(CaptureRetryableError);
+  expect(runner.mock.calls.some(([input]) => input.instruction.includes('Materialize'))).toBe(
+    false,
+  );
+});
+
+it('keeps typed sources and avoids the public JSON and quote-fragment protocol', async () => {
+  rows = [saved()];
+  const wire = vi.spyOn(proposalReads, 'readProposals');
+  const detail = vi.spyOn(db, 'proposal');
+  const completion = vi.spyOn(current, 'completion');
+  const staged = await run();
+  expect(completion).not.toHaveBeenCalled();
+  expect(() => current.completion(staged)).not.toThrow();
+  expect(completion).toHaveBeenCalledTimes(1);
+  expect(wire).not.toHaveBeenCalled();
+  expect(detail).not.toHaveBeenCalled();
+});
+
+it('matches tasks from one complete typed view and host-validates the exact target', async () => {
   const uuid = '12345678-1234-1234-1234-123456789abc';
   const task = { uuid, status: 'pending', description: 'Comparison' };
-  vi.mocked(lookupTasks).mockImplementation(async ({ offset } = {}) =>
-    offset === 0
-      ? {
-          tasks: [{ ...task, uuid: '12345678-1234-1234-1234-123456789abd', status: 'completed' }],
-          nextOffset: 1,
-        }
-      : { tasks: [task], nextOffset: null },
+  const file = join(dir, 'completed.jsonl');
+  writeFileSync(
+    file,
+    [
+      { type: 'session', id: 'session', cwd: dir },
+      {
+        type: 'message',
+        id: 'done',
+        parentId: null,
+        message: { role: 'user', content: 'completion:comparison|I sent the comparison.' },
+      },
+    ]
+      .map((row) => JSON.stringify(row))
+      .join('\n') + '\n',
   );
+  current = new CaptureReview(prepareReview([{ file, sessionId: 'session' }], []), () => {});
+  vi.mocked(readTaskCatalog).mockResolvedValue([
+    { ...task, uuid: '12345678-1234-1234-1234-123456789abd', status: 'completed' },
+    task,
+  ]);
   runner.mockImplementation(async (input) => {
     const work = JSON.parse(input.instruction.slice(input.instruction.lastIndexOf('\n') + 1)).work;
     let answer: unknown;
@@ -246,29 +409,22 @@ it('matches completed tasks from exhaustive pages and host-validates the exact t
       answer = { candidates: work.catalogue.map((item: { handle: string }) => item.handle) };
     else if (work.page) answer = { notes: 'Task exact fields inspected' };
     else if (input.instruction.includes('All exact candidate fields'))
-      answer = {
-        match: work.handle === 'task:0' ? 'different' : 'same',
-        state: {
-          summary: 'Comparison',
-          status: 'completed',
-          draft: {
-            change: { operation: 'complete', targetUuid: uuid, annotations: [] },
-            expected: snapshot(task),
-            question: null,
-          },
-        },
-      };
+      answer = { match: work.handle === 'task:0' ? 'different' : 'same' };
     else answer = captureAnswer(input.instruction);
     if (input.instruction.includes('Materialize'))
       answer = {
         reason: 'Completed existing task',
-        submission: { ...work.state.draft, explanation: 'Explicit completion' },
+        submission: {
+          change: { operation: 'complete', targetUuid: work.targetUuid, annotations: [] },
+          question: null,
+          explanation: 'Explicit completion',
+        },
       };
     return answerCapture(input, answer);
   });
   const submissions = await run();
   expect(submissions[0]!.change).toMatchObject({ operation: 'complete', targetUuid: uuid });
-  expect(lookupTasks).toHaveBeenCalledTimes(2);
+  expect(readTaskCatalog).toHaveBeenCalledTimes(1);
 });
 
 it.each([
@@ -362,13 +518,13 @@ it.each(['correction', 'completion', 'ambiguous'])(
       const { work, detail } = JSON.parse(
         input.instruction.slice(input.instruction.lastIndexOf('\n') + 1),
       );
-      if (outcome !== 'ambiguous' && work.candidate?.historyCount === 3 && !detail) {
+      if (outcome !== 'ambiguous' && work.candidate?.historyCount === 5 && !detail) {
         const tool = input.tools[0]!;
         await tool.execute(
           'merged-history',
           {
             result: {
-              inspect: { kind: 'history', recordId: work.candidate.id, index: 1 },
+              inspect: { kind: 'history', recordId: work.candidate.id, index: 2 },
               memory: 'Read the absorbed record evidence',
             },
           },
@@ -380,13 +536,14 @@ it.each(['correction', 'completion', 'ambiguous'])(
       }
       if (detail) {
         expect(detail.finding.label).toBe('beta');
-        expect(detail.finding.range.occurrenceCount).toBe(2);
+        expect(detail.finding.range.occurrenceCount).toBe(1);
+        expect(detail.finding.sourceOccurrenceCount).toBe(2);
         inspectedMergedHistory = true;
       }
       let answer = captureAnswer(input.instruction);
       if (work.catalogue && work.observation?.label === 'bridge')
         answer = { candidates: work.catalogue.map((item: { id: string }) => item.id) };
-      if (work.candidate && work.observation?.label === 'bridge')
+      if (work.candidate && (work.observation?.label === 'bridge' || work.bridge))
         answer = { match: outcome === 'ambiguous' ? 'ambiguous' : 'same' };
       if (work.observation && !work.catalogue && !work.candidate)
         folded.push(work.observation.range.occurrences[0]!.entryId);
@@ -397,13 +554,13 @@ it.each(['correction', 'completion', 'ambiguous'])(
     if (outcome === 'ambiguous') {
       expect(merged).not.toHaveBeenCalled();
       expect(submissions.every((submission) => Boolean(submission.question))).toBe(true);
-      expect(disposed).toHaveBeenCalledTimes(4);
+      expect(disposed).toHaveBeenCalledTimes(6);
     } else {
       expect(merged).toHaveBeenCalledExactlyOnceWith('r1', ['r2']);
       expect(inspectedMergedHistory).toBe(true);
       expect(disposed).toHaveBeenCalledTimes(1);
       const history = messages.map((_item, index) => `m${index}`);
-      expect(folded).toEqual([...history, ...history]);
+      expect(folded).toEqual(history); // Identical ordered history and frozen context reuse the fold.
       if (outcome === 'completion') {
         expect(submissions).toEqual([]);
         expect(disposed).toHaveBeenCalledWith('r1', null);
@@ -559,7 +716,7 @@ it.each([
   );
 });
 
-it('services distant frozen context in fresh bounded field passes, not a tool conversation', async () => {
+it('services distant frozen context as exact pages with real cursors, not a tool conversation', async () => {
   const file = join(dir, 'context.jsonl');
   const messages = Array.from({ length: 65 }, (_, index) => ({
     type: 'message',
@@ -604,9 +761,13 @@ it('services distant frozen context in fresh bounded field passes, not a tool co
       );
       return { status: 'handoff', message: {} } as Awaited<ReturnType<typeof runReviewerStep>>;
     }
-    if (work.page) {
-      sawDistantContext ||= work.page.text === 'earlier context 3';
-      return answerCapture(input, { notes: 'Frozen antecedent is comparison' });
+    const { detail } = JSON.parse(input.instruction.slice(input.instruction.lastIndexOf('\n') + 1));
+    if (detail) {
+      expect(detail.contextOnly).toBe(true);
+      expect(detail.nextOffset).toBeNull();
+      expect(detail.nextSkip).toBe(61);
+      sawDistantContext = detail.groups[0].entries[0].text === 'earlier context 3';
+      expect(sawDistantContext).toBe(true);
     }
     return answerCapture(input);
   });

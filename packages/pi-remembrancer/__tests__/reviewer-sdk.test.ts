@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ModelRuntime, type ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { expect, it } from 'vitest';
+import { writeCompletion } from './fixtures/openai-loopback.js';
 import {
   estimateReviewerTokens,
   getReviewerBudget,
@@ -15,7 +16,7 @@ import {
 
 // Real isolated SDK sessions, deterministic loopback transport, synthetic evidence only.
 async function withProvider(
-  options: { contextWindow?: number; truncate?: boolean } = {},
+  options: { contextWindow?: number; truncate?: boolean; reply?: string; toolName?: string } = {},
   test: (fixture: {
     input: ReviewerInput;
     requests: Record<string, unknown>[];
@@ -32,7 +33,7 @@ async function withProvider(
     for await (const chunk of request) body += chunk;
     requests.push(JSON.parse(body));
     // The guard makes a broken loop test terminate even if the host stops bounding it.
-    const callTool = requests.length < 30;
+    const callTool = options.reply === undefined && requests.length < 30;
     const delta = callTool
       ? {
           role: 'assistant',
@@ -41,21 +42,19 @@ async function withProvider(
               index: 0,
               id: `call-${requests.length}`,
               type: 'function',
-              function: { name: 'lookup', arguments: JSON.stringify({ handle: 'frozen-range' }) },
+              function: {
+                name: options.toolName ?? 'lookup',
+                arguments: JSON.stringify({ handle: 'frozen-range' }),
+              },
             },
           ],
         }
-      : { role: 'assistant', content: 'fixture guard' };
-    response.writeHead(200, { 'content-type': 'text/event-stream' });
-    for (const [value, finishReason] of [
-      [delta, null],
-      [{}, options.truncate ? 'length' : callTool ? 'tool_calls' : 'stop'],
-    ]) {
-      response.write(
-        `data: ${JSON.stringify({ id: 'offline', object: 'chat.completion.chunk', created: 1, model: 'fixture', choices: [{ index: 0, delta: value, finish_reason: finishReason }] })}\n\n`,
-      );
-    }
-    response.end('data: [DONE]\n\n');
+      : { role: 'assistant', content: options.reply ?? 'fixture guard' };
+    writeCompletion(
+      response,
+      delta,
+      options.truncate ? 'length' : callTool ? 'tool_calls' : 'stop',
+    );
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   try {
@@ -196,6 +195,56 @@ it('rejects truncated output before executing even a parseable tool call', async
     expect(toolCalls).toEqual([]);
   });
 });
+
+it('rejects an unknown tool by name without executing a current handler or requesting another turn', async () => {
+  await withProvider({ toolName: 'retired_lookup' }, async ({ input, requests, toolCalls }) => {
+    await expect(runReviewerStep({ ...input, instruction: 'Read one piece' })).rejects.toThrow(
+      /Reviewer tool failed \(retired_lookup\):.*not found/,
+    );
+    expect(requests).toHaveLength(1);
+    expect(toolCalls).toEqual([]);
+  });
+});
+
+it('passes preflight but rejects the complete SDK-framed provider request before HTTP', async () => {
+  await withProvider({ contextWindow: 4096 }, async ({ input, requests, toolCalls }) => {
+    await expect(
+      runReviewerStep({ ...input, instruction: 'x'.repeat(1800) }),
+    ).rejects.toMatchObject({
+      name: 'ReviewerBudgetError',
+      message: expect.stringMatching(/^Reviewer complete provider request exceeds context budget/),
+    });
+    expect(requests).toEqual([]);
+    expect(toolCalls).toEqual([]);
+  });
+});
+
+it.each(['text', 'tool'] as const)(
+  'accepts a terminal %s reply without charging reserved output and its acknowledgement as input',
+  async (kind) => {
+    await withProvider(
+      kind === 'text' ? { reply: 'One observation. '.repeat(30) } : {},
+      async ({ input, requests, toolCalls }) => {
+        const instruction = 'Read one piece';
+        await runReviewerStep({ ...input, instruction });
+        const limit = getReviewerBudget(input.model!).maxInputTokens;
+        // Measure actual SDK framing, then leave less headroom than the final reply.
+        const padding = limit - estimateReviewerTokens(requests[0]) - 20;
+        expect(padding).toBeGreaterThan(0);
+        const result = await runReviewerStep({
+          ...input,
+          instruction: instruction + 'x'.repeat(padding),
+        });
+        const requestTokens = estimateReviewerTokens(requests[1]);
+        expect(requestTokens).toBeLessThanOrEqual(limit);
+        expect(requestTokens + estimateReviewerTokens(result.message)).toBeGreaterThan(limit);
+        expect(result.status).toBe(kind === 'text' ? 'complete' : 'handoff');
+        expect(requests).toHaveLength(2);
+        expect(toolCalls).toHaveLength(kind === 'text' ? 0 : 2);
+      },
+    );
+  },
+);
 
 it('does not dispatch indivisible input that cannot fit the model', async () => {
   await withProvider({}, async ({ input, requests }) => {

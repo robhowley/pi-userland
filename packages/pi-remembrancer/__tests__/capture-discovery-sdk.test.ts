@@ -11,12 +11,12 @@ import { CAPTURE_BUDGET_MS } from '../extensions/remembrancer/capture.js';
 import { captureExecution } from '../extensions/remembrancer/config.js';
 import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
 import { getReviewerBudget } from '../extensions/remembrancer/reviewer-budget.js';
-import { lookupTasks, snapshot } from '../extensions/remembrancer/taskwarrior.js';
+import { readTaskCatalog } from '../extensions/remembrancer/taskwarrior.js';
 import { captureAnswer, providerInstruction } from './fixtures/capture-steps.js';
 
 vi.mock('../extensions/remembrancer/taskwarrior.js', async (original) => ({
   ...(await original<typeof import('../extensions/remembrancer/taskwarrior.js')>()),
-  lookupTasks: vi.fn(),
+  readTaskCatalog: vi.fn(),
 }));
 
 // Real worker, SDK tool loop, atomic publication and disposable HTTP transport.
@@ -29,7 +29,7 @@ it.each(['representative', 'plausible', 'truncated', 'existing-truncated'])(
     mkdirSync(agent);
     vi.stubEnv('PI_CODING_AGENT_DIR', agent);
     vi.stubEnv('XDG_STATE_HOME', dir);
-    vi.mocked(lookupTasks).mockResolvedValue({ tasks: [], nextOffset: null });
+    vi.mocked(readTaskCatalog).mockResolvedValue([]);
     const count = scenario === 'representative' ? 24 : 90;
     let phase: 'seed' | 'review' = 'seed';
     let truncated = false;
@@ -118,26 +118,7 @@ it.each(['representative', 'plausible', 'truncated', 'existing-truncated'])(
           scenario === 'representative' &&
           (candidate.description ?? candidate.effective?.change.fields.description) ===
             work.state.draft.change.fields.description;
-        answer = {
-          match: same ? 'same' : 'different',
-          state: same
-            ? {
-                ...work.state,
-                draft: candidate.uuid
-                  ? {
-                      change: {
-                        operation: 'update',
-                        targetUuid: candidate.uuid,
-                        fields: { priority: 'H' },
-                        annotations: [],
-                      },
-                      expected: snapshot(candidate),
-                      question: null,
-                    }
-                  : candidate.effective,
-              }
-            : work.state,
-        };
+        answer = { match: same ? 'same' : 'different' };
       } else if (work.candidate) category = 'recordMatch';
       else if (work.observation) category = 'fold';
       else if (work.page) {
@@ -150,6 +131,23 @@ it.each(['representative', 'plausible', 'truncated', 'existing-truncated'])(
         }
       } else if (instruction.includes('Materialize')) {
         category = 'materialize';
+        if (phase === 'review' && scenario === 'representative') {
+          const draft = work.targetUuid
+            ? {
+                change: {
+                  operation: 'update',
+                  targetUuid: work.targetUuid,
+                  fields: { priority: 'H' },
+                  annotations: [],
+                },
+                question: null,
+              }
+            : (work.matchedProposals[0]?.effective ?? work.state.draft);
+          answer = {
+            reason: 'Use unique matched identity',
+            submission: { ...draft, explanation: 'Exact fixture evidence' },
+          };
+        }
         if (phase === 'seed' && scenario === 'representative') {
           const result = answer as { submission: { explanation: string } };
           result.submission.explanation = savedExplanation;
@@ -313,10 +311,7 @@ it.each(['representative', 'plausible', 'truncated', 'existing-truncated'])(
         status: i < 12 ? 'pending' : 'completed',
         description: i < 12 ? `Work ${i}` : `Other ${i}`,
       }));
-      vi.mocked(lookupTasks).mockImplementation(async ({ offset = 0 } = {}) => ({
-        tasks: tasks.slice(offset, offset + 20),
-        nextOffset: offset + 20 < tasks.length ? offset + 20 : null,
-      }));
+      vi.mocked(readTaskCatalog).mockResolvedValue(tasks);
       phase = 'review';
       const started = performance.now();
       await capture(

@@ -96,6 +96,26 @@ export function safePrefixLength(text: string, start: number, maxUnits: number):
   return length;
 }
 
+/** Find a Unicode-safe prefix using the complete encoded response as the fit predicate. */
+export function fitPrefixLength(
+  text: string,
+  start: number,
+  fits: (length: number) => boolean,
+  maxUnits = text.length - start,
+): number {
+  let low = 0;
+  let high = Math.min(text.length - start, maxUnits);
+  const full = safePrefixLength(text, start, high);
+  // Finishing can remove a continuation cursor, so test that envelope first.
+  if (fits(full)) return full;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (fits(safePrefixLength(text, start, middle))) low = middle;
+    else high = middle - 1;
+  }
+  return safePrefixLength(text, start, low);
+}
+
 export function boundedEvidencePage(
   evidence: readonly Evidence[],
   initial: PageCursor,

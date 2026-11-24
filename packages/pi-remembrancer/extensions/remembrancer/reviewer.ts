@@ -188,7 +188,14 @@ async function runIsolatedReviewer(
                 toolName: tool.name,
                 result,
               });
-              assertReviewerFits(budget, retainedTokens + tokens, `tool result (${tool.name})`);
+              // A terminating step never replays its reply or acknowledgement as input.
+              // Still bound each tool result, but do not charge it against a request
+              // whose full response capacity was already reserved.
+              assertReviewerFits(
+                budget,
+                (endAfterToolBatch ? 0 : retainedTokens) + tokens,
+                `tool result (${tool.name})`,
+              );
               return tokens;
             };
             const result = await tool.execute(
@@ -210,7 +217,8 @@ async function runIsolatedReviewer(
               ctx,
             );
             if (runError) throw runError;
-            retainedTokens += checkResult(result);
+            const resultTokens = checkResult(result);
+            if (!endAfterToolBatch) retainedTokens += resultTokens;
             // Every tool in the batch terminates, so no automatic next request
             // can grow this step. Working state belongs to the supplied handlers.
             return endAfterToolBatch ? { ...result, terminate: true } : result;
@@ -263,16 +271,20 @@ async function runIsolatedReviewer(
               ? new CaptureRetryableError(reason)
               : new Error(reason);
         }
+        const calls = message.content.filter((item) => item.type === 'toolCall');
         if (!runError) {
           try {
-            retainedTokens += estimateReviewerTokens(message);
-            assertReviewerFits(budget, retainedTokens, 'assistant and retained turn history');
+            // Only the continuing protocol retains this response for another request.
+            // Terminal output uses the response reserve, not the input allowance.
+            if (!endAfterToolBatch && calls.length > 0) {
+              retainedTokens += estimateReviewerTokens(message);
+              assertReviewerFits(budget, retainedTokens, 'assistant and retained turn history');
+            }
             lastAssistant = message;
           } catch (error) {
             runError = error instanceof Error ? error : new Error(String(error));
           }
         }
-        const calls = message.content.filter((item) => item.type === 'toolCall');
         if (calls.length > 1 && calls.some((call) => call.name === 'remembrancer_submit'))
           runError ??= new Error('Submission must be alone in its tool batch');
       }

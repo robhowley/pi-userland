@@ -209,8 +209,9 @@ export function validateSnapshot(value: TaskSnapshot): void {
     text(annotation.description);
   }
 }
-export function validateDraft(value: ProposalDraft): void {
-  object(value, ['change', 'expected', 'question']);
+/** Intent syntax without a model-supplied snapshot. Bound drafts still require validateDraft. */
+export function validateProposalIntent(value: Pick<ProposalDraft, 'change' | 'question'>): void {
+  object(value, ['change', 'question']);
   const change = value.change;
   object(
     change,
@@ -225,17 +226,22 @@ export function validateDraft(value: ProposalDraft): void {
   if (!Array.isArray(change.annotations)) throw new Error('Invalid annotations');
   change.annotations.forEach(text);
   if (change.operation !== 'complete') fields(change.fields);
+  if (change.operation === 'add') text(change.fields.description);
+  else uuid(change.targetUuid);
+  if (value.question !== null) text(value.question);
+}
+export function validateDraft(value: ProposalDraft): void {
+  object(value, ['change', 'expected', 'question']);
+  validateProposalIntent({ change: value.change, question: value.question });
+  const change = value.change;
   if (change.operation === 'add') {
-    text(change.fields.description);
     if (value.expected !== null) throw new Error('Add cannot have an expected task');
   } else {
-    uuid(change.targetUuid);
     if (!value.expected) throw new Error('Existing task requires expected snapshot');
     validateSnapshot(value.expected);
     if (value.expected.uuid !== change.targetUuid)
       throw new Error('Task snapshot does not match target');
   }
-  if (value.question !== null) text(value.question);
 }
 export function validateSubmission(
   value: ProposalSubmission,

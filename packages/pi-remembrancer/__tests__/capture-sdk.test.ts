@@ -8,7 +8,7 @@ import { preserveHandoff } from '../extensions/remembrancer/capture-handoff.js';
 import { runCaptureWorker } from '../extensions/remembrancer/capture-worker.js';
 import { captureExecution } from '../extensions/remembrancer/config.js';
 import { getReviewerBudget } from '../extensions/remembrancer/reviewer-budget.js';
-import { lookupTasks, snapshot } from '../extensions/remembrancer/taskwarrior.js';
+import { readTaskCatalog, snapshot } from '../extensions/remembrancer/taskwarrior.js';
 import { captureAnswer, providerInstruction, stepWork } from './fixtures/capture-steps.js';
 import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
 
@@ -16,7 +16,7 @@ import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
 // No provider adapter, credentials, external requests or Taskwarrior commands.
 vi.mock('../extensions/remembrancer/taskwarrior.js', async (original) => ({
   ...(await original<typeof import('../extensions/remembrancer/taskwarrior.js')>()),
-  lookupTasks: vi.fn().mockResolvedValue({ tasks: [], nextOffset: null }),
+  readTaskCatalog: vi.fn().mockResolvedValue([]),
 }));
 it.each([
   { outcome: 'empty', requests: 1, covered: true },
@@ -64,10 +64,9 @@ it.each([
           )
         : {}),
     };
-    vi.mocked(lookupTasks).mockResolvedValue({
-      tasks: outcome === 'renamed' || aggregateCase ? [task] : [],
-      nextOffset: null,
-    });
+    vi.mocked(readTaskCatalog).mockResolvedValue(
+      outcome === 'renamed' || aggregateCase ? [task] : [],
+    );
     const taskFields = new Map<string, unknown>();
     let aliasInspected = false;
     let valuePages = 0;
@@ -113,20 +112,30 @@ it.each([
         outcome === 'missing' || outcome === 'overflow'
           ? []
           : outcome === 'unread'
-            ? ['remembrancer_submit']
-            : outcome === 'tool-error'
-              ? ['remembrancer_tasks']
-              : outcome === 'mixed'
-                ? ['remembrancer_step', 'remembrancer_submit']
-                : outcome === 'duplicate'
-                  ? ['remembrancer_step', 'remembrancer_step']
-                  : ['remembrancer_step'];
+            ? ['unknown_fixture_tool']
+            : outcome === 'mixed'
+              ? ['remembrancer_step', 'unknown_fixture_tool']
+              : outcome === 'duplicate'
+                ? ['remembrancer_step', 'remembrancer_step']
+                : ['remembrancer_step'];
       const messages = requests.at(-1)!['messages'] as { role: string; content: string }[];
       const instruction = providerInstruction(messages);
       const envelope = JSON.parse(instruction.slice(instruction.lastIndexOf('\n') + 1));
       const work = envelope.work;
       let result: object = { answer: captureAnswerForCase() };
       function captureAnswerForCase(): unknown {
+        if ((outcome === 'renamed' || aggregateCase) && work.catalogue?.[0]?.handle) {
+          return {
+            candidates: work.catalogue
+              .filter(
+                (item: { identity: { description?: unknown }; uncertainIdentity: boolean }) =>
+                  item.uncertainIdentity ||
+                  (typeof item.identity.description === 'string' &&
+                    item.identity.description.includes('comparison')),
+              )
+              .map((item: { handle: string }) => item.handle),
+          };
+        }
         if (denseCase && work.range) {
           const all = [...work.range.text.matchAll(/accepted:t(\d)\|Do\d;/g)].map((match) => ({
             kind: 'accepted',
@@ -192,27 +201,20 @@ it.each([
           (outcome === 'renamed' || aggregateCase) &&
           instruction.includes('All exact candidate fields')
         ) {
-          const candidate = work.candidate;
+          return { match: work.notes === 'same comparison' ? 'same' : 'different' };
+        }
+        if ((outcome === 'renamed' || aggregateCase) && instruction.includes('Materialize')) {
           return {
-            match: work.notes === 'same comparison' ? 'same' : 'different',
-            state: {
-              summary: 'comparison',
-              status: 'active',
-              draft: {
-                change: {
-                  operation: 'update',
-                  targetUuid: candidate.uuid ?? taskFields.get('uuid'),
-                  fields: { priority: 'H' },
-                  annotations: [],
-                },
-                expected: {
-                  uuid: candidate.uuid ?? taskFields.get('uuid'),
-                  status: candidate.status ?? taskFields.get('status'),
-                  fields: { description: candidate.description ?? taskFields.get('description') },
-                  annotations: candidate.annotations ?? [],
-                },
-                question: null,
+            reason: 'Update the independently matched task',
+            submission: {
+              change: {
+                operation: 'update',
+                targetUuid: work.targetUuid,
+                fields: { priority: 'H' },
+                annotations: [],
               },
+              explanation: 'Update the independently matched task',
+              question: null,
             },
           };
         }
@@ -254,6 +256,11 @@ it.each([
             memory: 'Continue reading the exact retained draft',
           };
       }
+      if (outcome === 'tool-error')
+        result = {
+          inspect: { kind: 'invalid-fixture-cursor' },
+          memory: 'Invalid cursor at the current step',
+        };
       const args = { result };
       largestOutput = Math.max(largestOutput, Buffer.byteLength(JSON.stringify(args)));
       response.writeHead(200, { 'content-type': 'text/event-stream' });
@@ -469,7 +476,9 @@ it.each([
         );
         const discovered = steps.find((work) => work.catalogue)?.catalogue[0];
         expect(discovered.identity.description).toBe(task.description);
-        const candidate = steps.find((work) => work.candidate)?.candidate;
+        const candidate = steps.find(
+          (work) => work.handle?.startsWith('task:') && work.candidate,
+        )?.candidate;
         expect(outcome === 'aggregate-object' ? candidate : candidate.annotations).toEqual({
           valueHandle: expect.any(String),
         });

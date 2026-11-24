@@ -18,6 +18,9 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, expect, it, vi } from 'vitest';
 import { captureAnswer, providerInstruction } from './fixtures/capture-steps.js';
+import { writeCompletion } from './fixtures/openai-loopback.js';
+import * as reviewer from '../extensions/remembrancer/reviewer.js';
+import * as taskwarrior from '../extensions/remembrancer/taskwarrior.js';
 import * as handoffs from '../extensions/remembrancer/capture-handoff.js';
 import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
 import { preserveHandoff, type HandoffInput } from '../extensions/remembrancer/capture-handoff.js';
@@ -783,7 +786,11 @@ it('retains a handoff after bootstrap failure following successful spawn; a late
   expect(job(f.database)?.state).toBe('completed');
 });
 
-async function provider(f: Awaited<ReturnType<typeof fixture>>, empty = false) {
+async function provider(
+  f: Awaited<ReturnType<typeof fixture>>,
+  empty = false,
+  onRequest?: (instruction: string, count: number) => void,
+) {
   const requests: { body: Record<string, unknown>; headers: Record<string, unknown> }[] = [];
   let block = false;
   let failure: string | undefined;
@@ -794,7 +801,7 @@ async function provider(f: Awaited<ReturnType<typeof fixture>>, empty = false) {
     const body = JSON.parse(raw);
     requests.push({ body, headers: req.headers });
     const pid = Number(req.headers['x-worker-pid']);
-    if (Number.isSafeInteger(pid) && pid > 1) workerPids.add(pid);
+    if (Number.isSafeInteger(pid) && pid > 1 && pid !== process.pid) workerPids.add(pid);
     if (block) await new Promise<void>((r) => blocked.add(r));
     if (failure) {
       res.writeHead(200, { 'content-type': 'text/event-stream' });
@@ -803,13 +810,12 @@ async function provider(f: Awaited<ReturnType<typeof fixture>>, empty = false) {
     }
     const messages = body.messages as { role: string; content?: string }[];
     const instruction = providerInstruction(messages);
+    onRequest?.(instruction, requests.length);
     const name = 'remembrancer_step';
     const args = { result: { answer: captureAnswer(instruction, empty) } };
-    res.writeHead(200, { 'content-type': 'text/event-stream' });
-    const chunk = (delta: unknown, finish_reason: string | null = null) =>
-      `data: ${JSON.stringify({ id: 'response', object: 'chat.completion.chunk', created: 1, model: 'not-in-catalog', choices: [{ index: 0, delta, finish_reason }] })}\n\n`;
-    res.end(
-      chunk({
+    writeCompletion(
+      res,
+      {
         role: 'assistant',
         tool_calls: [
           {
@@ -819,9 +825,9 @@ async function provider(f: Awaited<ReturnType<typeof fixture>>, empty = false) {
             function: { name, arguments: JSON.stringify(args) },
           },
         ],
-      }) +
-        chunk({}, 'tool_calls') +
-        'data: [DONE]\n\n',
+      },
+      'tool_calls',
+      'not-in-catalog',
     );
   });
   servers.push(server);
@@ -1104,6 +1110,103 @@ it('persists two actual worker deaths across competing launches and repeated res
   expect(existsSync(saved.manifest.snapshot)).toBe(true);
   p.release();
 }, 25_000);
+
+it('expires the original attempt after earlier complete SDK steps and retries the whole review without publishing partial work', async () => {
+  const f = await fixture();
+  vi.spyOn(taskwarrior, 'readTaskCatalog').mockResolvedValue([]);
+  const now = performance.now.bind(performance);
+  let elapsed = 0;
+  let expire = true;
+  vi.spyOn(performance, 'now').mockImplementation(() => now() + elapsed);
+  const p = await provider(f, false, (_instruction, count) => {
+    if (expire) elapsed = Math.min(count * 20_000, 50_000);
+  });
+  const saved = await preserveHandoff(f.input);
+  const signals: AbortSignal[] = [];
+  const completed: reviewer.ReviewerStepResult[] = [];
+  const failures: unknown[] = [];
+  const realStep = reviewer.runReviewerStep;
+  vi.spyOn(reviewer, 'runReviewerStep').mockImplementation(async (input) => {
+    signals.push(input.signal!);
+    try {
+      const result = await realStep(input);
+      completed.push(result);
+      return result;
+    } catch (error) {
+      failures.push(error);
+      throw error;
+    }
+  });
+  const publish = vi.spyOn(CheckpointStore.prototype, 'finishCaptureJob');
+  await runCaptureWorker({ ...f, budgetMs: 50_000 });
+  expect(p.requests).toHaveLength(3);
+  expect(completed).toHaveLength(2);
+  expect(completed.every((result) => result.status === 'handoff')).toBe(true);
+  expect(new Set(signals).size).toBe(1);
+  expect(signals[0]!.aborted).toBe(true);
+  expect(failures).toHaveLength(1);
+  expect(failures[0]).toBeInstanceOf(CaptureRetryableError);
+  expect((failures[0] as Error).message).toBe('Capture review timed out');
+  expect(publish).not.toHaveBeenCalled();
+  expect(job(f.database)).toMatchObject({ state: 'failed', attemptCount: 1, retryEligible: true });
+  let db = new CheckpointStore(f.database);
+  expect(db.reviewed()).toEqual([]);
+  expect(db.proposals()).toEqual([]);
+  db.close();
+  expect(existsSync(saved.manifest.snapshot)).toBe(true);
+
+  // No real timer wait: rerun every SDK step under a new whole-attempt deadline.
+  expire = false;
+  elapsed = 0;
+  makeDue(f.database);
+  await runCaptureWorker({ ...f, budgetMs: 50_000 });
+  expect(p.requests).toHaveLength(6);
+  expect(signals[3]).not.toBe(signals[0]);
+  expect(new Set(signals.slice(3)).size).toBe(1);
+  expect(completed).toHaveLength(5);
+  expect(
+    providerInstruction(p.requests[3]!.body['messages'] as { role: string; content: string }[]),
+  ).toBe(
+    providerInstruction(p.requests[0]!.body['messages'] as { role: string; content: string }[]),
+  );
+  expect(publish).toHaveBeenCalledOnce();
+  expect(publish.mock.calls[0]![2]).toHaveLength(1);
+  expect(job(f.database)).toMatchObject({ state: 'completed', attemptCount: 2 });
+  db = new CheckpointStore(f.database);
+  expect(db.reviewed()).not.toEqual([]);
+  expect(db.proposals()).toHaveLength(1);
+  db.close();
+});
+
+it('reaches atomic publication with a staged real-SDK proposal before an injected storage failure', async () => {
+  const f = await fixture();
+  vi.spyOn(taskwarrior, 'readTaskCatalog').mockResolvedValue([]);
+  const p = await provider(f);
+  const saved = await preserveHandoff(f.input);
+  const failure = new Error('fixture publication failed');
+  const publish = vi
+    .spyOn(CheckpointStore.prototype, 'finishCaptureJob')
+    .mockImplementationOnce(() => {
+      throw failure;
+    });
+  await runCaptureWorker(f);
+  expect(p.requests).toHaveLength(3);
+  expect(publish).toHaveBeenCalledOnce();
+  const submissions = publish.mock.calls[0]![2];
+  expect(submissions).toHaveLength(1);
+  expect(submissions[0]).toMatchObject({
+    change: { operation: 'add', fields: { description: 'comparison' } },
+    references: [
+      expect.objectContaining({ entryId: 'promise', quote: 'Send Maya the comparison' }),
+    ],
+  });
+  expect(job(f.database)).toMatchObject({ state: 'failed', attemptCount: 1, retryEligible: false });
+  const db = new CheckpointStore(f.database);
+  expect(db.reviewed()).toEqual([]);
+  expect(db.proposals()).toEqual([]);
+  db.close();
+  expect(existsSync(saved.manifest.snapshot)).toBe(true);
+});
 
 it('rejects synchronous reviewer output after absolute expiry before timers can run', async () => {
   const f = await fixture();

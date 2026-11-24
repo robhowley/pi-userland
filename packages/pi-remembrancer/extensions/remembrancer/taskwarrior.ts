@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { isDeepStrictEqual } from 'node:util';
 import type { CheckpointStore } from './checkpoints.js';
+import { CaptureRetryableError } from './capture-jobs.js';
 import { fitsResponse, REVIEW_RESPONSE_MAX_BYTES } from './review-pages.js';
 import {
   validateDraft,
@@ -12,7 +13,13 @@ import {
   type TaskSnapshot,
 } from './proposals.js';
 export type TaskRecord = Record<string, unknown>;
-export type TaskExecutionOptions = { cwd?: string; signal?: AbortSignal | undefined };
+export type TaskExecutionOptions = {
+  cwd?: string;
+  signal?: AbortSignal | undefined;
+};
+// Capture needs the complete export, not a public 50 KiB page. Keep a finite
+// ceiling even when unrelated metadata makes that export larger than 1 MiB.
+const TASK_CATALOG_MAX_BYTES = 16 * 1024 * 1024;
 export type TaskExecutor = (
   args: readonly string[],
   input?: string,
@@ -27,7 +34,16 @@ const options = [
   'rc.verbose=nothing',
 ];
 export const executeTask: TaskExecutor = (args, input, execution) =>
-  new Promise((resolve, reject) => {
+  executeBoundedTask(args, input, execution, 1024 * 1024);
+
+// The larger cap is private to catalog reads, not an executor option for callers.
+function executeBoundedTask(
+  args: readonly string[],
+  input: string | undefined,
+  execution: TaskExecutionOptions | undefined,
+  maxOutputBytes: number,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
     execution?.signal?.throwIfAborted();
     let failure: Error | null = null;
     let output = '';
@@ -35,14 +51,22 @@ export const executeTask: TaskExecutor = (args, input, execution) =>
       'task',
       [...options, ...args],
       {
-        ...execution,
+        cwd: execution?.cwd,
+        signal: execution?.signal,
         encoding: 'utf8',
         timeout: 10000,
         killSignal: 'SIGKILL',
-        maxBuffer: 1024 * 1024,
+        maxBuffer: maxOutputBytes,
       },
       (error, stdout, stderr) => {
-        if (error) failure = new Error(`${error.message}\n${stderr}\n${stdout}`);
+        if (error) {
+          failure =
+            error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
+              ? new Error(`Taskwarrior output exceeded the ${maxOutputBytes}-byte limit`)
+              : error.killed && error.signal === 'SIGKILL' && !execution?.signal?.aborted
+                ? new CaptureRetryableError('Taskwarrior command timed out')
+                : new Error(`${error.message}\n${stderr}\n${stdout}`);
+        }
         output = stdout;
       },
     );
@@ -63,6 +87,7 @@ export const executeTask: TaskExecutor = (args, input, execution) =>
     });
     child.stdin?.end(input);
   });
+}
 export function requireTui(mode: unknown): void {
   if (mode !== 'tui') throw new Error('Task proposals require TUI mode');
 }
@@ -97,17 +122,14 @@ export function snapshot(record: TaskRecord): TaskSnapshot {
   validateSnapshot(value);
   return value;
 }
-/** Fixed read-only export, bounded to 1 MiB / 10 seconds by the executor. No filter language. */
-export async function lookupTasks(
-  query: { uuid?: string; status?: 'pending' | 'completed'; offset?: number } = {},
-  execute: TaskExecutor = executeTask,
+async function exportTasks(
+  query: { uuid?: string; status?: 'pending' | 'completed' },
+  execute: TaskExecutor,
   execution?: TaskExecutionOptions,
-): Promise<{ tasks: TaskRecord[]; nextOffset: number | null }> {
+): Promise<TaskRecord[]> {
   if (query.uuid !== undefined) fullUuid(query.uuid);
   if (query.status !== undefined && !['pending', 'completed'].includes(query.status))
     throw new Error('Invalid status');
-  const offset = query.offset ?? 0;
-  if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('Invalid offset');
   const args = query.uuid
     ? [query.uuid, 'export']
     : query.status
@@ -127,6 +149,36 @@ export async function lookupTasks(
       throw new Error('Invalid Taskwarrior record');
     fullUuid(record.uuid);
   }
+  return records as TaskRecord[];
+}
+
+/** One validated, typed attempt-local view, independent of public response paging.
+ * The complete export is still capped at 16 MiB and ten seconds, failing closed.
+ */
+export async function readTaskCatalog(
+  execute: TaskExecutor = (args, input, execution) =>
+    executeBoundedTask(args, input, execution, TASK_CATALOG_MAX_BYTES),
+  execution?: TaskExecutionOptions,
+): Promise<TaskRecord[]> {
+  const records = await exportTasks({}, execute, execution);
+  const seen = new Set<string>();
+  for (const record of records) {
+    const value = snapshot(record);
+    if (seen.has(value.uuid)) throw new Error('Duplicate Taskwarrior UUID');
+    seen.add(value.uuid);
+  }
+  return records;
+}
+
+/** Fixed read-only export, bounded to 1 MiB / 10 seconds by the executor. No filter language. */
+export async function lookupTasks(
+  query: { uuid?: string; status?: 'pending' | 'completed'; offset?: number } = {},
+  execute: TaskExecutor = executeTask,
+  execution?: TaskExecutionOptions,
+): Promise<{ tasks: TaskRecord[]; nextOffset: number | null }> {
+  const offset = query.offset ?? 0;
+  if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('Invalid offset');
+  const records = await exportTasks(query, execute, execution);
   const tasks: TaskRecord[] = [];
   let nextOffset: number | null = null;
   for (const record of records.slice(offset, offset + 50) as TaskRecord[]) {

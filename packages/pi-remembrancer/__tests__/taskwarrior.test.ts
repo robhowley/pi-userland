@@ -15,6 +15,8 @@ import {
   serializedResponse,
 } from '../extensions/remembrancer/review-pages.js';
 import type { Proposal, ProposalDraft } from '../extensions/remembrancer/proposals.js';
+import { readProposal } from '../extensions/remembrancer/proposal-read.js';
+import { CaptureRetryableError } from '../extensions/remembrancer/capture-jobs.js';
 import {
   applyProposal,
   lookupTasks,
@@ -136,6 +138,25 @@ function setup(draft?: ProposalDraft) {
     },
   };
 }
+it('reads typed complete proposals from a temporary store and rejects stale or missing rows', () => {
+  const f = setup();
+  const before = f.store.contextGeneration();
+  const typed = readProposal(f.store, f.proposal.id, f.proposal.revision);
+  expect(typed).toEqual(f.proposal);
+  expect(typed.sources[0]!.quote).toBe('Send comparison');
+  const edited = f.store.editProposal(f.proposal.id, f.proposal.revision, {
+    change: { operation: 'add', fields: { description: 'Renamed deliverable' }, annotations: [] },
+    expected: null,
+    question: 'Keep the changed name?',
+  });
+  expect(f.store.contextGeneration()).toBeGreaterThan(before);
+  expect(() => readProposal(f.store, f.proposal.id, f.proposal.revision)).toThrow(
+    CaptureRetryableError,
+  );
+  expect(readProposal(f.store, edited.id, edited.revision)).toEqual(edited);
+  expect(() => readProposal(f.store, 'missing', 1)).toThrow(CaptureRetryableError);
+});
+
 const update: ProposalDraft = {
   change: {
     operation: 'update',
