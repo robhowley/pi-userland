@@ -1,5 +1,11 @@
 import type { ReviewerStepInput } from '../../extensions/remembrancer/reviewer.js';
 import type { FoldedFinding } from '../../extensions/remembrancer/review-findings.js';
+import type { CaptureField } from '../../extensions/remembrancer/capture-sizing.js';
+
+/** Exact candidate reads batch leaves/chunks; retained-value inspection keeps scalar pages. */
+export function captureFields(page: { fields: CaptureField[] }): CaptureField[] {
+  return page.fields;
+}
 
 export function providerInstruction(
   messages: { role: string; content?: string | { type: string; text?: string }[] }[],

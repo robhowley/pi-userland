@@ -163,6 +163,7 @@ export class CaptureReview {
     offset?: number;
     textUnits?: number;
     tokenLimit?: number;
+    fits?: (page: unknown) => boolean;
   }): object {
     this.assertActive();
     if (args.batch !== this.id) throw new Error('No matching open capture in this Pi session.');

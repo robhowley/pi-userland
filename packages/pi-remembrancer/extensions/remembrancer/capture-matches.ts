@@ -94,19 +94,7 @@ export function captureIsSatisfied(state: FoldedFinding, matches: CaptureMatches
         actual['status'] !== 'deleted' &&
         !!state.draft &&
         satisfies(state.draft.change, actual, actual['status']);
-  if (task) return satisfied(task);
-  const verified = matches.proposals.find((proposal) =>
-    ['applied', 'already_satisfied'].includes(proposal.state),
-  )?.result?.verified;
-  return (
-    !!verified &&
-    satisfied({
-      ...verified.fields,
-      uuid: verified.uuid,
-      status: verified.status,
-      annotations: verified.annotations,
-    })
-  );
+  return !!task && satisfied(task);
 }
 
 /** Independent records are not an ancestry-ordered correction chain. */

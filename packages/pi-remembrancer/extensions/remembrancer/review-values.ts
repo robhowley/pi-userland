@@ -34,6 +34,11 @@ export class ReviewValues {
     );
   }
 
+  /** Explicit paging when the complete request, rather than one field, needs more space. */
+  reference(value: unknown) {
+    return this.retain(value);
+  }
+
   private retain(value: unknown) {
     // Callers may combine already compacted fields into a new aggregate.
     value = this.original(value);

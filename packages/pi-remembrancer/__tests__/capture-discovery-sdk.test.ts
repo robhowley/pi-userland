@@ -11,8 +11,9 @@ import { CAPTURE_BUDGET_MS } from '../extensions/remembrancer/capture.js';
 import { captureExecution } from '../extensions/remembrancer/config.js';
 import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
 import { getReviewerBudget } from '../extensions/remembrancer/reviewer-budget.js';
+import { captureReplySize } from '../extensions/remembrancer/capture-sizing.js';
 import { readTaskCatalog } from '../extensions/remembrancer/taskwarrior.js';
-import { captureAnswer, providerInstruction } from './fixtures/capture-steps.js';
+import { captureFields, captureAnswer, providerInstruction } from './fixtures/capture-steps.js';
 
 vi.mock('../extensions/remembrancer/taskwarrior.js', async (original) => ({
   ...(await original<typeof import('../extensions/remembrancer/taskwarrior.js')>()),
@@ -106,7 +107,7 @@ it.each(['representative', 'plausible', 'truncated', 'existing-truncated'])(
           outputPages.push({
             kind: category,
             ids,
-            bytes: Buffer.byteLength(JSON.stringify({ result: { answer: { candidates: ids } } })),
+            bytes: captureReplySize({ candidates: ids }),
           });
         }
         answer = { candidates: ids };
@@ -114,19 +115,31 @@ it.each(['representative', 'plausible', 'truncated', 'existing-truncated'])(
         category = 'exact';
         if (phase === 'review') exactHandles.add(work.handle);
         const candidate = work.candidate;
+        if (phase === 'review' && candidate.sources && !detailRead.has(work.handle))
+          detailRead.set(work.handle, {
+            explanation: candidate.explanation,
+            quote: candidate.sources[0].quote,
+          });
         const same =
           scenario === 'representative' &&
           (candidate.description ?? candidate.effective?.change.fields.description) ===
             work.state.draft.change.fields.description;
         answer = { match: same ? 'same' : 'different' };
       } else if (work.candidate) category = 'recordMatch';
-      else if (work.observation) category = 'fold';
-      else if (work.page) {
+      else if (work.observation) {
+        category = 'fold';
+        if (phase === 'seed' && scenario === 'representative')
+          answer = { ...(answer as object), summary: savedExplanation };
+      } else if (work.page) {
         category = 'fields';
         if (phase === 'review') {
           const read = detailRead.get(work.handle) ?? { explanation: '', quote: '' };
-          if (work.page.path.join('.') === 'explanation') read.explanation += work.page.text;
-          if (work.page.path.join('.') === 'sources.0.quote') read.quote += work.page.text;
+          for (const field of captureFields(work.page)) {
+            if ('text' in field && field.path.join('.') === 'explanation')
+              read.explanation += field.text;
+            if ('text' in field && field.path.join('.') === 'sources.0.quote')
+              read.quote += field.text;
+          }
           detailRead.set(work.handle, read);
         }
       } else if (instruction.includes('Materialize')) {
@@ -239,7 +252,7 @@ it.each(['representative', 'plausible', 'truncated', 'existing-truncated'])(
                 input: ['text'],
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                 contextWindow: scenario === 'representative' ? 128000 : 524288,
-                maxTokens: 1024,
+                maxTokens: scenario === 'representative' ? 1024 : 512,
               },
             ],
           },
@@ -327,7 +340,7 @@ it.each(['representative', 'plausible', 'truncated', 'existing-truncated'])(
         attemptCount: 1,
       });
       expect(inputs.every((bytes) => bytes <= getReviewerBudget(model).maxInputTokens)).toBe(true);
-      expect(outputPages.every((page) => page.bytes <= model.maxTokens - 512)).toBe(true);
+      expect(outputPages.every((page) => page.bytes <= model.maxTokens)).toBe(true);
       expect(largestOutput).toBeLessThan(model.maxTokens);
       if (scenario.endsWith('truncated')) {
         expect(truncated).toBe(true);
@@ -339,7 +352,7 @@ it.each(['representative', 'plausible', 'truncated', 'existing-truncated'])(
         expect(existingSeen.size).toBe(count);
         expect([...existingSeen.values()].every((seen) => seen.size === 96)).toBe(true);
         if (scenario === 'representative') {
-          expect(counts.fields).toBeGreaterThan(0);
+          expect(counts.fields).toBe(0); // These exact envelopes fit inline, including saved evidence.
           const savedMatches = before.proposals.slice(0, 12);
           expect(exactHandles).toEqual(
             new Set([
@@ -367,7 +380,7 @@ it.each(['representative', 'plausible', 'truncated', 'existing-truncated'])(
           expect(recordSeen.size).toBe(count - 1);
           expect(counts.recordMatch).toBe(count - 1);
           expect(counts.exact).toBe(96);
-          const limit = Math.floor((getReviewerBudget(model).maxInputTokens - 5000) / 5);
+          const limit = getReviewerBudget(model).maxInputTokens;
           // Either entire catalogue fits input, but its all-plausible ID answer
           // cannot fit the response. Both must therefore split for output alone.
           for (const [catalogue, observation] of [

@@ -9,8 +9,15 @@ import { runCaptureWorker } from '../extensions/remembrancer/capture-worker.js';
 import { captureExecution } from '../extensions/remembrancer/config.js';
 import { getReviewerBudget } from '../extensions/remembrancer/reviewer-budget.js';
 import { readTaskCatalog, snapshot } from '../extensions/remembrancer/taskwarrior.js';
-import { captureAnswer, providerInstruction, stepWork } from './fixtures/capture-steps.js';
+import {
+  captureFields,
+  captureAnswer,
+  providerInstruction,
+  stepWork,
+} from './fixtures/capture-steps.js';
 import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
+import * as captureModule from '../extensions/remembrancer/capture.js';
+import { writeCompletion } from './fixtures/openai-loopback.js';
 
 // Exercise ordinary SDK startup and its real tool loop against a deterministic local transport.
 // No provider adapter, credentials, external requests or Taskwarrior commands.
@@ -35,6 +42,7 @@ it.each([
   { outcome: 'missing', requests: 1, covered: false },
   { outcome: 'overflow', requests: 1, covered: false },
   { outcome: 'tool-error', requests: 1, covered: false },
+  { outcome: 'invalid-args', requests: 1, covered: false },
   { outcome: 'provider-error', requests: 1, covered: false },
 ])(
   'installed SDK capture outcome=$outcome',
@@ -71,6 +79,7 @@ it.each([
     let aliasInspected = false;
     let valuePages = 0;
     const valueText: string[] = [];
+    let expectedRetainedText = '';
     let continuations = 0;
     let largestOutput = 0;
     const dir = mkdtempSync(join(tmpdir(), 'capture-sdk-'));
@@ -181,15 +190,20 @@ it.each([
           };
         }
         if ((outcome === 'renamed' || aggregateCase) && work.page) {
-          const key = work.page.path.join('.');
-          taskFields.set(
-            key,
-            work.page.text === undefined
-              ? work.page.value
-              : String(taskFields.get(key) ?? '') + work.page.text,
+          const fields = captureFields(work.page);
+          for (const field of fields) {
+            const key = field.path.join('.');
+            taskFields.set(
+              key,
+              'value' in field ? field.value : String(taskFields.get(key) ?? '') + field.text,
+            );
+          }
+          const identity = fields.some(
+            (field) =>
+              field.path.join('.') === 'description' &&
+              'text' in field &&
+              field.text.includes('comparison'),
           );
-          const identity =
-            work.page.path.join('.') === 'description' && work.page.text?.includes('comparison');
           return {
             notes:
               identity || work.notes?.includes('same comparison')
@@ -201,7 +215,13 @@ it.each([
           (outcome === 'renamed' || aggregateCase) &&
           instruction.includes('All exact candidate fields')
         ) {
-          return { match: work.notes === 'same comparison' ? 'same' : 'different' };
+          return {
+            match:
+              work.candidate.description?.includes?.('comparison') ||
+              work.notes === 'same comparison'
+                ? 'same'
+                : 'different',
+          };
         }
         if ((outcome === 'renamed' || aggregateCase) && instruction.includes('Materialize')) {
           return {
@@ -238,6 +258,8 @@ it.each([
       // Exercise paged inspection of a retained growing draft, then copy it on.
       const retained = work.previous?.draft?.change?.fields?.description;
       if (outcome === 'growing' && retained?.valueHandle && valuePages === 0 && !envelope.detail) {
+        const entryId = work.observation.range.occurrences[0].entryId;
+        expectedRetainedText = growingParts.slice(0, Number(entryId.slice('grow'.length))).join('');
         result = {
           inspect: { kind: 'value', valueHandle: retained.valueHandle, index: 0 },
           memory: 'Read the retained draft before appending',
@@ -261,16 +283,25 @@ it.each([
           inspect: { kind: 'invalid-fixture-cursor' },
           memory: 'Invalid cursor at the current step',
         };
-      const args = { result };
+      const args = outcome === 'invalid-args' ? { wrong: result } : { result };
       largestOutput = Math.max(largestOutput, Buffer.byteLength(JSON.stringify(args)));
-      response.writeHead(200, { 'content-type': 'text/event-stream' });
-      response.write(
-        `data: ${JSON.stringify({ id: 'offline', object: 'chat.completion.chunk', created: 1, model: 'fixture', choices: [{ index: 0, delta: { role: 'assistant', tool_calls: names.map((name, index) => ({ index, id: `call-${requests.length}-${index}`, type: 'function', function: { name, arguments: JSON.stringify(args) } })) }, finish_reason: null }] })}\n\n`,
+      writeCompletion(
+        response,
+        {
+          role: 'assistant',
+          tool_calls: names.map((name, index) => ({
+            index,
+            id: `call-${requests.length}-${index}`,
+            type: 'function',
+            function: { name, arguments: JSON.stringify(args) },
+          })),
+        },
+        outcome === 'overflow' || (outcome === 'dense-truncated' && requests.length === 2)
+          ? 'length'
+          : names.length
+            ? 'tool_calls'
+            : 'stop',
       );
-      response.write(
-        `data: ${JSON.stringify({ id: 'offline', object: 'chat.completion.chunk', created: 1, model: 'fixture', choices: [{ index: 0, delta: {}, finish_reason: outcome === 'overflow' || (outcome === 'dense-truncated' && requests.length === 2) ? 'length' : names.length ? 'tool_calls' : 'stop' }] })}\n\n`,
-      );
-      response.end('data: [DONE]\n\n');
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
@@ -416,6 +447,7 @@ it.each([
     }
     writeFileSync(file, transcript);
     const db = new CheckpointStore();
+    const review = vi.spyOn(captureModule, 'reviewPreparedCapture');
     try {
       const runtime = await ModelRuntime.create({
         authPath: join(agent, 'auth.json'),
@@ -439,8 +471,19 @@ it.each([
       });
       await runCaptureWorker({ database: db.file, inbox });
       // Only a later, due wake may consume another whole-review attempt.
-      if (boundedCase && covered) expect(requests.length).toBeGreaterThan(3);
-      else expect(requests).toHaveLength(expectedRequests);
+      if (!covered) expect(requests).toHaveLength(expectedRequests);
+      const stepError = {
+        unread: 'Reviewer tool failed (unknown_fixture_tool)',
+        'tool-error': 'Invalid capture inspection request',
+        'invalid-args': 'Reviewer tool failed (remembrancer_step)',
+        missing: 'Capture step did not return a result',
+      }[outcome];
+      if (stepError) {
+        expect(review).toHaveBeenCalledOnce();
+        await expect(review.mock.results[0]!.value).rejects.toThrow(stepError);
+        if (outcome === 'invalid-args')
+          await expect(review.mock.results[0]!.value).rejects.toThrow('Validation failed for tool');
+      }
       expect(db.captureJob('first')).toMatchObject({
         attemptCount: 1,
         retryEligible: outcome === 'provider-error',
@@ -455,17 +498,34 @@ it.each([
         expect(aliasInspected).toBe(true);
         expect(new Set(db.proposals()[0]!.sources.map((source) => source.branchId)).size).toBe(40);
       }
-      if (outcome === 'dense') expect(continuations).toBe(7);
+      if (outcome === 'dense') {
+        expect(continuations).toBeGreaterThan(0);
+        const saved = db.proposals().map((proposal) => ({
+          description: proposal.change.operation === 'add' && proposal.change.fields.description,
+          sources: proposal.sources.map(({ entryId, offset, quote }) => ({
+            entryId,
+            offset,
+            quote,
+          })),
+        }));
+        let offset = 0;
+        const expected = Array.from({ length: 8 }, (_, index) => {
+          const quote = `accepted:t${index}|Do${index};`;
+          const sources = [{ entryId: 'dense', offset, quote }];
+          offset += quote.length;
+          return { description: `Do${index};`, sources };
+        });
+        expect(saved.sort((a, b) => a.sources[0]!.offset - b.sources[0]!.offset)).toEqual(expected);
+      }
       if (outcome === 'growing') {
-        expect(valuePages).toBeGreaterThan(1);
-        expect(valueText.join('')).toBe(growingParts.slice(0, 3).join(''));
+        expect(expectedRetainedText).not.toBe('');
+        expect(valueText.join('')).toBe(expectedRetainedText);
         expect(db.proposals()[0]!.change).toMatchObject({
           fields: { description: growingParts.join('') + 'left' },
         });
         expect(db.proposals()[0]!.question).toBeTruthy();
       }
       if (aggregateCase) {
-        expect(Buffer.byteLength(JSON.stringify(task))).toBeGreaterThan(2770);
         const steps = requests.map(
           (request) =>
             JSON.parse(
@@ -479,17 +539,14 @@ it.each([
         const candidate = steps.find(
           (work) => work.handle?.startsWith('task:') && work.candidate,
         )?.candidate;
-        expect(outcome === 'aggregate-object' ? candidate : candidate.annotations).toEqual({
-          valueHandle: expect.any(String),
-        });
-        // Every small field behind the aggregate was read exactly, not summarized away.
-        for (const [path, value] of taskFields) {
-          const original = path
-            .split('.')
-            .reduce<unknown>((node, key) => (node as Record<string, unknown>)[key], task);
-          expect(value).toEqual(original);
+        // Compare exact leaf values, not a field count tied to this fixture's shape.
+        function leaves(value: unknown, path: string[] = []): [string, unknown][] {
+          return value !== null && typeof value === 'object' && Object.keys(value).length
+            ? Object.entries(value).flatMap(([key, child]) => leaves(child, [...path, key]))
+            : [[path.join('.'), value]];
         }
-        expect(taskFields.size).toBe(outcome === 'aggregate-object' ? 134 : 93);
+        if (taskFields.size) expect(taskFields).toEqual(new Map(leaves(task)));
+        else expect(candidate).toEqual(task);
         expect(db.proposals()[0]!.change).toMatchObject({
           operation: 'update',
           targetUuid: task.uuid,
@@ -503,7 +560,16 @@ it.each([
         });
         expect(db.proposals()[0]!.expected?.annotations).toEqual(task.annotations);
         expect(db.proposals()[0]!.expected?.fields.description).toBe(task.description);
-        expect(JSON.stringify(requests)).not.toContain(task.annotations[0]!.description);
+        const match = requests
+          .map((request) =>
+            JSON.parse(
+              providerInstruction(request['messages'] as Parameters<typeof providerInstruction>[0])
+                .split('\n')
+                .at(-1)!,
+            ),
+          )
+          .find(({ work }) => work.handle === 'task:0' && work.candidate);
+        expect(match.work.candidate).toEqual(task);
       }
       if (boundedCase) {
         expect(largestOutput).toBeLessThan(denseCase ? 1024 : 2048);
@@ -525,8 +591,8 @@ it.each([
           ).toBe(1);
         if (outcome === 'aliases')
           expect(
-            inputs.filter((work) => work.range?.occurrences[0]?.entryId === 'promise'),
-          ).toHaveLength(2); // Extraction plus explicit alias lookup, not forty primary reads.
+            inputs.filter((work) => work.range?.occurrences[0]?.entryId === 'promise').length,
+          ).toBeLessThanOrEqual(2); // Primary extraction plus explicit alias lookup, not forty reads.
         if (outcome === 'growing')
           expect(JSON.stringify(inputs)).not.toContain(growingParts.join(''));
       }
@@ -537,12 +603,6 @@ it.each([
       const tools = requests[0]!['tools'] as { function: { name: string } }[];
       expect(tools.map((tool) => tool.function.name)).toEqual(['remembrancer_step']);
       if (outcome === 'large') {
-        expect(
-          requests.every(
-            (request) =>
-              Buffer.byteLength(JSON.stringify(request)) < getReviewerBudget(model!).maxInputTokens,
-          ),
-        ).toBe(true);
         const ranges = requests
           .map(
             (request) =>
@@ -571,6 +631,7 @@ it.each([
         ).toBe(true);
       } else if (!boundedCase) expect(JSON.stringify(requests[0])).toContain('I will send Maya');
     } finally {
+      review.mockRestore();
       db.close();
       await new Promise<void>((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve())),

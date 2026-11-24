@@ -17,7 +17,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, expect, it, vi } from 'vitest';
-import { captureAnswer, providerInstruction } from './fixtures/capture-steps.js';
+import { captureAnswer, providerInstruction, stepWork } from './fixtures/capture-steps.js';
 import { writeCompletion } from './fixtures/openai-loopback.js';
 import * as reviewer from '../extensions/remembrancer/reviewer.js';
 import * as taskwarrior from '../extensions/remembrancer/taskwarrior.js';
@@ -1027,7 +1027,13 @@ it.each(['running', 'crashed'] as const)(
     });
     // Manual ownership and observer enrollment change review context. A running
     // attempt must discard/reprepare; a recovered attempt starts after enrollment.
-    expect(p.requests).toHaveLength(crash ? 4 : 6);
+    expect(
+      p.requests.filter(
+        ({ body }) =>
+          stepWork(providerInstruction(body['messages'] as { role: string; content: string }[]))
+            .range,
+      ),
+    ).toHaveLength(2);
     expect(p.requests[0]!.body['model']).toBe('not-in-catalog');
     expect(p.requests[0]!.body['reasoning_effort']).toBe('high');
     expect(p.requests[0]!.headers['authorization']).toBe('Bearer fixture-key');
@@ -1113,7 +1119,15 @@ it('persists two actual worker deaths across competing launches and repeated res
 
 it('expires the original attempt after earlier complete SDK steps and retries the whole review without publishing partial work', async () => {
   const f = await fixture();
-  vi.spyOn(taskwarrior, 'readTaskCatalog').mockResolvedValue([]);
+  // The third step scans a real candidate after extraction and folding. A valid
+  // unmatched add no longer needs a redundant materialization request.
+  vi.spyOn(taskwarrior, 'readTaskCatalog').mockResolvedValue([
+    {
+      uuid: '12345678-1234-1234-1234-123456789abc',
+      status: 'pending',
+      description: 'Unrelated',
+    },
+  ]);
   const now = performance.now.bind(performance);
   let elapsed = 0;
   let expire = true;
@@ -1190,7 +1204,13 @@ it('reaches atomic publication with a staged real-SDK proposal before an injecte
       throw failure;
     });
   await runCaptureWorker(f);
-  expect(p.requests).toHaveLength(3);
+  expect(
+    p.requests.some(
+      ({ body }) =>
+        stepWork(providerInstruction(body['messages'] as { role: string; content: string }[]))
+          .observation,
+    ),
+  ).toBe(true);
   expect(publish).toHaveBeenCalledOnce();
   const submissions = publish.mock.calls[0]![2];
   expect(submissions).toHaveLength(1);
@@ -1531,7 +1551,11 @@ it('drains two projects from a third cwd with identical stored-auth commands and
     [1, 'C', c],
   ] as const) {
     const requests = providers[index]!.requests;
-    expect(requests).toHaveLength(index === 0 ? 3 : 4); // Second job discovers the saved effective identity without full-detail passes.
+    const work = requests.map(({ body }) =>
+      stepWork(providerInstruction(body['messages'] as { role: string; content: string }[])),
+    );
+    expect(work.filter((step) => step.range)).toHaveLength(1);
+    if (index === 1) expect(work.some((step) => step.catalogue?.[0]?.handle)).toBe(true);
     for (const { headers } of requests) {
       expect(headers['authorization']).toBe(`Bearer credential-${label}`);
       expect(headers['x-command']).toBe(`header-${label}`);

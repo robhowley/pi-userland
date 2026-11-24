@@ -11,7 +11,7 @@ import * as proposalReads from '../extensions/remembrancer/proposal-read.js';
 import { CaptureRetryableError } from '../extensions/remembrancer/capture-jobs.js';
 import { readTaskCatalog, snapshot } from '../extensions/remembrancer/taskwarrior.js';
 import type { Proposal, ProposalDraft } from '../extensions/remembrancer/proposals.js';
-import { answerCapture, captureAnswer, stepWork } from './fixtures/capture-steps.js';
+import { captureFields, answerCapture, captureAnswer, stepWork } from './fixtures/capture-steps.js';
 
 vi.mock('../extensions/remembrancer/reviewer.js', () => ({ runReviewerStep: vi.fn() }));
 vi.mock('../extensions/remembrancer/taskwarrior.js', async (original) => ({
@@ -241,10 +241,14 @@ it.each(['plausible', 'uncertain'])(
         );
         answer = { candidates: identity === 'plausible' ? [work.catalogue[0].handle] : [] };
       } else if (work.page) {
-        seen.push(work.page);
+        seen.push(
+          ...captureFields(work.page).map((field) => ({ ...field, path: field.path.map(String) })),
+        );
         answer = {
           notes:
-            work.page.text?.includes('comparison') || work.notes?.includes('same comparison')
+            captureFields(work.page).some(
+              (field) => 'text' in field && field.text.includes('comparison'),
+            ) || work.notes?.includes('same comparison')
               ? 'same comparison'
               : 'identity unresolved',
         };
@@ -428,12 +432,12 @@ it('matches tasks from one complete typed view and host-validates the exact targ
 });
 
 it.each([
-  'missing extraction result',
-  'invalid range',
-  'invalid kind',
-  'unmatched target',
-  'insufficient context',
-])('rejects %s without a completed disposition', async (failure) => {
+  ['missing extraction result', 'Capture step did not return a result'],
+  ['invalid range', 'Invalid exact capture observation'],
+  ['invalid kind', 'Invalid exact capture observation'],
+  ['unmatched target', 'Capture target was not uniquely matched'],
+  ['insufficient context', 'Reviewer minimum framing and response reserve exceeds context budget'],
+])('rejects %s without a completed disposition', async (failure, error) => {
   runner.mockImplementation(async (input) => {
     const work = stepWork(input.instruction);
     if (failure === 'missing extraction result')
@@ -448,6 +452,12 @@ it.each([
         complete: true,
         observations: [{ kind: 'invented', label: 'comparison', start: 0, end: 1 }],
       });
+    if (failure === 'unmatched target' && work.observation && !work.candidate && !work.catalogue)
+      return answerCapture(input, {
+        summary: 'Unmatched existing-task intent',
+        status: 'active',
+        draft: null,
+      });
     if (input.instruction.includes('Materialize') && failure === 'unmatched target') {
       const target = {
         uuid: '12345678-1234-1234-1234-123456789abc',
@@ -457,7 +467,12 @@ it.each([
       return answerCapture(input, {
         reason: 'Fixture bad target',
         submission: {
-          change: { operation: 'complete', targetUuid: target.uuid, annotations: [] },
+          change: {
+            operation: 'update',
+            targetUuid: target.uuid,
+            fields: { priority: 'H' },
+            annotations: [],
+          },
           expected: snapshot(target),
           question: null,
           explanation: 'Fixture',
@@ -474,8 +489,10 @@ it.each([
       { cwd: dir, sessionId: 'session', model: inputModel },
       () => {},
     ),
-  ).rejects.toThrow();
-  expect(() => current.completion([])).toThrow();
+  ).rejects.toThrow(error);
+  expect(() => current.completion([])).toThrow(
+    /reconciliation|every original evidence range|Read all evidence pages/,
+  );
 });
 
 it.each(['correction', 'completion', 'ambiguous'])(
@@ -624,6 +641,9 @@ it('reads extra exact history only by a bounded validated handle, not all pairs'
       input.instruction.slice(input.instruction.lastIndexOf('\n') + 1),
     );
     if (work.candidate?.historyCount === 2 && !requested) {
+      expect(detail).toBeNull();
+      expect(work.candidate).not.toHaveProperty('history');
+      expect(JSON.stringify(work.candidate)).not.toContain('correction:alpha|Monday');
       requested = true;
       const tool = input.tools[0]!;
       await tool.execute(
@@ -654,13 +674,13 @@ it('reads extra exact history only by a bounded validated handle, not all pairs'
 });
 
 it.each([
-  'skipped cursor',
-  'empty continuation',
-  'replayed observation',
-  'invented value',
-  'invalid alias',
-  'failure after page',
-])('does not acknowledge a dense range after %s', async (failure) => {
+  ['skipped cursor', 'Incomplete capture extraction or invalid observation continuation'],
+  ['empty continuation', 'Incomplete capture extraction or invalid observation continuation'],
+  ['replayed observation', 'Capture observation continuation replayed evidence'],
+  ['invented value', 'Invalid capture value detail cursor'],
+  ['invalid alias', 'Invalid capture occurrence cursor'],
+  ['failure after page', 'Provider failure after page'],
+])('does not acknowledge a dense range after %s', async (failure, error) => {
   let calls = 0;
   runner.mockImplementation(async (input) => {
     calls++;
@@ -696,7 +716,17 @@ it.each([
       observations:
         failure === 'empty continuation'
           ? []
-          : [{ kind: 'accepted', label: 'comparison', start: range.offset, end: range.end }],
+          : [
+              {
+                kind: 'accepted',
+                label: 'comparison',
+                start: range.offset,
+                end: range.end,
+                ...(failure === 'replayed observation'
+                  ? { observationId: 'same-observation' }
+                  : {}),
+              },
+            ],
       nextObservationOffset:
         calls > 1
           ? null
@@ -708,7 +738,7 @@ it.each([
       memory: 'Continue the observations',
     });
   });
-  await expect(run()).rejects.toThrow();
+  await expect(run()).rejects.toThrow(error);
   expect(current.nextExtraction()!.offset).toBe(0);
   expect(() => current.completion([])).toThrow('every original evidence range');
   expect(runner.mock.calls.some(([input]) => input.instruction.includes('Materialize'))).toBe(
@@ -716,17 +746,25 @@ it.each([
   );
 });
 
-it('services distant frozen context as exact pages with real cursors, not a tool conversation', async () => {
+it('resumes folding from distant branch-specific context without promoting it to evidence', async () => {
   const file = join(dir, 'context.jsonl');
-  const messages = Array.from({ length: 65 }, (_, index) => ({
-    type: 'message',
-    id: `m${index}`,
-    parentId: index ? `m${index - 1}` : null,
-    message: {
-      role: 'user',
-      content: index === 64 ? 'I will send the comparison.' : `earlier context ${index}`,
-    },
-  }));
+  const descriptions = ['Send Maya the comparison.', 'Send Leon the route.'];
+  const messages = descriptions.flatMap((description, branch) =>
+    Array.from({ length: 65 }, (_, index) => ({
+      type: 'message',
+      id: `b${branch}m${index}`,
+      parentId: index ? `b${branch}m${index - 1}` : null,
+      message: {
+        role: 'user',
+        content:
+          index === 64
+            ? 'I will send it.'
+            : index === 3
+              ? `Antecedent: ${description}`
+              : `earlier context ${index}`,
+      },
+    })),
+  );
   writeFileSync(
     file,
     [{ type: 'session', id: 'session', cwd: dir }, ...messages]
@@ -736,43 +774,78 @@ it('services distant frozen context as exact pages with real cursors, not a tool
   current = new CaptureReview(
     prepareReview(
       [{ file, sessionId: 'session' }],
-      [{ file, sessionId: 'session', entryId: 'm63', since: null }],
+      descriptions.map((_, branch) => ({
+        file,
+        sessionId: 'session',
+        entryId: `b${branch}m63`,
+        since: null,
+      })),
     ),
     () => {},
   );
-  let requested = false;
-  let sawDistantContext = false;
+  const resumedBranches = new Set<string>();
   runner.mockImplementation(async (input) => {
-    const work = JSON.parse(input.instruction.slice(input.instruction.lastIndexOf('\n') + 1)).work;
-    if (work.observation && !requested) {
-      requested = true;
-      const tool = input.tools[0]!;
-      await tool.execute(
-        'context',
-        {
-          result: {
-            inspect: { kind: 'context', findingId: work.observation.id, skip: 60 },
-            memory: 'Resolve the antecedent',
+    const { work, detail } = JSON.parse(
+      input.instruction.slice(input.instruction.lastIndexOf('\n') + 1),
+    );
+    // These are separate obligations. Resolve each pronoun only in its own frozen branch.
+    if (work.catalogue) return answerCapture(input, { candidates: [] });
+    if (work.observation && !work.candidate) {
+      if (!detail) {
+        expect(JSON.stringify(work)).not.toContain('Antecedent:');
+        const tool = input.tools[0]!;
+        await tool.execute(
+          'context',
+          {
+            result: {
+              inspect: { kind: 'context', findingId: work.observation.id, skip: 60 },
+              memory: 'Resolve the antecedent',
+            },
           },
-        },
-        undefined,
-        undefined,
-        {} as Parameters<typeof tool.execute>[4],
-      );
-      return { status: 'handoff', message: {} } as Awaited<ReturnType<typeof runReviewerStep>>;
-    }
-    const { detail } = JSON.parse(input.instruction.slice(input.instruction.lastIndexOf('\n') + 1));
-    if (detail) {
+          undefined,
+          undefined,
+          {} as Parameters<typeof tool.execute>[4],
+        );
+        return { status: 'handoff', message: {} } as Awaited<ReturnType<typeof runReviewerStep>>;
+      }
       expect(detail.contextOnly).toBe(true);
       expect(detail.nextOffset).toBeNull();
       expect(detail.nextSkip).toBe(61);
-      sawDistantContext = detail.groups[0].entries[0].text === 'earlier context 3';
-      expect(sawDistantContext).toBe(true);
+      const occurrence = work.observation.range.occurrences[0];
+      const group = detail.groups[0];
+      expect(group.branchId).toBe(occurrence.branchId);
+      expect(group.entries[0].entryId).toBe(occurrence.entryId.replace('m64', 'm3'));
+      const antecedent = group.entries[0].text;
+      expect(antecedent).toMatch(/^Antecedent: /);
+      resumedBranches.add(occurrence.branchId);
+      return answerCapture(input, {
+        summary: 'Resolved pronoun',
+        status: 'active',
+        draft: {
+          change: {
+            operation: 'add',
+            fields: { description: antecedent.slice('Antecedent: '.length) },
+            annotations: [],
+          },
+          question: null,
+        },
+      });
     }
     return answerCapture(input);
   });
   const submissions = await run();
-  expect(sawDistantContext).toBe(true);
-  expect(submissions).toHaveLength(1);
-  expect(submissions[0]!.references.every((ref) => ref.entryId === 'm64')).toBe(true);
+  expect(resumedBranches.size).toBe(2);
+  expect(
+    submissions.map((item) => item.change.operation === 'add' && item.change.fields.description),
+  ).toEqual(descriptions);
+  expect(
+    submissions.map((item) =>
+      item.references.map(({ entryId, offset, quote }) => ({ entryId, offset, quote })),
+    ),
+  ).toEqual(
+    descriptions.map((_, branch) => [
+      { entryId: `b${branch}m64`, offset: 0, quote: 'I will send it.' },
+    ]),
+  );
+  expect(() => current.completion(submissions)).not.toThrow();
 });

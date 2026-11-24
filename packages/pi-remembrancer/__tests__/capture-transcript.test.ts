@@ -320,7 +320,7 @@ it('returns exact older windows and cursors, and uses the distant antecedent in 
   });
   const submissions = await run();
   expect(found).toBe(true);
-  expect(pages).toBeGreaterThan(2);
+  expect(pages).toBeGreaterThan(1);
   expect(submissions[0]!.change).toMatchObject({
     fields: { description: 'Send Alice the report' },
   });

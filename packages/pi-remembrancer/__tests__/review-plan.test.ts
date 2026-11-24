@@ -330,7 +330,7 @@ it('finishes accepted extraction against original aliases without draining legac
     current.completion([
       { ...submission, references: [{ ...submission.references[0]!, quote: 'invented' }] },
     ]),
-  ).toThrow();
+  ).toThrow('submit exactly its dispositions');
 });
 
 it('preserves existing page callers, rejects mode mixing, and honors attempt authority', () => {

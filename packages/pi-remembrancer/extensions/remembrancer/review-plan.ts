@@ -228,6 +228,7 @@ export class ReviewPlan {
       offset?: number;
       textUnits?: number;
       tokenLimit?: number;
+      fits?: (page: unknown) => boolean;
     } = {},
   ) {
     const { branch, selectedIndex } = this.branchView(selected);
@@ -260,6 +261,7 @@ export class ReviewPlan {
               args.textUnits!,
               envelope,
               args.tokenLimit,
+              args.fits,
             );
     return page(batch, selected, branch.slice(start, end), offset, {
       skip,

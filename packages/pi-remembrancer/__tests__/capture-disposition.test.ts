@@ -4,6 +4,10 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CaptureReview } from '../extensions/remembrancer/capture-review.js';
 import { reviewPreparedCapture } from '../extensions/remembrancer/capture.js';
+import {
+  captureIsSatisfied,
+  resolveCaptureMatches,
+} from '../extensions/remembrancer/capture-matches.js';
 import type { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
 import { prepareReview } from '../extensions/remembrancer/evidence.js';
 import type { Proposal } from '../extensions/remembrancer/proposals.js';
@@ -253,6 +257,52 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(dir, { force: true, recursive: true }));
 
+it.each([null, 'Which day?'])(
+  'uses a validated unmatched accepted add directly, preserving question %j',
+  async (question) => {
+    const materialize = vi.fn(() => disposition());
+    provider({
+      fold: () => ({ ...active, draft: { change: add, question } }),
+      materialize,
+    });
+    const submissions = await run();
+    expect(materialize).not.toHaveBeenCalled();
+    expect(submissions).toEqual([
+      {
+        change: add,
+        expected: null,
+        question,
+        explanation: active.summary,
+        references: [
+          {
+            sessionId: 'synthetic',
+            branchId: evidenceBranchId,
+            entryId: 'entry-0',
+            editId: null,
+            offset: 0,
+            quote: 'accepted:comparison|Comparison',
+          },
+        ],
+      },
+    ]);
+    expect(() => current.completion(submissions)).not.toThrow();
+  },
+);
+it.each(['correction', 'progress', 'reference', 'refusal', 'completion', 'accepted'])(
+  'does not use a question-free active draft to bypass unmatched or ambiguous %s evidence',
+  async (kind) => {
+    transcript([`${kind}:comparison|That comparison`]);
+    if (kind === 'accepted') vi.mocked(readTaskCatalog).mockResolvedValue([task]);
+    const materialize = vi.fn((work: MatchWork) => {
+      expect(work).toMatchObject({ ambiguous: true, state: active });
+      return disposition();
+    });
+    provider({ fold: () => active, exact: () => ({ match: 'ambiguous' }), materialize });
+    await expect(run()).rejects.toThrow('requires a question');
+    expect(materialize).toHaveBeenCalledOnce();
+    expect(() => current.completion([])).toThrow('reconciliation');
+  },
+);
 it.each([false, true])('does not pick a task by candidate order (reverse=%s)', async (reverse) => {
   const tasks = [task, { ...task, uuid: otherUuid }];
   vi.mocked(readTaskCatalog).mockResolvedValue(reverse ? tasks.reverse() : tasks);
@@ -420,29 +470,40 @@ it('does not revise a pending UUID contradicted by the evidence intent', async (
   expect(submissions[0]!.id).toBeUndefined();
   expect(submissions[0]!.expected).toBeNull();
 });
-it('rejects materializer-selected references to another valid frozen entry', async () => {
-  transcript(['accepted:first|First obligation', 'accepted:second|Second obligation']);
-  provider({
-    materialize: () => ({
-      reason: 'Forged provenance',
-      submission: {
-        ...disposition().submission,
-        references: [
-          {
-            sessionId: 'synthetic',
-            branchId: evidenceBranchId,
-            entryId: 'entry-1',
-            editId: null,
-            offset: 0,
-            quote: 'accepted:second|Second obligation',
-          },
-        ],
-      },
-    }),
-  });
-  await expect(run()).rejects.toThrow('cannot select references or proposal identity');
-  expect(() => current.completion([])).toThrow('reconciliation');
-});
+it.each(['references', 'id', 'expectedRevision'])(
+  'rejects materializer-selected %s even when it names valid frozen data',
+  async (field) => {
+    transcript(['accepted:first|First obligation', 'accepted:second|Second obligation']);
+    rows = [proposal()];
+    provider({
+      exact: () => ({ match: 'different' }),
+      fold: () => ({ ...active, draft: null }),
+      materialize: () => ({
+        reason: 'Forged provenance or identity',
+        submission: {
+          ...disposition().submission,
+          [field]:
+            field === 'references'
+              ? [
+                  {
+                    sessionId: 'synthetic',
+                    branchId: evidenceBranchId,
+                    entryId: 'entry-1',
+                    editId: null,
+                    offset: 0,
+                    quote: 'accepted:second|Second obligation',
+                  },
+                ]
+              : field === 'id'
+                ? rows[0]!.id
+                : rows[0]!.revision,
+        },
+      }),
+    });
+    await expect(run()).rejects.toThrow('cannot select references or proposal identity');
+    expect(() => current.completion([])).toThrow('reconciliation');
+  },
+);
 it('uses the same immutable evidence state for every candidate', async () => {
   vi.mocked(readTaskCatalog).mockResolvedValue([task, { ...task, uuid: otherUuid }]);
   const seen: unknown[] = [];
@@ -513,10 +574,14 @@ it('binds a truly matched completed row to its full host snapshot, not a model s
   });
 });
 it('rejects active null but accepts a host-proved no-op', async () => {
-  provider({ materialize: () => ({ reason: 'No change', submission: null }) });
+  provider({
+    fold: () => ({ ...active, draft: null }),
+    materialize: () => ({ reason: 'No change', submission: null }),
+  });
   await expect(run()).rejects.toThrow('Active capture');
   expect(() => current.completion([])).toThrow('reconciliation');
   transcript();
+  provider({ materialize: () => ({ reason: 'No change', submission: null }) });
   vi.mocked(readTaskCatalog).mockResolvedValue([task]);
   expect(await run()).toEqual([]);
 });
@@ -633,6 +698,155 @@ it('groups two confirmations of a pending row into one revision with both refere
   expect(rows[0]!.state).toBe('pending');
   expect(rows[0]!.revision).toBe(3);
 });
+it.each(['applied', 'already_satisfied'] as const)(
+  'leaves a matched %s add unresolved when its verified UUID is absent from live tasks',
+  async (state) => {
+    rows = [{ ...proposal(state), result: { state, verified: snapshot(task), error: null } }];
+    expect(captureIsSatisfied(active, resolveCaptureMatches([], rows))).toBe(false);
+    const materialize = vi.fn(() => ({ reason: 'Historical result', submission: null }));
+    provider({ materialize });
+    await expect(run()).rejects.toThrow('no live task; capture unresolved');
+    expect(materialize).not.toHaveBeenCalled();
+    expect(() => current.completion([])).toThrow('reconciliation');
+  },
+);
+it.each([false, true])(
+  'uses the live renamed task behind a matched applied add as proof (satisfied=%s)',
+  async (satisfied) => {
+    const renamed = {
+      ...task,
+      description: 'Renamed comparison',
+      project: satisfied ? 'Review' : 'Other',
+    };
+    rows = [
+      {
+        ...proposal('applied'),
+        result: { state: 'applied', verified: snapshot(task), error: null },
+      },
+    ];
+    vi.mocked(readTaskCatalog).mockResolvedValue([renamed]);
+    const materialize = vi.fn((work: MatchWork) => {
+      expect(work).toMatchObject({ satisfied, targetUuid: uuid, targetStatus: 'pending' });
+      return { reason: 'Only live data can prove this intent', submission: null };
+    });
+    provider({
+      // Simulate discovery/matching recognizing the saved evidence, not the renamed task.
+      exact: (work) => ({
+        match: (work as MatchWork & { handle: string }).handle.startsWith('proposal:')
+          ? 'same'
+          : 'different',
+      }),
+      fold: () => ({
+        ...active,
+        draft: {
+          change: {
+            operation: 'update',
+            targetUuid: uuid,
+            fields: { project: 'Review' },
+            annotations: [],
+          },
+          question: null,
+        },
+      }),
+      materialize,
+    });
+    if (satisfied) {
+      expect(await run()).toEqual([]);
+      expect(() => current.completion([])).not.toThrow();
+    } else {
+      await expect(run()).rejects.toThrow('Tracked capture requires a proposal');
+      expect(() => current.completion([])).toThrow('reconciliation');
+    }
+    expect(materialize).toHaveBeenCalledOnce();
+    expect(readTaskCatalog).toHaveBeenCalledOnce();
+  },
+);
+it.each(['third source', 'truncated quote', 'unrelated'] as const)(
+  'pages compact saved source cues before excluding a renamed draft (%s)',
+  async (scenario) => {
+    const background = 'Routine project background. '.repeat(80);
+    const thirdQuote =
+      scenario === 'third source'
+        ? `Comparison promised for Maya. ${background}`
+        : scenario === 'truncated quote'
+          ? `The original commitment follows this background. ${background} Comparison promised for Maya.`
+          : `Maintain the payroll export for Finance. ${background}`;
+    rows = [
+      {
+        ...proposal(),
+        change: { ...add, fields: { description: 'Original launch checklist' } },
+        draft: {
+          change: { ...add, fields: { description: 'Assemble launch briefing' } },
+          expected: null,
+          question: null,
+        },
+        explanation: background.repeat(2),
+        sources: Array.from({ length: 5 }, (_, index) => ({
+          sessionId: 'saved-session',
+          branchId: 'saved-branch',
+          entryId: `saved-${index}`,
+          editId: null,
+          file: join(dir, 'never-read.jsonl'),
+          role: 'user',
+          timestamp: '2026-11-01T00:00:00Z',
+          locator: `saved-session:saved-${index}`,
+          offset: 0,
+          quote: index === 2 ? thirdQuote : `Reviewed the launch checklist. ${background}`,
+        })),
+      },
+    ];
+    const offsets: number[] = [];
+    let exactCalls = 0;
+    runner.mockImplementation(async (input) => {
+      const work = JSON.parse(
+        input.instruction.slice(input.instruction.lastIndexOf('\n') + 1),
+      ).work;
+      if (work.catalogue?.[0]?.handle) {
+        const candidates: string[] = [];
+        for (const item of work.catalogue) {
+          const identity = item.identity;
+          expect(identity.sources).toHaveProperty('valueHandle');
+          expect(identity.sourceClues.length).toBeLessThanOrEqual(2);
+          expect(identity.sourceCount).toBe(5);
+          offsets.push(identity.sourceClueOffset);
+          for (const source of identity.sourceClues) {
+            const relevant =
+              source.quote.text.includes('Comparison promised') ||
+              source.quote.text.includes('The original commitment');
+            if (relevant) {
+              // A short quote prefix cannot exclude a potentially renamed promise.
+              expect(source.quote.truncated).toBe(true);
+              if (scenario === 'truncated quote') {
+                expect(source.quote.text).not.toContain('Comparison');
+                expect(input.instruction).toContain('never reject it from that prefix alone');
+              }
+              candidates.push(item.handle);
+            }
+          }
+        }
+        return answerCapture(input, { candidates });
+      }
+      if (input.instruction.includes('All exact candidate fields')) {
+        exactCalls++;
+        expect(work.candidate.sources[2].quote).toBe(thirdQuote);
+        return answerCapture(input, { match: 'same' });
+      }
+      return answerCapture(input);
+    });
+    const submissions = await run();
+    expect(submissions).toHaveLength(1);
+    if (scenario === 'unrelated') {
+      expect(offsets).toEqual([0, 2, 4]);
+      expect(exactCalls).toBe(0); // Long supporting quotes/explanation are not all-pairs detail reads.
+      expect(submissions[0]!.id).toBeUndefined();
+    } else {
+      expect(offsets).toEqual([0, 2]);
+      expect(exactCalls).toBe(1);
+      expect(submissions[0]).toMatchObject({ id: 'saved', expectedRevision: 3 });
+    }
+    expect(() => current.completion(submissions)).not.toThrow();
+  },
+);
 it('matches an applied add by its verified UUID after its task was renamed', async () => {
   const renamed = { ...task, description: 'Renamed comparison' };
   rows = [

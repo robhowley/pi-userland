@@ -49,6 +49,7 @@ export function transcriptPage(
   units: number,
   envelope: Record<string, unknown> = {},
   tokenLimit = Infinity,
+  envelopeFits: (page: unknown) => boolean = () => true,
 ) {
   if (!Number.isSafeInteger(units) || units < 2 || !Number.isSafeInteger(offset) || offset < 0)
     throw new Error('Invalid capture context cursor or text allowance');
@@ -64,7 +65,7 @@ export function transcriptPage(
     nextOffset: cursor < total ? cursor : null,
   });
   const fits = (page: typeof entries, cursor: number) =>
-    estimateReviewerTokens(build(page, cursor)) <= tokenLimit;
+    estimateReviewerTokens(build(page, cursor)) <= tokenLimit && envelopeFits(build(page, cursor));
   let position = 0;
   let cursor = offset;
   let remaining = units;
@@ -106,6 +107,7 @@ export function messageContext(
   units: number,
   batch = '',
   tokenLimit = Infinity,
+  envelopeFits: (page: unknown) => boolean = () => true,
 ) {
   const source = sources.get(range);
   const selected = range.occurrences[occurrence];
@@ -118,5 +120,6 @@ export function messageContext(
     units,
     { message: true },
     tokenLimit,
+    envelopeFits,
   );
 }

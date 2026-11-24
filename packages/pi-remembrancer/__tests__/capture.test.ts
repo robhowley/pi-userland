@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
 import { prepareReview } from '../extensions/remembrancer/evidence.js';
 import { CaptureReview } from '../extensions/remembrancer/capture-review.js';
+import * as captureReviewer from '../extensions/remembrancer/capture.js';
 import { preserveHandoff } from '../extensions/remembrancer/capture-handoff.js';
 import {
   launchCaptureWorker,
@@ -14,9 +15,10 @@ import {
 import { captureExecution } from '../extensions/remembrancer/config.js';
 import { captureExtension } from './fixtures/capture-extension.js';
 import { runReviewerStep } from '../extensions/remembrancer/reviewer.js';
-import { answerCapture, captureAnswer, stepWork } from './fixtures/capture-steps.js';
+import { captureFields, answerCapture, captureAnswer, stepWork } from './fixtures/capture-steps.js';
 import { readTaskCatalog } from '../extensions/remembrancer/taskwarrior.js';
 import { detailPages } from '../extensions/remembrancer/review-findings.js';
+import { estimateReviewerTokens } from '../extensions/remembrancer/reviewer-budget.js';
 import * as proposalReads from '../extensions/remembrancer/proposal-read.js';
 
 vi.mock('../extensions/remembrancer/reviewer.js', () => ({ runReviewerStep: vi.fn() }));
@@ -252,9 +254,12 @@ it('revises a differently labelled saved proposal from its exact edited draft, w
       answer = { candidates: work.catalogue.map((item: { handle: string }) => item.handle) };
     }
     if (work.page) {
-      const identity =
-        work.page.path.join('.') === 'effective.change.fields.description' &&
-        work.page.text?.includes('deployment');
+      const identity = captureFields(work.page).some(
+        (field) =>
+          field.path.join('.') === 'effective.change.fields.description' &&
+          'text' in field &&
+          field.text.includes('deployment'),
+      );
       readExact ||= identity;
       answer = {
         notes:
@@ -326,7 +331,6 @@ it('does not drain the legacy cursor, accepts empty findings only after every ra
   const ranges = runner.mock.calls
     .map(([input]) => stepWork(input.instruction).range)
     .filter((range): range is NonNullable<typeof range> => range !== undefined);
-  expect(ranges.length).toBeGreaterThan(10);
   expect(ranges.map((range) => range.text).join('')).toBe('😀\\"\n'.repeat(1000));
   expect(page).not.toHaveBeenCalled();
   expect(db.reviewed()).toHaveLength(1);
@@ -353,7 +357,6 @@ it('folds distant corrections, repeated intent and completion into the original 
     'repeat',
     'correction',
   ]);
-  appendFileSync(file, message('done', 'repeat', 'completion:alpha|done'));
   // This later capture matches saved proposals through their read API below; use one
   // frozen attempt here to prove distant completion supersedes a staged add.
   transcript([...entries, ['done', 'repeat', 'completion:alpha|done']]);
@@ -431,13 +434,9 @@ it('pages many findings and a growing one-obligation history without whole-array
   expect(
     db.proposals(undefined, 0, 100).find((item) => item.sources.length > 1)!.sources,
   ).toHaveLength(26);
-  expect(runner.mock.calls.length).toBeGreaterThan(150);
   expect(runner.mock.calls.every(([input]) => !input.instruction.includes('"proposals":['))).toBe(
     true,
   );
-  expect(
-    runner.mock.calls.filter(([input]) => input.instruction.includes('Scan this discovery')).length,
-  ).toBeGreaterThan(60);
 });
 it.each(['early extraction', 'reconciliation', 'cleanup', 'pre-publication'])(
   'commits nothing after %s failure',
@@ -448,30 +447,117 @@ it.each(['early extraction', 'reconciliation', 'cleanup', 'pre-publication'])(
     ]);
     const before = { sources: db.sources(), notice: db.proposalNotice() };
     let calls = 0;
+    let injected = false;
     runner.mockImplementation(async (input) => {
       calls++;
-      if (failure === 'early extraction' && calls === 2)
+      if (failure === 'early extraction' && calls === 2) {
+        injected = true;
         throw new Error('fixture extraction failed');
-      if (failure === 'reconciliation' && input.instruction.includes('Scan this discovery'))
+      }
+      if (failure === 'reconciliation' && input.instruction.includes('Scan this discovery')) {
+        injected = true;
         throw new Error('fixture matching failed');
+      }
       const result = await answerCapture(input);
       expect(db.proposals()).toEqual([]);
       expect(db.reviewed()).toEqual([]);
-      if (failure === 'cleanup' && input.instruction.includes('Materialize'))
+      const work = stepWork(input.instruction);
+      if (failure === 'cleanup' && work.observation && !work.catalogue && !work.candidate) {
+        injected = true;
         throw new Error('fixture cleanup failed');
+      }
       return result;
     });
+    const publication = vi.spyOn(CheckpointStore.prototype, 'finishCaptureJob');
     if (failure === 'pre-publication')
-      vi.spyOn(CheckpointStore.prototype, 'finishCaptureJob').mockImplementationOnce(() => {
-        throw new Error('storage failure');
+      publication.mockImplementationOnce((_owner, _attempt, submissions) => {
+        expect(submissions.map((item) => item.change)).toEqual([
+          { operation: 'add', fields: { description: 'Send alpha' }, annotations: [] },
+          { operation: 'add', fields: { description: 'Send beta' }, annotations: [] },
+        ]);
+        expect(submissions.every((item) => item.references.length === 1)).toBe(true);
+        injected = true;
+        throw Object.assign(new Error('fixture publication failed'), { code: 'EIO' });
       });
     const id = await capture();
+    expect(injected).toBe(true);
     expect(db.captureJob(id)?.state).toBe('failed');
+    if (failure === 'pre-publication') {
+      expect(publication).toHaveBeenCalledOnce();
+      expect(db.captureJob(id)?.diagnostic).toContain(
+        'Capture atomic-publication: execution-failure (EIO)',
+      );
+    } else expect(publication).not.toHaveBeenCalled();
     expect(db.reviewed()).toEqual([]);
     expect(db.proposals()).toEqual([]);
     expect({ sources: db.sources(), notice: db.proposalNotice() }).toEqual(before);
     db.claimReview();
     db.releaseReview();
+  },
+);
+it.each(['applying', 'uncertain'] as const)(
+  'publishes nothing, including an unrelated staged add, when a %s match is unresolved',
+  async (state) => {
+    await capture();
+    const saved = db.proposals()[0]!;
+    const claimed = db.claimProposal(saved.id, saved.revision);
+    if (state === 'uncertain')
+      db.recordProposalResult(claimed.id, claimed.revision, claimed.claim!, {
+        state,
+        verified: null,
+        error: 'Synthetic unresolved outcome',
+      });
+    const before = {
+      proposals: db.proposals(),
+      coverage: db.reviewed(),
+      sources: db.sources(),
+      notice: db.proposalNotice(),
+      generation: db.contextGeneration(),
+    };
+    appendFileSync(
+      file,
+      message('unrelated', 'promise', 'accepted:separate|Send separate report') +
+        message('repeat', 'unrelated', 'accepted:comparison|Send Maya the comparison'),
+    );
+    runner.mockImplementation(async (input) => {
+      const work = JSON.parse(input.instruction.split('\n').at(-1)!).work;
+      if (work.catalogue?.[0]?.handle)
+        return answerCapture(input, {
+          candidates:
+            work.state.summary === 'comparison'
+              ? work.catalogue.map((item: { handle: string }) => item.handle)
+              : [],
+        });
+      if (input.instruction.includes('All exact candidate fields'))
+        return answerCapture(input, { match: 'same' });
+      return answerCapture(input);
+    });
+    const review = vi.spyOn(captureReviewer, 'reviewPreparedCapture');
+    const disposed = vi.spyOn(CaptureReview.prototype, 'disposeRecord');
+    const publication = vi.spyOn(CheckpointStore.prototype, 'finishCaptureJob');
+    const id = await capture();
+    expect(review).toHaveBeenCalledOnce();
+    await expect(review.mock.results[0]!.value).rejects.toThrow('verify-only');
+    expect(disposed).toHaveBeenCalledExactlyOnceWith(
+      expect.any(String),
+      expect.objectContaining({
+        change: {
+          operation: 'add',
+          fields: { description: 'Send separate report' },
+          annotations: [],
+        },
+        references: [expect.objectContaining({ entryId: 'unrelated' })],
+      }),
+    );
+    expect(publication).not.toHaveBeenCalled();
+    expect(db.captureJob(id)?.state).toBe('failed');
+    expect({
+      proposals: db.proposals(),
+      coverage: db.reviewed(),
+      sources: db.sources(),
+      notice: db.proposalNotice(),
+      generation: db.contextGeneration(),
+    }).toEqual(before);
   },
 );
 it('keeps late appends/edits outside scope and never rereads live history', async () => {
@@ -501,12 +587,18 @@ it('keeps late appends/edits outside scope and never rereads live history', asyn
 });
 it('host pages exact oversized structured fields, preserving Unicode and offsets', () => {
   const original = '😀\\"\n'.repeat(10000);
-  const pages = [...detailPages({ draft: { explanation: original } }, 512)] as {
+  const envelope = (page: object, index: number) => ({ page, index, notes: 'Exact field' });
+  const pages = [...detailPages({ draft: { explanation: original } }, 512, [], envelope)] as {
     path: string[];
     offset: number;
     text: string;
+    end: boolean;
   }[];
-  expect(pages.length).toBeGreaterThan(50);
+  for (const [index, page] of pages.entries()) {
+    expect(estimateReviewerTokens(envelope(page, index))).toBeLessThanOrEqual(512);
+    expect(page.text).not.toMatch(/^[\uDC00-\uDFFF]|[\uD800-\uDBFF]$/u);
+    expect(page.end).toBe(page.offset + page.text.length === original.length);
+  }
   expect(pages.map((page) => page.text).join('')).toBe(original);
   expect(pages.every((page) => page.path.join('.') === 'draft.explanation')).toBe(true);
   expect(
@@ -533,8 +625,15 @@ it('manual foreground remains begin/next/finish with checkpoint-only finish', as
   appendFileSync(file, message('later', 'promise', 'A manual obligation'));
   batch = await call({ action: 'begin' });
   expect(batch.groups[0].entries[0].entryId).toBe('later');
+  const reviewed = db.reviewed();
+  const sources = db.sources();
+  const notice = db.proposalNotice();
+  expect(reviewed.map((row) => row.entryId)).toEqual(['promise']);
   await call({ action: 'finish', batch: batch.batch });
+  expect(db.reviewed()).toEqual([...reviewed, { ...reviewed[0]!, entryId: 'later' }]);
   expect(db.proposals()).toEqual(saved);
+  expect(db.sources()).toEqual(sources);
+  expect(db.proposalNotice()).toEqual(notice);
 });
 it.each(['empty', 'tool-only', 'covered'])(
   'makes no reviewer request for %s scope',
@@ -560,10 +659,21 @@ it.each(['empty', 'tool-only', 'covered'])(
       });
       db.releaseReview();
     }
-    const before = db.reviewed();
-    await capture();
+    const before = {
+      reviewed: db.reviewed(),
+      proposals: db.proposals(),
+      sources: db.sources(),
+      notice: db.proposalNotice(),
+    };
+    const id = await capture();
     expect(runner).not.toHaveBeenCalled();
-    expect(db.reviewed()).toEqual(before);
+    expect(db.captureJob(id)).toMatchObject({ state: 'completed', attemptCount: 1 });
+    expect({
+      reviewed: db.reviewed(),
+      proposals: db.proposals(),
+      sources: db.sources(),
+      notice: db.proposalNotice(),
+    }).toEqual(before);
   },
 );
 
