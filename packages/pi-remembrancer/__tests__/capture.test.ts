@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import type { ExtensionContext, ToolDefinition } from '@earendil-works/pi-coding-agent';
+import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
 import { prepareReview } from '../extensions/remembrancer/evidence.js';
+import { CaptureReview } from '../extensions/remembrancer/capture-review.js';
+import * as captureReviewer from '../extensions/remembrancer/capture.js';
 import { preserveHandoff } from '../extensions/remembrancer/capture-handoff.js';
 import {
   launchCaptureWorker,
@@ -12,65 +14,50 @@ import {
 } from '../extensions/remembrancer/capture-worker.js';
 import { captureExecution } from '../extensions/remembrancer/config.js';
 import { captureExtension } from './fixtures/capture-extension.js';
-import { runReviewer, type ReviewerInput } from '../extensions/remembrancer/reviewer.js';
-import { lookupTasks } from '../extensions/remembrancer/taskwarrior.js';
+import { runReviewerStep } from '../extensions/remembrancer/reviewer.js';
+import { captureFields, answerCapture, captureAnswer, stepWork } from './fixtures/capture-steps.js';
+import { readTaskCatalog } from '../extensions/remembrancer/taskwarrior.js';
+import { detailPages } from '../extensions/remembrancer/review-findings.js';
+import { estimateReviewerTokens } from '../extensions/remembrancer/reviewer-budget.js';
+import * as proposalReads from '../extensions/remembrancer/proposal-read.js';
 
-vi.mock('../extensions/remembrancer/reviewer.js', () => ({ runReviewer: vi.fn() }));
+vi.mock('../extensions/remembrancer/reviewer.js', () => ({ runReviewerStep: vi.fn() }));
 vi.mock('../extensions/remembrancer/capture-worker.js', async (original) => ({
   ...(await original<typeof import('../extensions/remembrancer/capture-worker.js')>()),
   launchCaptureWorker: vi.fn().mockResolvedValue(123),
 }));
 vi.mock('../extensions/remembrancer/taskwarrior.js', async (original) => ({
   ...(await original<typeof import('../extensions/remembrancer/taskwarrior.js')>()),
-  lookupTasks: vi.fn().mockResolvedValue({ tasks: [], nextOffset: null }),
+  readTaskCatalog: vi.fn().mockResolvedValue([]),
 }));
-
 let dir: string;
 let file: string;
 let ctx: ExtensionContext;
 let db: CheckpointStore;
-let handlers: Map<string, (event: object, ctx: ExtensionContext) => unknown>;
-let manualTool: ToolDefinition;
-let proposalTool: ToolDefinition;
-const runner = vi.mocked(runReviewer);
+let handlers: ReturnType<typeof captureExtension>['handlers'];
 let fixture: ReturnType<typeof captureExtension>;
 let config: ReturnType<typeof captureExtension>['settings'];
-function message(id: string, parentId: string | null, text = 'Send Maya the comparison') {
+const runner = vi.mocked(runReviewerStep);
+function message(id: string, parentId: string | null, content: string) {
   return (
     JSON.stringify({
       type: 'message',
       id,
       parentId,
-      timestamp: '2026-11-01T00:00:00.000Z',
-      message: { role: 'user', content: text },
+      timestamp: '2026-11-01T00:00:00Z',
+      message: { role: 'user', content },
     }) + '\n'
   );
 }
-async function call(input: ReviewerInput, name: string, args: object = {}) {
-  const tool = input.tools.find((tool) => tool.name === `remembrancer_${name}`)!;
-  return tool.execute(
-    'call',
-    args,
-    undefined,
-    undefined,
-    {} as Parameters<ToolDefinition['execute']>[4],
+function transcript(entries: [string, string | null, string][]) {
+  writeFileSync(
+    file,
+    JSON.stringify({ type: 'session', id: 'outgoing', cwd: dir }) +
+      '\n' +
+      entries.map((entry) => message(...entry)).join(''),
   );
 }
-async function readAll(input: ReviewerInput) {
-  let page;
-  do {
-    const result = await call(input, 'read_evidence');
-    const content = result.content[0]!;
-    if (content.type !== 'text') throw new Error('Expected text');
-    page = JSON.parse(content.text);
-  } while (page.hasMore);
-  return page;
-}
-async function empty(input: ReviewerInput) {
-  await readAll(input);
-  await call(input, 'submit', { proposals: [] });
-}
-async function capture() {
+async function capture(options: Partial<Parameters<typeof runCaptureWorker>[0]> = {}) {
   const inbox = join(dirname(db.file), 'capture-inbox');
   const accepted = await preserveHandoff({
     id: randomUUID(),
@@ -78,370 +65,580 @@ async function capture() {
     source: { file, sessionId: 'outgoing' },
     execution: captureExecution(ctx),
   });
-  await runCaptureWorker({ database: db.file, inbox });
+  await runCaptureWorker({ database: db.file, inbox, ...options });
   return accepted.manifest.id;
 }
-
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(launchCaptureWorker).mockResolvedValue(123);
   fixture = captureExtension(true);
   ({ dir, file, ctx, handlers, settings: config } = fixture);
   db = fixture.db!;
   config({ autoCapture: true });
-  runner.mockImplementation(empty);
+  runner.mockImplementation((input) => answerCapture(input));
+  vi.mocked(readTaskCatalog).mockResolvedValue([]);
+  vi.mocked(launchCaptureWorker).mockResolvedValue(123);
 });
-afterEach(async () => {
-  await fixture.close(ctx);
-});
+afterEach(async () => fixture.close(ctx));
 
-it('includes pre-opt-in evidence, excludes covered evidence and other enrolled sources, skips unchanged', async () => {
+it('captures only the outgoing frozen session and skips covered evidence', async () => {
   db.enroll('other', '/must-not-read');
+  const enrolled = db.sources();
+  const settings = readFileSync(join(dir, 'agent', 'settings.json'), 'utf8');
   await capture();
+  const calls = runner.mock.calls.length;
   await capture();
-  expect(runner).toHaveBeenCalledOnce();
+  expect(runner).toHaveBeenCalledTimes(calls);
   expect(db.reviewed().map((item) => item.sessionId)).toEqual(['outgoing']);
-  appendFileSync(file, message('later', 'promise', 'Later promise'));
-  runner.mockImplementation(async (input) => {
-    const page = await readAll(input);
-    expect(
-      page.groups
-        .flatMap((group: { entries: { entryId: string }[] }) => group.entries)
-        .map((entry: { entryId: string }) => entry.entryId),
-    ).toEqual(['later']);
-    await call(input, 'submit', { proposals: [] });
+  expect(db.proposals()).toHaveLength(1);
+  expect(db.sources().find((source) => source.sessionId === 'other')).toEqual(enrolled[0]);
+  expect(readFileSync(join(dir, 'agent', 'settings.json'), 'utf8')).toBe(settings);
+  expect(runner.mock.calls.every(([input]) => input.sessionId === 'outgoing')).toBe(true);
+  expect(
+    runner.mock.calls.every(
+      ([input]) => input.tools.map((tool) => tool.name).join() === 'remembrancer_step',
+    ),
+  ).toBe(true);
+  expect(readTaskCatalog).toHaveBeenCalledWith(undefined, {
+    cwd: dir,
+    signal: expect.any(AbortSignal),
   });
-  await capture();
-  expect(runner).toHaveBeenCalledTimes(2);
 });
-it.each([false, true])(
-  'saves nonempty proposals atomically and rejects invalid references=%s',
-  async (invalid) => {
-    runner.mockImplementation(async (input) => {
-      const page = await readAll(input);
-      const group = page.groups[0];
-      const entry = group.entries[0];
-      await call(input, 'submit', {
-        proposals: [
-          {
-            change: {
-              operation: 'add',
-              fields: { description: 'Send comparison' },
-              annotations: [],
-            },
-            expected: null,
-            question: null,
-            explanation: 'User promise',
-            references: [
-              {
-                sessionId: group.sessionId,
-                branchId: group.branchId,
-                entryId: entry.entryId,
-                editId: entry.editId,
-                offset: 0,
-                quote: invalid ? 'Invented quote' : 'Send Maya',
-              },
-            ],
-          },
-        ],
-      });
-      expect(db.proposals()).toEqual([]);
-      expect(db.reviewed()).toEqual([]);
-    });
-    await capture();
-    expect(db.proposals()).toHaveLength(invalid ? 0 : 1);
-    expect(db.reviewed()).toHaveLength(invalid ? 0 : 1);
-  },
-);
-it('rejects malformed saved scope without calling the model', async () => {
+it('rejects malformed saved scope before model work and preserves other enrolled defaults/settings', async () => {
+  const otherFile = join(dir, 'unread-other.jsonl');
+  writeFileSync(otherFile, 'broken archive\n');
+  db.enroll('other', otherFile);
+  const other = db.sources();
+  const settings = readFileSync(join(dir, 'agent', 'settings.json'), 'utf8');
   appendFileSync(file, '{broken json\n');
-  await capture();
+  const id = await capture();
   expect(runner).not.toHaveBeenCalled();
   expect(db.reviewed()).toEqual([]);
-  expect(existsSync(db.file + '.capture.log')).toBe(true);
+  expect(db.proposals()).toEqual([]);
+  expect(db.sources()).toEqual(other);
+  expect(readFileSync(join(dir, 'agent', 'settings.json'), 'utf8')).toBe(settings);
+  expect(db.captureJob(id)?.state).toBe('failed');
 });
-it('stages without persisting, then commits empty coverage only after reviewer cleanup', async () => {
-  runner.mockImplementation(async (input) => {
-    await empty(input);
-    expect(db.reviewed()).toEqual([]);
-  });
-  await capture();
-  expect(db.reviewed()).toHaveLength(1);
-});
-it.each(['unread', 'partial', 'duplicate', 'invalid', 'model error', 'missing submission'])(
-  'rejects %s without coverage/proposals',
-  async (failure) => {
-    if (failure === 'partial')
-      appendFileSync(file, message('large', 'promise', 'x'.repeat(60_000)));
-    runner.mockImplementation(async (input) => {
-      if (failure === 'missing submission') return;
-      if (failure === 'partial') await call(input, 'read_evidence');
-      else if (failure !== 'unread') await readAll(input);
-      await call(input, 'submit', { proposals: failure === 'invalid' ? [{}] : [] });
-      if (failure === 'duplicate') await call(input, 'submit', { proposals: [] });
-      if (failure === 'model error') throw new Error('context overflow');
-    });
-    await capture();
-    expect(db.reviewed()).toEqual([]);
-    expect(db.proposals()).toEqual([]);
-    expect(existsSync(db.file + '.capture.log')).toBe(true);
-  },
-);
-it('leaves appends outside the frozen review and closes extraction after submission', async () => {
-  runner.mockImplementation(async (input) => {
-    await empty(input);
-    appendFileSync(file, message('later', 'promise'));
-    const closed = await call(input, 'read_evidence');
-    expect(closed).toMatchObject({ terminate: true, content: [{ text: 'Review closed.' }] });
-  });
-  await capture();
-  const manual = prepareReview([{ sessionId: 'outgoing', file }], db.reviewed());
-  expect(manual.evidence.map((item) => item.entryId)).toEqual(['later']);
-});
-it('reads frozen context through the capture tool without consuming evidence', async () => {
-  appendFileSync(file, message('selected', 'promise', 'selected commitment'));
-  runner.mockImplementation(async (input) => {
-    const selected = {
-      sessionId: 'outgoing',
-      branchId: 'selected',
-      entryId: 'selected',
-      editId: null,
-    };
-    appendFileSync(file, message('later', 'selected', 'outside frozen scope'));
-    const result = await call(input, 'context', { selected, offset: 5 });
-    expect(JSON.parse((result.content[0] as { text: string }).text)).toMatchObject({
-      selected,
-      contextOnly: true,
-      groups: [{ entries: [{ entryId: 'promise', offset: 5, text: 'Maya the comparison' }] }],
-      nextOffset: null,
-    });
-    expect(await readAll(input)).toMatchObject({
-      groups: [{ entries: [{ entryId: 'promise' }, { entryId: 'selected' }] }],
-    });
-    await call(input, 'submit', { proposals: [] });
-  });
-  await capture();
-  expect(db.reviewed().map((checkpoint) => checkpoint.entryId)).toEqual(['selected']);
-});
-it('offers only scoped reads, typed task lookups and submission', async () => {
-  vi.mocked(lookupTasks).mockResolvedValue({ tasks: [], nextOffset: null });
-  runner.mockImplementation(async (input) => {
-    await call(input, 'tasks', { status: 'completed' });
-    await call(input, 'proposals');
-    await empty(input);
-  });
-  const id = await capture();
-  expect(runner).toHaveBeenCalledOnce();
-  const input = runner.mock.calls[0]![0];
-  expect(input.tools.map((tool) => tool.name)).toEqual([
-    'remembrancer_read_evidence',
-    'remembrancer_context',
-    'remembrancer_tasks',
-    'remembrancer_proposals',
-    'remembrancer_submit',
-  ]);
-  expect(lookupTasks).toHaveBeenCalledWith({ status: 'completed' }, undefined, {
-    cwd: dir,
-    signal: input.signal,
-  });
-  expect(input.signal).toBeInstanceOf(AbortSignal);
-  expect(vi.mocked(lookupTasks).mock.calls[0]![2]?.signal).toBe(input.signal);
-  expect(db.captureJob(id)?.state).toBe('completed');
-});
-it.each(['first', 'next'] as const)(
-  'proposal stale %s-page failures do not commit; controller recovery prepares current state',
+
+it.each(['catalogue', 'cached candidate'])(
+  'retains all published state on a stale typed %s and retries the whole attempt with fresh state',
   async (when) => {
-    runner.mockImplementation(async (input) => {
-      const page = await readAll(input);
-      const submission = proposal(page);
-      submission.explanation = '😀\\"\\n'.repeat(30_000);
-      await call(input, 'submit', { proposals: [submission, submission, submission] });
-    });
     await capture();
+    const original = db.proposals()[0]!;
+    db.editProposal(original.id, original.revision, {
+      change: {
+        operation: 'add',
+        fields: { description: 'Long saved draft '.repeat(10000) },
+        annotations: [],
+      },
+      expected: null,
+      question: 'Keep saved draft?',
+    });
     const before = {
       proposals: db.proposals(),
       coverage: db.reviewed(),
       notice: db.proposalNotice(),
     };
-    appendFileSync(file, message('later', 'promise', 'New accepted obligation'));
+    appendFileSync(
+      file,
+      message('later', 'promise', 'completion:other|I sent the unrelated later comparison.'),
+    );
+    const reads = vi.spyOn(proposalReads, 'readProposals');
+    const typedReads = vi.spyOn(proposalReads, 'readProposal');
     const originalLookup = CheckpointStore.prototype.proposal;
+    const lookup = vi.spyOn(CheckpointStore.prototype, 'proposal');
     let changed = false;
-    const lookup = vi.spyOn(CheckpointStore.prototype, 'proposal').mockImplementation(function (
-      this: CheckpointStore,
-      id: string,
-    ) {
+    lookup.mockImplementation(function (this: CheckpointStore, id: string) {
       const saved = originalLookup.call(this, id);
       return saved && changed ? { ...saved, revision: saved.revision + 1 } : saved;
     });
-    runner.mockImplementation(async (input) => {
-      changed = false;
-      await readAll(input);
-      const listed = await call(input, 'proposals');
-      const block = listed.content[0]!;
-      if (block.type !== 'text') throw new Error('Expected text');
-      const list = JSON.parse(block.text);
-      expect(list.proposals).toHaveLength(3);
-      const candidate = list.proposals[0];
-      let request = { action: 'detail', id: candidate.id, revision: candidate.revision };
-      if (when === 'next') {
-        const result = await call(input, 'proposals', request);
-        const block = result.content[0]!;
-        if (block.type !== 'text') throw new Error('Expected text');
-        request = JSON.parse(block.text).next;
-        expect(request).not.toBeNull();
-      }
-      changed = true;
-      await call(input, 'proposals', request);
-      throw new Error('Stale read unexpectedly returned');
+    const originalGeneration = CheckpointStore.prototype.contextGeneration;
+    const generation = vi
+      .spyOn(CheckpointStore.prototype, 'contextGeneration')
+      .mockImplementation(function (this: CheckpointStore) {
+        return originalGeneration.call(this) + Number(changed);
+      });
+    const originalList = CheckpointStore.prototype.proposals;
+    const list = vi.spyOn(CheckpointStore.prototype, 'proposals').mockImplementation(function (
+      this: CheckpointStore,
+      ...args
+    ) {
+      const page = originalList.apply(this, args);
+      if (when === 'catalogue') changed = true;
+      return page;
     });
-    const failedId = await capture();
-    await expect(runner.mock.results.at(-1)!.value).rejects.toThrow('Stale proposal');
+    runner.mockImplementation((input) => {
+      const work = stepWork(input.instruction);
+      if (when === 'cached candidate' && work.catalogue?.[0]?.handle) {
+        changed = true;
+        return answerCapture(input, { candidates: work.catalogue.map((item) => item.handle) });
+      }
+      return answerCapture(input);
+    });
+    const id = await capture();
+    expect(db.captureJob(id)).toMatchObject({
+      state: 'failed',
+      attemptCount: 1,
+      retryEligible: true,
+    });
+    expect(changed).toBe(true);
+    if (when === 'cached candidate') {
+      expect(typedReads.mock.results.at(-1)).toMatchObject({
+        type: 'throw',
+        value: expect.objectContaining({ message: expect.stringContaining('Stale proposal') }),
+      });
+    } else {
+      expect(typedReads).not.toHaveBeenCalled();
+      expect(new Set(generation.mock.results.map((result) => result.value)).size).toBe(2);
+    }
+    expect(reads).not.toHaveBeenCalled();
     lookup.mockRestore();
+    generation.mockRestore();
+    list.mockRestore();
+    reads.mockRestore();
+    typedReads.mockRestore();
     expect({
       proposals: db.proposals(),
       coverage: db.reviewed(),
       notice: db.proposalNotice(),
     }).toEqual(before);
-    expect(db.captureJob(failedId)?.state).toBe('failed');
-    const saved = before.proposals[0]!;
+    const saved = db.proposals()[0]!;
     const edited = db.editProposal(saved.id, saved.revision, {
-      change: saved.change,
-      expected: saved.expected,
-      question: 'Fresh state for recovery',
+      ...saved.draft!,
+      question: 'Fresh state for whole retry',
     });
-    const current = db.proposals();
-    const previousCalls = runner.mock.calls.length;
-    runner.mockImplementation(async (input) => {
-      await readAll(input);
-      const result = await call(input, 'proposals', {
-        action: 'detail',
-        id: edited.id,
-        revision: edited.revision,
-      });
-      const block = result.content[0]!;
-      if (block.type !== 'text') throw new Error('Expected text');
-      const first = JSON.parse(block.text);
-      expect(first.position).toBe(0);
-      expect(first.revision).toBe(edited.revision);
-      await call(input, 'submit', { proposals: [] });
+    const proposals = db.proposals();
+    let sawFresh = false;
+    runner.mockImplementation((input) => {
+      const work = JSON.parse(
+        input.instruction.slice(input.instruction.lastIndexOf('\n') + 1),
+      ).work;
+      if (JSON.stringify(work).includes('Fresh state for whole retry')) sawFresh = true;
+      return answerCapture(input);
     });
-    await runCaptureWorker({ database: db.file, inbox: join(dirname(db.file), 'capture-inbox') });
-    expect(runner).toHaveBeenCalledTimes(previousCalls);
-    vi.spyOn(Date, 'now').mockReturnValue(db.captureJob(failedId)!.nextAttemptAt!);
-    await runCaptureWorker({ database: db.file, inbox: join(dirname(db.file), 'capture-inbox') });
-    expect(runner).toHaveBeenCalledTimes(previousCalls + 1);
-    expect(db.captureJob(failedId)?.state).toBe('completed');
-    expect(db.proposals()).toEqual(current);
-    expect(db.reviewed().map((item) => item.entryId)).toEqual(['promise', 'later']);
+    const calls = runner.mock.calls.length;
+    const inbox = join(dirname(db.file), 'capture-inbox');
+    await runCaptureWorker({ database: db.file, inbox });
+    expect(runner).toHaveBeenCalledTimes(calls);
+    vi.spyOn(Date, 'now').mockReturnValue(db.captureJob(id)!.nextAttemptAt!);
+    await runCaptureWorker({ database: db.file, inbox });
+    expect(sawFresh).toBe(true);
+    expect(db.proposal(edited.id)?.revision).toBe(edited.revision);
+    expect(db.captureJob(id)).toMatchObject({ state: 'completed', attemptCount: 2 });
+    expect(db.proposals()).toEqual(proposals);
+    expect(db.reviewed().map((row) => row.entryId)).toEqual(['promise', 'later']);
   },
 );
 
-it('reports contention without model calls and cannot release another owner', async () => {
-  const other = new CheckpointStore();
-  other.claimReview();
-  try {
-    await capture();
-    expect(runner).not.toHaveBeenCalled();
-    expect(() => other.claimReview()).toThrow('already open');
-  } finally {
-    other.close();
-  }
-});
-type Page = {
-  groups: {
-    sessionId: string;
-    branchId: string;
-    entries: { entryId: string; editId: string | null; text: string; offset: number }[];
-  }[];
-};
-function proposal(page: Page) {
-  const group = page.groups[0]!;
-  const entry = group.entries[0]!;
-  return {
+it('revises a differently labelled saved proposal from its exact edited draft, without duplicating it', async () => {
+  await capture();
+  const first = db.proposals()[0]!;
+  const edited = db.editProposal(first.id, first.revision, {
     change: {
-      operation: 'add' as const,
-      fields: { description: 'Send comparison' },
+      operation: 'add',
+      fields: { description: 'Send the deployment report' },
       annotations: [],
     },
     expected: null,
-    question: null,
-    explanation: 'Accepted promise',
-    references: [
-      {
-        sessionId: group.sessionId,
-        branchId: group.branchId,
-        entryId: entry.entryId,
-        editId: entry.editId,
-        offset: entry.offset,
-        quote: entry.text.slice(0, 9),
-      },
-    ],
-  };
-}
-async function manual(args: object) {
-  const result = await manualTool.execute('manual', args, undefined, undefined, ctx);
-  const block = result.content[0]!;
-  if (block.type !== 'text') throw new Error('Expected text');
-  return JSON.parse(block.text);
-}
-
-it('automatic coverage prevents manual replay and manual finish leaves pending proposals unchanged', async () => {
-  runner.mockImplementation(async (input) => {
-    const page = await readAll(input);
-    await call(input, 'submit', { proposals: [proposal(page)] });
+    question: 'Keep my edited wording?',
+  });
+  appendFileSync(
+    file,
+    message('deployment', 'promise', 'accepted:deployment|Send the deployment report'),
+  );
+  let readExact = false;
+  runner.mockImplementation((input) => {
+    const work = JSON.parse(input.instruction.slice(input.instruction.lastIndexOf('\n') + 1)).work;
+    let answer = captureAnswer(input.instruction);
+    if (work.catalogue?.[0]?.handle) {
+      expect(JSON.stringify(work.catalogue)).toContain('Send the deployment report');
+      answer = { candidates: work.catalogue.map((item: { handle: string }) => item.handle) };
+    }
+    if (work.page) {
+      const identity = captureFields(work.page).some(
+        (field) =>
+          field.path.join('.') === 'effective.change.fields.description' &&
+          'text' in field &&
+          field.text.includes('deployment'),
+      );
+      readExact ||= identity;
+      answer = {
+        notes:
+          identity || work.notes === 'same deployment' ? 'same deployment' : 'identity unresolved',
+      };
+    }
+    if (input.instruction.includes('All exact candidate fields')) {
+      readExact ||=
+        work.candidate.effective.change.fields.description === 'Send the deployment report';
+      answer = {
+        match: readExact ? 'same' : 'different',
+        state: { ...work.state, draft: work.candidate.effective },
+      };
+    }
+    return answerCapture(input, answer);
   });
   await capture();
+  expect(readExact).toBe(true);
+  expect(db.proposals()).toHaveLength(1);
+  expect(db.proposals()[0]).toMatchObject({
+    id: edited.id,
+    revision: edited.revision + 1,
+    change: edited.draft!.change,
+  });
+  expect(db.proposals()[0]!.sources.map((source) => source.entryId)).toEqual([
+    'promise',
+    'deployment',
+  ]);
+});
+
+it('moves every finding and removes absorbed dispositions before closing a merged record', () => {
+  const current = new CaptureReview(prepareReview([{ file, sessionId: 'outgoing' }], []), () => {});
+  const range = current.nextExtraction()!;
+  current.acceptExtraction(range, ['f1', 'f2', 'f3']);
+  current.reconcileFinding('f1', 'r1');
+  current.reconcileFinding('f2', 'r2');
+  current.mergeRecords('r1', ['r2']);
+  expect(() => current.disposeRecord('r2', null)).toThrow('Unknown');
+  expect(() => current.finishReconciliation()).toThrow('every');
+  current.reconcileFinding('f3', 'r1');
+  current.disposeRecord('r1', null);
+  expect(() => current.mergeRecords('r1', ['r2'])).toThrow();
+  expect(current.finishReconciliation()).toEqual([]);
+  expect(() => current.completion([])).not.toThrow();
+});
+
+it('keeps extraction acknowledgement separate from complete reconciliation/dispositions', () => {
+  const current = new CaptureReview(prepareReview([{ file, sessionId: 'outgoing' }], []), () => {});
+  const range = current.nextExtraction()!;
+  current.acceptExtraction(range, ['f1']);
+  expect(() => current.completion([])).toThrow('reconciliation');
+  expect(() => current.finishReconciliation()).toThrow('every');
+  current.reconcileFinding('f1', 'r1');
+  expect(() => current.finishReconciliation()).toThrow('every');
+  current.disposeRecord('r1', null);
+  expect(current.finishReconciliation()).toEqual([]);
+  expect(() => current.completion([])).not.toThrow();
+  expect(() => current.reconcileFinding('f1', 'r1')).toThrow();
+});
+it('does not drain the legacy cursor, accepts empty findings only after every range', async () => {
+  transcript([['long', null, '😀\\"\n'.repeat(1000)]]);
+  const page = vi.spyOn(CaptureReview.prototype, 'page').mockImplementation(() => {
+    throw new Error('Legacy cursor used');
+  });
+  runner.mockImplementation((input) =>
+    answerCapture(input, captureAnswer(input.instruction, true)),
+  );
+  await capture();
+  const ranges = runner.mock.calls
+    .map(([input]) => stepWork(input.instruction).range)
+    .filter((range): range is NonNullable<typeof range> => range !== undefined);
+  expect(ranges.map((range) => range.text).join('')).toBe('😀\\"\n'.repeat(1000));
+  expect(page).not.toHaveBeenCalled();
+  expect(db.reviewed()).toHaveLength(1);
+  expect(db.proposals()).toEqual([]);
+});
+it('folds distant corrections, repeated intent and completion into the original record', async () => {
+  const entries: [string, string | null, string][] = [['a', null, 'accepted:alpha|Friday']];
+  let parent = 'a';
+  for (let index = 0; index < 20; index++) {
+    const id = `gap${index}`;
+    entries.push([id, parent, 'padding '.repeat(80)]);
+    parent = id;
+  }
+  entries.push(
+    ['correction', parent, 'correction:alpha|Monday'],
+    ['repeat', 'correction', 'accepted:alpha|Monday'],
+  );
+  transcript(entries);
+  await capture();
+  expect(db.proposals()).toHaveLength(1);
+  expect(db.proposals()[0]!.change).toMatchObject({ fields: { description: 'Monday' } });
+  expect(db.proposals()[0]!.sources.map((item) => item.entryId)).toEqual([
+    'a',
+    'repeat',
+    'correction',
+  ]);
+  // This later capture matches saved proposals through their read API below; use one
+  // frozen attempt here to prove distant completion supersedes a staged add.
+  transcript([...entries, ['done', 'repeat', 'completion:alpha|done']]);
+  const independent = new CheckpointStore(join(dir, 'independent.sqlite'));
+  const inbox = join(dir, 'independent-inbox');
+  await preserveHandoff({
+    id: 'completion',
+    inbox,
+    source: { file, sessionId: 'outgoing' },
+    execution: captureExecution(ctx),
+  });
+  try {
+    await runCaptureWorker({ database: independent.file, inbox });
+    expect(independent.proposals()).toEqual([]);
+    expect(independent.reviewed()).toHaveLength(1);
+  } finally {
+    independent.close();
+  }
+});
+it('resolves an earlier pronoun against later intent and retains ambiguous sibling changes as a question', async () => {
+  transcript([
+    ['pronoun', null, 'reference:it|actually Monday'],
+    ['intent', 'pronoun', 'accepted:alpha|Friday'],
+    ['left', 'intent', 'correction:alpha|Monday'],
+    ['right', 'intent', 'correction:alpha|Tuesday'],
+  ]);
+  await capture();
+  expect(db.proposals()).toHaveLength(1);
+  expect(db.proposals()[0]!.question).toBeTruthy();
+  const extraction = runner.mock.calls
+    .map(([input]) => stepWork(input.instruction).range)
+    .filter((range): range is NonNullable<typeof range> => range !== undefined);
+  expect(extraction.filter((range) => range.occurrences[0]!.entryId === 'intent')).toHaveLength(1);
+  expect(
+    extraction.find((range) => range.occurrences[0]!.entryId === 'intent')!.occurrenceCount,
+  ).toBe(2);
+  expect(new Set(db.proposals()[0]!.sources.map((source) => source.branchId))).toEqual(
+    new Set(['left', 'right']),
+  );
+});
+it.each(['refusal', 'reference'])(
+  'keeps %s outcomes behind a question rather than an unconditional addition',
+  async (kind) => {
+    transcript(
+      kind === 'refusal'
+        ? [
+            ['intent', null, 'accepted:alpha|Send alpha'],
+            ['refusal', 'intent', 'refusal:alpha|Do not send it'],
+          ]
+        : [['unresolved', null, 'reference:it|done']],
+    );
+    await capture();
+    expect(db.proposals()).toHaveLength(1);
+    expect(db.proposals()[0]!.question).toBeTruthy();
+  },
+);
+
+it('pages many findings and a growing one-obligation history without whole-array model output', async () => {
+  const entries: [string, string | null, string][] = [];
+  let parent: string | null = null;
+  for (let index = 0; index < 80; index++) {
+    const id = `intent${index}`;
+    entries.push([id, parent, `accepted:task${index}|Do task ${index}`]);
+    parent = id;
+  }
+  for (let index = 0; index < 25; index++) {
+    const id = `update${index}`;
+    entries.push([id, parent, `correction:task0|Update ${index}`]);
+    parent = id;
+  }
+  transcript(entries);
+  ctx = { ...ctx, model: { ...ctx.model!, contextWindow: 22000, maxTokens: 4096 } };
+  await capture();
+  expect(db.proposalCount()).toBe(80);
+  expect(
+    db.proposals(undefined, 0, 100).find((item) => item.sources.length > 1)!.sources,
+  ).toHaveLength(26);
+  expect(runner.mock.calls.every(([input]) => !input.instruction.includes('"proposals":['))).toBe(
+    true,
+  );
+});
+it.each(['early extraction', 'reconciliation', 'cleanup', 'pre-publication'])(
+  'commits nothing after %s failure',
+  async (failure) => {
+    transcript([
+      ['a', null, 'accepted:alpha|Send alpha'],
+      ['b', 'a', 'accepted:beta|Send beta'],
+    ]);
+    const before = { sources: db.sources(), notice: db.proposalNotice() };
+    let calls = 0;
+    let injected = false;
+    runner.mockImplementation(async (input) => {
+      calls++;
+      if (failure === 'early extraction' && calls === 2) {
+        injected = true;
+        throw new Error('fixture extraction failed');
+      }
+      if (failure === 'reconciliation' && input.instruction.includes('Scan this discovery')) {
+        injected = true;
+        throw new Error('fixture matching failed');
+      }
+      const result = await answerCapture(input);
+      expect(db.proposals()).toEqual([]);
+      expect(db.reviewed()).toEqual([]);
+      const work = stepWork(input.instruction);
+      if (failure === 'cleanup' && work.observation && !work.catalogue && !work.candidate) {
+        injected = true;
+        throw new Error('fixture cleanup failed');
+      }
+      return result;
+    });
+    const publication = vi.spyOn(CheckpointStore.prototype, 'finishCaptureJob');
+    if (failure === 'pre-publication')
+      publication.mockImplementationOnce((_owner, _attempt, submissions) => {
+        expect(submissions.map((item) => item.change)).toEqual([
+          { operation: 'add', fields: { description: 'Send alpha' }, annotations: [] },
+          { operation: 'add', fields: { description: 'Send beta' }, annotations: [] },
+        ]);
+        expect(submissions.every((item) => item.references.length === 1)).toBe(true);
+        injected = true;
+        throw Object.assign(new Error('fixture publication failed'), { code: 'EIO' });
+      });
+    const id = await capture();
+    expect(injected).toBe(true);
+    expect(db.captureJob(id)?.state).toBe('failed');
+    if (failure === 'pre-publication') {
+      expect(publication).toHaveBeenCalledOnce();
+      expect(db.captureJob(id)?.diagnostic).toContain(
+        'Capture atomic-publication: execution-failure (EIO)',
+      );
+    } else expect(publication).not.toHaveBeenCalled();
+    expect(db.reviewed()).toEqual([]);
+    expect(db.proposals()).toEqual([]);
+    expect({ sources: db.sources(), notice: db.proposalNotice() }).toEqual(before);
+    db.claimReview();
+    db.releaseReview();
+  },
+);
+it.each(['applying', 'uncertain'] as const)(
+  'publishes nothing, including an unrelated staged add, when a %s match is unresolved',
+  async (state) => {
+    await capture();
+    const saved = db.proposals()[0]!;
+    const claimed = db.claimProposal(saved.id, saved.revision);
+    if (state === 'uncertain')
+      db.recordProposalResult(claimed.id, claimed.revision, claimed.claim!, {
+        state,
+        verified: null,
+        error: 'Synthetic unresolved outcome',
+      });
+    const before = {
+      proposals: db.proposals(),
+      coverage: db.reviewed(),
+      sources: db.sources(),
+      notice: db.proposalNotice(),
+      generation: db.contextGeneration(),
+    };
+    appendFileSync(
+      file,
+      message('unrelated', 'promise', 'accepted:separate|Send separate report') +
+        message('repeat', 'unrelated', 'accepted:comparison|Send Maya the comparison'),
+    );
+    runner.mockImplementation(async (input) => {
+      const work = JSON.parse(input.instruction.split('\n').at(-1)!).work;
+      if (work.catalogue?.[0]?.handle)
+        return answerCapture(input, {
+          candidates:
+            work.state.summary === 'comparison'
+              ? work.catalogue.map((item: { handle: string }) => item.handle)
+              : [],
+        });
+      if (input.instruction.includes('All exact candidate fields'))
+        return answerCapture(input, { match: 'same' });
+      return answerCapture(input);
+    });
+    const review = vi.spyOn(captureReviewer, 'reviewPreparedCapture');
+    const disposed = vi.spyOn(CaptureReview.prototype, 'disposeRecord');
+    const publication = vi.spyOn(CheckpointStore.prototype, 'finishCaptureJob');
+    const id = await capture();
+    expect(review).toHaveBeenCalledOnce();
+    await expect(review.mock.results[0]!.value).rejects.toThrow('verify-only');
+    expect(disposed).toHaveBeenCalledExactlyOnceWith(
+      expect.any(String),
+      expect.objectContaining({
+        change: {
+          operation: 'add',
+          fields: { description: 'Send separate report' },
+          annotations: [],
+        },
+        references: [expect.objectContaining({ entryId: 'unrelated' })],
+      }),
+    );
+    expect(publication).not.toHaveBeenCalled();
+    expect(db.captureJob(id)?.state).toBe('failed');
+    expect({
+      proposals: db.proposals(),
+      coverage: db.reviewed(),
+      sources: db.sources(),
+      notice: db.proposalNotice(),
+      generation: db.contextGeneration(),
+    }).toEqual(before);
+  },
+);
+it('keeps late appends/edits outside scope and never rereads live history', async () => {
+  let changed = false;
+  runner.mockImplementation(async (input) => {
+    if (!changed) {
+      appendFileSync(
+        file,
+        JSON.stringify({
+          type: 'context_edit',
+          id: 'edit',
+          parentId: 'promise',
+          targetId: 'promise',
+          replacement: { content: 'Edited after freeze' },
+        }) +
+          '\n' +
+          message('later', 'edit', 'Late append'),
+      );
+      changed = true;
+    }
+    return answerCapture(input);
+  });
+  await capture();
+  expect(db.proposals()[0]!.sources[0]!.quote).toBe('Send Maya the comparison');
+  const next = prepareReview([{ file, sessionId: 'outgoing' }], db.reviewed());
+  expect(next.evidence.map((item) => item.text)).toEqual(['Edited after freeze', 'Late append']);
+});
+it('host pages exact oversized structured fields, preserving Unicode and offsets', () => {
+  const original = '😀\\"\n'.repeat(10000);
+  const envelope = (page: object, index: number) => ({ page, index, notes: 'Exact field' });
+  const pages = [...detailPages({ draft: { explanation: original } }, 512, [], envelope)] as {
+    path: string[];
+    offset: number;
+    text: string;
+    end: boolean;
+  }[];
+  for (const [index, page] of pages.entries()) {
+    expect(estimateReviewerTokens(envelope(page, index))).toBeLessThanOrEqual(512);
+    expect(page.text).not.toMatch(/^[\uDC00-\uDFFF]|[\uD800-\uDBFF]$/u);
+    expect(page.end).toBe(page.offset + page.text.length === original.length);
+  }
+  expect(pages.map((page) => page.text).join('')).toBe(original);
+  expect(pages.every((page) => page.path.join('.') === 'draft.explanation')).toBe(true);
+  expect(
+    pages.every(
+      (page, index) =>
+        page.offset === pages.slice(0, index).reduce((sum, item) => sum + item.text.length, 0),
+    ),
+  ).toBe(true);
+});
+it('manual foreground remains begin/next/finish with checkpoint-only finish', async () => {
+  await capture();
   const saved = db.proposals();
-  expect(saved).toHaveLength(1);
   config({ autoCapture: false });
   ctx = { ...ctx, mode: 'print', hasUI: false };
   await handlers.get('session_start')!({}, ctx);
-  manualTool = fixture.tools.find((tool) => tool.name === 'remembrancer_review')!;
-  proposalTool = fixture.tools.find((tool) => tool.name === 'remembrancer_proposals')!;
-  let batch = await manual({ action: 'begin' });
-  expect(batch.groups).toEqual([]);
-  const readSaved = async (args: object) => {
-    const result = await proposalTool.execute('proposals', args, undefined, undefined, ctx);
-    const content = result.content[0]!;
-    if (content.type !== 'text') throw new Error('Expected text');
-    return JSON.parse(content.text);
+  const tool = fixture.tools.find((item) => item.name === 'remembrancer_review')!;
+  const call = async (args: object) => {
+    const result = await tool.execute('manual', args, undefined, undefined, ctx);
+    return JSON.parse((result.content[0] as { text: string }).text);
   };
-  expect(await readSaved({})).toMatchObject({
-    action: 'list',
-    proposals: [{ id: saved[0]!.id, evidenceCount: 1 }],
-    nextOffset: null,
-  });
-  expect(await readSaved({ offset: 1 })).toEqual({
-    action: 'list',
-    proposals: [],
-    nextOffset: null,
-  });
-  const detail = await readSaved({
-    action: 'detail',
-    id: saved[0]!.id,
-    revision: saved[0]!.revision,
-  });
-  expect(JSON.parse(detail.json)).toMatchObject({ change: saved[0]!.change });
-  expect(JSON.parse(detail.json)).not.toHaveProperty('sources');
-  expect(await manual({ action: 'finish', batch: batch.batch })).toMatchObject({ finished: true });
-  appendFileSync(file, message('later', 'promise', 'A later manual obligation'));
-  batch = await manual({ action: 'begin' });
-  expect(
-    batch.groups
-      .flatMap((group: Page['groups'][number]) => group.entries)
-      .map((entry: { entryId: string }) => entry.entryId),
-  ).toEqual(['later']);
-  expect(await manual({ action: 'finish', batch: batch.batch })).toMatchObject({ finished: true });
+  let batch = await call({ action: 'begin' });
+  expect(batch.groups).toEqual([]);
+  await call({ action: 'finish', batch: batch.batch });
+  appendFileSync(file, message('later', 'promise', 'A manual obligation'));
+  batch = await call({ action: 'begin' });
+  expect(batch.groups[0].entries[0].entryId).toBe('later');
+  const reviewed = db.reviewed();
+  const sources = db.sources();
+  const notice = db.proposalNotice();
+  expect(reviewed.map((row) => row.entryId)).toEqual(['promise']);
+  await call({ action: 'finish', batch: batch.batch });
+  expect(db.reviewed()).toEqual([...reviewed, { ...reviewed[0]!, entryId: 'later' }]);
   expect(db.proposals()).toEqual(saved);
-  await handlers.get('session_shutdown')!({ reason: 'quit' }, ctx);
-  expect(runner).toHaveBeenCalledOnce();
+  expect(db.sources()).toEqual(sources);
+  expect(db.proposalNotice()).toEqual(notice);
 });
-
 it.each(['empty', 'tool-only', 'covered'])(
-  'makes no reviewer call or capture write for %s evidence',
+  'makes no reviewer request for %s scope',
   async (kind) => {
-    if (kind !== 'covered')
-      writeFileSync(file, JSON.stringify({ type: 'session', id: 'outgoing', cwd: dir }) + '\n');
+    if (kind !== 'covered') transcript([]);
     if (kind === 'tool-only')
       appendFileSync(
         file,
@@ -449,11 +646,11 @@ it.each(['empty', 'tool-only', 'covered'])(
           type: 'message',
           id: 'tool',
           parentId: null,
-          message: { role: 'toolResult', content: 'not evidence' },
+          message: { role: 'toolResult', content: 'ignored' },
         }) + '\n',
       );
     if (kind === 'covered') {
-      const prepared = prepareReview([{ sessionId: 'outgoing', file }], db.reviewed());
+      const prepared = prepareReview([{ file, sessionId: 'outgoing' }], []);
       db.claimReview();
       db.finish({
         sources: prepared.successfulSources,
@@ -462,147 +659,23 @@ it.each(['empty', 'tool-only', 'covered'])(
       });
       db.releaseReview();
     }
-    const effects = () => ({
-      sources: db.sources(),
+    const before = {
       reviewed: db.reviewed(),
       proposals: db.proposals(),
+      sources: db.sources(),
       notice: db.proposalNotice(),
-    });
-    const before = effects();
+    };
     const id = await capture();
     expect(runner).not.toHaveBeenCalled();
-    expect(db.captureJob(id)).toMatchObject({ state: 'completed', retryEligible: false });
-    expect(effects()).toEqual(before);
-    db.claimReview();
-    db.releaseReview();
+    expect(db.captureJob(id)).toMatchObject({ state: 'completed', attemptCount: 1 });
+    expect({
+      reviewed: db.reviewed(),
+      proposals: db.proposals(),
+      sources: db.sources(),
+      notice: db.proposalNotice(),
+    }).toEqual(before);
   },
 );
-
-it('reads only the outgoing file and preserves settings and other enrolled defaults', async () => {
-  const otherFile = join(dir, 'must-not-read.jsonl');
-  writeFileSync(otherFile, 'broken archive\n');
-  db.enroll('other', otherFile);
-  const sources = db.sources();
-  const settings = readFileSync(join(dir, 'agent', 'settings.json'), 'utf8');
-  await capture();
-  expect(runner.mock.calls[0]![0].sessionId).toBe('outgoing');
-  expect(db.sources().find((source) => source.sessionId === 'other')).toEqual(sources[0]);
-  expect(readFileSync(join(dir, 'agent', 'settings.json'), 'utf8')).toBe(settings);
-  expect(db.reviewed().every((tip) => tip.sessionId === 'outgoing')).toBe(true);
-});
-
-it('freezes evidence before the reviewer starts, leaving late appends and edits eligible', async () => {
-  runner.mockImplementation(async (input) => {
-    appendFileSync(
-      file,
-      JSON.stringify({
-        type: 'context_edit',
-        id: 'edit',
-        parentId: 'promise',
-        targetId: 'promise',
-        replacement: { content: 'Edited after freeze' },
-      }) +
-        '\n' +
-        message('later', 'edit', 'Late append'),
-    );
-    const page = await readAll(input);
-    expect(
-      page.groups
-        .flatMap((group: Page['groups'][number]) => group.entries)
-        .map((entry: { text: string }) => entry.text),
-    ).toEqual(['Send Maya the comparison']);
-    await call(input, 'submit', { proposals: [proposal(page)] });
-  });
-  await capture();
-  expect(db.proposals()[0]!.sources[0]!.quote).toBe('Send Maya');
-  const next = prepareReview([{ sessionId: 'outgoing', file }], db.reviewed());
-  expect(next.evidence.map((item) => item.text)).toEqual(['Edited after freeze', 'Late append']);
-});
-
-it('delivers every continuation of long frozen evidence before allowing explicit empty submission', async () => {
-  const text = 'promise '.repeat(15_000);
-  writeFileSync(
-    file,
-    JSON.stringify({ type: 'session', id: 'outgoing', cwd: dir }) +
-      '\n' +
-      message('promise', null, text),
-  );
-  runner.mockImplementation(async (input) => {
-    let restored = '';
-    let page;
-    let pages = 0;
-    do {
-      const result = await call(input, 'read_evidence');
-      const block = result.content[0]!;
-      if (block.type !== 'text') throw new Error('Expected text');
-      page = JSON.parse(block.text) as Page & { hasMore: boolean };
-      for (const group of page.groups)
-        for (const entry of group.entries) {
-          expect(entry.offset).toBe(restored.length);
-          restored += entry.text;
-        }
-      pages++;
-    } while (page.hasMore);
-    expect(pages).toBeGreaterThan(1);
-    expect(restored).toBe(text);
-    await call(input, 'submit', { proposals: [] });
-  });
-  await capture();
-  expect(db.reviewed()).toHaveLength(1);
-});
-
-it.each(['setup', 'tool', 'cleanup', 'storage'])(
-  'leaves no data or coverage after %s failure and releases ownership',
-  async (phase) => {
-    if (phase === 'storage')
-      vi.spyOn(CheckpointStore.prototype, 'finishCaptureJob').mockImplementation(() => {
-        throw new Error('storage failed');
-      });
-    runner.mockImplementation(async (input) => {
-      if (phase === 'setup') throw new Error('setup failed');
-      if (phase === 'tool') {
-        await call(input, 'context', {});
-        return;
-      }
-      const page = await readAll(input);
-      await call(input, 'submit', { proposals: [proposal(page)] });
-      if (phase === 'cleanup') throw new Error('cleanup failed');
-    });
-    await capture();
-    expect(db.proposals()).toEqual([]);
-    expect(db.reviewed()).toEqual([]);
-    expect(db.sources()).toEqual([]);
-    expect(existsSync(db.file + '.capture.log')).toBe(true);
-    db.claimReview();
-    db.releaseReview();
-  },
-);
-
-it('allows manual ownership through reviewer cleanup and reprepares after that context changes', async () => {
-  const peer = new CheckpointStore();
-  let changed = false;
-  try {
-    runner.mockImplementation(async (input) => {
-      await empty(input);
-      if (!changed) {
-        peer.claimReview();
-        peer.releaseReview();
-        changed = true;
-      }
-    });
-    const id = await capture();
-    expect(runner).toHaveBeenCalledTimes(1);
-    expect(db.reviewed()).toHaveLength(0);
-    vi.spyOn(Date, 'now').mockReturnValue(db.captureJob(id)!.nextAttemptAt!);
-    await runCaptureWorker({ database: db.file, inbox: join(dirname(db.file), 'capture-inbox') });
-    expect(runner).toHaveBeenCalledTimes(2);
-    expect(db.captureJob(id)?.attemptCount).toBe(2);
-    expect(db.reviewed()).toHaveLength(1);
-    peer.claimReview();
-  } finally {
-    peer.close();
-  }
-});
 
 it.each(['capture', 'release', 'close'])(
   'reports safe shutdown %s diagnostics and still closes the database',

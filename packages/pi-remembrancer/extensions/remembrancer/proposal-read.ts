@@ -4,6 +4,7 @@ import type { CheckpointStore } from './checkpoints.js';
 import type { Proposal, ProposalSource } from './proposals.js';
 import {
   fitsResponse,
+  fitPrefixLength,
   REVIEW_RESPONSE_MAX_BYTES,
   safePrefixLength,
   serializedResponse,
@@ -94,14 +95,7 @@ function position(text: string, value: number, name: string): void {
 
 // Size the complete encoded envelope, not just the unescaped fragment.
 function fragmentLength(text: string, start: number, fits: (length: number) => boolean): number {
-  let low = 0;
-  let high = Math.min(text.length - start, REVIEW_RESPONSE_MAX_BYTES);
-  while (low < high) {
-    const middle = Math.ceil((low + high) / 2);
-    if (fits(safePrefixLength(text, start, middle))) low = middle;
-    else high = middle - 1;
-  }
-  return safePrefixLength(text, start, low);
+  return fitPrefixLength(text, start, fits, REVIEW_RESPONSE_MAX_BYTES);
 }
 
 type EvidenceFragment = ProposalSource & {
@@ -109,6 +103,22 @@ type EvidenceFragment = ProposalSource & {
   quotePosition: number;
   continues: boolean;
 };
+
+/** Typed read for internal callers; public detail/evidence paging uses the same checks. */
+export function readProposal(db: CheckpointStore, id: string, revision: number): Proposal {
+  if (typeof id !== 'string' || !id.trim()) throw new Error('Invalid proposal ID.');
+  integer(revision, 'revision', 1);
+  const proposal = db.proposal(id);
+  if (!proposal)
+    throw new CaptureRetryableError(
+      'Missing proposal; discard partial reads and refresh the list.',
+    );
+  if (proposal.revision !== revision)
+    throw new CaptureRetryableError(
+      'Stale proposal; discard partial reads and refresh the list/current detail.',
+    );
+  return proposal;
+}
 
 export function readProposals(db: CheckpointStore, args: ProposalReadArgs) {
   const action = args.action ?? 'list';
@@ -125,15 +135,7 @@ export function readProposals(db: CheckpointStore, args: ProposalReadArgs) {
   if (action === 'list') return list(db, args.offset ?? 0);
   if (typeof args.id !== 'string' || !args.id.trim()) throw new Error('Invalid proposal ID.');
   integer(args.revision, 'revision', 1);
-  const proposal = db.proposal(args.id);
-  if (!proposal)
-    throw new CaptureRetryableError(
-      'Missing proposal; discard partial reads and refresh the list.',
-    );
-  if (proposal.revision !== args.revision)
-    throw new CaptureRetryableError(
-      'Stale proposal; discard partial reads and refresh the list/current detail.',
-    );
+  const proposal = readProposal(db, args.id, args.revision);
   const identity = { id: proposal.id, revision: proposal.revision };
   if (action === 'detail') {
     const text = JSON.stringify(

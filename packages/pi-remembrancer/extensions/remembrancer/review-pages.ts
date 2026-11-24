@@ -96,6 +96,26 @@ export function safePrefixLength(text: string, start: number, maxUnits: number):
   return length;
 }
 
+/** Find a Unicode-safe prefix using the complete encoded response as the fit predicate. */
+export function fitPrefixLength(
+  text: string,
+  start: number,
+  fits: (length: number) => boolean,
+  maxUnits = text.length - start,
+): number {
+  let low = 0;
+  let high = Math.min(text.length - start, maxUnits);
+  const full = safePrefixLength(text, start, high);
+  // Finishing can remove a continuation cursor, so test that envelope first.
+  if (fits(full)) return full;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (fits(safePrefixLength(text, start, middle))) low = middle;
+    else high = middle - 1;
+  }
+  return safePrefixLength(text, start, low);
+}
+
 export function boundedEvidencePage(
   evidence: readonly Evidence[],
   initial: PageCursor,
@@ -190,6 +210,25 @@ export function frozenContext(
 ) {
   const selected = args.selected;
   if (!selected) throw new Error('Context requires a selected evidence item.');
+  const { branch, selectedIndex } = frozenBranch(review, selected);
+  const before = args.before ?? 1;
+  const offset = args.offset ?? 0;
+  if (!Number.isInteger(before) || before < 1 || before > 40)
+    throw new Error('Context before must be an integer from 1 to 40.');
+  if (!Number.isInteger(offset) || offset < 0)
+    throw new Error('Context offset must be a nonnegative integer.');
+  return contextPage(
+    batch,
+    selected,
+    branch.slice(Math.max(0, selectedIndex - before), selectedIndex),
+    offset,
+  );
+}
+
+export function frozenBranch(
+  review: Pick<PreparedReview, 'evidence' | 'snapshots'>,
+  selected: Selected,
+) {
   const selectedEvidence = review.evidence.find(
     (item) =>
       item.sessionId === selected.sessionId &&
@@ -213,21 +252,16 @@ export function frozenContext(
     (item) => item.entryId === selected.entryId && item.editId === selected.editId,
   );
   if (selectedIndex < 0) throw new Error('Selected evidence is not in the frozen branch.');
-  const before = args.before ?? 1;
-  const offset = args.offset ?? 0;
-  if (!Number.isInteger(before) || before < 1 || before > 40)
-    throw new Error('Context before must be an integer from 1 to 40.');
-  if (!Number.isInteger(offset) || offset < 0)
-    throw new Error('Context offset must be a nonnegative integer.');
-  return contextPage(
-    batch,
-    selected,
-    branch.slice(Math.max(0, selectedIndex - before), selectedIndex),
-    offset,
-  );
+  return { branch, selectedIndex };
 }
 
-export function contextPage(batch: string, selected: Selected, items: Evidence[], offset: number) {
+export function contextPage(
+  batch: string,
+  selected: Selected,
+  items: Evidence[],
+  offset: number,
+  envelope: Record<string, unknown> = {},
+) {
   const total = items.reduce((length, item) => length + item.text.length, 0);
   if (offset > total) throw new Error('Context offset is beyond the requested range');
 
@@ -257,6 +291,7 @@ export function contextPage(batch: string, selected: Selected, items: Evidence[]
       items.slice(0, cursor.index).reduce((length, item) => length + item.text.length, 0) +
       cursor.offset;
     return {
+      ...envelope,
       batch,
       selected,
       contextOnly: true,
