@@ -17,11 +17,21 @@ import {
   type FindingRecord,
   type FoldedFinding,
 } from '../extensions/remembrancer/review-findings.js';
-import { runReviewerStep, type ReviewerStepInput } from '../extensions/remembrancer/reviewer.js';
+import { runReviewer, type ReviewerInput } from '../extensions/remembrancer/reviewer.js';
 import { readTaskCatalog, snapshot } from '../extensions/remembrancer/taskwarrior.js';
-import { answerCapture } from './fixtures/capture-steps.js';
+import {
+  answerCaptureReview,
+  captureDisposition,
+  captureRecord,
+  captureReference,
+  type CaptureRecord,
+  type CaptureScenario,
+} from './fixtures/capture-reviewer.js';
 
-vi.mock('../extensions/remembrancer/reviewer.js', () => ({ runReviewerStep: vi.fn() }));
+vi.mock('../extensions/remembrancer/reviewer.js', async (original) => ({
+  ...(await original<typeof import('../extensions/remembrancer/reviewer.js')>()),
+  runReviewer: vi.fn(),
+}));
 vi.mock('../extensions/remembrancer/taskwarrior.js', async (original) => ({
   ...(await original<typeof import('../extensions/remembrancer/taskwarrior.js')>()),
   readTaskCatalog: vi.fn(),
@@ -35,10 +45,15 @@ const active: FoldedFinding = {
   status: 'active',
   draft: { change: add, question: null },
 };
-const record: FindingRecord = { id: 'r', label: 'Comparison', findings: [], ambiguous: false };
-const disposition = (change = add, question: string | null = null) => ({
+const record: FindingRecord = { id: 'r', ambiguous: false };
+const intent = (change: Proposal['change'] = add, question: string | null = null) => ({
+  change,
+  question,
+  explanation: 'Exact evidence',
+});
+const disposition = (change: Proposal['change'] = add, question: string | null = null) => ({
   reason: 'Exact evidence',
-  submission: { change, question, explanation: 'Exact evidence' },
+  submission: intent(change, question),
 });
 
 describe('materialization boundary', () => {
@@ -91,11 +106,14 @@ describe('materialization boundary', () => {
       );
     },
   );
-  it('preserves an evidence question even when the materializer omits it', () => {
+  it('requires the reviewer to preserve an evidence question rather than completing it host-side', () => {
     const state = { ...active, draft: { ...active.draft!, question: 'Tuesday or Thursday?' } };
-    expect(validateMaterialization(disposition(), record, state)?.question).toBe(
-      'Tuesday or Thursday?',
+    expect(() => validateMaterialization(disposition(), record, state)).toThrow(
+      'preserve unresolved questions',
     );
+    expect(
+      validateMaterialization(disposition(add, 'Tuesday or Thursday?'), record, state)?.question,
+    ).toBe('Tuesday or Thursday?');
     expect(() =>
       validateMaterialization({ reason: 'No change', submission: null }, record, state),
     ).toThrow('preserve unresolved questions');
@@ -116,15 +134,10 @@ describe('materialization boundary', () => {
       const change =
         operation === 'add'
           ? add
-          : {
-              operation,
-              targetUuid: uuid,
-              fields: { due: '20261201' },
-              annotations: [],
-            };
+          : { operation, targetUuid: uuid, fields: { due: '20261201' }, annotations: [] };
       expect(() =>
         validateMaterialization(
-          { reason: 'Done', submission: { change, question: null, explanation: 'Done' } },
+          disposition(change),
           record,
           { ...active, status: 'completed' },
           { expected: snapshot(task) },
@@ -133,20 +146,16 @@ describe('materialization boundary', () => {
     },
   );
   it('validates intent before binding the trusted snapshot', () => {
-    const value = {
-      reason: 'Update',
-      submission: {
-        change: {
-          operation: 'update',
-          targetUuid: uuid,
-          fields: { priority: ['H'] },
-          annotations: [],
-        },
-        question: null,
-        explanation: 'Update',
-        expected: { forged: true },
+    const value = disposition();
+    Object.assign(value.submission, {
+      change: {
+        operation: 'update',
+        targetUuid: uuid,
+        fields: { priority: ['H'] },
+        annotations: [],
       },
-    };
+      expected: { forged: true },
+    });
     expect(() =>
       validateMaterialization(value, record, active, { expected: snapshot(task) }),
     ).toThrow('Invalid priority');
@@ -155,10 +164,9 @@ describe('materialization boundary', () => {
 
 let dir: string;
 let current: CaptureReview;
-let evidenceBranchId: string;
 let rows: Proposal[];
-const runner = vi.mocked(runReviewerStep);
-const model = { contextWindow: 32768, maxTokens: 2048 } as NonNullable<ReviewerStepInput['model']>;
+const runner = vi.mocked(runReviewer);
+const model = { contextWindow: 32768, maxTokens: 2048 } as NonNullable<ReviewerInput['model']>;
 const db = {
   contextGeneration: () => 0,
   proposals: (_state: unknown, offset: number, limit: number) => rows.slice(offset, offset + limit),
@@ -180,9 +188,7 @@ function transcript(texts = ['accepted:comparison|Comparison']) {
       .map((item) => JSON.stringify(item))
       .join('\n') + '\n',
   );
-  const prepared = prepareReview([{ file, sessionId: 'synthetic' }], []);
-  evidenceBranchId = prepared.evidence[0]!.branchId;
-  current = new CaptureReview(prepared, () => {});
+  current = new CaptureReview(prepareReview([{ file, sessionId: 'synthetic' }], []), () => {});
 }
 function proposal(state: Proposal['state'] = 'pending', id = 'saved'): Proposal {
   return {
@@ -203,48 +209,49 @@ function proposal(state: Proposal['state'] = 'pending', id = 'saved'): Proposal 
 }
 const run = () =>
   reviewPreparedCapture(current, db, { cwd: dir, sessionId: 'synthetic', model }, () => {});
-// This local provider deliberately keeps separate records so final identity grouping is exercised.
-type MatchWork = { state: FoldedFinding; observation: { label: string } };
-function provider(
+const taskCandidate = (
+  id = uuid,
+  judgment: 'same' | 'different' | 'ambiguous' = 'same',
+): CaptureRecord['candidates'][number] => ({ kind: 'task', id, judgment });
+const proposalCandidate = (id = 'saved'): CaptureRecord['candidates'][number] => ({
+  kind: 'proposal',
+  id,
+  revision: 3,
+  judgment: 'same',
+});
+function scenario(answer: CaptureScenario) {
+  runner.mockImplementation((input) => answerCaptureReview(input, answer));
+}
+// Mechanical single-record builder. Every scenario chooses its matches, state and final intent.
+function single(
   options: {
-    exact?: (work: MatchWork) => unknown;
-    fold?: (work: MatchWork) => unknown;
-    materialize?: (work: MatchWork) => unknown;
+    state?: FoldedFinding;
+    kind?: string;
+    candidates?: CaptureRecord['candidates'];
+    submission?: ReturnType<typeof intent> | null;
+    ambiguous?: boolean;
   } = {},
 ) {
-  runner.mockImplementation(async (input) => {
-    const work = JSON.parse(input.instruction.slice(input.instruction.lastIndexOf('\n') + 1)).work;
-    let answer: unknown;
-    if (work.range)
-      answer = {
-        complete: true,
-        observations: [
-          {
-            kind: work.range.text.split(':')[0],
-            label: work.range.text.split('|')[0],
-            start: work.range.offset,
-            end: work.range.end,
-          },
-        ],
-      };
-    else if (work.catalogue)
-      answer = {
-        candidates: work.catalogue
-          .filter((item: { handle?: string }) => item.handle)
-          .map((item: { handle: string }) => item.handle),
-      };
-    else if (input.instruction.includes('All exact candidate fields'))
-      answer = options.exact?.(work) ?? { match: 'same' };
-    else if (work.page) answer = { notes: 'Exact synthetic fields' };
-    else if (work.observation)
-      answer = options.fold?.(work) ?? {
-        ...active,
-        status: work.observation.kind === 'completion' ? 'completed' : 'active',
-      };
-    else if (input.instruction.includes('Materialize'))
-      answer = options.materialize?.(work) ?? disposition();
-    else throw new Error('Unexpected synthetic step');
-    return answerCapture(input, answer);
+  scenario(async ({ evidence, lookup }) => {
+    if (options.candidates?.length) await lookup('remembrancer_tasks', {});
+    const reference = captureReference(evidence[0]!);
+    return {
+      records: [
+        captureRecord(
+          'r',
+          [{ kind: options.kind ?? 'accepted', reference }],
+          [{ branchId: reference.branchId, state: options.state ?? active }],
+          { candidates: options.candidates ?? [], ambiguous: options.ambiguous ?? false },
+        ),
+      ],
+      dispositions: [
+        captureDisposition(
+          ['r'],
+          options.submission === undefined ? intent() : options.submission,
+          'Declared outcome',
+        ),
+      ],
+    };
   });
 }
 beforeEach(() => {
@@ -253,30 +260,29 @@ beforeEach(() => {
   runner.mockReset();
   vi.mocked(readTaskCatalog).mockReset().mockResolvedValue([]);
   transcript();
-  provider();
+  single();
 });
-afterEach(() => rmSync(dir, { force: true, recursive: true }));
+afterEach(() => {
+  vi.restoreAllMocks();
+  rmSync(dir, { force: true, recursive: true });
+});
 
 it.each([null, 'Which day?'])(
-  'uses a validated unmatched accepted add directly, preserving question %j',
+  'preserves the reviewer-finalized unmatched add and question %j',
   async (question) => {
-    const materialize = vi.fn(() => disposition());
-    provider({
-      fold: () => ({ ...active, draft: { change: add, question } }),
-      materialize,
+    single({
+      state: { ...active, draft: { change: add, question } },
+      submission: intent(add, question),
     });
     const submissions = await run();
-    expect(materialize).not.toHaveBeenCalled();
     expect(submissions).toEqual([
       {
-        change: add,
+        ...intent(add, question),
         expected: null,
-        question,
-        explanation: active.summary,
         references: [
           {
             sessionId: 'synthetic',
-            branchId: evidenceBranchId,
+            branchId: 'entry-0',
             entryId: 'entry-0',
             editId: null,
             offset: 0,
@@ -289,156 +295,138 @@ it.each([null, 'Which day?'])(
   },
 );
 it.each(['correction', 'progress', 'reference', 'refusal', 'completion', 'accepted'])(
-  'does not use a question-free active draft to bypass unmatched or ambiguous %s evidence',
+  'cannot bypass unmatched or ambiguous %s evidence with an active draft',
   async (kind) => {
     transcript([`${kind}:comparison|That comparison`]);
-    if (kind === 'accepted') vi.mocked(readTaskCatalog).mockResolvedValue([task]);
-    const materialize = vi.fn((work: MatchWork) => {
-      expect(work).toMatchObject({ ambiguous: true, state: active });
-      return disposition();
-    });
-    provider({ fold: () => active, exact: () => ({ match: 'ambiguous' }), materialize });
+    vi.mocked(readTaskCatalog).mockResolvedValue([task]);
+    single({ kind, candidates: kind === 'accepted' ? [taskCandidate(uuid, 'ambiguous')] : [] });
     await expect(run()).rejects.toThrow('requires a question');
-    expect(materialize).toHaveBeenCalledOnce();
-    expect(() => current.completion([])).toThrow('reconciliation');
   },
 );
 it.each([false, true])('does not pick a task by candidate order (reverse=%s)', async (reverse) => {
   const tasks = [task, { ...task, uuid: otherUuid }];
   vi.mocked(readTaskCatalog).mockResolvedValue(reverse ? tasks.reverse() : tasks);
-  provider({ materialize: () => disposition(add, 'Which comparison?') });
-  const submissions = await run();
-  expect(submissions).toHaveLength(1);
-  expect(submissions[0]).toMatchObject({ change: add, question: 'Which comparison?' });
-  expect(submissions[0]!.id).toBeUndefined();
-  expect(submissions[0]!.expected).toBeNull();
+  single({
+    candidates: (reverse ? [otherUuid, uuid] : [uuid, otherUuid]).map((id) => taskCandidate(id)),
+    submission: intent(add, 'Which comparison?'),
+  });
+  expect(await run()).toMatchObject([
+    { change: add, question: 'Which comparison?', expected: null },
+  ]);
 });
 it.each([false, true])(
   'does not pick a pending row by candidate order (reverse=%s)',
   async (reverse) => {
     rows = [proposal('pending', 'one'), proposal('pending', 'two')];
     if (reverse) rows.reverse();
-    provider({ materialize: () => disposition(add, 'Which pending interpretation?') });
-    const submissions = await run();
-    expect(submissions[0]!.id).toBeUndefined();
-    expect(submissions[0]!.expectedRevision).toBeUndefined();
+    single({
+      candidates: rows.map((row) => proposalCandidate(row.id)),
+      submission: intent(add, 'Which pending interpretation?'),
+    });
+    const [submission] = await run();
+    expect(submission!.id).toBeUndefined();
+    expect(submission!.expectedRevision).toBeUndefined();
     expect(rows.map((row) => row.revision)).toEqual([3, 3]);
   },
 );
-it('never binds a materializer-selected UUID from an ambiguous exact match set', async () => {
+it('never binds a reviewer-selected UUID from an ambiguous match set', async () => {
   vi.mocked(readTaskCatalog).mockResolvedValue([task, { ...task, uuid: otherUuid }]);
-  provider({
-    materialize: () => ({
-      reason: 'Guess',
-      submission: {
-        change: { operation: 'complete', targetUuid: uuid, annotations: [] },
-        question: 'Which task?',
-        explanation: 'Guess',
-      },
-    }),
+  single({
+    candidates: [taskCandidate(), taskCandidate(otherUuid)],
+    submission: intent({ operation: 'complete', targetUuid: uuid, annotations: [] }, 'Which task?'),
   });
   await expect(run()).rejects.toThrow('not uniquely matched');
-  expect(() => current.completion([])).toThrow('reconciliation');
 });
 it.each(['applying', 'uncertain'] as const)(
   'cannot create another pending add for a %s saved add',
   async (state) => {
     rows = [proposal(state)];
+    single({ candidates: [proposalCandidate()] });
     await expect(run()).rejects.toThrow('verify-only');
-    expect(() => current.completion([])).toThrow('reconciliation');
   },
 );
 it.each(['applying', 'uncertain'] as const)(
-  'allows only a live verified no-change outcome for a %s saved application',
+  'allows only live verified no-change for a %s saved application',
   async (state) => {
     rows = [{ ...proposal(state), claim: uuid }];
     vi.mocked(readTaskCatalog).mockResolvedValue([task]);
-    provider({
-      materialize: (work) => {
-        expect(work).toMatchObject({ satisfied: true, verifyOnly: true });
-        return {
-          reason: 'The live task proves both operations already satisfied',
-          submission: null,
-        };
-      },
-    });
+    single({ candidates: [proposalCandidate(), taskCandidate()], submission: null });
     expect(await run()).toEqual([]);
     expect(() => current.completion([])).not.toThrow();
-    expect(rows[0]!.state).toBe(state); // Capture never resolves or replays the saved application.
+    expect(rows[0]!.state).toBe(state);
   },
 );
 it.each(['applying', 'uncertain'] as const)(
-  'does not confuse a brand new change with a verified retry of a %s saved application',
+  'does not confuse new intent with a verified %s retry',
   async (state) => {
     rows = [{ ...proposal(state), claim: uuid }];
     vi.mocked(readTaskCatalog).mockResolvedValue([task]);
-    const next = {
-      ...active,
-      draft: {
-        change: {
-          operation: 'update' as const,
-          targetUuid: uuid,
-          fields: { priority: 'H' as const },
-          annotations: [],
+    single({
+      candidates: [proposalCandidate(), taskCandidate()],
+      state: {
+        ...active,
+        draft: {
+          change: {
+            operation: 'update',
+            targetUuid: uuid,
+            fields: { priority: 'H' },
+            annotations: [],
+          },
+          question: null,
         },
-        question: null,
       },
-    };
-    provider({
-      fold: () => next,
-      materialize: (work) => {
-        expect(work).toMatchObject({ satisfied: false, verifyOnly: true });
-        return { reason: 'Old add succeeded, but the new priority has not', submission: null };
-      },
+      submission: null,
     });
     await expect(run()).rejects.toThrow('verify-only');
-    expect(() => current.completion([])).toThrow('reconciliation');
   },
 );
 it.each(['applying', 'uncertain'] as const)(
-  'does not checkpoint an unresolved %s application as completed null',
+  'does not checkpoint unresolved %s application as completed null',
   async (state) => {
     transcript(['completion:comparison|I sent it.']);
     rows = [proposal(state)];
-    provider({ materialize: () => ({ reason: 'Already done', submission: null }) });
+    single({
+      kind: 'completion',
+      state: { ...active, status: 'completed' },
+      candidates: [proposalCandidate()],
+      submission: null,
+    });
     await expect(run()).rejects.toThrow('verify-only');
     expect(rows[0]!.state).toBe(state);
-    expect(() => current.completion([])).toThrow('reconciliation');
   },
 );
 it.each([false, true])(
   'ambiguous completions cannot silently checkpoint (reverse=%s)',
   async (reverse) => {
-    const tasks = [task, { ...task, uuid: otherUuid }];
     transcript(['completion:comparison|I sent it.']);
+    const tasks = [task, { ...task, uuid: otherUuid }];
     vi.mocked(readTaskCatalog).mockResolvedValue(reverse ? tasks.reverse() : tasks);
-    provider({ materialize: () => ({ reason: 'Already done', submission: null }) });
+    single({
+      kind: 'completion',
+      state: { ...active, status: 'completed' },
+      candidates: tasks.map((item) => taskCandidate(item.uuid)),
+      submission: null,
+    });
     await expect(run()).rejects.toThrow('requires a question');
-    expect(() => current.completion([])).toThrow('reconciliation');
   },
 );
-it('does not let a match reply rewrite completion into active intent', async () => {
+it('does not materialize declared completed evidence as active intent', async () => {
   transcript(['completion:comparison|I sent it.']);
   vi.mocked(readTaskCatalog).mockResolvedValue([task]);
-  provider({
-    exact: () => ({ match: 'same', state: active }),
-    materialize: () => ({
-      reason: 'Update',
-      submission: {
-        change: {
-          operation: 'update',
-          targetUuid: uuid,
-          fields: { due: '20261201' },
-          annotations: [],
-        },
-        question: null,
-        explanation: 'Update',
-      },
+  single({
+    kind: 'completion',
+    state: { ...active, status: 'completed' },
+    candidates: [taskCandidate()],
+    submission: intent({
+      operation: 'update',
+      targetUuid: uuid,
+      fields: { due: '20261201' },
+      annotations: [],
     }),
   });
   await expect(run()).rejects.toThrow('requires a question');
 });
-it('does not revise a pending UUID contradicted by the evidence intent', async () => {
+it('does not revise a pending UUID contradicted by declared evidence intent', async () => {
   rows = [
     {
       ...proposal(),
@@ -451,8 +439,9 @@ it('does not revise a pending UUID contradicted by the evidence intent', async (
       expected: snapshot({ ...task, uuid: otherUuid }),
     },
   ];
-  provider({
-    fold: () => ({
+  single({
+    candidates: [proposalCandidate()],
+    state: {
       ...active,
       draft: {
         change: {
@@ -463,90 +452,89 @@ it('does not revise a pending UUID contradicted by the evidence intent', async (
         },
         question: null,
       },
-    }),
-    materialize: () => disposition(add, 'Which UUID did you mean?'),
+    },
+    submission: intent(add, 'Which UUID did you mean?'),
   });
-  const submissions = await run();
-  expect(submissions[0]!.id).toBeUndefined();
-  expect(submissions[0]!.expected).toBeNull();
+  const [submission] = await run();
+  expect(submission!.id).toBeUndefined();
+  expect(submission!.expected).toBeNull();
 });
-it.each(['references', 'id', 'expectedRevision'])(
-  'rejects materializer-selected %s even when it names valid frozen data',
+it.each(['references', 'id', 'expectedRevision', 'expected'])(
+  'rejects reviewer-selected %s in final intent',
   async (field) => {
-    transcript(['accepted:first|First obligation', 'accepted:second|Second obligation']);
-    rows = [proposal()];
-    provider({
-      exact: () => ({ match: 'different' }),
-      fold: () => ({ ...active, draft: null }),
-      materialize: () => ({
-        reason: 'Forged provenance or identity',
-        submission: {
-          ...disposition().submission,
-          [field]:
-            field === 'references'
-              ? [
-                  {
-                    sessionId: 'synthetic',
-                    branchId: evidenceBranchId,
-                    entryId: 'entry-1',
-                    editId: null,
-                    offset: 0,
-                    quote: 'accepted:second|Second obligation',
-                  },
-                ]
-              : field === 'id'
-                ? rows[0]!.id
-                : rows[0]!.revision,
-        },
-      }),
-    });
-    await expect(run()).rejects.toThrow('cannot select references or proposal identity');
-    expect(() => current.completion([])).toThrow('reconciliation');
+    scenario(({ evidence }) => ({
+      records: [
+        captureRecord(
+          'r',
+          [{ kind: 'accepted', reference: captureReference(evidence[0]!) }],
+          [{ branchId: evidence[0]!.branchId, state: active }],
+        ),
+      ],
+      dispositions: [
+        captureDisposition(
+          ['r'],
+          Object.assign(intent(), {
+            [field]: field === 'references' ? [captureReference(evidence[0]!)] : 'forged',
+          }),
+          'Forbidden binding',
+        ),
+      ],
+    }));
+    await expect(run()).rejects.toThrow('Unknown finalized capture fields');
   },
 );
-it('uses the same immutable evidence state for every candidate', async () => {
+it('retains one declared state for all candidate judgments', async () => {
   vi.mocked(readTaskCatalog).mockResolvedValue([task, { ...task, uuid: otherUuid }]);
-  const seen: unknown[] = [];
-  provider({
-    exact: (work) => {
-      seen.push(work.state);
-      return { match: 'same', state: { ...active, status: 'completed' } };
-    },
-    materialize: () => disposition(add, 'Which task?'),
+  single({
+    candidates: [taskCandidate(), taskCandidate(otherUuid)],
+    submission: intent(add, 'Which task?'),
   });
-  await run();
-  expect(seen).toEqual([active, active]);
+  const result = await run();
+  expect(result[0]!.question).toBe('Which task?');
+  expect(result[0]!.change).toEqual(add);
 });
-it.each([['same'], { match: 'same' }, null])('rejects non-string exact match %j', async (match) => {
+it.each([['same'], { match: 'same' }, null])(
+  'rejects non-string declared match %j',
+  async (judgment) => {
+    vi.mocked(readTaskCatalog).mockResolvedValue([task]);
+    single({ candidates: [{ ...taskCandidate(), judgment: judgment as unknown as string }] });
+    await expect(run()).rejects.toThrow('Invalid capture candidate judgment');
+  },
+);
+it('rejects candidate-supplied lifecycle rewrites instead of changing the declared evidence state', async () => {
   vi.mocked(readTaskCatalog).mockResolvedValue([task]);
-  provider({ exact: () => ({ match }) });
-  await expect(run()).rejects.toThrow('Invalid existing match');
+  single({
+    candidates: [Object.assign(taskCandidate(), { state: { ...active, status: 'completed' } })],
+  });
+  await expect(run()).rejects.toThrow('Unknown finalized capture fields');
 });
 it('accepts explicit untracked completion without manufacturing an ambiguous add', async () => {
   transcript(['completion:comparison|I sent the comparison.']);
-  provider({ materialize: () => ({ reason: 'Untracked completion', submission: null }) });
+  single({ kind: 'completion', state: { ...active, status: 'completed' }, submission: null });
   expect(await run()).toEqual([]);
   expect(() => current.completion([])).not.toThrow();
 });
 it.each(['pending', 'completed'])(
-  'requires observable completion before a tracked null (%s)',
+  'requires observable completion before tracked null (%s)',
   async (status) => {
     transcript(['completion:comparison|I sent it.']);
     vi.mocked(readTaskCatalog).mockResolvedValue([{ ...task, status }]);
-    provider({ materialize: () => ({ reason: 'Completed', submission: null }) });
+    single({
+      kind: 'completion',
+      state: { ...active, status: 'completed' },
+      candidates: [taskCandidate()],
+      submission: null,
+    });
     if (status === 'completed') expect(await run()).toEqual([]);
     else await expect(run()).rejects.toThrow('Tracked capture');
   },
 );
-it('keeps an unanchored reference ambiguous even if folding calls it completed', async () => {
+it('keeps an unanchored reference ambiguous even if declared completed', async () => {
   transcript(['reference:it|That one.']);
-  provider({
-    fold: () => ({ ...active, status: 'completed' }),
-    materialize: () => ({ reason: 'Done', submission: null }),
-  });
+  single({ kind: 'reference', state: { ...active, status: 'completed' }, submission: null });
   await expect(run()).rejects.toThrow('requires a question');
 });
-it('binds a truly matched completed row to its full host snapshot, not a model snapshot', async () => {
+it('binds a matched completed row to its full host snapshot', async () => {
   const completed = {
     ...task,
     status: 'completed',
@@ -554,93 +542,84 @@ it('binds a truly matched completed row to its full host snapshot, not a model s
   };
   vi.mocked(readTaskCatalog).mockResolvedValue([completed]);
   transcript(['completion:comparison|I sent the comparison.']);
-  provider({
-    materialize: () => ({
-      reason: 'Completion',
-      submission: {
-        change: { operation: 'complete', targetUuid: uuid, annotations: [] },
-        expected: { forged: true },
-        question: null,
-        explanation: 'Explicit completion',
-      },
-    }),
+  const change = { operation: 'complete' as const, targetUuid: uuid, annotations: [] };
+  single({
+    kind: 'completion',
+    state: { ...active, status: 'completed' },
+    candidates: [taskCandidate()],
+    submission: intent(change),
   });
-  const submissions = await run();
-  expect(submissions[0]!.expected).toEqual(snapshot(completed));
-  expect(submissions[0]!.change).toEqual({
-    operation: 'complete',
-    targetUuid: uuid,
-    annotations: [],
-  });
+  expect(await run()).toMatchObject([{ change, expected: snapshot(completed) }]);
 });
 it('rejects active null but accepts a host-proved no-op', async () => {
-  provider({
-    fold: () => ({ ...active, draft: null }),
-    materialize: () => ({ reason: 'No change', submission: null }),
-  });
+  single({ state: { ...active, draft: null }, submission: null });
   await expect(run()).rejects.toThrow('Active capture');
-  expect(() => current.completion([])).toThrow('reconciliation');
   transcript();
-  provider({ materialize: () => ({ reason: 'No change', submission: null }) });
   vi.mocked(readTaskCatalog).mockResolvedValue([task]);
+  single({ candidates: [taskCandidate()], submission: null });
   expect(await run()).toEqual([]);
 });
+
 it.each([false, true])(
-  'groups compatible same-target records and keeps unrelated evidence (reverse=%s)',
+  'validates reviewer-grouped compatible changes and unrelated evidence (reverse=%s)',
   async (reverse) => {
-    const evidence = [
+    const texts = [
       'accepted:due|Set due',
       'accepted:project|Set project',
       'accepted:unrelated|Separate task',
     ];
-    transcript(reverse ? [...evidence].reverse() : evidence);
+    transcript(reverse ? [...texts].reverse() : texts);
     vi.mocked(readTaskCatalog).mockResolvedValue([task]);
-    provider({
-      fold: (work) => {
-        const label: string = work.observation.label;
-        const fields = label.includes('due') ? { due: '20261201' } : { project: 'Review' };
-        return {
-          ...active,
-          summary: label,
-          draft: {
-            change: label.includes('unrelated')
-              ? { ...add, fields: { description: 'Separate task' } }
-              : { operation: 'update', targetUuid: uuid, fields, annotations: [] },
-            question: null,
-          },
-        };
-      },
-      exact: (work) => ({ match: work.state.summary.includes('unrelated') ? 'different' : 'same' }),
-      materialize: (work) =>
-        work.state.summary.includes('unrelated')
-          ? {
-              reason: 'Separate',
-              submission: { ...work.state.draft, explanation: 'Separate' },
-            }
+    scenario(async ({ evidence, lookup }) => {
+      await lookup('remembrancer_tasks', {});
+      const records = evidence.map((entry) => {
+        const unrelated = entry.text.includes('unrelated');
+        const change: Proposal['change'] = unrelated
+          ? { ...add, fields: { description: 'Separate task' } }
           : {
-              reason: 'Consolidated',
-              submission: {
-                change: {
-                  operation: 'update',
-                  targetUuid: uuid,
-                  fields: { due: '20261201', project: 'Review' },
-                  annotations: [],
-                },
-                question: null,
-                explanation: 'Both changes',
-              },
-            },
+              operation: 'update',
+              targetUuid: uuid,
+              fields: entry.text.includes('due') ? { due: '20261201' } : { project: 'Review' },
+              annotations: [],
+            };
+        return captureRecord(
+          unrelated ? 'separate' : entry.text.includes('due') ? 'due' : 'project',
+          [{ kind: 'accepted', reference: captureReference(entry) }],
+          [{ branchId: entry.branchId, state: { ...active, draft: { change, question: null } } }],
+          { candidates: [taskCandidate(uuid, unrelated ? 'different' : 'same')] },
+        );
+      });
+      return {
+        records,
+        dispositions: [
+          captureDisposition(
+            ['due', 'project'],
+            intent({
+              operation: 'update',
+              targetUuid: uuid,
+              fields: { due: '20261201', project: 'Review' },
+              annotations: [],
+            }),
+            'Both changes',
+          ),
+          captureDisposition(
+            ['separate'],
+            intent({ ...add, fields: { description: 'Separate task' } }),
+            'Separate',
+          ),
+        ],
+      };
     });
     const submissions = await run();
     expect(submissions).toHaveLength(2);
-    const update = submissions.find((submission) => submission.change.operation === 'update')!;
+    const update = submissions.find((item) => item.change.operation === 'update')!;
     expect(update.expected).toEqual(snapshot(task));
-    expect(new Set(update.references.map((ref) => ref.quote))).toEqual(
-      new Set(evidence.slice(0, 2)),
-    );
-    const separate = submissions.find((submission) => submission.change.operation === 'add')!;
-    expect(separate.references.map((ref) => ref.quote)).toEqual([evidence[2]]);
-    expect(() => current.completion(submissions)).not.toThrow();
+    expect(new Set(update.references.map((ref) => ref.quote))).toEqual(new Set(texts.slice(0, 2)));
+    expect(
+      submissions
+        .find((item) => item.change.operation === 'add')!
+        .references.map((ref) => ref.quote),
+    ).toEqual([texts[2]]);
   },
 );
 it.each(['fields', 'annotations'])(
@@ -648,43 +627,74 @@ it.each(['fields', 'annotations'])(
   async (omitted) => {
     transcript(['accepted:due|Set due', 'accepted:project|Set project']);
     vi.mocked(readTaskCatalog).mockResolvedValue([task]);
-    provider({
-      fold: (work) => ({
-        ...active,
-        draft: {
-          change: {
-            operation: 'update',
-            targetUuid: uuid,
-            fields: work.observation.label.includes('due')
-              ? { due: '20261201' }
-              : { project: 'Review' },
-            annotations: work.observation.label.includes('due') ? ['Keep this note'] : [],
-          },
-          question: null,
-        },
-      }),
-      materialize: () => ({
-        reason: 'Incomplete consolidation',
-        submission: {
-          change: {
-            operation: 'update',
-            targetUuid: uuid,
-            fields:
-              omitted === 'fields' ? { due: '20261201' } : { due: '20261201', project: 'Review' },
-            annotations: omitted === 'annotations' ? [] : ['Keep this note'],
-          },
-          question: null,
-          explanation: 'Incomplete consolidation',
-        },
-      }),
+    scenario(async ({ evidence, lookup }) => {
+      await lookup('remembrancer_tasks', {});
+      return {
+        records: evidence.map((entry, index) =>
+          captureRecord(
+            String(index),
+            [{ kind: 'accepted', reference: captureReference(entry) }],
+            [
+              {
+                branchId: entry.branchId,
+                state: {
+                  ...active,
+                  draft: {
+                    change: {
+                      operation: 'update',
+                      targetUuid: uuid,
+                      fields: index ? { project: 'Review' } : { due: '20261201' },
+                      annotations: index ? [] : ['Keep this note'],
+                    },
+                    question: null,
+                  },
+                },
+              },
+            ],
+            { candidates: [taskCandidate()] },
+          ),
+        ),
+        dispositions: [
+          captureDisposition(
+            ['0', '1'],
+            intent({
+              operation: 'update',
+              targetUuid: uuid,
+              fields:
+                omitted === 'fields' ? { due: '20261201' } : { due: '20261201', project: 'Review' },
+              annotations: omitted === 'annotations' ? [] : ['Keep this note'],
+            }),
+            'Incomplete consolidation',
+          ),
+        ],
+      };
     });
     await expect(run()).rejects.toThrow(`Consolidation dropped requested ${omitted}`);
-    expect(() => current.completion([])).toThrow('reconciliation');
   },
 );
-it('groups two confirmations of a pending row into one revision with both references', async () => {
+it('groups two pending confirmations into one revision, preserving its question and both sources', async () => {
   transcript(['accepted:first|Comparison', 'accepted:second|Same comparison']);
   rows = [{ ...proposal(), question: 'Keep the edited plan?' }];
+  scenario(async ({ evidence, lookup }) => {
+    await lookup('remembrancer_proposals', {});
+    return {
+      records: evidence.map((entry, index) =>
+        captureRecord(
+          String(index),
+          [{ kind: 'accepted', reference: captureReference(entry) }],
+          [{ branchId: entry.branchId, state: active }],
+          { candidates: [proposalCandidate()] },
+        ),
+      ),
+      dispositions: [
+        captureDisposition(
+          ['0', '1'],
+          intent(add, 'Keep the edited plan?'),
+          'Same pending obligation',
+        ),
+      ],
+    };
+  });
   const submissions = await run();
   expect(submissions).toHaveLength(1);
   expect(submissions[0]).toMatchObject({
@@ -692,26 +702,20 @@ it('groups two confirmations of a pending row into one revision with both refere
     expectedRevision: 3,
     question: 'Keep the edited plan?',
   });
-  expect(new Set(submissions[0]!.references.map((ref) => ref.entryId))).toEqual(
-    new Set(['entry-0', 'entry-1']),
-  );
-  expect(rows[0]!.state).toBe('pending');
+  expect(submissions[0]!.references.map((ref) => ref.entryId)).toEqual(['entry-0', 'entry-1']);
   expect(rows[0]!.revision).toBe(3);
 });
 it.each(['applied', 'already_satisfied'] as const)(
-  'leaves a matched %s add unresolved when its verified UUID is absent from live tasks',
+  'leaves matched %s add unresolved without its live verified UUID',
   async (state) => {
     rows = [{ ...proposal(state), result: { state, verified: snapshot(task), error: null } }];
     expect(captureIsSatisfied(active, resolveCaptureMatches([], rows))).toBe(false);
-    const materialize = vi.fn(() => ({ reason: 'Historical result', submission: null }));
-    provider({ materialize });
+    single({ candidates: [proposalCandidate()], submission: null });
     await expect(run()).rejects.toThrow('no live task; capture unresolved');
-    expect(materialize).not.toHaveBeenCalled();
-    expect(() => current.completion([])).toThrow('reconciliation');
   },
 );
 it.each([false, true])(
-  'uses the live renamed task behind a matched applied add as proof (satisfied=%s)',
+  'uses the live renamed task behind a declared applied match (satisfied=%s)',
   async (satisfied) => {
     const renamed = {
       ...task,
@@ -725,18 +729,9 @@ it.each([false, true])(
       },
     ];
     vi.mocked(readTaskCatalog).mockResolvedValue([renamed]);
-    const materialize = vi.fn((work: MatchWork) => {
-      expect(work).toMatchObject({ satisfied, targetUuid: uuid, targetStatus: 'pending' });
-      return { reason: 'Only live data can prove this intent', submission: null };
-    });
-    provider({
-      // Simulate discovery/matching recognizing the saved evidence, not the renamed task.
-      exact: (work) => ({
-        match: (work as MatchWork & { handle: string }).handle.startsWith('proposal:')
-          ? 'same'
-          : 'different',
-      }),
-      fold: () => ({
+    single({
+      candidates: [proposalCandidate(), taskCandidate(uuid, 'different')],
+      state: {
         ...active,
         draft: {
           change: {
@@ -747,244 +742,356 @@ it.each([false, true])(
           },
           question: null,
         },
-      }),
-      materialize,
+      },
+      submission: null,
     });
-    if (satisfied) {
-      expect(await run()).toEqual([]);
-      expect(() => current.completion([])).not.toThrow();
-    } else {
-      await expect(run()).rejects.toThrow('Tracked capture requires a proposal');
-      expect(() => current.completion([])).toThrow('reconciliation');
-    }
-    expect(materialize).toHaveBeenCalledOnce();
+    if (satisfied) expect(await run()).toEqual([]);
+    else await expect(run()).rejects.toThrow('Tracked capture requires a proposal');
     expect(readTaskCatalog).toHaveBeenCalledOnce();
   },
 );
 it.each(['third source', 'truncated quote', 'unrelated'] as const)(
-  'pages compact saved source cues before excluding a renamed draft (%s)',
-  async (scenario) => {
+  'lets the reviewer inspect exact saved source clues before declaring a match (%s)',
+  async (which) => {
     const background = 'Routine project background. '.repeat(80);
     const thirdQuote =
-      scenario === 'third source'
+      which === 'third source'
         ? `Comparison promised for Maya. ${background}`
-        : scenario === 'truncated quote'
-          ? `The original commitment follows this background. ${background} Comparison promised for Maya.`
-          : `Maintain the payroll export for Finance. ${background}`;
+        : which === 'truncated quote'
+          ? `${background} Comparison promised for Maya.`
+          : `Maintain payroll. ${background}`;
     rows = [
       {
         ...proposal(),
-        change: { ...add, fields: { description: 'Original launch checklist' } },
         draft: {
           change: { ...add, fields: { description: 'Assemble launch briefing' } },
           expected: null,
           question: null,
         },
-        explanation: background.repeat(2),
         sources: Array.from({ length: 5 }, (_, index) => ({
           sessionId: 'saved-session',
           branchId: 'saved-branch',
           entryId: `saved-${index}`,
           editId: null,
-          file: join(dir, 'never-read.jsonl'),
+          file: '/never-read.jsonl',
           role: 'user',
-          timestamp: '2026-11-01T00:00:00Z',
-          locator: `saved-session:saved-${index}`,
+          timestamp: '',
+          locator: `saved-${index}`,
           offset: 0,
-          quote: index === 2 ? thirdQuote : `Reviewed the launch checklist. ${background}`,
+          quote: index === 2 ? thirdQuote : background,
         })),
       },
     ];
-    const offsets: number[] = [];
-    let exactCalls = 0;
-    runner.mockImplementation(async (input) => {
-      const work = JSON.parse(
-        input.instruction.slice(input.instruction.lastIndexOf('\n') + 1),
-      ).work;
-      if (work.catalogue?.[0]?.handle) {
-        const candidates: string[] = [];
-        for (const item of work.catalogue) {
-          const identity = item.identity;
-          expect(identity.sources).toHaveProperty('valueHandle');
-          expect(identity.sourceClues.length).toBeLessThanOrEqual(2);
-          expect(identity.sourceCount).toBe(5);
-          offsets.push(identity.sourceClueOffset);
-          for (const source of identity.sourceClues) {
-            const relevant =
-              source.quote.text.includes('Comparison promised') ||
-              source.quote.text.includes('The original commitment');
-            if (relevant) {
-              // A short quote prefix cannot exclude a potentially renamed promise.
-              expect(source.quote.truncated).toBe(true);
-              if (scenario === 'truncated quote') {
-                expect(source.quote.text).not.toContain('Comparison');
-                expect(input.instruction).toContain('never reject it from that prefix alone');
-              }
-              candidates.push(item.handle);
-            }
-          }
-        }
-        return answerCapture(input, { candidates });
+    scenario(async ({ evidence, lookup }) => {
+      await lookup('remembrancer_proposals', {});
+      let request: object | null = { action: 'evidence', id: 'saved', revision: 3 };
+      const quotes = new Map<number, string>();
+      while (request) {
+        const page: { entries: { index: number; quote: string }[]; next: object | null } =
+          await lookup('remembrancer_proposals', request);
+        for (const entry of page.entries)
+          quotes.set(entry.index, (quotes.get(entry.index) ?? '') + entry.quote);
+        request = page.next;
       }
-      if (input.instruction.includes('All exact candidate fields')) {
-        exactCalls++;
-        expect(work.candidate.sources[2].quote).toBe(thirdQuote);
-        return answerCapture(input, { match: 'same' });
-      }
-      return answerCapture(input);
+      expect(quotes.get(2)).toBe(thirdQuote);
+      const same = quotes.get(2)!.includes('Comparison promised');
+      const change = same ? rows[0]!.draft!.change : add;
+      return {
+        records: [
+          captureRecord(
+            'r',
+            [{ kind: 'accepted', reference: captureReference(evidence[0]!) }],
+            [{ branchId: evidence[0]!.branchId, state: active }],
+            { candidates: [{ ...proposalCandidate(), judgment: same ? 'same' : 'different' }] },
+          ),
+        ],
+        dispositions: [
+          captureDisposition(['r'], intent(change), 'Reviewer inspected saved quotes'),
+        ],
+      };
     });
     const submissions = await run();
     expect(submissions).toHaveLength(1);
-    if (scenario === 'unrelated') {
-      expect(offsets).toEqual([0, 2, 4]);
-      expect(exactCalls).toBe(0); // Long supporting quotes/explanation are not all-pairs detail reads.
-      expect(submissions[0]!.id).toBeUndefined();
-    } else {
-      expect(offsets).toEqual([0, 2]);
-      expect(exactCalls).toBe(1);
-      expect(submissions[0]).toMatchObject({ id: 'saved', expectedRevision: 3 });
-    }
-    expect(() => current.completion(submissions)).not.toThrow();
+    expect(submissions[0]!.id).toBe(which === 'unrelated' ? undefined : 'saved');
   },
 );
-it('matches an applied add by its verified UUID after its task was renamed', async () => {
+it('matches an applied add by verified UUID after a task rename', async () => {
   const renamed = { ...task, description: 'Renamed comparison' };
   rows = [
     { ...proposal('applied'), result: { state: 'applied', verified: snapshot(task), error: null } },
   ];
   vi.mocked(readTaskCatalog).mockResolvedValue([renamed]);
-  let verifiedRead = false;
-  provider({
-    fold: () => ({
-      ...active,
-      draft: {
-        change: {
-          operation: 'update',
-          targetUuid: uuid,
-          fields: { project: 'Review' },
-          annotations: [],
-        },
-        question: null,
-      },
-    }),
-    exact: (work) => {
-      const candidate = (work as MatchWork & { candidate: { verified?: { uuid: string } } })
-        .candidate;
-      if (candidate.verified) verifiedRead = candidate.verified.uuid === uuid;
-      return { match: 'same' };
-    },
-    materialize: (work) => ({
-      reason: 'New correction',
-      submission: { ...work.state.draft, explanation: 'New evidence' },
-    }),
+  const change = {
+    operation: 'update' as const,
+    targetUuid: uuid,
+    fields: { project: 'Review' },
+    annotations: [],
+  };
+  single({
+    candidates: [proposalCandidate()],
+    state: { ...active, draft: { change, question: null } },
+    submission: intent(change),
   });
-  const submissions = await run();
-  expect(verifiedRead).toBe(true);
-  expect(submissions[0]!.expected).toEqual(snapshot(renamed));
-  expect(submissions[0]!.id).toBeUndefined();
+  const [submission] = await run();
+  expect(submission!.expected).toEqual(snapshot(renamed));
+  expect(submission!.id).toBeUndefined();
   expect(rows[0]!.state).toBe('applied');
 });
 it.each([false, true])(
   'does not persist a winner for conflicting same-target records (reverse=%s)',
   async (reverse) => {
-    const evidence = ['accepted:tuesday|Tuesday', 'accepted:thursday|Thursday'];
-    transcript(reverse ? evidence.reverse() : evidence);
+    transcript(
+      reverse
+        ? ['accepted:thursday|Thursday', 'accepted:tuesday|Tuesday']
+        : ['accepted:tuesday|Tuesday', 'accepted:thursday|Thursday'],
+    );
     vi.mocked(readTaskCatalog).mockResolvedValue([task]);
-    provider({
-      fold: (work) => ({
-        ...active,
-        draft: {
-          change: {
-            operation: 'update',
-            targetUuid: uuid,
-            fields: { due: work.observation.label.includes('tuesday') ? '20261201' : '20261203' },
-            annotations: [],
-          },
-          question: null,
-        },
-      }),
-      materialize: () => ({
-        reason: 'Guess',
-        submission: {
-          change: {
-            operation: 'update',
-            targetUuid: uuid,
-            fields: { due: '20261201' },
-            annotations: [],
-          },
-          question: null,
-          explanation: 'Guess',
-        },
-      }),
+    scenario(async ({ evidence, lookup }) => {
+      await lookup('remembrancer_tasks', {});
+      return {
+        records: evidence.map((entry, index) =>
+          captureRecord(
+            String(index),
+            [{ kind: 'accepted', reference: captureReference(entry) }],
+            [
+              {
+                branchId: entry.branchId,
+                state: {
+                  ...active,
+                  draft: {
+                    change: {
+                      operation: 'update',
+                      targetUuid: uuid,
+                      fields: { due: entry.text.includes('tuesday') ? '20261201' : '20261203' },
+                      annotations: [],
+                    },
+                    question: null,
+                  },
+                },
+              },
+            ],
+            { candidates: [taskCandidate()] },
+          ),
+        ),
+        dispositions: [
+          captureDisposition(
+            ['0', '1'],
+            intent({
+              operation: 'update',
+              targetUuid: uuid,
+              fields: { due: '20261201' },
+              annotations: [],
+            }),
+            'Guess',
+          ),
+        ],
+      };
     });
     await expect(run()).rejects.toThrow('requires a question');
-    expect(() => current.completion([])).toThrow('reconciliation');
   },
 );
-it('keeps unrelated proposals when conflicting edits can use a safe question', async () => {
+it('keeps unrelated proposals when conflicting edits use a question on the known target', async () => {
   transcript([
     'accepted:tuesday|Tuesday',
     'accepted:thursday|Thursday',
     'accepted:unrelated|Separate',
   ]);
   vi.mocked(readTaskCatalog).mockResolvedValue([task]);
-  provider({
-    fold: (work) => ({
-      ...active,
-      summary: work.observation.label,
-      draft: {
-        change: work.observation.label.includes('unrelated')
-          ? { ...add, fields: { description: 'Separate' } }
-          : {
-              operation: 'update',
-              targetUuid: uuid,
-              fields: { due: work.observation.label.includes('tuesday') ? '20261201' : '20261203' },
-              annotations: [],
+  scenario(async ({ evidence, lookup }) => {
+    await lookup('remembrancer_tasks', {});
+    return {
+      records: evidence.map((entry, index) =>
+        captureRecord(
+          String(index),
+          [{ kind: 'accepted', reference: captureReference(entry) }],
+          [
+            {
+              branchId: entry.branchId,
+              state: {
+                ...active,
+                draft: {
+                  change:
+                    index === 2
+                      ? add
+                      : {
+                          operation: 'update',
+                          targetUuid: uuid,
+                          fields: { due: index ? '20261203' : '20261201' },
+                          annotations: [],
+                        },
+                  question: null,
+                },
+              },
             },
-        question: null,
-      },
-    }),
-    exact: (work) => ({ match: work.state.summary.includes('unrelated') ? 'different' : 'same' }),
-    materialize: (work) => ({
-      reason: 'Preserve intent',
-      submission: {
-        ...work.state.draft,
-        question: work.state.summary.includes('unrelated') ? null : 'Tuesday or Thursday?',
-        explanation: 'Preserve intent',
-      },
-    }),
+          ],
+          { candidates: index === 2 ? [] : [taskCandidate()] },
+        ),
+      ),
+      dispositions: [
+        captureDisposition(
+          ['0', '1'],
+          intent(
+            { operation: 'update', targetUuid: uuid, fields: { due: '20261201' }, annotations: [] },
+            'Tuesday or Thursday?',
+          ),
+          'Conflicting dates',
+        ),
+        captureDisposition(['2'], intent(), 'Separate'),
+      ],
+    };
   });
   const submissions = await run();
   expect(submissions).toHaveLength(2);
-  const question = submissions.find((submission) => submission.question)!;
-  expect(question.change.operation).toBe('update');
-  expect(question.expected?.uuid).toBe(uuid);
-  expect(question.references).toHaveLength(2);
-  expect(
-    submissions.find((submission) => !submission.question)!.references.map((ref) => ref.entryId),
-  ).toEqual(['entry-2']);
+  expect(submissions[0]).toMatchObject({
+    change: { operation: 'update', targetUuid: uuid },
+    expected: { uuid },
+    question: 'Tuesday or Thursday?',
+  });
+  expect(submissions[0]!.references).toHaveLength(2);
+  expect(submissions[1]!.references.map((ref) => ref.entryId)).toEqual(['entry-2']);
 });
-it('rejects a valid existing ID that was not on the discovery page', async () => {
+it('accepts a retained task selected outside a returned summary page, not an invented handle', async () => {
   const tasks = Array.from({ length: 100 }, (_, index) => ({
     ...task,
     uuid: `12345678-1234-1234-1234-${String(index).padStart(12, '0')}`,
-    description: `Task ${index} ` + 'identity '.repeat(45),
+    description: `Task ${index}`,
   }));
   vi.mocked(readTaskCatalog).mockResolvedValue(tasks);
-  runner.mockImplementation(async (input) => {
-    const work = JSON.parse(input.instruction.slice(input.instruction.lastIndexOf('\n') + 1)).work;
-    if (work.catalogue?.[0]?.handle) {
-      expect(work.catalogue.some((item: { handle: string }) => item.handle === 'task:99')).toBe(
-        false,
-      );
-      return answerCapture(input, { candidates: ['task:99'] });
-    }
-    if (work.range)
-      return answerCapture(input, {
-        complete: true,
-        observations: [{ kind: 'accepted', label: 'Comparison', start: 0, end: work.range.end }],
-      });
-    return answerCapture(input, active);
+  const change = {
+    operation: 'update' as const,
+    targetUuid: tasks[99]!.uuid,
+    fields: { project: 'Review' },
+    annotations: [],
+  };
+  scenario(async ({ evidence, lookup }) => {
+    const list = await lookup<{ tasks: { uuid: string }[] }>('remembrancer_tasks', {});
+    expect(list.tasks.some((item) => item.uuid === tasks[99]!.uuid)).toBe(false);
+    const detail = await lookup<{ json: string }>('remembrancer_tasks', { uuid: tasks[99]!.uuid });
+    expect(JSON.parse(detail.json)).toEqual(tasks[99]);
+    return {
+      records: [
+        captureRecord(
+          'r',
+          [{ kind: 'accepted', reference: captureReference(evidence[0]!) }],
+          [{ branchId: evidence[0]!.branchId, state: active }],
+          { candidates: [taskCandidate(tasks[99]!.uuid)] },
+        ),
+      ],
+      dispositions: [captureDisposition(['r'], intent(change), 'Explicit exact lookup')],
+    };
   });
-  await expect(run()).rejects.toThrow('Invalid existing candidate handle');
+  expect(await run()).toMatchObject([{ change, expected: snapshot(tasks[99]!) }]);
 });
+it.each([null, 'Reopen this obligation?'])(
+  'requires a reviewer question to reopen dismissed intent (%j)',
+  async (question) => {
+    rows = [proposal('dismissed')];
+    single({ candidates: [proposalCandidate()], submission: intent(add, question) });
+    if (question) expect(await run()).toMatchObject([{ change: add, question }]);
+    else
+      await expect(run()).rejects.toThrow('Reopening a dismissed obligation requires a question');
+  },
+);
+it('does not treat a dismissed row as verified satisfaction', async () => {
+  rows = [proposal('dismissed')];
+  single({ candidates: [proposalCandidate()], submission: null });
+  await expect(run()).rejects.toThrow(/Tracked capture|Dismissed proposal/);
+});
+it('cannot discard a saved pending proposal with a null disposition', async () => {
+  rows = [proposal()];
+  single({ candidates: [proposalCandidate()], submission: null });
+  await expect(run()).rejects.toThrow('Tracked capture requires a proposal');
+});
+it.each(['operation', 'field', 'uuid'])(
+  'rejects unauthorized proposal %s syntax',
+  async (invalid) => {
+    const submission = { ...intent(), change: structuredClone(add) };
+    if (invalid === 'operation')
+      Object.assign(submission.change, { operation: 'delete', targetUuid: uuid });
+    else if (invalid === 'field') Object.assign(submission.change.fields, { status: 'deleted' });
+    else
+      Object.assign(submission, {
+        change: { operation: 'complete', targetUuid: '12345678', annotations: [] },
+      });
+    single({ submission });
+    await expect(run()).rejects.toThrow(
+      invalid === 'uuid'
+        ? 'Expected full task UUID'
+        : invalid === 'operation'
+          ? 'Invalid operation'
+          : 'Invalid proposal fields',
+    );
+  },
+);
+it.each(['unknown task', 'stale proposal revision'])('rejects a declared %s', async (which) => {
+  rows = [proposal()];
+  single({
+    candidates:
+      which === 'unknown task' ? [taskCandidate()] : [{ ...proposalCandidate(), revision: 2 }],
+  });
+  await expect(run()).rejects.toThrow(
+    which === 'unknown task'
+      ? 'Unknown retained task candidate'
+      : 'Missing or stale retained proposal candidate',
+  );
+});
+it.each(['missing branch', 'repeated branch', 'wrong branch'])(
+  'requires exactly one state per observed branch (%s)',
+  async (which) => {
+    scenario(({ evidence }) => {
+      const reference = captureReference(evidence[0]!);
+      const branch = { branchId: reference.branchId, state: active };
+      return {
+        records: [
+          captureRecord(
+            'r',
+            [{ kind: 'accepted', reference }],
+            which === 'missing branch'
+              ? []
+              : which === 'repeated branch'
+                ? [branch, branch]
+                : [{ ...branch, branchId: 'invented' }],
+          ),
+        ],
+        dispositions: [captureDisposition(['r'], intent(), 'Invalid branch declaration')],
+      };
+    });
+    await expect(run()).rejects.toThrow(
+      /branch-specific capture state|exactly one observed branch/,
+    );
+  },
+);
+it('rejects separate dispositions for records declaring the same definite target', async () => {
+  transcript(['accepted:first|Comparison', 'accepted:second|Same comparison']);
+  vi.mocked(readTaskCatalog).mockResolvedValue([task]);
+  scenario(async ({ evidence, lookup }) => {
+    await lookup('remembrancer_tasks', {});
+    return {
+      records: evidence.map((entry, index) =>
+        captureRecord(
+          String(index),
+          [{ kind: 'accepted', reference: captureReference(entry) }],
+          [{ branchId: entry.branchId, state: active }],
+          { candidates: [taskCandidate()] },
+        ),
+      ),
+      dispositions: [
+        captureDisposition(['0'], null, 'Already satisfied'),
+        captureDisposition(['1'], null, 'Already satisfied'),
+      ],
+    };
+  });
+  await expect(run()).rejects.toThrow('Declared disposition does not match definite identities');
+});
+it.each(['pending', 'dismissed', 'applying', 'uncertain'] as const)(
+  'accepts no reported commitments without claiming exhaustive discovery or matching (%s saved)',
+  async (savedState) => {
+    rows = [proposal(savedState)];
+    const list = vi.spyOn(db, 'proposals');
+    scenario(() => ({ records: [], dispositions: [] }));
+    expect(await run()).toEqual([]);
+    expect(readTaskCatalog).not.toHaveBeenCalled();
+    expect(list).not.toHaveBeenCalled();
+    expect(() => current.completion([])).not.toThrow();
+  },
+);

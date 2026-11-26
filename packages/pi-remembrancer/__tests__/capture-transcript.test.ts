@@ -6,17 +6,27 @@ import { CaptureReview } from '../extensions/remembrancer/capture-review.js';
 import { prepareReview } from '../extensions/remembrancer/evidence.js';
 import { reviewPreparedCapture } from '../extensions/remembrancer/capture.js';
 import type { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
-import { runReviewerStep, type ReviewerStepInput } from '../extensions/remembrancer/reviewer.js';
+import { runReviewer, type ReviewerInput } from '../extensions/remembrancer/reviewer.js';
 import { readTaskCatalog } from '../extensions/remembrancer/taskwarrior.js';
-import { answerCapture } from './fixtures/capture-steps.js';
+import {
+  answerCaptureReview,
+  captureDisposition,
+  captureRecord,
+  captureReference,
+  reviewerPaths,
+  type CaptureScenario,
+} from './fixtures/capture-reviewer.js';
 
-vi.mock('../extensions/remembrancer/reviewer.js', () => ({ runReviewerStep: vi.fn() }));
+vi.mock('../extensions/remembrancer/reviewer.js', async (original) => ({
+  ...(await original<typeof import('../extensions/remembrancer/reviewer.js')>()),
+  runReviewer: vi.fn(),
+}));
 vi.mock('../extensions/remembrancer/taskwarrior.js', async (original) => ({
   ...(await original<typeof import('../extensions/remembrancer/taskwarrior.js')>()),
   readTaskCatalog: vi.fn(),
 }));
-const model = { contextWindow: 32768, maxTokens: 2048 } as NonNullable<ReviewerStepInput['model']>;
-const runner = vi.mocked(runReviewerStep);
+const model = { contextWindow: 32768, maxTokens: 2048 } as NonNullable<ReviewerInput['model']>;
+const runner = vi.mocked(runReviewer);
 let dir: string;
 let current: CaptureReview;
 const msg = (id: string, parentId: string | null, text: string, role = 'user') => ({
@@ -48,26 +58,22 @@ const db = {
 } as unknown as CheckpointStore;
 const run = () =>
   reviewPreparedCapture(current, db, { cwd: dir, sessionId: 'session', model }, () => {});
-const payload = (input: ReviewerStepInput) =>
-  JSON.parse(input.instruction.slice(input.instruction.lastIndexOf('\n') + 1));
-async function inspect(input: ReviewerStepInput, request: object) {
-  const tool = input.tools[0]!;
-  await tool.execute(
-    'inspect',
-    { result: { inspect: request, memory: 'Read exact supporting context' } },
-    undefined,
-    undefined,
-    {} as Parameters<typeof tool.execute>[4],
-  );
-  return { status: 'handoff', message: {} } as Awaited<ReturnType<typeof runReviewerStep>>;
-}
-const extracted = (observations: object[]) => ({ complete: true, observations });
-const observation = (kind: string, label: string, start: number, end: number) => ({
-  kind,
-  label,
-  start,
-  end,
+const intent = (description: string, question: string | null = null) => ({
+  change: { operation: 'add' as const, fields: { description }, annotations: [] },
+  question,
+  explanation: 'Reviewer interpretation',
 });
+const state = (branchId: string, description: string) => ({
+  branchId,
+  state: {
+    summary: description,
+    status: 'active',
+    draft: { change: intent(description).change, question: null },
+  },
+});
+function scenario(answer: CaptureScenario) {
+  runner.mockImplementation((input) => answerCaptureReview(input, answer));
+}
 function tuples(submissions: Awaited<ReturnType<typeof run>>) {
   return submissions.flatMap((item) =>
     item.references.map(({ sessionId, branchId, entryId, editId, offset, quote }) => [
@@ -82,7 +88,7 @@ function tuples(submissions: Awaited<ReturnType<typeof run>>) {
 }
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'capture-transcript-'));
-  runner.mockReset().mockImplementation((input) => answerCapture(input));
+  runner.mockReset();
   vi.mocked(readTaskCatalog).mockReset().mockResolvedValue([]);
 });
 afterEach(() => {
@@ -90,44 +96,36 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-it('reads distant same-message text and saves an exact citation spanning a primary cut', async () => {
-  const quote = `I will send Alice ${'the report '.repeat(20)}Monday.`;
+it('reassembles distant same-message text and saves an exact citation spanning an evidence cut', async () => {
+  const quote = `I will send Alice ${'the report 😀 '.repeat(6000)}Monday.`;
   const text = 'x'.repeat(25) + quote + ' '.repeat(100);
   prepare([msg('intent', null, text)]);
-  const next = current.nextExtraction.bind(current);
-  vi.spyOn(current, 'nextExtraction').mockImplementation((units) =>
-    next(Math.min(units ?? 32, 32)),
-  );
-  let sawExact = false;
-  runner.mockImplementation(async (input) => {
-    const { work, detail } = payload(input);
-    if (work.range) {
-      if (work.range.offset < 25 + quote.length && work.range.end >= 25 + quote.length) {
-        expect(work.range.offset - 25).toBeGreaterThan(80);
-        if (!detail)
-          return inspect(input, { kind: 'context', rangeId: work.range.id, messageOffset: 25 });
-        expect(detail.message).toBe(true);
-        expect(detail.groups[0].entries[0]).toMatchObject({
-          offset: 25,
-          text: expect.stringContaining(quote),
-        });
-        sawExact = true;
-        return answerCapture(
-          input,
-          extracted([observation('accepted', 'Alice report', 25, 25 + quote.length)]),
-        );
-      }
-      return answerCapture(input, extracted([]));
-    }
-    return answerCapture(input);
+  scenario(({ evidence }) => {
+    expect(evidence.length).toBeGreaterThan(1);
+    expect(evidence.map((entry) => entry.text).join('')).toBe(text);
+    expect(evidence[1]!.offset).toBeGreaterThan(25);
+    const reference = { ...captureReference(evidence[0]!), offset: 25, quote };
+    return {
+      records: [
+        captureRecord(
+          'report',
+          [{ kind: 'accepted', reference }],
+          [state('intent', 'Send Alice the report Monday')],
+        ),
+      ],
+      dispositions: [
+        captureDisposition(
+          ['report'],
+          intent('Send Alice the report Monday'),
+          'One commitment across fragments',
+        ),
+      ],
+    };
   });
   const submissions = await run();
-  expect(sawExact).toBe(true);
   expect(tuples(submissions)).toEqual([['session', 'intent', 'intent', null, 25, quote]]);
   expect(() => current.completion(submissions)).not.toThrow();
-  expect(current.nextExtraction()).toBeNull();
 });
-
 it.each([false, true])(
   'assigns a shared correction separately on each branch (identical intent text: %s)',
   async (identical) => {
@@ -138,70 +136,46 @@ it.each([false, true])(
       msg('a', 'shared', a),
       msg('b', 'shared', b),
     ]);
-    let sharedExtractions = 0;
-    runner.mockImplementation(async (input) => {
-      const { work } = payload(input);
-      if (work.range) {
-        if (work.range.occurrences[0].entryId === 'shared') {
-          sharedExtractions++;
-          return answerCapture(
-            input,
-            extracted([observation('correction', 'Monday', work.range.offset, work.range.end)]),
-          );
-        }
-        return answerCapture(
-          input,
-          extracted([
-            observation(
-              'accepted',
-              work.range.occurrences[0].entryId,
-              work.range.offset,
-              work.range.end,
-            ),
-          ]),
-        );
-      }
-      if (work.catalogue)
-        return answerCapture(input, {
-          candidates: work.catalogue.map((item: { id: string }) => item.id),
-        });
-      if (work.candidate)
-        return answerCapture(input, {
-          match:
-            work.observation.range.occurrences[0].branchId ===
-            work.candidate.first.range.occurrences[0].branchId
-              ? 'same'
-              : 'different',
-        });
-      if (work.observation) {
-        const branchId = work.branchId;
-        expect(work.observation.range.occurrences[0].branchId).toBe(branchId);
-        return answerCapture(input, {
-          summary: branchId,
-          status: 'active',
-          draft: {
-            change: {
-              operation: 'add',
-              fields: {
-                description: `Send ${branchId === 'a' ? 'Alice' : 'Bob'} the report Monday`,
+    scenario(({ evidence }) => {
+      expect(evidence.map((entry) => [entry.branchId, entry.entryId])).toEqual([
+        ['a', 'shared'],
+        ['a', 'a'],
+        ['b', 'shared'],
+        ['b', 'b'],
+      ]);
+      return {
+        records: ['a', 'b'].map((branchId) =>
+          captureRecord(
+            branchId,
+            [
+              {
+                kind: 'accepted',
+                reference: captureReference(evidence.find((entry) => entry.entryId === branchId)!),
               },
-              annotations: [],
-            },
-            expected: null,
-            question: null,
-          },
-        });
-      }
-      return answerCapture(input);
+              {
+                kind: 'correction',
+                reference: captureReference(
+                  evidence.find(
+                    (entry) => entry.branchId === branchId && entry.entryId === 'shared',
+                  )!,
+                ),
+              },
+            ],
+            [state(branchId, `Send ${branchId === 'a' ? 'Alice' : 'Bob'} the report Monday`)],
+          ),
+        ),
+        dispositions: ['a', 'b'].map((branchId) =>
+          captureDisposition(
+            [branchId],
+            intent(`Send ${branchId === 'a' ? 'Alice' : 'Bob'} the report Monday`),
+            'Branch-specific interpretation',
+          ),
+        ),
+      };
     });
     const submissions = await run();
-    expect(sharedExtractions).toBe(1);
     expect(submissions.map((item) => item.change)).toEqual(
-      ['Alice', 'Bob'].map((name) => ({
-        operation: 'add',
-        fields: { description: `Send ${name} the report Monday` },
-        annotations: [],
-      })),
+      ['Alice', 'Bob'].map((name) => intent(`Send ${name} the report Monday`).change),
     );
     expect(tuples(submissions)).toEqual([
       ['session', 'a', 'a', null, 0, a],
@@ -211,260 +185,349 @@ it.each([false, true])(
     ]);
   },
 );
-
-it('folds equivalent shared history once while preserving both occurrence references', async () => {
+it('lets the reviewer consolidate equivalent shared history while preserving both branch references', async () => {
   prepare([
     msg('shared', null, 'I will send the comparison.'),
     msg('a', 'shared', 'Context only', 'assistant'),
     msg('b', 'shared', 'Context only', 'assistant'),
   ]);
-  const submissions = await run();
-  const folds = runner.mock.calls.filter(([input]) =>
-    input.instruction.includes('Fold this exact observation'),
-  );
-  expect(folds).toHaveLength(1);
-  expect(tuples(submissions)).toEqual([
+  scenario(({ evidence }) => {
+    const shared = evidence.filter((entry) => entry.entryId === 'shared');
+    return {
+      records: [
+        captureRecord(
+          'comparison',
+          shared.map((entry) => ({ kind: 'accepted', reference: captureReference(entry) })),
+          ['a', 'b'].map((branchId) => state(branchId, 'Comparison')),
+        ),
+      ],
+      dispositions: [
+        captureDisposition(['comparison'], intent('Comparison'), 'Shared accepted intent'),
+      ],
+    };
+  });
+  expect(tuples(await run())).toEqual([
     ['session', 'a', 'shared', null, 0, 'I will send the comparison.'],
     ['session', 'b', 'shared', null, 0, 'I will send the comparison.'],
   ]);
 });
-
-it('defaults finding context to the currently folded branch, not alias zero', async () => {
+it('selects supporting context in the explicitly requested branch, not alias zero', async () => {
   prepare([
     msg('prior', null, 'Recipient is Alice.'),
     msg('shared', 'prior', 'I will send it.'),
     msg('a', 'shared', 'progress:comparison|Sending now'),
     msg('b', 'shared', 'progress:comparison|Sending now'),
   ]);
-  let sharedId = '';
-  let sawB = false;
-  runner.mockImplementation(async (input) => {
-    const { work, detail } = payload(input);
-    if (work.observation && !work.candidate && !work.catalogue) {
-      if (work.observation.range.occurrences[0].entryId === 'shared')
-        sharedId = work.observation.id;
-      if (work.branchId === 'b' && work.observation.range.occurrences[0].entryId === 'b') {
-        if (!detail) return inspect(input, { kind: 'context', findingId: sharedId });
-        expect(detail.selected.branchId).toBe('b');
-        expect(detail.groups[0].entries[0].text).toBe('Recipient is Alice.');
-        sawB = true;
-      }
-    }
-    return answerCapture(input);
+  scenario(async ({ evidence, lookup }) => {
+    const selected = captureReference(
+      evidence.find((entry) => entry.branchId === 'b' && entry.entryId === 'shared')!,
+    );
+    const detail = await lookup<{
+      selected: { branchId: string };
+      groups: { branchId: string; entries: { text: string }[] }[];
+    }>('remembrancer_context', {
+      selected: {
+        sessionId: selected.sessionId,
+        branchId: selected.branchId,
+        entryId: selected.entryId,
+        editId: selected.editId,
+      },
+    });
+    expect(detail.selected.branchId).toBe('b');
+    expect(detail.groups[0]!.branchId).toBe('b');
+    expect(detail.groups[0]!.entries[0]!.text).toBe('Recipient is Alice.');
+    return {
+      records: [
+        captureRecord(
+          'alice',
+          [{ kind: 'accepted', reference: selected }],
+          [state('b', 'Send Alice the report')],
+        ),
+      ],
+      dispositions: [
+        captureDisposition(
+          ['alice'],
+          intent('Send Alice the report'),
+          'Pronoun resolved in branch b',
+        ),
+      ],
+    };
   });
-  await run();
-  expect(sawB).toBe(true);
+  expect((await run())[0]!.references[0]!.branchId).toBe('b');
 });
-
-it('returns exact older windows and cursors, and uses the distant antecedent in the saved proposal', async () => {
-  const records = Array.from({ length: 65 }, (_, index) =>
-    msg(
-      `m${index}`,
-      index ? `m${index - 1}` : null,
-      index === 64
-        ? 'I will send it.'
-        : index === 3
-          ? 'Recipient is Alice.'
-          : `Earlier context ${index}.`,
+it('returns exact older windows and cursors, using the distant antecedent without citing context', async () => {
+  prepare(
+    Array.from({ length: 65 }, (_, index) =>
+      msg(
+        `m${index}`,
+        index ? `m${index - 1}` : null,
+        index === 64
+          ? 'I will send it.'
+          : index === 3
+            ? 'Recipient is Alice.'
+            : `Earlier context ${index}.`,
+      ),
     ),
+    'm63',
   );
-  prepare(records, 'm63');
-  let found = false;
   let pages = 0;
-  let skip = 0;
-  runner.mockImplementation(async (input) => {
-    const { work, detail } = payload(input);
-    expect(input.instruction).not.toContain('Interpret this supporting context field');
-    if (work.observation && !work.catalogue && !work.candidate) {
-      if (!detail)
-        return inspect(input, { kind: 'context', findingId: work.observation.id, before: 40 });
+  scenario(async ({ evidence, lookup }) => {
+    expect(evidence).toHaveLength(1);
+    const reference = captureReference(evidence[0]!);
+    const selected = {
+      sessionId: reference.sessionId,
+      branchId: reference.branchId,
+      entryId: reference.entryId,
+      editId: reference.editId,
+    };
+    let skip = 0;
+    let offset = 0;
+    let found = false;
+    do {
+      const page = await lookup<{
+        contextOnly: boolean;
+        groups: { entries: { text: string }[] }[];
+        nextOffset: number | null;
+        nextSkip: number | null;
+      }>('remembrancer_context', { selected, before: 40, skip, offset });
       pages++;
-      const exact = detail.groups
-        .flatMap((group: { entries: { text: string }[] }) => group.entries)
-        .map((entry: { text: string }) => entry.text)
-        .join('');
-      found ||= exact.includes('Recipient is Alice.');
-      if (!found) {
-        if (detail.nextOffset !== null)
-          return inspect(input, {
-            kind: 'context',
-            findingId: work.observation.id,
-            before: 40,
-            skip,
-            offset: detail.nextOffset,
-          });
-        expect(detail.nextSkip).not.toBeNull();
-        skip = detail.nextSkip;
-        return inspect(input, {
-          kind: 'context',
-          findingId: work.observation.id,
-          before: 40,
-          skip,
-        });
-      }
-      return answerCapture(input, {
-        summary: 'Send Alice the report',
-        status: 'active',
-        draft: {
-          change: {
-            operation: 'add',
-            fields: { description: 'Send Alice the report' },
-            annotations: [],
-          },
-          expected: null,
-          question: null,
-        },
-      });
-    }
-    return answerCapture(input);
+      expect(page.contextOnly).toBe(true);
+      found = page.groups.some((group) =>
+        group.entries.some((entry) => entry.text === 'Recipient is Alice.'),
+      );
+      if (found) break;
+      if (page.nextOffset !== null) offset = page.nextOffset;
+      else if (page.nextSkip !== null) {
+        skip = page.nextSkip;
+        offset = 0;
+      } else throw new Error('Antecedent not delivered');
+    } while (!found);
+    return {
+      records: [
+        captureRecord(
+          'report',
+          [{ kind: 'accepted', reference }],
+          [state('m64', 'Send Alice the report')],
+        ),
+      ],
+      dispositions: [
+        captureDisposition(['report'], intent('Send Alice the report'), 'Distant antecedent'),
+      ],
+    };
   });
   const submissions = await run();
-  expect(found).toBe(true);
   expect(pages).toBeGreaterThan(1);
-  expect(submissions[0]!.change).toMatchObject({
-    fields: { description: 'Send Alice the report' },
-  });
+  expect(submissions[0]!.change).toEqual(intent('Send Alice the report').change);
   expect(tuples(submissions)).toEqual([['session', 'm64', 'm64', null, 0, 'I will send it.']]);
 });
-
-it('clears provisional identity links after a decisive bridge resolves them', async () => {
+it('rejects supporting-only historical text as submitted commitment evidence', async () => {
+  prepare(
+    [msg('prior', null, 'I will send Alice the report.'), msg('later', 'prior', 'I will send it.')],
+    'prior',
+  );
+  scenario(async ({ evidence, lookup }) => {
+    const entry = evidence[0]!;
+    const context = await lookup<{
+      groups: {
+        entries: { entryId: string; editId: string | null; offset: number; text: string }[];
+      }[];
+    }>('remembrancer_context', {
+      selected: {
+        sessionId: entry.sessionId,
+        branchId: entry.branchId,
+        entryId: entry.entryId,
+        editId: entry.editId,
+      },
+    });
+    const prior = context.groups[0]!.entries[0]!;
+    expect(prior.entryId).toBe('prior');
+    const reference = {
+      ...captureReference(entry),
+      entryId: prior.entryId,
+      editId: prior.editId,
+      offset: prior.offset,
+      quote: prior.text,
+    };
+    return {
+      records: [
+        captureRecord(
+          'report',
+          [{ kind: 'accepted', reference }],
+          [state(entry.branchId, 'Send Alice the report')],
+        ),
+      ],
+      dispositions: [
+        captureDisposition(
+          ['report'],
+          intent('Send Alice the report'),
+          'Forbidden historical evidence',
+        ),
+      ],
+    };
+  });
+  await expect(run()).rejects.toThrow('Reference does not match frozen eligible evidence');
+});
+it('accepts the reviewer-resolved bridge as one unambiguous record', async () => {
   prepare([
     msg('a', null, 'accepted:report|Send the report'),
     msg('b', 'a', 'reference:it|That one'),
     msg('c', 'b', 'correction:resolved|The report, to Alice'),
   ]);
-  runner.mockImplementation(async (input) => {
-    const { work } = payload(input);
-    if (work.catalogue)
-      return answerCapture(input, {
-        candidates: work.catalogue.map((item: { id: string }) => item.id),
-      });
-    if (work.candidate)
-      return answerCapture(input, {
-        match: work.bridge || work.observation.label === 'resolved' ? 'same' : 'ambiguous',
-      });
-    return answerCapture(input);
-  });
+  scenario(({ evidence }) => ({
+    records: [
+      captureRecord(
+        'report',
+        evidence.map((entry, index) => ({
+          kind: ['accepted', 'reference', 'correction'][index]!,
+          reference: captureReference(entry),
+        })),
+        [state('c', 'Send Alice the report')],
+      ),
+    ],
+    dispositions: [
+      captureDisposition(
+        ['report'],
+        intent('Send Alice the report'),
+        'The last correction resolves the reference',
+      ),
+    ],
+  }));
   const submissions = await run();
   expect(submissions).toHaveLength(1);
   expect(submissions[0]!.question).toBeNull();
   expect(tuples(submissions).map((tuple) => tuple[2])).toEqual(['a', 'b', 'c']);
 });
-
-it('clears a provisional link when later evidence decisively separates the obligations', async () => {
+it('accepts the reviewer separating obligations after later decisive evidence', async () => {
   prepare([
     msg('a', null, 'accepted:alpha|Send the report'),
     msg('b', 'a', 'accepted:beta|Send the other report'),
     msg('c', 'b', 'correction:resolved|The second report is for Bob, not Alice'),
   ]);
-  runner.mockImplementation(async (input) => {
-    const { work } = payload(input);
-    if (work.catalogue)
-      return answerCapture(input, {
-        candidates: work.catalogue.map((item: { id: string }) => item.id),
-      });
-    if (work.candidate)
-      return answerCapture(input, {
-        match:
-          work.observation.label === 'beta'
-            ? 'ambiguous'
-            : work.candidate.first.label === 'beta'
-              ? 'same'
-              : 'different',
-      });
-    return answerCapture(input);
-  });
+  scenario(({ evidence }) => ({
+    records: [
+      captureRecord(
+        'alice',
+        [{ kind: 'accepted', reference: captureReference(evidence[0]!) }],
+        [state('c', 'Send Alice the report')],
+      ),
+      captureRecord(
+        'bob',
+        evidence.slice(1).map((entry, index) => ({
+          kind: index ? 'correction' : 'accepted',
+          reference: captureReference(entry),
+        })),
+        [state('c', 'Send Bob the report')],
+      ),
+    ],
+    dispositions: [
+      captureDisposition(['alice'], intent('Send Alice the report'), 'First report'),
+      captureDisposition(
+        ['bob'],
+        intent('Send Bob the report'),
+        'Second report separated explicitly',
+      ),
+    ],
+  }));
   const submissions = await run();
   expect(submissions).toHaveLength(2);
   expect(submissions.every((item) => item.question === null)).toBe(true);
   expect(tuples(submissions).map((tuple) => tuple[2])).toEqual(['a', 'b', 'c']);
 });
-
-it('does not merge contradictory founders merely because a bridge matches both', async () => {
+it('retains questions when the reviewer cannot assign a bridge between contradictory founders', async () => {
   prepare([
     msg('a', null, 'accepted:Alice|Send Alice the report'),
     msg('b', 'a', 'accepted:Bob|Send Bob the report'),
     msg('c', 'b', 'correction:bridge|Send it Monday'),
   ]);
-  const merge = vi.spyOn(current, 'mergeRecords');
-  runner.mockImplementation(async (input) => {
-    const { work } = payload(input);
-    if (work.catalogue && work.observation.label === 'bridge')
-      return answerCapture(input, {
-        candidates: work.catalogue.map((item: { id: string }) => item.id),
-      });
-    if (work.candidate && !work.bridge)
-      return answerCapture(input, {
-        match: work.observation.label === 'bridge' ? 'same' : 'different',
-      });
-    if (work.bridge) return answerCapture(input, { match: 'different' });
-    return answerCapture(input);
-  });
+  scenario(({ evidence }) => ({
+    records: evidence.map((entry, index) =>
+      captureRecord(
+        String(index),
+        [{ kind: index === 2 ? 'correction' : 'accepted', reference: captureReference(entry) }],
+        [state('c', ['Alice report', 'Bob report', 'Monday report'][index]!)],
+        { ambiguous: true },
+      ),
+    ),
+    dispositions: evidence.map((_, index) =>
+      captureDisposition(
+        [String(index)],
+        intent(
+          ['Alice report', 'Bob report', 'Monday report'][index]!,
+          'Which report is due Monday?',
+        ),
+        'Unresolved bridge',
+      ),
+    ),
+  }));
   const submissions = await run();
-  expect(merge).not.toHaveBeenCalled();
   expect(submissions).toHaveLength(3);
   expect(submissions.every((item) => !!item.question)).toBe(true);
 });
-
-it('rejects coerced finding match enums at ingress', async () => {
-  prepare([
-    msg('a', null, 'accepted:report|Send the report'),
-    msg('b', 'a', 'correction:report|Monday'),
+it('rejects coerced declared match enums at submission', async () => {
+  prepare([msg('a', null, 'accepted:report|Send the report')]);
+  const uuid = '12345678-1234-1234-1234-123456789abc';
+  vi.mocked(readTaskCatalog).mockResolvedValue([
+    { uuid, status: 'pending', description: 'Report' },
   ]);
-  runner.mockImplementation(async (input) =>
-    payload(input).work.candidate
-      ? answerCapture(input, { match: ['same'] })
-      : answerCapture(input),
-  );
-  await expect(run()).rejects.toThrow('Invalid capture match');
+  scenario(async ({ evidence, lookup }) => {
+    await lookup('remembrancer_tasks', {});
+    return {
+      records: [
+        captureRecord(
+          'report',
+          [{ kind: 'accepted', reference: captureReference(evidence[0]!) }],
+          [state('a', 'Report')],
+          { candidates: [{ kind: 'task', id: uuid, judgment: ['same'] as unknown as string }] },
+        ),
+      ],
+      dispositions: [captureDisposition(['report'], intent('Report'), 'Invalid judgment')],
+    };
+  });
+  await expect(run()).rejects.toThrow('Invalid capture candidate judgment');
 });
-
-it('rejects out-of-order continuation without acknowledging the range', async () => {
-  prepare([msg('a', null, 'x'.repeat(80))]);
+it('rejects out-of-order evidence continuation without acknowledging delivery', async () => {
+  prepare([msg('a', null, '😀'.repeat(40000))]);
   runner.mockImplementation(async (input) => {
-    const { work } = payload(input);
-    return answerCapture(
-      input,
-      work.observationOffset === 0
-        ? {
-            complete: false,
-            observations: [observation('accepted', 'later', 20, 25)],
-            nextObservationOffset: 1,
-            memory: 'Earlier span next',
-          }
-        : extracted([observation('accepted', 'earlier', 5, 10)]),
+    const paths = reviewerPaths(input.instruction);
+    const tool = input.tools.find((tool) => tool.name === 'remembrancer_read')!;
+    const skill = await tool.execute(
+      'skill',
+      { path: paths.skill },
+      undefined,
+      undefined,
+      {} as Parameters<typeof tool.execute>[4],
+    );
+    input.acceptToolResult?.(skill);
+    await tool.execute(
+      'skip',
+      { path: paths.review, page: 1 },
+      undefined,
+      undefined,
+      {} as Parameters<typeof tool.execute>[4],
     );
   });
-  await expect(run()).rejects.toThrow('not in source order');
-  expect(current.nextExtraction()!.offset).toBe(0);
+  await expect(run()).rejects.toThrow('next evidence page in order');
+  expect(() => current.completion([])).toThrow('Read all evidence pages');
 });
-
-it('allows distinct ordered observations on one span with stable continuation identities', async () => {
+it('allows distinct reviewer records on the same exact span, preserving every branch occurrence', async () => {
   const quote = 'I will send Alice and Bob the report.';
   prepare([msg('root', null, quote), msg('a', 'root', 'Context A'), msg('b', 'root', 'Context B')]);
-  runner.mockImplementation(async (input) => {
-    const { work } = payload(input);
-    if (work.range && work.range.occurrences[0].entryId !== 'root')
-      return answerCapture(input, extracted([]));
-    if (work.range) {
-      expect(work.observationOffset).toBeLessThanOrEqual(1);
-      return answerCapture(
-        input,
-        work.observationOffset === 0
-          ? {
-              complete: false,
-              observations: [
-                { ...observation('accepted', 'Alice', 0, quote.length), observationId: 'alice' },
-              ],
-              nextObservationOffset: 1,
-              memory: 'Bob next',
-            }
-          : extracted([
-              { ...observation('accepted', 'Bob', 0, quote.length), observationId: 'bob' },
-            ]),
-      );
-    }
-    return answerCapture(input);
+  scenario(({ evidence }) => {
+    const refs = evidence
+      .filter((entry) => entry.entryId === 'root')
+      .map((entry) => ({ kind: 'accepted', reference: captureReference(entry) }));
+    return {
+      records: ['Alice', 'Bob'].map((name) =>
+        captureRecord(
+          name,
+          refs,
+          ['a', 'b'].map((branchId) => state(branchId, `Send ${name} the report`)),
+        ),
+      ),
+      dispositions: ['Alice', 'Bob'].map((name) =>
+        captureDisposition([name], intent(`Send ${name} the report`), 'Two named recipients'),
+      ),
+    };
   });
   const submissions = await run();
   expect(submissions).toHaveLength(2);
@@ -472,31 +535,74 @@ it('allows distinct ordered observations on one span with stable continuation id
     ['a', 'b', 'a', 'b'].map((branchId) => ['session', branchId, 'root', null, 0, quote]),
   );
 });
-
-it('delivers the exact founding span to matching, not a retained range handle', async () => {
+it('delivers the exact founding span and later correction, not retained finding handles', async () => {
   const quote = 'I will ' + 'send the report '.repeat(180);
   prepare([msg('a', null, quote), msg('b', 'a', 'correction:report|Monday')]);
-  let sawFounder = false;
-  runner.mockImplementation(async (input) => {
-    const { work } = payload(input);
-    if (work.range && work.range.occurrences[0].entryId === 'a')
-      return answerCapture(
-        input,
-        extracted(
-          work.range.end === quote.length
-            ? [observation('accepted', 'report', 0, quote.length)]
-            : [],
+  scenario(({ evidence }) => {
+    expect(evidence[0]!.text).toBe(quote);
+    return {
+      records: [
+        captureRecord(
+          'report',
+          evidence.map((entry, index) => ({
+            kind: index ? 'correction' : 'accepted',
+            reference: captureReference(entry),
+          })),
+          [state('b', 'Send the report Monday')],
         ),
-      );
-    if (work.candidate) {
-      expect(work.candidate.first.range.text).toBe(quote);
-      expect(work.candidate.first).toMatchObject({ start: 0, end: quote.length });
-      sawFounder = true;
-      return answerCapture(input, { match: 'same' });
-    }
-    return answerCapture(input);
+      ],
+      dispositions: [
+        captureDisposition(
+          ['report'],
+          intent('Send the report Monday'),
+          'Correction to exact founder',
+        ),
+      ],
+    };
   });
-  const submissions = await run();
-  expect(sawFounder).toBe(true);
-  expect(tuples(submissions)[0]).toEqual(['session', 'b', 'a', null, 0, quote]);
+  expect(tuples(await run())[0]).toEqual(['session', 'b', 'a', null, 0, quote]);
+});
+it('preserves equal-text edit identities, redactions and UTF-16 offsets in delivered evidence', async () => {
+  prepare([
+    msg('root', null, 'Removed secret'),
+    { type: 'context_edit', id: 'redact', parentId: 'root', targetId: 'root', replacement: null },
+    msg('intent', 'redact', '😀 Send café'),
+    {
+      type: 'context_edit',
+      id: 'edit1',
+      parentId: 'intent',
+      targetId: 'intent',
+      replacement: { content: '😀 Send café' },
+    },
+    msg('a', 'edit1', 'A'),
+    {
+      type: 'context_edit',
+      id: 'edit2',
+      parentId: 'intent',
+      targetId: 'intent',
+      replacement: { content: '😀 Send café' },
+    },
+    msg('b', 'edit2', 'B'),
+  ]);
+  scenario(({ evidence }) => {
+    expect(evidence.some((entry) => entry.text.includes('Removed secret'))).toBe(false);
+    const edited = evidence.filter((entry) => entry.entryId === 'intent');
+    expect(edited.map((entry) => entry.editId)).toEqual(['edit1', 'edit2']);
+    return {
+      records: [
+        captureRecord(
+          'cafe',
+          edited.map((entry) => ({ kind: 'accepted', reference: captureReference(entry, 3) })),
+          ['a', 'b'].map((branchId) => state(branchId, 'Send café')),
+        ),
+      ],
+      dispositions: [
+        captureDisposition(['cafe'], intent('Send café'), 'Same text, distinct edits'),
+      ],
+    };
+  });
+  expect(tuples(await run())).toEqual([
+    ['session', 'a', 'intent', 'edit1', 3, 'Send café'],
+    ['session', 'b', 'intent', 'edit2', 3, 'Send café'],
+  ]);
 });

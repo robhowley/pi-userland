@@ -1,12 +1,5 @@
-import type { PlannedOccurrence, PlannedRange } from './review-plan.js';
-import { exactQuote } from './review-transcript.js';
 import { fitPrefixLength } from './review-pages.js';
-import type {
-  EvidenceReference,
-  ProposalDraft,
-  ProposalSubmission,
-  TaskSnapshot,
-} from './proposals.js';
+import type { ProposalDraft, ProposalSubmission, TaskSnapshot } from './proposals.js';
 import { validateDraft, validateProposalIntent } from './proposals.js';
 import { estimateReviewerTokens, ReviewerBudgetError } from './reviewer-budget.js';
 
@@ -18,20 +11,7 @@ export const findingKinds = [
   'completion',
   'reference',
 ] as const;
-export type FindingKind = (typeof findingKinds)[number];
-export type Finding = {
-  id: string;
-  label: string;
-  kind: FindingKind;
-  range: PlannedRange;
-  /** One source observation may have a different identity on each branch. */
-  occurrence: PlannedOccurrence;
-  sourceId: string;
-  observationOrder: number;
-  start: number;
-  end: number;
-};
-export type FindingRecord = { id: string; label: string; findings: Finding[]; ambiguous: boolean };
+export type FindingRecord = { id: string; ambiguous: boolean };
 // Intent does not need a model-reproduced snapshot. Only the host can bind one.
 export type CaptureDraft = Omit<ProposalDraft, 'expected'> & {
   expected?: TaskSnapshot | null;
@@ -76,43 +56,6 @@ export function validateIntent(value: unknown): CaptureDraft {
   // Ignore a legacy model-supplied snapshot, including any identity/status inside it.
   return { change, question: draft['question'] as string | null };
 }
-/** Full aliases remain host-side for coverage, ordering and final quote references. */
-export function workingRange(range: PlannedRange) {
-  return {
-    ...range,
-    occurrences: range.occurrences.slice(0, 1),
-    occurrenceCount: range.occurrences.length,
-  };
-}
-export function exactFinding(finding: Finding) {
-  const quote = exactQuote(finding.range, finding.start, finding.end);
-  return {
-    id: finding.id,
-    label: finding.label,
-    kind: finding.kind,
-    sourceOccurrenceCount: finding.range.occurrences.length,
-    range: workingRange({
-      ...finding.range,
-      text: quote,
-      offset: finding.start,
-      end: finding.end,
-      occurrences: [finding.occurrence],
-    }),
-    start: finding.start,
-    end: finding.end,
-  };
-}
-export function references(findings: readonly Finding[]): EvidenceReference[] {
-  return findings.map((finding) => ({
-    sessionId: finding.occurrence.sessionId,
-    branchId: finding.occurrence.branchId,
-    entryId: finding.occurrence.entryId,
-    editId: finding.occurrence.editId,
-    offset: finding.start,
-    quote: exactQuote(finding.range, finding.start, finding.end),
-  }));
-}
-
 /** Structured field pages, never JSON fragments the model must concatenate. Originals stay in host memory. */
 export function* detailPages(
   value: unknown,
@@ -160,6 +103,7 @@ export function validateMaterialization(
   state: FoldedFinding,
   binding: {
     expected?: TaskSnapshot | null;
+    conflictingChanges?: boolean;
     allowNoop?: boolean;
     tracked?: boolean;
     questions?: (string | null | undefined)[];
@@ -168,7 +112,7 @@ export function validateMaterialization(
   const result = object(value);
   text(result['reason']);
   if (result['submission'] === null) {
-    if (record.ambiguous || state.status === 'uncertain')
+    if (record.ambiguous || binding.conflictingChanges || state.status === 'uncertain')
       throw new Error('Ambiguous capture requires a question');
     if (state.draft?.question || binding.questions?.some(Boolean))
       throw new Error('Capture must preserve unresolved questions');
@@ -191,11 +135,13 @@ export function validateMaterialization(
     question: submission.question,
   });
   text(submission.explanation);
-  const questions = [submission.question, state.draft?.question, ...(binding.questions ?? [])];
-  const question =
-    [...new Set(questions.filter((item): item is string => !!item))].join('\n') || null;
+  const question = submission.question;
+  const requiredQuestions = [state.draft?.question, ...(binding.questions ?? [])];
+  if (requiredQuestions.some((required) => required && !question?.includes(required)))
+    throw new Error('Finalized capture must preserve unresolved questions');
   if (
     (record.ambiguous ||
+      binding.conflictingChanges ||
       state.status === 'uncertain' ||
       state.status === 'refused' ||
       (state.status === 'completed' && submission.change.operation !== 'complete')) &&
@@ -217,8 +163,10 @@ export function validateMaterialization(
       (intent && intent.operation !== 'add' && intent.targetUuid !== submission.change.targetUuid)
     )
       throw new Error('Capture target was not uniquely matched to exact saved state');
-  } else if (binding.expected && !question) {
-    throw new Error('Matched existing task cannot become an unqualified add');
+  } else if (binding.expected && (binding.conflictingChanges || !question)) {
+    throw new Error(
+      'Matched existing task cannot become an addition for conflicting changes or an unqualified add',
+    );
   }
   const bound = {
     ...submission,

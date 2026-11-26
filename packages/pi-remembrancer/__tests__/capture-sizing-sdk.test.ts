@@ -6,16 +6,28 @@ import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { expect, it, vi } from 'vitest';
 import { CaptureReview } from '../extensions/remembrancer/capture-review.js';
 import { reviewPreparedCapture, CAPTURE_BUDGET_MS } from '../extensions/remembrancer/capture.js';
-import { captureReplySize, type CaptureField } from '../extensions/remembrancer/capture-sizing.js';
-import type { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
+import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
 import { prepareReview } from '../extensions/remembrancer/evidence.js';
-import { getReviewerBudget } from '../extensions/remembrancer/reviewer-budget.js';
+import {
+  estimateReviewerTokens,
+  getReviewerBudget,
+  ReviewerBudgetError,
+} from '../extensions/remembrancer/reviewer-budget.js';
 import {
   readTaskCatalog,
   snapshot,
   type TaskRecord,
 } from '../extensions/remembrancer/taskwarrior.js';
-import { captureAnswer, providerInstruction } from './fixtures/capture-steps.js';
+import type { CaptureSubmission } from '../extensions/remembrancer/capture-submission.js';
+import type { EvidencePageEntry } from '../extensions/remembrancer/review-pages.js';
+import {
+  captureRecord,
+  captureReference,
+  captureDisposition,
+  captureToolCalls,
+  reviewerPaths,
+  type CaptureToolCall,
+} from './fixtures/capture-reviewer.js';
 import { writeCompletion } from './fixtures/openai-loopback.js';
 
 vi.mock('../extensions/remembrancer/taskwarrior.js', async (original) => ({
@@ -23,67 +35,196 @@ vi.mock('../extensions/remembrancer/taskwarrior.js', async (original) => ({
   readTaskCatalog: vi.fn(),
 }));
 
-type Envelope = { work: any; memory: string; detail: any };
+// Complete real SDK requests, retained history, and one terminal output budget.
 async function measure(
   texts: string[],
-  output: 512 | 4096,
-  answer?: (envelope: Envelope, instruction: string) => unknown,
-  tasks: TaskRecord[] = [],
+  output: number,
+  options: {
+    contextWindow?: number;
+    tasks?: TaskRecord[];
+    dense?: boolean;
+    context?: string;
+    oversized?: boolean;
+  } = {},
 ) {
   const dir = mkdtempSync(join(tmpdir(), 'capture-sizing-'));
   const agentDir = join(dir, 'agent');
   mkdirSync(agentDir);
-  vi.mocked(readTaskCatalog).mockResolvedValue(tasks);
-  const requests: { bytes: number; envelope: Envelope; instruction: string }[] = [];
+  vi.mocked(readTaskCatalog)
+    .mockReset()
+    .mockResolvedValue(options.tasks ?? []);
+  const requests: Record<string, unknown>[] = [];
   const outputs: number[] = [];
+  const evidence: EvidencePageEntry[] = [];
+  const contextText: string[] = [];
+  let nextPage = 0;
+  let evidenceDone = false;
+  let taskRead = '';
+  let taskNext: object | null = options.tasks?.length ? { uuid: options.tasks[0]!['uuid'] } : null;
+  let contextOffset: number | null = options.context ? 0 : null;
+  let lastCall: CaptureToolCall | undefined;
+  let fixtureError: unknown;
+  let submitCalls = 0;
+  function payload(): CaptureSubmission {
+    const records: CaptureSubmission['records'] = [];
+    const dispositions: CaptureSubmission['dispositions'] = [];
+    for (const entry of evidence) {
+      const matches = options.dense ? [...entry.text.matchAll(/accepted:t(\d+)\|Do \d+;/g)] : [];
+      const found = options.dense
+        ? matches.map((match) => ({
+            start: match.index!,
+            end: match.index! + match[0].length,
+            description: `Do ${match[1]};`,
+          }))
+        : entry.text.startsWith('accepted:')
+          ? [{ start: 0, end: entry.text.length, description: entry.text.split('|')[1]! }]
+          : [];
+      for (const item of found) {
+        const key = `record${records.length}`;
+        const task = options.tasks?.[0];
+        const change = task
+          ? {
+              operation: 'update' as const,
+              targetUuid: String(task['uuid']),
+              fields: { priority: 'H' as const },
+              annotations: [],
+            }
+          : {
+              operation: 'add' as const,
+              fields: { description: item.description },
+              annotations: [],
+            };
+        records.push(
+          captureRecord(
+            key,
+            [{ kind: 'accepted', reference: captureReference(entry, item.start, item.end) }],
+            [
+              {
+                branchId: entry.branchId,
+                state: {
+                  summary: item.description,
+                  status: 'active',
+                  draft: { change, question: null },
+                },
+              },
+            ],
+            {
+              candidates: task
+                ? [{ kind: 'task', id: String(task['uuid']), judgment: 'same' }]
+                : [],
+            },
+          ),
+        );
+        dispositions.push(
+          captureDisposition(
+            [key],
+            { change, question: null, explanation: 'Exact reviewer intent' },
+            'Accepted',
+          ),
+        );
+      }
+    }
+    return { records, dispositions };
+  }
+  const contentText = (content: unknown) =>
+    typeof content === 'string'
+      ? content
+      : (content as { text?: string }[]).map((part) => part.text ?? '').join('');
   const server = createServer(async (request, response) => {
-    let raw = '';
-    for await (const chunk of request) raw += chunk;
-    const payload = JSON.parse(raw);
-    const instruction = providerInstruction(payload.messages);
-    const envelope = JSON.parse(instruction.split('\n').at(-1)!) as Envelope;
-    requests.push({ bytes: Buffer.byteLength(raw), envelope, instruction });
-    const result = answer?.(envelope, instruction) ?? { answer: captureAnswer(instruction) };
-    const args = { result };
-    outputs.push(Buffer.byteLength(JSON.stringify({ name: 'remembrancer_step', arguments: args })));
-    writeCompletion(
-      response,
-      {
-        role: 'assistant',
-        tool_calls: [
-          {
-            index: 0,
-            id: `call-${requests.length}`,
-            type: 'function',
-            function: { name: 'remembrancer_step', arguments: JSON.stringify(args) },
+    try {
+      request.setEncoding('utf8');
+      let raw = '';
+      for await (const chunk of request) raw += chunk;
+      const body = JSON.parse(raw);
+      requests.push(body);
+      const messages = body.messages as { role: string; content: unknown }[];
+      const paths = reviewerPaths(
+        contentText(messages.find((message) => message.role === 'user')!.content),
+      );
+      const last = messages.filter((message) => message.role === 'tool').at(-1);
+      if (
+        last &&
+        lastCall &&
+        !(
+          lastCall.name === 'remembrancer_read' &&
+          (lastCall.args as { path: string }).path === paths.skill
+        )
+      ) {
+        const data = JSON.parse(contentText(last.content));
+        expect(Buffer.byteLength(contentText(last.content))).toBeLessThanOrEqual(51_200);
+        if (lastCall.name === 'remembrancer_read') {
+          for (const { entries, ...group } of data.groups)
+            for (const entry of entries) evidence.push({ ...group, ...entry });
+          evidenceDone = !data.hasMore;
+        } else if (lastCall.name === 'remembrancer_tasks') {
+          taskRead += data.json;
+          taskNext = data.next;
+        } else if (lastCall.name === 'remembrancer_context') {
+          expect(data.contextOnly).toBe(true);
+          for (const group of data.groups)
+            for (const entry of group.entries) contextText.push(entry.text);
+          contextOffset = data.nextOffset;
+        }
+      }
+      let call: CaptureToolCall;
+      if (requests.length === 1) call = { name: 'remembrancer_read', args: { path: paths.skill } };
+      else if (!evidenceDone)
+        call = { name: 'remembrancer_read', args: { path: paths.review, page: nextPage++ } };
+      else if (taskNext) call = { name: 'remembrancer_tasks', args: taskNext };
+      else if (contextOffset !== null) {
+        const entry = evidence[0]!;
+        call = {
+          name: 'remembrancer_context',
+          args: {
+            selected: {
+              sessionId: entry.sessionId,
+              branchId: entry.branchId,
+              entryId: entry.entryId,
+              editId: entry.editId,
+            },
+            before: 1,
+            offset: contextOffset,
           },
-        ],
-      },
-      'tool_calls',
-    );
+        };
+      } else {
+        call = {
+          name: 'remembrancer_submit',
+          args: options.oversized
+            ? { records: [], dispositions: [], extra: 'x'.repeat(2000) }
+            : payload(),
+        };
+        submitCalls++;
+      }
+      lastCall = call;
+      outputs.push(estimateReviewerTokens(captureToolCalls([call], requests.length)));
+      writeCompletion(response, captureToolCalls([call], requests.length), 'tool_calls');
+    } catch (error) {
+      fixtureError = error;
+      response.writeHead(500);
+      response.end('Fixture failure');
+    }
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const db = new CheckpointStore(join(dir, 'index.sqlite'));
   try {
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('Missing local transport');
-    // Both configurations have exactly 16,804 conservative input tokens available.
-    const contextWindow = output === 4096 ? 22000 : 18340;
     writeFileSync(
       join(agentDir, 'models.json'),
       JSON.stringify({
         providers: {
           fixture: {
+            api: 'openai-completions',
             baseUrl: `http://127.0.0.1:${address.port}/v1`,
             apiKey: 'local-fixture',
-            api: 'openai-completions',
             models: [
               {
                 id: 'fixture',
-                name: 'fixture',
+                name: 'Fixture',
                 reasoning: false,
                 input: ['text'],
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow,
+                contextWindow: options.contextWindow ?? 400_000,
                 maxTokens: output,
               },
             ],
@@ -97,44 +238,72 @@ async function measure(
     });
     const model = runtime.getModel('fixture', 'fixture')!;
     const file = join(dir, 'session.jsonl');
-    writeFileSync(
-      file,
-      [
-        { type: 'session', id: 'sizing', cwd: dir },
-        ...texts.map((content, index) => ({
-          type: 'message',
-          id: `entry-${index}`,
-          parentId: index ? `entry-${index - 1}` : null,
-          message: { role: 'user', content },
-        })),
-      ]
-        .map((row) => JSON.stringify(row))
-        .join('\n') + '\n',
+    const rows: object[] = [{ type: 'session', id: 'sizing', cwd: dir }];
+    if (options.context)
+      rows.push({
+        type: 'message',
+        id: 'older',
+        parentId: null,
+        timestamp: '2026-01-01',
+        message: { role: 'user', content: options.context },
+      });
+    texts.forEach((content, i) =>
+      rows.push({
+        type: 'message',
+        id: `entry-${i}`,
+        parentId: i ? `entry-${i - 1}` : options.context ? 'older' : null,
+        timestamp: '2026-01-30',
+        message: { role: 'user', content },
+      }),
     );
-    const current = new CaptureReview(prepareReview([{ file, sessionId: 'sizing' }], []), () => {});
-    const db = { contextGeneration: () => 0, proposals: () => [] } as unknown as CheckpointStore;
+    writeFileSync(file, rows.map((row) => JSON.stringify(row)).join('\n') + '\n');
+    const current = new CaptureReview(
+      prepareReview(
+        [{ file, sessionId: 'sizing' }],
+        [],
+        options.context ? { requestedSince: '2026-01-29' } : undefined,
+      ),
+      () => {},
+    );
     const start = Date.now();
+    let error: unknown;
     const submissions = await reviewPreparedCapture(
       current,
       db,
-      {
-        cwd: dir,
-        agentDir,
-        sessionId: 'sizing',
-        model,
-        modelRuntime: runtime,
-      },
+      { cwd: dir, agentDir, sessionId: 'sizing', model, modelRuntime: runtime },
       () => {
         if (Date.now() - start >= CAPTURE_BUDGET_MS) throw new Error('Attempt deadline');
       },
-    );
-    expect(() => current.completion(submissions)).not.toThrow();
-    const budget = getReviewerBudget(model);
-    expect(budget.maxInputTokens).toBe(16804);
-    expect(requests.every(({ bytes }) => bytes <= budget.maxInputTokens)).toBe(true);
-    expect(outputs.every((bytes) => bytes <= output)).toBe(true);
-    return { submissions, requests, outputs, elapsedMs: Date.now() - start };
+    ).catch((failure: unknown) => {
+      error = failure;
+      return undefined;
+    });
+    if (fixtureError) throw fixtureError;
+    expect(
+      requests.every(
+        (request) => estimateReviewerTokens(request) <= getReviewerBudget(model).maxInputTokens,
+      ),
+    ).toBe(true);
+    for (const [index, request] of requests.entries()) {
+      const messages = request['messages'] as { role: string }[];
+      expect(messages.filter((message) => message.role === 'user')).toHaveLength(1);
+      expect(messages.filter((message) => message.role === 'tool')).toHaveLength(index);
+    }
+    expect(db.proposals()).toEqual([]);
+    expect(db.reviewed()).toEqual([]); // The helper only stages.
+    return {
+      submissions,
+      error,
+      current,
+      requests,
+      evidence,
+      outputs,
+      taskRead,
+      contextText,
+      submitCalls,
+    };
   } finally {
+    db.close();
     await new Promise<void>((resolve, reject) =>
       server.close((error) => (error ? reject(error) : resolve())),
     );
@@ -142,152 +311,81 @@ async function measure(
   }
 }
 
-it.each([512, 4096] as const)(
-  'fits 40 KiB ASCII by complete SDK input at output %i',
+it.each([512, 4096])(
+  'delivers all 40 KiB ASCII with retained history at output %i',
   async (output) => {
     const source = '.'.repeat(40 * 1024);
     const result = await measure([source], output);
-    const ranges = result.requests.map(({ envelope }) => envelope.work.range);
-    expect(ranges.map((range) => range.text).join('')).toBe(source);
+    expect(result.error).toBeUndefined();
     expect(result.submissions).toEqual([]);
-    expect(result.requests.length).toBeLessThanOrEqual(8);
-    console.log(
-      JSON.stringify({
-        sizing: '40-KiB',
-        outputCeilingTokens: output,
-        extractionCalls: ranges.length,
-        totalModelCalls: result.requests.length,
-        largestProviderPayloadBytes: Math.max(...result.requests.map((request) => request.bytes)),
-        elapsedMs: result.elapsedMs,
-      }),
-    );
+    expect(result.evidence.map((entry) => entry.text).join('')).toBe(source);
+    expect(result.submitCalls).toBe(1);
+    expect(result.requests.length).toBeGreaterThanOrEqual(3);
   },
 );
 
-it.each([512, 4096] as const)(
-  'reduces 24 independent one-branch obligations at output %i',
+it.each([512, 4096, 32_768])(
+  'bounds 24 independent obligations in one terminal reply at output %i',
   async (output) => {
-    const texts = Array.from({ length: 24 }, (_, index) => `accepted:t${index}|Do ${index};`);
+    const texts = Array.from({ length: 24 }, (_, i) => `accepted:t${i}|Do ${i};`);
     const result = await measure(texts, output);
-    expect(result.submissions).toHaveLength(24);
-    expect(result.submissions.map((item) => item.references)).toEqual(
-      texts.map((quote, index) => [
-        {
-          sessionId: 'sizing',
-          branchId: 'entry-23',
-          entryId: `entry-${index}`,
-          editId: null,
-          offset: 0,
-          quote,
-        },
-      ]),
-    );
-    expect(result.requests.length).toBeLessThan(95);
-    expect(
-      result.requests.filter(({ instruction }) => instruction.includes('Materialize')),
-    ).toHaveLength(0);
-    console.log(
-      JSON.stringify({
-        sizing: '24-independent',
-        outputCeilingTokens: output,
-        extractionCalls: result.requests.filter(({ envelope }) => envelope.work.range).length,
-        totalModelCalls: result.requests.length,
-        largestProviderPayloadBytes: Math.max(...result.requests.map((request) => request.bytes)),
-        elapsedMs: result.elapsedMs,
-      }),
-    );
+    expect(result.submitCalls).toBe(1);
+    if (output < 32_768) {
+      expect(result.error).toBeInstanceOf(ReviewerBudgetError);
+      expect(result.submissions).toBeUndefined();
+    } else {
+      expect(result.error).toBeUndefined();
+      expect(result.submissions).toHaveLength(24);
+      expect(result.submissions!.map((item) => item.references)).toEqual(
+        texts.map((quote, i) => [
+          {
+            sessionId: 'sizing',
+            branchId: 'entry-23',
+            entryId: `entry-${i}`,
+            editId: null,
+            offset: 0,
+            quote,
+          },
+        ]),
+      );
+    }
   },
 );
 
-it('changes dense reply paging with output ceiling alone, including late continuation memory', async () => {
-  const source = Array.from({ length: 24 }, (_, index) => `accepted:t${index}|Do ${index};`).join(
-    '',
-  );
-  const counts: number[] = [];
-  for (const output of [512, 4096] as const) {
-    const result = await measure([source], output, ({ work }, instruction) => {
-      if (!work.range) return { answer: captureAnswer(instruction) };
-      const all = [...work.range.text.matchAll(/accepted:t(\d+)\|Do \d+;/g)].map((match) => ({
-        kind: 'accepted',
-        label: `t${match[1]}`,
-        start: match.index!,
-        end: match.index! + match[0].length,
-      }));
-      const observations = all.slice(
-        work.observationOffset,
-        work.observationOffset + work.maxObservations,
-      );
-      const next = work.observationOffset + observations.length;
-      return {
-        answer: {
-          complete: next === all.length,
-          observations,
-          nextObservationOffset: next === all.length ? null : next,
-          memory: `next:${next}`,
-        },
-      };
-    });
-    const extractions = result.requests.filter(({ envelope }) => envelope.work.range);
-    expect(new Set(extractions.map(({ envelope }) => envelope.work.range.id)).size).toBe(1);
-    expect(extractions.at(-1)!.envelope.work.extractionMemory).toMatch(/^next:/);
-    expect(result.submissions).toHaveLength(24);
-    expect(result.submissions.map((item) => item.references[0]!.quote).join('')).toBe(source);
-    counts.push(extractions.length);
-    console.log(
-      JSON.stringify({
-        sizing: 'dense-24',
-        outputCeilingTokens: output,
-        extractionCalls: extractions.length,
-        totalModelCalls: result.requests.length,
-      }),
-    );
-  }
-  expect(counts[0]).toBeGreaterThan(counts[1]!);
-});
+it.each([512, 4096, 32_768])(
+  'never splits dense terminal output into host-directed extraction turns at %i',
+  async (output) => {
+    const source = Array.from({ length: 24 }, (_, i) => `accepted:t${i}|Do ${i};`).join('');
+    const result = await measure([source], output, { dense: true });
+    expect(result.evidence.map((entry) => entry.text).join('')).toBe(source);
+    expect(result.submitCalls).toBe(1);
+    expect(result.requests).toHaveLength(3);
+    if (output < 32_768) expect(result.error).toBeInstanceOf(ReviewerBudgetError);
+    else {
+      expect(result.error).toBeUndefined();
+      expect(result.submissions).toHaveLength(24);
+      expect(result.submissions!.map((item) => item.references[0]!.quote).join('')).toBe(source);
+    }
+  },
+);
 
-it('packs compact exact candidates inline rather than rereading every leaf', async () => {
+it('reads a compact exact task without serializing its leaves into the opening prompt', async () => {
   const task = {
     uuid: '12345678-1234-1234-1234-123456789abc',
     status: 'pending',
     description: 'Do it',
     ...Object.fromEntries(Array.from({ length: 130 }, (_, i) => [`custom${i}`, `value${i}`])),
   };
-  const result = await measure(
-    ['accepted:t|Do it'],
-    4096,
-    ({ work }, instruction) => {
-      if (work.catalogue?.[0]?.handle)
-        return { answer: { candidates: [work.catalogue[0].handle] } };
-      if (instruction.includes('All exact candidate fields')) {
-        expect(work.candidate).toEqual(task);
-        return { answer: { match: 'same' } };
-      }
-      if (instruction.includes('Materialize'))
-        return {
-          answer: {
-            reason: 'Update exact match',
-            submission: {
-              change: {
-                operation: 'update',
-                targetUuid: task.uuid,
-                fields: { priority: 'H' },
-                annotations: [],
-              },
-              question: null,
-              explanation: 'Exact existing task',
-            },
-          },
-        };
-      return { answer: captureAnswer(instruction) };
-    },
-    [task],
-  );
-  expect(result.requests.some(({ envelope }) => envelope.work.page)).toBe(false);
-  expect(result.submissions[0]!.expected).toEqual(snapshot(task));
+  const result = await measure(['accepted:t|Do it'], 4096, { tasks: [task] });
+  expect(result.error).toBeUndefined();
+  expect(JSON.parse(result.taskRead)).toEqual(task);
+  expect(result.requests).toHaveLength(4);
+  expect(JSON.stringify(result.requests[0])).not.toContain('custom129');
+  expect(result.submissions![0]!.expected).toEqual(snapshot(task));
 });
 
-it.each([512, 4096] as const)(
-  'pages a long singleton in exact field batches at output %i',
+it.each([512, 4096])(
+  'reads a long singleton by bounded exact JSON fragments at output %i',
   async (output) => {
     const task = {
       uuid: '12345678-1234-1234-1234-123456789abc',
@@ -298,95 +396,52 @@ it.each([512, 4096] as const)(
         Array.from({ length: 130 }, (_, i) => [`custom${i}`, String(i).padStart(100, 'x')]),
       ),
     };
-    const seen = new Map<string, unknown>();
-    const result = await measure(
-      ['accepted:t|Do it'],
-      output,
-      ({ work }, instruction) => {
-        if (work.catalogue?.[0]?.handle) {
-          expect(work.catalogue[0].identity).toEqual({ valueHandle: expect.any(String) });
-          expect(work.catalogue[0].uncertainIdentity).toBe(true);
-          return { answer: { candidates: [] } };
-        }
-        if (work.page) {
-          for (const field of work.page.fields as CaptureField[]) {
-            const key = field.path.join('.');
-            seen.set(
-              key,
-              'value' in field ? field.value : String(seen.get(key) ?? '') + field.text,
-            );
-          }
-          return { answer: { notes: 'Exact matching task' } };
-        }
-        if (instruction.includes('All exact candidate fields'))
-          return { answer: { match: 'same' } };
-        if (instruction.includes('Materialize'))
-          return {
-            answer: {
-              reason: 'Update exact match',
-              submission: {
-                change: {
-                  operation: 'update',
-                  targetUuid: task.uuid,
-                  fields: { priority: 'H' },
-                  annotations: [],
-                },
-                question: null,
-                explanation: 'Exact existing task',
-              },
-            },
-          };
-        return { answer: captureAnswer(instruction) };
-      },
-      [task],
-    );
-    expect(Object.fromEntries(seen)).toEqual(task);
-    const pages = result.requests.filter(({ envelope }) => envelope.work.page);
-    expect(pages.some(({ envelope }) => envelope.work.page.fields.length > 1)).toBe(true);
-    expect(pages.length).toBeLessThan(30);
-    expect(result.submissions[0]!.expected).toEqual(snapshot(task));
-    console.log(
-      JSON.stringify({
-        sizing: 'long-singleton',
-        outputCeilingTokens: output,
-        extractionCalls: result.requests.filter(({ envelope }) => envelope.work.range).length,
-        totalModelCalls: result.requests.length,
-        fieldBatchCalls: pages.length,
-      }),
-    );
+    const result = await measure(['accepted:t|Do it'], output, { tasks: [task] });
+    expect(JSON.parse(result.taskRead)).toEqual(task);
+    expect(result.requests.length).toBeGreaterThan(4);
+    expect(readTaskCatalog).toHaveBeenCalledOnce();
+    if (output === 512) expect(result.error).toBeInstanceOf(ReviewerBudgetError);
+    else {
+      expect(result.error).toBeUndefined();
+      expect(result.submissions![0]!.expected).toEqual(snapshot(task));
+    }
   },
 );
 
-it('fits late exact context plus escaped continuation memory in the complete SDK payload', async () => {
-  const source = 'x'.repeat(40 * 1024);
-  let inspected = false;
-  let originalRange: any;
-  const result = await measure([source], 4096, ({ work, detail }, instruction) => {
-    if (!inspected && work.range.offset > 0) {
-      inspected = true;
-      originalRange = work.range;
-      return {
-        inspect: { kind: 'context', rangeId: work.range.id, messageOffset: 0 },
-        memory: 'memo\n"'.repeat(250),
-      };
-    }
-    if (detail) {
-      expect(detail.groups[0].entries[0].text).toBe(source.slice(0, detail.nextOffset));
-      expect(detail.nextOffset).toBeGreaterThan(0);
-      expect(originalRange.offset).toBeGreaterThan(0);
-      return { answer: { complete: true, observations: [] } };
-    }
-    return { answer: captureAnswer(instruction, true) };
-  });
-  expect(inspected).toBe(true);
-  expect(result.requests.some(({ envelope }) => envelope.memory.includes('memo'))).toBe(true);
+it('retains escaped earlier context in the SDK history without making it eligible evidence', async () => {
+  const source = 'memo\n"😀'.repeat(8000);
+  const result = await measure(['Nothing actionable.'], 4096, { context: source });
+  expect(result.error).toBeUndefined();
+  expect(result.submissions).toEqual([]);
+  expect(result.contextText.join('')).toBe(source);
+  expect(JSON.stringify(result.requests.at(-1))).toContain('memo');
+  expect(() =>
+    result.current.validateReferences([
+      {
+        sessionId: 'sizing',
+        branchId: 'entry-0',
+        entryId: 'older',
+        editId: null,
+        offset: 0,
+        quote: source.slice(0, 10),
+      },
+    ]),
+  ).toThrow('eligible evidence');
 });
 
-it('rejects an oversized tool result even when a local provider ignores its output ceiling', async () => {
-  expect(captureReplySize({ complete: true, observations: [] })).toBeLessThan(512);
-  await expect(
-    measure(['nothing'], 512, () => ({
-      answer: { complete: true, observations: [], extra: 'x'.repeat(1000) },
-    })),
-  ).rejects.toThrow('reply exceeds output allowance');
+it('fails when retained evidence exceeds context, without compaction, restart or partial result', async () => {
+  const result = await measure(['😀'.repeat(40_000)], 4096, { contextWindow: 90_000 });
+  expect(result.error).toBeInstanceOf(ReviewerBudgetError);
+  expect(result.submissions).toBeUndefined();
+  expect(result.submitCalls).toBe(0);
+  expect(result.requests.length).toBeGreaterThan(1);
+  expect(() => result.current.completion([])).toThrow('Read all evidence');
+});
+
+it('rejects oversized tool-call arguments even if the local provider ignores its output ceiling', async () => {
+  const result = await measure(['nothing'], 512, { oversized: true });
+  expect(result.error).toBeInstanceOf(ReviewerBudgetError);
+  expect(result.submitCalls).toBe(1);
+  expect(result.submissions).toBeUndefined();
+  expect(result.requests).toHaveLength(3);
 });

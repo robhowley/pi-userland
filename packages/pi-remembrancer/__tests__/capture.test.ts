@@ -5,7 +5,7 @@ import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
 import { prepareReview } from '../extensions/remembrancer/evidence.js';
-import { CaptureReview } from '../extensions/remembrancer/capture-review.js';
+import { CaptureArtifacts } from '../extensions/remembrancer/capture-artifacts.js';
 import * as captureReviewer from '../extensions/remembrancer/capture.js';
 import { preserveHandoff } from '../extensions/remembrancer/capture-handoff.js';
 import {
@@ -14,14 +14,24 @@ import {
 } from '../extensions/remembrancer/capture-worker.js';
 import { captureExecution } from '../extensions/remembrancer/config.js';
 import { captureExtension } from './fixtures/capture-extension.js';
-import { runReviewerStep } from '../extensions/remembrancer/reviewer.js';
-import { captureFields, answerCapture, captureAnswer, stepWork } from './fixtures/capture-steps.js';
+import { runReviewer } from '../extensions/remembrancer/reviewer.js';
+import {
+  answerCaptureReview,
+  captureDisposition,
+  captureRecord,
+  captureReference,
+  type CaptureScenario,
+  type CaptureRecord,
+} from './fixtures/capture-reviewer.js';
 import { readTaskCatalog } from '../extensions/remembrancer/taskwarrior.js';
 import { detailPages } from '../extensions/remembrancer/review-findings.js';
 import { estimateReviewerTokens } from '../extensions/remembrancer/reviewer-budget.js';
-import * as proposalReads from '../extensions/remembrancer/proposal-read.js';
+import type { Proposal } from '../extensions/remembrancer/proposals.js';
 
-vi.mock('../extensions/remembrancer/reviewer.js', () => ({ runReviewerStep: vi.fn() }));
+vi.mock('../extensions/remembrancer/reviewer.js', async (original) => ({
+  ...(await original<typeof import('../extensions/remembrancer/reviewer.js')>()),
+  runReviewer: vi.fn(),
+}));
 vi.mock('../extensions/remembrancer/capture-worker.js', async (original) => ({
   ...(await original<typeof import('../extensions/remembrancer/capture-worker.js')>()),
   launchCaptureWorker: vi.fn().mockResolvedValue(123),
@@ -37,7 +47,23 @@ let db: CheckpointStore;
 let handlers: ReturnType<typeof captureExtension>['handlers'];
 let fixture: ReturnType<typeof captureExtension>;
 let config: ReturnType<typeof captureExtension>['settings'];
-const runner = vi.mocked(runReviewerStep);
+const runner = vi.mocked(runReviewer);
+const intent = (description: string, question: string | null = null) => ({
+  change: { operation: 'add' as const, fields: { description }, annotations: [] },
+  question,
+  explanation: 'Reviewer-finalized obligation',
+});
+const state = (branchId: string, description: string, status = 'active') => ({
+  branchId,
+  state: {
+    summary: description,
+    status,
+    draft: { change: intent(description).change, question: null },
+  },
+});
+function scenario(answer: CaptureScenario) {
+  runner.mockImplementation((input) => answerCaptureReview(input, answer));
+}
 function message(id: string, parentId: string | null, content: string) {
   return (
     JSON.stringify({
@@ -74,20 +100,42 @@ beforeEach(() => {
   ({ dir, file, ctx, handlers, settings: config } = fixture);
   db = fixture.db!;
   config({ autoCapture: true });
-  runner.mockImplementation((input) => answerCapture(input));
+  scenario(async ({ evidence, lookup }) => {
+    await lookup('remembrancer_tasks', { query: 'comparison' });
+    const promise = evidence.find((entry) => entry.entryId === 'promise');
+    return promise
+      ? {
+          records: [
+            captureRecord(
+              'comparison',
+              [{ kind: 'accepted', reference: captureReference(promise) }],
+              [state(promise.branchId, 'Send Maya the comparison')],
+            ),
+          ],
+          dispositions: [
+            captureDisposition(
+              ['comparison'],
+              intent('Send Maya the comparison'),
+              'Accepted outgoing obligation',
+            ),
+          ],
+        }
+      : { records: [], dispositions: [] };
+  });
   vi.mocked(readTaskCatalog).mockResolvedValue([]);
   vi.mocked(launchCaptureWorker).mockResolvedValue(123);
 });
 afterEach(async () => fixture.close(ctx));
 
-it('captures only the outgoing frozen session and skips covered evidence', async () => {
+it('captures only outgoing frozen evidence and skips model work for covered scope', async () => {
   db.enroll('other', '/must-not-read');
   const enrolled = db.sources();
   const settings = readFileSync(join(dir, 'agent', 'settings.json'), 'utf8');
   await capture();
   const calls = runner.mock.calls.length;
-  await capture();
+  const coveredId = await capture();
   expect(runner).toHaveBeenCalledTimes(calls);
+  expect(db.captureJob(coveredId)?.state).toBe('completed');
   expect(db.reviewed().map((item) => item.sessionId)).toEqual(['outgoing']);
   expect(db.proposals()).toHaveLength(1);
   expect(db.sources().find((source) => source.sessionId === 'other')).toEqual(enrolled[0]);
@@ -95,7 +143,9 @@ it('captures only the outgoing frozen session and skips covered evidence', async
   expect(runner.mock.calls.every(([input]) => input.sessionId === 'outgoing')).toBe(true);
   expect(
     runner.mock.calls.every(
-      ([input]) => input.tools.map((tool) => tool.name).join() === 'remembrancer_step',
+      ([input]) =>
+        input.tools.map((tool) => tool.name).join() ===
+        'remembrancer_read,remembrancer_context,remembrancer_tasks,remembrancer_proposals,remembrancer_submit',
     ),
   ).toBe(true);
   expect(readTaskCatalog).toHaveBeenCalledWith(undefined, {
@@ -118,9 +168,8 @@ it('rejects malformed saved scope before model work and preserves other enrolled
   expect(readFileSync(join(dir, 'agent', 'settings.json'), 'utf8')).toBe(settings);
   expect(db.captureJob(id)?.state).toBe('failed');
 });
-
 it.each(['catalogue', 'cached candidate'])(
-  'retains all published state on a stale typed %s and retries the whole attempt with fresh state',
+  'retains published state on stale %s and retries the whole continuing attempt',
   async (when) => {
     await capture();
     const original = db.proposals()[0]!;
@@ -138,19 +187,8 @@ it.each(['catalogue', 'cached candidate'])(
       coverage: db.reviewed(),
       notice: db.proposalNotice(),
     };
-    appendFileSync(
-      file,
-      message('later', 'promise', 'completion:other|I sent the unrelated later comparison.'),
-    );
-    const reads = vi.spyOn(proposalReads, 'readProposals');
-    const typedReads = vi.spyOn(proposalReads, 'readProposal');
-    const originalLookup = CheckpointStore.prototype.proposal;
-    const lookup = vi.spyOn(CheckpointStore.prototype, 'proposal');
+    appendFileSync(file, message('later', 'promise', 'I sent the unrelated later comparison.'));
     let changed = false;
-    lookup.mockImplementation(function (this: CheckpointStore, id: string) {
-      const saved = originalLookup.call(this, id);
-      return saved && changed ? { ...saved, revision: saved.revision + 1 } : saved;
-    });
     const originalGeneration = CheckpointStore.prototype.contextGeneration;
     const generation = vi
       .spyOn(CheckpointStore.prototype, 'contextGeneration')
@@ -166,13 +204,18 @@ it.each(['catalogue', 'cached candidate'])(
       if (when === 'catalogue') changed = true;
       return page;
     });
-    runner.mockImplementation((input) => {
-      const work = stepWork(input.instruction);
-      if (when === 'cached candidate' && work.catalogue?.[0]?.handle) {
-        changed = true;
-        return answerCapture(input, { candidates: work.catalogue.map((item) => item.handle) });
-      }
-      return answerCapture(input);
+    scenario(async ({ lookup }) => {
+      const page = await lookup<{ proposals: { id: string; revision: number }[] }>(
+        'remembrancer_proposals',
+        {},
+      );
+      changed = true;
+      await lookup('remembrancer_proposals', {
+        action: 'detail',
+        id: page.proposals[0]!.id,
+        revision: page.proposals[0]!.revision,
+      });
+      throw new Error('Stale lookup accepted');
     });
     const id = await capture();
     expect(db.captureJob(id)).toMatchObject({
@@ -181,21 +224,9 @@ it.each(['catalogue', 'cached candidate'])(
       retryEligible: true,
     });
     expect(changed).toBe(true);
-    if (when === 'cached candidate') {
-      expect(typedReads.mock.results.at(-1)).toMatchObject({
-        type: 'throw',
-        value: expect.objectContaining({ message: expect.stringContaining('Stale proposal') }),
-      });
-    } else {
-      expect(typedReads).not.toHaveBeenCalled();
-      expect(new Set(generation.mock.results.map((result) => result.value)).size).toBe(2);
-    }
-    expect(reads).not.toHaveBeenCalled();
-    lookup.mockRestore();
+    expect(new Set(generation.mock.results.map((result) => result.value)).size).toBe(2);
     generation.mockRestore();
     list.mockRestore();
-    reads.mockRestore();
-    typedReads.mockRestore();
     expect({
       proposals: db.proposals(),
       coverage: db.reviewed(),
@@ -208,12 +239,38 @@ it.each(['catalogue', 'cached candidate'])(
     });
     const proposals = db.proposals();
     let sawFresh = false;
-    runner.mockImplementation((input) => {
-      const work = JSON.parse(
-        input.instruction.slice(input.instruction.lastIndexOf('\n') + 1),
-      ).work;
-      if (JSON.stringify(work).includes('Fresh state for whole retry')) sawFresh = true;
-      return answerCapture(input);
+    scenario(async ({ evidence, lookup }) => {
+      let request: object | null = { action: 'detail', id: edited.id, revision: edited.revision };
+      let json = '';
+      while (request) {
+        const page: { json: string; next: object | null } = await lookup(
+          'remembrancer_proposals',
+          request,
+        );
+        json += page.json;
+        request = page.next;
+      }
+      sawFresh = (JSON.parse(json) as Proposal).draft!.question === 'Fresh state for whole retry';
+      return {
+        records: [
+          captureRecord(
+            'later',
+            [{ kind: 'completion', reference: captureReference(evidence[0]!) }],
+            [state(evidence[0]!.branchId, 'Unrelated later comparison', 'completed')],
+            {
+              candidates: [
+                {
+                  kind: 'proposal',
+                  id: edited.id,
+                  revision: edited.revision,
+                  judgment: 'different',
+                },
+              ],
+            },
+          ),
+        ],
+        dispositions: [captureDisposition(['later'], null, 'Untracked unrelated completion')],
+      };
     });
     const calls = runner.mock.calls.length;
     const inbox = join(dirname(db.file), 'capture-inbox');
@@ -228,8 +285,7 @@ it.each(['catalogue', 'cached candidate'])(
     expect(db.reviewed().map((row) => row.entryId)).toEqual(['promise', 'later']);
   },
 );
-
-it('revises a differently labelled saved proposal from its exact edited draft, without duplicating it', async () => {
+it('revises a differently labelled saved proposal from its exact edited draft without duplicating it', async () => {
   await capture();
   const first = db.proposals()[0]!;
   const edited = db.editProposal(first.id, first.revision, {
@@ -246,35 +302,42 @@ it('revises a differently labelled saved proposal from its exact edited draft, w
     message('deployment', 'promise', 'accepted:deployment|Send the deployment report'),
   );
   let readExact = false;
-  runner.mockImplementation((input) => {
-    const work = JSON.parse(input.instruction.slice(input.instruction.lastIndexOf('\n') + 1)).work;
-    let answer = captureAnswer(input.instruction);
-    if (work.catalogue?.[0]?.handle) {
-      expect(JSON.stringify(work.catalogue)).toContain('Send the deployment report');
-      answer = { candidates: work.catalogue.map((item: { handle: string }) => item.handle) };
-    }
-    if (work.page) {
-      const identity = captureFields(work.page).some(
-        (field) =>
-          field.path.join('.') === 'effective.change.fields.description' &&
-          'text' in field &&
-          field.text.includes('deployment'),
-      );
-      readExact ||= identity;
-      answer = {
-        notes:
-          identity || work.notes === 'same deployment' ? 'same deployment' : 'identity unresolved',
-      };
-    }
-    if (input.instruction.includes('All exact candidate fields')) {
-      readExact ||=
-        work.candidate.effective.change.fields.description === 'Send the deployment report';
-      answer = {
-        match: readExact ? 'same' : 'different',
-        state: { ...work.state, draft: work.candidate.effective },
-      };
-    }
-    return answerCapture(input, answer);
+  scenario(async ({ evidence, lookup }) => {
+    const page = await lookup<{ json: string; next: unknown }>('remembrancer_proposals', {
+      action: 'detail',
+      id: edited.id,
+      revision: edited.revision,
+    });
+    expect(page.next).toBeNull();
+    const detail = JSON.parse(page.json) as Proposal;
+    readExact =
+      detail.draft?.change.operation === 'add' &&
+      detail.draft.change.fields.description === 'Send the deployment report';
+    return {
+      records: [
+        captureRecord(
+          'deployment',
+          [{ kind: 'accepted', reference: captureReference(evidence[0]!) }],
+          [state(evidence[0]!.branchId, 'Send the deployment report')],
+          {
+            candidates: [
+              { kind: 'proposal', id: detail.id, revision: detail.revision, judgment: 'same' },
+            ],
+          },
+        ),
+      ],
+      dispositions: [
+        captureDisposition(
+          ['deployment'],
+          {
+            change: detail.draft!.change,
+            question: detail.draft!.question,
+            explanation: 'Preserve edited deployment wording',
+          },
+          'Same edited obligation',
+        ),
+      ],
+    };
   });
   await capture();
   expect(readExact).toBe(true);
@@ -289,54 +352,49 @@ it('revises a differently labelled saved proposal from its exact edited draft, w
     'deployment',
   ]);
 });
-
-it('moves every finding and removes absorbed dispositions before closing a merged record', () => {
-  const current = new CaptureReview(prepareReview([{ file, sessionId: 'outgoing' }], []), () => {});
-  const range = current.nextExtraction()!;
-  current.acceptExtraction(range, ['f1', 'f2', 'f3']);
-  current.reconcileFinding('f1', 'r1');
-  current.reconcileFinding('f2', 'r2');
-  current.mergeRecords('r1', ['r2']);
-  expect(() => current.disposeRecord('r2', null)).toThrow('Unknown');
-  expect(() => current.finishReconciliation()).toThrow('every');
-  current.reconcileFinding('f3', 'r1');
-  current.disposeRecord('r1', null);
-  expect(() => current.mergeRecords('r1', ['r2'])).toThrow();
-  expect(current.finishReconciliation()).toEqual([]);
-  expect(() => current.completion([])).not.toThrow();
-});
-
-it('keeps extraction acknowledgement separate from complete reconciliation/dispositions', () => {
-  const current = new CaptureReview(prepareReview([{ file, sessionId: 'outgoing' }], []), () => {});
-  const range = current.nextExtraction()!;
-  current.acceptExtraction(range, ['f1']);
-  expect(() => current.completion([])).toThrow('reconciliation');
-  expect(() => current.finishReconciliation()).toThrow('every');
-  current.reconcileFinding('f1', 'r1');
-  expect(() => current.finishReconciliation()).toThrow('every');
-  current.disposeRecord('r1', null);
-  expect(current.finishReconciliation()).toEqual([]);
-  expect(() => current.completion([])).not.toThrow();
-  expect(() => current.reconcileFinding('f1', 'r1')).toThrow();
-});
-it('does not drain the legacy cursor, accepts empty findings only after every range', async () => {
-  transcript([['long', null, '😀\\"\n'.repeat(1000)]]);
-  const page = vi.spyOn(CaptureReview.prototype, 'page').mockImplementation(() => {
-    throw new Error('Legacy cursor used');
+it.each(['missing disposition', 'duplicate disposition', 'unknown record'])(
+  'rejects %s rather than silently losing a declared record',
+  async (failure) => {
+    scenario(({ evidence }) => {
+      const records = [
+        captureRecord(
+          'one',
+          [{ kind: 'accepted', reference: captureReference(evidence[0]!) }],
+          [state(evidence[0]!.branchId, 'Comparison')],
+        ),
+      ];
+      const outcome = captureDisposition(['one'], intent('Comparison'), 'Accepted');
+      return {
+        records,
+        dispositions:
+          failure === 'missing disposition'
+            ? []
+            : failure === 'duplicate disposition'
+              ? [outcome, outcome]
+              : [captureDisposition(['unknown'], null, 'Unknown')],
+      };
+    });
+    const id = await capture();
+    expect(db.captureJob(id)?.state).toBe('failed');
+    expect(db.reviewed()).toEqual([]);
+    expect(db.proposals()).toEqual([]);
+  },
+);
+it('delivers every Unicode fragment and accepts agent-declared no commitments', async () => {
+  const text = '😀\\"\n'.repeat(20000);
+  transcript([['long', null, text]]);
+  scenario(({ evidence }) => {
+    expect(evidence.length).toBeGreaterThan(1);
+    expect(evidence.map((entry) => entry.text).join('')).toBe(text);
+    for (const entry of evidence)
+      expect(entry.text).not.toMatch(/^[\uDC00-\uDFFF]|[\uD800-\uDBFF]$/u);
+    return { records: [], dispositions: [] };
   });
-  runner.mockImplementation((input) =>
-    answerCapture(input, captureAnswer(input.instruction, true)),
-  );
   await capture();
-  const ranges = runner.mock.calls
-    .map(([input]) => stepWork(input.instruction).range)
-    .filter((range): range is NonNullable<typeof range> => range !== undefined);
-  expect(ranges.map((range) => range.text).join('')).toBe('😀\\"\n'.repeat(1000));
-  expect(page).not.toHaveBeenCalled();
   expect(db.reviewed()).toHaveLength(1);
   expect(db.proposals()).toEqual([]);
 });
-it('folds distant corrections, repeated intent and completion into the original record', async () => {
+it('retains reviewer-folded distant corrections, repeated intent and completion', async () => {
   const entries: [string, string | null, string][] = [['a', null, 'accepted:alpha|Friday']];
   let parent = 'a';
   for (let index = 0; index < 20; index++) {
@@ -349,16 +407,40 @@ it('folds distant corrections, repeated intent and completion into the original 
     ['repeat', 'correction', 'accepted:alpha|Monday'],
   );
   transcript(entries);
+  scenario(({ evidence }) => {
+    const relevant = evidence.filter((entry) =>
+      ['a', 'repeat', 'correction', 'done'].includes(entry.entryId),
+    );
+    const done = relevant.some((entry) => entry.entryId === 'done');
+    return {
+      records: [
+        captureRecord(
+          'alpha',
+          relevant.map((entry) => ({
+            kind: entry.text.split(':')[0]!,
+            reference: captureReference(entry),
+          })),
+          [state(evidence[0]!.branchId, 'Monday', done ? 'completed' : 'active')],
+        ),
+      ],
+      dispositions: [
+        captureDisposition(
+          ['alpha'],
+          done ? null : intent('Monday'),
+          'Distant correction and repeat are the same obligation',
+        ),
+      ],
+    };
+  });
   await capture();
   expect(db.proposals()).toHaveLength(1);
   expect(db.proposals()[0]!.change).toMatchObject({ fields: { description: 'Monday' } });
-  expect(db.proposals()[0]!.sources.map((item) => item.entryId)).toEqual([
-    'a',
-    'repeat',
-    'correction',
-  ]);
-  // This later capture matches saved proposals through their read API below; use one
-  // frozen attempt here to prove distant completion supersedes a staged add.
+  expect(
+    db
+      .proposals()[0]!
+      .sources.map((item) => item.entryId)
+      .sort(),
+  ).toEqual(['a', 'correction', 'repeat']);
   transcript([...entries, ['done', 'repeat', 'completion:alpha|done']]);
   const independent = new CheckpointStore(join(dir, 'independent.sqlite'));
   const inbox = join(dir, 'independent-inbox');
@@ -376,29 +458,46 @@ it('folds distant corrections, repeated intent and completion into the original 
     independent.close();
   }
 });
-it('resolves an earlier pronoun against later intent and retains ambiguous sibling changes as a question', async () => {
+it('retains reviewer-resolved pronouns and conflicting sibling changes as a question', async () => {
   transcript([
     ['pronoun', null, 'reference:it|actually Monday'],
     ['intent', 'pronoun', 'accepted:alpha|Friday'],
     ['left', 'intent', 'correction:alpha|Monday'],
     ['right', 'intent', 'correction:alpha|Tuesday'],
   ]);
+  scenario(({ evidence }) => {
+    expect(
+      evidence.filter((entry) => entry.entryId === 'intent').map((entry) => entry.branchId),
+    ).toEqual(['left', 'right']);
+    return {
+      records: [
+        captureRecord(
+          'alpha',
+          evidence.map((entry) => ({
+            kind: entry.text.split(':')[0]!,
+            reference: captureReference(entry),
+          })),
+          [state('left', 'Monday'), state('right', 'Tuesday')],
+        ),
+      ],
+      dispositions: [
+        captureDisposition(
+          ['alpha'],
+          intent('Monday', 'Monday or Tuesday?'),
+          'Sibling corrections conflict',
+        ),
+      ],
+    };
+  });
   await capture();
   expect(db.proposals()).toHaveLength(1);
-  expect(db.proposals()[0]!.question).toBeTruthy();
-  const extraction = runner.mock.calls
-    .map(([input]) => stepWork(input.instruction).range)
-    .filter((range): range is NonNullable<typeof range> => range !== undefined);
-  expect(extraction.filter((range) => range.occurrences[0]!.entryId === 'intent')).toHaveLength(1);
-  expect(
-    extraction.find((range) => range.occurrences[0]!.entryId === 'intent')!.occurrenceCount,
-  ).toBe(2);
+  expect(db.proposals()[0]!.question).toBe('Monday or Tuesday?');
   expect(new Set(db.proposals()[0]!.sources.map((source) => source.branchId))).toEqual(
     new Set(['left', 'right']),
   );
 });
 it.each(['refusal', 'reference'])(
-  'keeps %s outcomes behind a question rather than an unconditional addition',
+  'keeps %s outcomes behind a reviewer-supplied question',
   async (kind) => {
     transcript(
       kind === 'refusal'
@@ -408,13 +507,40 @@ it.each(['refusal', 'reference'])(
           ]
         : [['unresolved', null, 'reference:it|done']],
     );
+    scenario(({ evidence }) => ({
+      records: [
+        captureRecord(
+          'alpha',
+          evidence.map((entry) => ({
+            kind: entry.text.split(':')[0]!,
+            reference: captureReference(entry),
+          })),
+          [
+            state(
+              evidence[0]!.branchId,
+              'Send alpha',
+              kind === 'refusal' ? 'refused' : 'uncertain',
+            ),
+          ],
+        ),
+      ],
+      dispositions: [
+        captureDisposition(
+          ['alpha'],
+          intent(
+            'Send alpha',
+            kind === 'refusal' ? 'Should this be cancelled?' : 'Which obligation was completed?',
+          ),
+          'Unresolved interpretation',
+        ),
+      ],
+    }));
     await capture();
     expect(db.proposals()).toHaveLength(1);
     expect(db.proposals()[0]!.question).toBeTruthy();
   },
 );
-
-it('pages many findings and a growing one-obligation history without whole-array model output', async () => {
+it('accepts many explicitly declared commitments and one growing correction history without a host output catalogue', async () => {
   const entries: [string, string | null, string][] = [];
   let parent: string | null = null;
   for (let index = 0; index < 80; index++) {
@@ -429,16 +555,40 @@ it('pages many findings and a growing one-obligation history without whole-array
   }
   transcript(entries);
   ctx = { ...ctx, model: { ...ctx.model!, contextWindow: 22000, maxTokens: 4096 } };
+  scenario(({ evidence }) => ({
+    records: Array.from({ length: 80 }, (_, index) =>
+      captureRecord(
+        `task${index}`,
+        evidence
+          .filter(
+            (entry) =>
+              entry.entryId === `intent${index}` ||
+              (index === 0 && entry.entryId.startsWith('update')),
+          )
+          .map((entry) => ({
+            kind: entry.entryId.startsWith('update') ? 'correction' : 'accepted',
+            reference: captureReference(entry),
+          })),
+        [state(evidence[0]!.branchId, index === 0 ? 'Update 24' : `Do task ${index}`)],
+      ),
+    ),
+    dispositions: Array.from({ length: 80 }, (_, index) =>
+      captureDisposition(
+        [`task${index}`],
+        intent(index === 0 ? 'Update 24' : `Do task ${index}`),
+        'Reviewer-finalized commitment',
+      ),
+    ),
+  }));
   await capture();
   expect(db.proposalCount()).toBe(80);
   expect(
     db.proposals(undefined, 0, 100).find((item) => item.sources.length > 1)!.sources,
   ).toHaveLength(26);
-  expect(runner.mock.calls.every(([input]) => !input.instruction.includes('"proposals":['))).toBe(
-    true,
-  );
+  expect(runner).toHaveBeenCalledOnce();
+  expect(runner.mock.calls[0]![0].instruction).not.toContain('"proposals":[');
 });
-it.each(['early extraction', 'reconciliation', 'cleanup', 'pre-publication'])(
+it.each(['early evidence', 'matching', 'cleanup', 'pre-publication'])(
   'commits nothing after %s failure',
   async (failure) => {
     transcript([
@@ -446,34 +596,53 @@ it.each(['early extraction', 'reconciliation', 'cleanup', 'pre-publication'])(
       ['b', 'a', 'accepted:beta|Send beta'],
     ]);
     const before = { sources: db.sources(), notice: db.proposalNotice() };
-    let calls = 0;
     let injected = false;
-    runner.mockImplementation(async (input) => {
-      calls++;
-      if (failure === 'early extraction' && calls === 2) {
-        injected = true;
-        throw new Error('fixture extraction failed');
-      }
-      if (failure === 'reconciliation' && input.instruction.includes('Scan this discovery')) {
+    scenario(async ({ evidence, lookup }) => {
+      if (failure === 'matching') {
+        await lookup('remembrancer_tasks', {});
         injected = true;
         throw new Error('fixture matching failed');
       }
-      const result = await answerCapture(input);
       expect(db.proposals()).toEqual([]);
       expect(db.reviewed()).toEqual([]);
-      const work = stepWork(input.instruction);
-      if (failure === 'cleanup' && work.observation && !work.catalogue && !work.candidate) {
+      return {
+        records: evidence.map((entry, index) =>
+          captureRecord(
+            String(index),
+            [{ kind: 'accepted', reference: captureReference(entry) }],
+            [state(entry.branchId, index ? 'Send beta' : 'Send alpha')],
+          ),
+        ),
+        dispositions: evidence.map((_, index) =>
+          captureDisposition(
+            [String(index)],
+            intent(index ? 'Send beta' : 'Send alpha'),
+            'Accepted',
+          ),
+        ),
+      };
+    });
+    if (failure === 'early evidence')
+      runner.mockImplementation(async () => {
+        injected = true;
+        throw new Error('fixture evidence failed');
+      });
+    if (failure === 'cleanup') {
+      const dispose = CaptureArtifacts.prototype.dispose;
+      vi.spyOn(CaptureArtifacts.prototype, 'dispose').mockImplementation(function (
+        this: CaptureArtifacts,
+      ) {
+        dispose.call(this);
         injected = true;
         throw new Error('fixture cleanup failed');
-      }
-      return result;
-    });
+      });
+    }
     const publication = vi.spyOn(CheckpointStore.prototype, 'finishCaptureJob');
     if (failure === 'pre-publication')
       publication.mockImplementationOnce((_owner, _attempt, submissions) => {
         expect(submissions.map((item) => item.change)).toEqual([
-          { operation: 'add', fields: { description: 'Send alpha' }, annotations: [] },
-          { operation: 'add', fields: { description: 'Send beta' }, annotations: [] },
+          intent('Send alpha').change,
+          intent('Send beta').change,
         ]);
         expect(submissions.every((item) => item.references.length === 1)).toBe(true);
         injected = true;
@@ -496,14 +665,14 @@ it.each(['early extraction', 'reconciliation', 'cleanup', 'pre-publication'])(
   },
 );
 it.each(['applying', 'uncertain'] as const)(
-  'publishes nothing, including an unrelated staged add, when a %s match is unresolved',
-  async (state) => {
+  'publishes nothing, including an unrelated declared add, when a %s match is unresolved',
+  async (savedState) => {
     await capture();
     const saved = db.proposals()[0]!;
     const claimed = db.claimProposal(saved.id, saved.revision);
-    if (state === 'uncertain')
+    if (savedState === 'uncertain')
       db.recordProposalResult(claimed.id, claimed.revision, claimed.claim!, {
-        state,
+        state: savedState,
         verified: null,
         error: 'Synthetic unresolved outcome',
       });
@@ -519,36 +688,48 @@ it.each(['applying', 'uncertain'] as const)(
       message('unrelated', 'promise', 'accepted:separate|Send separate report') +
         message('repeat', 'unrelated', 'accepted:comparison|Send Maya the comparison'),
     );
-    runner.mockImplementation(async (input) => {
-      const work = JSON.parse(input.instruction.split('\n').at(-1)!).work;
-      if (work.catalogue?.[0]?.handle)
-        return answerCapture(input, {
-          candidates:
-            work.state.summary === 'comparison'
-              ? work.catalogue.map((item: { handle: string }) => item.handle)
+    scenario(async ({ evidence, lookup }) => {
+      const page = await lookup<{ proposals: { id: string; revision: number }[] }>(
+        'remembrancer_proposals',
+        {},
+      );
+      const candidate = page.proposals[0]!;
+      const records: CaptureRecord[] = evidence.map((entry, index) =>
+        captureRecord(
+          String(index),
+          [{ kind: 'accepted', reference: captureReference(entry) }],
+          [state(entry.branchId, index ? 'Send Maya the comparison' : 'Send separate report')],
+          {
+            candidates: index
+              ? [
+                  {
+                    kind: 'proposal',
+                    id: candidate.id,
+                    revision: candidate.revision,
+                    judgment: 'same',
+                  },
+                ]
               : [],
-        });
-      if (input.instruction.includes('All exact candidate fields'))
-        return answerCapture(input, { match: 'same' });
-      return answerCapture(input);
+          },
+        ),
+      );
+      return {
+        records,
+        dispositions: [
+          captureDisposition(['0'], intent('Send separate report'), 'Separate obligation'),
+          captureDisposition(
+            ['1'],
+            intent('Send Maya the comparison'),
+            'Unresolved saved application',
+          ),
+        ],
+      };
     });
     const review = vi.spyOn(captureReviewer, 'reviewPreparedCapture');
-    const disposed = vi.spyOn(CaptureReview.prototype, 'disposeRecord');
     const publication = vi.spyOn(CheckpointStore.prototype, 'finishCaptureJob');
     const id = await capture();
     expect(review).toHaveBeenCalledOnce();
     await expect(review.mock.results[0]!.value).rejects.toThrow('verify-only');
-    expect(disposed).toHaveBeenCalledExactlyOnceWith(
-      expect.any(String),
-      expect.objectContaining({
-        change: {
-          operation: 'add',
-          fields: { description: 'Send separate report' },
-          annotations: [],
-        },
-        references: [expect.objectContaining({ entryId: 'unrelated' })],
-      }),
-    );
     expect(publication).not.toHaveBeenCalled();
     expect(db.captureJob(id)?.state).toBe('failed');
     expect({
@@ -562,6 +743,7 @@ it.each(['applying', 'uncertain'] as const)(
 );
 it('keeps late appends/edits outside scope and never rereads live history', async () => {
   let changed = false;
+  const answer = runner.getMockImplementation()!;
   runner.mockImplementation(async (input) => {
     if (!changed) {
       appendFileSync(
@@ -578,14 +760,14 @@ it('keeps late appends/edits outside scope and never rereads live history', asyn
       );
       changed = true;
     }
-    return answerCapture(input);
+    return answer(input);
   });
   await capture();
   expect(db.proposals()[0]!.sources[0]!.quote).toBe('Send Maya the comparison');
   const next = prepareReview([{ file, sessionId: 'outgoing' }], db.reviewed());
   expect(next.evidence.map((item) => item.text)).toEqual(['Edited after freeze', 'Late append']);
 });
-it('host pages exact oversized structured fields, preserving Unicode and offsets', () => {
+it('host pages exact oversized structured fields preserving Unicode and offsets', () => {
   const original = '😀\\"\n'.repeat(10000);
   const envelope = (page: object, index: number) => ({ page, index, notes: 'Exact field' });
   const pages = [...detailPages({ draft: { explanation: original } }, 512, [], envelope)] as {
@@ -636,7 +818,7 @@ it('manual foreground remains begin/next/finish with checkpoint-only finish', as
   expect(db.proposalNotice()).toEqual(notice);
 });
 it.each(['empty', 'tool-only', 'covered'])(
-  'makes no reviewer request for %s scope',
+  'makes no reviewer request and completes %s scope',
   async (kind) => {
     if (kind !== 'covered') transcript([]);
     if (kind === 'tool-only')
@@ -676,7 +858,6 @@ it.each(['empty', 'tool-only', 'covered'])(
     }).toEqual(before);
   },
 );
-
 it.each(['capture', 'release', 'close'])(
   'reports safe shutdown %s diagnostics and still closes the database',
   async (phase) => {
@@ -709,8 +890,9 @@ it.each(['capture', 'release', 'close'])(
       expect.stringContaining(`Capture ${expectedPhase}: shutdown-failed (EACCES)`),
       'warning',
     );
-    const diagnostics = JSON.stringify(vi.mocked(ctx.ui.notify).mock.calls);
-    expect(diagnostics).not.toMatch(/SECRET|provider body|credential-command|contention/);
+    expect(JSON.stringify(vi.mocked(ctx.ui.notify).mock.calls)).not.toMatch(
+      /SECRET|provider body|credential-command|contention/,
+    );
     expect(close).toHaveBeenCalledOnce();
     expect(db.reviewed()).toEqual([]);
     expect(db.proposals()).toEqual([]);
@@ -718,7 +900,6 @@ it.each(['capture', 'release', 'close'])(
     db.releaseReview();
   },
 );
-
 it.each(['SECRET non-Error provider failure', { code: 'ENOSPC', message: 'SECRET command' }])(
   'does not expose arbitrary rejected values in shutdown diagnostics: %j',
   async (failure) => {
@@ -733,7 +914,6 @@ it.each(['SECRET non-Error provider failure', { code: 'ENOSPC', message: 'SECRET
     if (typeof failure === 'object') expect(diagnostics).toContain('ENOSPC');
   },
 );
-
 it('closes the shutdown database even when failure notification throws', async () => {
   await handlers.get('session_start')!({}, ctx);
   const close = vi.spyOn(CheckpointStore.prototype, 'close');

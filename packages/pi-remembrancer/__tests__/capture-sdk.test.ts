@@ -2,459 +2,394 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ModelRuntime, type ExtensionContext } from '@earendil-works/pi-coding-agent';
+import { AgentSession, ModelRuntime, type ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { expect, it, vi } from 'vitest';
 import { preserveHandoff } from '../extensions/remembrancer/capture-handoff.js';
 import { runCaptureWorker } from '../extensions/remembrancer/capture-worker.js';
 import { captureExecution } from '../extensions/remembrancer/config.js';
-import { getReviewerBudget } from '../extensions/remembrancer/reviewer-budget.js';
-import { readTaskCatalog, snapshot } from '../extensions/remembrancer/taskwarrior.js';
 import {
-  captureFields,
-  captureAnswer,
-  providerInstruction,
-  stepWork,
-} from './fixtures/capture-steps.js';
+  getReviewerBudget,
+  estimateReviewerTokens,
+} from '../extensions/remembrancer/reviewer-budget.js';
+import { readTaskCatalog, snapshot } from '../extensions/remembrancer/taskwarrior.js';
 import { CheckpointStore } from '../extensions/remembrancer/checkpoints.js';
-import * as captureModule from '../extensions/remembrancer/capture.js';
+import type { CaptureSubmission } from '../extensions/remembrancer/capture-submission.js';
+import type { EvidencePageEntry } from '../extensions/remembrancer/review-pages.js';
+import {
+  captureRecord,
+  captureReference,
+  captureDisposition,
+  captureToolCalls,
+  reviewerPaths,
+  type CaptureToolCall,
+} from './fixtures/capture-reviewer.js';
 import { writeCompletion } from './fixtures/openai-loopback.js';
 
-// Exercise ordinary SDK startup and its real tool loop against a deterministic local transport.
-// No provider adapter, credentials, external requests or Taskwarrior commands.
+// Real worker and SDK, only Taskwarrior export is mocked. Never an external provider request.
 vi.mock('../extensions/remembrancer/taskwarrior.js', async (original) => ({
   ...(await original<typeof import('../extensions/remembrancer/taskwarrior.js')>()),
   readTaskCatalog: vi.fn().mockResolvedValue([]),
 }));
+const successful = [
+  'empty',
+  'proposal',
+  'large',
+  'aliases',
+  'dense',
+  'growing',
+  'renamed',
+  'aggregate-object',
+  'aggregate-array',
+];
 it.each([
-  { outcome: 'empty', requests: 1, covered: true },
-  { outcome: 'proposal', requests: 3, covered: true },
-  { outcome: 'large', requests: 0, covered: true },
-  { outcome: 'aliases', requests: 0, covered: true },
-  { outcome: 'dense', requests: 0, covered: true },
-  { outcome: 'dense-truncated', requests: 2, covered: false },
-  { outcome: 'growing', requests: 0, covered: true },
-  { outcome: 'renamed', requests: 0, covered: true },
-  { outcome: 'aggregate-object', requests: 0, covered: true },
-  { outcome: 'aggregate-array', requests: 0, covered: true },
-  { outcome: 'mixed', requests: 1, covered: false },
-  { outcome: 'duplicate', requests: 1, covered: false },
-  { outcome: 'unread', requests: 1, covered: false },
-  { outcome: 'missing', requests: 1, covered: false },
-  { outcome: 'overflow', requests: 1, covered: false },
-  { outcome: 'tool-error', requests: 1, covered: false },
-  { outcome: 'invalid-args', requests: 1, covered: false },
-  { outcome: 'provider-error', requests: 1, covered: false },
+  ...successful,
+  'dense-truncated',
+  'mixed',
+  'duplicate',
+  'unread',
+  'missing',
+  'overflow',
+  'tool-error',
+  'invalid-args',
+  'provider-error',
 ])(
-  'installed SDK capture outcome=$outcome',
-  async ({ outcome, requests: expectedRequests, covered }) => {
-    const denseCase = outcome.startsWith('dense');
-    const aggregateCase = outcome.startsWith('aggregate-');
-    const boundedCase =
-      aggregateCase || denseCase || ['large', 'aliases', 'growing', 'renamed'].includes(outcome);
+  'installed continuing SDK capture outcome=%s',
+  async (outcome) => {
+    const covered = successful.includes(outcome);
+    const dir = mkdtempSync(join(tmpdir(), 'capture-sdk-'));
+    const agent = join(dir, 'agent');
+    mkdirSync(agent);
+    vi.stubEnv('PI_CODING_AGENT_DIR', agent);
+    vi.stubEnv('XDG_STATE_HOME', dir);
     const task = {
       uuid: '12345678-1234-1234-1234-123456789abc',
       status: 'pending',
-      description: aggregateCase
+      description: outcome.startsWith('aggregate-')
         ? 'Send Maya the comparison.'
         : 'Unrelated leading label '.repeat(40) + 'comparison',
       annotations:
         outcome === 'aggregate-array'
-          ? Array.from({ length: 45 }, (_, index) => ({
+          ? Array.from({ length: 45 }, (_, i) => ({
               entry: '20260101T000000Z',
-              description: `Short annotation ${index}`,
+              description: `Short annotation ${i}`,
             }))
-          : aggregateCase
-            ? []
-            : [{ entry: '20260101T000000Z', description: 'Retain exact snapshot '.repeat(300) }],
+          : [{ entry: '20260101T000000Z', description: 'Retain exact snapshot '.repeat(300) }],
       ...(outcome === 'aggregate-object'
         ? Object.fromEntries(
-            Array.from({ length: 130 }, (_, index) => [`custom${index}`, `short value ${index}`]),
+            Array.from({ length: 130 }, (_, i) => [`custom${i}`, `short value ${i}`]),
           )
         : {}),
     };
-    vi.mocked(readTaskCatalog).mockResolvedValue(
-      outcome === 'renamed' || aggregateCase ? [task] : [],
-    );
-    const taskFields = new Map<string, unknown>();
-    let aliasInspected = false;
-    let valuePages = 0;
-    const valueText: string[] = [];
-    let expectedRetainedText = '';
-    let continuations = 0;
-    let largestOutput = 0;
-    const dir = mkdtempSync(join(tmpdir(), 'capture-sdk-'));
-    const agent = join(dir, 'agent');
-    mkdirSync(agent);
+    const matching = outcome === 'renamed' || outcome.startsWith('aggregate-');
+    vi.mocked(readTaskCatalog)
+      .mockReset()
+      .mockResolvedValue(matching ? [task] : []);
     const sentinel = 'RESOURCE_MUST_NOT_LOAD';
-    for (const root of [agent, dir]) {
-      writeFileSync(join(root, 'AGENTS.md'), sentinel);
-    }
+    for (const root of [agent, dir]) writeFileSync(join(root, 'AGENTS.md'), sentinel);
     for (const root of [agent, join(dir, '.pi')]) {
-      mkdirSync(join(root, 'extensions'), { recursive: true });
-      mkdirSync(join(root, 'skills', 'sentinel'), { recursive: true });
-      mkdirSync(join(root, 'prompts'), { recursive: true });
+      for (const path of ['extensions', 'skills/sentinel', 'prompts'])
+        mkdirSync(join(root, path), { recursive: true });
+      writeFileSync(join(root, 'extensions/forbidden.ts'), `throw new Error('${sentinel}');`);
       writeFileSync(
-        join(root, 'extensions', 'forbidden.ts'),
-        'throw new Error("RESOURCE_MUST_NOT_LOAD");',
+        join(root, 'skills/sentinel/SKILL.md'),
+        `---\nname: sentinel\ndescription: ${sentinel}\n---\n${sentinel}`,
       );
-      writeFileSync(
-        join(root, 'skills', 'sentinel', 'SKILL.md'),
-        '---\nname: sentinel\ndescription: RESOURCE_MUST_NOT_LOAD\n---\n' + sentinel,
-      );
-      writeFileSync(join(root, 'prompts', 'sentinel.md'), sentinel);
+      writeFileSync(join(root, 'prompts/sentinel.md'), sentinel);
       writeFileSync(join(root, 'SYSTEM.md'), sentinel);
       writeFileSync(join(root, 'APPEND_SYSTEM.md'), sentinel);
     }
-    const requests: Record<string, unknown>[] = [];
-    const server = createServer(async (request, response) => {
-      let body = '';
-      for await (const chunk of request) body += chunk;
-      requests.push(JSON.parse(body));
-      if (outcome === 'provider-error') {
-        response.writeHead(429, { 'content-type': 'application/json' });
-        response.end(
-          JSON.stringify({ error: { message: 'Fixture unavailable', type: 'rate_limit_error' } }),
-        );
-        return;
+    const growingParts = Array.from({ length: 35 }, (_, i) =>
+      String.fromCharCode(65 + (i % 26)).repeat(120),
+    );
+    const records: object[] = [{ type: 'session', id: 'outgoing', cwd: dir }];
+    const message = (id: string, parentId: string | null, content: string, role = 'user') => ({
+      type: 'message',
+      id,
+      parentId,
+      message: { role, content },
+    });
+    if (outcome === 'large') {
+      records.push(message('unicode', null, '😀\\"\n'.repeat(1000)));
+      let parent = 'unicode';
+      for (let i = 0; i < 8; i++) {
+        records.push(message(`intent${i}`, parent, `accepted:task${i}|Do task ${i}`));
+        parent = `intent${i}`;
       }
-      const names =
-        outcome === 'missing' || outcome === 'overflow'
-          ? []
-          : outcome === 'unread'
-            ? ['unknown_fixture_tool']
-            : outcome === 'mixed'
-              ? ['remembrancer_step', 'unknown_fixture_tool']
-              : outcome === 'duplicate'
-                ? ['remembrancer_step', 'remembrancer_step']
-                : ['remembrancer_step'];
-      const messages = requests.at(-1)!['messages'] as { role: string; content: string }[];
-      const instruction = providerInstruction(messages);
-      const envelope = JSON.parse(instruction.slice(instruction.lastIndexOf('\n') + 1));
-      const work = envelope.work;
-      let result: object = { answer: captureAnswerForCase() };
-      function captureAnswerForCase(): unknown {
-        if ((outcome === 'renamed' || aggregateCase) && work.catalogue?.[0]?.handle) {
-          return {
-            candidates: work.catalogue
-              .filter(
-                (item: { identity: { description?: unknown }; uncertainIdentity: boolean }) =>
-                  item.uncertainIdentity ||
-                  (typeof item.identity.description === 'string' &&
-                    item.identity.description.includes('comparison')),
-              )
-              .map((item: { handle: string }) => item.handle),
-          };
-        }
-        if (denseCase && work.range) {
-          const all = [...work.range.text.matchAll(/accepted:t(\d)\|Do\d;/g)].map((match) => ({
-            kind: 'accepted',
-            label: `t${match[1]}`,
-            start: work.range.offset + match.index!,
-            end: work.range.offset + match.index! + match[0].length,
-          }));
-          const observations = all.slice(
-            work.observationOffset,
-            work.observationOffset + work.maxObservations,
-          );
-          const next = work.observationOffset + observations.length;
-          continuations += Number(next < all.length);
-          return {
-            complete: next === all.length,
-            observations,
-            nextObservationOffset: next < all.length ? next : null,
-            memory: `Next observation ${next}`,
-          };
-        }
-        if (outcome === 'growing' && work.observation && !work.candidate && !work.catalogue) {
-          const part = work.observation.range.text.split('|')[1];
-          const prior = work.previous?.draft.change.fields.description;
-          return {
-            summary: 'growing',
-            status: 'active',
-            draft: {
-              change: {
-                operation: 'add',
-                fields: {
-                  description:
-                    prior === undefined
-                      ? part
-                      : typeof prior === 'string'
-                        ? prior + part
-                        : { ...prior, append: part },
-                },
-                annotations: [],
-              },
-              expected: null,
-              question: null,
-            },
-          };
-        }
-        if ((outcome === 'renamed' || aggregateCase) && work.page) {
-          const fields = captureFields(work.page);
-          for (const field of fields) {
-            const key = field.path.join('.');
-            taskFields.set(
-              key,
-              'value' in field ? field.value : String(taskFields.get(key) ?? '') + field.text,
-            );
-          }
-          const identity = fields.some(
-            (field) =>
-              field.path.join('.') === 'description' &&
-              'text' in field &&
-              field.text.includes('comparison'),
-          );
-          return {
-            notes:
-              identity || work.notes?.includes('same comparison')
-                ? 'same comparison'
-                : 'identity not yet found',
-          };
-        }
-        if (
-          (outcome === 'renamed' || aggregateCase) &&
-          instruction.includes('All exact candidate fields')
-        ) {
-          return {
-            match:
-              work.candidate.description?.includes?.('comparison') ||
-              work.notes === 'same comparison'
-                ? 'same'
-                : 'different',
-          };
-        }
-        if ((outcome === 'renamed' || aggregateCase) && instruction.includes('Materialize')) {
-          return {
-            reason: 'Update the independently matched task',
-            submission: {
-              change: {
-                operation: 'update',
-                targetUuid: work.targetUuid,
-                fields: { priority: 'H' },
-                annotations: [],
-              },
-              explanation: 'Update the independently matched task',
-              question: null,
-            },
-          };
-        }
-        return captureAnswer(instruction, outcome !== 'proposal' && !boundedCase);
+      for (let i = 0; i < 6; i++) {
+        records.push(message(`correction${i}`, parent, `correction:task0|Correction ${i}`));
+        parent = `correction${i}`;
       }
-      if (
-        outcome === 'aliases' &&
-        work.range?.occurrenceCount === 40 &&
-        !envelope.detail &&
-        !aliasInspected
-      ) {
-        result = {
-          inspect: { kind: 'occurrences', rangeId: work.range.id, index: 39 },
-          memory: 'Check last branch applicability',
-        };
-      }
-      if (outcome === 'aliases' && envelope.detail?.occurrence) {
-        expect(envelope.detail.occurrence.branchId).toBe('leaf39');
-        aliasInspected = true;
-      }
-      // Exercise paged inspection of a retained growing draft, then copy it on.
-      const retained = work.previous?.draft?.change?.fields?.description;
-      if (outcome === 'growing' && retained?.valueHandle && valuePages === 0 && !envelope.detail) {
-        const entryId = work.observation.range.occurrences[0].entryId;
-        expectedRetainedText = growingParts.slice(0, Number(entryId.slice('grow'.length))).join('');
-        result = {
-          inspect: { kind: 'value', valueHandle: retained.valueHandle, index: 0 },
-          memory: 'Read the retained draft before appending',
-        };
-      }
-      if (outcome === 'growing' && envelope.detail?.page) {
-        valuePages++;
-        valueText.push(envelope.detail.page.text);
-        if (envelope.detail.nextIndex !== null)
-          result = {
-            inspect: {
-              kind: 'value',
-              valueHandle: retained.valueHandle,
-              index: envelope.detail.nextIndex,
-            },
-            memory: 'Continue reading the exact retained draft',
-          };
-      }
-      if (outcome === 'tool-error')
-        result = {
-          inspect: { kind: 'invalid-fixture-cursor' },
-          memory: 'Invalid cursor at the current step',
-        };
-      const args = outcome === 'invalid-args' ? { wrong: result } : { result };
-      largestOutput = Math.max(largestOutput, Buffer.byteLength(JSON.stringify(args)));
-      writeCompletion(
-        response,
-        {
-          role: 'assistant',
-          tool_calls: names.map((name, index) => ({
-            index,
-            id: `call-${requests.length}-${index}`,
-            type: 'function',
-            function: { name, arguments: JSON.stringify(args) },
-          })),
-        },
-        outcome === 'overflow' || (outcome === 'dense-truncated' && requests.length === 2)
-          ? 'length'
-          : names.length
-            ? 'tool_calls'
-            : 'stop',
+    } else if (outcome === 'growing') {
+      growingParts.forEach((part, i) =>
+        records.push(
+          message(
+            `grow${i}`,
+            i ? `grow${i - 1}` : null,
+            `${i ? 'correction' : 'accepted'}:growing|${part}`,
+          ),
+        ),
       );
+      for (const id of ['left', 'right'])
+        records.push(message(id, 'grow34', `correction:growing|${id}`));
+    } else if (outcome.startsWith('dense'))
+      records.push(
+        message(
+          'dense',
+          null,
+          Array.from({ length: 8 }, (_, i) => `accepted:t${i}|Do${i};`).join(''),
+        ),
+      );
+    else {
+      records.push(message('promise', null, 'I will send Maya the comparison.'));
+      if (outcome === 'aliases')
+        for (let i = 0; i < 40; i++)
+          records.push(message(`leaf${i}`, 'promise', 'Context only', 'assistant'));
+    }
+    const file = join(dir, 'outgoing.jsonl');
+    const transcript = records.map((row) => JSON.stringify(row)).join('\n') + '\n';
+    writeFileSync(file, transcript);
+    const evidence: EvidencePageEntry[] = [];
+    const requests: Record<string, unknown>[] = [];
+    let paths = { skill: '', review: '' };
+    let nextPage = 0;
+    let evidenceDone = false;
+    let reread = false;
+    let matchingStarted = false;
+    let taskJson = '';
+    let taskNext: object | null = { uuid: task.uuid };
+    let fixtureError: unknown;
+    let submitted = 0;
+    function payload(): CaptureSubmission {
+      const groups = new Map<
+        string,
+        {
+          observations: CaptureSubmission['records'][number]['observations'];
+          descriptions: Map<string, string>;
+        }
+      >();
+      function add(
+        key: string,
+        entry: EvidencePageEntry,
+        start: number,
+        end: number,
+        description: string,
+        kind: 'accepted' | 'correction' = 'accepted',
+      ) {
+        const group = groups.get(key) ?? {
+          observations: [] as CaptureSubmission['records'][number]['observations'],
+          descriptions: new Map<string, string>(),
+        };
+        group.observations.push({ kind, reference: captureReference(entry, start, end) });
+        group.descriptions.set(entry.branchId, description);
+        groups.set(key, group);
+      }
+      if (outcome !== 'empty')
+        for (const entry of evidence) {
+          if (entry.role !== 'user') continue;
+          if (entry.entryId === 'unicode') continue;
+          if (entry.entryId === 'dense') {
+            for (const match of entry.text.matchAll(/accepted:t(\d)\|Do\d;/g))
+              add(
+                `t${match[1]}`,
+                entry,
+                match.index!,
+                match.index! + match[0].length,
+                `Do${match[1]};`,
+              );
+          } else if (outcome === 'large') {
+            const [label, description] = entry.text.split('|');
+            add(
+              label!.split(':')[1]!,
+              entry,
+              0,
+              entry.text.length,
+              description!,
+              label!.startsWith('correction') ? 'correction' : 'accepted',
+            );
+          } else if (outcome === 'growing') {
+            const branch = entry.branchId;
+            add(
+              'growing',
+              entry,
+              0,
+              entry.text.length,
+              growingParts.join('') + branch,
+              entry.entryId === 'grow0' ? 'accepted' : 'correction',
+            );
+          } else add('maya', entry, 0, entry.text.length, 'Send Maya the comparison.');
+        }
+      const result: CaptureSubmission = { records: [], dispositions: [] };
+      for (const [key, group] of groups) {
+        const change = matching
+          ? {
+              operation: 'update' as const,
+              targetUuid: task.uuid,
+              fields: { priority: 'H' as const },
+              annotations: [],
+            }
+          : {
+              operation: 'add' as const,
+              fields: { description: group.descriptions.values().next().value! },
+              annotations: [],
+            };
+        const question = outcome === 'growing' ? 'Left or right branch outcome?' : null;
+        const states = [...group.descriptions].map(([branchId, description]) => ({
+          branchId,
+          state: {
+            summary: key,
+            status: 'active' as const,
+            draft: {
+              change: matching ? change : { ...change, fields: { description } },
+              question,
+            },
+          },
+        }));
+        result.records.push(
+          captureRecord(key, group.observations, states, {
+            candidates: matching ? [{ kind: 'task', id: task.uuid, judgment: 'same' }] : [],
+          }),
+        );
+        result.dispositions.push(
+          captureDisposition(
+            [key],
+            { change, question, explanation: `Reviewer finalized ${key}` },
+            'Accepted obligation',
+          ),
+        );
+      }
+      return result;
+    }
+    const server = createServer(async (request, response) => {
+      try {
+        request.setEncoding('utf8');
+        let raw = '';
+        for await (const chunk of request) raw += chunk;
+        const body = JSON.parse(raw);
+        requests.push(body);
+        const messages = body.messages as { role: string; content: string }[];
+        const text = (content: unknown) =>
+          typeof content === 'string'
+            ? content
+            : (content as { text?: string }[]).map((part) => part.text ?? '').join('');
+        paths = reviewerPaths(text(messages.find((item) => item.role === 'user')!.content));
+        if (outcome === 'provider-error') {
+          response.writeHead(429, { 'content-type': 'application/json' });
+          response.end(
+            JSON.stringify({ error: { message: 'Fixture unavailable', type: 'rate_limit_error' } }),
+          );
+          return;
+        }
+        if (outcome === 'missing') {
+          writeCompletion(response, { role: 'assistant', content: 'Finished reviewing.' }, 'stop');
+          return;
+        }
+        if (outcome === 'overflow') {
+          writeCompletion(response, { role: 'assistant', content: '' }, 'length');
+          return;
+        }
+        let calls: CaptureToolCall[];
+        if (requests.length === 1)
+          calls = [{ name: 'remembrancer_read', args: { path: paths.skill } }];
+        else if (!evidenceDone) {
+          if (nextPage) {
+            const data = JSON.parse(
+              text(messages.filter((item) => item.role === 'tool').at(-1)!.content),
+            );
+            for (const { entries, ...group } of data.groups)
+              for (const entry of entries) evidence.push({ ...group, ...entry });
+            evidenceDone = !data.hasMore;
+          }
+          if (!evidenceDone) {
+            calls = [
+              {
+                name: 'remembrancer_read',
+                args: { path: paths.review, page: outcome === 'unread' ? 1 : nextPage++ },
+              },
+            ];
+          } else calls = [];
+        } else calls = [];
+        if (requests.length > 1 && evidenceDone && !calls!.length) {
+          if (!reread) {
+            reread = true;
+            calls = [{ name: 'remembrancer_read', args: { path: paths.review, page: 0 } }];
+          } else if (matching && !matchingStarted) {
+            matchingStarted = true;
+            calls = [{ name: 'remembrancer_tasks', args: {} }];
+          } else if (matching && taskNext) {
+            const data = JSON.parse(
+              text(messages.filter((item) => item.role === 'tool').at(-1)!.content),
+            );
+            if ('json' in data) {
+              taskJson += data.json;
+              taskNext = data.next;
+            }
+            calls = taskNext ? [{ name: 'remembrancer_tasks', args: taskNext }] : [];
+          }
+          if (!calls!.length) {
+            const args = payload();
+            calls = [{ name: 'remembrancer_submit', args }];
+            if (outcome === 'mixed')
+              calls.push({ name: 'remembrancer_read', args: { path: paths.review } });
+            if (outcome === 'duplicate') calls.push({ name: 'remembrancer_submit', args });
+            if (outcome === 'tool-error')
+              calls = [{ name: 'remembrancer_tasks', args: { uuid: 'missing-task' } }];
+            if (outcome === 'invalid-args')
+              calls = [{ name: 'remembrancer_submit', args: { wrong: args } }];
+          }
+        }
+        submitted += calls!.filter((call) => call.name === 'remembrancer_submit').length;
+        writeCompletion(
+          response,
+          captureToolCalls(calls!, requests.length),
+          outcome === 'dense-truncated' &&
+            calls!.some((call) => call.name === 'remembrancer_submit')
+            ? 'length'
+            : 'tool_calls',
+        );
+      } catch (error) {
+        fixtureError = error;
+        response.writeHead(500);
+        response.end('Fixture assertion failed');
+      }
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-    const address = server.address();
-    if (!address || typeof address === 'string') throw new Error('Missing fixture port');
-    vi.stubEnv('PI_CODING_AGENT_DIR', agent);
-    vi.stubEnv('XDG_STATE_HOME', dir);
-    writeFileSync(
-      join(agent, 'models.json'),
-      JSON.stringify({
-        providers: {
-          fixture: {
-            baseUrl: `http://127.0.0.1:${address.port}/v1`,
-            api: 'openai-completions',
-            apiKey: 'offline-fixture',
-            models: [
-              {
-                id: 'fixture',
-                name: 'Fixture',
-                reasoning: false,
-                input: ['text'],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: boundedCase ? 22000 : 128000,
-                maxTokens: boundedCase && !denseCase ? 2048 : 1024,
-              },
-            ],
-          },
-        },
-      }),
-    );
-    writeFileSync(
-      join(agent, 'settings.json'),
-      JSON.stringify({ 'pi-remembrancer': { autoCapture: true } }),
-    );
-    const file = join(dir, 'outgoing.jsonl');
-    let transcript = [
-      JSON.stringify({ type: 'session', id: 'outgoing', cwd: dir }),
-      JSON.stringify({
-        type: 'message',
-        id: 'promise',
-        parentId: null,
-        message: { role: 'user', content: 'I will send Maya the comparison.' },
-      }),
-      '',
-    ].join('\n');
-    if (outcome === 'large') {
-      const records: object[] = [
-        { type: 'session', id: 'outgoing', cwd: dir },
-        {
-          type: 'message',
-          id: 'unicode',
-          parentId: null,
-          message: { role: 'user', content: '😀\\"\n'.repeat(1000) },
-        },
-      ];
-      let parentId = 'unicode';
-      for (let index = 0; index < 8; index++) {
-        const id = 'intent' + index;
-        records.push({
-          type: 'message',
-          id,
-          parentId,
-          message: { role: 'user', content: 'accepted:task' + index + '|Do task ' + index },
-        });
-        parentId = id;
-      }
-      for (let index = 0; index < 6; index++) {
-        const id = 'correction' + index;
-        records.push({
-          type: 'message',
-          id,
-          parentId,
-          message: { role: 'user', content: 'correction:task0|Correction ' + index },
-        });
-        parentId = id;
-      }
-      transcript = records.map((record) => JSON.stringify(record)).join('\n') + '\n';
-    }
-    if (outcome === 'aliases') {
-      transcript =
-        [
-          { type: 'session', id: 'outgoing', cwd: dir },
-          {
-            type: 'message',
-            id: 'promise',
-            parentId: null,
-            message: { role: 'user', content: 'I will send Maya the comparison.' },
-          },
-          ...Array.from({ length: 40 }, (_, index) => ({
-            type: 'message',
-            id: `leaf${index}`,
-            parentId: 'promise',
-            message: { role: 'assistant', content: 'Context only' },
-          })),
-        ]
-          .map((row) => JSON.stringify(row))
-          .join('\n') + '\n';
-    }
-    if (denseCase) {
-      transcript =
-        [
-          { type: 'session', id: 'outgoing', cwd: dir },
-          {
-            type: 'message',
-            id: 'dense',
-            parentId: null,
-            message: {
-              role: 'user',
-              content: Array.from(
-                { length: 8 },
-                (_, index) => `accepted:t${index}|Do${index};`,
-              ).join(''),
-            },
-          },
-        ]
-          .map((row) => JSON.stringify(row))
-          .join('\n') + '\n';
-    }
-    const growingParts = Array.from({ length: 35 }, (_, index) =>
-      String.fromCharCode(65 + (index % 26)).repeat(120),
-    );
-    if (outcome === 'growing') {
-      transcript =
-        [
-          { type: 'session', id: 'outgoing', cwd: dir },
-          ...growingParts.map((part, index) => ({
-            type: 'message',
-            id: `grow${index}`,
-            parentId: index ? `grow${index - 1}` : null,
-            message: {
-              role: 'user',
-              content: `${index ? 'correction' : 'accepted'}:growing|${part}`,
-            },
-          })),
-          ...['left', 'right'].map((id) => ({
-            type: 'message',
-            id,
-            parentId: 'grow34',
-            message: { role: 'user', content: `correction:growing|${id}` },
-          })),
-        ]
-          .map((row) => JSON.stringify(row))
-          .join('\n') + '\n';
-    }
-    writeFileSync(file, transcript);
-    const db = new CheckpointStore();
-    const review = vi.spyOn(captureModule, 'reviewPreparedCapture');
+    const db = new CheckpointStore(join(dir, 'index.sqlite'));
+    const dispose = vi.spyOn(AgentSession.prototype, 'dispose');
     try {
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Missing fixture port');
+      writeFileSync(
+        join(agent, 'models.json'),
+        JSON.stringify({
+          providers: {
+            fixture: {
+              baseUrl: `http://127.0.0.1:${address.port}/v1`,
+              api: 'openai-completions',
+              apiKey: 'offline-fixture',
+              models: [
+                {
+                  id: 'fixture',
+                  name: 'Fixture',
+                  reasoning: false,
+                  input: ['text'],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 1_000_000,
+                  maxTokens: 64_000,
+                },
+              ],
+            },
+          },
+        }),
+      );
+      writeFileSync(
+        join(agent, 'settings.json'),
+        JSON.stringify({ 'pi-remembrancer': { autoCapture: true } }),
+      );
       const runtime = await ModelRuntime.create({
         authPath: join(agent, 'auth.json'),
         modelsPath: join(agent, 'models.json'),
       });
-      const model = runtime.getModel('fixture', 'fixture');
-      expect(model).toBeDefined();
+      const model = runtime.getModel('fixture', 'fixture')!;
       const ctx = {
         cwd: dir,
         mode: 'tui',
@@ -470,21 +405,9 @@ it.each([
         execution: captureExecution(ctx),
       });
       await runCaptureWorker({ database: db.file, inbox });
-      // Only a later, due wake may consume another whole-review attempt.
-      if (!covered) expect(requests).toHaveLength(expectedRequests);
-      const stepError = {
-        unread: 'Reviewer tool failed (unknown_fixture_tool)',
-        'tool-error': 'Invalid capture inspection request',
-        'invalid-args': 'Reviewer tool failed (remembrancer_step)',
-        missing: 'Capture step did not return a result',
-      }[outcome];
-      if (stepError) {
-        expect(review).toHaveBeenCalledOnce();
-        await expect(review.mock.results[0]!.value).rejects.toThrow(stepError);
-        if (outcome === 'invalid-args')
-          await expect(review.mock.results[0]!.value).rejects.toThrow('Validation failed for tool');
-      }
+      expect(fixtureError).toBeUndefined();
       expect(db.captureJob('first')).toMatchObject({
+        state: covered ? 'completed' : 'failed',
         attemptCount: 1,
         retryEligible: outcome === 'provider-error',
       });
@@ -494,144 +417,78 @@ it.each([
       expect(db.proposals()).toHaveLength(
         outcome === 'large' || outcome === 'dense' ? 8 : covered && outcome !== 'empty' ? 1 : 0,
       );
-      if (outcome === 'aliases') {
-        expect(aliasInspected).toBe(true);
+      expect(dispose).toHaveBeenCalledOnce();
+      if (covered) expect(submitted).toBe(1);
+      if (outcome === 'aliases')
         expect(new Set(db.proposals()[0]!.sources.map((source) => source.branchId)).size).toBe(40);
+      if (outcome === 'large') {
+        expect(
+          evidence
+            .filter((entry) => entry.entryId === 'unicode')
+            .map((entry) => entry.text)
+            .join(''),
+        ).toBe('😀\\"\n'.repeat(1000));
+        expect(
+          db
+            .proposals()
+            .find(
+              (proposal) =>
+                proposal.change.operation === 'add' &&
+                proposal.change.fields.description === 'Correction 5',
+            ),
+        ).toBeDefined();
       }
       if (outcome === 'dense') {
-        expect(continuations).toBeGreaterThan(0);
-        const saved = db.proposals().map((proposal) => ({
-          description: proposal.change.operation === 'add' && proposal.change.fields.description,
-          sources: proposal.sources.map(({ entryId, offset, quote }) => ({
-            entryId,
-            offset,
-            quote,
-          })),
-        }));
+        const saved = db.proposals().sort((a, b) => a.sources[0]!.offset - b.sources[0]!.offset);
         let offset = 0;
-        const expected = Array.from({ length: 8 }, (_, index) => {
+        for (const [index, proposal] of saved.entries()) {
           const quote = `accepted:t${index}|Do${index};`;
-          const sources = [{ entryId: 'dense', offset, quote }];
+          expect(proposal.sources).toMatchObject([{ entryId: 'dense', offset, quote }]);
+          expect(proposal.change).toMatchObject({ fields: { description: `Do${index};` } });
           offset += quote.length;
-          return { description: `Do${index};`, sources };
-        });
-        expect(saved.sort((a, b) => a.sources[0]!.offset - b.sources[0]!.offset)).toEqual(expected);
+        }
       }
       if (outcome === 'growing') {
-        expect(expectedRetainedText).not.toBe('');
-        expect(valueText.join('')).toBe(expectedRetainedText);
         expect(db.proposals()[0]!.change).toMatchObject({
           fields: { description: growingParts.join('') + 'left' },
         });
         expect(db.proposals()[0]!.question).toBeTruthy();
       }
-      if (aggregateCase) {
-        const steps = requests.map(
-          (request) =>
-            JSON.parse(
-              providerInstruction(request['messages'] as Parameters<typeof providerInstruction>[0])
-                .split('\n')
-                .at(-1)!,
-            ).work,
-        );
-        const discovered = steps.find((work) => work.catalogue)?.catalogue[0];
-        expect(discovered.identity.description).toBe(task.description);
-        const candidate = steps.find(
-          (work) => work.handle?.startsWith('task:') && work.candidate,
-        )?.candidate;
-        // Compare exact leaf values, not a field count tied to this fixture's shape.
-        function leaves(value: unknown, path: string[] = []): [string, unknown][] {
-          return value !== null && typeof value === 'object' && Object.keys(value).length
-            ? Object.entries(value).flatMap(([key, child]) => leaves(child, [...path, key]))
-            : [[path.join('.'), value]];
-        }
-        if (taskFields.size) expect(taskFields).toEqual(new Map(leaves(task)));
-        else expect(candidate).toEqual(task);
-        expect(db.proposals()[0]!.change).toMatchObject({
-          operation: 'update',
-          targetUuid: task.uuid,
-        });
+      if (matching) {
+        expect(JSON.parse(taskJson)).toEqual(task);
         expect(db.proposals()[0]!.expected).toEqual(snapshot(task));
-      }
-      if (outcome === 'renamed') {
         expect(db.proposals()[0]!.change).toMatchObject({
           operation: 'update',
           targetUuid: task.uuid,
         });
-        expect(db.proposals()[0]!.expected?.annotations).toEqual(task.annotations);
-        expect(db.proposals()[0]!.expected?.fields.description).toBe(task.description);
-        const match = requests
-          .map((request) =>
-            JSON.parse(
-              providerInstruction(request['messages'] as Parameters<typeof providerInstruction>[0])
-                .split('\n')
-                .at(-1)!,
-            ),
-          )
-          .find(({ work }) => work.handle === 'task:0' && work.candidate);
-        expect(match.work.candidate).toEqual(task);
+        expect(readTaskCatalog).toHaveBeenCalledOnce();
       }
-      if (boundedCase) {
-        expect(largestOutput).toBeLessThan(denseCase ? 1024 : 2048);
-        expect(
-          requests.every(
-            (request) =>
-              Buffer.byteLength(JSON.stringify(request)) < getReviewerBudget(model!).maxInputTokens,
-          ),
-        ).toBe(true);
-        const inputs = requests.map((request) =>
-          stepWork(
-            providerInstruction(request['messages'] as Parameters<typeof providerInstruction>[0]),
-          ),
-        );
-        if (outcome === 'dense')
-          expect(
-            new Set(inputs.filter((work) => work.range).map((work) => JSON.stringify(work.range)))
-              .size,
-          ).toBe(1);
-        if (outcome === 'aliases')
-          expect(
-            inputs.filter((work) => work.range?.occurrences[0]?.entryId === 'promise').length,
-          ).toBeLessThanOrEqual(2); // Primary extraction plus explicit alias lookup, not forty reads.
-        if (outcome === 'growing')
-          expect(JSON.stringify(inputs)).not.toContain(growingParts.join(''));
-      }
-      expect(db.captureJob('first')?.state).toBe(covered ? 'completed' : 'failed');
       expect(requests.every((request) => request['model'] === 'fixture')).toBe(true);
+      expect(
+        requests.every(
+          (request) => estimateReviewerTokens(request) <= getReviewerBudget(model).maxInputTokens,
+        ),
+      ).toBe(true);
       expect(JSON.stringify(requests)).not.toContain(sentinel);
       expect(readFileSync(file, 'utf8')).toBe(transcript);
-      const tools = requests[0]!['tools'] as { function: { name: string } }[];
-      expect(tools.map((tool) => tool.function.name)).toEqual(['remembrancer_step']);
-      if (outcome === 'large') {
-        const ranges = requests
-          .map(
-            (request) =>
-              stepWork(
-                providerInstruction(
-                  request['messages'] as Parameters<typeof providerInstruction>[0],
-                ),
-              ).range,
-          )
-          .filter((range): range is NonNullable<typeof range> => range !== undefined);
-        expect(
-          ranges
-            .filter((range) => range.occurrences[0]!.entryId === 'unicode')
-            .map((range) => range.text)
-            .join(''),
-        ).toBe('😀\\"\n'.repeat(1000));
-        expect(
-          requests.every((request) => !JSON.stringify(request).includes('"proposals":[')),
-        ).toBe(true);
-        expect(
-          requests.every((request) =>
-            (request['messages'] as { role: string }[]).every(
-              (message) => message.role !== 'assistant' && message.role !== 'tool',
-            ),
-          ),
-        ).toBe(true);
-      } else if (!boundedCase) expect(JSON.stringify(requests[0])).toContain('I will send Maya');
+      expect(
+        (requests[0]!['tools'] as { function: { name: string } }[]).map(
+          (tool) => tool.function.name,
+        ),
+      ).toEqual([
+        'remembrancer_read',
+        'remembrancer_context',
+        'remembrancer_tasks',
+        'remembrancer_proposals',
+        'remembrancer_submit',
+      ]);
+      for (const [index, request] of requests.entries()) {
+        const messages = request['messages'] as { role: string }[];
+        expect(messages.filter((message) => message.role === 'user')).toHaveLength(1);
+        expect(messages.filter((message) => message.role === 'tool')).toHaveLength(index);
+      }
     } finally {
-      review.mockRestore();
+      dispose.mockRestore();
       db.close();
       await new Promise<void>((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve())),

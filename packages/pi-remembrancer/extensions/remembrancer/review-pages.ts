@@ -206,22 +206,29 @@ export function boundedEvidencePage(
 export function frozenContext(
   review: Pick<PreparedReview, 'evidence' | 'snapshots'>,
   batch: string,
-  args: { selected?: Selected; before?: number; offset?: number },
+  args: { selected?: Selected; before?: number; skip?: number; offset?: number },
 ) {
   const selected = args.selected;
   if (!selected) throw new Error('Context requires a selected evidence item.');
   const { branch, selectedIndex } = frozenBranch(review, selected);
   const before = args.before ?? 1;
+  const skip = args.skip ?? 0;
   const offset = args.offset ?? 0;
   if (!Number.isInteger(before) || before < 1 || before > 40)
     throw new Error('Context before must be an integer from 1 to 40.');
+  if (!Number.isSafeInteger(skip) || skip < 0 || skip > selectedIndex)
+    throw new Error('Context skip is outside the frozen preceding entries.');
   if (!Number.isInteger(offset) || offset < 0)
     throw new Error('Context offset must be a nonnegative integer.');
+  const end = selectedIndex - skip;
+  const start = Math.max(0, end - before);
   return contextPage(
     batch,
     selected,
-    branch.slice(Math.max(0, selectedIndex - before), selectedIndex),
+    branch.slice(start, end),
     offset,
+    // Manual readers retain their existing response shape. Capture explicitly opts into paging.
+    args.skip === undefined ? {} : { skip, nextSkip: start > 0 ? selectedIndex - start : null },
   );
 }
 

@@ -10,15 +10,20 @@ import {
   getReviewerBudget,
   ReviewerBudgetError,
   runReviewer,
-  runReviewerStep,
-  type ReviewerInput,
+  type ContinuingReviewerInput,
 } from '../extensions/remembrancer/reviewer.js';
 
 // Real isolated SDK sessions, deterministic loopback transport, synthetic evidence only.
 async function withProvider(
-  options: { contextWindow?: number; truncate?: boolean; reply?: string; toolName?: string } = {},
+  options: {
+    contextWindow?: number;
+    truncate?: boolean;
+    reply?: string;
+    toolName?: string;
+    submitAfter?: number;
+  } = {},
   test: (fixture: {
-    input: ReviewerInput;
+    input: ContinuingReviewerInput;
     requests: Record<string, unknown>[];
     toolCalls: string[];
   }) => Promise<void>,
@@ -29,6 +34,7 @@ async function withProvider(
   const requests: Record<string, unknown>[] = [];
   const toolCalls: string[] = [];
   const server = createServer(async (request, response) => {
+    request.setEncoding('utf8');
     let body = '';
     for await (const chunk of request) body += chunk;
     requests.push(JSON.parse(body));
@@ -43,8 +49,14 @@ async function withProvider(
               id: `call-${requests.length}`,
               type: 'function',
               function: {
-                name: options.toolName ?? 'lookup',
-                arguments: JSON.stringify({ handle: 'frozen-range' }),
+                name:
+                  options.toolName ??
+                  (requests.length > (options.submitAfter ?? 30)
+                    ? 'remembrancer_submit'
+                    : 'lookup'),
+                arguments: JSON.stringify(
+                  requests.length > (options.submitAfter ?? 30) ? {} : { handle: 'frozen-range' },
+                ),
               },
             },
           ],
@@ -110,7 +122,23 @@ async function withProvider(
         model,
         modelRuntime: runtime,
         sessionId: 'synthetic',
-        tools: [tool],
+        instruction: 'Read frozen evidence, inspect existing records, then submit once alone.',
+        tools: [
+          tool,
+          {
+            name: 'remembrancer_submit',
+            label: 'Submit',
+            description: 'Terminal finalized result',
+            parameters: { type: 'object', properties: {} } as ToolDefinition['parameters'],
+            async execute() {
+              return {
+                content: [{ type: 'text', text: 'accepted' }],
+                details: {},
+                terminate: true,
+              };
+            },
+          },
+        ],
       },
       requests,
       toolCalls,
@@ -123,33 +151,29 @@ async function withProvider(
   }
 }
 
-it('hands off after one tool batch and starts fitted fresh sessions with host-selected state', async () => {
-  await withProvider({}, async ({ input, requests, toolCalls }) => {
-    for (let index = 0; index < 8; index++) {
-      const result = await runReviewerStep({
-        ...input,
-        instruction: `Read only range-${index}. Working state: ${index}. 😀`,
-      });
-      expect(result.status).toBe('handoff');
-      expect(result.message.content).toContainEqual(
-        expect.objectContaining({ type: 'toolCall', name: 'lookup' }),
-      );
-      expect(requests).toHaveLength(index + 1);
-      const serialized = JSON.stringify(requests[index]);
-      expect(serialized).toContain(`range-${index}`);
-      if (index > 0) expect(serialized).not.toContain(`range-${index - 1}`);
-      expect(serialized).not.toContain('Synthetic context.');
-      expect(estimateReviewerTokens(requests[index])).toBeLessThanOrEqual(
-        getReviewerBudget(input.model!).maxInputTokens,
-      );
-      expect(
-        (requests[index]!['tools'] as { function: { name: string } }[]).map(
-          (tool) => tool.function.name,
-        ),
-      ).toEqual(['lookup']);
-    }
-    expect(toolCalls).toHaveLength(8);
-  });
+it('retains all tool history in one session until the reviewer submits once alone', async () => {
+  await withProvider(
+    { contextWindow: 64_000, submitAfter: 3 },
+    async ({ input, requests, toolCalls }) => {
+      await expect(runReviewer(input)).resolves.toBeUndefined();
+      expect(requests).toHaveLength(4);
+      expect(toolCalls).toEqual(['frozen-range', 'frozen-range', 'frozen-range']);
+      for (const [index, request] of requests.entries()) {
+        const messages = request['messages'] as { role: string }[];
+        expect(messages.filter((message) => message.role === 'user')).toHaveLength(1);
+        expect(messages.filter((message) => message.role === 'tool')).toHaveLength(index);
+        expect(messages.filter((message) => message.role === 'assistant')).toHaveLength(index);
+        expect(JSON.stringify(request)).toContain(input.instruction);
+        if (index) expect(JSON.stringify(request)).toContain('Synthetic context.');
+        expect(estimateReviewerTokens(request)).toBeLessThanOrEqual(
+          getReviewerBudget(input.model!).maxInputTokens,
+        );
+        expect(
+          (request['tools'] as { function: { name: string } }[]).map((tool) => tool.function.name),
+        ).toEqual(['lookup', 'remembrancer_submit']);
+      }
+    },
+  );
 });
 
 it('bounds the existing reviewer tool loop without silently completing or sending oversized history', async () => {
@@ -169,7 +193,7 @@ it('fails on an indivisible oversized lookup without a follow-up request', async
   await withProvider({}, async ({ input, requests }) => {
     const tool = input.tools[0]!;
     await expect(
-      runReviewerStep({
+      runReviewer({
         ...input,
         tools: [
           {
@@ -188,9 +212,7 @@ it('fails on an indivisible oversized lookup without a follow-up request', async
 
 it('rejects truncated output before executing even a parseable tool call', async () => {
   await withProvider({ truncate: true }, async ({ input, requests, toolCalls }) => {
-    await expect(runReviewerStep({ ...input, instruction: 'Read one piece' })).rejects.toThrow(
-      /length/,
-    );
+    await expect(runReviewer(input)).rejects.toThrow(/length/);
     expect(requests).toHaveLength(1);
     expect(toolCalls).toEqual([]);
   });
@@ -198,7 +220,7 @@ it('rejects truncated output before executing even a parseable tool call', async
 
 it('rejects an unknown tool by name without executing a current handler or requesting another turn', async () => {
   await withProvider({ toolName: 'retired_lookup' }, async ({ input, requests, toolCalls }) => {
-    await expect(runReviewerStep({ ...input, instruction: 'Read one piece' })).rejects.toThrow(
+    await expect(runReviewer(input)).rejects.toThrow(
       /Reviewer tool failed \(retired_lookup\):.*not found/,
     );
     expect(requests).toHaveLength(1);
@@ -208,9 +230,7 @@ it('rejects an unknown tool by name without executing a current handler or reque
 
 it('passes preflight but rejects the complete SDK-framed provider request before HTTP', async () => {
   await withProvider({ contextWindow: 4096 }, async ({ input, requests, toolCalls }) => {
-    await expect(
-      runReviewerStep({ ...input, instruction: 'x'.repeat(1800) }),
-    ).rejects.toMatchObject({
+    await expect(runReviewer({ ...input, instruction: 'x'.repeat(1800) })).rejects.toMatchObject({
       name: 'ReviewerBudgetError',
       message: expect.stringMatching(/^Reviewer complete provider request exceeds context budget/),
     });
@@ -219,37 +239,25 @@ it('passes preflight but rejects the complete SDK-framed provider request before
   });
 });
 
-it.each(['text', 'tool'] as const)(
-  'accepts a terminal %s reply without charging reserved output and its acknowledgement as input',
-  async (kind) => {
-    await withProvider(
-      kind === 'text' ? { reply: 'One observation. '.repeat(30) } : {},
-      async ({ input, requests, toolCalls }) => {
-        const instruction = 'Read one piece';
-        await runReviewerStep({ ...input, instruction });
-        const limit = getReviewerBudget(input.model!).maxInputTokens;
-        // Measure actual SDK framing, then leave less headroom than the final reply.
-        const padding = limit - estimateReviewerTokens(requests[0]) - 20;
-        expect(padding).toBeGreaterThan(0);
-        const result = await runReviewerStep({
-          ...input,
-          instruction: instruction + 'x'.repeat(padding),
-        });
-        const requestTokens = estimateReviewerTokens(requests[1]);
-        expect(requestTokens).toBeLessThanOrEqual(limit);
-        expect(requestTokens + estimateReviewerTokens(result.message)).toBeGreaterThan(limit);
-        expect(result.status).toBe(kind === 'text' ? 'complete' : 'handoff');
-        expect(requests).toHaveLength(2);
-        expect(toolCalls).toHaveLength(kind === 'text' ? 0 : 2);
-      },
-    );
-  },
-);
+it('rejects prose-only completion rather than treating it as a submission', async () => {
+  await withProvider({ reply: 'Finished reviewing.' }, async ({ input, requests, toolCalls }) => {
+    await expect(runReviewer(input)).rejects.toThrow('did not submit a terminal result');
+    expect(requests).toHaveLength(1);
+    expect(toolCalls).toEqual([]);
+  });
+});
+
+it('rejects oversized assistant output even when the provider ignores max_tokens', async () => {
+  await withProvider({ reply: 'x'.repeat(2000) }, async ({ input, requests }) => {
+    await expect(runReviewer(input)).rejects.toBeInstanceOf(ReviewerBudgetError);
+    expect(requests).toHaveLength(1);
+  });
+});
 
 it('does not dispatch indivisible input that cannot fit the model', async () => {
   await withProvider({}, async ({ input, requests }) => {
     await expect(
-      runReviewerStep({ ...input, instruction: '😀'.repeat(12_000) }),
+      runReviewer({ ...input, instruction: '😀'.repeat(12_000) }),
     ).rejects.toBeInstanceOf(ReviewerBudgetError);
     expect(requests).toEqual([]);
   });
