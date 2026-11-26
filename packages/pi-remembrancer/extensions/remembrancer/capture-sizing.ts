@@ -1,36 +1,5 @@
 import { fitPrefixLength } from './review-pages.js';
-import { estimateReviewerTokens, ReviewerBudgetError } from './reviewer-budget.js';
-
-/** Include the tool name and argument envelope, not only the answer's variable fields. */
-export function captureReplySize(answer: unknown): number {
-  return estimateReviewerTokens({
-    name: 'remembrancer_step',
-    arguments: { result: { answer } },
-  });
-}
-
-/** Bound escaped labels, stable observation IDs, memory and the largest legal cursors. */
-export function extractionAllowance(output: number, end: number) {
-  const build = (units: number, count: number) => ({
-    complete: false,
-    observations: Array.from({ length: count }, () => ({
-      kind: 'completion',
-      label: '\u0000'.repeat(units),
-      observationId: '\u0000'.repeat(units),
-      start: end,
-      end,
-    })),
-    nextObservationOffset: Number.MAX_SAFE_INTEGER,
-    memory: '\u0000'.repeat(units),
-  });
-  let textUnits = 48;
-  while (textUnits > 0 && captureReplySize(build(textUnits, 1)) > output) textUnits--;
-  if (!textUnits)
-    throw new ReviewerBudgetError('Capture minimum observation response cannot fit this model');
-  let count = 1;
-  while (captureReplySize(build(textUnits, count + 1)) <= output) count++;
-  return { textUnits, count };
-}
+import { ReviewerBudgetError } from './reviewer-budget.js';
 
 export type CaptureField =
   | { path: (string | number)[]; value: unknown }

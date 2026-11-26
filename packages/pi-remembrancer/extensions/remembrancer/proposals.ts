@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import { Type } from '@sinclair/typebox';
 import type { Evidence } from './evidence.js';
+import { splitsSurrogatePair } from './review-pages.js';
 
 export type TaskFields = {
   description?: string;
@@ -265,9 +266,16 @@ export function validateSubmission(
     if (!Number.isSafeInteger(value.expectedRevision) || value.expectedRevision! < 1)
       throw new Error('Invalid expected revision');
   }
-  if (!Array.isArray(value.references) || !value.references.length)
+  return validateReferences(value.references, evidence);
+}
+
+export function validateReferences(
+  references: readonly EvidenceReference[],
+  evidence: readonly Evidence[],
+): ProposalSource[] {
+  if (!Array.isArray(references) || !references.length)
     throw new Error('Proposal requires eligible evidence');
-  const sources = value.references.map((ref) => {
+  const sources = references.map((ref: EvidenceReference) => {
     object(ref, ['sessionId', 'branchId', 'entryId', 'editId', 'offset', 'quote']);
     text(ref.quote);
     const item = evidence.find(
@@ -281,6 +289,8 @@ export function validateSubmission(
       !item ||
       !Number.isSafeInteger(ref.offset) ||
       ref.offset < 0 ||
+      splitsSurrogatePair(item.text, ref.offset) ||
+      splitsSurrogatePair(item.text, ref.offset + ref.quote.length) ||
       item.text.slice(ref.offset, ref.offset + ref.quote.length) !== ref.quote
     )
       throw new Error('Reference does not match frozen eligible evidence');

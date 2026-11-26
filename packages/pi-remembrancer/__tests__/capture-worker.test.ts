@@ -17,7 +17,14 @@ import { DatabaseSync } from 'node:sqlite';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, expect, it, vi } from 'vitest';
-import { captureAnswer, providerInstruction, stepWork } from './fixtures/capture-steps.js';
+import {
+  captureDisposition,
+  captureRecord,
+  captureReference,
+  captureToolCalls,
+  reviewerPaths,
+} from './fixtures/capture-reviewer.js';
+import type { EvidencePageEntry } from '../extensions/remembrancer/review-pages.js';
 import { writeCompletion } from './fixtures/openai-loopback.js';
 import * as reviewer from '../extensions/remembrancer/reviewer.js';
 import * as taskwarrior from '../extensions/remembrancer/taskwarrior.js';
@@ -148,7 +155,7 @@ async function fixture() {
           reasoning: true,
           input: ['text'],
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 32768,
+          contextWindow: 65536,
           maxTokens: 1024,
           compat: { supportsReasoningEffort: true, supportsDeveloperRole: false },
         },
@@ -786,6 +793,107 @@ it('retains a handoff after bootstrap failure following successful spawn; a late
   expect(job(f.database)?.state).toBe('completed');
 });
 
+type ProviderMessage = {
+  role: string;
+  content?: string | { text?: string }[];
+  tool_call_id?: string;
+  tool_calls?: { id: string; function: { name: string; arguments: string } }[];
+};
+function messageText(content: ProviderMessage['content']) {
+  return typeof content === 'string'
+    ? content
+    : (content ?? []).map((part) => part.text ?? '').join('');
+}
+function openingInstruction(messages: ProviderMessage[]) {
+  return messageText(messages.find((message) => message.role === 'user')!.content);
+}
+function requestedTools(body: Record<string, unknown>) {
+  return (body['messages'] as ProviderMessage[]).flatMap((message) => message.tool_calls ?? []);
+}
+function nextCaptureCall(messages: ProviderMessage[], empty: boolean) {
+  const paths = reviewerPaths(openingInstruction(messages));
+  const calls = messages.flatMap((message) => message.tool_calls ?? []);
+  const results = calls.map((call) => ({
+    name: call.function.name,
+    args: JSON.parse(call.function.arguments) as { path?: string; page?: number },
+    text: messageText(messages.find((message) => message.tool_call_id === call.id)!.content),
+  }));
+  if (!results.length) return { name: 'remembrancer_read', args: { path: paths.skill } };
+  const pages = results
+    .filter((result) => result.name === 'remembrancer_read' && result.args.path === paths.review)
+    .map(
+      (result) =>
+        JSON.parse(result.text) as {
+          groups: { sessionId: string; branchId: string; entries: EvidencePageEntry[] }[];
+          hasMore: boolean;
+        },
+    );
+  if (!pages.length || pages.at(-1)!.hasMore)
+    return { name: 'remembrancer_read', args: { path: paths.review, page: pages.length } };
+  if (!results.some((result) => result.name === 'remembrancer_tasks'))
+    return { name: 'remembrancer_tasks', args: {} };
+  const proposals = results.find((result) => result.name === 'remembrancer_proposals');
+  if (!proposals) return { name: 'remembrancer_proposals', args: {} };
+  if (empty) return { name: 'remembrancer_submit', args: { records: [], dispositions: [] } };
+  const entry = pages.flatMap((page) =>
+    page.groups.flatMap(({ entries, ...group }) =>
+      entries.map((entry) => ({ ...group, ...entry })),
+    ),
+  )[0]!;
+  const reference = captureReference(entry);
+  const change = {
+    operation: 'add' as const,
+    fields: { description: 'comparison' },
+    annotations: [],
+  };
+  const listed = JSON.parse(proposals.text) as {
+    proposals: { id: string; revision: number }[];
+    nextOffset: null;
+  };
+  expect(listed.nextOffset).toBeNull();
+  return {
+    name: 'remembrancer_submit',
+    args: {
+      records: [
+        captureRecord(
+          'comparison',
+          [{ kind: 'accepted', reference }],
+          [
+            {
+              branchId: reference.branchId,
+              state: {
+                summary: 'Send comparison',
+                status: 'active',
+                draft: { change, question: null },
+              },
+            },
+          ],
+          {
+            // Identical words in these independent project sessions report separate obligations.
+            candidates: listed.proposals.map(({ id, revision }) => ({
+              kind: 'proposal' as const,
+              id,
+              revision,
+              judgment: 'different' as const,
+            })),
+          },
+        ),
+      ],
+      dispositions: [
+        captureDisposition(
+          ['comparison'],
+          {
+            change,
+            question: null,
+            explanation: 'User requested the comparison.',
+          },
+          'Accepted obligation',
+        ),
+      ],
+    },
+  };
+}
+
 async function provider(
   f: Awaited<ReturnType<typeof fixture>>,
   empty = false,
@@ -808,24 +916,12 @@ async function provider(
       res.end(`data: ${JSON.stringify({ error: { message: failure } })}\n\n`);
       return;
     }
-    const messages = body.messages as { role: string; content?: string }[];
-    const instruction = providerInstruction(messages);
+    const messages = body.messages as ProviderMessage[];
+    const instruction = openingInstruction(messages);
     onRequest?.(instruction, requests.length);
-    const name = 'remembrancer_step';
-    const args = { result: { answer: captureAnswer(instruction, empty) } };
     writeCompletion(
       res,
-      {
-        role: 'assistant',
-        tool_calls: [
-          {
-            index: 0,
-            id: `call_${name}`,
-            type: 'function',
-            function: { name, arguments: JSON.stringify(args) },
-          },
-        ],
-      },
+      captureToolCalls([nextCaptureCall(messages, empty)], requests.length),
       'tool_calls',
       'not-in-catalog',
     );
@@ -1027,13 +1123,7 @@ it.each(['running', 'crashed'] as const)(
     });
     // Manual ownership and observer enrollment change review context. A running
     // attempt must discard/reprepare; a recovered attempt starts after enrollment.
-    expect(
-      p.requests.filter(
-        ({ body }) =>
-          stepWork(providerInstruction(body['messages'] as { role: string; content: string }[]))
-            .range,
-      ),
-    ).toHaveLength(2);
+    expect(p.requests.filter(({ body }) => requestedTools(body).length === 0)).toHaveLength(2);
     expect(p.requests[0]!.body['model']).toBe('not-in-catalog');
     expect(p.requests[0]!.body['reasoning_effort']).toBe('high');
     expect(p.requests[0]!.headers['authorization']).toBe('Bearer fixture-key');
@@ -1041,7 +1131,13 @@ it.each(['running', 'crashed'] as const)(
     expect(existsSync(join(f.dir, 'auth-outside-lock'))).toBe(true);
     expect(existsSync(join(f.dir, 'tasks-outside-lock'))).toBe(true);
     const tools = p.requests[0]!.body['tools'] as { function: { name: string } }[];
-    expect(tools.map((t) => t.function.name)).toEqual(['remembrancer_step']);
+    expect(tools.map((t) => t.function.name)).toEqual([
+      'remembrancer_read',
+      'remembrancer_context',
+      'remembrancer_tasks',
+      'remembrancer_proposals',
+      'remembrancer_submit',
+    ]);
     const store = new CheckpointStore(f.database);
     expect(store.proposals()).toHaveLength(1);
     expect(store.reviewed()).toHaveLength(1);
@@ -1117,10 +1213,9 @@ it('persists two actual worker deaths across competing launches and repeated res
   p.release();
 }, 25_000);
 
-it('expires the original attempt after earlier complete SDK steps and retries the whole review without publishing partial work', async () => {
+it('expires the continuing SDK review after delivered reads and retries without publishing partial work', async () => {
   const f = await fixture();
-  // The third step scans a real candidate after extraction and folding. A valid
-  // unmatched add no longer needs a redundant materialization request.
+  // Expire on the third request, after skill and evidence delivery, before matching.
   vi.spyOn(taskwarrior, 'readTaskCatalog').mockResolvedValue([
     {
       uuid: '12345678-1234-1234-1234-123456789abc',
@@ -1137,15 +1232,23 @@ it('expires the original attempt after earlier complete SDK steps and retries th
   });
   const saved = await preserveHandoff(f.input);
   const signals: AbortSignal[] = [];
-  const completed: reviewer.ReviewerStepResult[] = [];
+  let completed = 0;
+  const acceptedReads: number[] = [];
   const failures: unknown[] = [];
-  const realStep = reviewer.runReviewerStep;
-  vi.spyOn(reviewer, 'runReviewerStep').mockImplementation(async (input) => {
+  const realReviewer = reviewer.runReviewer;
+  vi.spyOn(reviewer, 'runReviewer').mockImplementation(async (input) => {
     signals.push(input.signal!);
+    const index = signals.length - 1;
+    acceptedReads[index] = 0;
     try {
-      const result = await realStep(input);
-      completed.push(result);
-      return result;
+      await realReviewer({
+        ...input,
+        acceptToolResult(result) {
+          input.acceptToolResult?.(result);
+          acceptedReads[index]!++;
+        },
+      });
+      completed++;
     } catch (error) {
       failures.push(error);
       throw error;
@@ -1154,9 +1257,9 @@ it('expires the original attempt after earlier complete SDK steps and retries th
   const publish = vi.spyOn(CheckpointStore.prototype, 'finishCaptureJob');
   await runCaptureWorker({ ...f, budgetMs: 50_000 });
   expect(p.requests).toHaveLength(3);
-  expect(completed).toHaveLength(2);
-  expect(completed.every((result) => result.status === 'handoff')).toBe(true);
-  expect(new Set(signals).size).toBe(1);
+  expect(completed).toBe(0);
+  expect(acceptedReads).toEqual([2]);
+  expect(signals).toHaveLength(1);
   expect(signals[0]!.aborted).toBe(true);
   expect(failures).toHaveLength(1);
   expect(failures[0]).toBeInstanceOf(CaptureRetryableError);
@@ -1169,20 +1272,27 @@ it('expires the original attempt after earlier complete SDK steps and retries th
   db.close();
   expect(existsSync(saved.manifest.snapshot)).toBe(true);
 
-  // No real timer wait: rerun every SDK step under a new whole-attempt deadline.
+  // No real timer wait: a fresh session rereads guidance/evidence under a new deadline.
   expire = false;
   elapsed = 0;
   makeDue(f.database);
   await runCaptureWorker({ ...f, budgetMs: 50_000 });
-  expect(p.requests).toHaveLength(6);
-  expect(signals[3]).not.toBe(signals[0]);
-  expect(new Set(signals.slice(3)).size).toBe(1);
-  expect(completed).toHaveLength(5);
-  expect(
-    providerInstruction(p.requests[3]!.body['messages'] as { role: string; content: string }[]),
-  ).toBe(
-    providerInstruction(p.requests[0]!.body['messages'] as { role: string; content: string }[]),
+  expect(p.requests).toHaveLength(8);
+  expect(signals).toHaveLength(2);
+  expect(signals[1]).not.toBe(signals[0]);
+  expect(signals[1]!.aborted).toBe(false);
+  expect(completed, failures.map(String).join('\n')).toBe(1);
+  expect(acceptedReads).toEqual([2, 5]);
+  const firstPaths = reviewerPaths(
+    openingInstruction(p.requests[0]!.body['messages'] as ProviderMessage[]),
   );
+  const retryPaths = reviewerPaths(
+    openingInstruction(p.requests[3]!.body['messages'] as ProviderMessage[]),
+  );
+  expect(retryPaths.skill).toBe(firstPaths.skill);
+  expect(retryPaths.review).not.toBe(firstPaths.review);
+  expect(existsSync(firstPaths.review)).toBe(false);
+  expect(existsSync(retryPaths.review)).toBe(false);
   expect(publish).toHaveBeenCalledOnce();
   expect(publish.mock.calls[0]![2]).toHaveLength(1);
   expect(job(f.database)).toMatchObject({ state: 'completed', attemptCount: 2 });
@@ -1204,13 +1314,17 @@ it('reaches atomic publication with a staged real-SDK proposal before an injecte
       throw failure;
     });
   await runCaptureWorker(f);
-  expect(
-    p.requests.some(
-      ({ body }) =>
-        stepWork(providerInstruction(body['messages'] as { role: string; content: string }[]))
-          .observation,
-    ),
-  ).toBe(true);
+  expect(requestedTools(p.requests.at(-1)!.body).map((call) => call.function.name)).toEqual([
+    'remembrancer_read',
+    'remembrancer_read',
+    'remembrancer_tasks',
+    'remembrancer_proposals',
+  ]);
+  const paths = reviewerPaths(
+    openingInstruction(p.requests[0]!.body['messages'] as ProviderMessage[]),
+  );
+  expect(existsSync(paths.review)).toBe(false);
+  expect(existsSync(paths.skill)).toBe(true);
   expect(publish).toHaveBeenCalledOnce();
   const submissions = publish.mock.calls[0]![2];
   expect(submissions).toHaveLength(1);
@@ -1551,11 +1665,17 @@ it('drains two projects from a third cwd with identical stored-auth commands and
     [1, 'C', c],
   ] as const) {
     const requests = providers[index]!.requests;
-    const work = requests.map(({ body }) =>
-      stepWork(providerInstruction(body['messages'] as { role: string; content: string }[])),
+    expect(requests.filter(({ body }) => requestedTools(body).length === 0)).toHaveLength(1);
+    expect(requests).toHaveLength(5);
+    const messages = requests.at(-1)!.body['messages'] as ProviderMessage[];
+    const proposalCall = requestedTools(requests.at(-1)!.body).find(
+      (call) => call.function.name === 'remembrancer_proposals',
+    )!;
+    const listed = JSON.parse(
+      messageText(messages.find((message) => message.tool_call_id === proposalCall.id)!.content),
     );
-    expect(work.filter((step) => step.range)).toHaveLength(1);
-    if (index === 1) expect(work.some((step) => step.catalogue?.[0]?.handle)).toBe(true);
+    expect(listed.proposals).toHaveLength(index);
+    expect(listed.nextOffset).toBeNull();
     for (const { headers } of requests) {
       expect(headers['authorization']).toBe(`Bearer credential-${label}`);
       expect(headers['x-command']).toBe(`header-${label}`);

@@ -56,7 +56,9 @@ function summary(proposal: Proposal) {
   };
 }
 
-function list(db: CheckpointStore, offset: number) {
+type ProposalReader = Pick<CheckpointStore, 'proposal' | 'proposals'>;
+
+function list(db: ProposalReader, offset: number) {
   integer(offset, 'offset');
   const candidates = db.proposals(undefined, offset, LIST_LIMIT + 1);
   const proposals: ReturnType<typeof summary>[] = [];
@@ -105,7 +107,7 @@ type EvidenceFragment = ProposalSource & {
 };
 
 /** Typed read for internal callers; public detail/evidence paging uses the same checks. */
-export function readProposal(db: CheckpointStore, id: string, revision: number): Proposal {
+export function readProposal(db: ProposalReader, id: string, revision: number): Proposal {
   if (typeof id !== 'string' || !id.trim()) throw new Error('Invalid proposal ID.');
   integer(revision, 'revision', 1);
   const proposal = db.proposal(id);
@@ -120,7 +122,7 @@ export function readProposal(db: CheckpointStore, id: string, revision: number):
   return proposal;
 }
 
-export function readProposals(db: CheckpointStore, args: ProposalReadArgs) {
+export function readProposals(db: ProposalReader, args: ProposalReadArgs) {
   const action = args.action ?? 'list';
   const allowed =
     action === 'list'

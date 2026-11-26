@@ -1,43 +1,7 @@
 import { expect, it } from 'vitest';
-import {
-  captureDetailPages,
-  captureReplySize,
-  extractionAllowance,
-} from '../extensions/remembrancer/capture-sizing.js';
-import {
-  estimateReviewerTokens,
-  ReviewerBudgetError,
-} from '../extensions/remembrancer/reviewer-budget.js';
+import { captureDetailPages } from '../extensions/remembrancer/capture-sizing.js';
+import { estimateReviewerTokens } from '../extensions/remembrancer/reviewer-budget.js';
 import { splitsSurrogatePair } from '../extensions/remembrancer/review-pages.js';
-
-it.each([384, 512, 1024, 4096])(
-  'reserves the complete worst-case extraction reply at %i',
-  (ceiling) => {
-    const end = Number.MAX_SAFE_INTEGER;
-    const { count, textUnits } = extractionAllowance(ceiling, end);
-    const answer = (size: number) => ({
-      complete: false,
-      observations: Array.from({ length: size }, () => ({
-        kind: 'completion',
-        label: '\u0000'.repeat(textUnits),
-        observationId: '\u0000'.repeat(textUnits),
-        start: end,
-        end,
-      })),
-      nextObservationOffset: Number.MAX_SAFE_INTEGER,
-      memory: '\u0000'.repeat(textUnits),
-    });
-    expect(count).toBeGreaterThan(0);
-    expect(textUnits).toBeGreaterThan(0);
-    expect(captureReplySize(answer(count))).toBeLessThanOrEqual(ceiling);
-    expect(captureReplySize(answer(count + 1))).toBeGreaterThan(ceiling);
-  },
-);
-
-it('rejects only when even a minimal bounded observation cannot fit', () => {
-  expect(() => extractionAllowance(1, 1)).toThrow(ReviewerBudgetError);
-  expect(extractionAllowance(384, 1).count).toBeGreaterThan(0);
-});
 
 it('packs escaped Unicode chunks and empty fields by the complete caller envelope', () => {
   const original = { text: '😀\n"\\'.repeat(30), empty: '', count: 3, array: [] };
