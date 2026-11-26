@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.6.0](https://github.com/robhowley/pi-userland/compare/pi-remembrancer-v0.5.1...pi-remembrancer-v0.6.0) (2026-11-26)
+
+
+### Features
+
+* **pi-remembrancer:** add capture now command ([#250](https://github.com/robhowley/pi-userland/issues/250)) ([1a1bfb9](https://github.com/robhowley/pi-userland/commit/1a1bfb976a09f2038930fc36bfb30e26b5b4c3d3))
+* **pi-remembrancer:** add collapsed-first proposal review overlay ([#244](https://github.com/robhowley/pi-userland/issues/244)) ([615a374](https://github.com/robhowley/pi-userland/commit/615a374d524139d3591525072ca0733ec66dc5f2))
+* **pi-remembrancer:** bound automatic capture reviews ([#248](https://github.com/robhowley/pi-userland/issues/248)) ([94e287a](https://github.com/robhowley/pi-userland/commit/94e287a311bb2707a1687026f074931477500339))
+* **pi-remembrancer:** detach automatic capture from session shutdown ([#242](https://github.com/robhowley/pi-userland/issues/242)) ([54225d7](https://github.com/robhowley/pi-userland/commit/54225d77192fc83f101f4d0e03a82658ea74348f))
+
+
+### Bug Fixes
+
+* **pi-remembrancer:** bound proposal evidence growth ([#246](https://github.com/robhowley/pi-userland/issues/246)) ([71629ba](https://github.com/robhowley/pi-userland/commit/71629ba814cb023e3bbce9eed996fdd05ae2623a))
+* **pi-remembrancer:** paginate oversized proposal responses ([#245](https://github.com/robhowley/pi-userland/issues/245)) ([d311f00](https://github.com/robhowley/pi-userland/commit/d311f00f8f8ab0773e85d2ab77e8f7c2cbf977ea))
+* **pi-remembrancer:** persist capture attempt limits and pause state ([#247](https://github.com/robhowley/pi-userland/issues/247)) ([75df0f4](https://github.com/robhowley/pi-userland/commit/75df0f47591aa3fa0313d50a0a9c885901d15d90))
+
+
+### Code Refactoring
+
+* **pi-remembrancer:** use one capture reviewer session ([#249](https://github.com/robhowley/pi-userland/issues/249)) ([b944ddf](https://github.com/robhowley/pi-userland/commit/b944ddf7122d0bf972d85534c03bf0206ab51529))
+
 ## [0.5.1](https://github.com/robhowley/pi-userland/compare/pi-remembrancer-v0.5.0...pi-remembrancer-v0.5.1) (2026-11-13)
 
 
