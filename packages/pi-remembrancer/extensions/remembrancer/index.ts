@@ -74,17 +74,22 @@ type Batch = {
 
 export const REMEMBRANCER_COMMAND_NAME = 'remembrancer';
 export const REMEMBRANCER_COMMAND_USAGE =
-  'Usage: /remembrancer seed <Nd>\n       /remembrancer proposals\n       /remembrancer capture status|pause|resume\n       /remembrancer capture retry <full-job-id>\n       /remembrancer help';
+  'Usage: /remembrancer seed <Nd>\n       /remembrancer proposals\n       /remembrancer capture now|status|pause|resume\n       /remembrancer capture retry <full-job-id>\n       /remembrancer help';
 export const REMEMBRANCER_HELP = [
   REMEMBRANCER_COMMAND_USAGE,
   'Seed saved-session evidence from a bounded historical window, then follow the Remembrancer skill.',
-  'Capture controls remain available when Remembrancer is disabled. Retry requires explicit UI confirmation.',
+  'Capture now snapshots the idle saved interactive session and requests a background worker wake; autoCapture must be true and disabled false.',
+  'Status, pause, resume and retry remain available when Remembrancer is disabled. Retry requires explicit UI confirmation.',
   'Natural-language review requests remain supported.',
 ].join('\n');
 
-const CAPTURE_COMMANDS = ['status', 'pause', 'resume', 'retry'] as const;
+const CAPTURE_COMMANDS = ['now', 'status', 'pause', 'resume', 'retry'] as const;
 const REMEMBRANCER_SUBCOMMANDS = [
-  { value: 'capture ', label: 'capture', description: 'Inspect or control accepted capture jobs' },
+  {
+    value: 'capture ',
+    label: 'capture',
+    description: 'Capture this session or control accepted jobs',
+  },
   { value: 'proposals', label: 'proposals', description: 'Review stored task proposals locally' },
   {
     value: 'seed ',
@@ -105,6 +110,7 @@ type RemembrancerCommandArgs =
   | { ok: true; mode: 'help' }
   | { ok: true; mode: 'proposals' }
   | { ok: true; mode: 'seed'; duration: string }
+  | { ok: true; mode: 'capture'; action: 'now' }
   | { ok: true; mode: 'capture'; action: 'status' }
   | { ok: true; mode: 'capture'; action: 'pause' }
   | { ok: true; mode: 'capture'; action: 'resume' }
@@ -120,7 +126,10 @@ export function parseRemembrancerCommandArgs(args: string): RemembrancerCommandA
   if (subcommand === 'proposals' && tokens.length === 1) return { ok: true, mode: 'proposals' };
   if (subcommand === 'capture') {
     const action = tokens[1];
-    if ((action === 'status' || action === 'pause' || action === 'resume') && tokens.length === 2)
+    if (
+      (action === 'now' || action === 'status' || action === 'pause' || action === 'resume') &&
+      tokens.length === 2
+    )
       return { ok: true, mode: 'capture', action };
     if (action === 'retry' && tokens.length === 3)
       return { ok: true, mode: 'capture', action, jobId: tokens[2]! };
@@ -309,6 +318,34 @@ export default function remembrancer(pi: ExtensionAPI) {
     ctx: ExtensionContext,
   ) {
     try {
+      if (parsed.action === 'now') {
+        if (ctx.mode !== 'tui' || !ctx.hasUI)
+          throw new Error('Capture now requires an interactive Pi terminal.');
+        if (!ctx.isIdle())
+          throw new Error(
+            'Pi is busy. Wait for the current run to finish, then retry capture now.',
+          );
+        const source = currentSource(ctx);
+        if (!source) throw new Error('Capture now requires a saved Pi session.');
+        const config = loadRemembrancerConfig(ctx.cwd, ctx.isProjectTrusted());
+        if (config.disabled || !config.autoCapture)
+          throw new Error(
+            'Capture now requires pi-remembrancer.autoCapture true and pi-remembrancer.disabled false in settings.',
+          );
+        const database = defaultCheckpointFile();
+        const accepted = await preserveHandoff({
+          id: randomUUID(),
+          inbox: join(dirname(database), 'capture-inbox'),
+          source,
+          execution: captureExecution(ctx),
+        });
+        await wakeCapture(ctx);
+        ctx.ui.notify(
+          `Capture accepted: ${accepted.manifest.id}. Worker wake requested; review may wait. Check /remembrancer capture status and /remembrancer proposals.${accepted.cleanupDiagnostic ? `\n${accepted.cleanupDiagnostic}` : ''}`,
+          accepted.cleanupDiagnostic ? 'warning' : 'info',
+        );
+        return;
+      }
       if (parsed.action === 'status') {
         const status = store().captureStatus();
         ctx.ui.notify(
@@ -398,7 +435,7 @@ export default function remembrancer(pi: ExtensionAPI) {
   }
 
   pi.registerCommand(REMEMBRANCER_COMMAND_NAME, {
-    description: 'Review stored proposals, seed history or control accepted capture jobs',
+    description: 'Review proposals, seed history, capture this session or control capture jobs',
     getArgumentCompletions: getRemembrancerArgumentCompletions,
     handler: async (args, ctx) => {
       const parsed = parseRemembrancerCommandArgs(args);

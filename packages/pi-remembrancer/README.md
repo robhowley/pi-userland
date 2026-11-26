@@ -67,6 +67,8 @@ Capture is off by default. To enable it, add this to Pi's global settings file, 
 
 ### Capture controls
 
+With automatic capture enabled, run `/remembrancer capture now` to review this session in the background.
+
 Available even when automatic capture or the extension is disabled:
 
 | Command                                     | Use                                                                          |
