@@ -95,7 +95,7 @@ Available even when automatic capture or the extension is disabled:
 - **Model:** your session's selected model.
 - **Result:** suggestions waiting in `/remembrancer proposals`.
 
-Automatic review uses one continuing reviewer session. The reviewer reads the installed skill and frozen evidence pages in order, inspects existing tasks and proposals with read-only tools, and submits finalized suggestions once. Branch edits and branch-specific meanings remain separate. Exact quotes can span text cuts within one message. Ambiguous identities and conflicting interpretations remain questions rather than guessed task targets. Code validates exact evidence references and binds proposal IDs and existing-task snapshots. Reviewer disposal and generated-file cleanup must succeed before suggestions and reviewed coverage are saved together. Complete evidence delivery does not prove the reviewer found every commitment or match.
+Check suggestions before approving them; automatic review can miss tasks or suggest duplicates.
 
 Branch aliases and growing draft/task details stay host-side and can be read in bounded pages. Dense messages can return several observation pages before their text range is acknowledged. Discovery pages fit both input and candidate-ID response capacity. Task and saved-proposal discovery includes current fields, effective drafts and saved evidence, not just labels. Large identity values retain exact handles and remain uncertain candidates; plausible or uncertain matches get exact detail, rather than reading every full detail for every obligation.
 
