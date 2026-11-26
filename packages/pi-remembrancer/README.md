@@ -67,7 +67,9 @@ Capture is off by default. To enable it, add this to Pi's global settings file, 
 
 ### Capture controls
 
-Available even when automatic capture or the extension is disabled:
+Run `/remembrancer capture now` to snapshot your current saved session and request a background worker wake without leaving Pi. Requires an idle interactive terminal, `autoCapture: true` and `disabled: false`. It returns after preservation and the wake request, not model completion. The worker drains the shared backlog; pause, earlier jobs, retry delays and attempt limits still apply. Check `/remembrancer capture status` and `/remembrancer proposals` for progress and suggestions.
+
+The following controls are available even when automatic capture or the extension is disabled:
 
 | Command                                     | Use                                                                          |
 | ------------------------------------------- | ---------------------------------------------------------------------------- |

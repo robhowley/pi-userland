@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { preserveHandoff } from '../extensions/remembrancer/capture-handoff.js';
@@ -16,7 +17,11 @@ vi.mock('../extensions/remembrancer/capture-worker.js', () => ({
 }));
 let fixture: ReturnType<typeof captureExtension>;
 const launch = vi.mocked(launchCaptureWorker);
-const command = (args: string) => fixture.commands.get('remembrancer')!.handler(args, fixture.ctx);
+const command = (args: string) =>
+  fixture.commands.get('remembrancer')!.handler(args, { ...fixture.ctx, isIdle: () => true });
+const inbox = () => join(dirname(fixture.db!.file), 'capture-inbox');
+const ready = () =>
+  existsSync(inbox()) ? readdirSync(inbox()).filter((name) => name.endsWith('.ready.json')) : [];
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -57,7 +62,7 @@ async function fail(retryEligible = false) {
 }
 
 it('parses only exact capture commands and completes actions, not job prefixes', () => {
-  for (const action of ['status', 'pause', 'resume']) {
+  for (const action of ['now', 'status', 'pause', 'resume']) {
     expect(parseRemembrancerCommandArgs(`capture ${action}`)).toEqual({
       ok: true,
       mode: 'capture',
@@ -72,6 +77,7 @@ it('parses only exact capture commands and completes actions, not job prefixes',
   });
   for (const args of [
     'capture',
+    'capture now extra',
     'capture status extra',
     'capture pause extra',
     'capture resume extra',
@@ -82,6 +88,7 @@ it('parses only exact capture commands and completes actions, not job prefixes',
     expect(parseRemembrancerCommandArgs(args).ok).toBe(false);
   }
   expect(getRemembrancerArgumentCompletions('capture ')).toEqual([
+    { value: 'capture now', label: 'now' },
     { value: 'capture status', label: 'status' },
     { value: 'capture pause', label: 'pause' },
     { value: 'capture resume', label: 'resume' },
@@ -89,6 +96,94 @@ it('parses only exact capture commands and completes actions, not job prefixes',
   ]);
   expect(getRemembrancerArgumentCompletions('capture re')).toHaveLength(2);
   expect(getRemembrancerArgumentCompletions('capture retry ')).toBeNull();
+});
+
+it('capture now preserves the current session before waking the worker without a model turn', async () => {
+  fixture.settings({ autoCapture: true });
+  fixture.db!.setCapturePaused(true);
+  const before = readFileSync(fixture.file, 'utf8');
+  launch.mockImplementationOnce(async (database, acceptedInbox, host) => {
+    expect(database).toBe(fixture.db!.file);
+    expect(acceptedInbox).toBe(inbox());
+    expect(ready()).toHaveLength(1);
+    const manifest = JSON.parse(readFileSync(join(inbox(), ready()[0]!), 'utf8'));
+    expect(manifest.source).toMatchObject({ file: fixture.file, sessionId: 'outgoing' });
+    expect(manifest.execution).toEqual(captureExecution(fixture.ctx));
+    expect(host).toEqual(manifest.execution.host);
+    writeFileSync(fixture.file, before + '\n');
+    expect(readFileSync(manifest.snapshot, 'utf8')).toBe(before);
+    return 123;
+  });
+  await command('capture now');
+  expect(launch).toHaveBeenCalledOnce();
+  const manifest = JSON.parse(readFileSync(join(inbox(), ready()[0]!), 'utf8'));
+  expect(fixture.ctx.ui.notify).toHaveBeenCalledWith(
+    expect.stringContaining(
+      `Capture accepted: ${manifest.id}. Worker wake requested; review may wait.`,
+    ),
+    'info',
+  );
+  expect(fixture.ctx.ui.notify).toHaveBeenCalledWith(
+    expect.stringContaining('/remembrancer capture status and /remembrancer proposals'),
+    'info',
+  );
+  expect(fixture.db!.captureStatus()).toEqual({ paused: true, jobs: [] });
+  expect(fixture.send).not.toHaveBeenCalled();
+});
+
+it.each([
+  ['print', 'interactive Pi terminal'],
+  ['json', 'interactive Pi terminal'],
+  ['rpc', 'interactive Pi terminal'],
+  ['no-ui', 'interactive Pi terminal'],
+  ['busy', 'Pi is busy'],
+  ['unsaved', 'saved Pi session'],
+  ['disabled', 'autoCapture true'],
+  ['not-authorized', 'autoCapture true'],
+  ['no-model', 'requires the outgoing model'],
+  ['missing-transcript', 'preservation-failed'],
+])('capture now refuses %s without queuing or waking', async (scenario, message) => {
+  fixture.settings({ autoCapture: true, disabled: scenario === 'disabled' });
+  if (scenario === 'not-authorized') fixture.settings({ autoCapture: false });
+  if (scenario === 'missing-transcript') unlinkSync(fixture.file);
+  const ctx = {
+    ...fixture.ctx,
+    isIdle: () => scenario !== 'busy',
+    ...(scenario === 'print' || scenario === 'json' || scenario === 'rpc'
+      ? { mode: scenario }
+      : {}),
+    ...(scenario === 'no-ui' ? { hasUI: false } : {}),
+    ...(scenario === 'no-model' ? { model: undefined } : {}),
+    ...(scenario === 'unsaved'
+      ? { sessionManager: { ...fixture.ctx.sessionManager, getSessionFile: () => undefined } }
+      : {}),
+  } as typeof fixture.ctx;
+  await fixture.commands.get('remembrancer')!.handler('capture now', ctx);
+  expect(ready()).toEqual([]);
+  expect(launch).not.toHaveBeenCalled();
+  expect(fixture.db!.captureStatus().jobs).toEqual([]);
+  expect(fixture.ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining(message), 'error');
+  expect(fixture.send).not.toHaveBeenCalled();
+});
+
+it('capture now keeps the accepted job recoverable when launch fails', async () => {
+  fixture.settings({ autoCapture: true });
+  launch.mockRejectedValueOnce(new Error('offline launcher'));
+  await command('capture now');
+  expect(ready()).toHaveLength(1);
+  const manifest = JSON.parse(readFileSync(join(inbox(), ready()[0]!), 'utf8'));
+  expect(readFileSync(manifest.snapshot, 'utf8')).toBe(readFileSync(fixture.file, 'utf8'));
+  expect(fixture.ctx.ui.notify).toHaveBeenCalledWith(
+    expect.stringContaining('state saved; worker launch failed'),
+    'warning',
+  );
+  expect(fixture.ctx.ui.notify).toHaveBeenCalledWith(
+    expect.stringContaining(`Capture accepted: ${manifest.id}`),
+    'info',
+  );
+  expect(vi.mocked(fixture.ctx.ui.notify).mock.calls.some(([, level]) => level === 'error')).toBe(
+    false,
+  );
 });
 
 it('status, pause and resume remain available while disabled without a model turn', async () => {
